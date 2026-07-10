@@ -4678,10 +4678,14 @@ func (w *rewriteWriter) Close() error {
 	}
 	var err error
 	if w.w != nil {
-		err = errors.Join(err, w.w.Close())
+		valueWriter := w.w
+		w.w = nil
+		err = errors.Join(err, valueWriter.Close())
 	}
 	if w.leafW != nil {
-		err = errors.Join(err, w.leafW.Close())
+		leafWriter := w.leafW
+		w.leafW = nil
+		err = errors.Join(err, leafWriter.Close())
 	}
 	return err
 }

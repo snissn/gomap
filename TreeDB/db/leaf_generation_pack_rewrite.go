@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -46,11 +49,12 @@ type leafRefRewriteCtx struct {
 	ctx context.Context
 	db  *DB
 
-	pager       *pager.Pager
-	leafReader  tree.SlabReader
-	leafToer    unsafeToReader
-	leafScratch []byte
-	alloc       interface {
+	pager             *pager.Pager
+	leafReader        tree.SlabReader
+	leafToer          unsafeToReader
+	privateLeafReader *valuelog.Manager
+	leafScratch       []byte
+	alloc             interface {
 		Alloc(hint uint64) (uint64, error)
 	}
 
@@ -104,6 +108,64 @@ type leafRefRewriteRunStats struct {
 	SubtreesPruned       int
 	LeafFramesWritten    int
 	MaxLeafFrameK        int
+	CopyTimeNanos        int64
+	PublishWaitNanos     int64
+	PublishHoldNanos     int64
+	PrivatePages         int
+	PublishConflict      bool
+}
+
+type leafGenerationPackCopyPhase uint8
+
+const leafGenerationPackCopyComplete leafGenerationPackCopyPhase = 1
+
+type leafGenerationPackCopyEvent struct {
+	Phase          leafGenerationPackCopyPhase
+	Attempt        int
+	CreatedFileIDs []uint32
+	PrivatePageIDs []uint64
+}
+
+var leafGenerationPackCopyHook struct {
+	mu sync.Mutex
+	fn func(leafGenerationPackCopyEvent)
+}
+
+func registerLeafGenerationPackCopyHook(hook func(leafGenerationPackCopyEvent)) func() {
+	leafGenerationPackCopyHook.mu.Lock()
+	previous := leafGenerationPackCopyHook.fn
+	leafGenerationPackCopyHook.fn = hook
+	leafGenerationPackCopyHook.mu.Unlock()
+	return func() {
+		leafGenerationPackCopyHook.mu.Lock()
+		leafGenerationPackCopyHook.fn = previous
+		leafGenerationPackCopyHook.mu.Unlock()
+	}
+}
+
+func runLeafGenerationPackCopyHook(event leafGenerationPackCopyEvent) {
+	leafGenerationPackCopyHook.mu.Lock()
+	hook := leafGenerationPackCopyHook.fn
+	leafGenerationPackCopyHook.mu.Unlock()
+	if hook != nil {
+		hook(event)
+	}
+}
+
+var errLeafGenerationPackPublishConflict = errors.New("leaf generation pack: copy basis changed before publish")
+
+type leafGenerationPackSourceGeneration struct {
+	state   string
+	fileIDs []uint32
+}
+
+type leafGenerationPackCopyBasis struct {
+	idx                        *indexGen
+	commitSeq                  uint64
+	rootPageID                 uint64
+	systemRootPageID           uint64
+	leafGenerationStateVersion uint64
+	sourceGenerations          map[uint64]leafGenerationPackSourceGeneration
 }
 
 type leafRefRewriteRemap struct {
@@ -118,20 +180,27 @@ func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
 	if c.leafReader == nil && c.leafToer == nil && (c.db == nil || c.db.valueLogManager == nil) {
 		return nil, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
 	}
-	if c.db != nil && c.db.valueLogManager != nil {
+	if c.privateLeafReader != nil && c.writer != nil && !c.privateLeafReader.HasSegment(ptr.FileID) {
+		for _, fileID := range c.writer.createdIDs {
+			if fileID != ptr.FileID {
+				continue
+			}
+			if err := c.writer.Flush(); err != nil {
+				return nil, err
+			}
+			if err := c.privateLeafReader.Refresh(); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+	if c.privateLeafReader != nil && c.privateLeafReader.HasSegment(ptr.FileID) {
 		if cap(c.leafScratch) < page.PageSize {
 			c.leafScratch = make([]byte, 0, page.PageSize)
 		} else {
 			c.leafScratch = c.leafScratch[:0]
 		}
-		leafPage, usedScratch, err := c.db.valueLogManager.ReadUnsafeTo(ptr, c.leafScratch[:0])
-		if err != nil && errors.Is(err, valuelog.ErrFileNotFound) && !c.readRefreshRetried {
-			if refreshErr := c.db.RefreshValueLogSet(); refreshErr != nil {
-				return nil, refreshErr
-			}
-			c.readRefreshRetried = true
-			leafPage, usedScratch, err = c.db.valueLogManager.ReadUnsafeTo(ptr, c.leafScratch[:0])
-		}
+		leafPage, usedScratch, err := c.privateLeafReader.ReadUnsafeTo(ptr, c.leafScratch[:0])
 		if err != nil {
 			return nil, err
 		}
@@ -156,7 +225,36 @@ func (c *leafRefRewriteCtx) readLeafPage(ptr page.ValuePtr) ([]byte, error) {
 		}
 		return leafPage, nil
 	}
-	return c.leafReader.ReadUnsafe(ptr)
+	if c.leafReader != nil {
+		return c.leafReader.ReadUnsafe(ptr)
+	}
+	if c.db != nil && c.db.valueLogManager != nil {
+		if cap(c.leafScratch) < page.PageSize {
+			c.leafScratch = make([]byte, 0, page.PageSize)
+		} else {
+			c.leafScratch = c.leafScratch[:0]
+		}
+		leafPage, usedScratch, err := c.db.valueLogManager.ReadUnsafeTo(ptr, c.leafScratch[:0])
+		if err != nil && errors.Is(err, valuelog.ErrFileNotFound) && !c.readRefreshRetried {
+			if refreshErr := c.db.RefreshValueLogSet(); refreshErr != nil {
+				return nil, refreshErr
+			}
+			c.readRefreshRetried = true
+			leafPage, usedScratch, err = c.db.valueLogManager.ReadUnsafeTo(ptr, c.leafScratch[:0])
+		}
+		if err != nil {
+			return nil, err
+		}
+		if usedScratch {
+			c.leafScratch = leafPage[:0]
+		}
+		return leafPage, nil
+	}
+	return nil, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
+}
+
+func (c *leafRefRewriteCtx) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	return c.readLeafPage(ptr)
 }
 
 func (c *leafRefRewriteCtx) lookupLeafRemap(id uint64) (uint64, bool) {
@@ -673,7 +771,108 @@ func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uin
 	return newRoot, newRoot != rootID || len(retired) > 0, nil
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, sync bool, leafFrameK int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
+func captureLeafGenerationPackCopyBasis(snap *Snapshot, sourceIDs map[uint32]struct{}, singleSourceID uint32, hasSingleSourceID bool) leafGenerationPackCopyBasis {
+	basis := leafGenerationPackCopyBasis{sourceGenerations: make(map[uint64]leafGenerationPackSourceGeneration)}
+	if snap == nil || snap.state == nil {
+		return basis
+	}
+	basis.idx = snap.idx
+	basis.commitSeq = snap.state.CommitSeq
+	basis.rootPageID = snap.state.RootPageID
+	basis.systemRootPageID = snap.state.SystemRootPageID
+	basis.leafGenerationStateVersion = snap.state.LeafGenerationStateVersion
+	view := snap.state.LeafGenerations
+	if view == nil {
+		return basis
+	}
+	for rawFileID, generationID := range view.FileToGeneration {
+		valueFileID := page.ValueLogFileID(rawFileID)
+		if hasSingleSourceID {
+			if valueFileID != singleSourceID {
+				continue
+			}
+		} else if sourceIDs != nil {
+			if _, ok := sourceIDs[valueFileID]; !ok {
+				continue
+			}
+		}
+		generation, ok := view.Generations[generationID]
+		if !ok {
+			continue
+		}
+		basis.sourceGenerations[generationID] = leafGenerationPackSourceGeneration{
+			state:   generation.State,
+			fileIDs: append([]uint32(nil), generation.FileIDs...),
+		}
+	}
+	return basis
+}
+
+func equalLeafGenerationPackFileIDs(left, right []uint32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) leafGenerationPackCopyBasisMatches(basis leafGenerationPackCopyBasis) bool {
+	if db == nil || db.idx.Load() != basis.idx {
+		return false
+	}
+	state := db.State()
+	if state == nil ||
+		state.CommitSeq != basis.commitSeq ||
+		state.RootPageID != basis.rootPageID ||
+		state.SystemRootPageID != basis.systemRootPageID ||
+		state.LeafGenerationStateVersion != basis.leafGenerationStateVersion {
+		return false
+	}
+	if len(basis.sourceGenerations) == 0 {
+		return true
+	}
+	if state.LeafGenerations == nil {
+		return false
+	}
+	for generationID, expected := range basis.sourceGenerations {
+		current, ok := state.LeafGenerations.Generations[generationID]
+		if !ok || current.State != expected.state || !equalLeafGenerationPackFileIDs(current.FileIDs, expected.fileIDs) {
+			return false
+		}
+		for _, rawFileID := range expected.fileIDs {
+			if state.LeafGenerations.FileToGeneration[rawFileID] != generationID {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir string) ([]rewriteCreatedSegment, error) {
+	promoted := append([]rewriteCreatedSegment(nil), created...)
+	for i := range promoted {
+		if promoted[i].path == "" || promoted[i].fileID == 0 {
+			continue
+		}
+		destination := filepath.Join(leafDir, filepath.Base(promoted[i].path))
+		if _, err := os.Stat(destination); err == nil {
+			return promoted, fmt.Errorf("leaf generation pack: publish destination already exists: %s", destination)
+		} else if !os.IsNotExist(err) {
+			return promoted, err
+		}
+		if err := os.Rename(promoted[i].path, destination); err != nil {
+			return promoted, err
+		}
+		promoted[i].path = destination
+	}
+	return promoted, nil
+}
+
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, syncPublish bool, leafFrameK int, attempt int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -701,8 +900,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, err
 	}
 
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return 0, 0, ErrClosed
+	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
@@ -714,8 +916,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	idx := snap.idx
 	rootID := snap.state.RootPageID
 	sysRoot := snap.state.SystemRootPageID
+	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
 
-	tracker := newAllocTracker(idx.allocator)
+	tracker := newPrivateAppendAllocTracker(idx.allocator)
 	defer func() {
 		if tracker == nil {
 			return
@@ -751,6 +954,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}
 
+	copyStarted := time.Now()
 	leafCtx := &leafRefRewriteCtx{
 		ctx:                  ctx,
 		db:                   db,
@@ -769,8 +973,20 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		maxCopiedBytes:       maxCopiedBytes,
 		leafFrameK:           leafFrameK,
 	}
+	privateLeafReader, err := valuelog.NewManager(writer.leafDir)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: open private leaf reader: %w", err)
+	}
+	privateLeafReader.SetDictLookup(db.valueLogDictLookup)
+	leafCtx.privateLeafReader = privateLeafReader
+	defer func() {
+		if closeErr := privateLeafReader.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	leafCtx.zipper = idx.zipper.CloneWithAllocator(tracker)
 	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+	leafCtx.zipper.SetLeafPageReader(leafCtx)
 	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
 	if db.indexOuterLeavesInValueLog {
 		leafCtx.zipper.SetLeafPageLog(&leafRefRewritePageAppender{ctx: leafCtx})
@@ -781,6 +997,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			runStats.SubtreesPruned = leafCtx.subtreesPruned
 			runStats.LeafFramesWritten = leafCtx.leafFrames
 			runStats.MaxLeafFrameK = leafCtx.maxLeafFrameK
+			if tracker != nil {
+				runStats.PrivatePages = len(tracker.Pages())
+			}
 		}()
 	}
 	if toer, ok := leafCtx.leafReader.(unsafeToReader); ok {
@@ -813,6 +1032,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			if err := writer.Flush(); err != nil {
 				return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten system leaf root: %w", err)
 			}
+			if err := privateLeafReader.Refresh(); err != nil {
+				return 0, 0, fmt.Errorf("vlog-rewrite: refresh private leaf reader: %w", err)
+			}
 		}
 		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
 		if err != nil {
@@ -826,53 +1048,105 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite user leaf root: %w", err)
 	}
 	if !sysChanged && !userChanged {
+		if runStats != nil {
+			runStats.CopyTimeNanos = time.Since(copyStarted).Nanoseconds()
+		}
 		return 0, 0, nil
 	}
 
-	// Ensure the copied leaf-page records are visible before publishing new leaf
-	// refs that point at them.
-	if sync {
+	createdIDs, err := writer.createdFileIDs()
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: list created leaf ref files: %w", err)
+	}
+	privatePages := tracker.Pages()
+	if runStats != nil {
+		runStats.PrivatePages = len(privatePages)
+	}
+	runLeafGenerationPackCopyHook(leafGenerationPackCopyEvent{
+		Phase:          leafGenerationPackCopyComplete,
+		Attempt:        attempt,
+		CreatedFileIDs: append([]uint32(nil), createdIDs...),
+		PrivatePageIDs: append([]uint64(nil), privatePages...),
+	})
+
+	// Persist only private copy output here. The meta-page install remains in
+	// the short publish phase after exact basis validation.
+	if syncPublish {
 		if err := writer.Sync(); err != nil {
 			return 0, 0, fmt.Errorf("vlog-rewrite: sync rewritten leaf refs: %w", err)
+		}
+		if err := idx.pager.SyncPages(privatePages); err != nil {
+			return 0, 0, fmt.Errorf("vlog-rewrite: sync private index pages: %w", err)
 		}
 	} else {
 		if err := writer.Flush(); err != nil {
 			return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten leaf refs: %w", err)
 		}
 	}
-	createdIDs, err := writer.createdFileIDs()
-	if err != nil {
-		return 0, 0, fmt.Errorf("vlog-rewrite: list created leaf ref files: %w", err)
-	}
 	createdSegments, err := writer.createdSegmentsSnapshot()
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: snapshot created leaf ref segments: %w", err)
 	}
+	if err := writer.Close(); err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: close copied leaf refs: %w", err)
+	}
+	if runStats != nil {
+		runStats.CopyTimeNanos = time.Since(copyStarted).Nanoseconds()
+	}
+
+	publishWaitStarted := time.Now()
+	db.writeMu.Lock()
+	publishWait := time.Since(publishWaitStarted)
+	publishStarted := time.Now()
+	if runStats != nil {
+		runStats.PublishWaitNanos = publishWait.Nanoseconds()
+	}
+	unlockPublish := func() {
+		if runStats != nil {
+			runStats.PublishHoldNanos = time.Since(publishStarted).Nanoseconds()
+		}
+		db.writeMu.Unlock()
+	}
+	if db.closing.Load() {
+		unlockPublish()
+		return 0, 0, ErrClosed
+	}
+	if !db.leafGenerationPackCopyBasisMatches(basis) {
+		if runStats != nil {
+			runStats.PublishConflict = true
+		}
+		unlockPublish()
+		return 0, 0, errLeafGenerationPackPublishConflict
+	}
+
+	promotedSegments, promoteErr := promoteLeafGenerationPackSegments(createdSegments, resolveStorageLayout(db.dir).leafVLogDir)
+	createdSegments = promotedSegments
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
-		closeErr := writer.Close()
 		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
-		if closeErr != nil || cleanupErr != nil {
-			baseErr = errors.Join(baseErr, closeErr, cleanupErr)
+		if cleanupErr != nil {
+			baseErr = errors.Join(baseErr, cleanupErr)
 		}
 		return 0, 0, baseErr
 	}
-	if len(createdSegments) > 0 {
-		// Register rewrite-created segments before commit publication so
-		// finalizeCommit can publish CurrentSetNoRefresh without forcing a
-		// filesystem rescan in leafref-heavy rewrite paths.
-		for _, seg := range createdSegments {
-			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
-				return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: register rewritten leaf segment %d: %w", seg.fileID, err))
-			}
+	if promoteErr != nil {
+		unlockPublish()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr))
+	}
+	if syncPublish && len(createdSegments) > 0 {
+		if err := syncDirFn(resolveStorageLayout(db.dir).leafVLogDir); err != nil {
+			unlockPublish()
+			return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", err))
 		}
 	}
+
 	var leafManifest *leafGenerationManifest
 	var leafManifestRawFileIDs []uint32
 	if db.leafGenerationManifest != nil {
 		stagedManifest := db.leafGenerationManifest.clone()
 		rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(stagedManifest, snap.state.CommitSeq+1, createdIDs)
 		if err != nil {
-			return 0, 0, fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", err)
+			unlockPublish()
+			return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", err))
 		}
 		if changed {
 			leafManifest = stagedManifest
@@ -880,13 +1154,38 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}
 
-	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs); err != nil {
-		if finalizeCommitErrorAllowsCreatedSegmentCleanup(err) {
-			return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", err))
+	db.publishPrepareMu.RLock()
+	if len(createdSegments) > 0 {
+		// Registration belongs to publish: staged files are invisible to Refresh
+		// until exact revalidation has succeeded under writeMu.
+		for _, seg := range createdSegments {
+			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
+				db.publishPrepareMu.RUnlock()
+				unlockPublish()
+				return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: register rewritten leaf segment %d: %w", seg.fileID, err))
+			}
 		}
-		return 0, 0, fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", err)
 	}
-	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
+
+	post, finalizeErr := db.finalizeCommitLockedWithOptions(newRoot, newSysRoot, leafCtx.retired, syncPublish, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
+		skipPrePublishFlush: true,
+		syncMetaPageOnly:    true,
+	})
+	db.publishPrepareMu.RUnlock()
+	if finalizeErr != nil {
+		if !finalizeCommitErrorAllowsCreatedSegmentCleanup(finalizeErr) {
+			// Meta persistence may have happened. Keep both pages and segments so a
+			// reopen can safely follow either durable meta-page outcome.
+			tracker = nil
+			unlockPublish()
+			return 0, 0, fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr)
+		}
+		unlockPublish()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
+	}
+	db.invalidateLeafGenerationSubtreeStats(privatePages)
 	tracker = nil
+	unlockPublish()
+	db.finalizeCommitPostWork(post)
 	return leafCtx.copied, leafCtx.copiedBytes, nil
 }

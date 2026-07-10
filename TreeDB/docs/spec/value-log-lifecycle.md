@@ -186,7 +186,45 @@ and updates keys in bounded commit batches. Cached-mode callers must checkpoint
 first, protect cached value-log paths, and allocate rewrite RIDs from the shared
 cached allocator.
 
-### 6.2 Offline rewrite (`ValueLogRewriteOffline`)
+### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
+
+Leaf-generation pack uses a two-phase copy/publish state machine:
+
+1. **Copy, without `writeMu`:** acquire a coherent snapshot and its leaf-generation
+   pins; discover source refs from that snapshot; read source leaf/value-log
+   records; write recompressed frames below a hidden, non-scanned staging
+   directory; allocate and write private COW index pages; and apply collection-root
+   zipper deltas. Private index allocations are append-only so speculative work
+   cannot consume or rewrite the foreground freelist. The pager serializes file
+   growth, while foreground writers may allocate and write other pages.
+2. **Copy durability, without `writeMu`:** flush staged frames and, for a sync
+   pack, fsync the staged records plus the exact private index pages. The copied
+   pages, records, and copy-time retired-page list remain unreachable.
+3. **Publish, under `writeMu`:** revalidate the snapshot's `CommitSeq`,
+   `RootPageID`, `SystemRootPageID`, `LeafGenerationStateVersion`, index
+   generation, and exact source-generation state/file lists. Any mismatch
+   discards the whole attempt and performs one full retry; no copied root,
+   retired-page list, or private allocation is reused.
+4. **Install:** rename staged files into `leaf_vlog`, fsync that directory for a
+   sync pack, and call `RegisterSegment` while still in the publish phase.
+   Registration is publish-owned: a concurrent manager refresh cannot discover
+   private records before validation. Publish the new roots and generation
+   manifest, sync only the new meta page, then make the copy-time retired pages
+   reclaimable at the new commit sequence.
+
+`maintenanceMu`, the snapshot generation pins, and `teardownMu` remain held
+across copy and publish. Therefore leaf-generation GC cannot reclaim a source
+before the replacement root and generation state are durable, and `Close`
+cannot tear down the snapshot, pager, or private reader during copy. Ordinary
+value-log pointers embedded in copied leaf pages remain persistent references;
+leaf packing does not alter their reachability or lifetime.
+
+`BenchmarkLeafGenerationPackCopyPublish` provides the pinned before/after
+performance fixture. Run it with `-benchtime=1x -count=5 -benchmem`; it reports
+copy bytes/second, frames, wall time, foreground write p95/p99 and completed
+writes, exclusive publish hold time, copy attempts, `B/op`, and `allocs/op`.
+
+### 6.3 Offline rewrite (`ValueLogRewriteOffline`)
 
 Offline rewrite rewrites live pointer records into fresh segments and swaps index.
 
@@ -212,7 +250,7 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 - Pointer map deduplicates source record copies when needed.
 - Old segments are removed only after index swap succeeds.
 
-### 6.3 Full storage compaction (`DB.CompactStorage`)
+### 6.4 Full storage compaction (`DB.CompactStorage`)
 
 `DB.CompactStorage` is the preferred online operator path for reclaiming TreeDB
 storage. It composes:

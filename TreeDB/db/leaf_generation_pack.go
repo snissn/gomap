@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -50,6 +53,13 @@ type LeafGenerationPackStats struct {
 	InternalPagesVisited            int
 	SubtreesPruned                  int
 	CreatedFileIDs                  []uint32
+	CopyAttempts                    int
+	CopyAborts                      int
+	CopyTimeNanos                   int64
+	PublishWaitNanos                int64
+	PublishHoldNanos                int64
+	PrivatePagesAllocated           int
+	PrivatePagesDiscarded           int
 	WallTimeNanos                   int64
 }
 
@@ -166,44 +176,107 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	}
 
 	layout := resolveStorageLayout(db.dir)
-	writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
-	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, leafStartSeq)
-	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
-	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
-	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
-	if writer.blockCompression {
+	blockCompression := db.valueLogCompression != ValueLogCompressionOff
+	blockCodec := valuelogBlockCodecFromDB(db.valueLogBlockCodec)
+	leafBlockCodec := leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	var leafDictID uint64
+	var leafDictBytes []byte
+	var leafDictUseRawPages bool
+	if blockCompression {
 		if state := db.State(); state != nil {
-			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
+			leafDictID, leafDictBytes, leafDictUseRawPages, err = prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
 			if err != nil {
 				return stats, err
 			}
-			if leafDictID != 0 && len(leafDictBytes) > 0 {
-				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
-			}
 		}
 	}
-	defer func() { _ = writer.Close() }()
 
 	sourceValueIDs := make(map[uint32]struct{}, len(rawSourceIDs))
 	for _, rawID := range rawSourceIDs {
 		sourceValueIDs[page.ValueLogFileID(rawID)] = struct{}{}
 	}
-	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
-	var rewriteStats leafRefRewriteRunStats
-	stats.LeafPagesCopied, stats.BytesCopied, err = db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), &rewriteStats)
-	stats.InternalPagesVisited = rewriteStats.InternalPagesVisited
-	stats.SubtreesPruned = rewriteStats.SubtreesPruned
-	stats.LeafFramesWritten = rewriteStats.LeafFramesWritten
-	stats.MaxLeafFrameK = rewriteStats.MaxLeafFrameK
-	if err != nil {
-		return stats, fmt.Errorf("leaf generation pack: rewrite leaf refs: %w", err)
+
+	seqAlloc, ridAlloc := db.leafGenerationPackAllocators(leafStartSeq, nextRID, opts.ReserveRIDs)
+	const maxCopyAttempts = 2
+	for attempt := 1; attempt <= maxCopyAttempts; attempt++ {
+		stats.CopyAttempts++
+		stagingDir, err := os.MkdirTemp(layout.leafVLogDir, ".leaf-pack-copy-")
+		if err != nil {
+			return stats, err
+		}
+		privateLeafDir := filepath.Join(stagingDir, filepath.Base(layout.leafVLogDir))
+		if err := os.MkdirAll(privateLeafDir, 0o700); err != nil {
+			_ = os.RemoveAll(stagingDir)
+			return stats, err
+		}
+		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
+		writer.ConfigureLeafLog(privateLeafDir, rewriteLeafLogLaneID, leafStartSeq)
+		writer.setLeafPageLogSeqAllocator(seqAlloc)
+		writer.setLeafPageLogRIDAllocator(ridAlloc)
+		writer.blockCompression = blockCompression
+		writer.blockCodec = blockCodec
+		writer.leafBlockCodec = leafBlockCodec
+		if leafDictID != 0 && len(leafDictBytes) > 0 {
+			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
+		}
+
+		var rewriteStats leafRefRewriteRunStats
+		copied, copiedBytes, rewriteErr := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), attempt, &rewriteStats)
+		closeErr := writer.Close()
+		removeErr := os.RemoveAll(stagingDir)
+		stats.CopyTimeNanos += rewriteStats.CopyTimeNanos
+		stats.PublishWaitNanos += rewriteStats.PublishWaitNanos
+		stats.PublishHoldNanos += rewriteStats.PublishHoldNanos
+		stats.PrivatePagesAllocated += rewriteStats.PrivatePages
+		if errors.Is(rewriteErr, errLeafGenerationPackPublishConflict) {
+			stats.CopyAborts++
+			stats.PrivatePagesDiscarded += rewriteStats.PrivatePages
+			if closeErr != nil || removeErr != nil {
+				return stats, errors.Join(rewriteErr, closeErr, removeErr)
+			}
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			continue
+		}
+		if rewriteErr != nil || closeErr != nil || removeErr != nil {
+			return stats, fmt.Errorf("leaf generation pack: rewrite leaf refs: %w", errors.Join(rewriteErr, closeErr, removeErr))
+		}
+
+		stats.LeafPagesCopied = copied
+		stats.BytesCopied = copiedBytes
+		stats.InternalPagesVisited = rewriteStats.InternalPagesVisited
+		stats.SubtreesPruned = rewriteStats.SubtreesPruned
+		stats.LeafFramesWritten = rewriteStats.LeafFramesWritten
+		stats.MaxLeafFrameK = rewriteStats.MaxLeafFrameK
+		createdIDs, err := writer.createdFileIDs()
+		if err != nil {
+			return stats, err
+		}
+		stats.CreatedFileIDs = filterLeafGenerationRawFileIDs(createdIDs)
+		return stats, nil
 	}
-	createdIDs, err := writer.createdFileIDs()
-	if err != nil {
-		return stats, err
+	return stats, errLeafGenerationPackPublishConflict
+}
+
+func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, reserveRIDs func(int) (uint64, error)) (*leafLogSeqAllocator, *rewriteRIDAllocator) {
+	seqAlloc := newLeafLogSeqAllocator(leafStartSeq)
+	ridAlloc := newRewriteRIDAllocator(nextRID, reserveRIDs)
+	if db == nil {
+		return seqAlloc, ridAlloc
 	}
-	stats.CreatedFileIDs = filterLeafGenerationRawFileIDs(createdIDs)
-	return stats, nil
+	db.writeMu.RLock()
+	group, ok := db.leafPageLog.(*leafPageLogLaneGroup)
+	if ok && group != nil {
+		if group.seqAlloc != nil {
+			seqAlloc = group.seqAlloc
+		}
+		if reserveRIDs == nil && group.ridAlloc != nil {
+			ridAlloc = group.ridAlloc
+		}
+	}
+	db.writeMu.RUnlock()
+	return seqAlloc, ridAlloc
 }
 
 func selectedLeafGenerationPackPlan(selection LeafGenerationPackSelection) LeafGenerationPlan {

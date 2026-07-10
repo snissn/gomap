@@ -2661,7 +2661,13 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// 4. Sync Meta - No DB Lock
 	if sync {
 		t1 := time.Now()
-		if err := idx.pager.Sync(); err != nil {
+		var err error
+		if opts.syncMetaPageOnly {
+			err = idx.pager.SyncPages([]uint64{targetPageID})
+		} else {
+			err = idx.pager.Sync()
+		}
+		if err != nil {
 			return post, err
 		}
 		if debugTiming {

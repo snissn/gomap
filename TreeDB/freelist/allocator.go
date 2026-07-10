@@ -334,6 +334,24 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 	return a.allocLocked(hint)
 }
 
+// AllocAppendOnly allocates a new page without consulting or mutating the
+// freelist. It is intended for speculative COW work that must remain private
+// until a later root publication. The allocator lock keeps accounting and file
+// growth ordered with ordinary foreground allocations.
+func (a *Allocator) AllocAppendOnly() (uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	id, err := a.pager.Alloc(1)
+	if err != nil {
+		return 0, err
+	}
+	a.lastAlloc = id
+	a.stats.AllocPages++
+	a.stats.AppendAllocPages++
+	return id, nil
+}
+
 // Free adds a page to the freelist.
 func (a *Allocator) Free(id uint64) error {
 	a.mu.Lock()

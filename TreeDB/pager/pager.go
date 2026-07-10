@@ -4,6 +4,7 @@ import (
 	"errors" // Added import
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -736,4 +737,66 @@ func (p *Pager) Sync() error {
 	}
 
 	return nil
+}
+
+// SyncPages synchronously persists the named pages and then the backing file.
+// It deliberately leaves dirtyChunks unchanged: unrelated foreground pages in
+// the same mmap chunk still require the ordinary commit sync path.
+func (p *Pager) SyncPages(pageIDs []uint64) error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
+	if len(pageIDs) == 0 {
+		return nil
+	}
+
+	ids := append([]uint64(nil), pageIDs...)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	unique := ids[:0]
+	for _, pageID := range ids {
+		if len(unique) == 0 || pageID != unique[len(unique)-1] {
+			unique = append(unique, pageID)
+		}
+	}
+
+	for start := 0; start < len(unique); {
+		pageID := unique[start]
+		p.mu.RLock()
+		if pageID >= p.numPages.Load() {
+			p.mu.RUnlock()
+			return ErrPageOutOfBounds
+		}
+		byteOffset := int64(pageID) * int64(page.PageSize)
+		chunkIdx := int(byteOffset / p.chunkSize)
+		offsetInChunk := int(byteOffset % p.chunkSize)
+		if chunkIdx >= len(p.chunks) || offsetInChunk+page.PageSize > len(p.chunks[chunkIdx]) {
+			p.mu.RUnlock()
+			return ErrPageOutOfBounds
+		}
+
+		end := start + 1
+		for end < len(unique) && unique[end] == unique[end-1]+1 {
+			endOffset := int64(unique[end]) * int64(page.PageSize)
+			if int(endOffset/p.chunkSize) != chunkIdx {
+				break
+			}
+			end++
+		}
+		length := (end - start) * page.PageSize
+		if offsetInChunk+length > len(p.chunks[chunkIdx]) {
+			p.mu.RUnlock()
+			return ErrPageOutOfBounds
+		}
+		err := msyncFile(p.chunks[chunkIdx][offsetInChunk : offsetInChunk+length])
+		p.mu.RUnlock()
+		if err != nil {
+			return err
+		}
+		start = end
+	}
+
+	p.mu.RLock()
+	err := p.file.Sync()
+	p.mu.RUnlock()
+	return err
 }

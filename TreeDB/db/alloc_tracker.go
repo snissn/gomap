@@ -9,17 +9,30 @@ import (
 // allocTracker wraps the freelist allocator and remembers allocated pages so
 // they can be returned if a write attempt is abandoned.
 type allocTracker struct {
-	alloc *freelist.Allocator
-	mu    sync.Mutex
-	pages []uint64
+	alloc      *freelist.Allocator
+	appendOnly bool
+	mu         sync.Mutex
+	pages      []uint64
 }
 
 func newAllocTracker(alloc *freelist.Allocator) *allocTracker {
 	return &allocTracker{alloc: alloc}
 }
 
+func newPrivateAppendAllocTracker(alloc *freelist.Allocator) *allocTracker {
+	return &allocTracker{alloc: alloc, appendOnly: true}
+}
+
 func (t *allocTracker) Alloc(hint uint64) (uint64, error) {
-	id, err := t.alloc.Alloc(hint)
+	var (
+		id  uint64
+		err error
+	)
+	if t.appendOnly {
+		id, err = t.alloc.AllocAppendOnly()
+	} else {
+		id, err = t.alloc.Alloc(hint)
+	}
 	if err != nil {
 		return 0, err
 	}
