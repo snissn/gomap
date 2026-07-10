@@ -60,53 +60,42 @@ func (events allocatorPageEvents) observe(event allocatorPageEvent, pageID uint6
 	}
 }
 
-type recordingAllocatorPageOperations struct {
-	inner   allocatorPageOperations
-	observe func(allocatorPageEvent, uint64)
-}
-
-func newRecordingAllocatorPageOperations(observe func(allocatorPageEvent, uint64)) *recordingAllocatorPageOperations {
-	return &recordingAllocatorPageOperations{
-		inner:   directAllocatorPageOperations{},
-		observe: observe,
+func newRecordingAllocatorPageOperations(observe func(allocatorPageEvent, uint64)) *allocatorPageOperations {
+	var direct *allocatorPageOperations
+	return &allocatorPageOperations{
+		getForWriteFunc: func(p *pager.Pager, pageID uint64) ([]byte, error) {
+			observe(allocatorPageGetForWrite, pageID)
+			return direct.getForWrite(p, pageID)
+		},
+		verifyChecksumFunc: func(pageID uint64, data []byte) bool {
+			observe(allocatorPageVerifyChecksum, pageID)
+			return direct.verifyChecksum(pageID, data)
+		},
+		updateChecksumFunc: func(pageID uint64, data []byte) {
+			observe(allocatorPageUpdateChecksum, pageID)
+			direct.updateChecksum(pageID, data)
+		},
 	}
 }
 
-func (ops *recordingAllocatorPageOperations) getForWrite(p *pager.Pager, pageID uint64) ([]byte, error) {
-	ops.observe(allocatorPageGetForWrite, pageID)
-	return ops.inner.getForWrite(p, pageID)
-}
-
-func (ops *recordingAllocatorPageOperations) verifyChecksum(pageID uint64, data []byte) bool {
-	ops.observe(allocatorPageVerifyChecksum, pageID)
-	return ops.inner.verifyChecksum(pageID, data)
-}
-
-func (ops *recordingAllocatorPageOperations) updateChecksum(pageID uint64, data []byte) {
-	ops.observe(allocatorPageUpdateChecksum, pageID)
-	ops.inner.updateChecksum(pageID, data)
-}
-
-type duplicateAllocatorPageOperations struct {
-	inner allocatorPageOperations
-}
-
-func (ops duplicateAllocatorPageOperations) getForWrite(p *pager.Pager, pageID uint64) ([]byte, error) {
-	if _, err := ops.inner.getForWrite(p, pageID); err != nil {
-		return nil, err
+func newDuplicateAllocatorPageOperations(inner *allocatorPageOperations) *allocatorPageOperations {
+	return &allocatorPageOperations{
+		getForWriteFunc: func(p *pager.Pager, pageID uint64) ([]byte, error) {
+			if _, err := inner.getForWrite(p, pageID); err != nil {
+				return nil, err
+			}
+			return inner.getForWrite(p, pageID)
+		},
+		verifyChecksumFunc: func(pageID uint64, data []byte) bool {
+			first := inner.verifyChecksum(pageID, data)
+			second := inner.verifyChecksum(pageID, data)
+			return first && second
+		},
+		updateChecksumFunc: func(pageID uint64, data []byte) {
+			inner.updateChecksum(pageID, data)
+			inner.updateChecksum(pageID, data)
+		},
 	}
-	return ops.inner.getForWrite(p, pageID)
-}
-
-func (ops duplicateAllocatorPageOperations) verifyChecksum(pageID uint64, data []byte) bool {
-	first := ops.inner.verifyChecksum(pageID, data)
-	second := ops.inner.verifyChecksum(pageID, data)
-	return first && second
-}
-
-func (ops duplicateAllocatorPageOperations) updateChecksum(pageID uint64, data []byte) {
-	ops.inner.updateChecksum(pageID, data)
-	ops.inner.updateChecksum(pageID, data)
 }
 
 func installAllocatorPageOperationRecorder(t testing.TB, observe func(allocatorPageEvent, uint64)) {
@@ -141,7 +130,7 @@ func TestAllocator_PageOperationGateDetectsDuplicateCalls(t *testing.T) {
 	headID := a.Head()
 	events := allocatorPageEvents{}
 	recorder := newRecordingAllocatorPageOperations(events.observe)
-	testAllocatorPageOperations = duplicateAllocatorPageOperations{inner: recorder}
+	testAllocatorPageOperations = newDuplicateAllocatorPageOperations(recorder)
 	t.Cleanup(func() { testAllocatorPageOperations = nil })
 
 	if err := a.FreeMany([]uint64{3}); err != nil {
