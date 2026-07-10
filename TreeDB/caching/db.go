@@ -22754,12 +22754,17 @@ func (db *DB) waitForCheckpointForWriteSince(start time.Time) {
 	if db == nil {
 		return
 	}
+	db.checkpointMu.Lock()
 	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+		db.checkpointMu.Unlock()
 		return
 	}
 	db.writeWaitForCheckpointActive.Add(1)
 	defer addAtomicInt64FloorZero(&db.writeWaitForCheckpointActive, -1)
-	db.waitForCheckpoint()
+	for db.checkpointing.Load() || db.maintenanceActive.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.checkpointMu.Unlock()
 	db.observeWriteWaitForCheckpoint(time.Since(start))
 }
 
