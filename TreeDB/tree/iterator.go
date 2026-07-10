@@ -515,22 +515,7 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, true)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
-	// Reverse seek: Find >= end, then step back.
-	if end == nil {
-		it.seekRightMost()
-	} else {
-		it.Seek(end)
-		if it.valid {
-			// Standard seek positions at the first key >= end; reverse iteration
-			// then steps once to land on the first key < end.
-			if compareTreeKey(it.currKey, end) >= 0 {
-				it.stepBackward()
-			}
-		} else if it.err == nil {
-			// seek(end) fell off the end (no error, just exhausted).
-			it.seekRightMost()
-		}
-	}
+	it.Seek(nil)
 
 	// Check Start bound
 	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
@@ -1052,8 +1037,45 @@ func (it *Iterator) Close() error {
 }
 
 func (it *Iterator) Seek(key []byte) {
+	if it.reverse {
+		it.seekReverse(key)
+		return
+	}
 	it.seek(key)
 	// Check bounds? Handled in loadCurrent
+}
+
+func (it *Iterator) seekReverse(key []byte) {
+	if key == nil || (it.end != nil && compareTreeKey(key, it.end) >= 0) {
+		if it.end == nil {
+			it.seekRightMost()
+			return
+		}
+		it.seek(it.end)
+		if it.valid {
+			if compareTreeKey(it.currKey, it.end) >= 0 {
+				it.stepBackward()
+			}
+		} else if it.err == nil {
+			it.seekRightMost()
+		}
+		if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
+			it.valid = false
+		}
+		return
+	}
+
+	it.seek(key)
+	if it.valid {
+		if compareTreeKey(it.currKey, key) > 0 {
+			it.stepBackward()
+		}
+	} else if it.err == nil {
+		it.seekRightMost()
+	}
+	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
+		it.valid = false
+	}
 }
 
 func (it *Iterator) IsDeleted() bool {

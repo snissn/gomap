@@ -807,7 +807,7 @@ func (l backendSnapshotLookup) Iterator(start, end []byte) (iterator.UnsafeItera
 	if l.rootID != 0 {
 		return l.snapshot.IteratorAtRoot(l.rootID, start, end)
 	}
-	return l.snapshot.Iterator(start, end)
+	return l.snapshot.IteratorWithOptions(start, end, backenddb.IteratorOptions{})
 }
 
 func (l backendSnapshotLookup) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
@@ -822,7 +822,7 @@ func (l backendSnapshotLookup) ReverseIterator(start, end []byte) (iterator.Unsa
 	if l.rootID != 0 {
 		return l.snapshot.ReverseIteratorAtRoot(l.rootID, start, end)
 	}
-	return l.snapshot.ReverseIterator(start, end)
+	return l.snapshot.ReverseIteratorWithOptions(start, end, backenddb.IteratorOptions{})
 }
 
 func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includeMutable bool) rootDomainSnapshot {
@@ -1793,7 +1793,7 @@ func (s rootDomainSnapshot) hasPrefixesSorted(prefixes [][]byte, out []bool) err
 
 	var it merging.Iterator
 	if len(sources) == 1 {
-		it = newSingleSourceIterator(sources[0].Iter, prefixes[0], nil)
+		it = newSingleSourceIterator(sources[0].Iter, prefixes[0], nil, false)
 	} else {
 		it = merging.NewMergingIterator(sources, prefixes[0], nil)
 	}

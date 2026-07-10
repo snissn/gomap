@@ -10,7 +10,9 @@ import (
 //
 // In cached mode, snapshots include writes that are buffered in memtables.
 //
-// TreeDB is pre-alpha; this interface may change without notice.
+// Iterators created from a snapshot are owned by it: Close invalidates every
+// outstanding iterator, which callers must still close to release its retained
+// resources. TreeDB is pre-alpha; this interface may change without notice.
 type Snapshot interface {
 	Pager() *pager.Pager
 	State() *backenddb.DBState
@@ -26,6 +28,8 @@ type Snapshot interface {
 	HasPrefixes(prefixes [][]byte) ([]bool, error)
 	Iterate(start, end []byte, fn func(key, value []byte) error) error
 	ReverseIterate(start, end []byte, fn func(key, value []byte) error) error
+	Iterator(start, end []byte) (Iterator, error)
+	ReverseIterator(start, end []byte) (Iterator, error)
 
 	GetEntry(key []byte) (node.LeafEntry, error)
 	GetEntryExact(key []byte) (node.LeafEntry, error)

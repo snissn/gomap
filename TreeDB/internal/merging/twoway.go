@@ -48,6 +48,18 @@ func (m *TwoWayMerger) Next() {
 	m.advance()
 }
 
+// Seek positions the iterator at the first visible key greater than or equal
+// to key, restricted to the iterator's original [start, end) domain.
+func (m *TwoWayMerger) Seek(key []byte) {
+	if m.start != nil && (key == nil || bytes.Compare(key, m.start) < 0) {
+		key = m.start
+	}
+	m.err = nil
+	m.src1.Seek(key)
+	m.src2.Seek(key)
+	m.advance()
+}
+
 func (m *TwoWayMerger) advance() {
 	m.valid = false // Assume invalid until an item is found
 	m.cur = nil

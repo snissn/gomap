@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -692,7 +693,7 @@ func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iter
 }
 
 // Iterator returns an iterator bound to an existing snapshot.
-func (s *Snapshot) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+func (s *Snapshot) Iterator(start, end []byte) (publiciterator.Iterator, error) {
 	return s.IteratorWithOptions(start, end, IteratorOptions{})
 }
 
@@ -702,7 +703,7 @@ func (s *Snapshot) IteratorWithOptions(start, end []byte, opts IteratorOptions) 
 	if s == nil || s.closed.Load() {
 		return nil, ErrClosed
 	}
-	return s.tree.IteratorWithOptions(start, end, opts), nil
+	return s.bindIterator(s.tree.IteratorWithOptions(start, end, opts))
 }
 
 // Iterate calls fn for each visible key/value pair in [start, end) using this
@@ -729,7 +730,7 @@ func (db *DB) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions
 }
 
 // ReverseIterator returns a reverse iterator bound to an existing snapshot.
-func (s *Snapshot) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, error) {
 	return s.ReverseIteratorWithOptions(start, end, IteratorOptions{})
 }
 
@@ -739,7 +740,7 @@ func (s *Snapshot) ReverseIteratorWithOptions(start, end []byte, opts IteratorOp
 	if s == nil || s.closed.Load() {
 		return nil, ErrClosed
 	}
-	return s.tree.ReverseIteratorWithOptions(start, end, opts), nil
+	return s.bindIterator(s.tree.ReverseIteratorWithOptions(start, end, opts))
 }
 
 // ReverseIterate calls fn for each visible key/value pair in [start, end) in
@@ -754,7 +755,7 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	if fn == nil {
 		return errors.New("treedb: snapshot iterate nil callback")
 	}
-	var it iterator.UnsafeIterator
+	var it publiciterator.Iterator
 	if reverse {
 		it, err = s.ReverseIterator(start, end)
 	} else {

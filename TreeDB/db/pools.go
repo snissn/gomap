@@ -57,7 +57,11 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.leafGenerationPinSet = nil
 	s.reader = valueReader{}
 	s.registryID = 0
+	s.iteratorMu.Lock()
+	clear(s.iterators)
+	s.iteratorMu.Unlock()
 	s.closed.Store(false)
+	s.finalized.Store(false)
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for
 	// the next AcquireSnapshot() on this same object. registryShardHint is also
 	// preserved so the same pooled Snapshot keeps a stable fast registry shard.

@@ -213,6 +213,12 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	}); !errors.Is(err, ErrConditionalTxnUnsupported) {
 		t.Fatalf("tx snapshot Iterate error=%v, want ErrConditionalTxnUnsupported", err)
 	}
+	if _, err := snap.Iterator(nil, nil); !errors.Is(err, ErrConditionalTxnUnsupported) {
+		t.Fatalf("tx snapshot Iterator error=%v, want ErrConditionalTxnUnsupported", err)
+	}
+	if _, err := snap.ReverseIterator(nil, nil); !errors.Is(err, ErrConditionalTxnUnsupported) {
+		t.Fatalf("tx snapshot ReverseIterator error=%v, want ErrConditionalTxnUnsupported", err)
+	}
 
 	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
 		t.Fatalf("tx.Commit error=%v, want ErrConcurrentModification", err)

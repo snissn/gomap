@@ -12,6 +12,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -42,7 +43,10 @@ type Snapshot struct {
 	rootIterator    rootDomainSnapshot
 	publishedRoots  *publishedRootSet
 
-	closed atomic.Bool
+	closed     atomic.Bool
+	finalized  atomic.Bool
+	iteratorMu sync.Mutex
+	iterators  map[*snapshotBoundIterator]struct{}
 }
 
 type ownedReadScratch struct {
@@ -85,7 +89,11 @@ func putSnapshot(snap *Snapshot) {
 	snap.rootSystem = rootDomainSnapshot{}
 	snap.rootIterator = rootDomainSnapshot{}
 	snap.publishedRoots = nil
+	snap.iteratorMu.Lock()
+	clear(snap.iterators)
+	snap.iteratorMu.Unlock()
 	snap.closed.Store(true)
+	snap.finalized.Store(false)
 	snapshotPool.Put(snap)
 }
 
@@ -335,7 +343,17 @@ func (s *Snapshot) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	s.invalidateBoundIterators()
+	return s.finalizeCloseIfUnreferenced()
+}
 
+func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+	s.iteratorMu.Lock()
+	if len(s.iterators) != 0 || !s.finalized.CompareAndSwap(false, true) {
+		s.iteratorMu.Unlock()
+		return nil
+	}
+	s.iteratorMu.Unlock()
 	var err error
 	if s.backend != nil {
 		err = s.backend.Close()
@@ -601,13 +619,13 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	if reverse {
 		diskIter, ok, err = rootDomainPublishedReverseIterator(rootSnap, start, end)
 		if !ok {
-			diskIter, err = s.backend.ReverseIterator(start, end)
+			diskIter, err = s.backend.ReverseIteratorWithOptions(start, end, backenddb.IteratorOptions{})
 			ok = true
 		}
 	} else {
 		diskIter, ok, err = rootDomainPublishedIterator(rootSnap, start, end)
 		if !ok {
-			diskIter, err = s.backend.Iterator(start, end)
+			diskIter, err = s.backend.IteratorWithOptions(start, end, backenddb.IteratorOptions{})
 			ok = true
 		}
 	}
@@ -628,18 +646,18 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 
 // Iterator returns a stable iterator over the snapshot's queued memtables plus
 // its backend snapshot.
-func (s *Snapshot) Iterator(start, end []byte) (merging.Iterator, error) {
+func (s *Snapshot) Iterator(start, end []byte) (publiciterator.Iterator, error) {
 	sources, err := s.iteratorSources(start, end, false)
 	if err != nil {
 		return nil, err
 	}
 	if len(sources) == 0 {
-		return &emptyIterator{start: start, end: end}, nil
+		return s.bindIterator(&emptyIterator{start: start, end: end})
 	}
 	if len(sources) == 1 {
-		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+		return s.bindIterator(newSingleSourceIterator(sources[0].Iter, start, end, false))
 	}
-	return merging.NewMergingIterator(sources, start, end), nil
+	return s.bindIterator(merging.NewMergingIterator(sources, start, end))
 }
 
 // Iterate calls fn for each visible key/value pair in [start, end) using this
@@ -652,18 +670,18 @@ func (s *Snapshot) Iterate(start, end []byte, fn func(key, value []byte) error) 
 
 // ReverseIterator returns a stable reverse iterator over the snapshot's queued
 // memtables plus its backend snapshot.
-func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, error) {
 	sources, err := s.iteratorSources(start, end, true)
 	if err != nil {
 		return nil, err
 	}
 	if len(sources) == 0 {
-		return &emptyIterator{start: start, end: end}, nil
+		return s.bindIterator(&emptyIterator{start: start, end: end})
 	}
 	if len(sources) == 1 {
-		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+		return s.bindIterator(newSingleSourceIterator(sources[0].Iter, start, end, true))
 	}
-	return merging.NewReverseMergingIterator(sources, start, end), nil
+	return s.bindIterator(merging.NewReverseMergingIterator(sources, start, end))
 }
 
 // ReverseIterate calls fn for each visible key/value pair in [start, end) in
@@ -678,7 +696,7 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	if fn == nil {
 		return errors.New("treedb: snapshot iterate nil callback")
 	}
-	var it merging.Iterator
+	var it publiciterator.Iterator
 	if reverse {
 		it, err = s.ReverseIterator(start, end)
 	} else {

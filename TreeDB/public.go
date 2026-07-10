@@ -22,6 +22,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
 )
@@ -78,25 +79,12 @@ const (
 	defaultAdaptiveMaxBacklogBytes int64 = 2 << 30
 )
 
-// Iterator is the public iterator contract returned by TreeDB.
-//
-// Semantics (performance-first; callers must treat returned slices as
-// read-only):
-//   - Key() and Value() return views valid only until the next Next()/Close()
-//     on the same iterator.
-//   - Do not retain or mutate Key()/Value() views across iterator movement.
-//   - KeyCopy/ValueCopy return caller-owned stable bytes, reusing dst capacity
-//     when possible.
-type Iterator interface {
-	Valid() bool
-	Next()
-	Key() []byte
-	Value() []byte
-	KeyCopy(dst []byte) []byte
-	ValueCopy(dst []byte) []byte
-	Close() error
-	Error() error
-}
+// Iterator is the public storage-neutral iterator contract returned by TreeDB.
+// Seek remains inside the original [start,end) domain: forward iterators choose
+// the first key >= target, while reverse iterators choose the first key <=
+// target (nil seeks to the greatest key). See package TreeDB/iterator for view
+// ownership rules.
+type Iterator = publiciterator.Iterator
 
 // Batch is the public batch contract returned by TreeDB.
 // Both cached and backend implementations satisfy it.

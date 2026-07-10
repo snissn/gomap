@@ -235,12 +235,25 @@ read/precondition validation.
 ### 4.3 Iterator lifetime
 
 - Iterators are point-in-time views.
-- `Key()`/`Value()` data is a read-only view valid only until next movement/close.
+- `Key()`/`Value()` data is a read-only view valid only until the next
+  `Next`, `Seek`, iterator `Close`, or owning snapshot `Close`.
 - Callers must not retain or mutate `Key()`/`Value()` views across iterator movement.
 - `KeyCopy`/`ValueCopy` provide caller-owned stable copies that may be retained after movement/close.
 - Iterator must be closed.
 
-### 4.4 Cached-mode iterator semantics
+### 4.4 Seek
+
+- `Seek` never changes the iterator's original half-open `[start,end)` domain.
+- On a forward iterator, `Seek(target)` selects the least visible key greater
+  than or equal to `target`.
+- On a reverse iterator, `Seek(target)` selects the greatest visible key less
+  than or equal to `target`; a nil target selects the greatest key in the
+  domain.
+- Seeking before or after the domain clamps to the first eligible key or makes
+  the iterator invalid, respectively. Tombstones and shadowed source versions
+  are never exposed.
+
+### 4.5 Cached-mode iterator semantics
 
 When the cached layer is enabled:
 
@@ -252,6 +265,16 @@ When the cached layer is enabled:
 ## 5. Snapshot Contracts
 
 - Snapshots are point-in-time readers and MUST be closed to release retention pressure.
+- `Snapshot.Iterator` and `Snapshot.ReverseIterator` bind iterators to that
+  snapshot's pinned view. Closing the snapshot immediately invalidates every
+  outstanding bound iterator. After snapshot closure, iterator movement and
+  seek are no-ops, accessors return no view, `Valid` is false, and `Error`
+  returns `ErrClosed`; iterator `Close` remains idempotent. Physical snapshot
+  reclamation is deferred until those invalidated iterators are closed, so a
+  close racing `Next` or `Seek` cannot recycle their backing snapshot.
+- Snapshot iterator creation racing snapshot closure either returns a fully
+  registered iterator or fails with `ErrClosed`; it must not return an iterator
+  backed by a recycled snapshot object.
 - In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
 - `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
 - Under the planned user-command WAL contract, collection scans and snapshots

@@ -1347,6 +1347,9 @@ type Snapshot struct {
 	rootTreesMu             sync.Mutex
 	rootTrees               []snapshotRootTree
 	closed                  atomic.Bool
+	finalized               atomic.Bool
+	iteratorMu              sync.Mutex
+	iterators               map[*snapshotBoundIterator]struct{}
 	treePager               *pager.Pager
 	treeRoot                uint64
 	// registryShardHint is used to route reader registrations to a stable fast
@@ -1543,7 +1546,17 @@ func (s *Snapshot) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	s.invalidateBoundIterators()
+	return s.finalizeCloseIfUnreferenced()
+}
 
+func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+	s.iteratorMu.Lock()
+	if len(s.iterators) != 0 || !s.finalized.CompareAndSwap(false, true) {
+		s.iteratorMu.Unlock()
+		return nil
+	}
+	s.iteratorMu.Unlock()
 	var err error
 	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {

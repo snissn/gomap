@@ -32123,7 +32123,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	if len(sources) == 1 {
-		out := newSingleSourceIterator(sources[0].Iter, start, end)
+		out := newSingleSourceIterator(sources[0].Iter, start, end, false)
 		return decorateIterator(out, 1), nil
 	}
 
@@ -32240,6 +32240,19 @@ func (it *concatUnsafeIterator) Next() {
 		panic("iterator invalid")
 	}
 	it.cur.Next()
+	it.advance()
+}
+
+func (it *concatUnsafeIterator) Seek(key []byte) {
+	it.err = nil
+	if it.first != nil {
+		it.first.Seek(key)
+	}
+	if it.second != nil {
+		it.second.Seek(key)
+	}
+	it.cur = it.first
+	it.usingFirst = true
 	it.advance()
 }
 
@@ -32510,7 +32523,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	if len(sources) == 1 {
-		out := newSingleSourceIterator(sources[0].Iter, start, end)
+		out := newSingleSourceIterator(sources[0].Iter, start, end, true)
 		return decorateIterator(out, 1), nil
 	}
 
@@ -36606,17 +36619,19 @@ func (b *Batch) GetByteSize() (int, error) {
 // singleSourceIterator wraps a single UnsafeIterator to satisfy merging.Iterator,
 // skipping tombstones.
 type singleSourceIterator struct {
-	iter  iterator.UnsafeIterator
-	valid bool
-	start []byte
-	end   []byte
+	iter    iterator.UnsafeIterator
+	valid   bool
+	start   []byte
+	end     []byte
+	reverse bool
 }
 
-func newSingleSourceIterator(iter iterator.UnsafeIterator, start, end []byte) merging.Iterator {
+func newSingleSourceIterator(iter iterator.UnsafeIterator, start, end []byte, reverse bool) merging.Iterator {
 	it := &singleSourceIterator{
-		iter:  iter,
-		start: start,
-		end:   end,
+		iter:    iter,
+		start:   start,
+		end:     end,
+		reverse: reverse,
 	}
 	// Iterator is already sought to start by the caller
 	it.advance()
@@ -36626,6 +36641,9 @@ func newSingleSourceIterator(iter iterator.UnsafeIterator, start, end []byte) me
 func (it *singleSourceIterator) advance() {
 	it.valid = false
 	for it.iter.Valid() {
+		if it.reverse && it.start != nil && bytes.Compare(it.iter.UnsafeKey(), it.start) < 0 {
+			return
+		}
 		if it.end != nil && bytes.Compare(it.iter.UnsafeKey(), it.end) >= 0 {
 			return
 		}
@@ -36643,6 +36661,15 @@ func (it *singleSourceIterator) Next() {
 		panic("iterator invalid")
 	}
 	it.iter.Next()
+	it.advance()
+}
+
+func (it *singleSourceIterator) Seek(key []byte) {
+	it.valid = false
+	if it.reverse && key != nil && it.start != nil && bytes.Compare(key, it.start) < 0 {
+		return
+	}
+	it.iter.Seek(key)
 	it.advance()
 }
 
@@ -36684,6 +36711,7 @@ type emptyIterator struct {
 }
 
 func (it *emptyIterator) Next()                     { panic("iterator invalid") }
+func (it *emptyIterator) Seek([]byte)               {}
 func (it *emptyIterator) Valid() bool               { return false }
 func (it *emptyIterator) Key() []byte               { panic("iterator invalid") }
 func (it *emptyIterator) Value() []byte             { panic("iterator invalid") }
