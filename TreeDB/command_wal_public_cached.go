@@ -55,9 +55,12 @@ func (tdb *DB) appendPublicRawKVCommandPayloadMeasured(payload []byte, sync bool
 		return timing, ErrClosed
 	}
 	lsn, timing, err := tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedMeasured(payload, sync)
+	postAppendStart := time.Now()
+	timing.PostAppendPendingLSNBookkeepingObserved = true
 	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
+	timing.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
 	return timing, err
 }
 
@@ -98,9 +101,12 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanMeasured(scanEntries func(func(b
 		return timing, ErrClosed
 	}
 	lsn, timing, err := tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintMeasured(scanEntries, opHint, sync)
+	postAppendStart := time.Now()
+	timing.PostAppendPendingLSNBookkeepingObserved = true
 	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
+	timing.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
 	return timing, err
 }
 
@@ -877,6 +883,14 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 			phaseSample.preflightMaterialization = cachedTiming.PreflightMaterialization
 			phaseSample.commandCallback = cachedTiming.CommandCallback
 			phaseSample.memtablePublicationReset = cachedTiming.MemtablePublicationReset
+			phaseSample.commandPublicPayloadEntryScanPreparation = commandTiming.PublicPayloadEntryScanPreparation
+			phaseSample.commandPublicPreparationObserved = commandTiming.PublicPreparationObserved
+			phaseSample.commandPublishLockBarrierWait = commandTiming.PublishLockBarrierWait
+			phaseSample.commandPublishLockBarrierWaitObserved = commandTiming.PublishLockBarrierWaitObserved
+			phaseSample.commandBackendIntentPlanningSerialization = commandTiming.BackendIntentPlanningSerialization
+			phaseSample.commandBackendIntentPlanningObserved = commandTiming.BackendIntentPlanningSerializationObserved
+			phaseSample.commandExternalRefOrdering = commandTiming.ExternalRefOrdering
+			phaseSample.commandExternalRefOrderingObserved = commandTiming.ExternalRefOrderingObserved
 			phaseSample.commandAppend = commandTiming.Append
 			phaseSample.commandAppendObserved = commandTiming.AppendObserved
 			if commandTiming.Sync {
@@ -886,6 +900,8 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 				phaseSample.commandFlush = commandTiming.Flush
 				phaseSample.commandFlushObserved = commandTiming.FlushObserved
 			}
+			phaseSample.commandPostAppendPendingLSNBookkeeping = commandTiming.PostAppendPendingLSNBookkeeping
+			phaseSample.commandPostAppendPendingLSNBookkeepingObserved = commandTiming.PostAppendPendingLSNBookkeepingObserved
 			writeErr = measuredErr
 		} else {
 			writer, ok := b.inner.(interface {
@@ -924,6 +940,8 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 			commandStart := time.Now()
 			syncErr := b.db.syncPublicCommandWAL()
 			phaseSample.commandCallback = time.Since(commandStart)
+			phaseSample.commandEmptyBarrier = phaseSample.commandCallback
+			phaseSample.commandEmptyBarrierObserved = true
 			if syncErr != nil {
 				return syncErr
 			}
@@ -1198,14 +1216,24 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandW
 	if b == nil || b.inner == nil || b.db == nil {
 		return timing, ErrClosed
 	}
+	preparationStart := time.Now()
+	timing.PublicPreparationObserved = true
 	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		payload, err := b.commandWALPayload()
+		timing.PublicPayloadEntryScanPreparation = time.Since(preparationStart)
 		if err != nil {
 			return timing, err
 		}
-		return b.db.appendPublicRawKVCommandPayloadMeasured(payload, sync)
+		backendTiming, appendErr := b.db.appendPublicRawKVCommandPayloadMeasured(payload, sync)
+		backendTiming.PublicPayloadEntryScanPreparation += timing.PublicPayloadEntryScanPreparation
+		backendTiming.PublicPreparationObserved = true
+		return backendTiming, appendErr
 	}
-	return b.db.appendPublicRawKVCommandEntryScanMeasured(b.inner.Replay, b.opCount, sync)
+	timing.PublicPayloadEntryScanPreparation = time.Since(preparationStart)
+	backendTiming, appendErr := b.db.appendPublicRawKVCommandEntryScanMeasured(b.inner.Replay, b.opCount, sync)
+	backendTiming.PublicPayloadEntryScanPreparation += timing.PublicPayloadEntryScanPreparation
+	backendTiming.PublicPreparationObserved = true
+	return backendTiming, appendErr
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {

@@ -449,9 +449,15 @@ func requirePublicBatchWriteSyncPhasePartitions(t *testing.T, stats map[string]s
 		t.Fatalf("request phase sum=%d, want wall=%d (stats=%#v)", topLevel, wall, stats)
 	}
 	commandCallback := statMapUint64(t, stats, prefix+"command_callback.ns_total")
-	commandPartition := statMapUint64(t, stats, prefix+"command_append.ns_total") +
+	commandPartition := statMapUint64(t, stats, prefix+"command_public_payload_entry_scan_preparation.ns_total") +
+		statMapUint64(t, stats, prefix+"command_publish_lock_barrier_wait.ns_total") +
+		statMapUint64(t, stats, prefix+"command_backend_intent_planning_serialization.ns_total") +
+		statMapUint64(t, stats, prefix+"command_external_ref_ordering.ns_total") +
+		statMapUint64(t, stats, prefix+"command_append.ns_total") +
 		statMapUint64(t, stats, prefix+"command_flush.ns_total") +
 		statMapUint64(t, stats, prefix+"command_sync.ns_total") +
+		statMapUint64(t, stats, prefix+"command_post_append_pending_lsn_bookkeeping.ns_total") +
+		statMapUint64(t, stats, prefix+"command_empty_barrier.ns_total") +
 		statMapUint64(t, stats, prefix+"command_other.ns_total")
 	if commandPartition != commandCallback {
 		t.Fatalf("command phase sum=%d, want callback=%d (stats=%#v)", commandPartition, commandCallback, stats)
@@ -616,7 +622,7 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *
 	if got := before[prefix+"top_level_partition"]; got != "checkpoint_gate+preflight_materialization+command_callback+memtable_publication_reset+residual" {
 		t.Fatalf("top-level partition=%q", got)
 	}
-	if got := before[prefix+"command_callback_partition"]; got != "command_append+(command_flush|command_sync)+command_other" {
+	if got := before[prefix+"command_callback_partition"]; got != "command_public_payload_entry_scan_preparation+command_publish_lock_barrier_wait+command_backend_intent_planning_serialization+command_external_ref_ordering+command_append+(command_flush|command_sync)+command_post_append_pending_lsn_bookkeeping+command_empty_barrier+command_other" {
 		t.Fatalf("command partition=%q", got)
 	}
 
@@ -670,8 +676,8 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *
 		t.Fatalf("entry-scan batch Close: %v", err)
 	}
 
-	// Empty WriteSync still has a request-scoped command barrier. Its unsplit
-	// barrier time is conservatively retained in command_other.
+	// Empty WriteSync still has a request-scoped command barrier. Keep it in a
+	// distinct leaf so command_other remains honest for dirty callbacks.
 	emptyBatch := db.NewBatch()
 	if err := emptyBatch.WriteSync(); err != nil {
 		_ = emptyBatch.Close()
@@ -697,6 +703,21 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *
 	}
 	if got := statMapUint64(t, after, prefix+"command_flush.calls_total"); got != 0 {
 		t.Fatalf("phase command flush calls=%d, want 0 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_public_payload_entry_scan_preparation.calls_total"); got != 2 {
+		t.Fatalf("phase public preparation calls=%d, want 2 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_publish_lock_barrier_wait.calls_total"); got != 2 {
+		t.Fatalf("phase publish lock/barrier calls=%d, want 2 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_backend_intent_planning_serialization.calls_total"); got != 2 {
+		t.Fatalf("phase backend planning calls=%d, want 2 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_post_append_pending_lsn_bookkeeping.calls_total"); got != 2 {
+		t.Fatalf("phase post-append bookkeeping calls=%d, want 2 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_empty_barrier.calls_total"); got != 1 {
+		t.Fatalf("phase empty barrier calls=%d, want 1 (stats=%#v)", got, after)
 	}
 	if got := statMapUint64(t, after, "treedb.command_wal.append.count_total"); got <= 2 {
 		t.Fatalf("global command append count=%d, want > request-scoped 2 after noise (stats=%#v)", got, after)
@@ -746,6 +767,38 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelRelaxedFlush(t *testing.T)
 	}
 	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 0 {
 		t.Fatalf("phase command sync calls=%d, want 0 (stats=%#v)", got, stats)
+	}
+	requirePublicBatchWriteSyncPhasePartitions(t, stats)
+}
+
+func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelExternalRefOrdering(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	opts.PublicBatchWriteSyncPhaseStats = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("external-ref"), bytes.Repeat([]byte("v"), 2048)); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	stats := db.Stats()
+	prefix := "treedb.public.batch.write_sync.phase."
+	if got := statMapUint64(t, stats, prefix+"command_external_ref_ordering.calls_total"); got != 1 {
+		t.Fatalf("phase external-ref ordering calls=%d, want 1 (stats=%#v)", got, stats)
 	}
 	requirePublicBatchWriteSyncPhasePartitions(t, stats)
 }

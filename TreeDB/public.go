@@ -209,36 +209,60 @@ type publicOperationStats struct {
 }
 
 type publicBatchWriteSyncPhaseSample struct {
-	checkpointGate           time.Duration
-	preflightMaterialization time.Duration
-	commandCallback          time.Duration
-	commandAppend            time.Duration
-	commandAppendObserved    bool
-	commandFlush             time.Duration
-	commandFlushObserved     bool
-	commandSync              time.Duration
-	commandSyncObserved      bool
-	memtablePublicationReset time.Duration
+	checkpointGate                                 time.Duration
+	preflightMaterialization                       time.Duration
+	commandCallback                                time.Duration
+	commandPublicPayloadEntryScanPreparation       time.Duration
+	commandPublicPreparationObserved               bool
+	commandPublishLockBarrierWait                  time.Duration
+	commandPublishLockBarrierWaitObserved          bool
+	commandBackendIntentPlanningSerialization      time.Duration
+	commandBackendIntentPlanningObserved           bool
+	commandExternalRefOrdering                     time.Duration
+	commandExternalRefOrderingObserved             bool
+	commandAppend                                  time.Duration
+	commandAppendObserved                          bool
+	commandFlush                                   time.Duration
+	commandFlushObserved                           bool
+	commandSync                                    time.Duration
+	commandSyncObserved                            bool
+	commandPostAppendPendingLSNBookkeeping         time.Duration
+	commandPostAppendPendingLSNBookkeepingObserved bool
+	commandEmptyBarrier                            time.Duration
+	commandEmptyBarrierObserved                    bool
+	memtablePublicationReset                       time.Duration
 }
 
 type publicBatchWriteSyncPhaseStats struct {
-	calls                      atomic.Uint64
-	errors                     atomic.Uint64
-	wallNs                     atomic.Uint64
-	checkpointGateNs           atomic.Uint64
-	preflightMaterializationNs atomic.Uint64
-	commandCallbackNs          atomic.Uint64
-	commandAppendCalls         atomic.Uint64
-	commandAppendNs            atomic.Uint64
-	commandFlushCalls          atomic.Uint64
-	commandFlushNs             atomic.Uint64
-	commandSyncCalls           atomic.Uint64
-	commandSyncNs              atomic.Uint64
-	commandOtherNs             atomic.Uint64
-	memtablePublicationResetNs atomic.Uint64
-	residualNs                 atomic.Uint64
-	topLevelPartitionOverruns  atomic.Uint64
-	commandPartitionOverruns   atomic.Uint64
+	calls                                       atomic.Uint64
+	errors                                      atomic.Uint64
+	wallNs                                      atomic.Uint64
+	checkpointGateNs                            atomic.Uint64
+	preflightMaterializationNs                  atomic.Uint64
+	commandCallbackNs                           atomic.Uint64
+	commandPublicPreparationCalls               atomic.Uint64
+	commandPublicPayloadEntryScanPreparationNs  atomic.Uint64
+	commandPublishLockBarrierWaitCalls          atomic.Uint64
+	commandPublishLockBarrierWaitNs             atomic.Uint64
+	commandBackendIntentPlanningCalls           atomic.Uint64
+	commandBackendIntentPlanningSerializationNs atomic.Uint64
+	commandExternalRefOrderingCalls             atomic.Uint64
+	commandExternalRefOrderingNs                atomic.Uint64
+	commandAppendCalls                          atomic.Uint64
+	commandAppendNs                             atomic.Uint64
+	commandFlushCalls                           atomic.Uint64
+	commandFlushNs                              atomic.Uint64
+	commandSyncCalls                            atomic.Uint64
+	commandSyncNs                               atomic.Uint64
+	commandPostAppendPendingLSNBookkeepingCalls atomic.Uint64
+	commandPostAppendPendingLSNBookkeepingNs    atomic.Uint64
+	commandEmptyBarrierCalls                    atomic.Uint64
+	commandEmptyBarrierNs                       atomic.Uint64
+	commandOtherNs                              atomic.Uint64
+	memtablePublicationResetNs                  atomic.Uint64
+	residualNs                                  atomic.Uint64
+	topLevelPartitionOverruns                   atomic.Uint64
+	commandPartitionOverruns                    atomic.Uint64
 }
 
 var (
@@ -365,9 +389,15 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 	checkpointGateNs := nonNegativeDurationNs(sample.checkpointGate)
 	preflightMaterializationNs := nonNegativeDurationNs(sample.preflightMaterialization)
 	commandCallbackNs := nonNegativeDurationNs(sample.commandCallback)
+	commandPublicPayloadEntryScanPreparationNs := nonNegativeDurationNs(sample.commandPublicPayloadEntryScanPreparation)
+	commandPublishLockBarrierWaitNs := nonNegativeDurationNs(sample.commandPublishLockBarrierWait)
+	commandBackendIntentPlanningSerializationNs := nonNegativeDurationNs(sample.commandBackendIntentPlanningSerialization)
+	commandExternalRefOrderingNs := nonNegativeDurationNs(sample.commandExternalRefOrdering)
 	commandAppendNs := nonNegativeDurationNs(sample.commandAppend)
 	commandFlushNs := nonNegativeDurationNs(sample.commandFlush)
 	commandSyncNs := nonNegativeDurationNs(sample.commandSync)
+	commandPostAppendPendingLSNBookkeepingNs := nonNegativeDurationNs(sample.commandPostAppendPendingLSNBookkeeping)
+	commandEmptyBarrierNs := nonNegativeDurationNs(sample.commandEmptyBarrier)
 	memtablePublicationResetNs := nonNegativeDurationNs(sample.memtablePublicationReset)
 
 	topLevelKnownNs := checkpointGateNs + preflightMaterializationNs + commandCallbackNs + memtablePublicationResetNs
@@ -377,7 +407,15 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 	} else {
 		s.topLevelPartitionOverruns.Add(1)
 	}
-	commandKnownNs := commandAppendNs + commandFlushNs + commandSyncNs
+	commandKnownNs := commandPublicPayloadEntryScanPreparationNs +
+		commandPublishLockBarrierWaitNs +
+		commandBackendIntentPlanningSerializationNs +
+		commandExternalRefOrderingNs +
+		commandAppendNs +
+		commandFlushNs +
+		commandSyncNs +
+		commandPostAppendPendingLSNBookkeepingNs +
+		commandEmptyBarrierNs
 	commandOtherNs := uint64(0)
 	if commandKnownNs <= commandCallbackNs {
 		commandOtherNs = commandCallbackNs - commandKnownNs
@@ -393,6 +431,22 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 	s.checkpointGateNs.Add(checkpointGateNs)
 	s.preflightMaterializationNs.Add(preflightMaterializationNs)
 	s.commandCallbackNs.Add(commandCallbackNs)
+	if sample.commandPublicPreparationObserved {
+		s.commandPublicPreparationCalls.Add(1)
+	}
+	s.commandPublicPayloadEntryScanPreparationNs.Add(commandPublicPayloadEntryScanPreparationNs)
+	if sample.commandPublishLockBarrierWaitObserved {
+		s.commandPublishLockBarrierWaitCalls.Add(1)
+	}
+	s.commandPublishLockBarrierWaitNs.Add(commandPublishLockBarrierWaitNs)
+	if sample.commandBackendIntentPlanningObserved {
+		s.commandBackendIntentPlanningCalls.Add(1)
+	}
+	s.commandBackendIntentPlanningSerializationNs.Add(commandBackendIntentPlanningSerializationNs)
+	if sample.commandExternalRefOrderingObserved {
+		s.commandExternalRefOrderingCalls.Add(1)
+	}
+	s.commandExternalRefOrderingNs.Add(commandExternalRefOrderingNs)
 	if sample.commandAppendObserved {
 		s.commandAppendCalls.Add(1)
 	}
@@ -405,6 +459,14 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 		s.commandSyncCalls.Add(1)
 	}
 	s.commandSyncNs.Add(commandSyncNs)
+	if sample.commandPostAppendPendingLSNBookkeepingObserved {
+		s.commandPostAppendPendingLSNBookkeepingCalls.Add(1)
+	}
+	s.commandPostAppendPendingLSNBookkeepingNs.Add(commandPostAppendPendingLSNBookkeepingNs)
+	if sample.commandEmptyBarrierObserved {
+		s.commandEmptyBarrierCalls.Add(1)
+	}
+	s.commandEmptyBarrierNs.Add(commandEmptyBarrierNs)
 	s.commandOtherNs.Add(commandOtherNs)
 	s.memtablePublicationResetNs.Add(memtablePublicationResetNs)
 	s.residualNs.Add(residualNs)
@@ -418,19 +480,31 @@ func publicBatchWriteSyncPhaseStatsInto(stats map[string]string, enabled bool, s
 	stats[prefix+"enabled"] = strconv.FormatBool(enabled)
 	stats[prefix+"scope"] = "command_wal_public_batch_write_sync"
 	stats[prefix+"top_level_partition"] = "checkpoint_gate+preflight_materialization+command_callback+memtable_publication_reset+residual"
-	stats[prefix+"command_callback_partition"] = "command_append+(command_flush|command_sync)+command_other"
+	stats[prefix+"command_callback_partition"] = "command_public_payload_entry_scan_preparation+command_publish_lock_barrier_wait+command_backend_intent_planning_serialization+command_external_ref_ordering+command_append+(command_flush|command_sync)+command_post_append_pending_lsn_bookkeeping+command_empty_barrier+command_other"
 	stats[prefix+"calls_total"] = fmt.Sprintf("%d", s.calls.Load())
 	stats[prefix+"errors_total"] = fmt.Sprintf("%d", s.errors.Load())
 	stats[prefix+"wall.ns_total"] = fmt.Sprintf("%d", s.wallNs.Load())
 	stats[prefix+"checkpoint_gate.ns_total"] = fmt.Sprintf("%d", s.checkpointGateNs.Load())
 	stats[prefix+"preflight_materialization.ns_total"] = fmt.Sprintf("%d", s.preflightMaterializationNs.Load())
 	stats[prefix+"command_callback.ns_total"] = fmt.Sprintf("%d", s.commandCallbackNs.Load())
+	stats[prefix+"command_public_payload_entry_scan_preparation.calls_total"] = fmt.Sprintf("%d", s.commandPublicPreparationCalls.Load())
+	stats[prefix+"command_public_payload_entry_scan_preparation.ns_total"] = fmt.Sprintf("%d", s.commandPublicPayloadEntryScanPreparationNs.Load())
+	stats[prefix+"command_publish_lock_barrier_wait.calls_total"] = fmt.Sprintf("%d", s.commandPublishLockBarrierWaitCalls.Load())
+	stats[prefix+"command_publish_lock_barrier_wait.ns_total"] = fmt.Sprintf("%d", s.commandPublishLockBarrierWaitNs.Load())
+	stats[prefix+"command_backend_intent_planning_serialization.calls_total"] = fmt.Sprintf("%d", s.commandBackendIntentPlanningCalls.Load())
+	stats[prefix+"command_backend_intent_planning_serialization.ns_total"] = fmt.Sprintf("%d", s.commandBackendIntentPlanningSerializationNs.Load())
+	stats[prefix+"command_external_ref_ordering.calls_total"] = fmt.Sprintf("%d", s.commandExternalRefOrderingCalls.Load())
+	stats[prefix+"command_external_ref_ordering.ns_total"] = fmt.Sprintf("%d", s.commandExternalRefOrderingNs.Load())
 	stats[prefix+"command_append.calls_total"] = fmt.Sprintf("%d", s.commandAppendCalls.Load())
 	stats[prefix+"command_append.ns_total"] = fmt.Sprintf("%d", s.commandAppendNs.Load())
 	stats[prefix+"command_flush.calls_total"] = fmt.Sprintf("%d", s.commandFlushCalls.Load())
 	stats[prefix+"command_flush.ns_total"] = fmt.Sprintf("%d", s.commandFlushNs.Load())
 	stats[prefix+"command_sync.calls_total"] = fmt.Sprintf("%d", s.commandSyncCalls.Load())
 	stats[prefix+"command_sync.ns_total"] = fmt.Sprintf("%d", s.commandSyncNs.Load())
+	stats[prefix+"command_post_append_pending_lsn_bookkeeping.calls_total"] = fmt.Sprintf("%d", s.commandPostAppendPendingLSNBookkeepingCalls.Load())
+	stats[prefix+"command_post_append_pending_lsn_bookkeeping.ns_total"] = fmt.Sprintf("%d", s.commandPostAppendPendingLSNBookkeepingNs.Load())
+	stats[prefix+"command_empty_barrier.calls_total"] = fmt.Sprintf("%d", s.commandEmptyBarrierCalls.Load())
+	stats[prefix+"command_empty_barrier.ns_total"] = fmt.Sprintf("%d", s.commandEmptyBarrierNs.Load())
 	stats[prefix+"command_other.ns_total"] = fmt.Sprintf("%d", s.commandOtherNs.Load())
 	stats[prefix+"memtable_publication_reset.ns_total"] = fmt.Sprintf("%d", s.memtablePublicationResetNs.Load())
 	stats[prefix+"residual.ns_total"] = fmt.Sprintf("%d", s.residualNs.Load())
