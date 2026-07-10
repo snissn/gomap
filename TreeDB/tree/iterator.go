@@ -1046,6 +1046,9 @@ func (it *Iterator) Seek(key []byte) {
 		it.seekReverse(key)
 		return
 	}
+	if it.start != nil && (key == nil || compareTreeKey(key, it.start) < 0) {
+		key = it.start
+	}
 	it.seek(key)
 	// Check bounds? Handled in loadCurrent
 }
@@ -1054,15 +1057,15 @@ func (it *Iterator) seekReverse(key []byte) {
 	if key == nil || (it.end != nil && compareTreeKey(key, it.end) >= 0) {
 		if it.end == nil {
 			it.seekRightMost()
-			return
-		}
-		it.seek(it.end)
-		if it.valid {
-			if compareTreeKey(it.currKey, it.end) >= 0 {
-				it.stepBackward()
+		} else {
+			it.seek(it.end)
+			if it.valid {
+				if compareTreeKey(it.currKey, it.end) >= 0 {
+					it.stepBackward()
+				}
+			} else if it.err == nil {
+				it.seekRightMost()
 			}
-		} else if it.err == nil {
-			it.seekRightMost()
 		}
 		if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
 			it.valid = false
@@ -1075,7 +1078,7 @@ func (it *Iterator) seekReverse(key []byte) {
 		if compareTreeKey(it.currKey, key) > 0 {
 			it.stepBackward()
 		}
-	} else if it.err == nil {
+	} else if it.err == nil && (it.start == nil || compareTreeKey(key, it.start) >= 0) {
 		it.seekRightMost()
 	}
 	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {

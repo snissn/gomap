@@ -1,11 +1,13 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 )
 
 func TestSnapshotIteratorCreationSerializesCloseAndPoolReuse(t *testing.T) {
@@ -212,5 +214,130 @@ func TestBackendSnapshotIteratorEmptyDomainSeekRemainsEmpty(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestBackendSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, key := range []string{"a", "c"} {
+		if err := d.SetSync([]byte(key), []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	defer snap.Close()
+
+	start := []byte("m")
+	targets := []struct {
+		name string
+		key  []byte
+	}{
+		{name: "nil", key: nil},
+		{name: "below", key: []byte("a")},
+		{name: "inside", key: []byte("m")},
+		{name: "above", key: []byte{0xff}},
+	}
+	for _, reverse := range []bool{false, true} {
+		name := map[bool]string{false: "forward", true: "reverse"}[reverse]
+		t.Run(name, func(t *testing.T) {
+			var it publiciterator.Iterator
+			var err error
+			if reverse {
+				it, err = snap.ReverseIterator(start, nil)
+			} else {
+				it, err = snap.Iterator(start, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer it.Close()
+			if it.Valid() {
+				t.Fatalf("iterator construction exposed key %q below start %q", it.Key(), start)
+			}
+			for _, target := range targets {
+				t.Run(target.name, func(t *testing.T) {
+					it.Seek(target.key)
+					if it.Valid() {
+						t.Fatalf("Seek(%x) exposed key %q below start %q", target.key, it.Key(), start)
+					}
+					if err := it.Error(); err != nil {
+						t.Fatalf("Seek(%x) error=%v", target.key, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestBackendSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, key := range []string{"a", "c", "m", "z"} {
+		if err := d.SetSync([]byte(key), []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	defer snap.Close()
+
+	start := []byte("m")
+	tests := []struct {
+		name    string
+		target  []byte
+		forward []byte
+		reverse []byte
+	}{
+		{name: "nil", target: nil, forward: []byte("m"), reverse: []byte("z")},
+		{name: "below", target: []byte("a"), forward: []byte("m")},
+		{name: "inside", target: []byte("n"), forward: []byte("z"), reverse: []byte("m")},
+		{name: "above", target: []byte{0xff}, reverse: []byte("z")},
+	}
+	for _, reverse := range []bool{false, true} {
+		name := map[bool]string{false: "forward", true: "reverse"}[reverse]
+		t.Run(name, func(t *testing.T) {
+			var it publiciterator.Iterator
+			var err error
+			if reverse {
+				it, err = snap.ReverseIterator(start, nil)
+			} else {
+				it, err = snap.Iterator(start, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer it.Close()
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					it.Seek(test.target)
+					want := test.forward
+					if reverse {
+						want = test.reverse
+					}
+					if want == nil {
+						if it.Valid() {
+							t.Fatalf("Seek(%x) key=%q want invalid", test.target, it.Key())
+						}
+					} else if !it.Valid() || !bytes.Equal(it.Key(), want) {
+						t.Fatalf("Seek(%x) valid=%v key=%q want %q", test.target, it.Valid(), it.Key(), want)
+					}
+					if err := it.Error(); err != nil {
+						t.Fatalf("Seek(%x) error=%v", test.target, err)
+					}
+				})
+			}
+		})
 	}
 }
