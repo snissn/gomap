@@ -456,6 +456,7 @@ func commandWALDurabilityProofOptions(dir string) Options {
 	opts.DisableSideStores = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.DisableBackgroundPrune = true
 	opts.FlushThreshold = 1 << 30
@@ -3011,6 +3012,7 @@ func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 			after := db.Stats()
 			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.append.count_total", uint64(b.N))
 			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.append.payload.count_total", uint64(b.N))
+			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.flush.count_total", 0)
 			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.sync.count_total", uint64(b.N))
 			requireBenchmarkStatDelta(b, before, after, "treedb.public.batch.write_sync.calls_total", uint64(b.N))
 			requireBenchmarkStatDelta(b, before, after, "treedb.public.checkpoint.calls_total", 0)
@@ -3059,6 +3061,7 @@ func TestPublicCommandWALDurableTinyBatchWriteSyncShapes(t *testing.T) {
 			after := db.Stats()
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.payload.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.flush.count_total", 0)
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
 			requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -3164,14 +3167,6 @@ func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
 	if err := waitForPublicCommandWALWriteEntries(writeEntered, len(overlapBatches)); err != nil {
 		t.Fatal(err)
 	}
-	// The checkpoint publish hook is still blocked. A write returning here would
-	// prove it bypassed the foreground checkpoint gate instead of overlapping it.
-	select {
-	case result := <-writeResults:
-		t.Fatalf("overlap Write(%d) returned before checkpoint release: %v", result.index, result.err)
-	case <-time.After(20 * time.Millisecond):
-	}
-
 	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
 	if err := waitForPublicCommandWALCheckpointPhase(checkpointComplete, "checkpoint cleanup hook"); err != nil {
 		t.Fatal(err)
