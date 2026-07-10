@@ -1721,6 +1721,7 @@ type applyRunConfig struct {
 	maxParallelWorkers int
 	workerPool         *ApplyWorkerPool
 	leafPagePersister  leafPagePersistSink
+	oldPointerRefs     *PointerRefCounts
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -2553,6 +2554,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		if flags&node.FlagPointer == 0 {
 			return
 		}
+		if cfg.oldPointerRefs != nil {
+			cfg.oldPointerRefs.add(ptr.FileID, 1)
+		}
 		metrics.SlabDeadBytes += int(ptr.Length)
 		if metrics.SlabDeadBytesByFile == nil {
 			metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
@@ -3133,6 +3137,10 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			childCfg.maxParallelWorkers = 1
 		}
 		var childScratches []*mergeScratch
+		var childOldPointerRefs []PointerRefCounts
+		if cfg.oldPointerRefs != nil {
+			childOldPointerRefs = make([]PointerRefCounts, len(children))
+		}
 		if scratch != nil {
 			childScratches = scratch.acquireSpanWorkerScratchSlots(len(children))
 			defer func() {
@@ -3154,7 +3162,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			}
 			var childMetrics adaptive.Metrics
 			childRet := children[i].retired[:0]
-			ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, childScratch, false, childCfg)
+			localCfg := childCfg
+			if childOldPointerRefs != nil {
+				localCfg.oldPointerRefs = &childOldPointerRefs[i]
+			}
+			ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, childScratch, false, localCfg)
 			if err != nil {
 				errOnce.Do(func() { firstErr = err })
 				return
@@ -3197,6 +3209,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			mergeMetrics(metrics, &children[i].childStat)
 			if retired != nil && len(children[i].retired) > 0 {
 				*retired = append(*retired, children[i].retired...)
+			}
+			if childOldPointerRefs != nil {
+				cfg.oldPointerRefs.merge(&childOldPointerRefs[i])
 			}
 		}
 	} else {

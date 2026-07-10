@@ -30,7 +30,7 @@ func (db *DB) flushApplyOptions() zipper.ApplyOptions {
 }
 
 func flushApplyUseOptions(opts zipper.ApplyOptions) bool {
-	return opts.ParallelApplyConcurrency > 1 || opts.SpanNativeApply || opts.PrepareReadOnly
+	return opts.ParallelApplyConcurrency > 1 || opts.SpanNativeApply || opts.PrepareReadOnly || opts.CollectOldPointerRefs
 }
 
 func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err error) {

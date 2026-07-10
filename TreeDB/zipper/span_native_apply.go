@@ -380,6 +380,10 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	defer coordinatorScratch.releaseSpanRangeRetired(rangeRetired)
 	rangeSplits := coordinatorScratch.acquireSpanRangeSplits(len(workerRanges))
 	defer coordinatorScratch.releaseSpanRangeSplits(rangeSplits)
+	var rangeOldPointerRefs []PointerRefCounts
+	if opts.CollectOldPointerRefs {
+		rangeOldPointerRefs = make([]PointerRefCounts, len(workerRanges))
+	}
 	var firstErr error
 	var errOnce sync.Once
 	var workerBusyNs atomic.Int64
@@ -423,6 +427,9 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			}
 		}
 		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafPagePersister}
+		if rangeOldPointerRefs != nil {
+			workerApplyCfg.oldPointerRefs = &rangeOldPointerRefs[job]
+		}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
 			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, workerApplyCfg)
@@ -548,6 +555,12 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 		return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, firstErr
 	}
+	var oldPointerRefs PointerRefCounts
+	if opts.CollectOldPointerRefs {
+		for i := range rangeOldPointerRefs {
+			oldPointerRefs.merge(&rangeOldPointerRefs[i])
+		}
+	}
 	rootReduceStart := time.Now()
 	newRootID, err := z.reduceSpanNativeRootWithContext(rootID, spanNativeLeafReplacements{spans: prepared.LeafSpans, outputs: &outputs}, &metrics, &retired, coordinatorScratch)
 	metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()
@@ -556,12 +569,14 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, err
 	}
 	return ApplyResult{
-		RootID:              newRootID,
-		PendingRetiredPages: retired,
-		Metrics:             metrics,
-		SpanNativeEligible:  true,
-		SpanNativeWorkers:   scheduledWorkers,
-		SpanNativeUsed:      true,
+		RootID:                  newRootID,
+		PendingRetiredPages:     retired,
+		Metrics:                 metrics,
+		SpanNativeEligible:      true,
+		SpanNativeWorkers:       scheduledWorkers,
+		SpanNativeUsed:          true,
+		OldPointerRefs:          oldPointerRefs,
+		OldPointerRefsCollected: opts.CollectOldPointerRefs,
 	}, true, nil
 }
 

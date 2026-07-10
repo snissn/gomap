@@ -1019,10 +1019,16 @@ func seedValueLogRefIncrementalParityFixture(t *testing.T, db *DB, dir string, i
 	_ = b.Close()
 
 	b = db.NewBatch().(*Batch)
+	if err := b.DeleteRange(key(90), key(120)); err != nil {
+		t.Fatalf("delete range: %v", err)
+	}
 	for i := 0; i < 90; i++ {
 		if err := b.Delete(key(i)); err != nil {
 			t.Fatalf("delete %d: %v", i, err)
 		}
+	}
+	if err := b.Delete(key(100)); err != nil {
+		t.Fatalf("delete inside range: %v", err)
 	}
 	for i := 160; i < 280; i++ {
 		if err := b.SetPointer(key(i), ptrsB[i-160]); err != nil {

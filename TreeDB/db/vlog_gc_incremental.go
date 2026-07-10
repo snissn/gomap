@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 const (
@@ -52,6 +53,11 @@ var scanValueLogRefCountsHook struct {
 	fn func()
 }
 
+var lookupValueLogRefAtKeyHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
 func registerScanValueLogRefCountsHook(hook func()) func() {
 	scanValueLogRefCountsHook.mu.Lock()
 	prev := scanValueLogRefCountsHook.fn
@@ -68,6 +74,27 @@ func runScanValueLogRefCountsHook() {
 	scanValueLogRefCountsHook.mu.Lock()
 	hook := scanValueLogRefCountsHook.fn
 	scanValueLogRefCountsHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+func registerLookupValueLogRefAtKeyHook(hook func()) func() {
+	lookupValueLogRefAtKeyHook.mu.Lock()
+	prev := lookupValueLogRefAtKeyHook.fn
+	lookupValueLogRefAtKeyHook.fn = hook
+	lookupValueLogRefAtKeyHook.mu.Unlock()
+	return func() {
+		lookupValueLogRefAtKeyHook.mu.Lock()
+		lookupValueLogRefAtKeyHook.fn = prev
+		lookupValueLogRefAtKeyHook.mu.Unlock()
+	}
+}
+
+func runLookupValueLogRefAtKeyHook() {
+	lookupValueLogRefAtKeyHook.mu.Lock()
+	hook := lookupValueLogRefAtKeyHook.fn
+	lookupValueLogRefAtKeyHook.mu.Unlock()
 	if hook != nil {
 		hook()
 	}
@@ -649,14 +676,43 @@ func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIte
 	return it.Error()
 }
 
-func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange) (*valueLogRefDelta, error) {
-	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
-		return nil, nil
-	}
-	if db.indexOuterLeavesInValueLog {
+func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
+	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+}
+
+func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
+	if !db.shouldCollectValueLogRefDelta(baseSeq) {
 		return nil, nil
 	}
 	delta := newValueLogRefDelta()
+	if oldPointerRefsCollected {
+		var countErr error
+		oldPointerRefs.ForEach(func(fileID uint32, count uint64) bool {
+			if !page.IsValueLogFileID(fileID) {
+				return true
+			}
+			if count > uint64(^uint64(0)>>1) {
+				countErr = fmt.Errorf("treedb: value-log ref decrement overflow for file %d: %d", fileID, count)
+				return false
+			}
+			delta.add(fileID, -int64(count))
+			return true
+		})
+		if countErr != nil {
+			releaseValueLogRefDelta(delta)
+			return nil, countErr
+		}
+		for i := range entries {
+			if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
+				delta.add(entries[i].ValuePtr.FileID, 1)
+			}
+		}
+		return delta, nil
+	}
+
+	// Fail safe for any caller that requests tracking without apply-fed evidence.
+	// This preserves correctness while making the normal foreground path measurable
+	// through lookupValueLogRefAtKeyHook.
 	if p == nil {
 		return delta, nil
 	}
@@ -706,6 +762,7 @@ func (db *DB) newNoopValueLogRefDeltaIfTrackable(baseSeq uint64) *valueLogRefDel
 }
 
 func lookupValueLogRefAtKey(tr *tree.Tree, key []byte) (uint32, bool, error) {
+	runLookupValueLogRefAtKeyHook()
 	if tr == nil {
 		return 0, false, nil
 	}
