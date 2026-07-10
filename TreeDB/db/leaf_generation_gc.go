@@ -59,9 +59,31 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		defer db.maintenanceMu.Unlock()
 	}
 
+	attempts := 1
+	if opts.DryRun {
+		attempts++
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		stats, stale, err := db.leafGenerationGCAttempt(ctx, opts)
+		if err != nil {
+			return stats, err
+		}
+		if !stale {
+			return stats, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return LeafGenerationGCStats{}, err
+		}
+	}
+	return LeafGenerationGCStats{}, ErrLeafGenerationGCStaleScan
+}
+
+func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, bool, error) {
+	var stats LeafGenerationGCStats
+
 	prepared, err := db.prepareLeafGenerationGCScan()
 	if err != nil || !prepared {
-		return stats, err
+		return stats, false, err
 	}
 
 	// Hold a shared writer gate only for the unlocked scan window. Ordinary
@@ -72,7 +94,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		db.writeMu.RUnlock()
-		return stats, ErrClosed
+		return stats, false, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
 		snap.releaseLeafGenerationPins()
@@ -80,25 +102,25 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	if snap.state == nil || snap.state.LeafGenerations == nil {
 		_ = snap.Close()
 		db.writeMu.RUnlock()
-		return stats, nil
+		return stats, false, nil
 	}
 
 	basis, ok := db.captureLeafGenerationGCScanBasis(snap)
 	if !ok {
 		_ = snap.Close()
 		db.writeMu.RUnlock()
-		return stats, nil
+		return stats, opts.DryRun, nil
 	}
 
 	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
 	if err != nil {
 		_ = snap.Close()
 		db.writeMu.RUnlock()
-		return stats, err
+		return stats, false, err
 	}
 	if err := snap.Close(); err != nil {
 		db.writeMu.RUnlock()
-		return stats, err
+		return stats, false, err
 	}
 	db.writeMu.RUnlock()
 	snap = nil
@@ -106,7 +128,8 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	if opts.DryRun {
 		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations)
 	}
-	return db.leafGenerationGCApplyScan(basis, liveGenerations)
+	stats, err = db.leafGenerationGCApplyScan(basis, liveGenerations)
+	return stats, false, err
 }
 
 type leafGenerationGCScanBasis struct {
@@ -212,29 +235,29 @@ func (db *DB) leafGenerationGCValidatedManifestClone(basis leafGenerationGCScanB
 	return manifest, true
 }
 
-func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, error) {
+func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, bool, error) {
 	var stats LeafGenerationGCStats
 
 	db.writeMu.Lock()
 	if db.closing.Load() {
 		db.writeMu.Unlock()
-		return stats, nil
+		return stats, false, nil
 	}
 	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
 	if !ok {
 		db.writeMu.Unlock()
-		return stats, nil
+		return stats, true, nil
 	}
 	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
 	if err != nil {
 		db.writeMu.Unlock()
-		return stats, err
+		return stats, false, err
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
 	db.writeMu.Unlock()
 
 	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, true)
-	return decision.stats, nil
+	return decision.stats, false, nil
 }
 
 func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, error) {

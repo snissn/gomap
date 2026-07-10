@@ -17,6 +17,9 @@ var (
 	// ErrConcurrentModification indicates a publish or maintenance operation
 	// observed that a root changed after its validation point.
 	ErrConcurrentModification = errors.New("treedb: concurrent modification")
+	// ErrLeafGenerationGCStaleScan indicates both bounded dry-run attempts were
+	// invalidated by concurrent publishes before their results could be used.
+	ErrLeafGenerationGCStaleScan = errors.New("treedb: leaf generation gc scan invalidated")
 	// ErrConditionalTxnClosed indicates a conditional transaction was used after
 	// Commit, CommitSync, or Close.
 	ErrConditionalTxnClosed = errors.New("treedb: conditional transaction is closed")
