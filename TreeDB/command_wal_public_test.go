@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2965,35 +2966,273 @@ func BenchmarkPublicCommandWALRawKVBatchWrite(b *testing.B) {
 }
 
 func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
-	opts := OptionsFor(ProfileCommandWALDurable, b.TempDir())
-	opts.DisableSideStores = true
-	opts.DisableBackgroundPrune = true
+	for _, batchSize := range []int{1, 8, 32} {
+		b.Run(fmt.Sprintf("ops=%d", batchSize), func(b *testing.B) {
+			db, err := Open(commandWALDurabilityProofOptions(b.TempDir()))
+			if err != nil {
+				b.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			value := []byte("public-command-wal-value")
+			before := db.Stats()
+			latencies := make([]time.Duration, 0, b.N)
+			var totalBatchBytes uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				batch := db.NewBatchWithSize(batchSize)
+				for j := 0; j < batchSize; j++ {
+					var keyBuf [32]byte
+					key := strconv.AppendInt(keyBuf[:0], int64(i*batchSize+j), 10)
+					if err := batch.Set(key, value); err != nil {
+						_ = batch.Close()
+						b.Fatalf("batch Set(%d): %v", j, err)
+					}
+				}
+				byteSize, err := batch.GetByteSize()
+				if err != nil {
+					_ = batch.Close()
+					b.Fatalf("batch GetByteSize: %v", err)
+				}
+				totalBatchBytes += uint64(byteSize)
+				start := time.Now()
+				if err := batch.WriteSync(); err != nil {
+					_ = batch.Close()
+					b.Fatalf("batch WriteSync: %v", err)
+				}
+				latencies = append(latencies, time.Since(start))
+				if err := batch.Close(); err != nil {
+					b.Fatalf("batch Close: %v", err)
+				}
+			}
+			b.StopTimer()
+
+			after := db.Stats()
+			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.append.count_total", uint64(b.N))
+			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.append.payload.count_total", uint64(b.N))
+			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.sync.count_total", uint64(b.N))
+			requireBenchmarkStatDelta(b, before, after, "treedb.public.batch.write_sync.calls_total", uint64(b.N))
+			requireBenchmarkStatDelta(b, before, after, "treedb.public.checkpoint.calls_total", 0)
+			if got := statMapUint64B(b, after, "treedb.cache.checkpoint.runs"); got != 0 {
+				b.Fatalf("checkpoint.runs=%d, want 0 for isolated WriteSync baseline", got)
+			}
+
+			elapsed := b.Elapsed()
+			if elapsed > 0 {
+				b.ReportMetric(float64(b.N)/elapsed.Seconds(), "batches/s")
+				b.ReportMetric(float64(b.N*batchSize)/elapsed.Seconds(), "writes/s")
+			}
+			b.ReportMetric(float64(batchSize), "writes/batch")
+			b.ReportMetric(float64(totalBatchBytes)/float64(b.N), "bytes/batch")
+			reportWriteSyncLatencyDistribution(b, latencies)
+			reportCommandWALBenchmarkDeltas(b, before, after, uint64(b.N))
+		})
+	}
+}
+
+func TestPublicCommandWALDurableTinyBatchWriteSyncShapes(t *testing.T) {
+	for _, batchSize := range []int{1, 8, 32} {
+		t.Run(fmt.Sprintf("ops=%d", batchSize), func(t *testing.T) {
+			db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			before := db.Stats()
+			batch := db.NewBatchWithSize(batchSize)
+			for i := 0; i < batchSize; i++ {
+				if err := batch.Set([]byte(fmt.Sprintf("tx-index/%02d", i)), []byte("value")); err != nil {
+					_ = batch.Close()
+					t.Fatalf("batch Set(%d): %v", i, err)
+				}
+			}
+			if err := batch.WriteSync(); err != nil {
+				_ = batch.Close()
+				t.Fatalf("batch WriteSync: %v", err)
+			}
+			if err := batch.Close(); err != nil {
+				t.Fatalf("batch Close: %v", err)
+			}
+
+			after := db.Stats()
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.payload.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
+			requirePublicCommandWALNoCheckpointSince(t, db, before)
+			assertPublicCommandWALFrames(t, db, 1)
+		})
+	}
+}
+
+func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	opts.BackgroundCheckpointInterval = time.Hour // Starts the existing loop; the test triggers its pass explicitly.
+	opts.FlushThreshold = 64 << 10
 	db, err := Open(opts)
 	if err != nil {
-		b.Fatalf("Open: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	value := []byte("public-command-wal-value")
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		batch := db.NewBatchWithSize(1)
-		var keyBuf [32]byte
-		key := strconv.AppendInt(keyBuf[:0], int64(i), 10)
-		if err := batch.Set(key, value); err != nil {
-			_ = batch.Close()
-			b.Fatalf("batch Set: %v", err)
+	frontierValue := bytes.Repeat([]byte("f"), 32<<10)
+	for i := 0; i < 32; i++ {
+		batch := db.NewBatchWithSize(16)
+		for j := 0; j < 16; j++ {
+			key := []byte(fmt.Sprintf("tx-index/frontier/%03d/%02d", i, j))
+			if err := batch.Set(key, frontierValue); err != nil {
+				_ = batch.Close()
+				t.Fatalf("seed Set(%d,%d): %v", i, j, err)
+			}
 		}
-		if err := batch.WriteSync(); err != nil {
+		if err := batch.Write(); err != nil {
 			_ = batch.Close()
-			b.Fatalf("batch WriteSync: %v", err)
+			t.Fatalf("seed Write(%d): %v", i, err)
 		}
 		if err := batch.Close(); err != nil {
-			b.Fatalf("batch Close: %v", err)
+			t.Fatalf("seed Close(%d): %v", i, err)
 		}
 	}
-	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "batches/s")
+
+	checkpointPublish := make(chan struct{})
+	releaseCheckpointPublish := make(chan struct{})
+	checkpointComplete := make(chan struct{})
+	var checkpointPublishOnce, releaseCheckpointPublishOnce, checkpointCompleteOnce sync.Once
+	defer releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
+	db.cached.SetCommandWALCheckpointCutoverHook(func() {
+		db.snapshotPublicCommandWALCheckpointCutover()
+	})
+	db.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		checkpointPublishOnce.Do(func() {
+			close(checkpointPublish)
+			<-releaseCheckpointPublish
+		})
+		return db.preparePublicCommandWALPendingPublish(sync)
+	})
+	db.cached.SetCommandWALCheckpointCleanupHook(func(sync bool) error {
+		err := db.cleanupPublicCommandWALCheckpoint(sync)
+		if err == nil {
+			checkpointCompleteOnce.Do(func() { close(checkpointComplete) })
+		}
+		return err
+	})
+
+	before := db.Stats()
+	db.triggerAutoCheckpointForTest()
+	<-checkpointPublish
+	postFrontierValue := bytes.Repeat([]byte("p"), 64<<10)
+	for i := 0; i < 16; i++ {
+		batch := db.NewBatchWithSize(1)
+		if err := batch.Set([]byte(fmt.Sprintf("tx-index/post-frontier/%02d", i)), postFrontierValue); err != nil {
+			_ = batch.Close()
+			t.Fatalf("post-frontier Set(%d): %v", i, err)
+		}
+		var writeErr error
+		if i%2 == 0 {
+			writeErr = batch.Write()
+		} else {
+			writeErr = batch.WriteSync()
+		}
+		if writeErr != nil {
+			_ = batch.Close()
+			t.Fatalf("post-frontier Write(%d): %v", i, writeErr)
+		}
+		if err := batch.Close(); err != nil {
+			t.Fatalf("post-frontier Close(%d): %v", i, err)
+		}
+	}
+	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
+	<-checkpointComplete
+
+	after := db.Stats()
+	if got := statMapUint64(t, after, "treedb.cache.auto_checkpoint.count"); got != 1 {
+		t.Fatalf("auto_checkpoint.count=%d, want 1", got)
+	}
+	if got := after["treedb.cache.auto_checkpoint.last_reason"]; got != "force" {
+		t.Fatalf("auto_checkpoint.last_reason=%q, want force", got)
+	}
+	if got := statMapUint64(t, after, "treedb.cache.checkpoint.frontier.drained_units_last"); got == 0 {
+		t.Fatal("checkpoint frontier drained no units")
+	}
+	if got := statMapUint64(t, after, "treedb.cache.checkpoint.frontier.post_units_last"); got == 0 {
+		t.Fatal("checkpoint recorded no post-frontier units; overlap was not observed")
+	}
+	requirePublicStatDelta(t, before, after, "treedb.public.batch.write.calls_total", 8)
+	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 8)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 16)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 8)
+	requirePublicStatDelta(t, before, after, "treedb.public.checkpoint.calls_total", 0)
+}
+
+// triggerAutoCheckpointForTest is test-only coordination for an already-running
+// auto-checkpoint loop. It does not expose a production control surface.
+func (db *DB) triggerAutoCheckpointForTest() {
+	db.cached.TriggerAutoCheckpoint()
+}
+
+func requireBenchmarkStatDelta(b *testing.B, before, after map[string]string, key string, want uint64) {
+	b.Helper()
+	got := statMapUint64B(b, after, key) - statMapUint64B(b, before, key)
+	if got != want {
+		b.Fatalf("%s delta=%d, want %d", key, got, want)
+	}
+}
+
+func statMapUint64B(b *testing.B, stats map[string]string, key string) uint64 {
+	b.Helper()
+	got, err := strconv.ParseUint(stats[key], 10, 64)
+	if err != nil {
+		b.Fatalf("parse %s=%q: %v", key, stats[key], err)
+	}
+	return got
+}
+
+func reportWriteSyncLatencyDistribution(b *testing.B, samples []time.Duration) {
+	b.Helper()
+	if len(samples) == 0 {
+		return
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	for _, percentile := range []struct {
+		name string
+		pct  int
+	}{{"p50", 50}, {"p95", 95}, {"p99", 99}, {"max", 100}} {
+		idx := len(samples) - 1
+		if percentile.pct < 100 {
+			idx = (len(samples)*percentile.pct - 1) / 100
+		}
+		b.ReportMetric(float64(samples[idx].Nanoseconds()), "writesync_"+percentile.name+"_ns")
+	}
+}
+
+func reportCommandWALBenchmarkDeltas(b *testing.B, before, after map[string]string, batches uint64) {
+	b.Helper()
+	for _, key := range []string{
+		"treedb.command_wal.append.count_total",
+		"treedb.command_wal.flush.count_total",
+		"treedb.command_wal.sync.count_total",
+		"treedb.command_wal.append.ns_total",
+		"treedb.command_wal.flush.ns_total",
+		"treedb.command_wal.sync.ns_total",
+		"treedb.cache.checkpoint.runs",
+		"treedb.cache.checkpoint.barrier_wait_ns_total",
+		"treedb.cache.checkpoint.stage.cutover.total_ns",
+		"treedb.cache.checkpoint.stage.wal_rotate.total_ns",
+		"treedb.cache.checkpoint.stage.value_log_flush.total_ns",
+		"treedb.cache.checkpoint.stage.command_wal_publish.total_ns",
+		"treedb.cache.checkpoint.stage.flush_all.total_ns",
+		"treedb.cache.checkpoint.stage.backend_boundary.total_ns",
+		"treedb.cache.checkpoint.stage.wal_cleanup.total_ns",
+	} {
+		delta := statMapUint64B(b, after, key) - statMapUint64B(b, before, key)
+		name := strings.TrimPrefix(strings.TrimSuffix(key, "_total"), "treedb.command_wal.")
+		b.ReportMetric(float64(delta)/float64(batches), name+"/batch")
+	}
+	// Kernel syscall counts and kernel-only syscall time are intentionally not
+	// claimed here: these in-process timers cover TreeDB stages, while the
+	// coordinator-owned profile capture is the evidence source for syscalls.
 }
 
 func assertPublicCommandWALFramesB(b *testing.B, db *DB, minFrames uint64) {
