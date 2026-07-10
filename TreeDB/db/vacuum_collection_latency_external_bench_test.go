@@ -33,6 +33,7 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 				foreground.latencies = append(foreground.latencies, round.latencies...)
 				foreground.points += round.points
 				foreground.ranges += round.ranges
+				foreground.overlap += round.overlap
 				if round.err != nil && foreground.err == nil {
 					foreground.err = round.err
 				}
@@ -54,12 +55,16 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			if len(foreground.latencies) != wantSamples || foreground.points != uint64(wantSamples/2) || foreground.ranges != uint64(wantSamples/2) {
 				b.Fatalf("foreground fixed work samples=%d points=%d ranges=%d want %d/%d/%d", len(foreground.latencies), foreground.points, foreground.ranges, wantSamples, wantSamples/2, wantSamples/2)
 			}
+			if foreground.overlap == 0 {
+				b.Fatal("foreground fixed work did not overlap vacuum")
+			}
 
 			b.ReportMetric(float64(pl06PublicChurnPercentile(foreground.latencies, 95).Nanoseconds()), "foreground-p95-ns")
 			b.ReportMetric(float64(pl06PublicChurnPercentile(foreground.latencies, 99).Nanoseconds()), "foreground-p99-ns")
 			b.ReportMetric(float64(len(foreground.latencies))/float64(b.N), "foreground-samples/op")
 			b.ReportMetric(float64(foreground.points)/float64(b.N), "foreground-points/op")
 			b.ReportMetric(float64(foreground.ranges)/float64(b.N), "foreground-ranges/op")
+			b.ReportMetric(float64(foreground.overlap)/float64(b.N), "foreground-overlap-samples/op")
 			b.ReportMetric(float64(exposureMisses)/float64(b.N), "foreground-exposure-misses/op")
 			b.ReportMetric(float64(vacuumErrors)/float64(b.N), "vacuum-errors/op")
 		})
@@ -111,45 +116,41 @@ type pl06PublicChurnResult struct {
 	latencies []time.Duration
 	points    uint64
 	ranges    uint64
+	overlap   uint64
 	err       error
 }
 
 const (
 	pl06PublicChurnWorkers             = 4
-	pl06PublicChurnOperationsPerWorker = 8
+	pl06PublicChurnOperationsPerWorker = 40
 	pl06PublicChurnOperationsPerVacuum = pl06PublicChurnWorkers * pl06PublicChurnOperationsPerWorker
-	pl06PublicChurnVacuumLead          = time.Millisecond
+	pl06PublicChurnOperationInterval   = time.Millisecond
 )
 
 type pl06PublicChurnWorkerResult struct {
 	latencies [pl06PublicChurnOperationsPerWorker]time.Duration
 	points    uint64
 	ranges    uint64
+	overlap   uint64
 	err       error
 }
 
 func runPL06PublicFixedChurnRound(database *dbpkg.DB, round int) (pl06PublicChurnResult, error, bool) {
 	vacuumDone := make(chan error, 1)
+	vacuumStarted := make(chan struct{})
+	vacuumFinished := make(chan struct{})
 	go func() {
-		vacuumDone <- database.VacuumIndexOnline(context.Background())
+		close(vacuumStarted)
+		vacuumErr := database.VacuumIndexOnline(context.Background())
+		close(vacuumFinished)
+		vacuumDone <- vacuumErr
 	}()
-
-	timer := time.NewTimer(pl06PublicChurnVacuumLead)
-	exposureMiss := false
-	var vacuumErr error
-	select {
-	case vacuumErr = <-vacuumDone:
-		exposureMiss = true
-		if !timer.Stop() {
-			<-timer.C
-		}
-	case <-timer.C:
-	}
+	<-vacuumStarted
 
 	start := make(chan struct{})
 	workerDone := make(chan pl06PublicChurnWorkerResult, pl06PublicChurnWorkers)
 	for worker := 0; worker < pl06PublicChurnWorkers; worker++ {
-		go runPL06PublicFixedChurnWorker(database, round, worker, start, workerDone)
+		go runPL06PublicFixedChurnWorker(database, round, worker, start, vacuumFinished, workerDone)
 	}
 	close(start)
 
@@ -159,20 +160,27 @@ func runPL06PublicFixedChurnRound(database *dbpkg.DB, round int) (pl06PublicChur
 		result.latencies = append(result.latencies, current.latencies[:]...)
 		result.points += current.points
 		result.ranges += current.ranges
+		result.overlap += current.overlap
 		if current.err != nil && result.err == nil {
 			result.err = current.err
 		}
 	}
-	if !exposureMiss {
-		vacuumErr = <-vacuumDone
-	}
-	return result, vacuumErr, exposureMiss
+	vacuumErr := <-vacuumDone
+	return result, vacuumErr, result.overlap == 0
 }
 
-func runPL06PublicFixedChurnWorker(database *dbpkg.DB, round, worker int, start <-chan struct{}, done chan<- pl06PublicChurnWorkerResult) {
+func runPL06PublicFixedChurnWorker(database *dbpkg.DB, round, worker int, start, vacuumFinished <-chan struct{}, done chan<- pl06PublicChurnWorkerResult) {
 	<-start
 	var result pl06PublicChurnWorkerResult
 	for operation := 0; operation < pl06PublicChurnOperationsPerWorker; operation++ {
+		if operation > 0 {
+			time.Sleep(pl06PublicChurnOperationInterval)
+		}
+		select {
+		case <-vacuumFinished:
+		default:
+			result.overlap++
+		}
 		sequence := round*pl06PublicChurnOperationsPerVacuum + worker*pl06PublicChurnOperationsPerWorker + operation
 		started := time.Now()
 		if (worker+operation)%2 == 0 {
