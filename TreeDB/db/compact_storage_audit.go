@@ -36,6 +36,22 @@ type compactStorageAuditRaw struct {
 	counters                   compactStorageAuditCounters
 }
 
+var errCompactStorageAuditProtectedBasisDrift = errors.New("compact storage protected basis drift")
+
+type compactStorageProtectedBasis struct {
+	paths               []string
+	rootIDs             []uint64
+	systemRootIDs       []uint64
+	rootHash            [32]byte
+	pathHash            [32]byte
+	leafPageLogVersion  uint64
+	rootProviderVersion uint64
+}
+
+func (b compactStorageProtectedBasis) equal(other compactStorageProtectedBasis) bool {
+	return b.rootHash == other.rootHash && b.pathHash == other.pathHash
+}
+
 type compactStorageAuditInput struct {
 	db                     *DB
 	snap                   *Snapshot
@@ -43,6 +59,7 @@ type compactStorageAuditInput struct {
 	protectedPaths         []string
 	protectedRootIDs       []uint64
 	protectedSystemRootIDs []uint64
+	protectedBasis         compactStorageProtectedBasis
 	key                    compactStorageAuditKey
 }
 
@@ -94,45 +111,111 @@ func runCompactStorageSharedAuditScanHook(counters compactStorageAuditCounters) 
 }
 
 func (db *DB) acquireCompactStorageAuditInput(opts CompactStorageOptions) (*compactStorageAuditInput, error) {
+	return db.acquireCompactStorageAuditInputAttempt(opts, 0)
+}
+
+func (db *DB) acquireCompactStorageAuditInputAttempt(opts CompactStorageOptions, attempt int) (*compactStorageAuditInput, error) {
 	if db == nil {
 		return nil, fmt.Errorf("missing db")
 	}
 	if err := db.prepareCompactStorageAuditTopology(); err != nil {
 		return nil, err
 	}
-	protectedPaths := canonicalCompactStorageProtectedPaths(compactStorageFencedValueLogProtectedPaths(opts))
-	protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-	protectedRootIDs = canonicalCompactStorageRootIDs(protectedRootIDs)
-	protectedSystemRootIDs = canonicalCompactStorageRootIDs(protectedSystemRootIDs)
+	protectedBefore := db.captureCompactStorageProtectedBasis(opts)
+	db.runCompactStorageAuditProtectedBasisHook("acquire-after-first-protected-basis", attempt)
 
 	db.writeMu.RLock()
+	if db.leafPageLogVersion != protectedBefore.leafPageLogVersion {
+		db.writeMu.RUnlock()
+		return nil, errCompactStorageAuditProtectedBasisDrift
+	}
 	manifest := db.leafGenerationManifest.clone()
 	snap := db.AcquireSnapshot()
 	db.writeMu.RUnlock()
+	db.runCompactStorageAuditProtectedBasisHook("acquire-after-state", attempt)
 	if snap == nil || snap.state == nil || snap.idx == nil {
 		if snap != nil {
 			_ = snap.Close()
 		}
 		return nil, ErrClosed
 	}
+	protectedAfter := db.captureCompactStorageProtectedBasis(opts)
+	if !protectedBefore.equal(protectedAfter) {
+		_ = snap.Close()
+		return nil, errCompactStorageAuditProtectedBasisDrift
+	}
 	state := snap.state
 	return &compactStorageAuditInput{
 		db:                     db,
 		snap:                   snap,
 		manifest:               manifest,
-		protectedPaths:         protectedPaths,
-		protectedRootIDs:       protectedRootIDs,
-		protectedSystemRootIDs: protectedSystemRootIDs,
+		protectedPaths:         protectedAfter.paths,
+		protectedRootIDs:       protectedAfter.rootIDs,
+		protectedSystemRootIDs: protectedAfter.systemRootIDs,
+		protectedBasis:         protectedAfter,
 		key: compactStorageAuditKey{
 			CommitSeq:                  state.CommitSeq,
 			RootPageID:                 state.RootPageID,
 			SystemRootPageID:           state.SystemRootPageID,
 			LeafGenerationStateVersion: state.LeafGenerationStateVersion,
 			ValueLogSetIdentity:        state.ValueLogSet,
-			ProtectedRootSetHash:       hashCompactStorageProtectedRoots(protectedRootIDs, protectedSystemRootIDs),
-			ProtectedPathSetHash:       hashCompactStorageProtectedPaths(protectedPaths),
+			ProtectedRootSetHash:       protectedAfter.rootHash,
+			ProtectedPathSetHash:       protectedAfter.pathHash,
 		},
 	}, nil
+}
+
+func (db *DB) captureCompactStorageProtectedBasis(opts CompactStorageOptions) compactStorageProtectedBasis {
+	paths := canonicalCompactStorageProtectedPaths(compactStorageFencedValueLogProtectedPaths(opts))
+	rootIDs, systemRootIDs := compactStorageOptionProtectedRootIDPair(opts)
+
+	db.writeMu.RLock()
+	leafPageLog := db.leafPageLog
+	leafPageLogVersion := db.leafPageLogVersion
+	db.writeMu.RUnlock()
+	providerRootIDs, providerSystemRootIDs, providerVersion := protectedLeafGenerationRootIDPairSnapshot(leafPageLog)
+	rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, providerRootIDs)
+	systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, providerSystemRootIDs)
+	rootIDs = canonicalCompactStorageRootIDs(rootIDs)
+	systemRootIDs = canonicalCompactStorageRootIDs(systemRootIDs)
+
+	return compactStorageProtectedBasis{
+		paths:               paths,
+		rootIDs:             rootIDs,
+		systemRootIDs:       systemRootIDs,
+		rootHash:            hashCompactStorageProtectedRoots(rootIDs, systemRootIDs, leafPageLogVersion, providerVersion),
+		pathHash:            hashCompactStorageProtectedPaths(paths),
+		leafPageLogVersion:  leafPageLogVersion,
+		rootProviderVersion: providerVersion,
+	}
+}
+
+func protectedLeafGenerationRootIDPairSnapshot(log LeafPageLog) ([]uint64, []uint64, uint64) {
+	if log == nil {
+		return nil, nil, 0
+	}
+	if provider, ok := log.(leafPageLogProtectedRootPairSnapshotProvider); ok {
+		return provider.ProtectedLeafGenerationRootIDPairSnapshot()
+	}
+	if provider, ok := log.(leafPageLogProtectedRootPairProvider); ok {
+		rootIDs, systemRootIDs := provider.ProtectedLeafGenerationRootIDPair()
+		return rootIDs, systemRootIDs, 0
+	}
+	var rootIDs []uint64
+	if provider, ok := log.(leafPageLogProtectedRootProvider); ok {
+		rootIDs = provider.ProtectedLeafGenerationRootIDs()
+	}
+	var systemRootIDs []uint64
+	if provider, ok := log.(leafPageLogProtectedSystemRootProvider); ok {
+		systemRootIDs = provider.ProtectedLeafGenerationSystemRootIDs()
+	}
+	return rootIDs, systemRootIDs, 0
+}
+
+func (db *DB) runCompactStorageAuditProtectedBasisHook(stage string, attempt int) {
+	if db != nil && db.compactStorageAuditProtectedBasisHook != nil {
+		db.compactStorageAuditProtectedBasisHook(stage, attempt)
+	}
 }
 
 func (db *DB) prepareCompactStorageAuditTopology() error {
@@ -227,9 +310,13 @@ func canonicalCompactStorageRootIDs(rootIDs []uint64) []uint64 {
 	return out
 }
 
-func hashCompactStorageProtectedRoots(rootIDs, systemRootIDs []uint64) [32]byte {
+func hashCompactStorageProtectedRoots(rootIDs, systemRootIDs []uint64, leafPageLogVersion, providerVersion uint64) [32]byte {
 	h := sha256.New()
 	var buf [8]byte
+	for _, version := range []uint64{leafPageLogVersion, providerVersion} {
+		binary.LittleEndian.PutUint64(buf[:], version)
+		_, _ = h.Write(buf[:])
+	}
 	for _, roots := range [][]uint64{rootIDs, systemRootIDs} {
 		binary.LittleEndian.PutUint64(buf[:], uint64(len(roots)))
 		_, _ = h.Write(buf[:])
@@ -673,24 +760,35 @@ func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts C
 	if db.compactStorageAuditBeforeRevalidate != nil {
 		db.compactStorageAuditBeforeRevalidate(attempt)
 	}
-	paths := canonicalCompactStorageProtectedPaths(compactStorageFencedValueLogProtectedPaths(opts))
-	rootIDs, systemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-	rootIDs = canonicalCompactStorageRootIDs(rootIDs)
-	systemRootIDs = canonicalCompactStorageRootIDs(systemRootIDs)
-	pathHash := hashCompactStorageProtectedPaths(paths)
-	rootHash := hashCompactStorageProtectedRoots(rootIDs, systemRootIDs)
+	protectedBefore := db.captureCompactStorageProtectedBasis(opts)
+	db.runCompactStorageAuditProtectedBasisHook("revalidate-after-first-protected-basis", attempt)
+	if !protectedBefore.equal(in.protectedBasis) {
+		return false, nil
+	}
 
+	db.writeMu.RLock()
+	stateBefore := db.state.Load()
+	stateBeforeValid := compactStorageAuditStateMatches(stateBefore, in.key) &&
+		db.leafPageLogVersion == protectedBefore.leafPageLogVersion
+	db.writeMu.RUnlock()
+	if !stateBeforeValid {
+		return false, nil
+	}
+	db.runCompactStorageAuditProtectedBasisHook("revalidate-after-state", attempt)
+	protectedAfter := db.captureCompactStorageProtectedBasis(opts)
+	if !protectedBefore.equal(protectedAfter) || !protectedAfter.equal(in.protectedBasis) {
+		return false, nil
+	}
+
+	// The protected basis is stable on both sides of an exact backend-state
+	// check. Versioned providers make same-ID ABA visible. For legacy callbacks,
+	// equal canonical IDs are observationally the same basis: retiring or reusing
+	// one of those pages necessarily changes the commit/root state checked here.
 	db.writeMu.Lock()
 	db.mu.Lock()
 	state := db.state.Load()
-	valid := state != nil &&
-		state.CommitSeq == in.key.CommitSeq &&
-		state.RootPageID == in.key.RootPageID &&
-		state.SystemRootPageID == in.key.SystemRootPageID &&
-		state.LeafGenerationStateVersion == in.key.LeafGenerationStateVersion &&
-		state.ValueLogSet == in.key.ValueLogSetIdentity &&
-		rootHash == in.key.ProtectedRootSetHash &&
-		pathHash == in.key.ProtectedPathSetHash
+	valid := compactStorageAuditStateMatches(state, in.key) &&
+		db.leafPageLogVersion == protectedAfter.leafPageLogVersion
 	if valid && db.valueLogRefTracker != nil {
 		db.valueLogRefTracker.replace(raw.valueLogRefCounts, in.key.CommitSeq, true)
 	}
@@ -699,11 +797,27 @@ func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts C
 	return valid, nil
 }
 
+func compactStorageAuditStateMatches(state *DBState, key compactStorageAuditKey) bool {
+	return state != nil &&
+		state.CommitSeq == key.CommitSeq &&
+		state.RootPageID == key.RootPageID &&
+		state.SystemRootPageID == key.SystemRootPageID &&
+		state.LeafGenerationStateVersion == key.LeafGenerationStateVersion &&
+		state.ValueLogSet == key.ValueLogSetIdentity
+}
+
 func (db *DB) compactStorageSharedAudit(ctx context.Context, opts CompactStorageOptions, session *compactStorageAuditSession) (*compactStorageAuditInput, compactStorageAuditRaw, CompactStorageAuditStats, error) {
 	var aggregate CompactStorageAuditStats
 	for attempt := 0; attempt < 2; attempt++ {
-		in, err := db.acquireCompactStorageAuditInput(opts)
+		in, err := db.acquireCompactStorageAuditInputAttempt(opts, attempt)
 		if err != nil {
+			if errors.Is(err, errCompactStorageAuditProtectedBasisDrift) {
+				if attempt == 0 {
+					aggregate.RevalidationRetries++
+					continue
+				}
+				return nil, compactStorageAuditRaw{}, aggregate, ErrCompactStorageAuditStale
+			}
 			return nil, compactStorageAuditRaw{}, aggregate, err
 		}
 		var raw compactStorageAuditRaw
@@ -946,6 +1060,7 @@ func (db *DB) compactStorageFencedUnreferencedFromAudit(opts CompactStorageOptio
 	}
 	protected := compactStorageProtectedPathSet(protectedPaths)
 	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, nil)
+	pendingFileIDs := db.pendingValueLogAppendFileIDs()
 	files := db.valueOnlyValueLogFiles(set.Files)
 	ids := make([]uint32, 0, len(files))
 	var bytes int64
@@ -957,6 +1072,9 @@ func (db *DB) compactStorageFencedUnreferencedFromAudit(opts CompactStorageOptio
 			continue
 		}
 		if _, ok := protectedFileIDs[id]; ok {
+			continue
+		}
+		if _, ok := pendingFileIDs[id]; ok {
 			continue
 		}
 		size := fileSize(f)

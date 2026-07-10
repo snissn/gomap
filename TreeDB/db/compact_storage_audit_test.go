@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -634,13 +635,273 @@ func TestCompactStorageAudit_ReusesStructureButRefreshesZeroByteDebt(t *testing.
 	}
 }
 
-func TestCompactStorageAudit_ScanCountInvalidationTable(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+func TestCompactStorageAudit_ProtectedRootBasisDrift(t *testing.T) {
+	tests := []struct {
+		name        string
+		stage       string
+		ordinary    bool
+		wantScans   uint64
+		wantRetries uint64
+	}{
+		{
+			name:        "ordinary provider changes across initial state capture",
+			stage:       "acquire-after-first-protected-basis",
+			ordinary:    true,
+			wantScans:   1,
+			wantRetries: 1,
+		},
+		{
+			name:        "system provider changes across revalidation",
+			stage:       "revalidate-after-first-protected-basis",
+			wantScans:   2,
+			wantRetries: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer closeNoErr(t, db)
+
+			firstRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "protected/a", "a").NewIterator(nil, nil))
+			if err != nil {
+				t.Fatalf("PublishOrderedRootIterator first: %v", err)
+			}
+			secondRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "protected/b", "b").NewIterator(nil, nil))
+			if err != nil {
+				t.Fatalf("PublishOrderedRootIterator second: %v", err)
+			}
+
+			var providerMu sync.RWMutex
+			providerRoot := firstRoot
+			readProvider := func() []uint64 {
+				providerMu.RLock()
+				defer providerMu.RUnlock()
+				return []uint64{providerRoot}
+			}
+			opts := CompactStorageOptions{}
+			if tt.ordinary {
+				opts.LeafGenerationProtectedRootIDsFunc = readProvider
+			} else {
+				opts.LeafGenerationProtectedSystemRootIDsFunc = readProvider
+			}
+
+			var advanced atomic.Bool
+			db.compactStorageAuditProtectedBasisHook = func(stage string, attempt int) {
+				if attempt != 0 || stage != tt.stage || !advanced.CompareAndSwap(false, true) {
+					return
+				}
+				providerMu.Lock()
+				providerRoot = secondRoot
+				providerMu.Unlock()
+			}
+			defer func() { db.compactStorageAuditProtectedBasisHook = nil }()
+
+			stats, err := db.CompactStoragePlan(context.Background(), opts)
+			if err != nil {
+				t.Fatalf("CompactStoragePlan: %v", err)
+			}
+			if !advanced.Load() {
+				t.Fatal("protected-root provider was not advanced")
+			}
+			if stats.Audit.SharedScans != tt.wantScans || stats.Audit.RevalidationRetries != tt.wantRetries {
+				t.Fatalf("audit counters=%+v want scans=%d retries=%d", stats.Audit, tt.wantScans, tt.wantRetries)
+			}
+		})
+	}
+}
+
+type compactStorageAuditVersionedLeafLog struct {
+	replayInlineLeafPageLog
+	mu            sync.RWMutex
+	rootIDs       []uint64
+	systemRootIDs []uint64
+	version       uint64
+}
+
+func (l *compactStorageAuditVersionedLeafLog) ProtectedLeafGenerationRootIDPairSnapshot() ([]uint64, []uint64, uint64) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return append([]uint64(nil), l.rootIDs...), append([]uint64(nil), l.systemRootIDs...), l.version
+}
+
+func (l *compactStorageAuditVersionedLeafLog) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	return l, workerIndex == 0
+}
+
+func (l *compactStorageAuditVersionedLeafLog) advanceVersion() {
+	l.mu.Lock()
+	l.version++
+	l.mu.Unlock()
+}
+
+func TestCompactStorageAudit_ProtectedRootProviderVersionRejectsSameIDABA(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer closeNoErr(t, db)
 
+	provider := &compactStorageAuditVersionedLeafLog{
+		rootIDs: []uint64{db.State().RootPageID},
+		version: 1,
+	}
+	db.SetLeafPageLog(provider)
+	var advanced atomic.Bool
+	db.compactStorageAuditProtectedBasisHook = func(stage string, attempt int) {
+		if stage == "acquire-after-first-protected-basis" && attempt == 0 && advanced.CompareAndSwap(false, true) {
+			provider.advanceVersion()
+		}
+	}
+	defer func() { db.compactStorageAuditProtectedBasisHook = nil }()
+
+	stats, err := db.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if !advanced.Load() {
+		t.Fatal("versioned provider did not advance")
+	}
+	if stats.Audit.SharedScans != 1 || stats.Audit.RevalidationRetries != 1 {
+		t.Fatalf("same-ID provider ABA reused mixed basis: %+v", stats.Audit)
+	}
+}
+
+func TestCompactStorageAudit_ProtectedRootProviderVersionInvalidatesStructuralReuse(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+	writeCompactStorageAuditInvalidation(t, db, "provider-version-root")
+
+	provider := &compactStorageAuditVersionedLeafLog{
+		rootIDs: []uint64{db.State().RootPageID},
+		version: 1,
+	}
+	db.SetLeafPageLog(provider)
+	session := &compactStorageAuditSession{}
+	defer session.close()
+	if _, err := runCompactStorageAuditTableCase(db, session, CompactStorageOptions{}); err != nil {
+		t.Fatalf("first audit: %v", err)
+	}
+	provider.advanceVersion()
+
+	stats, err := runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("second audit: %v", err)
+	}
+	if stats.Audit.SharedScans != 1 || stats.Audit.StructuralReuseHits != 0 || stats.Audit.LastStructuralReuseMissReason != "protected_root_set" {
+		t.Fatalf("same-ID provider version did not invalidate structural cache: %+v", stats.Audit)
+	}
+}
+
+func TestCompactStorageAudit_RepeatedProtectedRootDriftReturnsStaleWithoutTrackerPublication(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+	db.valueLogRefTracker.invalidate()
+
+	firstRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "protected/stale-a", "a").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator first: %v", err)
+	}
+	secondRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "protected/stale-b", "b").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator second: %v", err)
+	}
+	var providerMu sync.RWMutex
+	providerRoot := firstRoot
+	opts := CompactStorageOptions{
+		LeafGenerationProtectedRootIDsFunc: func() []uint64 {
+			providerMu.RLock()
+			defer providerMu.RUnlock()
+			return []uint64{providerRoot}
+		},
+	}
+	db.compactStorageAuditProtectedBasisHook = func(stage string, attempt int) {
+		if stage != "revalidate-after-first-protected-basis" {
+			return
+		}
+		providerMu.Lock()
+		if attempt == 0 {
+			providerRoot = secondRoot
+		} else {
+			providerRoot = firstRoot
+		}
+		providerMu.Unlock()
+	}
+	defer func() { db.compactStorageAuditProtectedBasisHook = nil }()
+
+	_, err = db.CompactStoragePlan(context.Background(), opts)
+	if !errors.Is(err, ErrCompactStorageAuditStale) {
+		t.Fatalf("CompactStoragePlan error=%v want ErrCompactStorageAuditStale", err)
+	}
+	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); ok {
+		t.Fatal("repeated protected-root drift published a current tracker")
+	}
+}
+
+func TestCompactStorageAudit_PendingSegmentExcludedFromFencedDebtAndSettle(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	pendingID := appendPointersInNewSegment(t, dir, 0, 1, 360_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("pending-fenced|"), 32)
+	})[0].FileID
+	active := appendPointersInNewSegment(t, dir, 0, 2, 370_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-fenced|"), 32)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	db.pendingValueLogAppendMu.Lock()
+	db.pendingValueLogAppendFileIDRefs = map[uint32]int{pendingID: 1}
+	db.pendingValueLogAppendMu.Unlock()
+
+	activePath := filepath.Join(ValueLogDirPath(dir), "value-l0-000002.log")
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{
+		UnsafeValueLogReclaimFencedUnreferenced: true,
+		ValueLogFencedProtectedPathsFunc: func() []string {
+			return []string{activePath}
+		},
+	})
+	session := &compactStorageAuditSession{}
+	defer session.close()
+	var stats CompactStorageStats
+	var fencedIDs []uint32
+	debt, err := db.populateCompactStorageAudit(context.Background(), opts, &stats, true, &fencedIDs, nil, session)
+	if err != nil {
+		t.Fatalf("populateCompactStorageAudit: %v", err)
+	}
+	if compactStorageIDListContains(fencedIDs, pendingID) {
+		t.Fatalf("pending file %d selected for fenced reclaim: %v", pendingID, fencedIDs)
+	}
+	if debt.ValueLogGCSegments != 0 || debt.ValueLogGCBytes != 0 {
+		t.Fatalf("pending segment produced GC debt: %+v", debt)
+	}
+	if stats.ValueLogGC.SegmentsActive == 0 || active.FileID == pendingID {
+		t.Fatalf("fixture did not classify pending/current segments as active: %+v", stats.ValueLogGC)
+	}
+
+	var settleStats CompactStorageStats
+	if err := db.settleCompactStorageGC(context.Background(), opts, &settleStats, true, nil, nil, 0, session); err != nil {
+		t.Fatalf("settleCompactStorageGC: %v", err)
+	}
+	if len(settleStats.Phases) != 0 {
+		t.Fatalf("pending-only debt started settle phases: %+v", settleStats.Phases)
+	}
+}
+
+func TestCompactStorageAudit_ScanCountInvalidationTable(t *testing.T) {
 	type scanCounts struct {
 		shared uint64
 		refs   uint64
@@ -680,61 +941,87 @@ func TestCompactStorageAudit_ScanCountInvalidationTable(t *testing.T) {
 		}
 	}
 
-	session := &compactStorageAuditSession{}
-	defer session.close()
-	protectedRoot := db.State().RootPageID
-	protectedPath := filepath.Join(ValueLogDirPath(db.dir), "protected.log")
 	tests := []struct {
 		name       string
-		session    *compactStorageAuditSession
-		opts       CompactStorageOptions
-		before     func()
+		prepare    func(t *testing.T, db *DB, session *compactStorageAuditSession) error
+		run        func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error)
 		want       scanCounts
 		missReason string
 	}{
-		{name: "cold", session: session, want: scanCounts{shared: 1}, missReason: "cold"},
-		{name: "exact reuse", session: session, want: scanCounts{}},
 		{
-			name:       "protected-root invalidation",
-			session:    session,
-			opts:       CompactStorageOptions{LeafGenerationProtectedRootIDs: []uint64{protectedRoot}},
+			name: "cold",
+			run: func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error) {
+				return runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
+			},
+			want: scanCounts{shared: 1}, missReason: "cold",
+		},
+		{
+			name: "exact reuse",
+			prepare: func(t *testing.T, db *DB, session *compactStorageAuditSession) error {
+				_, err := runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
+				return err
+			},
+			run: func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error) {
+				return runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
+			},
+			want: scanCounts{},
+		},
+		{
+			name: "protected-root invalidation",
+			prepare: func(t *testing.T, db *DB, session *compactStorageAuditSession) error {
+				_, err := runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
+				return err
+			},
+			run: func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error) {
+				return runCompactStorageAuditTableCase(db, session, CompactStorageOptions{
+					LeafGenerationProtectedRootIDs: []uint64{db.State().RootPageID},
+				})
+			},
 			want:       scanCounts{shared: 1},
 			missReason: "protected_root_set",
 		},
 		{
-			name:    "protected-path invalidation",
-			session: session,
-			opts: CompactStorageOptions{
-				LeafGenerationProtectedRootIDs: []uint64{protectedRoot},
-				ValueLogProtectedPaths:         []string{protectedPath},
+			name: "protected-path invalidation",
+			prepare: func(t *testing.T, db *DB, session *compactStorageAuditSession) error {
+				_, err := runCompactStorageAuditTableCase(db, session, CompactStorageOptions{
+					LeafGenerationProtectedRootIDs: []uint64{db.State().RootPageID},
+				})
+				return err
+			},
+			run: func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error) {
+				root := db.State().RootPageID
+				return runCompactStorageAuditTableCase(db, session, CompactStorageOptions{
+					LeafGenerationProtectedRootIDs: []uint64{root},
+					ValueLogProtectedPaths:         []string{filepath.Join(ValueLogDirPath(db.dir), "protected.log")},
+				})
 			},
 			want:       scanCounts{shared: 1},
 			missReason: "protected_path_set",
 		},
 		{
-			name:    "commit invalidation",
-			session: session,
-			opts: CompactStorageOptions{
-				LeafGenerationProtectedRootIDs: []uint64{protectedRoot},
-				ValueLogProtectedPaths:         []string{protectedPath},
+			name: "commit invalidation",
+			prepare: func(t *testing.T, db *DB, session *compactStorageAuditSession) error {
+				if _, err := runCompactStorageAuditTableCase(db, session, CompactStorageOptions{}); err != nil {
+					return err
+				}
+				writeCompactStorageAuditInvalidation(t, db, "table-commit")
+				return nil
 			},
-			before:     func() { writeCompactStorageAuditInvalidation(t, db, "table-commit") },
+			run: func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error) {
+				return runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
+			},
 			want:       scanCounts{shared: 1},
 			missReason: "commit_seq",
 		},
 		{
-			name:    "cold retry",
-			session: &compactStorageAuditSession{},
-			opts: CompactStorageOptions{
-				LeafGenerationProtectedRootIDs: []uint64{protectedRoot},
-				ValueLogProtectedPaths:         []string{protectedPath},
-			},
-			before: func() {
+			name: "cold retry",
+			run: func(t *testing.T, db *DB, session *compactStorageAuditSession) (CompactStorageStats, error) {
 				db.compactStorageAuditBeforeRevalidate = func(attempt int) {
 					if attempt == 0 {
 						writeCompactStorageAuditInvalidation(t, db, "table-retry")
 					}
 				}
+				return runCompactStorageAuditTableCase(db, session, CompactStorageOptions{})
 			},
 			want:       scanCounts{shared: 2},
 			missReason: "cold",
@@ -742,21 +1029,21 @@ func TestCompactStorageAudit_ScanCountInvalidationTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db.compactStorageAuditBeforeRevalidate = nil
-			if tt.before != nil {
-				tt.before()
+			db, err := Open(Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer closeNoErr(t, db)
+			writeCompactStorageAuditInvalidation(t, db, "table-fixture")
+			session := &compactStorageAuditSession{}
+			defer session.close()
+			if tt.prepare != nil {
+				if err := tt.prepare(t, db, session); err != nil {
+					t.Fatalf("prepare: %v", err)
+				}
 			}
 			before := load()
-			var stats CompactStorageStats
-			_, err := db.populateCompactStorageAudit(
-				context.Background(),
-				normalizeCompactStorageOptions(tt.opts),
-				&stats,
-				true,
-				nil,
-				nil,
-				tt.session,
-			)
+			stats, err := tt.run(t, db, session)
 			db.compactStorageAuditBeforeRevalidate = nil
 			if err != nil {
 				t.Fatalf("populateCompactStorageAudit: %v", err)
@@ -769,7 +1056,20 @@ func TestCompactStorageAudit_ScanCountInvalidationTable(t *testing.T) {
 			}
 		})
 	}
-	t.Cleanup(func() { db.compactStorageAuditBeforeRevalidate = nil })
+}
+
+func runCompactStorageAuditTableCase(db *DB, session *compactStorageAuditSession, opts CompactStorageOptions) (CompactStorageStats, error) {
+	var stats CompactStorageStats
+	_, err := db.populateCompactStorageAudit(
+		context.Background(),
+		normalizeCompactStorageOptions(opts),
+		&stats,
+		true,
+		nil,
+		nil,
+		session,
+	)
+	return stats, err
 }
 
 func TestCompactStorageAudit_StaleRevalidationRetriesOnce(t *testing.T) {

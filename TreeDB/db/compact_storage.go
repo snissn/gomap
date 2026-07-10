@@ -1355,6 +1355,14 @@ func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 }
 
 func (db *DB) compactStorageLeafGenerationProtectedRootIDPair(opts CompactStorageOptions) ([]uint64, []uint64) {
+	rootIDs, systemRootIDs := compactStorageOptionProtectedRootIDPair(opts)
+	dynamicRootIDs, dynamicSystemRootIDs := db.protectedLeafGenerationRootIDPairFromLeafPageLog()
+	rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, dynamicRootIDs)
+	systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, dynamicSystemRootIDs)
+	return rootIDs, systemRootIDs
+}
+
+func compactStorageOptionProtectedRootIDPair(opts CompactStorageOptions) ([]uint64, []uint64) {
 	var rootIDs []uint64
 	var systemRootIDs []uint64
 	rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, opts.LeafGenerationProtectedRootIDs)
@@ -1370,9 +1378,6 @@ func (db *DB) compactStorageLeafGenerationProtectedRootIDPair(opts CompactStorag
 		rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, dynamicRootIDs)
 		systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, dynamicSystemRootIDs)
 	}
-	dynamicRootIDs, dynamicSystemRootIDs := db.protectedLeafGenerationRootIDPairFromLeafPageLog()
-	rootIDs = appendCompactStorageProtectedRootIDs(rootIDs, dynamicRootIDs)
-	systemRootIDs = appendCompactStorageProtectedRootIDs(systemRootIDs, dynamicSystemRootIDs)
 	return rootIDs, systemRootIDs
 }
 

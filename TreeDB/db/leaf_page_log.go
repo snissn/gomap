@@ -119,6 +119,10 @@ type leafPageLogProtectedRootPairProvider interface {
 	ProtectedLeafGenerationRootIDPair() (rootIDs []uint64, systemRootIDs []uint64)
 }
 
+type leafPageLogProtectedRootPairSnapshotProvider interface {
+	ProtectedLeafGenerationRootIDPairSnapshot() (rootIDs []uint64, systemRootIDs []uint64, version uint64)
+}
+
 type leafPageLogRecordLengthProvider interface {
 	LastLeafPageRecordLength() uint32
 }
@@ -392,9 +396,21 @@ func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDPair() (
 	}
 	provider, ok := l.inner.(leafPageLogProtectedRootPairProvider)
 	if !ok {
-		return nil, nil
+		return l.ProtectedLeafGenerationRootIDs(), l.ProtectedLeafGenerationSystemRootIDs()
 	}
 	return provider.ProtectedLeafGenerationRootIDPair()
+}
+
+func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDPairSnapshot() ([]uint64, []uint64, uint64) {
+	if l == nil || l.inner == nil {
+		return nil, nil, 0
+	}
+	provider, ok := l.inner.(leafPageLogProtectedRootPairSnapshotProvider)
+	if !ok {
+		rootIDs, systemRootIDs := l.ProtectedLeafGenerationRootIDPair()
+		return rootIDs, systemRootIDs, 0
+	}
+	return provider.ProtectedLeafGenerationRootIDPairSnapshot()
 }
 
 func (db *DB) currentLeafPageLogSegment() (path string, fileID uint32, ok bool) {
@@ -569,6 +585,7 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	}
 	db.writeMu.Lock()
 	db.leafPageLog = installed
+	db.leafPageLogVersion++
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
 		idx.zipper.SetLeafPageLog(installed)
 	}

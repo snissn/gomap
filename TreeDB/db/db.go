@@ -77,6 +77,7 @@ type DB struct {
 	valueLogRefTracker             *valueLogRefTracker
 	valueLogAppender               atomic.Pointer[valueLogAppenderHolder]
 	leafPageLog                    LeafPageLog
+	leafPageLogVersion             uint64
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
 	leafGenerationPendingMu        sync.Mutex
@@ -96,6 +97,9 @@ type DB struct {
 	// Test hook used to invalidate a shared CompactStorage audit immediately
 	// before its exact publication-basis revalidation.
 	compactStorageAuditBeforeRevalidate func(attempt int)
+	// Test hook used to advance protected-root providers at deterministic
+	// capture boundaries.
+	compactStorageAuditProtectedBasisHook func(stage string, attempt int)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
