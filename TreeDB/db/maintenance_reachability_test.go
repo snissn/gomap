@@ -131,6 +131,44 @@ func TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork(t *testing.T) 
 	}
 }
 
+func TestMaintenanceReachabilityLeafSubtreeCachePolicy(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	writeLeafGenerationKeys(t, db, "cache", 1024, 'c')
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer closeNoErr(t, snap)
+
+	scan := func(disable bool) maintenanceReachabilityResult {
+		t.Helper()
+		got, err := db.maintenanceReachabilityScan(context.Background(), snap, maintenanceReachabilityScanOptions{
+			Collectors:              maintenanceReachabilityLeafGenerationTotals,
+			DisableLeafSubtreeCache: disable,
+		})
+		if err != nil {
+			t.Fatalf("maintenanceReachabilityScan disable=%v: %v", disable, err)
+		}
+		return got
+	}
+
+	db.clearLeafGenerationReachabilityCaches()
+	if first := scan(false); first.counters.PagesVisited == 0 {
+		t.Fatalf("cold cached scan visited no pages: %+v", first.counters)
+	}
+	if second := scan(false); second.counters.PagesVisited != 0 || second.counters.MemoHits == 0 {
+		t.Fatalf("warm cached scan did not reuse root subtree: %+v", second.counters)
+	}
+
+	db.clearLeafGenerationReachabilityCaches()
+	if first := scan(true); first.counters.PagesVisited == 0 {
+		t.Fatalf("first uncached scan visited no pages: %+v", first.counters)
+	}
+	if second := scan(true); second.counters.PagesVisited == 0 {
+		t.Fatalf("disabled cache unexpectedly reused subtree: %+v", second.counters)
+	}
+}
+
 func BenchmarkMaintenanceReachability(b *testing.B) {
 	db := openCompactStorageAuditBenchmarkFixture(b, 4096, 256)
 	ctx := context.Background()

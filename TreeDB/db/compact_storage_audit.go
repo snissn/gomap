@@ -447,9 +447,8 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		Collectors: maintenanceReachabilityValueLogRefCounts |
 			maintenanceReachabilityValueLogLiveBytes |
 			maintenanceReachabilityLeafGenerationTotals,
-		ProtectedRootIDs:        in.protectedRootIDs,
-		ProtectedSystemRootIDs:  in.protectedSystemRootIDs,
-		DisableLeafSubtreeCache: true,
+		ProtectedRootIDs:       in.protectedRootIDs,
+		ProtectedSystemRootIDs: in.protectedSystemRootIDs,
 	})
 	raw := compactStorageAuditRaw{
 		valueLogRefCounts:          result.valueLogRefCounts,
