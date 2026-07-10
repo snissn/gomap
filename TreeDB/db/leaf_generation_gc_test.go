@@ -297,6 +297,49 @@ func requireLeafGenerationForegroundSetCompletes(t *testing.T, db *DB, key strin
 	}
 }
 
+func queueLeafGenerationCheckpointBehindReadLock(t *testing.T, db *DB) (func(), <-chan error) {
+	t.Helper()
+	db.writeMu.RLock()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(db.writeMu.RUnlock)
+	}
+	t.Cleanup(release)
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- db.Checkpoint()
+	}()
+	<-started
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if !db.writeMu.TryRLock() {
+			break
+		}
+		db.writeMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("Checkpoint did not queue for writeMu")
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+	return release, done
+}
+
+func requireLeafGenerationOperationCompletes(t *testing.T, name string, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s did not complete", name)
+	}
+}
+
 func requireLeafGenerationGCResult(t *testing.T, done <-chan leafGenerationGCTestResult) LeafGenerationGCStats {
 	t.Helper()
 	select {
@@ -367,6 +410,85 @@ func TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("ok")) {
 		t.Fatalf("concurrent write value=%q want ok", got)
+	}
+}
+
+func TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "checkpoint-scan-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "checkpoint-scan-new", 64, 'b')
+
+	releaseScan, gcDone := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{})
+	releaseCheckpointBlocker, checkpointDone := queueLeafGenerationCheckpointBehindReadLock(t, db)
+
+	setStarted := make(chan struct{})
+	setDone := make(chan error, 1)
+	go func() {
+		close(setStarted)
+		setDone <- db.SetSync([]byte("checkpoint-scan-concurrent"), []byte("ok"))
+	}()
+	<-setStarted
+	releaseCheckpointBlocker()
+
+	requireLeafGenerationOperationCompletes(t, "Checkpoint while live scan paused", checkpointDone)
+	requireLeafGenerationOperationCompletes(t, "SetSync queued after Checkpoint", setDone)
+	releaseScan()
+	_ = requireLeafGenerationGCResult(t, gcDone)
+
+	got, err := db.Get([]byte("checkpoint-scan-concurrent"))
+	if err != nil {
+		t.Fatalf("Get concurrent write: %v", err)
+	}
+	if !bytes.Equal(got, []byte("ok")) {
+		t.Fatalf("concurrent write value=%q want ok", got)
+	}
+}
+
+func TestLeafGenerationGC_LifetimeGateLockOrderStress(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "lifetime-stress-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "lifetime-stress-new", 64, 'b')
+
+	for round := 0; round < 24; round++ {
+		start := make(chan struct{})
+		errs := make(chan error, 3)
+		go func() {
+			<-start
+			_, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+			if errors.Is(err, ErrLeafGenerationGCStaleScan) {
+				err = nil
+			}
+			errs <- err
+		}()
+		go func() {
+			<-start
+			errs <- db.Checkpoint()
+		}()
+		go func(round int) {
+			<-start
+			key := []byte(fmt.Sprintf("lifetime-stress-write-%02d", round))
+			errs <- db.SetSync(key, []byte("ok"))
+		}(round)
+		close(start)
+
+		for operation := 0; operation < 3; operation++ {
+			select {
+			case err := <-errs:
+				if err != nil {
+					t.Fatalf("round %d operation %d: %v", round, operation, err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("round %d operation %d timed out", round, operation)
+			}
+		}
 	}
 }
 

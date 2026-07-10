@@ -12,6 +12,7 @@ import (
 
 const leafGenerationGCContentionFixtureKeys = 16 * 1024
 const leafGenerationGCContentionScanWindow = 50 * time.Millisecond
+const leafGenerationGCExclusiveQueueWindow = time.Millisecond
 
 type leafGenerationGCBenchmarkWriteResult struct {
 	duration time.Duration
@@ -27,6 +28,11 @@ type leafGenerationGCBenchmarkWrite struct {
 type leafGenerationGCBenchmarkGCResult struct {
 	duration time.Duration
 	err      error
+}
+
+type leafGenerationGCBenchmarkExclusiveWaiter struct {
+	started chan struct{}
+	done    chan leafGenerationGCBenchmarkWriteResult
 }
 
 func openLeafGenerationGCContentionBenchDB(b *testing.B) (*DB, *rewriteWriter) {
@@ -74,6 +80,22 @@ func (write leafGenerationGCBenchmarkWrite) begin() {
 	<-write.started
 }
 
+func launchLeafGenerationGCBenchmarkExclusiveWaiter(db *DB) leafGenerationGCBenchmarkExclusiveWaiter {
+	waiter := leafGenerationGCBenchmarkExclusiveWaiter{
+		started: make(chan struct{}),
+		done:    make(chan leafGenerationGCBenchmarkWriteResult, 1),
+	}
+	go func() {
+		close(waiter.started)
+		start := time.Now()
+		db.writeMu.Lock()
+		duration := time.Since(start)
+		db.writeMu.Unlock()
+		waiter.done <- leafGenerationGCBenchmarkWriteResult{duration: duration}
+	}()
+	return waiter
+}
+
 func TestLeafGenerationGCBenchmarkPercentile(t *testing.T) {
 	samples := make([]time.Duration, 100)
 	for i := range samples {
@@ -95,6 +117,7 @@ func BenchmarkLeafGenerationGCWriterContention(b *testing.B) {
 	idleWrites := make([]time.Duration, 0, b.N)
 	gcWrites := make([]time.Duration, 0, b.N)
 	gcDurations := make([]time.Duration, 0, b.N)
+	exclusiveWaiterDurations := make([]time.Duration, 0, b.N)
 	var scannedPages atomic.Uint64
 	unregisterPageCounter := registerLeafGenerationSubtreeCacheMissHook(func(uint64) {
 		scannedPages.Add(1)
@@ -139,10 +162,18 @@ func BenchmarkLeafGenerationGCWriterContention(b *testing.B) {
 			b.Fatal("LeafGenerationGC did not enter live scan")
 		}
 
+		exclusiveWaiter := launchLeafGenerationGCBenchmarkExclusiveWaiter(db)
+		<-exclusiveWaiter.started
+		// Give the exclusive request a stable opportunity to queue behind the
+		// paused scan before launching the later foreground write.
+		time.Sleep(leafGenerationGCExclusiveQueueWindow)
+
 		gcWrite := launchLeafGenerationGCBenchmarkWrite(db, []byte(fmt.Sprintf("leaf-gc-write-g-%08d", i)))
 		gcWrite.begin()
 		time.Sleep(leafGenerationGCContentionScanWindow)
 		close(releaseScan)
+		exclusiveWaiterResult := <-exclusiveWaiter.done
+		exclusiveWaiterDurations = append(exclusiveWaiterDurations, exclusiveWaiterResult.duration)
 		writeResult := <-gcWrite.done
 		if writeResult.err != nil {
 			unregister()
@@ -169,7 +200,10 @@ func BenchmarkLeafGenerationGCWriterContention(b *testing.B) {
 	b.ReportMetric(float64(idleP99.Nanoseconds()), "idle-write-p99-ns")
 	b.ReportMetric(float64(gcP95.Nanoseconds()), "gc-write-p95-ns")
 	b.ReportMetric(float64(gcP99.Nanoseconds()), "gc-write-p99-ns")
+	b.ReportMetric(float64(leafGenerationGCBenchmarkPercentile(exclusiveWaiterDurations, 95).Nanoseconds()), "exclusive-waiter-p95-ns")
+	b.ReportMetric(float64(leafGenerationGCBenchmarkPercentile(exclusiveWaiterDurations, 99).Nanoseconds()), "exclusive-waiter-p99-ns")
 	b.ReportMetric(float64(leafGenerationGCContentionScanWindow.Nanoseconds()), "scan-window-ns")
+	b.ReportMetric(float64(leafGenerationGCExclusiveQueueWindow.Nanoseconds()), "exclusive-queue-window-ns")
 	if idleP95 > 0 {
 		b.ReportMetric(float64(gcP95)/float64(idleP95), "gc/idle-p95")
 	}

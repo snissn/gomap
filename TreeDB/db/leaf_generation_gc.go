@@ -81,19 +81,29 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, bool, error) {
 	var stats LeafGenerationGCStats
 
+	// Refresh, snapshot acquisition, and the live scan intentionally run outside
+	// writeMu. Pin their backing resources against Close without joining the lock
+	// used by checkpoints and foreground publishes.
+	db.teardownMu.RLock()
+	teardownHeld := true
+	releaseTeardown := func() {
+		if teardownHeld {
+			db.teardownMu.RUnlock()
+			teardownHeld = false
+		}
+	}
+	defer releaseTeardown()
+	if db.closing.Load() {
+		return stats, false, nil
+	}
+
 	prepared, err := db.prepareLeafGenerationGCScan()
 	if err != nil || !prepared {
 		return stats, false, err
 	}
 
-	// Hold a shared writer gate only for the unlocked scan window. Ordinary
-	// foreground commits can still proceed through their shared-lock publish path,
-	// but Close and other exclusive teardown/cutover paths cannot close the pager
-	// or value-log manager while the pinned snapshot is being walked.
-	db.writeMu.RLock()
 	snap := db.AcquireSnapshot()
 	if snap == nil {
-		db.writeMu.RUnlock()
 		return stats, false, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
@@ -101,29 +111,25 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 	}
 	if snap.state == nil || snap.state.LeafGenerations == nil {
 		_ = snap.Close()
-		db.writeMu.RUnlock()
 		return stats, false, nil
 	}
 
 	basis, ok := db.captureLeafGenerationGCScanBasis(snap)
 	if !ok {
 		_ = snap.Close()
-		db.writeMu.RUnlock()
 		return stats, opts.DryRun, nil
 	}
 
 	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
 	if err != nil {
 		_ = snap.Close()
-		db.writeMu.RUnlock()
 		return stats, false, err
 	}
 	if err := snap.Close(); err != nil {
-		db.writeMu.RUnlock()
 		return stats, false, err
 	}
-	db.writeMu.RUnlock()
 	snap = nil
+	releaseTeardown()
 
 	if opts.DryRun {
 		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations)
@@ -145,28 +151,22 @@ type leafGenerationGCDecision struct {
 }
 
 func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
-	db.writeMu.RLock()
 	if db.closing.Load() {
-		db.writeMu.RUnlock()
 		return false, nil
 	}
 	db.mu.RLock()
 	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		db.mu.RUnlock()
-		db.writeMu.RUnlock()
 		return false, nil
 	}
 	valueLogManager := db.valueLogManager
 	db.mu.RUnlock()
 
-	// Refresh may touch value-log manager state/files. Keep the shared writer
-	// gate while it runs so Close cannot clear/close the manager underneath it;
-	// ordinary shared-lock foreground publishes can still proceed.
+	// The caller's teardown read lock keeps Close from clearing or closing this
+	// manager. Manager synchronization handles concurrent normal DB activity.
 	if err := valueLogManager.Refresh(); err != nil {
-		db.writeMu.RUnlock()
 		return false, err
 	}
-	db.writeMu.RUnlock()
 
 	db.writeMu.Lock()
 	runLeafGenerationGCExclusivePhaseHook(true)
@@ -194,11 +194,9 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 		return basis, false
 	}
 
-	// The caller holds writeMu.RLock for the scan window. Optimistic publishers can
-	// share that lock while swapping the manifest under db.mu, so capture the
-	// state/manifest basis under db.mu as a coherent pair. Do not reacquire
-	// writeMu here: Go's RWMutex blocks recursive read locks when an exclusive
-	// waiter is pending.
+	// Optimistic publishers swap the state and manifest under db.mu, so capture
+	// the pair under that lock. The teardown read lock protects backing resources
+	// from Close; snapshot references handle normal index-generation cutovers.
 	db.mu.RLock()
 	current := db.state.Load()
 	var manifest *leafGenerationManifest
