@@ -3,6 +3,7 @@ package freelist
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -33,6 +34,14 @@ type allocatorPageEventCounts struct {
 	updates  int
 }
 
+type allocatorPageEvent uint8
+
+const (
+	allocatorPageGetForWrite allocatorPageEvent = iota
+	allocatorPageVerifyChecksum
+	allocatorPageUpdateChecksum
+)
+
 type allocatorPageEvents map[uint64]*allocatorPageEventCounts
 
 func (events allocatorPageEvents) observe(event allocatorPageEvent, pageID uint64) {
@@ -51,14 +60,96 @@ func (events allocatorPageEvents) observe(event allocatorPageEvent, pageID uint6
 	}
 }
 
+type recordingAllocatorPageOperations struct {
+	inner   allocatorPageOperations
+	observe func(allocatorPageEvent, uint64)
+}
+
+func newRecordingAllocatorPageOperations(observe func(allocatorPageEvent, uint64)) *recordingAllocatorPageOperations {
+	return &recordingAllocatorPageOperations{
+		inner:   directAllocatorPageOperations{},
+		observe: observe,
+	}
+}
+
+func (ops *recordingAllocatorPageOperations) getForWrite(p *pager.Pager, pageID uint64) ([]byte, error) {
+	ops.observe(allocatorPageGetForWrite, pageID)
+	return ops.inner.getForWrite(p, pageID)
+}
+
+func (ops *recordingAllocatorPageOperations) verifyChecksum(pageID uint64, data []byte) bool {
+	ops.observe(allocatorPageVerifyChecksum, pageID)
+	return ops.inner.verifyChecksum(pageID, data)
+}
+
+func (ops *recordingAllocatorPageOperations) updateChecksum(pageID uint64, data []byte) {
+	ops.observe(allocatorPageUpdateChecksum, pageID)
+	ops.inner.updateChecksum(pageID, data)
+}
+
+type duplicateAllocatorPageOperations struct {
+	inner allocatorPageOperations
+}
+
+func (ops duplicateAllocatorPageOperations) getForWrite(p *pager.Pager, pageID uint64) ([]byte, error) {
+	if _, err := ops.inner.getForWrite(p, pageID); err != nil {
+		return nil, err
+	}
+	return ops.inner.getForWrite(p, pageID)
+}
+
+func (ops duplicateAllocatorPageOperations) verifyChecksum(pageID uint64, data []byte) bool {
+	first := ops.inner.verifyChecksum(pageID, data)
+	second := ops.inner.verifyChecksum(pageID, data)
+	return first && second
+}
+
+func (ops duplicateAllocatorPageOperations) updateChecksum(pageID uint64, data []byte) {
+	ops.inner.updateChecksum(pageID, data)
+	ops.inner.updateChecksum(pageID, data)
+}
+
+func installAllocatorPageOperationRecorder(t testing.TB, observe func(allocatorPageEvent, uint64)) {
+	t.Helper()
+	testAllocatorPageOperations = newRecordingAllocatorPageOperations(observe)
+	t.Cleanup(func() { testAllocatorPageOperations = nil })
+}
+
 func assertAllocatorPageEvents(t *testing.T, events allocatorPageEvents, pageID uint64, want allocatorPageEventCounts) {
 	t.Helper()
+	if err := validateAllocatorPageEvents(events, pageID, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func validateAllocatorPageEvents(events allocatorPageEvents, pageID uint64, want allocatorPageEventCounts) error {
 	got := events[pageID]
 	if got == nil {
 		got = &allocatorPageEventCounts{}
 	}
 	if *got != want {
-		t.Fatalf("page %d events = %+v, want %+v", pageID, *got, want)
+		return fmt.Errorf("page %d events = %+v, want %+v", pageID, *got, want)
+	}
+	return nil
+}
+
+func TestAllocator_PageOperationGateDetectsDuplicateCalls(t *testing.T) {
+	a, _ := newAllocatorForFreeManyTest(t, 6)
+	if err := a.Free(2); err != nil {
+		t.Fatalf("Free(2): %v", err)
+	}
+	headID := a.Head()
+	events := allocatorPageEvents{}
+	recorder := newRecordingAllocatorPageOperations(events.observe)
+	testAllocatorPageOperations = duplicateAllocatorPageOperations{inner: recorder}
+	t.Cleanup(func() { testAllocatorPageOperations = nil })
+
+	if err := a.FreeMany([]uint64{3}); err != nil {
+		t.Fatalf("FreeMany: %v", err)
+	}
+	assertAllocatorPageEvents(t, events, headID, allocatorPageEventCounts{gets: 2, verifies: 2, updates: 2})
+	if err := validateAllocatorPageEvents(events, headID, allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1}); err == nil {
+		t.Fatal("one-operation gate accepted deliberately duplicated calls")
 	}
 }
 
@@ -78,8 +169,7 @@ func TestAllocator_FreeMany_FillsHeadAndChains(t *testing.T) {
 	TestHookFreeManyBeforeChecksum = func() { checksumUpdates++ }
 	t.Cleanup(func() { TestHookFreeManyBeforeChecksum = nil })
 	events := allocatorPageEvents{}
-	testAllocatorPageEvent = events.observe
-	t.Cleanup(func() { testAllocatorPageEvent = nil })
+	installAllocatorPageOperationRecorder(t, events.observe)
 	if err := a.FreeMany(ids); err != nil {
 		t.Fatalf("FreeMany: %v", err)
 	}
@@ -119,6 +209,32 @@ func TestAllocator_FreeMany_FillsHeadAndChains(t *testing.T) {
 	}
 	assertAllocatorPageEvents(t, events, seed[0], allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1})
 	assertAllocatorPageEvents(t, events, ids[2], allocatorPageEventCounts{gets: 1, updates: 1})
+}
+
+func TestAllocator_FreeMany_FullHeadGetsFinalChecksumBeforeChaining(t *testing.T) {
+	a, _ := newAllocatorForFreeManyTest(t, page.MaxFreeIDs+3)
+	seed := make([]uint64, page.MaxFreeIDs+1)
+	for i := range seed {
+		seed[i] = uint64(i + 1)
+	}
+	if err := a.FreeMany(seed); err != nil {
+		t.Fatalf("seed FreeMany: %v", err)
+	}
+
+	fullHead := a.Head()
+	events := allocatorPageEvents{}
+	installAllocatorPageOperationRecorder(t, events.observe)
+	checksumUpdates := 0
+	TestHookFreeManyBeforeChecksum = func() { checksumUpdates++ }
+	t.Cleanup(func() { TestHookFreeManyBeforeChecksum = nil })
+
+	if err := a.FreeMany([]uint64{uint64(page.MaxFreeIDs + 2)}); err != nil {
+		t.Fatalf("FreeMany: %v", err)
+	}
+	if checksumUpdates != 2 {
+		t.Fatalf("checksum updates = %d, want full transition head and new head (2)", checksumUpdates)
+	}
+	assertAllocatorPageEvents(t, events, fullHead, allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1})
 }
 
 func TestAllocator_FreeMany_RejectsPageZeroBeforeMutation(t *testing.T) {
@@ -296,6 +412,8 @@ func TestAllocator_RegionBiasedAllocMany_RecycledHeadDoesNotConsumeFreeIDStat(t 
 	if before.Pages != 2 || before.FreeIDs != page.MaxFreeIDs {
 		t.Fatalf("counters before recycling empty head = %+v, want 2 heads and %d body IDs", before, page.MaxFreeIDs)
 	}
+	events := allocatorPageEvents{}
+	installAllocatorPageOperationRecorder(t, events.observe)
 	got, err := a.AllocMany(2, emptyHead)
 	if err != nil {
 		t.Fatalf("recycle AllocMany: %v", err)
@@ -314,6 +432,7 @@ func TestAllocator_RegionBiasedAllocMany_RecycledHeadDoesNotConsumeFreeIDStat(t 
 	if after.AllocPages != before.AllocPages+2 || after.ReuseAllocPages != before.ReuseAllocPages+2 {
 		t.Fatalf("allocation counters after recycling empty head: before=%+v after=%+v", before, after)
 	}
+	assertAllocatorPageEvents(t, events, emptyHead, allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1})
 }
 
 func TestAllocator_RegionBiasedAllocMany_DrainsAndRecyclesHeadWithOneVerification(t *testing.T) {
@@ -335,9 +454,8 @@ func TestAllocator_RegionBiasedAllocMany_DrainsAndRecyclesHeadWithOneVerificatio
 	}
 
 	events := allocatorPageEvents{}
-	testAllocatorPageEvent = events.observe
+	installAllocatorPageOperationRecorder(t, events.observe)
 	got, err := a.AllocMany(3, freed[len(freed)-1])
-	testAllocatorPageEvent = nil
 	if err != nil {
 		t.Fatalf("AllocMany: %v", err)
 	}
