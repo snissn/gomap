@@ -71,7 +71,9 @@ The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
   it does not materialize the key's history.
 - Read results distinguish absent, present, and tombstoned states. Malformed
   physical keys/value envelopes and underlying iterator/storage errors are
-  returned explicitly. Present values are caller-owned copies.
+  returned explicitly. Storage failures wrap `ErrStorage` while retaining the
+  underlying error for `errors.Is`/`errors.As`. Present values are caller-owned
+  copies.
 
 Retained-version iteration, discard floors, Dgraph metadata, TTL,
 subscriptions, and conditional transactions remain separate contracts owned by

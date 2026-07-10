@@ -292,7 +292,8 @@ Invariants:
 - durable commits require durable TreeDB mode and survive a process crash;
   relaxed commits require a later checkpoint/close boundary for reopen proof;
 - storage failures may leave the whole batch present or absent but never leave
-  a visible prefix; malformed records and storage errors fail explicitly;
+  a visible prefix; malformed records fail with `ErrMalformedRecord`, while
+  storage errors wrap `ErrStorage` and their underlying cause;
 - raw TreeDB and `EntryRevision` paths do not invoke this opt-in layer.
 
 Coverage:

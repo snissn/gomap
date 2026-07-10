@@ -62,6 +62,7 @@ var (
 	ErrDurabilityUnavailable = errors.New("mvcc: durable commit requires durable TreeDB mode")
 	ErrInvalidKey            = errors.New("mvcc: invalid logical key")
 	ErrMalformedRecord       = errors.New("mvcc: malformed physical record")
+	ErrStorage               = errors.New("mvcc: storage error")
 )
 
 const (
@@ -83,6 +84,9 @@ type Store struct {
 // New returns an opt-in MVCC store over db. Callers must not use raw writes in
 // the reserved MVCC namespace while the Store owns it.
 func New(db *treedb.DB) *Store {
+	if db == nil {
+		return &Store{}
+	}
 	return newStore(db)
 }
 
@@ -105,7 +109,7 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 		return ErrInvalidCommitMode
 	}
 	if s == nil || s.db == nil {
-		return fmt.Errorf("mvcc: create batch: %w", treedb.ErrClosed)
+		return storageError("create batch", treedb.ErrClosed)
 	}
 	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
 		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
@@ -150,11 +154,12 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 
 	batch := s.db.NewBatchWithSize(len(staged))
 	if batch == nil {
-		return fmt.Errorf("mvcc: create batch: %w", treedb.ErrClosed)
+		return storageError("create batch", treedb.ErrClosed)
 	}
 	for i := range staged {
 		if err := batch.Set(staged[i].physical, staged[i].record); err != nil {
-			return errors.Join(fmt.Errorf("mvcc: stage key index %d: %w", i, err), batch.Close())
+			stageErr := storageError(fmt.Sprintf("stage key index %d", i), err)
+			return errors.Join(stageErr, storageError("close batch", batch.Close()))
 		}
 	}
 
@@ -165,9 +170,9 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 		err = batch.Write()
 	}
 	if err != nil {
-		err = fmt.Errorf("mvcc: commit batch: %w", err)
+		err = storageError("commit batch", err)
 	}
-	return errors.Join(err, batch.Close())
+	return errors.Join(err, storageError("close batch", batch.Close()))
 }
 
 // GetAt returns the newest retained version of logical at or below timestamp.
@@ -178,7 +183,7 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		return Result{}, ErrZeroTimestamp
 	}
 	if s == nil || s.db == nil {
-		return Result{}, fmt.Errorf("mvcc: open iterator: %w", treedb.ErrClosed)
+		return Result{}, storageError("open iterator", treedb.ErrClosed)
 	}
 
 	lower, err := mvcckey.Encode(logical, timestamp)
@@ -191,17 +196,17 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	}
 	it, err := s.db.Iterator(lower, upper)
 	if err != nil {
-		return Result{}, fmt.Errorf("mvcc: open iterator: %w", err)
+		return Result{}, storageError("open iterator", err)
 	}
 	defer func() {
 		if closeErr := it.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("mvcc: close iterator: %w", closeErr))
+			err = errors.Join(err, storageError("close iterator", closeErr))
 		}
 	}()
 
 	if !it.Valid() {
 		if iterErr := it.Error(); iterErr != nil {
-			return Result{}, fmt.Errorf("mvcc: iterate: %w", iterErr)
+			return Result{}, storageError("iterate", iterErr)
 		}
 		return Result{State: Absent}, nil
 	}
@@ -216,7 +221,7 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	}
 	record := it.Value()
 	if iterErr := it.Error(); iterErr != nil {
-		return Result{}, fmt.Errorf("mvcc: read value: %w", iterErr)
+		return Result{}, storageError("read value", iterErr)
 	}
 	if len(record) == 0 {
 		return Result{}, fmt.Errorf("%w: empty value envelope", ErrMalformedRecord)
@@ -240,4 +245,11 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 
 func durableTreeDBMode(mode string) bool {
 	return mode == "wal_on_sync" || strings.HasPrefix(mode, "wal_on_sync+")
+}
+
+func storageError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %s: %w", ErrStorage, operation, err)
 }

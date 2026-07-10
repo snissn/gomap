@@ -142,6 +142,9 @@ func TestCommitAtInjectedFailureIsAllOrNone(t *testing.T) {
 			if !errors.Is(err, injected) {
 				t.Fatalf("CommitAt error = %v, want injected", err)
 			}
+			if !errors.Is(err, ErrStorage) {
+				t.Fatalf("CommitAt error = %v, want ErrStorage", err)
+			}
 			want := Absent
 			if afterCommit {
 				want = Present
@@ -218,8 +221,18 @@ func TestGetAtMalformedAndStorageErrors(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, err := store.GetAt([]byte("bad-value"), 9); !errors.Is(err, treedb.ErrClosed) {
-		t.Fatalf("GetAt closed error=%v want ErrClosed", err)
+	if _, err := store.GetAt([]byte("bad-value"), 9); !errors.Is(err, treedb.ErrClosed) || !errors.Is(err, ErrStorage) {
+		t.Fatalf("GetAt closed error=%v want ErrStorage wrapping ErrClosed", err)
+	}
+}
+
+func TestNilStoreReturnsStorageErrors(t *testing.T) {
+	store := New(nil)
+	if err := store.CommitAt(1, []Mutation{{Key: []byte("k")}}, CommitRelaxed); !errors.Is(err, ErrStorage) || !errors.Is(err, treedb.ErrClosed) {
+		t.Fatalf("CommitAt nil store error=%v", err)
+	}
+	if _, err := store.GetAt([]byte("k"), 1); !errors.Is(err, ErrStorage) || !errors.Is(err, treedb.ErrClosed) {
+		t.Fatalf("GetAt nil store error=%v", err)
 	}
 }
 
