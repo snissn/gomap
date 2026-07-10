@@ -861,7 +861,7 @@ func TestLeafGenerationPlan_CachesProtectedRootsCanonically(t *testing.T) {
 		ProtectedRootIDs:       []uint64{state.RootPageID},
 		ProtectedSystemRootIDs: []uint64{state.SystemRootPageID},
 	}); err != nil {
-		t.Fatalf("LeafGenerationPlan reordered roots: %v", err)
+		t.Fatalf("LeafGenerationPlan deduplicated roots: %v", err)
 	}
 	if got, want := counter.Load(), uint64(1); got != want {
 		t.Fatalf("scan count after reordered protected plan=%d, want %d", got, want)
@@ -873,6 +873,28 @@ func TestLeafGenerationPlan_CachesProtectedRootsCanonically(t *testing.T) {
 	}
 	if got, want := counter.Load(), uint64(2); got != want {
 		t.Fatalf("scan count after changed protected plan=%d, want %d", got, want)
+	}
+}
+
+func TestLeafGenerationProtectedRootsHashCanonicalizesOrderAndKeepsRootKindsDistinct(t *testing.T) {
+	first := leafGenerationProtectedRootsHash(
+		[]uint64{9, 3, 5, 3, 0},
+		[]uint64{17, 11, 17, 0},
+	)
+	reordered := leafGenerationProtectedRootsHash(
+		[]uint64{5, 9, 3},
+		[]uint64{11, 17},
+	)
+	if first != reordered {
+		t.Fatalf("canonical hashes differ: first=%x reordered=%x", first, reordered)
+	}
+
+	swappedKinds := leafGenerationProtectedRootsHash(
+		[]uint64{11, 17},
+		[]uint64{3, 5, 9},
+	)
+	if first == swappedKinds {
+		t.Fatalf("user/system root distinction lost: hash=%x", first)
 	}
 }
 

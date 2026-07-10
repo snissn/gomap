@@ -2504,6 +2504,220 @@ func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testin
 	}
 }
 
+func TestCompactStorageLeafPackMultiPassReusesLiveScan(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf left: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "left", 0, 1024, 'b')
+
+	writeLeafGenerationKeys(t, d, "right", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf right: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "right", 0, 1024, 'd')
+	writeLeafGenerationKeys(t, d, "current", 16, 'e')
+	d.SetLeafPageLog(nil)
+
+	scans := withLeafGenerationLiveScanCounter(t)
+	var scansAfterFirst, scansAfterSecond uint64
+	d.compactStorageAfterPhase = func(name string) {
+		switch name {
+		case "leaf-generation-pack-1":
+			scansAfterFirst = scans.Load()
+		case "leaf-generation-pack-2":
+			scansAfterSecond = scans.Load()
+		}
+	}
+	t.Cleanup(func() { d.compactStorageAfterPhase = nil })
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMaxPasses:             3,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := compactStorageRanLeafPackCount(stats.LeafGenerationPacks); got < 2 {
+		t.Fatalf("ran leaf-pack passes=%d want at least 2, packs=%+v", got, stats.LeafGenerationPacks)
+	}
+	if scansAfterFirst == 0 || scansAfterSecond == 0 {
+		t.Fatalf("missing pack scan observations: after_first=%d after_second=%d", scansAfterFirst, scansAfterSecond)
+	}
+	if got, want := scansAfterSecond, scansAfterFirst; got != want {
+		t.Fatalf("second unchanged pack scan count=%d want unchanged from first=%d", got, want)
+	}
+}
+
+func TestCompactStorageLeafPackMultiPassRescansAfterForegroundCommit(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf left: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "left", 0, 1024, 'b')
+
+	writeLeafGenerationKeys(t, d, "right", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf right: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "right", 0, 1024, 'd')
+	writeLeafGenerationKeys(t, d, "current", 16, 'e')
+	d.SetLeafPageLog(nil)
+
+	scans := withLeafGenerationLiveScanCounter(t)
+	injected := false
+	var scansAfterFirst, scansAfterSecond uint64
+	d.compactStorageAfterPhase = func(name string) {
+		switch name {
+		case "leaf-generation-pack-1":
+			scansAfterFirst = scans.Load()
+			if injected {
+				return
+			}
+			injected = true
+			state := d.State()
+			if state == nil {
+				t.Fatal("missing state before foreground commit")
+			}
+			if err := d.Commit(state.RootPageID); err != nil {
+				t.Fatalf("foreground same-root commit: %v", err)
+			}
+		case "leaf-generation-pack-2":
+			scansAfterSecond = scans.Load()
+		}
+	}
+	t.Cleanup(func() { d.compactStorageAfterPhase = nil })
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMaxPasses:             3,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if !injected {
+		t.Fatal("foreground commit hook did not run")
+	}
+	if got := compactStorageRanLeafPackCount(stats.LeafGenerationPacks); got < 2 {
+		t.Fatalf("ran leaf-pack passes=%d want at least 2, packs=%+v", got, stats.LeafGenerationPacks)
+	}
+	if scansAfterFirst == 0 || scansAfterSecond == 0 {
+		t.Fatalf("missing pack scan observations: after_first=%d after_second=%d", scansAfterFirst, scansAfterSecond)
+	}
+	if got, want := scansAfterSecond, scansAfterFirst+1; got != want {
+		t.Fatalf("second dirty pack scan count=%d want one more than first=%d", got, scansAfterFirst)
+	}
+}
+
+func TestCompactStorageLeafPackCarryMatchesFreshPlan(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf left: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "left", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "right", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf right: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "right", 0, 1024, 'd')
+	writeLeafGenerationKeys(t, d, "current", 16, 'e')
+	d.SetLeafPageLog(nil)
+
+	assertCompactStorageLeafPackCarryMatchesFreshPlan(t, d, nil, nil)
+}
+
+func TestCompactStorageLeafPackCarryMatchesFreshPlanWithProtectedResidual(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "main", 2048, 'a')
+	detachedTable := mustFrozenSystemMemtable(t, systemRangeKVs(512, nil)...)
+	detachedRoot, err := d.PublishOrderedRootIterator(0, detachedTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	if detachedRoot == 0 {
+		t.Fatal("expected detached protected root")
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "main", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "current", 16, 'c')
+	d.SetLeafPageLog(nil)
+
+	assertCompactStorageLeafPackCarryMatchesFreshPlan(t, d, []uint64{detachedRoot}, nil)
+}
+
+func assertCompactStorageLeafPackCarryMatchesFreshPlan(t *testing.T, d *DB, protectedRootIDs, protectedSystemRootIDs []uint64) {
+	t.Helper()
+	opts := compactStorageLeafPackFromPlanOptions(normalizeCompactStorageOptions(CompactStorageOptions{
+		LeafPackMaxPasses:             2,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  1,
+	}), protectedRootIDs, protectedSystemRootIDs)
+	ignored := make(map[uint32]struct{})
+	var carry compactStorageLeafPackPlanState
+
+	first, err := d.compactStorageLeafGenerationPackRunOnce(context.Background(), opts, true, ignored, &carry)
+	if err != nil {
+		t.Fatalf("first leaf pack: %v", err)
+	}
+	if !first.Ran {
+		t.Fatalf("first leaf pack skipped: %+v", first)
+	}
+	compactStorageRememberLeafPackCreatedFileIDs(ignored, first)
+	pin := d.AcquireSnapshot()
+	if pin == nil {
+		t.Fatal("expected snapshot pin before carried plan")
+	}
+	defer func() { _ = pin.Close() }()
+
+	planOpts := leafGenerationPackFromPlanPlanOptions(opts)
+	carried, err := d.compactStorageLeafGenerationPlan(context.Background(), planOpts, &carry)
+	if err != nil {
+		t.Fatalf("carried plan: %v", err)
+	}
+	fresh, err := d.LeafGenerationPlan(context.Background(), planOpts)
+	if err != nil {
+		t.Fatalf("fresh plan: %v", err)
+	}
+	carried = compactStorageFilterIgnoredLeafPackPlan(carried, opts, ignored)
+	fresh = compactStorageFilterIgnoredLeafPackPlan(fresh, opts, ignored)
+
+	if !reflect.DeepEqual(carried.Candidates, fresh.Candidates) {
+		t.Fatalf("carried candidates differ from fresh scan:\ncarried=%+v\nfresh=%+v", carried.Candidates, fresh.Candidates)
+	}
+	if !reflect.DeepEqual(carried.CandidateGenerationIDs, fresh.CandidateGenerationIDs) ||
+		carried.CandidateBytesTotal != fresh.CandidateBytesTotal ||
+		carried.CandidateBytesLive != fresh.CandidateBytesLive ||
+		carried.CandidateBytesDead != fresh.CandidateBytesDead ||
+		carried.CandidateBytesToCopy != fresh.CandidateBytesToCopy ||
+		carried.CandidateLivePages != fresh.CandidateLivePages ||
+		carried.ExpectedReclaimBytes != fresh.ExpectedReclaimBytes ||
+		carried.ExpectedReclaimRatioPPM != fresh.ExpectedReclaimRatioPPM ||
+		carried.ExpectedReclaimPerByteCopiedPPM != fresh.ExpectedReclaimPerByteCopiedPPM ||
+		carried.Admission != fresh.Admission {
+		t.Fatalf("carried aggregate differs from fresh scan:\ncarried=%+v\nfresh=%+v", carried, fresh)
+	}
+}
+
+func compactStorageRanLeafPackCount(packs []LeafGenerationPackRunOnceStats) int {
+	ran := 0
+	for _, pack := range packs {
+		if pack.Ran {
+			ran++
+		}
+	}
+	return ran
+}
+
 func TestCompactStoragePlanIgnoresEmptyAndCurrentLeafGenerations(t *testing.T) {
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 	d.SetLeafPageLog(nil)

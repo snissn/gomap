@@ -89,6 +89,9 @@ type LeafGenerationPlan struct {
 	ExpectedReclaimRatioPPM         int
 	ExpectedReclaimPerByteCopiedPPM int
 	Admission                       string
+
+	stateKey  treeReachabilityCacheKey
+	liveStats leafGenerationLiveScanStats
 }
 
 type leafGenerationLiveScanStats struct {
@@ -251,8 +254,27 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	if err != nil {
 		return plan, err
 	}
+	plan = db.leafGenerationPlanFromLiveStats(opts, snap.state, manifest, liveScan)
+	if key, ok := leafGenerationLiveStatsKeyForState(snap.state); ok {
+		if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
+			key.protectedRoots = leafGenerationProtectedRootsHash(opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
+		}
+		plan.stateKey = key
+	}
+	plan.liveStats = cloneLeafGenerationLiveScanStats(liveScan)
+	return plan, nil
+}
 
-	set := snap.state.ValueLogSet
+func (db *DB) leafGenerationPlanFromLiveStats(opts LeafGenerationPlanOptions, state *DBState, manifest *leafGenerationManifest, liveScan leafGenerationLiveScanStats) LeafGenerationPlan {
+	var plan LeafGenerationPlan
+	if state == nil || manifest == nil {
+		plan.Admission = leafGenerationPlanAdmissionNoCandidates
+		return plan
+	}
+	plan.CurrentCommitSeq = state.CommitSeq
+	plan.CurrentGenerationID = manifest.CurrentGenerationID
+
+	set := state.ValueLogSet
 	plan.Generations = make([]LeafGenerationPlanGeneration, 0, len(manifest.Generations))
 	plan.Candidates = make([]LeafGenerationPlanGeneration, 0, len(manifest.Generations))
 	for _, gen := range manifest.Generations {
@@ -305,7 +327,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	plan.ExpectedReclaimRatioPPM = ratioPPM(plan.CandidateBytesDead, plan.CandidateBytesTotal)
 	plan.ExpectedReclaimPerByteCopiedPPM = ratioPPM(plan.CandidateBytesDead, plan.CandidateBytesToCopy)
 	plan.Admission = leafGenerationPlanAdmission(opts, plan)
-	return plan, nil
+	return plan
 }
 
 func leafGenerationPlanAdmission(opts LeafGenerationPlanOptions, plan LeafGenerationPlan) string {

@@ -973,7 +973,7 @@ func TestCompactStorageAudit_PendingSegmentExcludedFromFencedDebtAndSettle(t *te
 	}
 
 	var settleStats CompactStorageStats
-	if err := db.settleCompactStorageGC(context.Background(), opts, &settleStats, true, nil, nil, 0, session); err != nil {
+	if err := db.settleCompactStorageGC(context.Background(), opts, &settleStats, true, nil, nil, 0, session, nil); err != nil {
 		t.Fatalf("settleCompactStorageGC: %v", err)
 	}
 	if len(settleStats.Phases) != 0 {
