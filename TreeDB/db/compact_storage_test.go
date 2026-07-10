@@ -1039,7 +1039,7 @@ func withValueLogRefFullScanCounter(t *testing.T) *atomic.Uint64 {
 	return &counter
 }
 
-func TestCompactStoragePlanFencedReclaimUsesTrackerRefsWhenValid(t *testing.T) {
+func TestCompactStoragePlanFencedReclaimUsesSharedAuditRefs(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -1063,8 +1063,8 @@ func TestCompactStoragePlanFencedReclaimUsesTrackerRefsWhenValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactStoragePlan: %v", err)
 	}
-	if counters.tracker.Load() != 1 || counters.fallbackScan.Load() != 0 || counters.validationScan.Load() != 0 || counters.other.Load() != 0 {
-		t.Fatalf("fenced refs counters tracker=%d fallback=%d validation=%d other=%d; want tracker=1 only",
+	if counters.tracker.Load() != 0 || counters.fallbackScan.Load() != 0 || counters.validationScan.Load() != 1 || counters.other.Load() != 0 {
+		t.Fatalf("fenced refs counters tracker=%d fallback=%d validation=%d other=%d; want validation=1 only",
 			counters.tracker.Load(), counters.fallbackScan.Load(), counters.validationScan.Load(), counters.other.Load())
 	}
 	if got := fullScans.Load(); got != 0 {
@@ -1072,7 +1072,7 @@ func TestCompactStoragePlanFencedReclaimUsesTrackerRefsWhenValid(t *testing.T) {
 	}
 	if stats.RemainingDebt.ValueLogGCSegments == 0 {
 		// RemainingDebt carries both ordinary GC and fenced debt; the hook and scan
-		// counter assertions above prove the fenced audit used the tracker path.
+		// counter assertions above prove fenced debt used the shared validation scan.
 		t.Fatalf("expected value-log debt including unreferenced file %d, stats=%+v", fixture.UnreferencedFileID, stats.RemainingDebt)
 	}
 }

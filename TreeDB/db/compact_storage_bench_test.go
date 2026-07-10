@@ -16,6 +16,7 @@ func BenchmarkCompactStorageRewritePolicyMostlyLivePlan(b *testing.B) {
 		DisableZeroByteValueLogCleanup: true,
 	}
 	var selectedBytes, copiedBytes, staleBytes, selectedStaleBytes int64
+	var audit CompactStorageAuditStats
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		plan, err := db.CompactStoragePlan(context.Background(), opts)
@@ -26,12 +27,21 @@ func BenchmarkCompactStorageRewritePolicyMostlyLivePlan(b *testing.B) {
 		copiedBytes += plan.ValueLogRewritePlan.SelectedBytesLive
 		staleBytes += plan.ValueLogRewritePlan.BytesStale
 		selectedStaleBytes += plan.ValueLogRewritePlan.SelectedBytesStale
+		addCompactStorageAuditStats(&audit, plan.Audit)
 	}
 	if b.N > 0 {
 		b.ReportMetric(float64(selectedBytes)/float64(b.N), "selected_bytes/op")
 		b.ReportMetric(float64(copiedBytes)/float64(b.N), "copied_bytes/op")
 		b.ReportMetric(float64(staleBytes)/float64(b.N), "stale_bytes/op")
 		b.ReportMetric(float64(selectedStaleBytes)/float64(b.N), "selected_stale_bytes/op")
+		b.ReportMetric(float64(audit.SharedScans)/float64(b.N), "shared_scans/op")
+		b.ReportMetric(float64(audit.StructuralReuseHits)/float64(b.N), "reuse_hits/op")
+		b.ReportMetric(float64(audit.RootSets)/float64(b.N), "root_sets/op")
+		b.ReportMetric(float64(audit.PagesVisited)/float64(b.N), "pages/op")
+		b.ReportMetric(float64(audit.MemoHits)/float64(b.N), "memo_hits/op")
+		b.ReportMetric(float64(audit.PointerProjections)/float64(b.N), "pointer_projections/op")
+		b.ReportMetric(float64(audit.GroupedRecordDedupeHits)/float64(b.N), "grouped_dedupe_hits/op")
+		b.ReportMetric(float64(audit.PhysicalBytesRead)/float64(b.N), "physical_bytes_read/op")
 	}
 }
 

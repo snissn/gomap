@@ -230,6 +230,23 @@ storage. It composes:
 Applied full storage compaction holds backend maintenance serialization for the
 whole sequence. Plan mode computes the same debt model without mutating storage.
 
+Each cold debt audit performs at most one page-granular reachability walk over a
+coherent snapshot of the user, system, collection, and protected roots. The
+snapshot basis includes the commit and root IDs, leaf-generation state version,
+retained value-log set, and protected root/path sets. Dynamic protected-root
+snapshots are captured on both sides of backend state and must match; cached
+providers also contribute their monotonic root-domain version so same-ID ABA is
+observable. For unversioned callbacks, equal canonical root sets with unchanged
+backend commit/root state are the same audit-visible basis because retiring or
+reusing a protected page changes that backend state. Value-log reference counts
+retain every logical pointer projection, while live-byte accounting counts a
+grouped physical record once. Audit results are published to the incremental
+reference tracker only after the protected basis brackets two exact backend-state
+checks; one invalidation is retried and a second returns
+`ErrCompactStorageAuditStale`. Later settle/final audits perform zero new walks
+when they reuse structural reachability on an exact complete-basis match. File
+sizes, pins, and zero-byte debt are recomputed on every audit.
+
 Value-log deletion in this lifecycle remains reachability-based. Zero-byte
 cleanup is limited to untracked `value_vlog` segment files and must honor
 cached-mode protected paths.
