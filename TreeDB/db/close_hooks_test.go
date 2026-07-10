@@ -63,6 +63,50 @@ func TestCloseHookMayCallClose(t *testing.T) {
 	}
 }
 
+func TestCloseWaitsForStandaloneCloseHookDrain(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	hookStarted := make(chan struct{})
+	releaseHook := make(chan struct{})
+	d.RegisterCloseHook(func() error {
+		close(hookStarted)
+		<-releaseHook
+		return nil
+	})
+
+	hookDone := make(chan error, 1)
+	go func() { hookDone <- d.RunCloseHooks() }()
+	<-hookStarted
+
+	closeWaiting := make(chan struct{})
+	d.closeHooksMu.Lock()
+	d.closeHooksWaitHook = func() { close(closeWaiting) }
+	d.closeHooksMu.Unlock()
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	<-closeWaiting
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before standalone hook drain completed: %v", err)
+	default:
+	}
+
+	close(releaseHook)
+	if err := <-hookDone; err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !d.IsClosing() {
+		t.Fatal("Close returned without marking the DB closing")
+	}
+}
+
 func TestCloseHookMayRunOnlineVacuum(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")

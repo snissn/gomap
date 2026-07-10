@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -211,7 +213,9 @@ type DB struct {
 	// closeHooksRunning is protected by closeHooksMu. A reentrant Close from a
 	// user callback is folded into the active outer close operation.
 	closeHooksRunning bool
-	closeHooksWG      sync.WaitGroup
+	// closeHooksWaitHook is a deterministic test seam for the concurrent waiter.
+	closeHooksWaitHook func()
+	closeHooksWG       sync.WaitGroup
 
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
@@ -2283,11 +2287,18 @@ func (db *DB) Close() error {
 	}
 	db.closeHooksMu.Lock()
 	closeHooksRunning := db.closeHooksRunning
+	closeHooksWaitHook := db.closeHooksWaitHook
 	db.closeHooksMu.Unlock()
 	if closeHooksRunning {
-		// A user hook cannot synchronously wait for the hook drain that is
-		// invoking it. The active outer Close remains responsible for teardown.
-		return nil
+		if closeCalledFromUserCloseHook() {
+			// A user hook cannot synchronously wait for the hook drain that is
+			// invoking it. The active outer Close remains responsible for teardown.
+			return nil
+		}
+		if closeHooksWaitHook != nil {
+			closeHooksWaitHook()
+		}
+		db.closeHooksWG.Wait()
 	}
 
 	var errs []error
@@ -2379,6 +2390,24 @@ func (db *DB) Close() error {
 		errs = append(errs, bgErr)
 	}
 	return errors.Join(errs...)
+}
+
+func closeCalledFromUserCloseHook() bool {
+	// Hooks run synchronously, so runCloseHooks remains on the stack only for
+	// the true reentrant callback path. Unrelated Close callers must wait for
+	// the active drain and continue teardown.
+	var pcs [16]uintptr
+	n := runtime.Callers(2, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, "/TreeDB/db.(*DB).runCloseHooks") {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
 }
 
 func (db *DB) reportError(err error) {
