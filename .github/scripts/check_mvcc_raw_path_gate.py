@@ -195,9 +195,9 @@ def annotate_binary_equivalence(
 
 
 def acceptance_verdict(measurement_pass: bool, all_equivalent: bool) -> str:
-    if all_equivalent:
-        return "EQUIVALENT"
-    return "PASS" if measurement_pass else "FAIL"
+    if measurement_pass:
+        return "PASS"
+    return "EQUIVALENT" if all_equivalent else "FAIL"
 
 
 def render_markdown(
@@ -460,6 +460,7 @@ def main() -> int:
     accepted = verdict in {"PASS", "EQUIVALENT"}
     payload = {
         "accepted": accepted,
+        "no_attributable_regression": accepted,
         "verdict": verdict,
         "measurement_pass": measurement_pass,
         "all_row_binaries_equivalent": all_equivalent,

@@ -65,6 +65,23 @@ class RawPathEquivalenceTests(unittest.TestCase):
             CHECKER.acceptance_verdict(False, all_equivalent), "EQUIVALENT"
         )
 
+    def test_verdict_truth_table(self) -> None:
+        cases = (
+            (True, True, "PASS"),
+            (True, False, "PASS"),
+            (False, True, "EQUIVALENT"),
+            (False, False, "FAIL"),
+        )
+        for measurement_pass, all_equivalent, expected in cases:
+            with self.subTest(
+                measurement_pass=measurement_pass,
+                all_equivalent=all_equivalent,
+            ):
+                self.assertEqual(
+                    CHECKER.acceptance_verdict(measurement_pass, all_equivalent),
+                    expected,
+                )
+
     def test_different_package_digests_use_measured_pass(self) -> None:
         parsed = CHECKER.compute_binary_digests(self.binary_paths(set()))
         all_equivalent, _ = CHECKER.annotate_binary_equivalence(
@@ -152,6 +169,7 @@ class RawPathEquivalenceTests(unittest.TestCase):
         payload = json.loads(json_output.read_text(encoding="utf-8"))
         self.assertEqual(payload["verdict"], "EQUIVALENT")
         self.assertTrue(payload["accepted"])
+        self.assertTrue(payload["no_attributable_regression"])
         self.assertFalse(payload["measurement_pass"])
         self.assertFalse(payload["results"][0]["measurement_pass"])
         self.assertNotIn("pass", payload)

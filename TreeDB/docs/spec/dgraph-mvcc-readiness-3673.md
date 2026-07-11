@@ -139,6 +139,10 @@ matches (`db`, `caching`, and `treedb`). `EQUIVALENT` preserves the measured
 PASS/FAIL medians and deltas but states that no observed difference can be
 attributed to the candidate code; mixed, missing, or malformed binary evidence
 fails closed and cannot produce equivalence acceptance.
+The verdict truth table is `PASS` for a passing measurement, `EQUIVALENT` only
+for a failed measurement with all row binaries matching, and `FAIL` otherwise.
+Machine-readable `no_attributable_regression` is true exactly when the verdict
+is accepted (`PASS` or `EQUIVALENT`).
 
 `scripts/mvcc_adapter_overhead_gate.sh` separately compares public MVCC commit,
 get, and all-version iteration rows with their direct TreeDB/physical controls.
