@@ -1,7 +1,9 @@
 # TreeDB Durable-Write M2 Barrier Ledger (2026-07-10)
 
-Issue: [#3656](https://github.com/snissn/gomap/issues/3656)  
-Parent: [#3652](https://github.com/snissn/gomap/issues/3652)  
+Issue: [#3656](https://github.com/snissn/gomap/issues/3656)
+
+Parent: [#3652](https://github.com/snissn/gomap/issues/3652)
+
 Base commit: `3e5543145e2f4fd0762b6bdeb1bbcbcb42599f6c`
 
 This is an instrumentation and contract result. It does not change a
