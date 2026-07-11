@@ -48,7 +48,7 @@ func TestPowerLossOracleSourceDeletionWaitsForStableCoverage(t *testing.T) {
 		if event.Namespace == durabilitycut.NamespaceUnlink && event.Resource == durabilitycut.ResourceCommandWAL {
 			unlinks++
 		}
-		if event.Point == durabilitycut.BeforeIndexDataSync {
+		if event.Point == durabilitycut.BeforeMetaWrite {
 			return cutErr
 		}
 		return nil

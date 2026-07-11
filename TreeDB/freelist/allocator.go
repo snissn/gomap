@@ -228,6 +228,23 @@ func (a *Allocator) SetPreferAppend(prefer bool) {
 	a.preferAppend = prefer
 }
 
+// SetRetainDrainedHeads preserves empty freelist chain pages after advancing
+// past them. This is a conservative recovery-window bridge: an older durable
+// meta slot may still name that chain until it is overwritten. Complete COW
+// freelist generations can reclaim these metadata pages later.
+func (a *Allocator) SetRetainDrainedHeads(retain bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.retainDrainedHeads = retain
+}
+
+func (a *Allocator) retainDrainedHeadLocked(next uint64) {
+	a.head = next
+	if a.stats.Pages > 0 {
+		a.stats.Pages--
+	}
+}
+
 // BeginPublicationFence keeps the current freelist generation immutable while
 // a prepared root's index-page images are written. Allocations append and frees
 // are deferred until publication completes. DUR-04 replaces this conservative
@@ -331,6 +348,10 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			}
 			next := freelistNextPageID(data)
 			a.batchUpdateChecksum(headID, n)
+			if a.retainDrainedHeads {
+				a.retainDrainedHeadLocked(next)
+				continue
+			}
 
 			recycled := a.head
 			a.head = next
@@ -423,6 +444,10 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 		}
 		next := freelistNextPageID(data)
 		a.batchUpdateChecksum(headID, n)
+		if a.retainDrainedHeads {
+			a.retainDrainedHeadLocked(next)
+			return a.allocManyRegionScanLocked(2, hint)
+		}
 		a.head = next
 		a.pager.MarkUnverified(headID)
 		a.lastAlloc = headID
@@ -473,6 +498,12 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 			return a.appendAllocManyLocked(ids, 2)
 		}
 		next := freelistNextPageID(data)
+		if a.retainDrainedHeads {
+			a.retainDrainedHeadLocked(next)
+			tail, tailErr := a.allocManyRegionScanLocked(2-len(ids), target)
+			ids = append(ids, tail...)
+			return ids, tailErr
+		}
 		a.head = next
 		a.pager.MarkUnverified(headID)
 		a.lastAlloc = headID
@@ -514,6 +545,10 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 			}
 			next := freelistNextPageID(data)
 			a.batchUpdateChecksum(headID, n)
+			if a.retainDrainedHeads {
+				a.retainDrainedHeadLocked(next)
+				continue
+			}
 			a.head = next
 			a.pager.MarkUnverified(headID)
 			a.lastAlloc = headID
@@ -559,6 +594,10 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 				return a.appendAllocManyLocked(ids, count)
 			}
 			next := freelistNextPageID(data)
+			if a.retainDrainedHeads {
+				a.retainDrainedHeadLocked(next)
+				continue
+			}
 			a.head = next
 			a.pager.MarkUnverified(headID)
 			a.lastAlloc = headID
@@ -607,6 +646,10 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 			}
 			next := freelistNextPageID(data)
 			a.batchUpdateChecksum(headID, n)
+			if a.retainDrainedHeads {
+				a.retainDrainedHeadLocked(next)
+				continue
+			}
 			recycled := headID
 			a.head = next
 			a.pager.MarkUnverified(recycled)
@@ -667,6 +710,10 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 				return a.appendAllocManyLocked(ids, count)
 			}
 			next := freelistNextPageID(data)
+			if a.retainDrainedHeads {
+				a.retainDrainedHeadLocked(next)
+				continue
+			}
 			a.head = next
 			a.pager.MarkUnverified(headID)
 			a.lastAlloc = headID
@@ -693,120 +740,126 @@ func (a *Allocator) recordReuseAllocation(id uint64) {
 }
 
 func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
-	if a.appendOnlyLocked() {
-		id, err := a.pager.Alloc(1)
-		if err == nil {
-			a.lastAlloc = id
-			a.stats.AllocPages++
-			a.stats.AppendAllocPages++
-		}
-		return id, err
-	}
-	if a.head == 0 {
-		id, err := a.pager.Alloc(1)
-		if err == nil {
-			a.lastAlloc = id
-			a.stats.AllocPages++
-			a.stats.AppendAllocPages++
-		}
-		return id, err
-	}
-
-	data, err := a.pager.GetForWrite(a.head)
-	if err != nil {
-		return 0, err
-	}
-	n := node.NewNode(data)
-	if !n.VerifyChecksum() {
-		return 0, errors.New("freelist head corrupted (Alloc)")
-	}
-	if n.Type() != page.PageTypeFreelist {
-		return 0, errors.New("invalid freelist page type")
-	}
-
-	count := int(n.Count())
-	if count > 0 {
-		id := freelistIDAt(data, count-1)
-
-		target := hint
-		if target == 0 {
-			target = a.lastAlloc
-		}
-
-		if a.regionPages > 0 && a.regionRadius > 0 && target != 0 {
-			targetRegion := target / a.regionPages
-			idx := -1
-			for i := count - 1; i >= 0; i-- {
-				candidate := freelistIDAt(data, i)
-				candidateRegion := candidate / a.regionPages
-				var diff uint64
-				if candidateRegion >= targetRegion {
-					diff = candidateRegion - targetRegion
-				} else {
-					diff = targetRegion - candidateRegion
-				}
-				if diff <= uint64(a.regionRadius) {
-					idx = i
-					id = candidate
-					break
-				}
-			}
-			if idx >= 0 {
-				lastIdx := count - 1
-				if idx != lastIdx {
-					setFreelistIDAt(data, idx, freelistIDAt(data, lastIdx))
-				}
-				clearFreelistIDAt(data, lastIdx)
-				n.SetCount(uint16(lastIdx))
-				n.UpdateChecksum()
-
-				a.pager.MarkUnverified(id)
+	for {
+		if a.appendOnlyLocked() {
+			id, err := a.pager.Alloc(1)
+			if err == nil {
 				a.lastAlloc = id
 				a.stats.AllocPages++
-				a.stats.ReuseAllocPages++
-				if a.stats.FreeIDs > 0 {
-					a.stats.FreeIDs--
-				}
-				return id, nil
+				a.stats.AppendAllocPages++
 			}
+			return id, err
+		}
+		if a.head == 0 {
+			id, err := a.pager.Alloc(1)
+			if err == nil {
+				a.lastAlloc = id
+				a.stats.AllocPages++
+				a.stats.AppendAllocPages++
+			}
+			return id, err
 		}
 
-		lastIdx := count - 1
-		clearFreelistIDAt(data, lastIdx)
-		n.SetCount(uint16(lastIdx))
-		n.UpdateChecksum()
-
-		a.pager.MarkUnverified(id)
-		a.lastAlloc = id
-		a.stats.AllocPages++
-		a.stats.ReuseAllocPages++
-		if a.stats.FreeIDs > 0 {
-			a.stats.FreeIDs--
+		data, err := a.pager.GetForWrite(a.head)
+		if err != nil {
+			return 0, err
 		}
-		return id, nil
-	}
-	if a.publicationFence.Load() {
-		id, err := a.pager.Alloc(1)
-		if err == nil {
+		n := node.NewNode(data)
+		if !n.VerifyChecksum() {
+			return 0, errors.New("freelist head corrupted (Alloc)")
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return 0, errors.New("invalid freelist page type")
+		}
+
+		count := int(n.Count())
+		if count > 0 {
+			id := freelistIDAt(data, count-1)
+
+			target := hint
+			if target == 0 {
+				target = a.lastAlloc
+			}
+
+			if a.regionPages > 0 && a.regionRadius > 0 && target != 0 {
+				targetRegion := target / a.regionPages
+				idx := -1
+				for i := count - 1; i >= 0; i-- {
+					candidate := freelistIDAt(data, i)
+					candidateRegion := candidate / a.regionPages
+					var diff uint64
+					if candidateRegion >= targetRegion {
+						diff = candidateRegion - targetRegion
+					} else {
+						diff = targetRegion - candidateRegion
+					}
+					if diff <= uint64(a.regionRadius) {
+						idx = i
+						id = candidate
+						break
+					}
+				}
+				if idx >= 0 {
+					lastIdx := count - 1
+					if idx != lastIdx {
+						setFreelistIDAt(data, idx, freelistIDAt(data, lastIdx))
+					}
+					clearFreelistIDAt(data, lastIdx)
+					n.SetCount(uint16(lastIdx))
+					n.UpdateChecksum()
+
+					a.pager.MarkUnverified(id)
+					a.lastAlloc = id
+					a.stats.AllocPages++
+					a.stats.ReuseAllocPages++
+					if a.stats.FreeIDs > 0 {
+						a.stats.FreeIDs--
+					}
+					return id, nil
+				}
+			}
+
+			lastIdx := count - 1
+			clearFreelistIDAt(data, lastIdx)
+			n.SetCount(uint16(lastIdx))
+			n.UpdateChecksum()
+
+			a.pager.MarkUnverified(id)
 			a.lastAlloc = id
 			a.stats.AllocPages++
-			a.stats.AppendAllocPages++
+			a.stats.ReuseAllocPages++
+			if a.stats.FreeIDs > 0 {
+				a.stats.FreeIDs--
+			}
+			return id, nil
 		}
-		return id, err
-	}
+		if a.publicationFence.Load() {
+			id, err := a.pager.Alloc(1)
+			if err == nil {
+				a.lastAlloc = id
+				a.stats.AllocPages++
+				a.stats.AppendAllocPages++
+			}
+			return id, err
+		}
 
-	next := freelistNextPageID(data)
-	recycled := a.head
-	a.head = next
+		next := freelistNextPageID(data)
+		if a.retainDrainedHeads {
+			a.retainDrainedHeadLocked(next)
+			continue
+		}
+		recycled := a.head
+		a.head = next
 
-	a.pager.MarkUnverified(recycled)
-	a.lastAlloc = recycled
-	a.stats.AllocPages++
-	a.stats.ReuseAllocPages++
-	if a.stats.Pages > 0 {
-		a.stats.Pages--
+		a.pager.MarkUnverified(recycled)
+		a.lastAlloc = recycled
+		a.stats.AllocPages++
+		a.stats.ReuseAllocPages++
+		if a.stats.Pages > 0 {
+			a.stats.Pages--
+		}
+		return recycled, nil
 	}
-	return recycled, nil
 }
 
 // Alloc allocates a single page.

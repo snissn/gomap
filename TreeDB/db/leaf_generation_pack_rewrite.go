@@ -1707,11 +1707,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, nil, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
-		skipPrePublishFlush: true,
-		dependenciesFlushed: true,
-		syncMetaPageOnly:    true,
-		publishPrepareGuard: publishPrepareGuard,
-		touchedIndexPages:   publishAlloc.Pages(),
+		skipPrePublishFlush:    true,
+		dependenciesFlushed:    true,
+		syncMetaPageOnly:       true,
+		publishPrepareGuard:    publishPrepareGuard,
+		touchedIndexPages:      publishAlloc.Pages(),
+		touchedIndexPagesOwned: true,
 	})
 	finalizeDuration := time.Since(finalizeStarted)
 	if runStats != nil {

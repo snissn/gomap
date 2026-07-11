@@ -273,6 +273,9 @@ func TestLeafGenerationPack_PrivatePagesRaceWithForegroundWriters(t *testing.T) 
 	for err := range errCh {
 		t.Fatalf("concurrent private-page stress: %v", err)
 	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint foreground writes: %v", err)
+	}
 	if got := idx.pager.PageCount(); got < mainPagesBefore || got != db.meta.TotalPages {
 		t.Fatalf("main pager pages=%d before=%d durable meta=%d", got, mainPagesBefore, db.meta.TotalPages)
 	}

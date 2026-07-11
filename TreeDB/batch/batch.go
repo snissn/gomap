@@ -937,18 +937,32 @@ func (b *Batch) ByteSize() int {
 	return b.byteSize
 }
 
-// ValueLogPointerBytes returns a conservative byte total for value-log records
-// referenced by pointer puts in this batch. Grouped-record aliases may be
-// counted more than once intentionally: publication debt must never
-// under-account side-store bytes while durability is stalled.
+// ValueLogPointerBytes returns the byte total for value-log records referenced
+// by pointer puts in this batch. Grouped pointers alias one physical record, so
+// aliases within the batch are counted once by their stable record identity.
 func (b *Batch) ValueLogPointerBytes() uint64 {
 	if b == nil || !b.hasValueLogPointers {
 		return 0
 	}
+	type groupedRecord struct {
+		fileID uint32
+		offset uint64
+	}
+	var groupedSeen map[groupedRecord]struct{}
 	var total uint64
 	for _, entry := range b.entries {
 		if entry.Type != OpPut || !entry.IsPtr || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
 			continue
+		}
+		if page.ValuePtrIsGrouped(entry.ValuePtr) {
+			if groupedSeen == nil {
+				groupedSeen = make(map[groupedRecord]struct{})
+			}
+			identity := groupedRecord{fileID: entry.ValuePtr.FileID, offset: entry.ValuePtr.Offset}
+			if _, exists := groupedSeen[identity]; exists {
+				continue
+			}
+			groupedSeen[identity] = struct{}{}
 		}
 		length := uint64(page.ValuePtrRecordLength(entry.ValuePtr))
 		if length > ^uint64(0)-total {

@@ -1895,6 +1895,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
+	alloc.SetRetainDrainedHeads(true)
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
 	z := zipper.New(p, alloc)
@@ -3073,7 +3074,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		// optimistic batch paths always supply their allocation tracker explicitly.
 		touchedIndexPages = idx.pager.DirtyIndexPages()
 	}
-	touchedIndexPages = append([]uint64(nil), touchedIndexPages...)
+	if !opts.touchedIndexPagesOwned {
+		touchedIndexPages = append([]uint64(nil), touchedIndexPages...)
+	}
 	ownedBytes := rootPublicationOwnedBytes(touchedIndexPages, retired, metrics, opts.sideStoreBytes)
 	dependencyEvent, hasDependencyEvent, err := db.finalizeDependencySyncEvent(valueLogAppender, len(touchedValueLogSegments) != 0)
 	if err != nil {

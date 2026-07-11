@@ -2767,7 +2767,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, nil
 	}
 
-	post, err := db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{touchedIndexPages: tracker.Pages()})
+	post, err := db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{touchedIndexPages: tracker.Pages(), touchedIndexPagesOwned: true})
 	db.commitMu.Unlock()
 	if err != nil {
 		return false, err

@@ -75,6 +75,7 @@ type RootPublicationCoordinator struct {
 	stop          chan struct{}
 	done          chan struct{}
 	indexSnapshot *pager.IndexPageSnapshot
+	metaPageImage [page.PageSize]byte
 
 	pending                    []*PreparedRootCandidate
 	pendingBytes               uint64
@@ -341,11 +342,12 @@ func (r *RootPublicationCoordinator) run() {
 					r.recordFailure(frontier.CommitSeq, err, postMeta)
 					break
 				}
-				r.completeLocked(frontier)
+				r.completeLocked(frontier, publicationFrontier)
 				r.recoveryMu.Unlock()
 
 				// The pwrite/meta phase is complete. Drain builders admitted during
-				// it before ending the append-only/deferred-free freelist fence.
+				// it before ending the deferred-free freelist fence. An allocator call
+				// is atomic, but an aborted builder can free after that call returns.
 				r.relockRootSerialization()
 				fenceErr := idx.allocator.EndPublicationFence()
 				r.unlockRootSerialization()
@@ -430,7 +432,7 @@ func (r *RootPublicationCoordinator) relockRootSerialization() {
 	// Do not queue an RWMutex writer here. An admitted optimistic builder may
 	// legitimately enter another read-side build before releasing its outer read
 	// lock; Go's writer preference would block that nested read and deadlock the
-	// fence. The append-only fence remains safe while we wait for a quiet point.
+	// fence. The publication fence remains safe while we wait for a quiet point.
 	for !r.db.writeMu.TryLock() {
 		runtime.Gosched()
 	}
@@ -520,7 +522,7 @@ func (r *RootPublicationCoordinator) writeAndSyncMeta(target uint64, meta page.M
 	if r.db.testFailSyncMeta.Load() {
 		return errTestSyncMetaFailpoint, true
 	}
-	if err := idx.pager.SyncPages([]uint64{target}); err != nil {
+	if err := idx.pager.SyncMetaPageImage(target, r.metaPageImage[:]); err != nil {
 		return err, true
 	}
 	if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, r.db.dir, metaPath); err != nil {
@@ -532,10 +534,13 @@ func (r *RootPublicationCoordinator) writeAndSyncMeta(target uint64, meta page.M
 func (r *RootPublicationCoordinator) complete(frontier *PreparedRootCandidate) {
 	r.recoveryMu.Lock()
 	defer r.recoveryMu.Unlock()
-	r.completeLocked(frontier)
+	r.completeLocked(frontier, frontier)
 }
 
-func (r *RootPublicationCoordinator) completeLocked(frontier *PreparedRootCandidate) {
+// completeLocked removes candidates through queuedFrontier while recording the
+// exact sealed frontier whose meta image was written. The two pointers differ
+// when publication refreshes mutable allocator state after draining builders.
+func (r *RootPublicationCoordinator) completeLocked(queuedFrontier, durableFrontier *PreparedRootCandidate) {
 	r.mu.Lock()
 	count := 0
 	bytes := uint64(0)
@@ -545,7 +550,7 @@ func (r *RootPublicationCoordinator) completeLocked(frontier *PreparedRootCandid
 		completed = append(completed, c)
 		bytes += c.OwnedBytes
 		count++
-		if c == frontier {
+		if c == queuedFrontier {
 			break
 		}
 	}
@@ -562,13 +567,13 @@ func (r *RootPublicationCoordinator) completeLocked(frontier *PreparedRootCandid
 	if r.durableMetaPageID == 0 {
 		target = 1
 	}
-	r.durableMeta = frontier.Meta
+	r.durableMeta = durableFrontier.Meta
 	r.durableMetaPageID = target
-	r.metaSlotSeq[target] = frontier.CommitSeq
+	r.metaSlotSeq[target] = durableFrontier.CommitSeq
 	r.metaSlotValid[target] = true
-	r.metaSlotMeta[target] = frontier.Meta
+	r.metaSlotMeta[target] = durableFrontier.Meta
 	r.recoveryClosureGeneration++
-	r.durableCommitSeq = frontier.CommitSeq
+	r.durableCommitSeq = durableFrontier.CommitSeq
 	if r.durabilityDemandSeq <= r.durableCommitSeq {
 		r.durabilityDemandSeq = 0
 	}
@@ -578,7 +583,7 @@ func (r *RootPublicationCoordinator) completeLocked(frontier *PreparedRootCandid
 	r.metaSyncs++
 	r.mu.Unlock()
 	r.db.mu.Lock()
-	r.db.meta = frontier.Meta
+	r.db.meta = durableFrontier.Meta
 	r.db.metaPageID = target
 	r.db.mu.Unlock()
 	r.mu.Lock()

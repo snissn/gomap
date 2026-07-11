@@ -36,6 +36,7 @@ type finalizeCommitOptions struct {
 	maxEntryRevision            page.EntryRevision
 	publishPrepareGuard         *finalizeCommitPrepareGuard
 	touchedIndexPages           []uint64
+	touchedIndexPagesOwned      bool
 	sideStoreBytes              uint64
 }
 

@@ -48,6 +48,11 @@ type Allocator struct {
 	// later via vacuum.
 	preferAppend bool
 
+	// retainDrainedHeads keeps consumed freelist metadata pages intact instead
+	// of recycling them as data pages. TreeDB enables this while alternating
+	// meta slots can still select an older freelist generation.
+	retainDrainedHeads bool
+
 	publicationMu           sync.RWMutex
 	publicationFence        atomic.Bool
 	publicationDeferredFree []uint64

@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
@@ -54,5 +56,41 @@ func TestAllocator_PublicationFenceAppendsAndDefersFrees(t *testing.T) {
 		if got != want {
 			t.Fatalf("Alloc after fence=%d want reusable page %d", got, want)
 		}
+	}
+}
+
+func TestAllocator_RetainDrainedHeadPreservesRecoveryMetadata(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+	a := New(p, 0)
+	if err := a.Free(3); err != nil {
+		t.Fatalf("Free head: %v", err)
+	}
+	if err := a.Free(2); err != nil {
+		t.Fatalf("Free body: %v", err)
+	}
+	a.SetRetainDrainedHeads(true)
+
+	got, err := a.AllocMany(2, 0)
+	if err != nil {
+		t.Fatalf("AllocMany: %v", err)
+	}
+	if len(got) != 2 || got[0] != 2 || got[1] != 4 {
+		t.Fatalf("AllocMany=%v want reused body 2 then appended page 4", got)
+	}
+	data, err := p.Get(3)
+	if err != nil {
+		t.Fatalf("Get retained head: %v", err)
+	}
+	n := node.NewNode(data)
+	if n.Type() != page.PageTypeFreelist || !n.VerifyChecksum() || n.Count() != 0 {
+		t.Fatalf("retained head type=%d count=%d checksum=%v", n.Type(), n.Count(), n.VerifyChecksum())
 	}
 }

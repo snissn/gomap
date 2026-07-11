@@ -498,7 +498,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, publishPrepareGuard: publishPrepareGuard, touchedIndexPages: tracker.Pages(), sideStoreBytes: sideStoreBytes})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, publishPrepareGuard: publishPrepareGuard, touchedIndexPages: tracker.Pages(), touchedIndexPagesOwned: true, sideStoreBytes: sideStoreBytes})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -520,6 +520,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.maxEntryRevision = maxEntryRevision
 		opts.publishPrepareGuard = publishPrepareGuard
 		opts.touchedIndexPages = tracker.Pages()
+		opts.touchedIndexPagesOwned = true
 		opts.sideStoreBytes = sideStoreBytes
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu so that no concurrent writer can

@@ -396,6 +396,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 
 	newAlloc := freelist.New(newPager, 0)
 	newAlloc.SetPreferAppend(db.preferAppendAlloc)
+	newAlloc.SetRetainDrainedHeads(true)
 	newAlloc.SetFreelistRegion(db.freelistRegionPages, db.freelistRegionRadius)
 
 	newZ := zipper.New(newPager, newAlloc)
@@ -647,7 +648,13 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 				return err
 			}
 			db.writeMu.Lock()
-			db.rootPublication.publishMu.Lock()
+			// Fence close holds publishMu while it reacquires writeMu. Never wait
+			// for publishMu while holding writeMu or the two paths can deadlock.
+			if !db.rootPublication.publishMu.TryLock() {
+				db.writeMu.Unlock()
+				runtime.Gosched()
+				continue
+			}
 			if !db.publishPrepareMu.TryLock() {
 				db.rootPublication.publishMu.Unlock()
 				db.writeMu.Unlock()

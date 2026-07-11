@@ -2793,7 +2793,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		var post finalizeCommitPost
 		commitStarted = true
 		touchedIndexPages := append(rootTracker.Pages(), systemTracker.Pages()...)
-		post, err = db.finalizeCommitLockedWithOptions(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, publishPrepareGuard: publishPrepareGuard, touchedIndexPages: touchedIndexPages})
+		post, err = db.finalizeCommitLockedWithOptions(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, publishPrepareGuard: publishPrepareGuard, touchedIndexPages: touchedIndexPages, touchedIndexPagesOwned: true})
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
 		hold := time.Since(holdStart)

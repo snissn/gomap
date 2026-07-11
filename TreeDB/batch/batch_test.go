@@ -395,6 +395,39 @@ func TestTouchedValueLogSegments(t *testing.T) {
 	}
 }
 
+func TestValueLogPointerBytesCountsGroupedRecordOnce(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	const recordLen = uint32(8192)
+	fileID := page.ValueLogFileID(7)
+	for i := uint8(0); i < 8; i++ {
+		ptr := page.ValuePtr{
+			FileID: fileID,
+			Offset: 4096,
+			Length: page.ValuePtrMarkGrouped(recordLen, i),
+		}
+		if err := b.SetPointer([]byte{byte('a' + i)}, ptr); err != nil {
+			t.Fatalf("SetPointer alias %d: %v", i, err)
+		}
+	}
+	if got := b.ValueLogPointerBytes(); got != uint64(recordLen) {
+		t.Fatalf("ValueLogPointerBytes()=%d want %d", got, recordLen)
+	}
+
+	other := page.ValuePtr{
+		FileID: fileID,
+		Offset: 8192,
+		Length: page.ValuePtrMarkGrouped(recordLen, 0),
+	}
+	if err := b.SetPointer([]byte("z"), other); err != nil {
+		t.Fatalf("SetPointer distinct record: %v", err)
+	}
+	if got := b.ValueLogPointerBytes(); got != 2*uint64(recordLen) {
+		t.Fatalf("ValueLogPointerBytes()=%d want %d", got, 2*uint64(recordLen))
+	}
+}
+
 func TestSetPointerViewNoTouch_SkipsTouchedSegmentTracking(t *testing.T) {
 	b := New(newMapValueReader(), page.DefaultInlineThreshold)
 	t.Cleanup(func() { _ = b.Close() })
