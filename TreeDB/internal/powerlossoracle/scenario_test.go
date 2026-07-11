@@ -217,6 +217,40 @@ func TestValidateDurableAckWithoutRootUsesRecoveredAcknowledgements(t *testing.T
 	})
 }
 
+func TestValidateDurableAckUsesRecoveredRootAppliedLSN(t *testing.T) {
+	t.Run("commit generation does not cover later acknowledgement", func(t *testing.T) {
+		scenario := Scenario{
+			Cut:                  AfterMetaSync,
+			ReopenAttempted:      true,
+			Generations:          []Generation{completeGeneration(10, 4)},
+			LatestSealedSequence: 10,
+			SelectedSequence:     10,
+			OpenedSequence:       10,
+			OpenedAppliedLSN:     4,
+			Acknowledged:         []Acknowledgement{{Sequence: 5, Durable: true}},
+		}
+		if err := RequireViolation(scenario.Validate(), InvariantDurableAckLost); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("applied lsn covers acknowledgement beyond commit generation", func(t *testing.T) {
+		scenario := Scenario{
+			Cut:                  AfterMetaSync,
+			ReopenAttempted:      true,
+			Generations:          []Generation{completeGeneration(1, 5)},
+			LatestSealedSequence: 1,
+			SelectedSequence:     1,
+			OpenedSequence:       1,
+			OpenedAppliedLSN:     5,
+			Acknowledged:         []Acknowledgement{{Sequence: 5, Durable: true}},
+		}
+		if err := scenario.Validate(); err != nil {
+			t.Fatalf("AppliedLSN-covered durable ack rejected: %v", err)
+		}
+	})
+}
+
 func TestValidateRecoveredDurableAckAfterGapIsNonSuffixLoss(t *testing.T) {
 	scenario := Scenario{
 		Cut:                       AfterMetaSync,

@@ -120,13 +120,13 @@ func (s Scenario) Validate() error {
 	}
 	for _, ack := range s.Acknowledged {
 		_, recoveredByWAL := recovered[ack.Sequence]
-		recoveredByRoot := newest != nil && ack.Sequence <= newest.Sequence
+		recoveredByRoot := newest != nil && ack.Sequence <= newest.AppliedLSN
 		if ack.Durable && !recoveredByRoot && !recoveredByWAL {
-			recoveredSequence := uint64(0)
+			recoveredAppliedLSN := uint64(0)
 			if newest != nil {
-				recoveredSequence = newest.Sequence
+				recoveredAppliedLSN = newest.AppliedLSN
 			}
-			return Violation{Invariant: InvariantDurableAckLost, Detail: fmt.Sprintf("ack=%d recovered=%d cut=%s", ack.Sequence, recoveredSequence, s.Cut)}
+			return Violation{Invariant: InvariantDurableAckLost, Detail: fmt.Sprintf("ack=%d recovered-applied-lsn=%d cut=%s", ack.Sequence, recoveredAppliedLSN, s.Cut)}
 		}
 	}
 	if err := s.validateSelectedState(); err != nil {

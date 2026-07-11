@@ -65,18 +65,23 @@ func recoverIndexSwap(dir string) error {
 	if indexExists {
 		// If a prior vacuum crashed before the swap, clean up the temp artifacts so
 		// future opens are unambiguous.
+		namespaceChanged := false
 		if newExists {
 			if err := removePersistentFileBestEffort(dir, newPath, durabilitycut.ResourceIndex); err != nil {
 				return err
 			}
+			namespaceChanged = true
 		}
 		if readyExists {
 			if err := removePersistentFileBestEffort(dir, readyPath, durabilitycut.ResourceIndex); err != nil {
 				return err
 			}
+			namespaceChanged = true
 		}
-		if err := syncDeletionNamespaceDirectory(dir, durabilitycut.ResourceIndex); err != nil {
-			return err
+		if namespaceChanged {
+			if err := syncDeletionNamespaceDirectory(dir, durabilitycut.ResourceIndex); err != nil {
+				return err
+			}
 		}
 		// Keep bak around as a safety net; it will be removed by a successful
 		// vacuum run.

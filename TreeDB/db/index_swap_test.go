@@ -1,10 +1,27 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestRecoverIndexSwap_CleanIndexDoesNotSyncDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, indexFileName), []byte("index"), 0600); err != nil {
+		t.Fatalf("WriteFile(index): %v", err)
+	}
+
+	origSync := syncDirFn
+	defer func() { syncDirFn = origSync }()
+	wantErr := errors.New("unexpected directory sync")
+	syncDirFn = func(_ string) error { return wantErr }
+
+	if err := recoverIndexSwap(dir); err != nil {
+		t.Fatalf("recoverIndexSwap clean index: %v", err)
+	}
+}
 
 func TestRecoverIndexSwap_SyncsAfterNewReadyRename(t *testing.T) {
 	dir := t.TempDir()
