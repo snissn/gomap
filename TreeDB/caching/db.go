@@ -2590,6 +2590,32 @@ func (db *DB) observeValueLogSync(path valueLogSyncPath, waited, elapsed time.Du
 	}
 }
 
+// recordValueLogMaterializationSyncCoverageMuHeld records the append-only
+// writer boundary covered by a successful materialization sync. Callers hold
+// l.vlogMu; reuse additionally requires the lane's sync reservation to remain
+// held until the command-WAL external-reference ordering step.
+func (db *DB) recordValueLogMaterializationSyncCoverageMuHeld(l *lane, w valueWriter) {
+	if l == nil {
+		return
+	}
+	l.vlogMaterializationSyncValid = false
+	if db == nil || w == nil || l.id < 0 || l.vlogSeq <= 0 {
+		return
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+	if err != nil {
+		return
+	}
+	size := w.Size()
+	if size < 0 {
+		return
+	}
+	l.vlogMaterializationSyncFileID = fileID
+	l.vlogMaterializationSyncSeq = l.vlogSeq
+	l.vlogMaterializationSyncSize = size
+	l.vlogMaterializationSyncValid = true
+}
+
 func (db *DB) flushPendingValueLogLanes(sync bool, syncPath valueLogSyncPath) error {
 	if db == nil || !db.splitValueLogEnabled() {
 		return nil
@@ -16090,6 +16116,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		case needSync:
 			start := time.Now()
 			err = w.Sync()
+			if err == nil {
+				db.recordValueLogMaterializationSyncCoverageMuHeld(l, w)
+			}
 			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 		case needFlush:
 			err = w.Flush()
@@ -17375,6 +17404,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		case journalDurabilitySync:
 			start := time.Now()
 			err = w.Sync()
+			if err == nil {
+				db.recordValueLogMaterializationSyncCoverageMuHeld(l, w)
+			}
 			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 			syncedBoundary = err == nil
 		default:
@@ -18087,6 +18119,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		case journalDurabilitySync:
 			start := time.Now()
 			err = w.Sync()
+			if err == nil {
+				db.recordValueLogMaterializationSyncCoverageMuHeld(l, w)
+			}
 			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 			syncedBoundary = err == nil
 		default:

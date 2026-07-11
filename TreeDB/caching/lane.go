@@ -88,12 +88,19 @@ type lane struct {
 	vlogQueueDriftCurrentNs        uint64
 	vlogDirty                      atomic.Bool
 	vlogSyncPending                atomic.Bool
-	backendReadDirtySeq            atomic.Uint64
-	backendReadFlushedSeq          atomic.Uint64
-	vlogLiveBytes                  atomic.Int64
-	vlogClosedBytes                atomic.Int64
-	vlogClosedSizes                map[string]int64
-	vlogCreatedSegments            []laneValueLogSegment
+	// The materialization-sync certificate is protected by vlogMu. It is only
+	// reusable while this lane's sync reservation remains held and the active
+	// append-only writer still has the same file and size.
+	vlogMaterializationSyncValid  bool
+	vlogMaterializationSyncFileID uint32
+	vlogMaterializationSyncSeq    int
+	vlogMaterializationSyncSize   int64
+	backendReadDirtySeq           atomic.Uint64
+	backendReadFlushedSeq         atomic.Uint64
+	vlogLiveBytes                 atomic.Int64
+	vlogClosedBytes               atomic.Int64
+	vlogClosedSizes               map[string]int64
+	vlogCreatedSegments           []laneValueLogSegment
 
 	// Observability counters for diagnosing pathological lane shapes (e.g. huge l0).
 	// These are incremented on segment rotation and allow distinguishing useful

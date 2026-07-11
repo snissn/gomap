@@ -130,17 +130,13 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 		}
 		if _, ok := seenLanes[l]; !ok {
 			seenLanes[l] = struct{}{}
-			if err := a.db.flushValueLogLane(l); err != nil {
+			activeFileID, err := a.db.flushValueLogLaneForExternalRefFileIDs(l, fileIDs, sync)
+			if err != nil {
 				return err
 			}
-			if sync && !a.db.relaxedSync {
-				if err := a.db.syncValueLogLane(l); err != nil {
-					return err
-				}
+			if activeFileID != 0 {
+				activeFileIDs[activeFileID] = struct{}{}
 			}
-		}
-		if _, activeFileID, ok := cachingValueLogSegmentForLane(l); ok {
-			activeFileIDs[activeFileID] = struct{}{}
 		}
 	}
 	if !sync {
@@ -163,6 +159,104 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 		}
 	}
 	return nil
+}
+
+func (db *DB) flushValueLogLaneForExternalRefFileIDs(l *lane, fileIDs []uint32, sync bool) (uint32, error) {
+	if db == nil || l == nil {
+		return 0, errWALUnavailable
+	}
+	if !db.splitValueLogEnabled() {
+		if err := db.flushValueLogLane(l); err != nil {
+			return 0, err
+		}
+		if sync && !db.relaxedSync {
+			if err := db.syncValueLogLane(l); err != nil {
+				return 0, err
+			}
+		}
+		_, activeFileID, _ := cachingValueLogSegmentForLane(l)
+		return activeFileID, nil
+	}
+	waitStart := time.Now()
+	l.vlogMu.Lock()
+	waited := time.Since(waitStart)
+	defer l.vlogMu.Unlock()
+
+	var activeFileID uint32
+	if l.vlogPath != "" && l.vlogSeq > 0 {
+		if fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq)); err == nil {
+			activeFileID = fileID
+		}
+	}
+	w := l.vlog
+	if w == nil {
+		// A path/sequence without an active writer is not an active durability
+		// owner. Return no active ID so the caller directly syncs the segment.
+		return 0, nil
+	}
+	if l.vlogDirty.Load() || valueWriterPendingBytes(w) > 0 {
+		start := time.Now()
+		err := w.Flush()
+		if db.testOnVlogFlush != nil {
+			db.testOnVlogFlush(int(l.id))
+		}
+		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
+		if err != nil {
+			return activeFileID, err
+		}
+		l.vlogDirty.Store(false)
+		if db.relaxedSync {
+			l.vlogSyncPending.Store(false)
+		}
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	}
+	if !sync || db.relaxedSync {
+		return activeFileID, nil
+	}
+	if db.valueLogMaterializationSyncCoversFileIDMuHeld(l, w, activeFileID, fileIDs) {
+		return activeFileID, nil
+	}
+	start := time.Now()
+	err := w.Sync()
+	elapsed := time.Since(start)
+	db.observeValueLogSync(valueLogSyncPathExternalRef, waited, elapsed, err)
+	if db.testOnVlogSync != nil {
+		db.testOnVlogSync(int(l.id))
+	}
+	db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, elapsed)
+	if err == nil {
+		l.vlogDirty.Store(false)
+		l.vlogSyncPending.Store(false)
+		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
+	}
+	return activeFileID, err
+}
+
+func valueWriterPendingBytes(w valueWriter) int {
+	if pending, ok := w.(interface{ PendingBytes() int }); ok {
+		return pending.PendingBytes()
+	}
+	return 0
+}
+
+func (db *DB) valueLogMaterializationSyncCoversFileIDMuHeld(l *lane, w valueWriter, activeFileID uint32, fileIDs []uint32) bool {
+	// Durable batch writes retain l.syncing from value materialization through
+	// command-WAL external-reference ordering. A successful materialization
+	// sync therefore covers the whole append-only active file at the recorded
+	// boundary. Reuse is safe only while the writer identity (file/sequence) and
+	// size remain unchanged; every uncertainty falls back to another sync.
+	if db == nil || l == nil || w == nil || activeFileID == 0 || !l.syncing.Load() ||
+		!l.vlogMaterializationSyncValid || l.vlogMaterializationSyncFileID != activeFileID ||
+		l.vlogMaterializationSyncSeq != l.vlogSeq || l.vlogMaterializationSyncSize < 0 ||
+		w.Size() != l.vlogMaterializationSyncSize {
+		return false
+	}
+	for _, fileID := range fileIDs {
+		if fileID == activeFileID {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *cachingValueLogAppender) syncValueLogExternalRefSegment(fileID uint32) (retErr error) {

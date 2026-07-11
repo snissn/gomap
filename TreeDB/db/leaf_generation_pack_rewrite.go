@@ -198,6 +198,7 @@ type leafRefRewriteRunStats struct {
 	PublishHoldNanos                       int64
 	PrivatePages                           int
 	PublishConflict                        bool
+	ApplyStages                            LeafGenerationPackApplyStageStats
 	trackCarry                             bool
 	trackSourceLiveMoved                   bool
 	protectedRootIDs                       []uint64
@@ -1159,6 +1160,7 @@ func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir 
 }
 
 func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, _ bool, leafFrameK int, attempt int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
+	applyStarted := time.Now()
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -1249,6 +1251,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}
 
+	if runStats != nil {
+		runStats.ApplyStages.SetupTimeNanos += time.Since(applyStarted).Nanoseconds()
+	}
 	copyStarted := time.Now()
 	leafCtx := &leafRefRewriteCtx{
 		ctx:                  ctx,
@@ -1362,6 +1367,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 	if !sysChanged && !userChanged {
 		if runStats != nil {
+			runStats.ApplyStages.TreeRewriteTimeNanos += time.Since(copyStarted).Nanoseconds()
 			runStats.CopyTimeNanos = time.Since(copyStarted).Nanoseconds()
 		}
 		return 0, 0, nil
@@ -1381,13 +1387,21 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		CreatedFileIDs: append([]uint32(nil), createdIDs...),
 		PrivatePageIDs: append([]uint64(nil), privatePages...),
 	})
+	if runStats != nil {
+		runStats.ApplyStages.TreeRewriteTimeNanos += time.Since(copyStarted).Nanoseconds()
+	}
 
 	// Pack publication is always durable. Copy fsync remains outside writeMu;
 	// Sync=false is retained only for source compatibility with the pre-alpha
 	// API and no longer weakens the root/segment publication contract.
+	leafSyncStarted := time.Now()
 	if err := writer.Sync(); err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: sync rewritten leaf refs: %w", err)
 	}
+	if runStats != nil {
+		runStats.ApplyStages.LeafSyncTimeNanos += time.Since(leafSyncStarted).Nanoseconds()
+	}
+	copyCloseStarted := time.Now()
 	// The private index pages live only in memory and are never a publication
 	// candidate. Their reconstructed live-pager pages are synchronized before the
 	// alternate meta page.
@@ -1407,6 +1421,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("vlog-rewrite: close copied leaf refs: %w", err)
 	}
 	if runStats != nil {
+		runStats.ApplyStages.CopyCloseTimeNanos += time.Since(copyCloseStarted).Nanoseconds()
 		runStats.CopyTimeNanos = time.Since(copyStarted).Nanoseconds()
 	}
 
@@ -1430,6 +1445,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if !db.leafGenerationPackCopyBasisMatches(basis) {
 		if runStats != nil {
 			runStats.PublishConflict = true
+			runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
 		}
 		unlockPublish()
 		return 0, 0, errLeafGenerationPackPublishConflict
@@ -1458,6 +1474,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if !db.leafGenerationPackCopyBasisMatches(basis) {
 		if runStats != nil {
 			runStats.PublishConflict = true
+			runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
 		}
 		unlockPublish()
 		return 0, 0, errLeafGenerationPackPublishConflict
@@ -1472,19 +1489,31 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, fmt.Errorf("vlog-rewrite: promotion failpoint: %w", err)
 	}
 
+	if runStats != nil {
+		runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
+	}
+	promotionStarted := time.Now()
 	promotedSegments, promoteErr := promoteLeafGenerationPackSegments(createdSegments, resolveStorageLayout(db.dir).leafVLogDir)
+	if runStats != nil {
+		runStats.ApplyStages.PromotionTimeNanos += time.Since(promotionStarted).Nanoseconds()
+	}
 	createdSegments = promotedSegments
 	var (
 		publishAlloc *leafGenerationPackPublishAllocator
-		dirSyncCh    chan error
+		dirSyncCh    chan leafGenerationPackDirectorySyncResult
 	)
 	waitDirectorySync := func() error {
 		if dirSyncCh == nil {
 			return nil
 		}
-		err := <-dirSyncCh
+		waitStarted := time.Now()
+		result := <-dirSyncCh
 		dirSyncCh = nil
-		return err
+		if runStats != nil {
+			runStats.ApplyStages.DirectorySyncTimeNanos += result.timeNanos
+			runStats.ApplyStages.DirectorySyncWaitTimeNanos += time.Since(waitStarted).Nanoseconds()
+		}
+		return result.err
 	}
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		if syncErr := waitDirectorySync(); syncErr != nil {
@@ -1518,11 +1547,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promoted leaf directory failpoint: %w", err))
 	}
 	if len(createdSegments) > 0 {
-		dirSyncCh = make(chan error, 1)
+		dirSyncCh = make(chan leafGenerationPackDirectorySyncResult, 1)
 		leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-		go func() {
-			dirSyncCh <- syncNewFileNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf)
-		}()
+		started := time.Now()
+		go func(started time.Time) {
+			err := syncNewFileNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf)
+			dirSyncCh <- leafGenerationPackDirectorySyncResult{err: err, timeNanos: time.Since(started).Nanoseconds()}
+		}(started)
 	}
 
 	var leafManifest *leafGenerationManifest
@@ -1558,6 +1589,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish system root: %w", err))
 	}
 	relocateDuration := time.Since(relocateStarted)
+	if runStats != nil {
+		runStats.ApplyStages.RelocationTimeNanos += relocateDuration.Nanoseconds()
+	}
 	publishRetired := leafGenerationPackCommittedRetired(leafCtx.retired)
 	// The target-directory and index-page durability fences are independent and
 	// can run concurrently. Both complete before registration or meta write.
@@ -1566,6 +1600,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published index pages: %w", err))
 	}
 	pageSyncDuration := time.Since(pageSyncStarted)
+	if runStats != nil {
+		runStats.ApplyStages.PageSyncTimeNanos += pageSyncDuration.Nanoseconds()
+	}
 	dirWaitStarted := time.Now()
 	if err := waitDirectorySync(); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", err))
@@ -1594,7 +1631,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: post-registration failpoint: %w", err))
 	}
+	registerDuration := time.Since(registerStarted)
+	if runStats != nil {
+		runStats.ApplyStages.RegistrationTimeNanos += registerDuration.Nanoseconds()
+	}
 
+	collectionPublishStarted := time.Now()
 	if len(publishCollectionReplacements) > 0 {
 		if db.leafPageLog == nil {
 			return cleanupAndUnlock(errors.New("vlog-rewrite: collection root publication requires leaf page log"))
@@ -1622,18 +1664,23 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection index pages: %w", err))
 		}
 	}
+	if runStats != nil {
+		runStats.ApplyStages.CollectionPublishTimeNanos += time.Since(collectionPublishStarted).Nanoseconds()
+	}
 	publishEvent.Phase = leafGenerationPackBeforeMetaWrite
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: meta write failpoint: %w", err))
 	}
 
-	registerDuration := time.Since(registerStarted)
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
 		skipPrePublishFlush: true,
 		syncMetaPageOnly:    true,
 	})
 	finalizeDuration := time.Since(finalizeStarted)
+	if runStats != nil {
+		runStats.ApplyStages.FinalizeTimeNanos += finalizeDuration.Nanoseconds()
+	}
 	if finalizeErr != nil {
 		if !finalizeCommitErrorAllowsCreatedSegmentCleanup(finalizeErr) {
 			// The alternate meta page was written and its durability outcome is
@@ -1656,6 +1703,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()
+	postWorkStarted := time.Now()
 	db.finalizeCommitPostWork(post)
+	if runStats != nil {
+		runStats.ApplyStages.PostWorkTimeNanos += time.Since(postWorkStarted).Nanoseconds()
+	}
 	return leafCtx.copied, leafCtx.copiedBytes, nil
+}
+
+type leafGenerationPackDirectorySyncResult struct {
+	err       error
+	timeNanos int64
 }

@@ -2947,7 +2947,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
-	metaPath := filepath.Join(db.dir, "index.db")
+	var metaPath string
+	if durabilitycut.Enabled() {
+		metaPath = filepath.Join(db.dir, "index.db")
+	}
 	metaOffset := int64(targetPageID) * int64(page.PageSize)
 	if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
 		return post, prePublishErr(err)

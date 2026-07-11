@@ -1,6 +1,8 @@
 # Command-WAL Durable Write Contract
 
-Status: current behavior and measurement contract for issue #3656 (M2).
+Status: current behavior and measurement contract for issue #3657 (M3
+candidate). The candidate preserves this contract but does not meet the issue's
+latency exit gate.
 
 This document defines the durability boundary used by cached public raw-KV
 operations in `ProfileCommandWALDurable`. It distinguishes a logical public
@@ -59,8 +61,11 @@ creation/rotation concern, not a per-operation durability barrier.
 public Batch.WriteSync
   -> append external records to the selected persistent value-log lane
   -> value-log materialization Sync
+  -> retain that lane's durable-write reservation
   -> acquire the command publish/barrier ordering lock
-  -> value-log external-reference Sync for referenced lane/file IDs
+  -> validate/read each pointer RID
+  -> verify the active lane still has the certified file, sequence, and size
+  -> reuse the materialization Sync for that unchanged active segment
   -> encode RID references and append one RawKVBatch command frame
   -> flush command writer buffers
   -> command-WAL file Sync
@@ -68,19 +73,28 @@ public Batch.WriteSync
   -> return nil
 ```
 
-Current code therefore performs two actual value-log file-sync hooks for a
-forced-pointer dirty `WriteSync`: `materialization`, then `external_ref`. This
-is measured behavior, not a required count in the public contract. M2 leaves it
-unchanged. A later M3 may coalesce the second sync only if it proves that the
-exact referenced bytes were covered by the first successful sync, no writer or
-rotation can intervene, the external-reference lookup is readable, and the
-command-WAL sync remains strictly later. The measured ceiling is at most the
-second value-log file-sync time; it is not the sum of both syncs and is not a
-throughput claim.
+For an unchanged active segment, current code therefore performs one actual
+value-log file-sync hook for a forced-pointer dirty `WriteSync`, attributed to
+`materialization`; the logical `external_ref` sync and its duplicate physical
+file sync are coalesced. The successful materialization sync records a
+certificate containing the active file ID, lane sequence, and writer size while
+holding `vlogMu`. The durable batch retains `lane.syncing` until
+external-reference ordering. Reuse requires that reservation plus an exact
+file/sequence/size match under the same lock. The value log is append-only, so
+the certificate covers every referenced byte in that unchanged file at or
+below the recorded boundary. Pointer validation and RID lookup complete before
+external-reference ordering can append or sync a command frame. The later
+command-WAL sync remains mandatory.
+
+Every uncertainty falls back to the original external-reference sync: writer
+growth, rotation, reservation release, missing active writer, a failed
+materialization sync, or a referenced file different from the certified active
+file. Malformed or unreadable pointers fail before command-WAL durability.
 
 When a command frame references a rotated, non-current value-log segment, the
-current implementation first flushes and syncs the referenced lane's active
-writer, then opens and syncs each distinct referenced old segment directly.
+current implementation first flushes and, unless its own active reference is
+certified, syncs the referenced lane's active writer, then opens and syncs each
+distinct referenced old segment directly.
 Each operation is a logical `external_ref` observation. The active-writer call
 records its lane-lock wait; the direct old-segment call has zero lock wait and
 records the direct request time. Failure to open an old segment is a logical error
@@ -137,7 +151,7 @@ window.
 
 `Flush` means buffered bytes were passed to the kernel and is not an fsync
 promise. `Sync` is a logical durable-mode request. `file_sync.calls_total` is
-the physical hook count. On Linux M2 validates that production `os.File.Sync`
+the physical hook count. On Linux M2 and M3 validate that production `os.File.Sync`
 calls appear as `fsync(2)` with `strace`; consumers must not assume a specific
 syscall name on other Go versions or operating systems.
 
@@ -179,6 +193,8 @@ The verification matrix requires all of the following:
 
 - external-reference ordering failure leaves the command-WAL file-sync count
   unchanged;
+- a malformed value-log pointer is rejected before any external-reference or
+  command-WAL sync;
 - a frame synced before a publication failure is replayed after reopen;
 - inline and forced-pointer public writes survive reopen;
 - an empty barrier after a prior unsynced pointer write syncs the pending
@@ -187,12 +203,19 @@ The verification matrix requires all of the following:
   counts; and
 - observer state remains race-safe.
 
-## M3 ownership
+## M3 result and remaining ownership
 
-M2 records costs but makes no performance change. The only currently proven
-redundancy candidate is the second value-log sync in the pointer-backed dirty
-`WriteSync` path. Any M3 proposal must report the measured second-sync ceiling,
-preserve the no-intervening-writer/rotation and external-reference durability
-invariants above, and re-run crash/reopen plus syscall-count gates. Command-WAL
-sync removal, async acknowledgement, relaxed durability, and per-write backend
-checkpointing are outside that optimization boundary.
+M3 removes the only redundancy proven by M2: the second value-log sync in the
+unchanged active-segment pointer path. Deterministic counters and Linux syscall
+tracing show one value-log sync rather than two, while rotation, writer growth,
+missing-writer, released-reservation, and error fallbacks retain conservative
+ordering. Crash/reopen, race, and full repository tests pass.
+
+The identical focused benchmark does not demonstrate the required latency
+improvement: the canonical alternating comparison is statistically
+inconclusive and has a +3.0% geomean. The remaining power-loss-durable floor is
+one value-log materialization sync followed by one command-WAL sync. Therefore
+this candidate is a partial mechanism result and a no-go for #3657's latency
+gate, not completion of that issue. Command-WAL sync removal, async
+acknowledgement, relaxed durability, and per-write backend checkpointing remain
+outside the optimization boundary.
