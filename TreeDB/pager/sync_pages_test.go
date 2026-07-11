@@ -10,6 +10,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func syncPagesTestChunkSize(minPages int) int64 {
+	size := int64(minPages * page.PageSize)
+	size = alignUp(size, int64(os.Getpagesize()))
+	return alignUp(size, mmapOffsetGranularity())
+}
+
 func TestSyncPagesUsesDataDurabilityBoundary(t *testing.T) {
 	originalRanges := syncPageRangesFn
 	originalFile := syncPageFileFn
@@ -32,7 +38,7 @@ func TestSyncPagesUsesDataDurabilityBoundary(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	p, err := Open(filepath.Join(dir, "data-sync.db"), int64(page.PageSize))
+	p, err := Open(filepath.Join(dir, "data-sync.db"), syncPagesTestChunkSize(1))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -67,7 +73,7 @@ func TestSyncPagesFallsBackWhenRangeDurabilityIsUnavailable(t *testing.T) {
 		syncPageFileFn = originalFile
 	})
 
-	p, err := Open(filepath.Join(t.TempDir(), "fallback.db"), int64(page.PageSize))
+	p, err := Open(filepath.Join(t.TempDir(), "fallback.db"), syncPagesTestChunkSize(1))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -103,10 +109,7 @@ func TestSyncPagesFallsBackUntilFileGrowthIsDurable(t *testing.T) {
 		syncPageFileFn = originalFile
 	})
 
-	chunkSize := int64(2 * page.PageSize)
-	if granularity := mmapOffsetGranularity(); chunkSize%granularity != 0 {
-		chunkSize = ((chunkSize + granularity - 1) / granularity) * granularity
-	}
+	chunkSize := syncPagesTestChunkSize(2)
 	p, err := Open(filepath.Join(t.TempDir(), "growth.db"), chunkSize)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
