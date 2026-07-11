@@ -36,6 +36,11 @@ the persistent value log, then eventually flushes to the backend.
   On recovery, either the entire batch is applied or none of it is.
 - None of these `*Sync` calls need a backend `Checkpoint()` or `treedb.commit_seq`
   advance per write. The backend root is published later by flush/checkpoint.
+- The exact inline, pointer-backed, `Write`-then-`WriteSync`, and empty-barrier
+  ordering is normative in
+  `TreeDB/docs/spec/command-wal-durable-write-contract.md`. In particular,
+  external value-log bytes are synced before the command frame, and cached
+  publication occurs only after the command-WAL sync succeeds.
 
 Crash recovery:
 - On open, command-WAL segments in `Dir/maindb/wal/` are replayed through the

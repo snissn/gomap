@@ -3,6 +3,7 @@ package caching
 import (
 	"fmt"
 	"os"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -85,7 +86,7 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 		return errWALUnavailable
 	}
 	if len(fileIDs) == 0 {
-		return a.db.flushPendingValueLogLanes(sync)
+		return a.db.flushPendingValueLogLanes(sync, valueLogSyncPathPendingBarrier)
 	}
 	seenLanes := make(map[*lane]struct{}, len(fileIDs))
 	activeFileIDs := make(map[uint32]struct{}, len(fileIDs))
@@ -134,10 +135,14 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 	return nil
 }
 
-func (a *cachingValueLogAppender) syncValueLogExternalRefSegment(fileID uint32) error {
+func (a *cachingValueLogAppender) syncValueLogExternalRefSegment(fileID uint32) (retErr error) {
 	if a == nil || a.db == nil || fileID == 0 {
 		return errWALUnavailable
 	}
+	start := time.Now()
+	defer func() {
+		a.db.observeValueLogSync(valueLogSyncPathExternalRef, 0, time.Since(start), retErr)
+	}()
 	path := valuelog.SegmentPath(a.db.valueLogDir, fileID)
 	if l := a.db.valueLogLaneForFileID(fileID); l != nil {
 		dir := a.db.valueLogDirForLane(l)
@@ -150,7 +155,31 @@ func (a *cachingValueLogAppender) syncValueLogExternalRefSegment(fileID uint32) 
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	return f.Sync()
+	return a.db.syncRotatedValueLogFile(f)
+}
+
+func (db *DB) syncRotatedValueLogFile(f *os.File) error {
+	if db == nil || f == nil {
+		return errWALUnavailable
+	}
+	// Rotated segments no longer have an active writer whose DurabilityStats can
+	// own this direct file-sync observation. Keep this telemetry DB-owned so the
+	// aggregate can add it to active-writer stats exactly once.
+	start := time.Now()
+	var err error
+	if db.testSyncRotatedValueLogFile != nil {
+		err = db.testSyncRotatedValueLogFile(f)
+	} else {
+		err = f.Sync()
+	}
+	db.valueLogRotatedFileSyncCalls.Add(1)
+	if ns := time.Since(start).Nanoseconds(); ns > 0 {
+		db.valueLogRotatedFileSyncNs.Add(uint64(ns))
+	}
+	if err != nil {
+		db.valueLogRotatedFileSyncErrors.Add(1)
+	}
+	return err
 }
 
 func cachingValueLogSegmentForLane(l *lane) (string, uint32, bool) {

@@ -2548,7 +2548,48 @@ func (db *DB) markLaneValueLogBoundary(l *lane, totalBytes int64, flushedBoundar
 	l.vlogSyncPending.Store(true)
 }
 
-func (db *DB) flushPendingValueLogLanes(sync bool) error {
+type valueLogSyncPath uint8
+
+const (
+	valueLogSyncPathMaterialization valueLogSyncPath = iota
+	valueLogSyncPathExternalRef
+	valueLogSyncPathPendingBarrier
+	valueLogSyncPathCheckpoint
+	valueLogSyncPathCount
+)
+
+func (p valueLogSyncPath) statName() string {
+	switch p {
+	case valueLogSyncPathMaterialization:
+		return "materialization"
+	case valueLogSyncPathExternalRef:
+		return "external_ref"
+	case valueLogSyncPathPendingBarrier:
+		return "pending_barrier"
+	case valueLogSyncPathCheckpoint:
+		return "checkpoint"
+	default:
+		return "unknown"
+	}
+}
+
+func (db *DB) observeValueLogSync(path valueLogSyncPath, waited, elapsed time.Duration, err error) {
+	if db == nil || path >= valueLogSyncPathCount {
+		return
+	}
+	db.valueLogSyncPathCalls[path].Add(1)
+	if ns := elapsed.Nanoseconds(); ns > 0 {
+		db.valueLogSyncPathNs[path].Add(uint64(ns))
+	}
+	if ns := waited.Nanoseconds(); ns > 0 {
+		db.valueLogSyncPathWaitNs[path].Add(uint64(ns))
+	}
+	if err != nil {
+		db.valueLogSyncPathErrors[path].Add(1)
+	}
+}
+
+func (db *DB) flushPendingValueLogLanes(sync bool, syncPath valueLogSyncPath) error {
 	if db == nil || !db.splitValueLogEnabled() {
 		return nil
 	}
@@ -2558,13 +2599,17 @@ func (db *DB) flushPendingValueLogLanes(sync bool) error {
 		if !l.vlogDirty.Load() && !(actualSync && l.vlogSyncPending.Load()) {
 			continue
 		}
+		waitStart := time.Now()
 		l.vlogMu.Lock()
+		waited := time.Since(waitStart)
 		w := l.vlog
 		var err error
 		syncBoundary := actualSync && l.vlogSyncPending.Load()
 		if w != nil {
 			if syncBoundary {
+				start := time.Now()
 				err = w.Sync()
+				db.observeValueLogSync(syncPath, waited, time.Since(start), err)
 			} else {
 				err = w.Flush()
 			}
@@ -2587,7 +2632,7 @@ func (db *DB) flushPendingValueLogLanes(sync bool) error {
 func (db *DB) checkpointFlushValueLogLanes() error {
 	// Checkpoint is a durability boundary for cached mode. Ensure any buffered
 	// value-log bytes are visible before publishing pointers durably to the backend.
-	return db.flushPendingValueLogLanes(true)
+	return db.flushPendingValueLogLanes(true, valueLogSyncPathCheckpoint)
 }
 
 func (db *DB) syncDirBestEffort(dir string) {
@@ -4955,10 +5000,12 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		}
 		start := time.Now()
 		err := w.Sync()
+		elapsed := time.Since(start)
+		db.observeValueLogSync(valueLogSyncPathExternalRef, waited, elapsed, err)
 		if db.testOnVlogSync != nil {
 			db.testOnVlogSync(int(l.id))
 		}
-		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
+		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, elapsed)
 		if err == nil {
 			l.vlogDirty.Store(false)
 			l.vlogSyncPending.Store(false)
@@ -8597,6 +8644,14 @@ type DB struct {
 	walAckMu                  sync.Mutex
 	walErr                    error
 	nextRID                   atomic.Uint64
+	valueLogSyncPathCalls     [valueLogSyncPathCount]atomic.Uint64
+	valueLogSyncPathNs        [valueLogSyncPathCount]atomic.Uint64
+	valueLogSyncPathWaitNs    [valueLogSyncPathCount]atomic.Uint64
+	valueLogSyncPathErrors    [valueLogSyncPathCount]atomic.Uint64
+
+	valueLogRotatedFileSyncCalls  atomic.Uint64
+	valueLogRotatedFileSyncNs     atomic.Uint64
+	valueLogRotatedFileSyncErrors atomic.Uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog            bool
@@ -9488,6 +9543,7 @@ type DB struct {
 	// testing hooks
 	testOnVlogFlush                     func(laneID int)
 	testOnVlogSync                      func(laneID int)
+	testSyncRotatedValueLogFile         func(*os.File) error
 	testBeforeVlogUnlock                func(laneID int)
 	testBeforeCheckpointFrontierCapture func()
 	testAfterCheckpointFrontierCapture  func()
@@ -15592,21 +15648,29 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 
 	var (
-		ptrs        []page.ValuePtr
-		startSize   int64
-		totalBytes  int64
-		framesTotal int
-		framesTried int
-		framesKept  int
-		retainPath  string
-		probeKept   bool
-		dictRaw     int
-		dictStored  int
-		dictRecords int
-		err         error
+		ptrs         []page.ValuePtr
+		startSize    int64
+		totalBytes   int64
+		framesTotal  int
+		framesTried  int
+		framesKept   int
+		retainPath   string
+		probeKept    bool
+		dictRaw      int
+		dictStored   int
+		dictRecords  int
+		err          error
+		syncLockWait time.Duration
 	)
 
+	syncLockWaitStart := time.Time{}
+	if needSync {
+		syncLockWaitStart = time.Now()
+	}
 	l.vlogMu.Lock()
+	if needSync {
+		syncLockWait = time.Since(syncLockWaitStart)
+	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
 		for i := range requests {
@@ -15976,7 +16040,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	if err == nil {
 		switch {
 		case needSync:
+			start := time.Now()
 			err = w.Sync()
+			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 		case needFlush:
 			err = w.Flush()
 		default:
@@ -16635,6 +16701,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	appendWallStart := time.Time{}
 	appendWait := time.Duration(0)
 	appendHold := time.Duration(0)
+	syncLockWait := time.Duration(0)
 	if leafLogAppend {
 		appendWallStart = time.Now()
 	}
@@ -16898,13 +16965,21 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	lockWaitStart := time.Time{}
-	if leafLogAppend {
+	if leafLogAppend || durability == journalDurabilitySync {
 		lockWaitStart = time.Now()
 	}
 	l.vlogMu.Lock()
 	lockHoldStart := time.Time{}
+	if leafLogAppend || durability == journalDurabilitySync {
+		waited := time.Since(lockWaitStart)
+		if leafLogAppend {
+			appendWait += waited
+		}
+		if durability == journalDurabilitySync {
+			syncLockWait += waited
+		}
+	}
 	if leafLogAppend {
-		appendWait += time.Since(lockWaitStart)
 		lockHoldStart = time.Now()
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
@@ -17118,12 +17193,20 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				l.vlogMu.Unlock()
 				runtime.Gosched()
 				relockWaitStart := time.Time{}
-				if leafLogAppend {
+				if leafLogAppend || durability == journalDurabilitySync {
 					relockWaitStart = time.Now()
 				}
 				l.vlogMu.Lock()
+				if leafLogAppend || durability == journalDurabilitySync {
+					waited := time.Since(relockWaitStart)
+					if leafLogAppend {
+						appendWait += waited
+					}
+					if durability == journalDurabilitySync {
+						syncLockWait += waited
+					}
+				}
 				if leafLogAppend {
-					appendWait += time.Since(relockWaitStart)
 					lockHoldStart = time.Now()
 				}
 				w = l.vlog
@@ -17242,7 +17325,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			err = w.Flush()
 			flushedBoundary = err == nil
 		case journalDurabilitySync:
+			start := time.Now()
 			err = w.Sync()
+			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 			syncedBoundary = err == nil
 		default:
 			if db.shouldFlushDeferredValueLog(finalWriteMode, records) {
@@ -17442,6 +17527,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	appendWallStart := time.Time{}
 	appendWait := time.Duration(0)
 	appendHold := time.Duration(0)
+	syncLockWait := time.Duration(0)
 	if leafLogAppend {
 		appendWallStart = time.Now()
 	}
@@ -17798,13 +17884,21 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	lockWaitStart := time.Time{}
-	if leafLogAppend {
+	if leafLogAppend || durability == journalDurabilitySync {
 		lockWaitStart = time.Now()
 	}
 	l.vlogMu.Lock()
 	lockHoldStart := time.Time{}
+	if leafLogAppend || durability == journalDurabilitySync {
+		waited := time.Since(lockWaitStart)
+		if leafLogAppend {
+			appendWait += waited
+		}
+		if durability == journalDurabilitySync {
+			syncLockWait += waited
+		}
+	}
 	if leafLogAppend {
-		appendWait += time.Since(lockWaitStart)
 		lockHoldStart = time.Now()
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
@@ -17943,7 +18037,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			err = w.Flush()
 			flushedBoundary = err == nil
 		case journalDurabilitySync:
+			start := time.Now()
 			err = w.Sync()
+			db.observeValueLogSync(valueLogSyncPathMaterialization, syncLockWait, time.Since(start), err)
 			syncedBoundary = err == nil
 		default:
 			if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
@@ -29624,6 +29720,12 @@ func (db *DB) Stats() map[string]string {
 	var rawWriteSyscalls uint64
 	var rawWriteBytes uint64
 	var rawWriteCalls uint64
+	var valueLogFileSyncCalls uint64
+	var valueLogFileSyncNs uint64
+	var valueLogFileSyncErrors uint64
+	var valueLogDirectorySyncCalls uint64
+	var valueLogDirectorySyncNs uint64
+	var valueLogDirectorySyncErrors uint64
 	var vlogShapeSegmentsTotal int64
 	var vlogShapeBytesTotal int64
 	var vlogShapeL0Segments int64
@@ -29722,6 +29824,17 @@ func (db *DB) Stats() map[string]string {
 			rawWriteBytes += snap.Bytes
 			rawWriteCalls += snap.Calls
 		}
+		if snapper, ok := any(vlogWriter).(interface {
+			DurabilityStats() valuelog.DurabilityStats
+		}); ok {
+			snap := snapper.DurabilityStats()
+			valueLogFileSyncCalls += snap.FileSyncCalls
+			valueLogFileSyncNs += snap.FileSyncNs
+			valueLogFileSyncErrors += snap.FileSyncErrors
+			valueLogDirectorySyncCalls += snap.DirectorySyncCalls
+			valueLogDirectorySyncNs += snap.DirectorySyncNs
+			valueLogDirectorySyncErrors += snap.DirectorySyncErrors
+		}
 
 		laneLagP99 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.99)
 		laneLagP999 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.999)
@@ -29749,6 +29862,41 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_shape.l0.segments_total"] = "0"
 		stats["treedb.cache.vlog_shape.l0.bytes_total"] = "0"
 	}
+	var valueLogSyncCalls, valueLogSyncNs, valueLogSyncWaitNs, valueLogSyncErrors uint64
+	for path := valueLogSyncPathMaterialization; path < valueLogSyncPathCount; path++ {
+		calls := db.valueLogSyncPathCalls[path].Load()
+		ns := db.valueLogSyncPathNs[path].Load()
+		waitNs := db.valueLogSyncPathWaitNs[path].Load()
+		errors := db.valueLogSyncPathErrors[path].Load()
+		valueLogSyncCalls += calls
+		valueLogSyncNs += ns
+		valueLogSyncWaitNs += waitNs
+		valueLogSyncErrors += errors
+		name := path.statName()
+		stats["treedb.cache.value_log.sync."+name+".calls_total"] = fmt.Sprintf("%d", calls)
+		stats["treedb.cache.value_log.sync."+name+".ns_total"] = fmt.Sprintf("%d", ns)
+		stats["treedb.cache.value_log.sync."+name+".wait_ns_total"] = fmt.Sprintf("%d", waitNs)
+		stats["treedb.cache.value_log.sync."+name+".errors_total"] = fmt.Sprintf("%d", errors)
+	}
+	stats["treedb.cache.value_log.sync.calls_total"] = fmt.Sprintf("%d", valueLogSyncCalls)
+	stats["treedb.cache.value_log.sync.ns_total"] = fmt.Sprintf("%d", valueLogSyncNs)
+	stats["treedb.cache.value_log.sync.wait_ns_total"] = fmt.Sprintf("%d", valueLogSyncWaitNs)
+	stats["treedb.cache.value_log.sync.errors_total"] = fmt.Sprintf("%d", valueLogSyncErrors)
+	rotatedSyncCalls := db.valueLogRotatedFileSyncCalls.Load()
+	rotatedSyncNs := db.valueLogRotatedFileSyncNs.Load()
+	rotatedSyncErrors := db.valueLogRotatedFileSyncErrors.Load()
+	valueLogFileSyncCalls += rotatedSyncCalls
+	valueLogFileSyncNs += rotatedSyncNs
+	valueLogFileSyncErrors += rotatedSyncErrors
+	stats["treedb.cache.value_log.file_sync.rotated_segment.calls_total"] = fmt.Sprintf("%d", rotatedSyncCalls)
+	stats["treedb.cache.value_log.file_sync.rotated_segment.ns_total"] = fmt.Sprintf("%d", rotatedSyncNs)
+	stats["treedb.cache.value_log.file_sync.rotated_segment.errors_total"] = fmt.Sprintf("%d", rotatedSyncErrors)
+	stats["treedb.cache.value_log.file_sync.calls_total"] = fmt.Sprintf("%d", valueLogFileSyncCalls)
+	stats["treedb.cache.value_log.file_sync.ns_total"] = fmt.Sprintf("%d", valueLogFileSyncNs)
+	stats["treedb.cache.value_log.file_sync.errors_total"] = fmt.Sprintf("%d", valueLogFileSyncErrors)
+	stats["treedb.cache.value_log.directory_sync.calls_total"] = fmt.Sprintf("%d", valueLogDirectorySyncCalls)
+	stats["treedb.cache.value_log.directory_sync.ns_total"] = fmt.Sprintf("%d", valueLogDirectorySyncNs)
+	stats["treedb.cache.value_log.directory_sync.errors_total"] = fmt.Sprintf("%d", valueLogDirectorySyncErrors)
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
@@ -33671,24 +33819,26 @@ func (b *Batch) canApplySmallSelectedSortedShard(shardCounts []int, allowBatchAr
 			continue
 		}
 		shard := &b.db.mutableShards[i]
-		useSteal, _ := cachedBatchWriteUseSteal(b.db, shard.mem)
+		// Iterator rotation replaces shard.mem while holding db.mu then shard.mu.
+		// This precheck takes only shard.mu, releases it before returning, and the
+		// apply phase below locks the shard and rechecks the selected interface.
+		shard.mu.Lock()
+		mem := shard.mem
+		useSteal, _ := cachedBatchWriteUseSteal(b.db, mem)
 		useSteal = allowBatchArenaBorrow && useSteal
-		if useSteal {
-			return false
-		}
-		if allowStableViewValueBorrow {
-			if _, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier); !ok {
-				return false
+		eligible := false
+		if !useSteal {
+			switch {
+			case allowStableViewValueBorrow:
+				_, eligible = mem.(memtable.CopySelectedSortedBatchApplier)
+			case !allowBatchArenaBorrow:
+				_, eligible = mem.(memtable.CopySelectedSortedBatchValueCopier)
+			default:
+				_, eligible = mem.(memtable.CopySelectedSortedBatchApplier)
 			}
-			continue
 		}
-		if !allowBatchArenaBorrow {
-			if _, ok := shard.mem.(memtable.CopySelectedSortedBatchValueCopier); !ok {
-				return false
-			}
-			continue
-		}
-		if _, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier); !ok {
+		shard.mu.Unlock()
+		if !eligible {
 			return false
 		}
 	}

@@ -533,6 +533,10 @@ type DB struct {
 	commandWALFlushNs                atomic.Uint64
 	commandWALSyncCount              atomic.Uint64
 	commandWALSyncNs                 atomic.Uint64
+	commandWALFlushPathCount         [commandWALStatsPathCount]atomic.Uint64
+	commandWALFlushPathNs            [commandWALStatsPathCount]atomic.Uint64
+	commandWALSyncPathCount          [commandWALStatsPathCount]atomic.Uint64
+	commandWALSyncPathNs             [commandWALStatsPathCount]atomic.Uint64
 	commandWALCleanupScans           atomic.Uint64
 	commandWALCleanupScanNs          atomic.Uint64
 	commandWALCleanupScanBytes       atomic.Uint64

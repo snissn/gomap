@@ -87,6 +87,12 @@ type Writer struct {
 	noBenefit              uint8
 	skipRemain             uint16
 	syncFn                 func(*os.File) error
+	fileSyncCalls          atomic.Uint64
+	fileSyncNs             atomic.Uint64
+	fileSyncErrors         atomic.Uint64
+	directorySyncCalls     atomic.Uint64
+	directorySyncNs        atomic.Uint64
+	directorySyncErrors    atomic.Uint64
 	clock                  Clock
 	encodeCostModel        EncodeCostModel
 	encodeSampleStride     uint64
@@ -94,6 +100,71 @@ type Writer struct {
 	keepIoNsPerStoredByte  float64
 	keepEncodeNsPerRawByte float64
 	keepSafetyMargin       float64
+}
+
+// DurabilityStats reports calls to the writer's injected durability
+// boundaries. Production file and directory hooks call os.File.Sync; tests may
+// replace the hooks to count the same boundaries deterministically.
+type DurabilityStats struct {
+	FileSyncCalls       uint64
+	FileSyncNs          uint64
+	FileSyncErrors      uint64
+	DirectorySyncCalls  uint64
+	DirectorySyncNs     uint64
+	DirectorySyncErrors uint64
+}
+
+// DurabilityStats returns a lock-free cumulative snapshot. The writer object
+// is reused across value-log segment rotations.
+func (w *Writer) DurabilityStats() DurabilityStats {
+	if w == nil {
+		return DurabilityStats{}
+	}
+	return DurabilityStats{
+		FileSyncCalls:       w.fileSyncCalls.Load(),
+		FileSyncNs:          w.fileSyncNs.Load(),
+		FileSyncErrors:      w.fileSyncErrors.Load(),
+		DirectorySyncCalls:  w.directorySyncCalls.Load(),
+		DirectorySyncNs:     w.directorySyncNs.Load(),
+		DirectorySyncErrors: w.directorySyncErrors.Load(),
+	}
+}
+
+func (w *Writer) syncFile() error {
+	if w == nil || w.f == nil {
+		return nil
+	}
+	start := time.Now()
+	var err error
+	if w.syncFn != nil {
+		err = w.syncFn(w.f)
+	} else {
+		err = w.f.Sync()
+	}
+	w.fileSyncCalls.Add(1)
+	if ns := time.Since(start).Nanoseconds(); ns > 0 {
+		w.fileSyncNs.Add(uint64(ns))
+	}
+	if err != nil {
+		w.fileSyncErrors.Add(1)
+	}
+	return err
+}
+
+func (w *Writer) syncDirectory(path string) error {
+	if w == nil {
+		return syncDirFn(path)
+	}
+	start := time.Now()
+	err := syncDirFn(path)
+	w.directorySyncCalls.Add(1)
+	if ns := time.Since(start).Nanoseconds(); ns > 0 {
+		w.directorySyncNs.Add(uint64(ns))
+	}
+	if err != nil {
+		w.directorySyncErrors.Add(1)
+	}
+	return err
 }
 
 var errEncodedTooLarge = errors.New("valuelog: encoded payload too large")
@@ -487,7 +558,11 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syncDirFn(path); err != nil {
+	w := &Writer{
+		f:      f,
+		syncFn: func(file *os.File) error { return file.Sync() },
+	}
+	if err := w.syncDirectory(path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -496,23 +571,21 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &Writer{
-		f: f,
-		// File-backed writers use direct writes and append buffers; bufio is only
-		// needed for sink-backed writers (tests/benchmarks).
-		bw:                    nil,
-		size:                  info.Size(),
-		fileID:                fileID,
-		appendMax:             defaultBufferSize,
-		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
-		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
-		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		dictFrameEncodeLevel:  zstd.SpeedFastest,
-		blockCodec:            BlockCodecSnappy,
-		syncFn:                func(file *os.File) error { return file.Sync() },
-		clock:                 RealClock{},
-		keepSafetyMargin:      DefaultKeepSafetyMargin,
-	}, nil
+	w.f = f
+	// File-backed writers use direct writes and append buffers; bufio is only
+	// needed for sink-backed writers (tests/benchmarks).
+	w.bw = nil
+	w.size = info.Size()
+	w.fileID = fileID
+	w.appendMax = defaultBufferSize
+	w.rawWritevMinAvgBytes = defaultRawWritevMinAvgBytes
+	w.rawWritevMinBatchRecs = defaultRawWritevMinBatchRecords
+	w.prefixBuf = make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4))
+	w.dictFrameEncodeLevel = zstd.SpeedFastest
+	w.blockCodec = BlockCodecSnappy
+	w.clock = RealClock{}
+	w.keepSafetyMargin = DefaultKeepSafetyMargin
+	return w, nil
 }
 
 func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
@@ -803,7 +876,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			return err
 		}
 		if syncCurrent {
-			if err := syncDirFn(path); err != nil {
+			if err := w.syncDirectory(path); err != nil {
 				_ = f.Close()
 				return err
 			}
@@ -827,8 +900,8 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if syncCurrent && w.syncFn != nil {
-		if err := w.syncFn(w.f); err != nil {
+	if syncCurrent {
+		if err := w.syncFile(); err != nil {
 			return err
 		}
 	}
@@ -843,7 +916,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		return err
 	}
 	if syncCurrent {
-		if err := syncDirFn(path); err != nil {
+		if err := w.syncDirectory(path); err != nil {
 			_ = f.Close()
 			return err
 		}
@@ -2319,15 +2392,7 @@ func (w *Writer) Sync() error {
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if w.syncFn != nil {
-		if err := w.syncFn(w.f); err != nil {
-			return err
-		}
-		w.trimTransientScratchBuffers()
-		w.releaseIdleAppendBuf()
-		return nil
-	}
-	if err := w.f.Sync(); err != nil {
+	if err := w.syncFile(); err != nil {
 		return err
 	}
 	w.trimTransientScratchBuffers()

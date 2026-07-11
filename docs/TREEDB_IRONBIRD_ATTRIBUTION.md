@@ -115,6 +115,9 @@ families that Ironbird should preserve when present:
 
 - command-WAL append, flush, sync, live coverage, and cleanup:
   `treedb.command_wal.*`;
+- command-WAL physical write/file-sync/directory-sync calls and time:
+  `treedb.command_wal.write.*`, `treedb.command_wal.file_sync.*`, and
+  `treedb.command_wal.directory_sync.*`;
 - cached command-WAL durability mode and checkpoint publication split:
   `treedb.cache.command_wal.*`;
 - foreground write wait-for-checkpoint totals:
@@ -132,6 +135,7 @@ families that Ironbird should preserve when present:
   `treedb.cache.queue_laneid_misses`;
 - value-log generation, GC, rewrite, mmap, read, template, buffer, and cache
   telemetry: `treedb.cache.vlog_generation.*`, `treedb.cache.vlog_mmap.*`,
+  `treedb.cache.value_log.sync.*`, `treedb.cache.value_log.file_sync.*`,
   selected `treedb.cache.vlog_read.*_total`,
   selected `treedb.cache.vlog_template.*_total`,
   selected `treedb.cache.vlog_template_def_cache.{hits,misses}`,
