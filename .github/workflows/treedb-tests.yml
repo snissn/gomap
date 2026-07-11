@@ -71,8 +71,13 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          bash -n scripts/mvcc_raw_path_gate.sh scripts/mvcc_adapter_overhead_gate.sh \
-            scripts/mvcc_closeout_matrix.sh scripts/mvcc_candidate_checkout_guard.sh
+          for script in \
+            scripts/mvcc_raw_path_gate.sh \
+            scripts/mvcc_adapter_overhead_gate.sh \
+            scripts/mvcc_closeout_matrix.sh \
+            scripts/mvcc_candidate_checkout_guard.sh; do
+            bash -n "$script"
+          done
           python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
           python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
           python3 .github/scripts/test_mvcc_raw_path_equivalence.py
@@ -89,6 +94,8 @@ jobs:
             TreeDB/pager/madvise_linux.go \
             TreeDB/internal/valuelog/autotune_options.go \
             TreeDB/docs/spec/native-ann-vector-index.md \
+            scripts/mvcc_raw_path_gate.sh \
+            scripts/mvcc_adapter_overhead_gate.sh \
             scripts/mvcc_closeout_matrix.sh \
             scripts/mvcc_candidate_checkout_guard.sh \
             .github/scripts/summarize_mvcc_closeout.py \
