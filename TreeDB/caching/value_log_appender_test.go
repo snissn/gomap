@@ -11,6 +11,127 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
+func TestCachingValueLogExternalRefSyncCoalescingGuards(t *testing.T) {
+	type setupResult struct {
+		db       *DB
+		lane     *lane
+		writer   *vlogDirtyOrderWriter
+		appender *cachingValueLogAppender
+		fileID   uint32
+	}
+	setup := func(t *testing.T) setupResult {
+		t.Helper()
+		db := &DB{
+			closeCh:       make(chan struct{}),
+			splitValueLog: true,
+			valueLogDir:   t.TempDir(),
+			lanes:         make([]lane, 1),
+		}
+		l := &db.lanes[0]
+		l.id = 0
+		l.vlogSeq = 1
+		fileID, err := valuelog.EncodeFileID(0, 1)
+		if err != nil {
+			t.Fatalf("EncodeFileID: %v", err)
+		}
+		l.vlogPath = valuelog.SegmentPath(db.valueLogDir, fileID)
+		w := &vlogDirtyOrderWriter{}
+		l.vlog = w
+		l.syncing.Store(true)
+		ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("covered")}}, journalDurabilitySync)
+		if err != nil {
+			t.Fatalf("appendValueLog materialization sync: %v", err)
+		}
+		if len(ptrs) != 1 {
+			putValueLogPtrs(ptrs)
+			t.Fatalf("appendValueLog pointers=%d, want 1", len(ptrs))
+		}
+		putValueLogPtrs(ptrs)
+		return setupResult{
+			db:       db,
+			lane:     l,
+			writer:   w,
+			appender: &cachingValueLogAppender{db: db, lane: l},
+			fileID:   fileID,
+		}
+	}
+
+	t.Run("same_reserved_segment_and_unchanged_writer", func(t *testing.T) {
+		got := setup(t)
+		if err := got.appender.FlushValueLogExternalRefs([]uint32{got.fileID}, true); err != nil {
+			t.Fatalf("FlushValueLogExternalRefs: %v", err)
+		}
+		if syncs := got.writer.syncs.Load(); syncs != 1 {
+			t.Fatalf("writer syncs=%d, want only the materialization sync", syncs)
+		}
+		if calls := got.db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); calls != 0 {
+			t.Fatalf("external-ref sync calls=%d, want 0", calls)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*setupResult)
+	}{
+		{
+			name: "intervening_writer_growth",
+			mutate: func(got *setupResult) {
+				got.lane.vlogMu.Lock()
+				got.writer.size++
+				got.lane.vlogMu.Unlock()
+			},
+		},
+		{
+			name: "sync_reservation_released",
+			mutate: func(got *setupResult) {
+				got.lane.syncing.Store(false)
+			},
+		},
+		{
+			name: "segment_rotated",
+			mutate: func(got *setupResult) {
+				got.lane.vlogMu.Lock()
+				got.lane.vlogSeq = 2
+				fileID, err := valuelog.EncodeFileID(0, 2)
+				if err != nil {
+					got.lane.vlogMu.Unlock()
+					t.Fatalf("EncodeFileID rotated: %v", err)
+				}
+				got.lane.vlogPath = valuelog.SegmentPath(got.db.valueLogDir, fileID)
+				got.fileID = fileID
+				got.lane.vlogMu.Unlock()
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := setup(t)
+			tc.mutate(&got)
+			if err := got.appender.FlushValueLogExternalRefs([]uint32{got.fileID}, true); err != nil {
+				t.Fatalf("FlushValueLogExternalRefs: %v", err)
+			}
+			if syncs := got.writer.syncs.Load(); syncs != 2 {
+				t.Fatalf("writer syncs=%d, want materialization plus conservative external-ref sync", syncs)
+			}
+			if calls := got.db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); calls != 1 {
+				t.Fatalf("external-ref sync calls=%d, want 1", calls)
+			}
+		})
+	}
+
+	t.Run("fallback_sync_failure_propagates", func(t *testing.T) {
+		got := setup(t)
+		injected := errors.New("injected conservative external-ref sync failure")
+		got.lane.syncing.Store(false)
+		got.writer.syncErr = injected
+		if err := got.appender.FlushValueLogExternalRefs([]uint32{got.fileID}, true); !errors.Is(err, injected) {
+			t.Fatalf("FlushValueLogExternalRefs error=%v, want %v", err, injected)
+		}
+		if calls := got.db.valueLogSyncPathErrors[valueLogSyncPathExternalRef].Load(); calls != 1 {
+			t.Fatalf("external-ref sync errors=%d, want 1", calls)
+		}
+	})
+}
+
 func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 	dir := t.TempDir()
 	oldFileID, err := valuelog.EncodeFileID(0, 1)
@@ -31,20 +152,26 @@ func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 	db.lanes[0].vlogPath = valuelog.SegmentPath(dir, currentFileID)
 	appender := &cachingValueLogAppender{db: db, lane: &db.lanes[0]}
 
+	if err := os.WriteFile(valuelog.SegmentPath(dir, currentFileID), []byte("current segment"), 0o644); err != nil {
+		t.Fatalf("write current segment: %v", err)
+	}
 	if err := appender.FlushValueLogExternalRefs([]uint32{currentFileID}, true); err != nil {
 		t.Fatalf("FlushValueLogExternalRefs current segment: %v", err)
+	}
+	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 1 {
+		t.Fatalf("direct file-sync calls for nil active writer=%d, want 1", got)
 	}
 	if err := appender.FlushValueLogExternalRefs([]uint32{oldFileID}, true); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("FlushValueLogExternalRefs missing rotated segment error=%v, want os.ErrNotExist", err)
 	}
-	if got := db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); got != 1 {
-		t.Fatalf("logical external-ref calls after open failure=%d, want 1", got)
+	if got := db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); got != 2 {
+		t.Fatalf("logical external-ref calls after open failure=%d, want 2", got)
 	}
 	if got := db.valueLogSyncPathErrors[valueLogSyncPathExternalRef].Load(); got != 1 {
 		t.Fatalf("logical external-ref errors after open failure=%d, want 1", got)
 	}
-	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 0 {
-		t.Fatalf("rotated file-sync calls after open failure=%d, want 0", got)
+	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 1 {
+		t.Fatalf("rotated file-sync calls after open failure=%d, want 1", got)
 	}
 	if err := os.WriteFile(valuelog.SegmentPath(dir, oldFileID), []byte("old segment"), 0o644); err != nil {
 		t.Fatalf("write old segment: %v", err)
@@ -54,14 +181,14 @@ func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 	if err := appender.FlushValueLogExternalRefs([]uint32{oldFileID}, true); !errors.Is(err, injected) {
 		t.Fatalf("FlushValueLogExternalRefs injected rotated sync error=%v, want %v", err, injected)
 	}
-	if got := db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); got != 2 {
-		t.Fatalf("logical external-ref calls after sync failure=%d, want 2", got)
+	if got := db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); got != 3 {
+		t.Fatalf("logical external-ref calls after sync failure=%d, want 3", got)
 	}
 	if got := db.valueLogSyncPathErrors[valueLogSyncPathExternalRef].Load(); got != 2 {
 		t.Fatalf("logical external-ref errors after sync failure=%d, want 2", got)
 	}
-	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 1 {
-		t.Fatalf("rotated file-sync calls after sync failure=%d, want 1", got)
+	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 2 {
+		t.Fatalf("rotated file-sync calls after sync failure=%d, want 2", got)
 	}
 	if got := db.valueLogRotatedFileSyncErrors.Load(); got != 1 {
 		t.Fatalf("rotated file-sync errors after sync failure=%d, want 1", got)
@@ -70,14 +197,14 @@ func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 	if err := appender.FlushValueLogExternalRefs([]uint32{oldFileID, currentFileID, oldFileID}, true); err != nil {
 		t.Fatalf("FlushValueLogExternalRefs rotated segment: %v", err)
 	}
-	if got := db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); got != 3 {
-		t.Fatalf("logical external-ref calls after successful deduplicated sync=%d, want 3", got)
+	if got := db.valueLogSyncPathCalls[valueLogSyncPathExternalRef].Load(); got != 5 {
+		t.Fatalf("logical external-ref calls after successful deduplicated sync=%d, want 5", got)
 	}
 	if got := db.valueLogSyncPathErrors[valueLogSyncPathExternalRef].Load(); got != 2 {
 		t.Fatalf("logical external-ref errors after successful deduplicated sync=%d, want 2", got)
 	}
-	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 2 {
-		t.Fatalf("rotated file-sync calls after successful deduplicated sync=%d, want 2", got)
+	if got := db.valueLogRotatedFileSyncCalls.Load(); got != 4 {
+		t.Fatalf("rotated file-sync calls after successful deduplicated sync=%d, want 4", got)
 	}
 	if got := db.valueLogRotatedFileSyncErrors.Load(); got != 1 {
 		t.Fatalf("rotated file-sync errors after successful deduplicated sync=%d, want 1", got)
