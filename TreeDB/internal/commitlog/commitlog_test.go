@@ -733,6 +733,36 @@ func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
 	}
 }
 
+func TestWriterSyncFallsBackToFileSyncWhenHookNil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit.log")
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	if err := writer.AppendBatch([]Record{{
+		Op:    OpSetInline,
+		Key:   []byte("key"),
+		Value: []byte("value"),
+		Seq:   1,
+	}}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	writer.syncFn = nil
+	before := writer.DurabilityStats()
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("sync with nil hook: %v", err)
+	}
+	after := writer.DurabilityStats()
+	if got := after.FileSyncCalls - before.FileSyncCalls; got != 1 {
+		t.Fatalf("file sync call delta=%d, want 1", got)
+	}
+	if got := after.FileSyncErrors - before.FileSyncErrors; got != 0 {
+		t.Fatalf("file sync error delta=%d, want 0", got)
+	}
+}
+
 func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

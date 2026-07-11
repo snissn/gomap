@@ -273,11 +273,16 @@ func (w *Writer) writev(parts [][]byte) error {
 }
 
 func (w *Writer) syncFile() error {
-	if w == nil || w.f == nil || w.syncFn == nil {
+	if w == nil || w.f == nil {
 		return nil
 	}
 	start := time.Now()
-	err := w.syncFn(w.f)
+	var err error
+	if w.syncFn != nil {
+		err = w.syncFn(w.f)
+	} else {
+		err = w.f.Sync()
+	}
 	w.fileSyncCalls.Add(1)
 	if ns := time.Since(start).Nanoseconds(); ns > 0 {
 		w.fileSyncNs.Add(uint64(ns))
