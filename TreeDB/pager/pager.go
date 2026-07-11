@@ -48,12 +48,15 @@ type Pager struct {
 	atomicChunks atomic.Pointer[chunkList] // Lock-free view for Get
 	chunkSize    int64
 	numPages     atomic.Uint64 // The number of pages logically allocated
-	dirtyChunks  map[int]struct{}
-	mu           sync.RWMutex
-	allocMu      sync.Mutex
-	path         string
-	readOnly     bool
-	memoryOnly   bool
+	// durableFileSize is the file length covered by a completed file-wide
+	// durability fence. Sparse range durability is restricted to this prefix.
+	durableFileSize atomic.Int64
+	dirtyChunks     map[int]struct{}
+	mu              sync.RWMutex
+	allocMu         sync.Mutex
+	path            string
+	readOnly        bool
+	memoryOnly      bool
 	// pageIDBase gives private overlay pagers a disjoint logical ID namespace.
 	// IDs below the base are read through fallback and are never writable here.
 	pageIDBase   uint64
@@ -155,6 +158,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 	}
 
 	size := info.Size()
+	durableSize := size
 
 	p := &Pager{
 		file:           f,
@@ -165,6 +169,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		prefetchOnRead: opts.PrefetchOnRead,
 	}
 	p.syncConcurrency.Store(1)
+	p.durableFileSize.Store(durableSize)
 
 	if size > 0 {
 		// Align size to chunk size if needed
@@ -833,6 +838,8 @@ func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
 	if syncErr == nil && syncFile {
 		if err := p.file.Sync(); err != nil {
 			syncErr = err
+		} else {
+			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
 		}
 	}
 	p.mu.RUnlock()
@@ -947,10 +954,13 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 		p.mu.RUnlock()
 		return err
 	}
-	handled, err := syncPageRangesFn(p.file, p.chunks, ranges, p.chunkSize)
-	if err != nil {
-		p.mu.RUnlock()
-		return err
+	handled := false
+	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
+		handled, err = syncPageRangesFn(p.file, p.chunks, ranges, p.chunkSize)
+		if err != nil {
+			p.mu.RUnlock()
+			return err
+		}
 	}
 	if !handled && mappedRangeSyncRequired() {
 		for _, r := range ranges {
@@ -963,6 +973,9 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 	}
 	if !handled {
 		err = syncPageFile(p.file)
+		if err == nil {
+			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
+		}
 	}
 	p.mu.RUnlock()
 	return err

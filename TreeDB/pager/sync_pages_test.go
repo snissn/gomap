@@ -41,6 +41,7 @@ func TestSyncPagesUsesDataDurabilityBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Alloc: %v", err)
 	}
+	p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
 	if err := p.Write(id, bytes.Repeat([]byte{0x2a}, page.PageSize)); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -75,11 +76,62 @@ func TestSyncPagesFallsBackWhenRangeDurabilityIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Alloc: %v", err)
 	}
+	p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
 	if err := p.SyncPages([]uint64{id}); err != nil {
 		t.Fatalf("SyncPages: %v", err)
 	}
 	if fileCalls != 1 {
 		t.Fatalf("fallback durability calls=%d want 1", fileCalls)
+	}
+}
+
+func TestSyncPagesFallsBackUntilFileGrowthIsDurable(t *testing.T) {
+	originalRanges := syncPageRangesFn
+	originalFile := syncPageFileFn
+	rangeCalls := 0
+	fileCalls := 0
+	syncPageRangesFn = func(*os.File, [][]byte, []syncPageRange, int64) (bool, error) {
+		rangeCalls++
+		return true, nil
+	}
+	syncPageFileFn = func(*os.File) error {
+		fileCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		syncPageRangesFn = originalRanges
+		syncPageFileFn = originalFile
+	})
+
+	chunkSize := int64(2 * page.PageSize)
+	if granularity := mmapOffsetGranularity(); chunkSize%granularity != 0 {
+		chunkSize = ((chunkSize + granularity - 1) / granularity) * granularity
+	}
+	p, err := Open(filepath.Join(t.TempDir(), "growth.db"), chunkSize)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	first, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc first: %v", err)
+	}
+	if err := p.SyncPages([]uint64{first}); err != nil {
+		t.Fatalf("SyncPages growth: %v", err)
+	}
+	if rangeCalls != 0 || fileCalls != 1 {
+		t.Fatalf("growth range/file durability calls=%d/%d want 0/1", rangeCalls, fileCalls)
+	}
+
+	second, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc second: %v", err)
+	}
+	if err := p.SyncPages([]uint64{second}); err != nil {
+		t.Fatalf("SyncPages durable capacity: %v", err)
+	}
+	if rangeCalls != 1 || fileCalls != 1 {
+		t.Fatalf("steady-state range/file durability calls=%d/%d want 1/1", rangeCalls, fileCalls)
 	}
 }
 
@@ -225,6 +277,10 @@ func TestSyncPagesPersistsNonzeroPageWithinAllocationGranularity(t *testing.T) {
 	if err != nil {
 		_ = p.Close()
 		t.Fatalf("Alloc: %v", err)
+	}
+	if err := p.Sync(); err != nil {
+		_ = p.Close()
+		t.Fatalf("Sync allocated file size: %v", err)
 	}
 	want := bytes.Repeat([]byte{0x5d}, page.PageSize)
 	if err := p.Write(start+1, want); err != nil {
