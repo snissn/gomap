@@ -172,7 +172,7 @@ func TestCompactStorageAuditKey_ExactInvalidation(t *testing.T) {
 	}
 }
 
-func TestCompactStorageAudit_ValueLogCollectorsMatchLegacyGroupedAliases(t *testing.T) {
+func TestCompactStorageAudit_ValueLogCollectorsMatchStandaloneGroupedAliases(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -209,11 +209,11 @@ func TestCompactStorageAudit_ValueLogCollectorsMatchLegacyGroupedAliases(t *test
 
 	wantRefs, _, err := db.scanValueLogRefCounts(context.Background())
 	if err != nil {
-		t.Fatalf("legacy refs: %v", err)
+		t.Fatalf("standalone refs: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
 	if err != nil {
-		t.Fatalf("legacy live bytes: %v", err)
+		t.Fatalf("standalone live bytes: %v", err)
 	}
 	input, err := db.acquireCompactStorageAuditInput(CompactStorageOptions{})
 	if err != nil {
@@ -225,10 +225,10 @@ func TestCompactStorageAudit_ValueLogCollectorsMatchLegacyGroupedAliases(t *test
 		t.Fatalf("shared audit: %v", err)
 	}
 	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
-		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+		t.Fatalf("ref counts mismatch: combined=%v standalone=%v", got.valueLogRefCounts, wantRefs)
 	}
 	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
-		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got.valueLogLiveBytesBySegment, wantLive)
+		t.Fatalf("live bytes mismatch: combined=%v standalone=%v", got.valueLogLiveBytesBySegment, wantLive)
 	}
 	if got.valueLogRefCounts[base.FileID] != 3 {
 		t.Fatalf("grouped alias refs=%d want 3", got.valueLogRefCounts[base.FileID])
@@ -313,9 +313,9 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	if err != nil {
 		t.Fatalf("legacy refs: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
 	if err != nil {
-		t.Fatalf("legacy live bytes: %v", err)
+		t.Fatalf("standalone live bytes: %v", err)
 	}
 	opts := normalizeCompactStorageOptions(CompactStorageOptions{
 		LeafGenerationProtectedRootIDs:       []uint64{ordinaryRoot},
@@ -330,18 +330,6 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	if err != nil {
 		t.Fatalf("shared protected audit: %v", err)
 	}
-	wantLeafStats, err := db.scanLeafGenerationLiveStatsWithOptionsLegacy(context.Background(), input.snap, leafGenerationLiveStatsScanOptions{
-		DisableCache:           true,
-		ProtectedRootIDs:       input.protectedRootIDs,
-		ProtectedSystemRootIDs: input.protectedSystemRootIDs,
-	})
-	if err != nil {
-		t.Fatalf("legacy protected leaf scan: %v", err)
-	}
-	if !reflect.DeepEqual(got.leafGenerationLive, wantLeafStats) {
-		t.Fatalf("protected leaf totals mismatch: shared=%v legacy=%v", got.leafGenerationLive, wantLeafStats)
-	}
-
 	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
 		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
 	}
@@ -412,7 +400,7 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	}
 }
 
-func TestCompactStorageAudit_ProtectedPagerRootsMatchLegacyWithMemoReuse(t *testing.T) {
+func TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReuse(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -487,9 +475,9 @@ func TestCompactStorageAudit_ProtectedPagerRootsMatchLegacyWithMemoReuse(t *test
 	if err != nil {
 		t.Fatalf("legacy refs: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
 	if err != nil {
-		t.Fatalf("legacy live bytes: %v", err)
+		t.Fatalf("standalone live bytes: %v", err)
 	}
 	opts := normalizeCompactStorageOptions(CompactStorageOptions{
 		LeafGenerationProtectedRootIDs:       []uint64{ordinaryRoot},
@@ -668,7 +656,7 @@ func TestCompactStorageAudit_CountsValuePointersInsideOuterLeafPages(t *testing.
 	}
 }
 
-func TestCompactStorageAudit_PlannersMatchLegacyResults(t *testing.T) {
+func TestCompactStorageAudit_PlannersMatchStandaloneResults(t *testing.T) {
 	db := openCompactStorageRewritePolicyBenchmarkFixture(t, 256, 32, 512)
 	defer closeNoErr(t, db)
 

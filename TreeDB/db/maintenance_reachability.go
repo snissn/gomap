@@ -112,7 +112,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	var leafScan *leafGenerationScanContext
 	var err error
 	if collectLeaf {
-		leafScan, err = db.newCompactStorageLeafScanContext(snap)
+		leafScan, err = db.newLeafGenerationScanContext(snap)
 		if err != nil {
 			return result, err
 		}
@@ -148,9 +148,6 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	}
 	verifyAlways := snap.idx.pager.VerifyOnRead()
 	leafCacheOnly := collectLeaf && !collectValueLog && !opts.DisableLeafSubtreeCache && !verifyAlways
-	if leafScan != nil {
-		leafScan.cacheEnabled = leafCacheOnly
-	}
 	var memo map[uint64]memoEntry
 	var leafMemo map[uint64]leafGenerationSubtreeStats
 	if collectValueLog {
