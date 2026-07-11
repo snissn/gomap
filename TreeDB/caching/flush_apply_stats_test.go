@@ -209,6 +209,9 @@ func TestWriteWaitForCheckpointStatsIncrement(t *testing.T) {
 	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.active"); got != 0 {
 		t.Fatalf("wait_for_checkpoint.active=%d, want 0 (stats=%#v)", got, stats)
 	}
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait.checkpoint_drain.count_total"); got != 1 {
+		t.Fatalf("checkpoint_drain.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
 	for _, key := range []string{
 		"treedb.cache.write.wait_for_checkpoint.ns_total",
 		"treedb.cache.write.wait_for_checkpoint.ns_max",
@@ -218,6 +221,44 @@ func TestWriteWaitForCheckpointStatsIncrement(t *testing.T) {
 			t.Fatalf("%s=0, want >0 (stats=%#v)", key, stats)
 		}
 	}
+}
+
+func TestWriteWaitReasonStatsDistribution(t *testing.T) {
+	db := &DB{}
+	for _, wait := range []time.Duration{
+		5 * time.Microsecond,
+		75 * time.Microsecond,
+		2 * time.Millisecond,
+		75 * time.Millisecond,
+		2 * time.Second,
+	} {
+		db.observeWriteWaitReason(writeWaitReasonFrontierCutover, wait)
+	}
+	db.observeWriteWaitReason(writeWaitReasonCheckpointDrain, 250*time.Millisecond)
+	db.observeWriteWaitReason(writeWaitReasonMaintenance, 0)
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	assertStat := func(key string, want uint64) {
+		t.Helper()
+		if got := requireStatUint64(t, stats, key); got != want {
+			t.Fatalf("%s=%d, want %d", key, got, want)
+		}
+	}
+	assertStat("treedb.cache.write.wait.frontier_cutover.count_total", 5)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_10us.count_total", 1)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_100us.count_total", 2)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_1ms.count_total", 2)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_10ms.count_total", 3)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_100ms.count_total", 4)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_5s.count_total", 5)
+	assertStat("treedb.cache.write.wait.frontier_cutover.bucket_le_inf.count_total", 5)
+	assertStat("treedb.cache.write.wait.frontier_cutover.p50_upper_ns", uint64((10 * time.Millisecond).Nanoseconds()))
+	assertStat("treedb.cache.write.wait.frontier_cutover.p95_upper_ns", uint64((5 * time.Second).Nanoseconds()))
+	assertStat("treedb.cache.write.wait.frontier_cutover.p99_upper_ns", uint64((5 * time.Second).Nanoseconds()))
+	assertStat("treedb.cache.write.wait.checkpoint_drain.count_total", 1)
+	assertStat("treedb.cache.write.wait.maintenance.count_total", 1)
+	assertStat("treedb.cache.write.wait.maintenance.ns_total", 1)
 }
 
 func TestObserveWriteWaitForCheckpointPreservesZeroDurationSample(t *testing.T) {

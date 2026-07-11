@@ -8443,11 +8443,18 @@ type DB struct {
 	// Commit workers removed; backend commits are synchronous.
 	journalOwner *commitlog.JournalOwner
 
-	checkpointMu      sync.Mutex
-	checkpointCond    *sync.Cond
-	checkpointing     atomic.Bool
-	maintenanceActive atomic.Bool
-	maintenancePhase  atomic.Uint32
+	checkpointMu   sync.Mutex
+	checkpointCond *sync.Cond
+	checkpointing  atomic.Bool
+	// checkpointWriteCutoverActive is the short writer-stop phase inside an
+	// active checkpoint. checkpointing remains true until the captured frontier,
+	// durability metadata, and cleanup complete. Post-frontier admission is
+	// enabled separately only after an installed command-WAL cutover hook runs;
+	// cached redo-WAL and unsafe WAL-off modes keep waiting through the full drain.
+	checkpointWriteCutoverActive    atomic.Bool
+	checkpointPostFrontierAdmission atomic.Bool
+	maintenanceActive               atomic.Bool
+	maintenancePhase                atomic.Uint32
 
 	// Level 0 (Memory)
 	mutableShards                 []memShard
@@ -8849,6 +8856,10 @@ type DB struct {
 	writeWaitForCheckpointMaxNs                                  atomic.Uint64
 	writeWaitForCheckpointLastNs                                 atomic.Uint64
 	writeWaitForCheckpointSamples                                atomic.Uint64
+	writeWaitFrontierCutover                                     writeWaitReasonStats
+	writeWaitCheckpointDrain                                     writeWaitReasonStats
+	writeWaitMaintenance                                         writeWaitReasonStats
+	writePostFrontierAdmissions                                  atomic.Uint64
 	checkpointDebtMemtablesLast                                  atomic.Uint64
 	checkpointDebtMemtablesMax                                   atomic.Uint64
 	checkpointDebtBytesLast                                      atomic.Uint64
@@ -9475,14 +9486,17 @@ type DB struct {
 	publishWatermarkLastBacklogBytes int64
 	publishWatermarkLastUnixNano     int64
 	// testing hooks
-	testOnVlogFlush                    func(laneID int)
-	testOnVlogSync                     func(laneID int)
-	testBeforeVlogUnlock               func(laneID int)
-	testRetainedPruneScanHook          func(context.Context, string) error
-	testRetainedPruneQuietWaitExitHook func(retainedPruneQuietWaitResult)
-	testSkipRetainedPrune              bool
-	testSkipVlogCheckpointKick         bool
-	testSkipCheckpointAutoVacuum       bool
+	testOnVlogFlush                     func(laneID int)
+	testOnVlogSync                      func(laneID int)
+	testBeforeVlogUnlock                func(laneID int)
+	testBeforeCheckpointFrontierCapture func()
+	testAfterCheckpointFrontierCapture  func()
+	testBeforeCheckpointFrontierDrain   func()
+	testRetainedPruneScanHook           func(context.Context, string) error
+	testRetainedPruneQuietWaitExitHook  func(retainedPruneQuietWaitResult)
+	testSkipRetainedPrune               bool
+	testSkipVlogCheckpointKick          bool
+	testSkipCheckpointAutoVacuum        bool
 }
 
 const (
@@ -22740,11 +22754,45 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
+func (db *DB) writeAdmissionWaitReason() writeWaitReason {
+	if db == nil {
+		return writeWaitReasonNone
+	}
+	if db.maintenanceActive.Load() {
+		return writeWaitReasonMaintenance
+	}
+	if !db.checkpointing.Load() {
+		return writeWaitReasonNone
+	}
+	if db.checkpointWriteCutoverActive.Load() {
+		return writeWaitReasonFrontierCutover
+	}
+	// The installed command-WAL cutover hook captures an explicit LSN cut and
+	// rotates its active segment while writeMu is held. Once that cut completes,
+	// later commands are recoverable from the fresh command-WAL generation and
+	// cannot be covered or cleaned by the active checkpoint. Configuring external
+	// command WAL without the hook is not enough: retain the legacy full-drain
+	// writer stop unless this checkpoint actually established that ownership.
+	if db.checkpointPostFrontierAdmission.Load() {
+		return writeWaitReasonNone
+	}
+	return writeWaitReasonCheckpointDrain
+}
+
+func (db *DB) observePostFrontierWriteAdmission() {
+	if db == nil || !db.checkpointPostFrontierAdmission.Load() || db.maintenanceActive.Load() {
+		return
+	}
+	if db.checkpointing.Load() && !db.checkpointWriteCutoverActive.Load() {
+		db.writePostFrontierAdmissions.Add(1)
+	}
+}
+
 func (db *DB) waitForCheckpointForWrite() {
 	if db == nil {
 		return
 	}
-	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+	if db.writeAdmissionWaitReason() == writeWaitReasonNone {
 		return
 	}
 	db.waitForCheckpointForWriteSince(time.Now())
@@ -22754,15 +22802,27 @@ func (db *DB) waitForCheckpointForWriteSince(start time.Time) {
 	if db == nil {
 		return
 	}
+	if start.IsZero() {
+		start = time.Now()
+	}
 	db.checkpointMu.Lock()
-	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+	reason := db.writeAdmissionWaitReason()
+	if reason == writeWaitReasonNone {
 		db.checkpointMu.Unlock()
 		return
 	}
 	db.writeWaitForCheckpointActive.Add(1)
 	defer addAtomicInt64FloorZero(&db.writeWaitForCheckpointActive, -1)
-	for db.checkpointing.Load() || db.maintenanceActive.Load() {
+	phaseStart := start
+	for reason != writeWaitReasonNone {
 		db.checkpointCond.Wait()
+		now := time.Now()
+		nextReason := db.writeAdmissionWaitReason()
+		if nextReason != reason {
+			db.observeWriteWaitReason(reason, now.Sub(phaseStart))
+			phaseStart = now
+			reason = nextReason
+		}
 	}
 	db.checkpointMu.Unlock()
 	db.observeWriteWaitForCheckpoint(time.Since(start))
@@ -22770,26 +22830,29 @@ func (db *DB) waitForCheckpointForWriteSince(start time.Time) {
 
 func (db *DB) beginDirectWrite() error {
 	for {
-		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
+		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
-		if preWaitActive {
+		if preWaitReason != writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.RLock()
 		if db.closing.Load() {
 			db.writeMu.RUnlock()
-			if preWaitActive {
+			if preWaitReason != writeWaitReasonNone {
+				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			return backenddb.ErrClosed
 		}
-		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
-			if preWaitActive {
+		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if preWaitReason != writeWaitReasonNone {
+				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
+			db.observePostFrontierWriteAdmission()
 			return nil
 		}
-		if !preWaitActive {
+		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.RUnlock()
@@ -22799,26 +22862,29 @@ func (db *DB) beginDirectWrite() error {
 
 func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 	for {
-		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
+		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
-		if preWaitActive {
+		if preWaitReason != writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.RLock()
 		if db.closing.Load() {
 			db.writeMu.RUnlock()
-			if preWaitActive {
+			if preWaitReason != writeWaitReasonNone {
+				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			return backenddb.ErrClosed
 		}
-		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
-			if preWaitActive {
+		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if preWaitReason != writeWaitReasonNone {
+				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
+			db.observePostFrontierWriteAdmission()
 			return nil
 		}
-		if !preWaitActive {
+		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.RUnlock()
@@ -22830,19 +22896,21 @@ func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 
 func (db *DB) beginExclusiveWrite() {
 	for {
-		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
+		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
-		if preWaitActive {
+		if preWaitReason != writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.Lock()
-		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
-			if preWaitActive {
+		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if preWaitReason != writeWaitReasonNone {
+				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
+			db.observePostFrontierWriteAdmission()
 			return
 		}
-		if !preWaitActive {
+		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.Unlock()
@@ -22852,19 +22920,21 @@ func (db *DB) beginExclusiveWrite() {
 
 func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
 	for {
-		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
+		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
-		if preWaitActive {
+		if preWaitReason != writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.Lock()
-		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
-			if preWaitActive {
+		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if preWaitReason != writeWaitReasonNone {
+				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
+			db.observePostFrontierWriteAdmission()
 			return
 		}
-		if !preWaitActive {
+		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
 		}
 		db.writeMu.Unlock()
@@ -23602,6 +23672,8 @@ func (db *DB) Checkpoint() error {
 	for {
 		db.checkpointMu.Lock()
 		if !db.checkpointing.Load() {
+			db.checkpointPostFrontierAdmission.Store(false)
+			db.checkpointWriteCutoverActive.Store(true)
 			db.checkpointing.Store(true) // Set flag only after acquiring flushMu
 			db.checkpointMu.Unlock()
 			break
@@ -23620,10 +23692,19 @@ func (db *DB) Checkpoint() error {
 
 	defer func() { // This defer runs when db.Checkpoint() returns
 		db.checkpointMu.Lock()
+		db.checkpointPostFrontierAdmission.Store(false)
+		db.checkpointWriteCutoverActive.Store(false)
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
 	}()
+	endWriteCutover := func() {
+		db.checkpointMu.Lock()
+		if db.checkpointWriteCutoverActive.Swap(false) {
+			db.checkpointCond.Broadcast()
+		}
+		db.checkpointMu.Unlock()
+	}
 
 	db.writeMu.Lock()
 	cutoverStart := time.Now()
@@ -23632,6 +23713,9 @@ func (db *DB) Checkpoint() error {
 		db.writeMu.Unlock()
 		db.recordCheckpointCutover(d)
 		db.checkpointStageCutover.record(d)
+	}
+	if hook := db.testBeforeCheckpointFrontierCapture; hook != nil {
+		hook()
 	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
@@ -23653,6 +23737,7 @@ func (db *DB) Checkpoint() error {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
+			endWriteCutover()
 			return err
 		}
 		hasQueue = len(db.queue) > 0
@@ -23660,6 +23745,7 @@ func (db *DB) Checkpoint() error {
 	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.loadCommandWALCheckpointPublishHook() == nil {
 		db.mu.Unlock()
 		releaseWriteMu()
+		endWriteCutover()
 		db.checkpointNoopSkips.Add(1)
 		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
 			return err
@@ -23674,9 +23760,15 @@ func (db *DB) Checkpoint() error {
 		// can re-check recently rewritten active sources.
 		forceVLogRotate := db.vlogGenerationCheckpointKickPending.Load()
 		if !forceVLogRotate {
-			db.snapshotCommandWALCheckpointCutover()
+			if db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL {
+				db.checkpointPostFrontierAdmission.Store(true)
+			}
 			db.mu.Unlock()
 			releaseWriteMu()
+			endWriteCutover()
+			if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
+				hook()
+			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 				commandWALAppliedLSN, commandWALRanges, err := publishHook(!db.relaxedSync)
 				if err != nil {
@@ -23703,13 +23795,16 @@ func (db *DB) Checkpoint() error {
 	if frontier.missingQueueID {
 		db.mu.Unlock()
 		releaseWriteMu()
+		endWriteCutover()
 		return errors.New("cachingdb: checkpoint frontier missing stable queue id")
 	}
 	db.observeCheckpointFrontierCapture(frontier)
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
 	ridBeforeWALRotate := db.nextRID.Load()
-	db.snapshotCommandWALCheckpointCutover()
+	if db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL {
+		db.checkpointPostFrontierAdmission.Store(true)
+	}
 	db.mu.Unlock()
 	rotateLaneIDs := make([]int, 0, len(db.lanes))
 	for i := range db.lanes {
@@ -23723,6 +23818,10 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	releaseWriteMu()
+	endWriteCutover()
+	if hook := db.testAfterCheckpointFrontierCapture; hook != nil {
+		hook()
+	}
 
 	walRotateStart := time.Now()
 	errCh := make(chan error, len(rotateLaneIDs))
@@ -23776,6 +23875,9 @@ func (db *DB) Checkpoint() error {
 	}
 
 	// Flush all queued memtables with backend sync.
+	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
+		hook()
+	}
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
@@ -24056,12 +24158,13 @@ func (db *DB) loadStatsHook() func(map[string]string) {
 	return box.fn
 }
 
-func (db *DB) snapshotCommandWALCheckpointCutover() {
+func (db *DB) snapshotCommandWALCheckpointCutover() bool {
 	cutoverHook := db.loadCommandWALCheckpointCutoverHook()
 	if cutoverHook == nil {
-		return
+		return false
 	}
 	cutoverHook()
+	return true
 }
 
 func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
@@ -29669,6 +29772,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
 	stats["treedb.cache.mutable_flush_threshold_effective_bytes"] = fmt.Sprintf("%d", db.mutableFlushThreshold())
 	stats["treedb.cache.checkpoint.runs"] = fmt.Sprintf("%d", db.checkpointRuns.Load())
+	stats["treedb.cache.checkpoint.active"] = fmt.Sprintf("%t", db.checkpointing.Load())
+	stats["treedb.cache.checkpoint.write_cutover.active"] = fmt.Sprintf("%t", db.checkpointWriteCutoverActive.Load())
+	stats["treedb.cache.checkpoint.post_frontier_admission_enabled"] = fmt.Sprintf("%t", db.externalCommandWAL && db.loadCommandWALCheckpointCutoverHook() != nil)
+	stats["treedb.cache.checkpoint.post_frontier_admission.active"] = fmt.Sprintf("%t", db.checkpointPostFrontierAdmission.Load())
 	stats["treedb.cache.checkpoint.total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointTotalNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointMaxNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitNs.Load())/float64(time.Millisecond))

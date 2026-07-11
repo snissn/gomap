@@ -268,6 +268,111 @@ func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
 	updateAtomicMaxUint64(&db.checkpointActiveBackgroundFlushWaitMaxNs, ns)
 }
 
+type writeWaitReason uint8
+
+const (
+	writeWaitReasonNone writeWaitReason = iota
+	writeWaitReasonFrontierCutover
+	writeWaitReasonCheckpointDrain
+	writeWaitReasonMaintenance
+)
+
+type writeWaitReasonStats struct {
+	totalNs atomic.Uint64
+	maxNs   atomic.Uint64
+	lastNs  atomic.Uint64
+	samples atomic.Uint64
+	buckets [10]atomic.Uint64
+}
+
+var writeWaitLatencyBuckets = [...]struct {
+	upperNs uint64
+	label   string
+}{
+	{upperNs: uint64((10 * time.Microsecond).Nanoseconds()), label: "10us"},
+	{upperNs: uint64((100 * time.Microsecond).Nanoseconds()), label: "100us"},
+	{upperNs: uint64(time.Millisecond.Nanoseconds()), label: "1ms"},
+	{upperNs: uint64((10 * time.Millisecond).Nanoseconds()), label: "10ms"},
+	{upperNs: uint64((50 * time.Millisecond).Nanoseconds()), label: "50ms"},
+	{upperNs: uint64((100 * time.Millisecond).Nanoseconds()), label: "100ms"},
+	{upperNs: uint64((250 * time.Millisecond).Nanoseconds()), label: "250ms"},
+	{upperNs: uint64(time.Second.Nanoseconds()), label: "1s"},
+	{upperNs: uint64((5 * time.Second).Nanoseconds()), label: "5s"},
+	{upperNs: ^uint64(0), label: "inf"},
+}
+
+func (s *writeWaitReasonStats) observe(wait time.Duration) {
+	if s == nil {
+		return
+	}
+	ns := uint64(1)
+	if wait > 0 && wait.Nanoseconds() > 0 {
+		ns = uint64(wait.Nanoseconds())
+	}
+	s.totalNs.Add(ns)
+	s.lastNs.Store(ns)
+	s.samples.Add(1)
+	updateAtomicMaxUint64(&s.maxNs, ns)
+	for i := range writeWaitLatencyBuckets {
+		if ns <= writeWaitLatencyBuckets[i].upperNs {
+			s.buckets[i].Add(1)
+			break
+		}
+	}
+}
+
+func writeWaitQuantileUpperNs(s *writeWaitReasonStats, percentile uint64) uint64 {
+	if s == nil || percentile == 0 {
+		return 0
+	}
+	total := s.samples.Load()
+	if total == 0 {
+		return 0
+	}
+	target := (total*percentile + 99) / 100
+	var cumulative uint64
+	for i := range writeWaitLatencyBuckets {
+		cumulative += s.buckets[i].Load()
+		if cumulative >= target {
+			return writeWaitLatencyBuckets[i].upperNs
+		}
+	}
+	return ^uint64(0)
+}
+
+func appendWriteWaitReasonStats(stats map[string]string, reason string, s *writeWaitReasonStats) {
+	if stats == nil || reason == "" || s == nil {
+		return
+	}
+	prefix := "treedb.cache.write.wait." + reason
+	stats[prefix+".ns_total"] = fmt.Sprintf("%d", s.totalNs.Load())
+	stats[prefix+".ns_max"] = fmt.Sprintf("%d", s.maxNs.Load())
+	stats[prefix+".ns_last"] = fmt.Sprintf("%d", s.lastNs.Load())
+	stats[prefix+".count_total"] = fmt.Sprintf("%d", s.samples.Load())
+	var cumulative uint64
+	for i := range writeWaitLatencyBuckets {
+		cumulative += s.buckets[i].Load()
+		stats[prefix+".bucket_le_"+writeWaitLatencyBuckets[i].label+".count_total"] = fmt.Sprintf("%d", cumulative)
+	}
+	stats[prefix+".p50_upper_ns"] = fmt.Sprintf("%d", writeWaitQuantileUpperNs(s, 50))
+	stats[prefix+".p95_upper_ns"] = fmt.Sprintf("%d", writeWaitQuantileUpperNs(s, 95))
+	stats[prefix+".p99_upper_ns"] = fmt.Sprintf("%d", writeWaitQuantileUpperNs(s, 99))
+}
+
+func (db *DB) observeWriteWaitReason(reason writeWaitReason, wait time.Duration) {
+	if db == nil || reason == writeWaitReasonNone {
+		return
+	}
+	switch reason {
+	case writeWaitReasonFrontierCutover:
+		db.writeWaitFrontierCutover.observe(wait)
+	case writeWaitReasonCheckpointDrain:
+		db.writeWaitCheckpointDrain.observe(wait)
+	case writeWaitReasonMaintenance:
+		db.writeWaitMaintenance.observe(wait)
+	}
+}
+
 func (db *DB) observeWriteWaitForCheckpoint(wait time.Duration) {
 	if db == nil {
 		return
@@ -294,6 +399,10 @@ func (db *DB) appendWriteWaitForCheckpointStats(stats map[string]string) {
 	stats["treedb.cache.write.wait_for_checkpoint.ns_last"] = fmt.Sprintf("%d", db.writeWaitForCheckpointLastNs.Load())
 	stats["treedb.cache.write.wait_for_checkpoint.count_total"] = fmt.Sprintf("%d", db.writeWaitForCheckpointSamples.Load())
 	stats["treedb.cache.write.wait_for_checkpoint.active"] = fmt.Sprintf("%d", db.writeWaitForCheckpointActive.Load())
+	appendWriteWaitReasonStats(stats, "frontier_cutover", &db.writeWaitFrontierCutover)
+	appendWriteWaitReasonStats(stats, "checkpoint_drain", &db.writeWaitCheckpointDrain)
+	appendWriteWaitReasonStats(stats, "maintenance", &db.writeWaitMaintenance)
+	stats["treedb.cache.write.post_frontier_admission.count_total"] = fmt.Sprintf("%d", db.writePostFrontierAdmissions.Load())
 }
 
 const flushCoordinatorProgressWait = 10 * time.Millisecond
