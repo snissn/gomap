@@ -315,6 +315,30 @@ func TestMaintenanceReachabilityLeafSubtreeCachePolicy(t *testing.T) {
 	}
 }
 
+func TestScanLeafGenerationLiveStatsUsesPublishedViewWhenOptionDisabled(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	writeLeafGenerationKeys(t, db, "published-view", 512, 'p')
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil {
+		t.Fatal("expected snapshot with published leaf-generation state")
+	}
+	defer closeNoErr(t, snap)
+
+	db.indexOuterLeavesInValueLog = false
+	stats, err := db.scanLeafGenerationLiveStats(context.Background(), snap)
+	if err != nil {
+		t.Fatalf("scanLeafGenerationLiveStats: %v", err)
+	}
+	livePages := 0
+	for _, totals := range stats.Generations {
+		livePages += totals.LivePages
+	}
+	if livePages == 0 {
+		t.Fatalf("published leaf-generation view was ignored: %+v", stats.Generations)
+	}
+}
+
 func BenchmarkMaintenanceReachability(b *testing.B) {
 	db := openCompactStorageAuditBenchmarkFixture(b, 4096, 256)
 	ctx := context.Background()
