@@ -916,10 +916,11 @@ func planSyncPageRanges(pageIDs []uint64, pageIDBase, pageCount uint64, chunkSiz
 
 // SyncPages durably synchronizes the named pages. Platforms that require an
 // explicit mapped-view flush receive granularity-aligned ranges before the
-// final os.File.Sync; Linux relies on fsync's file-wide modified-page-cache
-// contract. This method never promises that only the named bytes reach stable
-// storage and deliberately leaves dirtyChunks unchanged so ordinary commit
-// bookkeeping remains exact.
+// final file data-sync boundary. Linux fdatasync includes file-size metadata
+// needed to retrieve appended pages; other platforms retain os.File.Sync.
+// This method never promises that only the named bytes reach stable storage
+// and deliberately leaves dirtyChunks unchanged so ordinary commit bookkeeping
+// remains exact.
 func (p *Pager) SyncPages(pageIDs []uint64) error {
 	if p.readOnly {
 		return ErrReadOnly
@@ -946,7 +947,12 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 		p.mu.RUnlock()
 		return err
 	}
-	if mappedRangeSyncRequired() {
+	handled, err := syncPageRangesFn(p.file, p.chunks, ranges, p.chunkSize)
+	if err != nil {
+		p.mu.RUnlock()
+		return err
+	}
+	if !handled && mappedRangeSyncRequired() {
 		for _, r := range ranges {
 			err := msyncFile(p.chunks[r.chunk][r.start:r.end])
 			if err != nil {
@@ -955,7 +961,9 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 			}
 		}
 	}
-	err = p.file.Sync()
+	if !handled {
+		err = syncPageFile(p.file)
+	}
 	p.mu.RUnlock()
 	return err
 }

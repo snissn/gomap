@@ -189,6 +189,12 @@ func TestLeafGenerationPack_ChangedOverlappingRootDiscardsCopyAndRetries(t *test
 		if result.stats.CopyAborts != 1 || result.stats.PrivatePagesDiscarded == 0 {
 			t.Fatalf("stale copy cleanup stats=%+v", result.stats)
 		}
+		if result.stats.RetryApplyStages.TreeRewriteTimeNanos <= 0 || result.stats.RetryApplyStages.LeafSyncTimeNanos <= 0 {
+			t.Fatalf("discarded attempt stages were not accounted separately: %+v", result.stats)
+		}
+		if result.stats.RetryApplyStages.TreeRewriteTimeNanos >= result.stats.ApplyStages.TreeRewriteTimeNanos {
+			t.Fatalf("aggregate stages do not include successful retry: %+v", result.stats)
+		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("pack did not finish after overlapping write")
 	}

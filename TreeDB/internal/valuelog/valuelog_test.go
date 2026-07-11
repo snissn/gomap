@@ -172,6 +172,33 @@ func TestWriterRotateToWithSyncFalseSkipsRotateSync(t *testing.T) {
 	}
 }
 
+func TestNewStagingWriterSkipsDirectorySync(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "staging.log")
+
+	original := syncDirFn
+	dirSyncs := 0
+	syncDirFn = func(string) error {
+		dirSyncs++
+		return nil
+	}
+	t.Cleanup(func() { syncDirFn = original })
+
+	writer, err := NewStagingWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewStagingWriter: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if dirSyncs != 0 {
+		t.Fatalf("staging directory syncs=%d want 0", dirSyncs)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("staging file: %v", err)
+	}
+}
+
 func TestValueLogAppendRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")

@@ -1,0 +1,76 @@
+package db
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+)
+
+func TestLeafGenerationPack_ApplyStageAccounting(t *testing.T) {
+	db, leafLog, _ := openLeafGenerationPackTestDB(t)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 1024)
+
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID},
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	stages := stats.ApplyStages
+	if stages.TreeRewriteTimeNanos <= 0 || stages.LeafSyncTimeNanos <= 0 {
+		t.Fatalf("copy stage timings were not populated: %+v", stages)
+	}
+	if stages.PageSyncTimeNanos <= 0 || stages.FinalizeTimeNanos <= 0 {
+		t.Fatalf("publish stage timings were not populated: %+v", stages)
+	}
+	copyAttributed := stages.TreeRewriteTimeNanos + stages.LeafSyncTimeNanos + stages.CopyCloseTimeNanos
+	if copyAttributed > stats.CopyTimeNanos {
+		t.Fatalf("copy stages=%d exceed copy wall=%d: %+v", copyAttributed, stats.CopyTimeNanos, stages)
+	}
+	publishAttributed := stages.RevalidateTimeNanos + stages.PromotionTimeNanos + stages.RelocationTimeNanos +
+		stages.PageSyncTimeNanos + stages.DirectorySyncWaitTimeNanos + stages.RegistrationTimeNanos +
+		stages.CollectionPublishTimeNanos + stages.FinalizeTimeNanos
+	if publishAttributed > stats.PublishHoldNanos {
+		t.Fatalf("exclusive publish stages=%d exceed publish hold=%d: %+v", publishAttributed, stats.PublishHoldNanos, stages)
+	}
+	if stages.DirectorySyncWaitTimeNanos > stages.DirectorySyncTimeNanos {
+		t.Fatalf("directory sync wait=%d exceeds operation wall=%d", stages.DirectorySyncWaitTimeNanos, stages.DirectorySyncTimeNanos)
+	}
+	if stats.RetryApplyStages != (LeafGenerationPackApplyStageStats{}) {
+		t.Fatalf("successful first attempt reported retry stages: %+v", stats.RetryApplyStages)
+	}
+}
+
+func TestLeafGenerationPackStats_JSONTimingFieldsRemainAdditive(t *testing.T) {
+	const legacy = `{"CopyTimeNanos":11,"RetryCopyTimeNanos":12,"PublishWaitNanos":13,"PublishHoldNanos":14}`
+	var decoded LeafGenerationPackStats
+	if err := json.Unmarshal([]byte(legacy), &decoded); err != nil {
+		t.Fatalf("Unmarshal legacy stats: %v", err)
+	}
+	if decoded.CopyTimeNanos != 11 || decoded.RetryCopyTimeNanos != 12 || decoded.PublishWaitNanos != 13 || decoded.PublishHoldNanos != 14 {
+		t.Fatalf("legacy timing fields changed: %+v", decoded)
+	}
+
+	decoded.ApplyStages.TreeRewriteTimeNanos = 15
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("Marshal stats: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("Unmarshal encoded stats: %v", err)
+	}
+	for _, name := range []string{
+		"CopyTimeNanos",
+		"RetryCopyTimeNanos",
+		"PublishWaitNanos",
+		"PublishHoldNanos",
+		"ApplyStages",
+		"RetryApplyStages",
+	} {
+		if _, ok := fields[name]; !ok {
+			t.Fatalf("encoded stats missing %q: %s", name, encoded)
+		}
+	}
+}
