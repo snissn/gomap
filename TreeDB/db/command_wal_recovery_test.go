@@ -878,6 +878,59 @@ func TestAppendCommandWALIntentPostAppendCutRecordsLSNAndPoisonsHandle(t *testin
 	}
 }
 
+func TestAppendCommandWALIntentPreFlushCutRecordsLSNAndPoisonsHandle(t *testing.T) {
+	tests := []struct {
+		name       string
+		durability DurabilityMode
+		point      durabilitycut.Point
+	}{
+		{
+			name:       "strict-sync",
+			durability: DurabilityDurable,
+			point:      durabilitycut.BeforeDependencyFileSync,
+		},
+		{
+			name:       "relaxed-flush",
+			durability: DurabilityWALOnRelaxed,
+			point:      durabilitycut.BeforeUserspaceFlush,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db, err := Open(Options{Dir: dir, Durability: tt.durability})
+			if err != nil {
+				t.Fatalf("Open command WAL DB: %v", err)
+			}
+			defer db.Close()
+
+			intent := mustRawKVCommandWALIntent(t, db, "k", "v")
+			wantErr := errors.New("injected pre-flush cut")
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == tt.point && event.Resource == durabilitycut.ResourceCommandWAL {
+					return wantErr
+				}
+				return nil
+			})
+			lsn, err := db.AppendCommandWALIntent(intent, true)
+			restore()
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("AppendCommandWALIntent error=%v, want pre-flush cut", err)
+			}
+			if lsn != 1 || intent.AssignedLSN() != lsn {
+				t.Fatalf("pre-flush cut lsn=%d assigned=%d, want 1", lsn, intent.AssignedLSN())
+			}
+			if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+			}
+			if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
+			}
+		})
+	}
+}
+
 func TestCommandWALDirectPostAppendCutRecordsLSNAndPoisonsHandle(t *testing.T) {
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("batch"), Value: []byte("value")}})
 	if err != nil {

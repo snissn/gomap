@@ -1566,7 +1566,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
-		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
+		// Poison here rather than relying on FlushCommandWAL: pre-flush
+		// durability cuts return before that helper reaches its poison block.
+		db.poisonCommandWALAfterPostAppendFailure(intent)
 		return lsn, flushErr
 	}
 	if requestTiming != nil {
@@ -1608,13 +1610,11 @@ func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchInte
 	if db == nil || intent == nil || intent.lsn == 0 {
 		// intent.lsn == 0 means the frame was never durably appended
 		// (appendCommandWALIntent sets lsn once AppendCommand succeeds).
-		// No need to poison; appendCommandWALIntent already poisons its own
-		// flush/sync failures.
+		// No need to poison because no command identity was assigned.
 		return
 	}
-	// appendRawKVCommandWALIntent poisons its own flush/sync failures. This
-	// path covers the later case where a command frame was appended but root
-	// publication failed before AppliedCommandLSN could be published.
+	// This covers both flush/sync failures after append and the later case where
+	// root publication failed before AppliedCommandLSN could be published.
 	db.commandWALFlushPoisoned.Store(true)
 }
 
