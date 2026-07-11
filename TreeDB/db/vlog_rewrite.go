@@ -1179,6 +1179,50 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 			}
 		}
 		runRewritePlanLiveEstimateHook()
+		result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+			Collectors: maintenanceReachabilityValueLogLiveBytes,
+		})
+		if err != nil {
+			return nil, err
+		}
+		liveByID := result.valueLogLiveBytesBySegment
+		if cacheable {
+			db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
+		}
+		return liveByID, nil
+	}
+
+	liveByID, err := estimate()
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		// Refresh/re-publish value-log set once when live-byte estimation races
+		// segment registration (for example, new outer-leaf segments).
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		return estimate()
+	}
+	return liveByID, err
+}
+
+func (db *DB) estimateValueLogLiveBytesBySegmentLegacy(ctx context.Context) (_ map[uint32]int64, err error) {
+	estimate := func() (_ map[uint32]int64, err error) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		snap := db.AcquireSnapshot()
+		if snap == nil || snap.state == nil || snap.idx == nil {
+			closeRewriteSnapshot(&err, snap)
+			return nil, fmt.Errorf("missing snapshot state")
+		}
+		defer closeRewriteSnapshot(&err, snap)
+		cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
+		if cacheable {
+			if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
+				return liveByID, nil
+			}
+		}
+		runRewritePlanLiveEstimateHook()
 		liveByID := make(map[uint32]int64)
 
 		// Pointer-projection iterators can return many keys pointing at the same

@@ -46,7 +46,7 @@ func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchLegacy(t *testing
 	if err != nil {
 		t.Fatalf("legacy ref counts: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
 	if err != nil {
 		t.Fatalf("legacy live bytes: %v", err)
 	}
@@ -175,6 +175,127 @@ func TestScanValueLogRefCountsUsesSharedCollectorAndMatchesLegacy(t *testing.T) 
 	}
 }
 
+func clearRewritePlanLiveBytesCacheForTest(db *DB) {
+	db.rewritePlanLiveBytesMu.Lock()
+	db.rewritePlanLiveBytesCache = valueLogRewriteLiveBytesCache{}
+	db.rewritePlanLiveBytesMu.Unlock()
+}
+
+func TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndMatchesLegacy(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	grouped := appendPointersInNewSegment(t, db.dir, 0, 1, 440_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("maintenance-reachability-live-migration|"), 32)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	recordLen := page.ValuePtrRecordLength(grouped)
+	for i := 0; i < 3; i++ {
+		ptr := grouped
+		ptr.Length = page.ValuePtrMarkGrouped(recordLen, uint8(i))
+		if err := b.SetPointer([]byte(fmt.Sprintf("grouped-live/%d", i)), ptr); err != nil {
+			t.Fatalf("SetPointer grouped %d: %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	closeNoErr(t, b)
+	ctx := context.Background()
+
+	clearRewritePlanLiveBytesCacheForTest(db)
+	want, err := db.estimateValueLogLiveBytesBySegmentLegacy(ctx)
+	if err != nil {
+		t.Fatalf("legacy estimateValueLogLiveBytesBySegment: %v", err)
+	}
+	if len(want) == 0 {
+		t.Fatal("legacy live-byte fixture produced no value-log references")
+	}
+	if got := want[grouped.FileID]; got != int64(recordLen) {
+		t.Fatalf("legacy grouped live bytes=%d want one record=%d", got, recordLen)
+	}
+
+	clearRewritePlanLiveBytesCacheForTest(db)
+	var hookCalls int
+	restore := registerRewritePlanLiveEstimateHook(func() { hookCalls++ })
+	defer restore()
+	got, err := db.estimateValueLogLiveBytesBySegment(ctx)
+	if err != nil {
+		t.Fatalf("estimateValueLogLiveBytesBySegment: %v", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("uncached live-estimate hook calls=%d want 1", hookCalls)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got, want)
+	}
+	if _, err := db.estimateValueLogLiveBytesBySegment(ctx); err != nil {
+		t.Fatalf("cached estimateValueLogLiveBytesBySegment: %v", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("cached live estimate reran scanner: hook calls=%d want 1", hookCalls)
+	}
+}
+
+func TestEstimateValueLogLiveBytesBySegmentRefreshesOnceOnMissingSnapshotFile(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		LeafPageReadCacheEntries:   -1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+	t.Cleanup(func() { closeNoErr(t, leafLog) })
+	t.Cleanup(func() { closeNoErr(t, db) })
+	ptr := appendPointersInNewSegment(t, db.dir, 0, 1, 450_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("maintenance-reachability-live-refresh|"), 32)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("refresh-pointer"), ptr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	closeNoErr(t, b)
+	writeLeafGenerationKeys(t, db, "refresh-outer-leaf", 1024, 'r')
+
+	clearRewritePlanLiveBytesCacheForTest(db)
+	forceStalePublishedValueLogSetForReadRetryTest(t, db)
+	refreshBefore := db.valueLogManager.RefreshScanCount()
+	var hookCalls int
+	restore := registerRewritePlanLiveEstimateHook(func() { hookCalls++ })
+	defer restore()
+
+	got, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	if err != nil {
+		t.Fatalf("estimateValueLogLiveBytesBySegment after stale set: %v", err)
+	}
+	if gotRefreshes := db.valueLogManager.RefreshScanCount() - refreshBefore; gotRefreshes != 1 {
+		t.Fatalf("refresh scans=%d want 1", gotRefreshes)
+	}
+	if hookCalls != 2 {
+		t.Fatalf("uncached live-estimate hook calls=%d want initial attempt plus retry", hookCalls)
+	}
+	if want := int64(page.ValuePtrRecordLength(ptr)); got[ptr.FileID] != want {
+		t.Fatalf("live bytes for refreshed segment=%d want %d", got[ptr.FileID], want)
+	}
+}
+
 func TestMaintenanceReachabilityLeafSubtreeCachePolicy(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	writeLeafGenerationKeys(t, db, "cache", 1024, 'c')
@@ -240,6 +361,28 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			}
 			if err != nil {
 				b.Fatalf("maintenanceReachabilityScan: %v", err)
+			}
+		}
+	})
+	b.Run("legacy_live_bytes", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			clearRewritePlanLiveBytesCacheForTest(db)
+			b.StartTimer()
+			if _, err := db.estimateValueLogLiveBytesBySegmentLegacy(ctx); err != nil {
+				b.Fatalf("estimateValueLogLiveBytesBySegmentLegacy: %v", err)
+			}
+		}
+	})
+	b.Run("shared_live_bytes", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			clearRewritePlanLiveBytesCacheForTest(db)
+			b.StartTimer()
+			if _, err := db.estimateValueLogLiveBytesBySegment(ctx); err != nil {
+				b.Fatalf("estimateValueLogLiveBytesBySegment: %v", err)
 			}
 		}
 	})
