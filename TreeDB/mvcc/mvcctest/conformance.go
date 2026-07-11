@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/mvcc"
@@ -343,8 +344,58 @@ func runConcurrent(t *testing.T, open OpenFunc, durability DurabilityClass) {
 		}
 	}()
 
+	// Prove one post-barrier read/commit overlap at the public Adapter call
+	// boundary. The wrappers make both invocations enter before either may call
+	// through and return, so this is independent of which goroutine the
+	// scheduler runs first and does not require backend-specific hooks.
+	originalCommitAt := adapter.CommitAt
+	originalGetAt := adapter.GetAt
+	proofCommitCall := make(chan struct{})
+	proofReadCall := make(chan struct{})
+	proofAbort := make(chan struct{})
+	var proofAbortOnce sync.Once
+	var proofEnabled atomic.Bool
+	var proofReadClaimed atomic.Bool
+	var proofCommitEntered atomic.Bool
+	var proofReadEntered atomic.Bool
+	abortProof := func() { proofAbortOnce.Do(func() { close(proofAbort) }) }
+	waitForProofPeer := func(peer <-chan struct{}) error {
+		select {
+		case <-peer:
+			return nil
+		case <-proofAbort:
+			return errors.New("mvcctest: concurrent overlap proof aborted")
+		}
+	}
+	adapter.CommitAt = func(timestamp uint64, mutations []mvcc.Mutation, mode mvcc.CommitMode) error {
+		if !proofEnabled.Load() || timestamp != 18 {
+			return originalCommitAt(timestamp, mutations, mode)
+		}
+		proofCommitEntered.Store(true)
+		close(proofCommitCall)
+		if err := waitForProofPeer(proofReadCall); err != nil {
+			return err
+		}
+		return originalCommitAt(timestamp, mutations, mode)
+	}
+	adapter.GetAt = func(key []byte, timestamp uint64) (mvcc.Result, error) {
+		if !proofEnabled.Load() || !proofReadClaimed.CompareAndSwap(false, true) {
+			return originalGetAt(key, timestamp)
+		}
+		proofReadEntered.Store(true)
+		close(proofReadCall)
+		if err := waitForProofPeer(proofCommitCall); err != nil {
+			return mvcc.Result{}, err
+		}
+		return originalGetAt(key, timestamp)
+	}
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, 9)
+	reportError := func(err error) {
+		abortProof()
+		errCh <- err
+	}
 	start := make(chan struct{})
 	writerStarted := make(chan struct{})
 	overlap := make(chan struct{})
@@ -354,7 +405,7 @@ func runConcurrent(t *testing.T, open OpenFunc, durability DurabilityClass) {
 		defer wg.Done()
 		<-start
 		if err := adapter.CommitAt(17, []mvcc.Mutation{{Key: []byte("k"), Value: []byte("17")}}, mvcc.CommitRelaxed); err != nil {
-			errCh <- err
+			reportError(err)
 			close(writerStarted)
 			return
 		}
@@ -362,7 +413,7 @@ func runConcurrent(t *testing.T, open OpenFunc, durability DurabilityClass) {
 		<-overlap
 		for timestamp := uint64(18); timestamp <= 80; timestamp++ {
 			if err := adapter.CommitAt(timestamp, []mvcc.Mutation{{Key: []byte("k"), Value: []byte(fmt.Sprint(timestamp))}}, mvcc.CommitRelaxed); err != nil {
-				errCh <- err
+				reportError(err)
 				return
 			}
 		}
@@ -376,7 +427,7 @@ func runConcurrent(t *testing.T, open OpenFunc, durability DurabilityClass) {
 			for i := 0; i < 100; i++ {
 				got, err := adapter.GetAt([]byte("k"), 80)
 				if err != nil || got.State != mvcc.Present || got.Timestamp < 1 || got.Timestamp > 80 || string(got.Value) != fmt.Sprint(got.Timestamp) {
-					errCh <- fmt.Errorf("concurrent GetAt result=%+v err=%v", got, err)
+					reportError(fmt.Errorf("concurrent GetAt result=%+v err=%v", got, err))
 					return
 				}
 				if i == 0 {
@@ -388,20 +439,34 @@ func runConcurrent(t *testing.T, open OpenFunc, durability DurabilityClass) {
 	}
 	close(start)
 	<-writerStarted
+	var barrierErr error
 	for reader := 0; reader < 8; reader++ {
 		select {
 		case <-readerProgress:
 		case err := <-errCh:
-			t.Fatalf("reader failed before overlap barrier: %v", err)
+			barrierErr = fmt.Errorf("reader failed before overlap barrier: %w", err)
 		}
+		if barrierErr != nil {
+			break
+		}
+	}
+	if barrierErr == nil {
+		proofEnabled.Store(true)
 	}
 	close(overlap)
 	wg.Wait()
+	abortProof()
 	close(errCh)
+	if barrierErr != nil {
+		t.Fatal(barrierErr)
+	}
 	for err := range errCh {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if !proofCommitEntered.Load() || !proofReadEntered.Load() {
+		t.Fatalf("post-barrier Adapter calls did not overlap: commit=%t read=%t", proofCommitEntered.Load(), proofReadEntered.Load())
 	}
 
 	var pinnedLabels []string

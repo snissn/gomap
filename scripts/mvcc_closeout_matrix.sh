@@ -36,11 +36,7 @@ if [[ -z "$OUT_DIR" || "$OUT_DIR" == "/" || "$OUT_DIR" == "$ROOT" ]]; then
   exit 2
 fi
 CANDIDATE_SHA=$(git rev-parse "${CANDIDATE_HASH}^{commit}")
-CHECKED_OUT_SHA=$(git rev-parse "HEAD^{commit}")
-if [[ "$CHECKED_OUT_SHA" != "$CANDIDATE_SHA" ]]; then
-  echo "candidate mismatch: checkout=$CHECKED_OUT_SHA requested=$CANDIDATE_SHA" >&2
-  exit 2
-fi
+"$ROOT/scripts/mvcc_candidate_checkout_guard.sh" "$ROOT" "$CANDIDATE_SHA"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"

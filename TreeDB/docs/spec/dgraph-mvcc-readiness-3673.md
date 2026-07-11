@@ -39,8 +39,9 @@ TreeDB example. `mvcctest.Run` executes:
   `Next`, `Seek`, and `Close`;
 - a deterministic seed-3673 randomized point-read and all-version oracle over
   empty, embedded-zero, and `0xff` logical keys;
-- concurrent point readers and writers while an older iterator retains its
-  pinned snapshot.
+- concurrent point readers and writers with an invocation/response barrier
+  proving one post-barrier Adapter read/commit call interval overlap, while an
+  older iterator retains its pinned snapshot.
 
 Except for the durable reopen trace, the public suite runs each case against
 both WAL-on relaxed and WAL-off relaxed stores. The durable trace separately

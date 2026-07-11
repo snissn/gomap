@@ -45,11 +45,7 @@ if ! git cat-file -e "${BASELINE_HASH}^{commit}" >/dev/null 2>&1; then
 fi
 BASELINE_SHA=$(git rev-parse "${BASELINE_HASH}^{commit}")
 CANDIDATE_SHA=$(git rev-parse "${CANDIDATE_HASH}^{commit}")
-CHECKED_OUT_SHA=$(git rev-parse "HEAD^{commit}")
-if [[ "$CHECKED_OUT_SHA" != "$CANDIDATE_SHA" ]]; then
-  echo "candidate mismatch: checkout=$CHECKED_OUT_SHA requested=$CANDIDATE_SHA" >&2
-  exit 2
-fi
+"$ROOT/scripts/mvcc_candidate_checkout_guard.sh" "$ROOT" "$CANDIDATE_SHA"
 if [[ "$BASELINE_SHA" == "$CANDIDATE_SHA" ]]; then
   echo "baseline and candidate resolve to the same commit" >&2
   exit 2

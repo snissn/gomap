@@ -1,5 +1,12 @@
 # Dgraph MVCC closeout evidence
 
+> [!CAUTION]
+> The committed summaries below are superseded by post-review code changes
+> after `5ea704c4892191c509aa76e4551148b77db018f0`. They remain historical
+> records of the first measurement only and MUST NOT be cited as exact-head
+> evidence. A clean-checkout exact-head rerun and replacement evidence commit
+> are required before this PR is merge-ready.
+
 This directory indexes the compact, reproducible evidence for gomap #3673.
 The measured code commit is
 `2f0a687f048ece277ab039303f6e28a1a7906bcb`; the base commit for paired
