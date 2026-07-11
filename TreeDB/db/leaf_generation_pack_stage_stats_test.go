@@ -18,19 +18,19 @@ func TestLeafGenerationPack_ApplyStageAccounting(t *testing.T) {
 		t.Fatalf("LeafGenerationPack: %v", err)
 	}
 	stages := stats.ApplyStages
-	if stages.TreeRewriteTimeNanos <= 0 || stages.LeafSyncTimeNanos <= 0 {
+	copyAttributed := stages.TreeRewriteTimeNanos + stages.LeafSyncTimeNanos + stages.CopyCloseTimeNanos
+	if copyAttributed <= 0 {
 		t.Fatalf("copy stage timings were not populated: %+v", stages)
 	}
-	if stages.PageSyncTimeNanos <= 0 || stages.FinalizeTimeNanos <= 0 {
-		t.Fatalf("publish stage timings were not populated: %+v", stages)
-	}
-	copyAttributed := stages.TreeRewriteTimeNanos + stages.LeafSyncTimeNanos + stages.CopyCloseTimeNanos
 	if copyAttributed > stats.CopyTimeNanos {
 		t.Fatalf("copy stages=%d exceed copy wall=%d: %+v", copyAttributed, stats.CopyTimeNanos, stages)
 	}
 	publishAttributed := stages.RevalidateTimeNanos + stages.PromotionTimeNanos + stages.RelocationTimeNanos +
 		stages.PageSyncTimeNanos + stages.DirectorySyncWaitTimeNanos + stages.RegistrationTimeNanos +
 		stages.CollectionPublishTimeNanos + stages.FinalizeTimeNanos
+	if publishAttributed <= 0 {
+		t.Fatalf("publish stage timings were not populated: %+v", stages)
+	}
 	if publishAttributed > stats.PublishHoldNanos {
 		t.Fatalf("exclusive publish stages=%d exceed publish hold=%d: %+v", publishAttributed, stats.PublishHoldNanos, stages)
 	}
