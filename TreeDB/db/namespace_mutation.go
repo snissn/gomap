@@ -39,10 +39,15 @@ func removePersistentFile(root, path string, resource durabilitycut.Resource) (b
 // ignore operating-system removal failures while still propagating an injected
 // post-removal durability cut.
 func removePersistentFileBestEffort(root, path string, resource durabilitycut.Resource) error {
+	_, err := removePersistentFileBestEffortResult(root, path, resource)
+	return err
+}
+
+func removePersistentFileBestEffortResult(root, path string, resource durabilitycut.Resource) (bool, error) {
 	if err := os.Remove(path); err != nil {
-		return nil
+		return false, nil
 	}
-	return observeNamespaceMutation(durabilitycut.NamespaceUnlink, resource, root, path, "")
+	return true, observeNamespaceMutation(durabilitycut.NamespaceUnlink, resource, root, path, "")
 }
 
 func removePersistentTree(root, path string, resource durabilitycut.Resource) error {

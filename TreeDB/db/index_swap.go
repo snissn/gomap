@@ -67,16 +67,18 @@ func recoverIndexSwap(dir string) error {
 		// future opens are unambiguous.
 		namespaceChanged := false
 		if newExists {
-			if err := removePersistentFileBestEffort(dir, newPath, durabilitycut.ResourceIndex); err != nil {
+			removed, err := removePersistentFileBestEffortResult(dir, newPath, durabilitycut.ResourceIndex)
+			if err != nil {
 				return err
 			}
-			namespaceChanged = true
+			namespaceChanged = namespaceChanged || removed
 		}
 		if readyExists {
-			if err := removePersistentFileBestEffort(dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+			removed, err := removePersistentFileBestEffortResult(dir, readyPath, durabilitycut.ResourceIndex)
+			if err != nil {
 				return err
 			}
-			namespaceChanged = true
+			namespaceChanged = namespaceChanged || removed
 		}
 		if namespaceChanged {
 			if err := syncDeletionNamespaceDirectory(dir, durabilitycut.ResourceIndex); err != nil {
