@@ -605,6 +605,17 @@ func (j *CommandJournal) NextLSN() uint64 {
 // journal mutex. This intentionally optimizes for deterministic frame order and
 // tail-only rollback, not parallel appends within one lane.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
+	return j.appendCommand(env, false)
+}
+
+// AppendCommandObserved appends a complete command frame and emits its
+// durability boundaries while the journal lock still identifies the exact
+// active segment that owns the frame.
+func (j *CommandJournal) AppendCommandObserved(env CommandEnvelope) (uint64, error) {
+	return j.appendCommand(env, durabilitycut.Enabled())
+}
+
+func (j *CommandJournal) appendCommand(env CommandEnvelope, observe bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -612,6 +623,9 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
 	}
 	if env.LSN != 0 {
 		return 0, errors.New("commitlog: command journal owns lsn assignment")
@@ -661,6 +675,9 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
+	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, err
 	}
 	return lsn, nil
 }
@@ -972,6 +989,16 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedWithRotateSync(bas
 // replayable RawKVBatch operation source without materializing the canonical
 // payload slice.
 func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (uint64, error) {
+	return j.appendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, plan, scan, false)
+}
+
+// AppendRawKVBatchPayloadScanCommandTrustedObserved appends a scanned payload
+// and emits append boundaries under the journal lock.
+func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrustedObserved(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (uint64, error) {
+	return j.appendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, plan, scan, durabilitycut.Enabled())
+}
+
+func (j *CommandJournal) appendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner, observe bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -979,6 +1006,9 @@ func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLS
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
 	}
 	if err := plan.validate(); err != nil {
 		return 0, err
@@ -1006,6 +1036,9 @@ func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLS
 		}
 		return 0, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, err
+	}
 	return lsn, nil
 }
 
@@ -1013,6 +1046,16 @@ func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLS
 // payload. It validates only command identity and frame size; callers must use
 // this only for payloads built by the matching commitlog encoder.
 func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	return j.appendCommandPayloadTrusted(kind, scope, format, baseAppliedLSN, payload, false)
+}
+
+// AppendCommandPayloadTrustedObserved appends a trusted payload and emits
+// append boundaries under the journal lock.
+func (j *CommandJournal) AppendCommandPayloadTrustedObserved(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	return j.appendCommandPayloadTrusted(kind, scope, format, baseAppliedLSN, payload, durabilitycut.Enabled())
+}
+
+func (j *CommandJournal) appendCommandPayloadTrusted(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte, observe bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -1020,6 +1063,9 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
 	}
 	if err := validateCommandEnvelopeIdentity(CommandEnvelope{
 		LSN:           1,
@@ -1051,6 +1097,9 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
+	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, err
 	}
 	return lsn, nil
 }
@@ -1239,6 +1288,20 @@ func (j *CommandJournal) Sync() error {
 		return nil
 	}
 	return j.writer.Sync()
+}
+
+// FlushObserved flushes or syncs the exact active segment while holding the
+// same lock used to emit its durability boundaries.
+func (j *CommandJournal) FlushObserved(sync bool) error {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
+		return nil
+	}
+	return j.flushDirectCommandWALLocked(sync, durabilitycut.Enabled())
 }
 
 func (j *CommandJournal) Close() error {

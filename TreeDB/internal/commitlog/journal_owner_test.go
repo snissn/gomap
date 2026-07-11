@@ -71,6 +71,68 @@ func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	}
 }
 
+func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
+	var (
+		events   []durabilitycut.Event
+		unlocked []durabilitycut.Point
+	)
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceCommandWAL || event.Point == "" {
+			return nil
+		}
+		events = append(events, event)
+		if j.mu.TryLock() {
+			unlocked = append(unlocked, event.Point)
+			j.mu.Unlock()
+		}
+		return nil
+	})
+	defer restore()
+
+	lsn, err := j.AppendCommandObserved(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommandObserved: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendCommandObserved LSN=%d, want 1", lsn)
+	}
+	if err := j.FlushObserved(true); err != nil {
+		t.Fatalf("FlushObserved: %v", err)
+	}
+	if len(unlocked) != 0 {
+		t.Fatalf("durability boundaries emitted without journal lock: %v", unlocked)
+	}
+	wantPoints := []durabilitycut.Point{
+		durabilitycut.BeforeDependencyAppend,
+		durabilitycut.AfterDependencyAppend,
+		durabilitycut.BeforeDependencyFileSync,
+		durabilitycut.AfterDependencyFileSync,
+	}
+	if len(events) != len(wantPoints) {
+		t.Fatalf("events=%#v, want points %v", events, wantPoints)
+	}
+	activePath, _ := j.ActiveSegmentSnapshot()
+	for i, want := range wantPoints {
+		if events[i].Point != want {
+			t.Fatalf("event[%d].Point=%q, want %q", i, events[i].Point, want)
+		}
+		if want != durabilitycut.BeforeDependencyAppend && events[i].Path != activePath {
+			t.Fatalf("event[%d].Path=%q, want active path %q", i, events[i].Path, activePath)
+		}
+	}
+}
+
 func TestCommandJournalRejectsOutOfRangeLane(t *testing.T) {
 	for _, lane := range []int{-1, MaxCommandJournalLane + 1} {
 		if _, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: lane}); err == nil {

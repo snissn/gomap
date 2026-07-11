@@ -240,29 +240,12 @@ func (db *DB) flushCommandWALForPath(sync bool, observe bool, path commandWALApp
 		return err
 	}
 	var err error
-	walPath := db.commandJournal.Path()
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	start := time.Time{}
 	if observe {
 		start = time.Now()
 	}
-	if actualSync {
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, db.dir, walPath); err != nil {
-			return err
-		}
-		err = db.commandJournal.Sync()
-		if err == nil {
-			err = durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, db.dir, walPath)
-		}
-	} else {
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeUserspaceFlush, durabilitycut.ResourceCommandWAL, db.dir, walPath); err != nil {
-			return err
-		}
-		err = db.commandJournal.Flush()
-		if err == nil {
-			err = durabilitycut.EmitPath(durabilitycut.AfterUserspaceFlush, durabilitycut.ResourceCommandWAL, db.dir, walPath)
-		}
-	}
+	err = db.commandJournal.FlushObserved(actualSync)
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint
 	}
@@ -1496,9 +1479,6 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	var lsn uint64
 	var err error
 	appendPath := commandWALAppendStatsIntent
-	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, db.dir); err != nil {
-		return 0, err
-	}
 	appendStart := time.Now()
 	if intent.rawKVDirect {
 		appendPath = commandWALAppendStatsEntryScan
@@ -1506,12 +1486,12 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if scan == nil {
 			scan = db.rawKVCommandWALOperationScanner(intent.rawKVEntries, &intent.rawKVRIDCache, nil)
 		}
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, intent.rawKVPlan, scan)
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrustedObserved(baseAppliedLSN, intent.rawKVPlan, scan)
 	} else if intent.trustedPayload && !intent.externalRefs {
 		appendPath = commandWALAppendStatsPayload
-		lsn, err = db.commandJournal.AppendCommandPayloadTrusted(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
+		lsn, err = db.commandJournal.AppendCommandPayloadTrustedObserved(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
 	} else {
-		lsn, err = db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
+		lsn, err = db.commandJournal.AppendCommandObserved(commitlog.CommandEnvelope{
 			Kind:           intent.kind,
 			Scope:          intent.scope,
 			BaseAppliedLSN: baseAppliedLSN,
@@ -1530,21 +1510,20 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if lsn != 0 || err == nil {
 		db.observeCommandWALAppend(appendPath, appendElapsed)
 	}
-	if err != nil {
-		if requestTiming != nil {
-			requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
-		}
-		return 0, err
-	}
 	if lsn != 0 {
 		intent.lsn = lsn
 		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	}
-	if err := durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, db.dir, db.commandJournal.Path(), lsn); err != nil {
-		// The frame already owns this LSN and may become replay-visible later.
-		// Keep the intent identity and fail the open handle closed so a retry
-		// cannot append a second frame for the same public mutation.
-		db.poisonCommandWALAfterPostAppendFailure(intent)
+	if err != nil {
+		if requestTiming != nil {
+			requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+		}
+		if lsn != 0 {
+			// The frame already owns this LSN and may become replay-visible later.
+			// Keep the intent identity and fail the open handle closed so a retry
+			// cannot append a second frame for the same public mutation.
+			db.poisonCommandWALAfterPostAppendFailure(intent)
+		}
 		return lsn, err
 	}
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
