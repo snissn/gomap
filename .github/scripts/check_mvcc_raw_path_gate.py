@@ -92,14 +92,22 @@ def compute_binary_digests(
 
 def parse_benchmarks(path: Path, expected_samples: int) -> dict[str, list[Sample]]:
     samples = {name: [] for name in BENCHMARKS}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+    ):
         match = BENCH_RE.match(line.strip())
         if match is None:
             continue
         name, ns_per_op, tail = match.groups()
         if name not in samples:
             continue
-        metrics = {unit: float(value) for value, unit in METRIC_RE.findall(tail)}
+        metrics = {}
+        for value, unit in METRIC_RE.findall(tail):
+            if unit in metrics:
+                raise ValueError(
+                    f"{path}:{line_number}: {name}: duplicate metric unit {unit}"
+                )
+            metrics[unit] = float(value)
         missing = {"B/op", "allocs/op"} - set(metrics)
         if missing:
             raise ValueError(f"{path}: {name}: missing metrics {sorted(missing)}")
@@ -385,6 +393,18 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError("missing required row should fail")
+        candidate_path.write_text(
+            synthetic_log().replace(
+                "128.000 B/op", "128.000 B/op 129.000 B/op", 1
+            ),
+            encoding="utf-8",
+        )
+        try:
+            parse_benchmarks(candidate_path, 8)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("duplicate metric unit should fail")
     print("check_mvcc_raw_path_gate.py self-test: PASS")
 
 

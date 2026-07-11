@@ -4,8 +4,11 @@ This directory contains the compact exact-target evidence for gomap #3673.
 The measured code target is
 `dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a`; the paired comparison base is
 `f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final pull-request head is a
-docs-and-evidence-only descendant of the measured target. It does not change
-production MVCC code, benchmark definitions, or the benchmark harnesses.
+post-measure validation, CI-wiring, and evidence descendant of the measured
+target. It does not change production MVCC code, benchmark definitions,
+benchmark harnesses, or the inputs used for these measurements. The committed
+summaries were regenerated and revalidated from the preserved raw inputs; no
+benchmark was rerun after the measured target.
 Dgraph must still pin the first merged-main descendant containing this PR, not
 the worker-branch commit.
 

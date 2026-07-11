@@ -15,9 +15,37 @@ BENCH_RE = re.compile(
     r"([0-9.]+)\s+ns/op\s+(.*)$"
 )
 METRIC_RE = re.compile(r"([0-9.eE+-]+)\s+([^\s]+)")
-RSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s+(\d+)")
-USER_RE = re.compile(r"User time \(seconds\):\s+([0-9.]+)")
-SYSTEM_RE = re.compile(r"System time \(seconds\):\s+([0-9.]+)")
+RESOURCE_DELIMITER_RE = re.compile(
+    r"--- sample=(\d+) group=(regular|prune) benchtime=([^\s]+) ---"
+)
+RESOURCE_FIELDS = (
+    ("command", re.compile(r'Command being timed:\s+".+"')),
+    ("user", re.compile(r"User time \(seconds\):\s+([0-9.]+)")),
+    ("system", re.compile(r"System time \(seconds\):\s+([0-9.]+)")),
+    ("cpu", re.compile(r"Percent of CPU this job got:\s+\d+%")),
+    (
+        "elapsed",
+        re.compile(r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s+[0-9:.]+"),
+    ),
+    ("average_shared_text", re.compile(r"Average shared text size \(kbytes\):\s+\d+")),
+    ("average_unshared_data", re.compile(r"Average unshared data size \(kbytes\):\s+\d+")),
+    ("average_stack", re.compile(r"Average stack size \(kbytes\):\s+\d+")),
+    ("average_total", re.compile(r"Average total size \(kbytes\):\s+\d+")),
+    ("rss", re.compile(r"Maximum resident set size \(kbytes\):\s+(\d+)")),
+    ("average_rss", re.compile(r"Average resident set size \(kbytes\):\s+\d+")),
+    ("major_faults", re.compile(r"Major \(requiring I/O\) page faults:\s+\d+")),
+    ("minor_faults", re.compile(r"Minor \(reclaiming a frame\) page faults:\s+\d+")),
+    ("voluntary_switches", re.compile(r"Voluntary context switches:\s+\d+")),
+    ("involuntary_switches", re.compile(r"Involuntary context switches:\s+\d+")),
+    ("swaps", re.compile(r"Swaps:\s+\d+")),
+    ("filesystem_inputs", re.compile(r"File system inputs:\s+\d+")),
+    ("filesystem_outputs", re.compile(r"File system outputs:\s+\d+")),
+    ("socket_sent", re.compile(r"Socket messages sent:\s+\d+")),
+    ("socket_received", re.compile(r"Socket messages received:\s+\d+")),
+    ("signals", re.compile(r"Signals delivered:\s+\d+")),
+    ("page_size", re.compile(r"Page size \(bytes\):\s+\d+")),
+    ("exit_status", re.compile(r"Exit status:\s+(\d+)")),
+)
 
 PROFILES = ("durable_sync", "wal_on_relaxed", "wal_off_relaxed")
 EXPECTED_BENCHMARKS = frozenset(
@@ -55,13 +83,20 @@ def required_metrics(name: str) -> set[str]:
 
 def parse_benchmarks(path: Path, expected: int) -> dict[str, dict[str, float]]:
     samples: dict[str, list[dict[str, float]]] = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+    ):
         match = BENCH_RE.match(line.strip())
         if match is None:
             continue
         name, ns_per_op, tail = match.groups()
-        metrics = {unit: float(value) for value, unit in METRIC_RE.findall(tail)}
-        metrics["ns/op"] = float(ns_per_op)
+        metrics = {"ns/op": float(ns_per_op)}
+        for value, unit in METRIC_RE.findall(tail):
+            if unit in metrics:
+                raise ValueError(
+                    f"{path}:{line_number}: {name}: duplicate metric unit {unit}"
+                )
+            metrics[unit] = float(value)
         samples.setdefault(name, []).append(metrics)
     if not samples:
         raise ValueError(f"{path}: no closeout benchmarks found")
@@ -87,19 +122,55 @@ def parse_benchmarks(path: Path, expected: int) -> dict[str, dict[str, float]]:
 
 
 def parse_resources(path: Path, expected_samples: int) -> dict[str, float]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    rss = [int(value) for value in RSS_RE.findall(text)]
-    user = [float(value) for value in USER_RE.findall(text)]
-    system = [float(value) for value in SYSTEM_RE.findall(text)]
-    expected_invocations = expected_samples * 2
-    counts = (len(rss), len(user), len(system))
-    if counts != (expected_invocations,) * 3:
-        raise ValueError(
-            f"{path}: expected {expected_invocations} complete /usr/bin/time "
-            f"invocations, got rss/user/system={counts}"
-        )
+    lines = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+    cursor = 0
+    records: list[dict[str, str]] = []
+    for sample in range(1, expected_samples + 1):
+        for group in ("regular", "prune"):
+            if cursor >= len(lines):
+                raise ValueError(f"{path}: missing resource record for sample={sample} group={group}")
+            delimiter = RESOURCE_DELIMITER_RE.fullmatch(lines[cursor])
+            if delimiter is None or (int(delimiter.group(1)), delimiter.group(2)) != (
+                sample,
+                group,
+            ):
+                raise ValueError(
+                    f"{path}: expected resource delimiter for sample={sample} "
+                    f"group={group}, got {lines[cursor]!r}"
+                )
+            cursor += 1
+            record: dict[str, str] = {}
+            for field, pattern in RESOURCE_FIELDS:
+                if cursor >= len(lines):
+                    raise ValueError(
+                        f"{path}: sample={sample} group={group}: missing {field} field"
+                    )
+                match = pattern.fullmatch(lines[cursor])
+                if match is None:
+                    raise ValueError(
+                        f"{path}: sample={sample} group={group}: expected {field} "
+                        f"field, got {lines[cursor]!r}"
+                    )
+                if match.lastindex:
+                    record[field] = match.group(1)
+                cursor += 1
+            if record["exit_status"] != "0":
+                raise ValueError(
+                    f"{path}: sample={sample} group={group}: /usr/bin/time "
+                    f"exit status {record['exit_status']}"
+                )
+            records.append(record)
+    if cursor != len(lines):
+        raise ValueError(f"{path}: unexpected extra resource content {lines[cursor]!r}")
+    rss = [int(record["rss"]) for record in records]
+    user = [float(record["user"]) for record in records]
+    system = [float(record["system"]) for record in records]
     return {
-        "invocations": float(len(rss)),
+        "invocations": float(len(records)),
         "max_rss_kib": float(max(rss)),
         "total_user_seconds": sum(user),
         "total_system_seconds": sum(system),

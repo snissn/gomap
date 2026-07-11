@@ -32,13 +32,21 @@ METRIC_RE = re.compile(r"([0-9.eE+-]+)\s+(B/op|allocs/op)(?:\s|$)")
 
 def parse(path: Path, expected: int) -> dict[str, list[tuple[float, float, float]]]:
     rows = {name: [] for name in BENCHMARKS}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+    ):
         match = BENCH_RE.match(line.strip())
         if match is None:
             continue
         name, ns, tail = match.groups()
         if name in rows:
-            metrics = {unit: float(value) for value, unit in METRIC_RE.findall(tail)}
+            metrics = {}
+            for value, unit in METRIC_RE.findall(tail):
+                if unit in metrics:
+                    raise ValueError(
+                        f"{path}:{line_number}: {name}: duplicate metric unit {unit}"
+                    )
+                metrics[unit] = float(value)
             missing = {"B/op", "allocs/op"} - set(metrics)
             if missing:
                 raise ValueError(f"{path}: {name}: missing metrics {sorted(missing)}")
@@ -103,7 +111,7 @@ def evaluate(
 
 def render(baseline_sha, candidate_sha, samples, max_regression, max_ratio, passed, results, ratios):
     lines = [
-        "## TreeDB MVCC adapter-overhead gate", "",
+        "# TreeDB MVCC adapter-overhead gate", "",
         f"- result: **{'PASS' if passed else 'FAIL'}**",
         f"- baseline: `{baseline_sha}`", f"- candidate: `{candidate_sha}`",
         f"- samples: {samples} per revision, benchmark-group-paired alternating AB/BA order",
@@ -171,6 +179,16 @@ def self_test():
             pass
         else:
             raise AssertionError("missing row should fail")
+        head_path.write_text(
+            synthetic().replace("100.0 B/op", "100.0 B/op 101.0 B/op", 1),
+            encoding="utf-8",
+        )
+        try:
+            parse(head_path, 8)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("duplicate metric unit should fail")
     print("check_mvcc_adapter_overhead_gate.py self-test: PASS")
 
 

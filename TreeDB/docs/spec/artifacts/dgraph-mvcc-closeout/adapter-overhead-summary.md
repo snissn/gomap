@@ -1,4 +1,4 @@
-## TreeDB MVCC adapter-overhead gate
+# TreeDB MVCC adapter-overhead gate
 
 - result: **FAIL**
 - baseline: `f9c9b2a37838909d0e669818cfa2840c0a8d5f85`

@@ -198,9 +198,12 @@ the pull request run; generated CPU profiles are not committed.
 
 The measured code target is
 `dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a`, compared with base
-`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final evidence commit is a
-docs-only descendant: it does not change the production MVCC implementation,
-benchmark definitions, or harnesses measured at `dbea38e0`.
+`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final pull-request head is a
+post-measure validation, CI-wiring, and evidence descendant: it does not change
+the production MVCC implementation, benchmark definitions, benchmark
+harnesses, or measurement inputs used at `dbea38e0`. The summaries were
+regenerated and revalidated from the preserved raw inputs without rerunning
+the benchmarks.
 
 - The hosted raw-path verdict is **EQUIVALENT**, not PASS. Its durable-sync row
   measured +27.94% and failed the timing threshold, while all three
