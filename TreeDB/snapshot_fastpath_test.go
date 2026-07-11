@@ -74,7 +74,7 @@ func TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable(t *testing.T) {
 	}
 }
 
-func TestAcquireSnapshot_BackendFastPathAllocsAfterWarm(t *testing.T) {
+func TestAcquireSnapshot_BackendFastPathAllocsAreBounded(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -107,8 +107,11 @@ func TestAcquireSnapshot_BackendFastPathAllocsAfterWarm(t *testing.T) {
 			panic(err)
 		}
 	})
-	if allocs > 0.1 {
-		t.Fatalf("backend fast-path AcquireSnapshot allocs/run=%f want <= 0.1", allocs)
+	// The backend fast path intentionally allocates one uniquely-addressed
+	// exported handle. Reusing its address would let a stale pointer operate on a
+	// later snapshot.
+	if allocs > 1.1 {
+		t.Fatalf("backend fast-path AcquireSnapshot allocs/run=%f want <= 1.1", allocs)
 	}
 }
 

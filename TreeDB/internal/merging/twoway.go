@@ -44,6 +44,27 @@ func (m *TwoWayMerger) Next() {
 	}
 	if m.cur != nil {
 		m.cur.Next()
+		if m.captureIteratorError(m.cur) {
+			return
+		}
+	}
+	m.advance()
+}
+
+// Seek positions the iterator at the first visible key greater than or equal
+// to key, restricted to the iterator's original [start, end) domain.
+func (m *TwoWayMerger) Seek(key []byte) {
+	if m.start != nil && (key == nil || bytes.Compare(key, m.start) < 0) {
+		key = m.start
+	}
+	m.err = nil
+	m.cur = nil
+	m.valid = false
+	m.src1.Seek(key)
+	m.src2.Seek(key)
+	m.err = twoIteratorErrors(m.src1, m.src2)
+	if m.err != nil {
+		return
 	}
 	m.advance()
 }
@@ -66,6 +87,9 @@ func (m *TwoWayMerger) advance() {
 				// Keys equal: src1 wins, src2 is shadowed.
 				winner = m.src1
 				m.src2.Next()
+				if m.captureIteratorError(m.src2) {
+					return
+				}
 			}
 		case m.src1.Valid():
 			winner = m.src1
@@ -82,12 +106,18 @@ func (m *TwoWayMerger) advance() {
 		// Handle range bounds (inclusive start) - only needed if Seek doesn't handle it
 		if m.start != nil && bytes.Compare(k, m.start) < 0 {
 			winner.Next()
+			if m.captureIteratorError(winner) {
+				return
+			}
 			continue
 		}
 
 		// If tombstone, skip it (and keep searching).
 		if winner.IsDeleted() {
 			winner.Next()
+			if m.captureIteratorError(winner) {
+				return
+			}
 			continue
 		}
 
@@ -97,6 +127,20 @@ func (m *TwoWayMerger) advance() {
 		m.valid = true
 		return
 	}
+}
+
+func (m *TwoWayMerger) captureIteratorError(iter iterator.UnsafeIterator) bool {
+	if iter == nil {
+		return false
+	}
+	err := iter.Error()
+	if err == nil {
+		return false
+	}
+	m.err = joinIteratorError(m.err, err)
+	m.valid = false
+	m.cur = nil
+	return true
 }
 
 func (m *TwoWayMerger) Valid() bool {

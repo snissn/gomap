@@ -86,13 +86,14 @@ func (h *reverseIteratorHeap) down(i0, n int) bool {
 
 // ReverseMergingIterator merges multiple reverse-sorted iterators.
 type ReverseMergingIterator struct {
-	h      reverseIteratorHeap
-	cur    reverseHeapItem
-	hasCur bool
-	valid  bool
-	err    error
-	start  []byte
-	end    []byte
+	sources []IteratorSource
+	h       reverseIteratorHeap
+	cur     reverseHeapItem
+	hasCur  bool
+	valid   bool
+	err     error
+	start   []byte
+	end     []byte
 }
 
 func NewReverseMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
@@ -101,26 +102,48 @@ func NewReverseMergingIterator(sources []IteratorSource, start, end []byte) Iter
 		return NewReverseTwoWayMerger(sources[0].Iter, sources[1].Iter, start, end)
 	}
 
-	h := make(reverseIteratorHeap, 0, len(sources))
-	for _, src := range sources {
+	mi := &ReverseMergingIterator{sources: sources, start: start, end: end}
+	mi.rebuildHeap()
+	mi.advance()
+	return mi
+}
+
+func (mi *ReverseMergingIterator) rebuildHeap() {
+	mi.h = mi.h[:0]
+	for _, src := range mi.sources {
 		if src.Iter.Valid() {
-			h = append(h, reverseHeapItem{
+			mi.h = append(mi.h, reverseHeapItem{
 				iter:     src.Iter,
 				priority: src.Priority,
 				key:      src.Iter.UnsafeKey(),
 			})
-		} else {
-			_ = src.Iter.Close()
 		}
 	}
-	// Heapify.
-	for i := len(h)/2 - 1; i >= 0; i-- {
-		(&h).down(i, len(h))
+	for i := len(mi.h)/2 - 1; i >= 0; i-- {
+		(&mi.h).down(i, len(mi.h))
 	}
+}
 
-	mi := &ReverseMergingIterator{h: h, start: start, end: end}
+// Seek positions the iterator at the first visible key less than or equal to
+// key, restricted to the iterator's original [start, end) domain. A nil key
+// seeks to the greatest key in the domain.
+func (mi *ReverseMergingIterator) Seek(key []byte) {
+	mi.err = nil
+	mi.hasCur = false
+	mi.valid = false
+	if key != nil && mi.start != nil && bytes.Compare(key, mi.start) < 0 {
+		return
+	}
+	for _, src := range mi.sources {
+		src.Iter.Seek(key)
+	}
+	mi.err = sourceIteratorErrors(mi.sources)
+	if mi.err != nil {
+		mi.h = mi.h[:0]
+		return
+	}
+	mi.rebuildHeap()
 	mi.advance()
-	return mi
 }
 
 func (mi *ReverseMergingIterator) Next() {
@@ -134,11 +157,12 @@ func (mi *ReverseMergingIterator) Next() {
 
 	if mi.hasCur {
 		mi.cur.iter.Next()
+		if mi.captureIteratorError(mi.cur.iter) {
+			return
+		}
 		if mi.cur.iter.Valid() {
 			mi.cur.key = mi.cur.iter.UnsafeKey()
 			mi.h.push(mi.cur)
-		} else {
-			_ = mi.cur.iter.Close()
 		}
 		mi.hasCur = false
 	}
@@ -163,11 +187,12 @@ func (mi *ReverseMergingIterator) advance() {
 		// Upper bound is exclusive; if a source yields >= end, advance it and continue.
 		if mi.end != nil && bytes.Compare(currentKey, mi.end) >= 0 {
 			top.iter.Next()
+			if mi.captureIteratorError(top.iter) {
+				return
+			}
 			if top.iter.Valid() {
 				top.key = top.iter.UnsafeKey()
 				mi.h.push(top)
-			} else {
-				_ = top.iter.Close()
 			}
 			continue
 		}
@@ -178,11 +203,12 @@ func (mi *ReverseMergingIterator) advance() {
 			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := mi.h.pop()
 				shadowed.iter.Next()
+				if mi.captureIteratorError(shadowed.iter) {
+					return
+				}
 				if shadowed.iter.Valid() {
 					shadowed.key = shadowed.iter.UnsafeKey()
 					mi.h.push(shadowed)
-				} else {
-					_ = shadowed.iter.Close()
 				}
 			} else {
 				break
@@ -192,11 +218,12 @@ func (mi *ReverseMergingIterator) advance() {
 		// If tombstone, advance winner and continue.
 		if top.iter.IsDeleted() {
 			top.iter.Next()
+			if mi.captureIteratorError(top.iter) {
+				return
+			}
 			if top.iter.Valid() {
 				top.key = top.iter.UnsafeKey()
 				mi.h.push(top)
-			} else {
-				_ = top.iter.Close()
 			}
 			continue
 		}
@@ -206,6 +233,21 @@ func (mi *ReverseMergingIterator) advance() {
 		mi.valid = true
 		return
 	}
+}
+
+func (mi *ReverseMergingIterator) captureIteratorError(iter iterator.UnsafeIterator) bool {
+	if iter == nil {
+		return false
+	}
+	err := iter.Error()
+	if err == nil {
+		return false
+	}
+	mi.err = joinIteratorError(mi.err, err)
+	mi.cur = reverseHeapItem{}
+	mi.hasCur = false
+	mi.valid = false
+	return true
 }
 
 func (mi *ReverseMergingIterator) Valid() bool { return mi.valid }
@@ -257,20 +299,15 @@ func (mi *ReverseMergingIterator) Error() error {
 
 func (mi *ReverseMergingIterator) Close() error {
 	var firstErr error
-
-	if mi.hasCur {
-		if err := mi.cur.iter.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		mi.hasCur = false
-	}
-
-	for _, item := range mi.h {
-		if err := item.iter.Close(); err != nil && firstErr == nil {
+	for _, src := range mi.sources {
+		if err := src.Iter.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-
+	mi.sources = nil
+	mi.h = nil
+	mi.hasCur = false
+	mi.valid = false
 	return firstErr
 }
 
@@ -308,6 +345,28 @@ func (m *ReverseTwoWayMerger) Next() {
 	}
 	if m.cur != nil {
 		m.cur.Next()
+		if m.captureIteratorError(m.cur) {
+			return
+		}
+	}
+	m.advance()
+}
+
+// Seek positions the iterator at the first visible key less than or equal to
+// key, restricted to the iterator's original [start, end) domain. A nil key
+// seeks to the greatest key in the domain.
+func (m *ReverseTwoWayMerger) Seek(key []byte) {
+	m.err = nil
+	m.cur = nil
+	m.valid = false
+	if key != nil && m.start != nil && bytes.Compare(key, m.start) < 0 {
+		return
+	}
+	m.src1.Seek(key)
+	m.src2.Seek(key)
+	m.err = twoIteratorErrors(m.src1, m.src2)
+	if m.err != nil {
+		return
 	}
 	m.advance()
 }
@@ -330,6 +389,9 @@ func (m *ReverseTwoWayMerger) advance() {
 				// Keys equal: src1 wins, src2 is shadowed.
 				winner = m.src1
 				m.src2.Next()
+				if m.captureIteratorError(m.src2) {
+					return
+				}
 			}
 		case m.src1.Valid():
 			winner = m.src1
@@ -342,6 +404,9 @@ func (m *ReverseTwoWayMerger) advance() {
 		// Exclusive end (upper bound): skip keys >= end.
 		if m.end != nil && bytes.Compare(k, m.end) >= 0 {
 			winner.Next()
+			if m.captureIteratorError(winner) {
+				return
+			}
 			continue
 		}
 
@@ -352,6 +417,9 @@ func (m *ReverseTwoWayMerger) advance() {
 
 		if winner.IsDeleted() {
 			winner.Next()
+			if m.captureIteratorError(winner) {
+				return
+			}
 			continue
 		}
 
@@ -359,6 +427,20 @@ func (m *ReverseTwoWayMerger) advance() {
 		m.valid = true
 		return
 	}
+}
+
+func (m *ReverseTwoWayMerger) captureIteratorError(iter iterator.UnsafeIterator) bool {
+	if iter == nil {
+		return false
+	}
+	err := iter.Error()
+	if err == nil {
+		return false
+	}
+	m.err = joinIteratorError(m.err, err)
+	m.valid = false
+	m.cur = nil
+	return true
 }
 
 func (m *ReverseTwoWayMerger) Valid() bool { return m.valid }

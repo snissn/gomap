@@ -383,6 +383,7 @@ type Iterator struct {
 	mode              IteratorMode
 	includeTombstones bool
 	reverse           bool
+	emptyDomain       bool
 	verifyAlways      bool
 }
 
@@ -477,6 +478,7 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, includeTomb
 		mode:              mode,
 		includeTombstones: includeTombstones,
 		reverse:           reverse,
+		emptyDomain:       start != nil && end != nil && compareTreeKey(start, end) >= 0,
 		verifyAlways:      t.pager != nil && t.pager.VerifyOnRead(),
 		slabAppender:      t.slabAppender,
 		slabBatcher:       t.slabBatcher,
@@ -493,7 +495,7 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, includeTomb
 func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, false) // Invalid immediately
+		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	it.Seek(start)
@@ -512,25 +514,10 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, true)
+		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
-	// Reverse seek: Find >= end, then step back.
-	if end == nil {
-		it.seekRightMost()
-	} else {
-		it.Seek(end)
-		if it.valid {
-			// Standard seek positions at the first key >= end; reverse iteration
-			// then steps once to land on the first key < end.
-			if compareTreeKey(it.currKey, end) >= 0 {
-				it.stepBackward()
-			}
-		} else if it.err == nil {
-			// seek(end) fell off the end (no error, just exhausted).
-			it.seekRightMost()
-		}
-	}
+	it.Seek(nil)
 
 	// Check Start bound
 	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
@@ -1052,8 +1039,51 @@ func (it *Iterator) Close() error {
 }
 
 func (it *Iterator) Seek(key []byte) {
+	if it.emptyDomain {
+		return
+	}
+	if it.reverse {
+		it.seekReverse(key)
+		return
+	}
+	if it.start != nil && (key == nil || compareTreeKey(key, it.start) < 0) {
+		key = it.start
+	}
 	it.seek(key)
 	// Check bounds? Handled in loadCurrent
+}
+
+func (it *Iterator) seekReverse(key []byte) {
+	if key == nil || (it.end != nil && compareTreeKey(key, it.end) >= 0) {
+		if it.end == nil {
+			it.seekRightMost()
+		} else {
+			it.seek(it.end)
+			if it.valid {
+				if compareTreeKey(it.currKey, it.end) >= 0 {
+					it.stepBackward()
+				}
+			} else if it.err == nil {
+				it.seekRightMost()
+			}
+		}
+		if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
+			it.valid = false
+		}
+		return
+	}
+
+	it.seek(key)
+	if it.valid {
+		if compareTreeKey(it.currKey, key) > 0 {
+			it.stepBackward()
+		}
+	} else if it.err == nil && (it.start == nil || compareTreeKey(key, it.start) >= 0) {
+		it.seekRightMost()
+	}
+	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
+		it.valid = false
+	}
 }
 
 func (it *Iterator) IsDeleted() bool {

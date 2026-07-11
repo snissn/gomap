@@ -10,7 +10,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func newCachedSnapshotPoolTestDB(t *testing.T) (*DB, *backenddb.DB) {
+func newCachedSnapshotTestDB(t *testing.T) (*DB, *backenddb.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -25,8 +25,8 @@ func newCachedSnapshotPoolTestDB(t *testing.T) (*DB, *backenddb.DB) {
 	return cached, backend
 }
 
-func TestAcquireSnapshot_CachedPathAllocsAfterWarm(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+func TestAcquireSnapshot_CachedPathAllocsAreBounded(t *testing.T) {
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
@@ -59,19 +59,22 @@ func TestAcquireSnapshot_CachedPathAllocsAfterWarm(t *testing.T) {
 			panic(err)
 		}
 	})
-	if allocs > 0.1 {
-		t.Fatalf("cached AcquireSnapshot allocs/run=%f want <= 0.1", allocs)
+	// Each acquisition deliberately allocates distinct exported cached and
+	// backend handles. Reusing either address would allow a stale pointer to
+	// operate on a later snapshot; keep the safety cost bounded to those handles.
+	if allocs > 2.1 {
+		t.Fatalf("cached AcquireSnapshot allocs/run=%f want <= 2.1", allocs)
 	}
 }
 
-func TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossReuse(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+func TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossAcquisitions(t *testing.T) {
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
 	}()
 
-	key := []byte("snapshot-reuse-isolation")
+	key := []byte("snapshot-acquisition-isolation")
 	if err := cached.Set(key, []byte("old")); err != nil {
 		t.Fatalf("Set old: %v", err)
 	}
@@ -107,7 +110,7 @@ func TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossReuse(t *testing.T) {
 }
 
 func TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()

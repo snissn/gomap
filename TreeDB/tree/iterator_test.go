@@ -10,6 +10,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -321,6 +322,91 @@ func TestIterator(t *testing.T) {
 			t.Errorf("Expected %d items, got %d", len(expected), i)
 		}
 		it.Close()
+	})
+
+	t.Run("OpenEndedLowerBoundSeekRemainsEmpty", func(t *testing.T) {
+		start := []byte("Z")
+		targets := []struct {
+			name string
+			key  []byte
+		}{
+			{name: "nil", key: nil},
+			{name: "below", key: []byte("A")},
+			{name: "inside", key: []byte("Z")},
+			{name: "above", key: []byte{0xff}},
+		}
+		for _, reverse := range []bool{false, true} {
+			name := map[bool]string{false: "forward", true: "reverse"}[reverse]
+			t.Run(name, func(t *testing.T) {
+				var it iterator.UnsafeIterator
+				if reverse {
+					it = tr.ReverseIterator(start, nil)
+				} else {
+					it = tr.Iterator(start, nil)
+				}
+				defer it.Close()
+				if it.Valid() {
+					t.Fatalf("iterator construction exposed key %q below start %q", it.Key(), start)
+				}
+				for _, target := range targets {
+					t.Run(target.name, func(t *testing.T) {
+						it.Seek(target.key)
+						if it.Valid() {
+							t.Fatalf("Seek(%x) exposed key %q below start %q", target.key, it.Key(), start)
+						}
+						if err := it.Error(); err != nil {
+							t.Fatalf("Seek(%x) error=%v", target.key, err)
+						}
+					})
+				}
+			})
+		}
+	})
+
+	t.Run("OpenEndedLowerBoundSeekClampsToDomain", func(t *testing.T) {
+		start := []byte("D")
+		tests := []struct {
+			name    string
+			target  []byte
+			forward string
+			reverse string
+		}{
+			{name: "nil", target: nil, forward: "E", reverse: "G"},
+			{name: "below", target: []byte("A"), forward: "E"},
+			{name: "inside", target: []byte("F"), forward: "G", reverse: "E"},
+			{name: "above", target: []byte{0xff}, reverse: "G"},
+		}
+		for _, reverse := range []bool{false, true} {
+			name := map[bool]string{false: "forward", true: "reverse"}[reverse]
+			t.Run(name, func(t *testing.T) {
+				var it iterator.UnsafeIterator
+				if reverse {
+					it = tr.ReverseIterator(start, nil)
+				} else {
+					it = tr.Iterator(start, nil)
+				}
+				defer it.Close()
+				for _, test := range tests {
+					t.Run(test.name, func(t *testing.T) {
+						it.Seek(test.target)
+						want := test.forward
+						if reverse {
+							want = test.reverse
+						}
+						if want == "" {
+							if it.Valid() {
+								t.Fatalf("Seek(%x) key=%q want invalid", test.target, it.Key())
+							}
+						} else if !it.Valid() || string(it.Key()) != want {
+							t.Fatalf("Seek(%x) valid=%v key=%q want %q", test.target, it.Valid(), it.Key(), want)
+						}
+						if err := it.Error(); err != nil {
+							t.Fatalf("Seek(%x) error=%v", test.target, err)
+						}
+					})
+				}
+			})
+		}
 	})
 
 	t.Run("ViewSemantics", func(t *testing.T) {

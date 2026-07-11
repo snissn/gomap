@@ -143,7 +143,7 @@ func TestBatchDeleteRangeIteratorVisibilityMixedBatch(t *testing.T) {
 	}
 	assertIteratorKVs(t, it, []string{"k000=v000", "k003=after", "k005=v005"})
 
-	snapIt, err := snap.Iterator(nil, nil)
+	snapIt, err := snap.IteratorWithOptions(nil, nil, IteratorOptions{})
 	if err != nil {
 		t.Fatalf("snapshot Iterator: %v", err)
 	}

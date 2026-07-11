@@ -1190,6 +1190,7 @@ type stubMergingIterator struct {
 }
 
 func (it *stubMergingIterator) Next()                       {}
+func (it *stubMergingIterator) Seek([]byte)                 {}
 func (it *stubMergingIterator) Valid() bool                 { return false }
 func (it *stubMergingIterator) Key() []byte                 { return nil }
 func (it *stubMergingIterator) Value() []byte               { return nil }

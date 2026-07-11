@@ -168,6 +168,14 @@ func (s conditionalTxnSnapshot) ReverseIterate(start, end []byte, fn func(key, v
 	return ErrConditionalTxnUnsupported
 }
 
+func (s conditionalTxnSnapshot) Iterator(start, end []byte) (Iterator, error) {
+	return nil, ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) ReverseIterator(start, end []byte) (Iterator, error) {
+	return nil, ErrConditionalTxnUnsupported
+}
+
 func (tx *ConditionalTxn) recordSnapshotReadVersion(key []byte, revision EntryRevision, found bool) error {
 	if tx == nil {
 		return ErrConditionalTxnClosed

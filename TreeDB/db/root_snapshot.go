@@ -11,8 +11,9 @@ import (
 // SnapshotRootReader is a root-bound read view owned by a Snapshot.
 // It is valid only while the parent Snapshot remains open.
 type SnapshotRootReader struct {
-	tree tree.Tree
-	ok   bool
+	owner *Snapshot
+	tree  tree.Tree
+	ok    bool
 }
 
 func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
@@ -39,28 +40,48 @@ func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
 }
 
 func (s *Snapshot) ReaderAtRoot(rootID uint64) (SnapshotRootReader, error) {
+	if err := s.beginRead(); err != nil {
+		return SnapshotRootReader{}, err
+	}
+	defer s.endRead()
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return SnapshotRootReader{}, err
 	}
-	return SnapshotRootReader{tree: *tr, ok: true}, nil
+	return SnapshotRootReader{owner: s, tree: *tr, ok: true}, nil
+}
+
+func (r *SnapshotRootReader) beginRead() error {
+	if r == nil || !r.ok || r.owner == nil {
+		return ErrClosed
+	}
+	if err := r.owner.beginRead(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *SnapshotRootReader) GetAppend(key, dst []byte) ([]byte, error) {
-	if r == nil || !r.ok {
-		return dst, tree.ErrKeyNotFound
+	if err := r.beginRead(); err != nil {
+		return dst, err
 	}
+	defer r.owner.endRead()
 	return r.tree.GetAppend(key, dst)
 }
 
 func (r *SnapshotRootReader) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
-	if r == nil || !r.ok {
-		return tree.ErrKeyNotFound
+	if err := r.beginRead(); err != nil {
+		return err
 	}
+	defer r.owner.endRead()
 	return r.tree.GetManyView(keys, fn)
 }
 
 func (s *Snapshot) GetEntryAtRoot(rootID uint64, key []byte) (node.LeafEntry, error) {
+	if err := s.beginRead(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	defer s.endRead()
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return node.LeafEntry{}, err
@@ -69,6 +90,10 @@ func (s *Snapshot) GetEntryAtRoot(rootID uint64, key []byte) (node.LeafEntry, er
 }
 
 func (s *Snapshot) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return nil, err
@@ -77,6 +102,10 @@ func (s *Snapshot) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) GetAppendAtRoot(rootID uint64, key, dst []byte) ([]byte, error) {
+	if err := s.beginRead(); err != nil {
+		return dst, err
+	}
+	defer s.endRead()
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return dst, err
@@ -85,6 +114,10 @@ func (s *Snapshot) GetAppendAtRoot(rootID uint64, key, dst []byte) ([]byte, erro
 }
 
 func (s *Snapshot) GetManyViewAtRoot(rootID uint64, keys [][]byte, fn GetManyViewFunc) error {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer s.endRead()
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return err
@@ -93,6 +126,10 @@ func (s *Snapshot) GetManyViewAtRoot(rootID uint64, keys [][]byte, fn GetManyVie
 }
 
 func (s *Snapshot) GetUnsafeAtRoot(rootID uint64, key []byte) ([]byte, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return nil, err
@@ -105,11 +142,26 @@ func (s *Snapshot) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.Un
 }
 
 func (s *Snapshot) IteratorAtRootWithOptions(rootID uint64, start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
+	return s.bindRootIterator(rootID, start, end, opts, false)
+}
+
+func (s *Snapshot) bindRootIterator(rootID uint64, start, end []byte, opts IteratorOptions, reverse bool) (iterator.UnsafeIterator, error) {
+	if s == nil {
+		return nil, ErrClosed
+	}
+	s.iteratorMu.Lock()
+	defer s.iteratorMu.Unlock()
+	if s.closed.Load() {
+		return nil, ErrClosed
+	}
 	tr, err := s.treeAtRoot(rootID)
 	if err != nil {
 		return nil, err
 	}
-	return tr.IteratorWithOptions(start, end, opts), nil
+	if reverse {
+		return s.bindIteratorLocked(tr.ReverseIteratorWithOptions(start, end, opts))
+	}
+	return s.bindIteratorLocked(tr.IteratorWithOptions(start, end, opts))
 }
 
 func (s *Snapshot) ReverseIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
@@ -117,14 +169,14 @@ func (s *Snapshot) ReverseIteratorAtRoot(rootID uint64, start, end []byte) (iter
 }
 
 func (s *Snapshot) ReverseIteratorAtRootWithOptions(rootID uint64, start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	tr, err := s.treeAtRoot(rootID)
-	if err != nil {
-		return nil, err
-	}
-	return tr.ReverseIteratorWithOptions(start, end, opts), nil
+	return s.bindRootIterator(rootID, start, end, opts, true)
 }
 
 func (s *Snapshot) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	out := make([]bool, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -140,6 +192,10 @@ func (s *Snapshot) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
 }
 
 func (s *Snapshot) HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error) {
+	if err := s.beginRead(); err != nil {
+		return false, err
+	}
+	defer s.endRead()
 	if len(keys) == 0 {
 		return false, nil
 	}
@@ -158,6 +214,10 @@ func (s *Snapshot) HasAnySortedAtRoot(rootID uint64, keys [][]byte) (bool, error
 }
 
 func (s *Snapshot) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	out := make([]bool, len(prefixes))
 	if len(prefixes) == 0 {
 		return out, nil

@@ -626,3 +626,72 @@ jobs:
 
           echo "incompressible auto-vs-off gate failed after ${max_attempts} attempts"
           exit 1
+
+  snapshot-iterator-perf:
+    name: snapshot-iterator-perf (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test snapshot iterator benchmark parser
+        run: go test ./.github/scripts/snapshot_iterator_bench
+
+      - name: Capture exact-head runner metadata
+        run: |
+          mkdir -p artifacts/snapshot_iterator_perf
+          {
+            echo "head=$(git rev-parse HEAD)"
+            echo "runner_image=${ImageOS:-unknown}-${ImageVersion:-unknown}"
+            echo "cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
+            echo "go=$(go version)"
+            echo "gomaxprocs=1"
+            echo "kernel=$(uname -a)"
+          } | tee artifacts/snapshot_iterator_perf/environment.txt
+
+      - name: Run same-binary snapshot iterator benchmark
+        run: |
+          GOMAXPROCS=1 go test ./TreeDB -run '^$' \
+            -bench '^BenchmarkSnapshotIteratorSeekNext/keys=(1024|16384)/(snapshot_(seek|next)|public_(seek|next)_baseline)$' \
+            -benchmem -benchtime=500ms -count=7 \
+            | tee artifacts/snapshot_iterator_perf/raw.txt
+
+      - name: Check snapshot iterator performance gate
+        run: |
+          go run ./.github/scripts/snapshot_iterator_bench \
+            -bench-output artifacts/snapshot_iterator_perf/raw.txt \
+            -json-output artifacts/snapshot_iterator_perf/report.json \
+            -markdown-output artifacts/snapshot_iterator_perf/report.md \
+            -head "$(git rev-parse HEAD)" \
+            -runner-image "${ImageOS:-unknown}-${ImageVersion:-unknown}" \
+            -cpu "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)" \
+            -go-version "$(go version)" \
+            -samples 7 \
+            -max-regression 0.05
+
+      - name: Publish snapshot iterator summary
+        if: always()
+        run: |
+          if [[ -f artifacts/snapshot_iterator_perf/report.md ]]; then
+            cat artifacts/snapshot_iterator_perf/report.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "## Snapshot iterator performance gate: no report generated" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload snapshot iterator performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-iterator-perf-${{ github.sha }}
+          path: artifacts/snapshot_iterator_perf/
+          if-no-files-found: error
+          retention-days: 14

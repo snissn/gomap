@@ -961,21 +961,23 @@ func TestSnapshotPool_PutClearsLeafGenerationRefs(t *testing.T) {
 	snap.leafGenerationPinSet = &leafGenerationPinSet{}
 	pool.Put(snap)
 
-	reused := pool.Get()
-	if len(reused.leafGenerationIDs) != 0 {
-		t.Fatalf("expected pooled snapshot ids slice to be reset, got len=%d", len(reused.leafGenerationIDs))
+	if len(snap.leafGenerationIDs) != 0 {
+		t.Fatalf("expected released snapshot ids slice to be reset, got len=%d", len(snap.leafGenerationIDs))
 	}
-	if len(reused.leafGenerationPinnedIDs) != 0 {
-		t.Fatalf("expected pooled snapshot pinned ids slice to be reset, got len=%d", len(reused.leafGenerationPinnedIDs))
+	if len(snap.leafGenerationPinnedIDs) != 0 {
+		t.Fatalf("expected released snapshot pinned ids slice to be reset, got len=%d", len(snap.leafGenerationPinnedIDs))
 	}
-	if len(reused.leafGenerationRefs) != 0 {
-		t.Fatalf("expected pooled snapshot refs slice to be reset, got len=%d", len(reused.leafGenerationRefs))
+	if len(snap.leafGenerationRefs) != 0 {
+		t.Fatalf("expected released snapshot refs slice to be reset, got len=%d", len(snap.leafGenerationRefs))
 	}
-	if cap(reused.leafGenerationRefs) > 0 && reused.leafGenerationRefs[:1][0] != nil {
-		t.Fatalf("expected pooled snapshot refs backing array to be cleared")
+	if cap(snap.leafGenerationRefs) > 0 && snap.leafGenerationRefs[:1][0] != nil {
+		t.Fatalf("expected released snapshot refs backing array to be cleared")
 	}
-	if reused.leafGenerationPinSet != nil {
-		t.Fatalf("expected pooled snapshot pin set to be cleared")
+	if snap.leafGenerationPinSet != nil {
+		t.Fatalf("expected released snapshot pin set to be cleared")
+	}
+	if fresh := pool.Get(); fresh == snap {
+		t.Fatal("SnapshotPool reused an exported snapshot handle")
 	}
 }
 

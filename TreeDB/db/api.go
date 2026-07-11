@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -692,17 +693,16 @@ func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iter
 }
 
 // Iterator returns an iterator bound to an existing snapshot.
-func (s *Snapshot) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+func (s *Snapshot) Iterator(start, end []byte) (publiciterator.Iterator, error) {
 	return s.IteratorWithOptions(start, end, IteratorOptions{})
 }
 
 // IteratorWithOptions returns an iterator bound to an existing snapshot with
 // explicit value materialization controls.
 func (s *Snapshot) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	if s == nil || s.closed.Load() {
-		return nil, ErrClosed
-	}
-	return s.tree.IteratorWithOptions(start, end, opts), nil
+	return s.bindNewIterator(func() iterator.UnsafeIterator {
+		return s.buildIteratorLocked(start, end, opts, false)
+	})
 }
 
 // Iterate calls fn for each visible key/value pair in [start, end) using this
@@ -729,17 +729,25 @@ func (db *DB) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions
 }
 
 // ReverseIterator returns a reverse iterator bound to an existing snapshot.
-func (s *Snapshot) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, error) {
 	return s.ReverseIteratorWithOptions(start, end, IteratorOptions{})
 }
 
 // ReverseIteratorWithOptions returns a reverse iterator bound to an existing
 // snapshot with explicit value materialization controls.
 func (s *Snapshot) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	if s == nil || s.closed.Load() {
-		return nil, ErrClosed
+	return s.bindNewIterator(func() iterator.UnsafeIterator {
+		return s.buildIteratorLocked(start, end, opts, true)
+	})
+}
+
+// buildIteratorLocked reads the snapshot's pinned tree and must run while
+// iteratorMu is held by bindNewIterator.
+func (s *Snapshot) buildIteratorLocked(start, end []byte, opts IteratorOptions, reverse bool) iterator.UnsafeIterator {
+	if reverse {
+		return s.tree.ReverseIteratorWithOptions(start, end, opts)
 	}
-	return s.tree.ReverseIteratorWithOptions(start, end, opts), nil
+	return s.tree.IteratorWithOptions(start, end, opts)
 }
 
 // ReverseIterate calls fn for each visible key/value pair in [start, end) in
@@ -751,10 +759,14 @@ func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) 
 }
 
 func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) (err error) {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	s.endRead()
 	if fn == nil {
 		return errors.New("treedb: snapshot iterate nil callback")
 	}
-	var it iterator.UnsafeIterator
+	var it publiciterator.Iterator
 	if reverse {
 		it, err = s.ReverseIterator(start, end)
 	} else {
