@@ -420,6 +420,19 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		restoreValueLogAppender()
 		restoreLeafPageLog()
 	}
+	// Registered command handlers publish their recovered roots through the
+	// ordinary asynchronous coordinator. Recovery must not proceed to segment
+	// cleanup (or let Open consume db.meta) until the complete replayed frontier
+	// is stable. Besides preserving the command frames until their backend state
+	// is recovery-selectable, this joins the publisher before the rest of Open
+	// reads the durable meta fields.
+	if db.rootPublication != nil {
+		if state := db.state.Load(); state != nil {
+			if err := db.rootPublication.waitDurable(state.CommitSeq); err != nil {
+				return err
+			}
+		}
+	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 	return err
 }

@@ -383,23 +383,14 @@ func (r *RootPublicationCoordinator) sealedAllocatorFrontier(idx *indexGen, fron
 }
 
 func (r *RootPublicationCoordinator) lockRootSerialization() (*indexGen, error) {
-	// Queue as a writer before publishMu. Destructive maintenance serializes on
-	// publishMu before attempting the preparation gate, so it cannot queue an
-	// exclusive preparation waiter that blocks an admitted builder here.
-	// First give already-runnable foreground builders a bounded chance to join
-	// this frontier. The blocking fallback is essential: a continuous reader
-	// stream must not starve stable publication.
-	const optimisticWriterAttempts = 64
-	locked := false
-	for attempt := 0; attempt < optimisticWriterAttempts; attempt++ {
-		if r.db.writeMu.TryLock() {
-			locked = true
-			break
-		}
+	// Do not queue an RWMutex writer. An admitted optimistic builder may enter a
+	// nested read-side build before releasing its outer read lock; Go's writer
+	// preference would block that nested read behind this publisher and deadlock
+	// the frontier. Pending-debt limits stop new visibility if readers keep the
+	// gate continuously occupied, so polling here remains bounded by foreground
+	// admission rather than weakening the serialization fence.
+	for !r.db.writeMu.TryLock() {
 		runtime.Gosched()
-	}
-	if !locked {
-		r.db.writeMu.Lock()
 	}
 	r.publishMu.Lock()
 	r.db.commitMu.Lock()
