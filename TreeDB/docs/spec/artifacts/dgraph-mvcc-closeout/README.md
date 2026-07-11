@@ -1,14 +1,14 @@
 # Dgraph MVCC closeout evidence
 
 This directory contains the compact exact-target evidence for gomap #3673.
-The measured code target is
+The raw-path and adapter target is
 `dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a`; the paired comparison base is
-`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final pull-request head is a
-post-measure validation, CI-wiring, and evidence descendant of the measured
-target. It does not change production MVCC code, benchmark definitions,
-benchmark harnesses, or the inputs used for these measurements. The committed
-summaries were regenerated and revalidated from the preserved raw inputs; no
-benchmark was rerun after the measured target.
+`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The corrected closeout-matrix
+target is `103f9c5af85d8d6a5801119fc2247be3b9c87fad`, which stops the prune
+benchmark timer before all fixture setup. The final pull-request head is an
+evidence descendant of that correction and does not change production MVCC
+code. The raw-path and adapter benchmarks were not rerun; the closeout matrix
+was rerun exactly once after a fresh passing quiet audit.
 Dgraph must still pin the first merged-main descendant containing this PR, not
 the worker-branch commit.
 
@@ -18,8 +18,10 @@ the worker-branch commit.
 - CPU: 11th Gen Intel Core i5-11400F, 6 cores / 12 threads;
 - Go: `go1.26.0 linux/amd64`;
 - timing CPU: `0`, `GOMAXPROCS=1`, `GOWORK=off`;
-- final local preflight: exact clean target, 92.21% average idle, 0.38%
+- adapter preflight: exact clean `dbea38e0` target, 92.21% average idle, 0.38%
   iowait, no `simd`, and no competing benchmark/build/test job;
+- corrected-matrix preflight: exact clean `103f9c5af` target, 95.64% average
+  idle, 0.36% iowait, no `simd`, and no competing benchmark/build/test job;
 - the unrelated Ironbird durability campaign completed 15/15 accepted rows
   before the local adapter and matrix measurements started.
 
@@ -30,10 +32,13 @@ outside git at:
   `/mnt/fast4tb/gomap-3673-evidence/hosted-raw-dbea38e0`;
 - local adapter artifact:
   `/mnt/fast4tb/gomap-3673-evidence/adapter-dbea38e0`;
-- local closeout matrix:
+- superseded local closeout matrix, invalid for prune timing because fixture
+  setup entered the single timed sample:
   `/mnt/fast4tb/gomap-3673-evidence/closeout-matrix-dbea38e0`;
-- passing final quiet audit:
-  `/mnt/fast4tb/gomap-3673-evidence/quiet-window-dbea38e0-final`.
+- corrected local closeout matrix:
+  `/mnt/fast4tb/gomap-3673-evidence/closeout-matrix-103f9c5af`;
+- passing corrected-matrix quiet audit:
+  `/mnt/fast4tb/gomap-3673-evidence/quiet-window-103f9c5af`.
 
 Large raw logs, test binaries, and binary CPU profiles are deliberately not
 committed. The generated Markdown and JSON summaries in this directory are
@@ -95,17 +100,21 @@ keeps the exact samples and profiles available for follow-up. See
 
 ## Durability-matched closeout matrix: PASS
 
-The exact-target closeout matrix used five samples and `-benchtime=750ms` for
-regular rows; each prune row used one fresh fixture per sample. The summarizer
-completed successfully with all 24 benchmark rows, ten measured invocations,
-600,640 KiB maximum RSS, 109.07 seconds aggregate user CPU, and 7.49 seconds
-aggregate system CPU. Representative durable-sync medians were:
+The corrected exact-target closeout matrix used five samples and
+`-benchtime=750ms` for regular rows; each prune row used one fresh fixture per
+sample, with the benchmark timer stopped before the parent temporary directory
+and all fixture setup. Only `PruneVersions` is timed. The prior matrix is
+superseded because its single prune sample included pre-loop temporary-directory
+setup. The corrected summarizer completed successfully with all 24 benchmark
+rows, ten measured invocations, 611,264 KiB maximum RSS, 102.36 seconds
+aggregate user CPU, and 6.97 seconds aggregate system CPU. Representative
+durable-sync medians were:
 
-- commit: 152.5 mutations/s at batch 1 and 4,833 mutations/s at batch 32;
-- point read: 870,369 lookups/s at depth 1 and 567,989 lookups/s at depth 64;
-- all-version iteration: 2,996,840 versions/s at depth 1 and 3,582,446
+- commit: 149.5 mutations/s at batch 1 and 5,271 mutations/s at batch 32;
+- point read: 937,621 lookups/s at depth 1 and 670,037 lookups/s at depth 64;
+- all-version iteration: 3,485,151 versions/s at depth 1 and 4,119,271
   versions/s at depth 32;
-- prune: 14,400 pruned versions/s at floor 4 and 26,322/s at floor 12.
+- prune: 13,505 pruned versions/s at floor 4 and 25,211/s at floor 12.
 
 Prune delete write amplification was 0.8286 in every row. Durable-sync,
 WAL-on relaxed, and WAL-off relaxed results remain separate acknowledgement
@@ -126,7 +135,7 @@ CANDIDATE_HASH=dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a \
 RUNS=8 BENCHTIME=2s PROFILE_BENCHTIME=1s CPUSET=0 GOWORK=off \
 OUT_DIR=/absolute/adapter ./scripts/mvcc_adapter_overhead_gate.sh
 
-CANDIDATE_HASH=dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a \
+CANDIDATE_HASH=103f9c5af85d8d6a5801119fc2247be3b9c87fad \
 RUNS=5 BENCHTIME=750ms CPUSET=0 GOWORK=off \
 OUT_DIR=/absolute/matrix ./scripts/mvcc_closeout_matrix.sh
 ```

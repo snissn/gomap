@@ -169,6 +169,10 @@ fresh populated database per external sample (`-benchtime=1x`), because
 duration calibration would multiply excluded fixture setup and make process RSS
 describe fixture churn rather than the bounded pruning operation. Five external
 samples still provide five independent prune latency/throughput observations.
+The timer is stopped before the parent temporary directory and all other setup,
+then started only around `PruneVersions`; the earlier `dbea38e0` matrix is
+superseded because its single prune sample included pre-loop temporary-directory
+setup.
 `storage_bytes/op` is normalized final logical file footprint, including fixed
 TreeDB files and preallocation. `durable_footprint_bytes/op` is emitted only for
 the sync-acknowledged rows and remains final logical footprint; it does not
@@ -196,14 +200,15 @@ the pull request run; generated CPU profiles are not committed.
 
 ### Exact-target closeout outcome
 
-The measured code target is
+The raw-path and adapter code target is
 `dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a`, compared with base
-`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final pull-request head is a
-post-measure validation, CI-wiring, and evidence descendant: it does not change
-the production MVCC implementation, benchmark definitions, benchmark
-harnesses, or measurement inputs used at `dbea38e0`. The summaries were
-regenerated and revalidated from the preserved raw inputs without rerunning
-the benchmarks.
+`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The corrected closeout-matrix
+target is `103f9c5af85d8d6a5801119fc2247be3b9c87fad`, which changes only prune
+timer accounting and its structural guard relative to the previously measured
+matrix target. It does not change the production MVCC implementation. The raw
+and adapter gates were not rerun. After one passing 30-second quiet audit, the
+closeout matrix was rerun exactly once; its summaries were regenerated and
+revalidated from the preserved raw inputs.
 
 - The hosted raw-path verdict is **EQUIVALENT**, not PASS. Its durable-sync row
   measured +27.94% and failed the timing threshold, while all three
@@ -214,8 +219,10 @@ the benchmarks.
   +18.88%/+13.41%. Get rows remained within the 5% revision ceiling.
   Allocations were unchanged, bytes remained flat, and every candidate
   adapter/direct ratio passed the 2x ceiling; the maximum was 1.121x.
-- The five-sample durability-matched closeout matrix completed successfully
-  with all 24 rows and required metrics present.
+- The corrected five-sample durability-matched closeout matrix completed
+  successfully with all 24 rows and required metrics present. The prior matrix
+  is invalid for prune timing and is superseded, not combined with the
+  corrected samples.
 
 The four adapter revision-ceiling misses are accepted only as a scoped risk for
 the first restricted pre-alpha Dgraph benchmark. They are not relabeled as a
