@@ -33819,24 +33819,26 @@ func (b *Batch) canApplySmallSelectedSortedShard(shardCounts []int, allowBatchAr
 			continue
 		}
 		shard := &b.db.mutableShards[i]
-		useSteal, _ := cachedBatchWriteUseSteal(b.db, shard.mem)
+		// Iterator rotation replaces shard.mem while holding db.mu then shard.mu.
+		// This precheck takes only shard.mu, releases it before returning, and the
+		// apply phase below locks the shard and rechecks the selected interface.
+		shard.mu.Lock()
+		mem := shard.mem
+		useSteal, _ := cachedBatchWriteUseSteal(b.db, mem)
 		useSteal = allowBatchArenaBorrow && useSteal
-		if useSteal {
-			return false
-		}
-		if allowStableViewValueBorrow {
-			if _, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier); !ok {
-				return false
+		eligible := false
+		if !useSteal {
+			switch {
+			case allowStableViewValueBorrow:
+				_, eligible = mem.(memtable.CopySelectedSortedBatchApplier)
+			case !allowBatchArenaBorrow:
+				_, eligible = mem.(memtable.CopySelectedSortedBatchValueCopier)
+			default:
+				_, eligible = mem.(memtable.CopySelectedSortedBatchApplier)
 			}
-			continue
 		}
-		if !allowBatchArenaBorrow {
-			if _, ok := shard.mem.(memtable.CopySelectedSortedBatchValueCopier); !ok {
-				return false
-			}
-			continue
-		}
-		if _, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier); !ok {
+		shard.mu.Unlock()
+		if !eligible {
 			return false
 		}
 	}
