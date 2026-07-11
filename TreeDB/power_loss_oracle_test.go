@@ -1486,8 +1486,35 @@ func TestBuildPowerLossCommandFramesRequiresStableSegmentName(t *testing.T) {
 // The raw-KV fixture publishes one commit sequence per replayed command frame.
 // Use the public post-open counters plus each modeled root's applied frontier to
 // infer which sealed root production selected before replay.
+func TestInferSelectedSequenceTracksGenerationZero(t *testing.T) {
+	t.Run("selects generation zero", func(t *testing.T) {
+		got, err := inferSelectedSequence([]powerlossoracle.Generation{{
+			Sequence:    0,
+			AppliedLSN:  0,
+			Recoverable: true,
+		}}, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 0 {
+			t.Fatalf("selected sequence=%d, want 0", got)
+		}
+	})
+
+	t.Run("detects ambiguity after generation zero", func(t *testing.T) {
+		_, err := inferSelectedSequence([]powerlossoracle.Generation{
+			{Sequence: 0, AppliedLSN: 0, Recoverable: true},
+			{Sequence: 1, AppliedLSN: 1, Recoverable: true},
+		}, 1, 1, 1)
+		if err == nil || !strings.Contains(err.Error(), "ambiguous candidates 0 and 1") {
+			t.Fatalf("error=%v, want generation-zero ambiguity", err)
+		}
+	})
+}
+
 func inferSelectedSequence(generations []powerlossoracle.Generation, latestSealedSequence, openedSequence, openedAppliedLSN uint64) (uint64, error) {
 	var selected uint64
+	found := false
 	for _, generation := range generations {
 		if !generation.Recoverable || generation.Sequence > latestSealedSequence || generation.AppliedLSN > openedAppliedLSN {
 			continue
@@ -1496,12 +1523,13 @@ func inferSelectedSequence(generations []powerlossoracle.Generation, latestSeale
 		if generation.Sequence > ^uint64(0)-replayed || generation.Sequence+replayed != openedSequence {
 			continue
 		}
-		if selected != 0 {
+		if found {
 			return 0, fmt.Errorf("ambiguous candidates %d and %d for public-open sequence=%d applied-lsn=%d", selected, generation.Sequence, openedSequence, openedAppliedLSN)
 		}
 		selected = generation.Sequence
+		found = true
 	}
-	if selected == 0 {
+	if !found {
 		return 0, fmt.Errorf("no candidate at-or-below seal=%d for public-open sequence=%d applied-lsn=%d", latestSealedSequence, openedSequence, openedAppliedLSN)
 	}
 	return selected, nil
