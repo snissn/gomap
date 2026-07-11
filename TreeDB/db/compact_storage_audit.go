@@ -458,7 +458,7 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 }
 
 func (db *DB) newLeafGenerationScanContext(snap *Snapshot) (*leafGenerationScanContext, error) {
-	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil || !db.indexOuterLeavesInValueLog {
+	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil {
 		return nil, nil
 	}
 	view := snap.state.LeafGenerations
