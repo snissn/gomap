@@ -1,0 +1,179 @@
+{
+  "benchmarks": {
+    "BenchmarkDgraphMVCCCloseout/AllVersions/durable_sync/keys=64/depth=1": {
+      "B/op": 4195.0,
+      "allocs/op": 150.0,
+      "ns/op": 18364.0,
+      "versions/s": 3485151.0
+    },
+    "BenchmarkDgraphMVCCCloseout/AllVersions/durable_sync/keys=64/depth=32": {
+      "B/op": 51915.0,
+      "allocs/op": 4118.0,
+      "ns/op": 497176.0,
+      "versions/s": 4119271.0
+    },
+    "BenchmarkDgraphMVCCCloseout/AllVersions/wal_off_relaxed/keys=64/depth=1": {
+      "B/op": 4192.0,
+      "allocs/op": 150.0,
+      "ns/op": 18879.0,
+      "versions/s": 3390107.0
+    },
+    "BenchmarkDgraphMVCCCloseout/AllVersions/wal_off_relaxed/keys=64/depth=32": {
+      "B/op": 51833.0,
+      "allocs/op": 4118.0,
+      "ns/op": 501606.0,
+      "versions/s": 4082893.0
+    },
+    "BenchmarkDgraphMVCCCloseout/AllVersions/wal_on_relaxed/keys=64/depth=1": {
+      "B/op": 4195.0,
+      "allocs/op": 150.0,
+      "ns/op": 18669.0,
+      "versions/s": 3428068.0
+    },
+    "BenchmarkDgraphMVCCCloseout/AllVersions/wal_on_relaxed/keys=64/depth=32": {
+      "B/op": 51918.0,
+      "allocs/op": 4118.0,
+      "ns/op": 510273.0,
+      "versions/s": 4013546.0
+    },
+    "BenchmarkDgraphMVCCCloseout/CommitAt/durable_sync/batch=1": {
+      "B/op": 4652.0,
+      "allocs/op": 14.0,
+      "durable_footprint_bytes/op": 1960.0,
+      "mutations/s": 149.5,
+      "ns/op": 6688579.0,
+      "storage_bytes/op": 1960.0
+    },
+    "BenchmarkDgraphMVCCCloseout/CommitAt/durable_sync/batch=32": {
+      "B/op": 16925.0,
+      "allocs/op": 112.0,
+      "durable_footprint_bytes/op": 4496.0,
+      "mutations/s": 5271.0,
+      "ns/op": 6071126.0,
+      "storage_bytes/op": 4496.0
+    },
+    "BenchmarkDgraphMVCCCloseout/CommitAt/wal_off_relaxed/batch=1": {
+      "B/op": 7494.0,
+      "allocs/op": 9.0,
+      "mutations/s": 250407.0,
+      "ns/op": 3993.0,
+      "storage_bytes/op": 76.84
+    },
+    "BenchmarkDgraphMVCCCloseout/CommitAt/wal_off_relaxed/batch=32": {
+      "B/op": 26144.0,
+      "allocs/op": 106.0,
+      "mutations/s": 838950.0,
+      "ns/op": 38143.0,
+      "storage_bytes/op": 2054.0
+    },
+    "BenchmarkDgraphMVCCCloseout/CommitAt/wal_on_relaxed/batch=1": {
+      "B/op": 4252.0,
+      "allocs/op": 13.0,
+      "mutations/s": 217744.0,
+      "ns/op": 4593.0,
+      "storage_bytes/op": 83.41
+    },
+    "BenchmarkDgraphMVCCCloseout/CommitAt/wal_on_relaxed/batch=32": {
+      "B/op": 20131.0,
+      "allocs/op": 110.0,
+      "mutations/s": 752181.0,
+      "ns/op": 42543.0,
+      "storage_bytes/op": 2085.0
+    },
+    "BenchmarkDgraphMVCCCloseout/GetAt/durable_sync/depth=1": {
+      "B/op": 629.0,
+      "allocs/op": 12.0,
+      "lookups/s": 937621.0,
+      "ns/op": 1067.0
+    },
+    "BenchmarkDgraphMVCCCloseout/GetAt/durable_sync/depth=64": {
+      "B/op": 1008.0,
+      "allocs/op": 16.0,
+      "lookups/s": 670037.0,
+      "ns/op": 1492.0
+    },
+    "BenchmarkDgraphMVCCCloseout/GetAt/wal_off_relaxed/depth=1": {
+      "B/op": 628.0,
+      "allocs/op": 12.0,
+      "lookups/s": 946058.0,
+      "ns/op": 1057.0
+    },
+    "BenchmarkDgraphMVCCCloseout/GetAt/wal_off_relaxed/depth=64": {
+      "B/op": 1008.0,
+      "allocs/op": 16.0,
+      "lookups/s": 678949.0,
+      "ns/op": 1473.0
+    },
+    "BenchmarkDgraphMVCCCloseout/GetAt/wal_on_relaxed/depth=1": {
+      "B/op": 629.0,
+      "allocs/op": 12.0,
+      "lookups/s": 962350.0,
+      "ns/op": 1039.0
+    },
+    "BenchmarkDgraphMVCCCloseout/GetAt/wal_on_relaxed/depth=64": {
+      "B/op": 1008.0,
+      "allocs/op": 16.0,
+      "lookups/s": 687875.0,
+      "ns/op": 1454.0
+    },
+    "BenchmarkDgraphMVCCCloseout/Prune/durable_sync/keys=64/depth=16/floor=12": {
+      "B/op": 245568.0,
+      "allocs/op": 182.0,
+      "delete_write_amplification": 0.8286,
+      "durable_footprint_bytes/op": 524727.0,
+      "ns/op": 27923914.0,
+      "pruned_versions/s": 25211.0,
+      "storage_bytes/op": 524727.0
+    },
+    "BenchmarkDgraphMVCCCloseout/Prune/durable_sync/keys=64/depth=16/floor=4": {
+      "B/op": 269456.0,
+      "allocs/op": 142.0,
+      "delete_write_amplification": 0.8286,
+      "durable_footprint_bytes/op": 524727.0,
+      "ns/op": 14216940.0,
+      "pruned_versions/s": 13505.0,
+      "storage_bytes/op": 524727.0
+    },
+    "BenchmarkDgraphMVCCCloseout/Prune/wal_off_relaxed/keys=64/depth=16/floor=12": {
+      "B/op": 167120.0,
+      "allocs/op": 154.0,
+      "delete_write_amplification": 0.8286,
+      "ns/op": 415359.0,
+      "pruned_versions/s": 1694919.0,
+      "storage_bytes/op": 524664.0
+    },
+    "BenchmarkDgraphMVCCCloseout/Prune/wal_off_relaxed/keys=64/depth=16/floor=4": {
+      "B/op": 130184.0,
+      "allocs/op": 122.0,
+      "delete_write_amplification": 0.8286,
+      "ns/op": 353285.0,
+      "pruned_versions/s": 543471.0,
+      "storage_bytes/op": 524664.0
+    },
+    "BenchmarkDgraphMVCCCloseout/Prune/wal_on_relaxed/keys=64/depth=16/floor=12": {
+      "B/op": 240336.0,
+      "allocs/op": 166.0,
+      "delete_write_amplification": 0.8286,
+      "ns/op": 568753.0,
+      "pruned_versions/s": 1237796.0,
+      "storage_bytes/op": 524727.0
+    },
+    "BenchmarkDgraphMVCCCloseout/Prune/wal_on_relaxed/keys=64/depth=16/floor=4": {
+      "B/op": 133152.0,
+      "allocs/op": 124.0,
+      "delete_write_amplification": 0.8286,
+      "ns/op": 769070.0,
+      "pruned_versions/s": 249652.0,
+      "storage_bytes/op": 524727.0
+    }
+  },
+  "candidate_sha": "103f9c5af85d8d6a5801119fc2247be3b9c87fad",
+  "resources": {
+    "invocations": 10.0,
+    "max_rss_kib": 611264.0,
+    "total_system_seconds": 6.97,
+    "total_user_seconds": 102.36
+  },
+  "samples": 5,
+  "schema": "treedb-dgraph-mvcc-closeout-v1"
+}

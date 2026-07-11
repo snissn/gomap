@@ -78,6 +78,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - downstream adapter closeout for native `EntryRevision` cache tokens,
     conditional transaction conflict mapping, command-WAL/fail-closed surfaces,
     and unsupported Badger-style feature errors.
+- `TreeDB/docs/spec/dgraph-mvcc-readiness-3673.md`
+  - reusable external-MVCC conformance harness, exact supported/unsupported
+    Dgraph Alpha boundary, merged-main module-pin policy, correctness matrix,
+    and pinned raw/MVCC performance evidence for issue #3673.
 - `TreeDB/docs/spec/concurrency-paradigms.md`
   - complete concurrency mechanism inventory, lock/worker topology, and option/flag matrix for perf/refactor audits.
 - `TreeDB/docs/spec/storage-format.md`
