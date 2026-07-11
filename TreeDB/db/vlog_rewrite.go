@@ -3356,6 +3356,7 @@ type rewriteWriter struct {
 	currentFileID     uint32
 	leafCurrentPath   string
 	leafCurrentFileID uint32
+	leafStaging       bool
 	lastLeafRecordLen uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
@@ -3441,6 +3442,12 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafSeq = startSeq
 }
 
+func (w *rewriteWriter) configureLeafStaging() {
+	if w != nil {
+		w.leafStaging = true
+	}
+}
+
 func (w *rewriteWriter) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
 	if w == nil {
 		return
@@ -3483,6 +3490,7 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone := newRewriteWriter(w.walDir, w.lane, 0, w.maxSize)
 	clone.leafDir = w.leafDir
 	clone.leafLane = w.leafLane
+	clone.leafStaging = w.leafStaging
 	clone.leafSeqAllocator = seqAlloc
 	clone.ridAlloc = ridAlloc
 	clone.blockCompression = w.blockCompression
@@ -4118,7 +4126,12 @@ func (w *rewriteWriter) rotateLeaf() error {
 	}
 	path := filepath.Join(w.leafDir, fmt.Sprintf("value-l%d-%06d.log", w.leafLane, nextSeq))
 	if w.leafW == nil {
-		writer, err := valuelog.NewWriter(path, fileID)
+		var writer *valuelog.Writer
+		if w.leafStaging {
+			writer, err = valuelog.NewStagingWriter(path, fileID)
+		} else {
+			writer, err = valuelog.NewWriter(path, fileID)
+		}
 		if err != nil {
 			return err
 		}

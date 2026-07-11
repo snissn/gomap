@@ -63,6 +63,49 @@ type LeafGenerationPackOptions struct {
 	ProtectedSystemRootIDs     []uint64
 }
 
+// LeafGenerationPackApplyStageStats attributes copy and publication wall time.
+// DirectorySyncTimeNanos is diagnostic operation wall and may overlap page
+// relocation/sync; DirectorySyncWaitTimeNanos is the non-overlapping portion
+// charged to the exclusive publication path.
+type LeafGenerationPackApplyStageStats struct {
+	SetupTimeNanos             int64
+	TreeRewriteTimeNanos       int64
+	LeafSyncTimeNanos          int64
+	CopyCloseTimeNanos         int64
+	RevalidateTimeNanos        int64
+	PromotionTimeNanos         int64
+	RelocationTimeNanos        int64
+	PageSyncTimeNanos          int64
+	DirectorySyncTimeNanos     int64
+	DirectorySyncWaitTimeNanos int64
+	RegistrationTimeNanos      int64
+	CollectionPublishTimeNanos int64
+	FinalizeTimeNanos          int64
+	PostWorkTimeNanos          int64
+	CleanupTimeNanos           int64
+}
+
+func (s *LeafGenerationPackApplyStageStats) add(other LeafGenerationPackApplyStageStats) {
+	if s == nil {
+		return
+	}
+	s.SetupTimeNanos += other.SetupTimeNanos
+	s.TreeRewriteTimeNanos += other.TreeRewriteTimeNanos
+	s.LeafSyncTimeNanos += other.LeafSyncTimeNanos
+	s.CopyCloseTimeNanos += other.CopyCloseTimeNanos
+	s.RevalidateTimeNanos += other.RevalidateTimeNanos
+	s.PromotionTimeNanos += other.PromotionTimeNanos
+	s.RelocationTimeNanos += other.RelocationTimeNanos
+	s.PageSyncTimeNanos += other.PageSyncTimeNanos
+	s.DirectorySyncTimeNanos += other.DirectorySyncTimeNanos
+	s.DirectorySyncWaitTimeNanos += other.DirectorySyncWaitTimeNanos
+	s.RegistrationTimeNanos += other.RegistrationTimeNanos
+	s.CollectionPublishTimeNanos += other.CollectionPublishTimeNanos
+	s.FinalizeTimeNanos += other.FinalizeTimeNanos
+	s.PostWorkTimeNanos += other.PostWorkTimeNanos
+	s.CleanupTimeNanos += other.CleanupTimeNanos
+}
+
 type LeafGenerationPackStats struct {
 	GenerationsRequested            int
 	GenerationsMatched              int
@@ -91,6 +134,8 @@ type LeafGenerationPackStats struct {
 	PublishHoldNanos                int64
 	PrivatePagesAllocated           int
 	PrivatePagesDiscarded           int
+	ApplyStages                     LeafGenerationPackApplyStageStats
+	RetryApplyStages                LeafGenerationPackApplyStageStats
 	WallTimeNanos                   int64
 }
 
@@ -255,6 +300,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	const maxCopyAttempts = 2
 	for attempt := 1; attempt <= maxCopyAttempts; attempt++ {
 		stats.CopyAttempts++
+		attemptStarted := time.Now()
 		stagingDir, err := os.MkdirTemp(layout.leafVLogDir, ".leaf-pack-copy-")
 		if err != nil {
 			return stats, err
@@ -266,6 +312,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		}
 		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
 		writer.ConfigureLeafLog(privateLeafDir, rewriteLeafLogLaneID, leafStartSeq)
+		writer.configureLeafStaging()
 		writer.setLeafPageLogSeqAllocator(seqAlloc)
 		writer.setLeafPageLogRIDAllocator(ridAlloc)
 		writer.blockCompression = blockCompression
@@ -281,13 +328,18 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			protectedRootIDs:       opts.ProtectedRootIDs,
 			protectedSystemRootIDs: opts.ProtectedSystemRootIDs,
 		}
+		rewriteStarted := time.Now()
 		copied, copiedBytes, rewriteErr := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), attempt, &rewriteStats)
+		rewriteStats.ApplyStages.SetupTimeNanos += rewriteStarted.Sub(attemptStarted).Nanoseconds()
+		cleanupStarted := time.Now()
 		closeErr := writer.Close()
 		removeErr := removeLeafGenerationPackStagingDirFn(stagingDir)
+		rewriteStats.ApplyStages.CleanupTimeNanos += time.Since(cleanupStarted).Nanoseconds()
 		stats.CopyTimeNanos += rewriteStats.CopyTimeNanos
 		stats.PublishWaitNanos += rewriteStats.PublishWaitNanos
 		stats.PublishHoldNanos += rewriteStats.PublishHoldNanos
 		stats.PrivatePagesAllocated += rewriteStats.PrivatePages
+		stats.ApplyStages.add(rewriteStats.ApplyStages)
 		if carry != nil {
 			carry.sourceStateKey = rewriteStats.sourceStateKey
 			carry.publishedState = rewriteStats.publishedState
@@ -299,6 +351,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			stats.CopyAborts++
 			stats.RetryCopyTimeNanos += rewriteStats.CopyTimeNanos
 			stats.PrivatePagesDiscarded += rewriteStats.PrivatePages
+			stats.RetryApplyStages.add(rewriteStats.ApplyStages)
 			if closeErr != nil || removeErr != nil {
 				return stats, errors.Join(rewriteErr, closeErr, removeErr)
 			}

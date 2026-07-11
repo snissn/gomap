@@ -554,17 +554,31 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 }
 
 func NewWriter(path string, fileID uint32) (*Writer, error) {
+	return newFileWriter(path, fileID, true, func(file *os.File) error { return file.Sync() })
+}
+
+// NewStagingWriter creates a writer for an unreferenced temporary file whose
+// caller owns later promotion. It skips syncing the disposable source
+// directory; callers must sync the file, rename it into its durable namespace,
+// and sync the destination directory before publishing a reference.
+func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
+	return newFileWriter(path, fileID, false, syncStagingFileData)
+}
+
+func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}
 	w := &Writer{
 		f:      f,
-		syncFn: func(file *os.File) error { return file.Sync() },
+		syncFn: syncFn,
 	}
-	if err := w.syncDirectory(path); err != nil {
-		_ = f.Close()
-		return nil, err
+	if syncDirectory {
+		if err := w.syncDirectory(path); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 	info, err := f.Stat()
 	if err != nil {

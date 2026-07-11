@@ -3,11 +3,157 @@ package pager
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func syncPagesTestChunkSize(minPages int) int64 {
+	size := int64(minPages * page.PageSize)
+	size = alignUp(size, int64(os.Getpagesize()))
+	return alignUp(size, mmapOffsetGranularity())
+}
+
+func TestSyncPagesUsesDataDurabilityBoundary(t *testing.T) {
+	originalRanges := syncPageRangesFn
+	originalFile := syncPageFileFn
+	rangeCalls := 0
+	fileCalls := 0
+	syncPageRangesFn = func(file *os.File, chunks [][]byte, ranges []syncPageRange, chunkSize int64) (bool, error) {
+		if file == nil || len(chunks) == 0 || len(ranges) == 0 || chunkSize <= 0 {
+			t.Fatalf("invalid range durability input: file=%v chunks=%d ranges=%d chunk_size=%d", file, len(chunks), len(ranges), chunkSize)
+		}
+		rangeCalls++
+		return true, nil
+	}
+	syncPageFileFn = func(file *os.File) error {
+		fileCalls++
+		return originalFile(file)
+	}
+	t.Cleanup(func() {
+		syncPageRangesFn = originalRanges
+		syncPageFileFn = originalFile
+	})
+
+	dir := t.TempDir()
+	p, err := Open(filepath.Join(dir, "data-sync.db"), syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	id, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc: %v", err)
+	}
+	p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
+	if err := p.Write(id, bytes.Repeat([]byte{0x2a}, page.PageSize)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := p.SyncPages([]uint64{id}); err != nil {
+		t.Fatalf("SyncPages: %v", err)
+	}
+	if rangeCalls != 1 || fileCalls != 0 {
+		t.Fatalf("range/file durability calls=%d/%d want 1/0", rangeCalls, fileCalls)
+	}
+}
+
+func TestSyncPagesFallsBackWhenRangeDurabilityIsUnavailable(t *testing.T) {
+	originalRanges := syncPageRangesFn
+	originalFile := syncPageFileFn
+	fileCalls := 0
+	syncPageRangesFn = func(*os.File, [][]byte, []syncPageRange, int64) (bool, error) { return false, nil }
+	syncPageFileFn = func(*os.File) error {
+		fileCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		syncPageRangesFn = originalRanges
+		syncPageFileFn = originalFile
+	})
+
+	p, err := Open(filepath.Join(t.TempDir(), "fallback.db"), syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	id, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc: %v", err)
+	}
+	p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
+	if err := p.SyncPages([]uint64{id}); err != nil {
+		t.Fatalf("SyncPages: %v", err)
+	}
+	if fileCalls != 1 {
+		t.Fatalf("fallback durability calls=%d want 1", fileCalls)
+	}
+}
+
+func TestSyncPagesFallsBackUntilFileGrowthIsDurable(t *testing.T) {
+	originalRanges := syncPageRangesFn
+	originalFile := syncPageFileFn
+	rangeCalls := 0
+	fileCalls := 0
+	syncPageRangesFn = func(*os.File, [][]byte, []syncPageRange, int64) (bool, error) {
+		rangeCalls++
+		return true, nil
+	}
+	syncPageFileFn = func(*os.File) error {
+		fileCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		syncPageRangesFn = originalRanges
+		syncPageFileFn = originalFile
+	})
+
+	chunkSize := syncPagesTestChunkSize(2)
+	p, err := Open(filepath.Join(t.TempDir(), "growth.db"), chunkSize)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	first, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc first: %v", err)
+	}
+	if err := p.SyncPages([]uint64{first}); err != nil {
+		t.Fatalf("SyncPages growth: %v", err)
+	}
+	if rangeCalls != 0 || fileCalls != 1 {
+		t.Fatalf("growth range/file durability calls=%d/%d want 0/1", rangeCalls, fileCalls)
+	}
+
+	second, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("Alloc second: %v", err)
+	}
+	if err := p.SyncPages([]uint64{second}); err != nil {
+		t.Fatalf("SyncPages durable capacity: %v", err)
+	}
+	if rangeCalls != 1 || fileCalls != 1 {
+		t.Fatalf("steady-state range/file durability calls=%d/%d want 1/1", rangeCalls, fileCalls)
+	}
+}
+
+func TestUseDurableRangeWritesBoundsSparseDurabilityWork(t *testing.T) {
+	unit := syncPageRange{chunk: 0, start: 0, end: page.PageSize}
+	if !useDurableRangeWrites([]syncPageRange{unit}) {
+		t.Fatal("single-page publication should use range durability")
+	}
+	tooMany := make([]syncPageRange, maxDurableRangeWrites+1)
+	for i := range tooMany {
+		tooMany[i] = unit
+	}
+	if useDurableRangeWrites(tooMany) {
+		t.Fatalf("%d ranges should use the file durability fallback", len(tooMany))
+	}
+	if useDurableRangeWrites([]syncPageRange{{chunk: 0, start: 0, end: maxDurableRangeBytes + 1}}) {
+		t.Fatal("oversized range should use the file durability fallback")
+	}
+}
 
 func TestPlanSyncPageRangesAlignsTo64KiBAllocationGranularity(t *testing.T) {
 	const (
@@ -134,6 +280,10 @@ func TestSyncPagesPersistsNonzeroPageWithinAllocationGranularity(t *testing.T) {
 	if err != nil {
 		_ = p.Close()
 		t.Fatalf("Alloc: %v", err)
+	}
+	if err := p.Sync(); err != nil {
+		_ = p.Close()
+		t.Fatalf("Sync allocated file size: %v", err)
 	}
 	want := bytes.Repeat([]byte{0x5d}, page.PageSize)
 	if err := p.Write(start+1, want); err != nil {
