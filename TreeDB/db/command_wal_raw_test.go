@@ -532,6 +532,42 @@ func TestAppendRawKVCommandWALOrderedEntryScanFlushesFreshValueLogPointer(t *tes
 	}
 }
 
+func TestAppendRawKVCommandWALOrderedEntriesRejectsMalformedValueLogPointerBeforeDurability(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	appender := &commandWALBarrierTestAppender{}
+	d.SetValueLogAppender(appender)
+
+	before := d.Stats()
+	_, err = d.AppendRawKVCommandWALOrderedEntries([]batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   []byte("malformed-pointer"),
+		IsPtr: true,
+		ValuePtr: page.ValuePtr{
+			FileID: page.ValueLogFileID(1),
+			Length: 0,
+		},
+	}}, true)
+	if err == nil || !strings.Contains(err.Error(), "invalid value-log pointer") {
+		t.Fatalf("AppendRawKVCommandWALOrderedEntries error=%v, want invalid value-log pointer", err)
+	}
+	for _, key := range []string{
+		"treedb.command_wal.append.count_total",
+		"treedb.command_wal.file_sync.calls_total",
+	} {
+		got := commandWALTestStatUint64(t, d.Stats(), key) - commandWALTestStatUint64(t, before, key)
+		if got != 0 {
+			t.Fatalf("%s delta=%d, want 0 after pointer validation failure", key, got)
+		}
+	}
+	if appender.externalFlushes != 0 {
+		t.Fatalf("external-reference flushes=%d, want 0 after pointer validation failure", appender.externalFlushes)
+	}
+}
+
 func TestRawKVOrderedEntriesIntentOwnsPayloadBytes(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})

@@ -805,10 +805,10 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.sync.count_total", 1)
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.write.syscalls_total", 1)
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.file_sync.calls_total", 1)
-	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.calls_total", 2)
+	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.calls_total", 1)
 	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.materialization.calls_total", 1)
-	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.external_ref.calls_total", 1)
-	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.file_sync.calls_total", 2)
+	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.external_ref.calls_total", 0)
+	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.file_sync.calls_total", 1)
 	requirePublicBatchWriteSyncPhasePartitions(t, stats)
 }
 
@@ -3647,13 +3647,13 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 		appendCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 1, 1, 1
 		batchWriteSyncCalls = 1
 		if forcedPointers {
-			valueLogMaterializationSyncs, valueLogExternalRefSyncs = 1, 1
+			valueLogMaterializationSyncs = 1
 		}
 	case "write_then_dirty_write_sync":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls = 1, 1
 		if forcedPointers {
-			valueLogMaterializationSyncs, valueLogExternalRefSyncs = 1, 1
+			valueLogMaterializationSyncs = 1
 		}
 	case "empty_write_sync_after_write":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 1, 1, 1, 1
@@ -3667,7 +3667,7 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 		if forcedPointers {
 			// Public point commands remain inline command-WAL inputs. The batch
 			// materialization is the state-shaped external-value boundary.
-			valueLogMaterializationSyncs, valueLogExternalRefSyncs = 1, 1
+			valueLogMaterializationSyncs = 1
 		}
 	}
 	valueLogSyncs := valueLogMaterializationSyncs + valueLogExternalRefSyncs + valueLogPendingBarrierSyncs

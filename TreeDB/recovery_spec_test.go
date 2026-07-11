@@ -217,6 +217,8 @@ func TestHelperTreeDBCommandWALDurableUncheckpointedWriter(t *testing.T) {
 	opts.WriterFlushMaxMemtables = 0
 	opts.WriterFlushMaxDuration = 0
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
 
 	db, err := treedb.Open(opts)
 	if err != nil {
