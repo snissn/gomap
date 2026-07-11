@@ -52,7 +52,10 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 	if baseline == nil {
 		t.Fatal("missing baseline state")
 	}
-	model, err := powerlossoracle.Capture(dir)
+	// LOCK is process-local coordination rather than durable database state. It
+	// is also held with non-shareable locking on Windows, so exclude it from the
+	// live crash-model capture.
+	model, err := powerlossoracle.CaptureExcluding(dir, "LOCK")
 	if err != nil {
 		t.Fatalf("capture stable command-WAL image: %v", err)
 	}

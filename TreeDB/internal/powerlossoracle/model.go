@@ -92,6 +92,22 @@ type Model struct {
 
 // Capture imports a real directory as an initially stable image.
 func Capture(root string) (*Model, error) {
+	return CaptureExcluding(root)
+}
+
+// CaptureExcluding imports a real directory as an initially stable image while
+// omitting exact root-relative paths that are not persistence resources. This
+// is primarily useful for live database captures where the process-local LOCK
+// file cannot be read on Windows and must not appear in a crash image anyway.
+func CaptureExcluding(root string, excluded ...string) (*Model, error) {
+	excludedPaths := make(map[string]struct{}, len(excluded))
+	for _, path := range excluded {
+		rel, err := normalize(path)
+		if err != nil {
+			return nil, fmt.Errorf("powerlossoracle: exclude %q: %w", path, err)
+		}
+		excludedPaths[rel] = struct{}{}
+	}
 	m := newModel()
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -104,6 +120,12 @@ func Capture(root string) (*Model, error) {
 		rel, err = normalize(rel)
 		if err != nil {
 			return err
+		}
+		if _, excluded := excludedPaths[rel]; excluded {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if entry.IsDir() {
 			m.volatileDirs[rel] = struct{}{}

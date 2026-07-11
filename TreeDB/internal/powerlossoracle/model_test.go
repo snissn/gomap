@@ -10,6 +10,34 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
+func TestCaptureExcludingOmitsProcessLocalFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "LOCK"), []byte("process-local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data"), []byte("durable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model, err := CaptureExcluding(root, "LOCK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "LOCK")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("excluded LOCK stat err=%v, want not-exist", err)
+	}
+	data, err := os.ReadFile(filepath.Join(crashDir, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "durable" {
+		t.Fatalf("materialized data=%q, want durable", data)
+	}
+}
+
 func TestObserveDependencyFileSyncPromotesOnlyExactPath(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"value.log", "leaf.log"} {
