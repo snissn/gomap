@@ -381,6 +381,42 @@ is compared on the same base/head with ten samples; because the MVCC path is
 opt-in, its acceptable raw-path regression is at most 5% with no allocation
 increase.
 
+## 10.5 Dgraph MVCC Public Conformance and Closeout
+
+Invariants:
+
+- downstream conformance uses only exported `TreeDB`, `mvcc`, and `mvcctest`
+  APIs; Dgraph-specific envelopes do not become generic TreeDB contracts;
+- one committed golden public trace covers binary-key codec effects, atomic
+  commit/read-at, empty values, tombstones, all-version order, durable reopen,
+  discard floor, and pruning;
+- deterministic randomized and concurrent traces remain reproducible from
+  fixed seeds and bounded operation counts;
+- the Dgraph module pin is an exact merged-main gomap commit containing the
+  closeout, never a worker branch or floating main;
+- raw-path and MVCC evidence name the tested commit, host, Go toolchain,
+  commands, sample count, and artifact location; relaxed and durable rows are
+  never compared as equivalent acknowledgement classes.
+
+Coverage:
+
+- `TreeDB/mvcc/mvcctest` provides the closure-based downstream harness and
+  TreeDB adapter helper; `TreeDB/mvcc/conformance_external_test.go` proves the
+  suite from outside the implementation package and the harness example
+  compiles against the public surface.
+- `TreeDB/internal/mvcckey/testdata/codec_v1_golden.json` pins the internal
+  pre-alpha codec bytes and order independently from the public behavioral
+  trace; existing codec property/fuzz tests continue to cover larger domains.
+- Existing MVCC tests retain direct fault-injection and abrupt-child-exit
+  coverage that a generic in-process adapter factory cannot express.
+- `scripts/mvcc_raw_path_gate.sh` is the <=5% raw-path base/head gate.
+  `scripts/mvcc_closeout_matrix.sh` runs the pinned CommitAt, GetAt,
+  all-version, and pruning depth/durability matrix and captures CPU, peak RSS,
+  normalized storage footprint, `B/op`, and `allocs/op`.
+- `TreeDB/docs/spec/dgraph-mvcc-readiness-3673.md` is the supported/unsupported
+  capability and measurement-boundary closeout; its artifact index records the
+  exact measured commit and compact results.
+
 ## 11. Collections Native Fast Path
 
 Invariant:

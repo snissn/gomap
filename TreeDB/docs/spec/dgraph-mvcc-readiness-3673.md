@@ -1,0 +1,158 @@
+# Dgraph MVCC Readiness Closeout (#3673)
+
+Status: pre-alpha downstream contract for the first restricted Dgraph Alpha
+benchmark. This document closes gomap issue
+[#3673](https://github.com/snissn/gomap/issues/3673) and the TreeDB side of
+[#3668](https://github.com/snissn/gomap/issues/3668). The downstream tracker is
+[snissn/dgraph#16](https://github.com/snissn/dgraph/issues/16).
+
+TreeDB and its MVCC format remain pre-alpha. This closeout pins tested behavior
+for one Dgraph experiment; it is not a general compatibility or migration
+promise.
+
+## Intended Dgraph module pin
+
+Dgraph MUST pin the first `github.com/snissn/gomap` **merged-main commit that
+contains this closeout PR**, using the Go pseudo-version resolved for that exact
+commit. It MUST NOT pin a worker branch, a predecessor branch, or a floating
+`main`. The dependency chain through all #3668 children is present on main at
+`e94013508e7fad1d9fb89034ec8dfd6d88c7e6e2`; the final closeout merge commit is
+recorded in the Dgraph adapter PR when that descendant starts.
+
+The evidence below is collected on the closeout code commit named in
+`artifacts/dgraph-mvcc-closeout/README.md`. The final evidence-only commit may
+follow it without changing production MVCC code.
+
+## Reusable conformance surface
+
+`TreeDB/mvcc/mvcctest` is a downstream test package, not a production adapter.
+Its closure-based `Adapter` deliberately avoids requiring Dgraph types to
+implement TreeDB-specific interfaces. `mvcctest.FromStore` is the minimal
+TreeDB example. `mvcctest.Run` executes:
+
+- the committed `public_trace_v1.json` golden history;
+- durable close/reopen before and after floor advancement and pruning;
+- nil/empty-key duplicate handling, zero timestamps, durability rejection,
+  monotonic floors, and commit/read rejection at the floor;
+- a deterministic seed-3673 randomized point-read and all-version oracle over
+  empty, embedded-zero, and `0xff` logical keys;
+- concurrent point readers and writers while an older iterator retains its
+  pinned snapshot.
+
+`TreeDB/mvcc/conformance_external_test.go` invokes the suite from the external
+`mvcc_test` package, so package-private helpers cannot accidentally become part
+of the dependency. `TreeDB/mvcc/mvcctest/example_test.go` is a compiling example
+that imports only public TreeDB, MVCC, and harness APIs.
+
+The physical codec remains intentionally internal. Its exact v1 bytes and
+ordering are independently pinned by
+`TreeDB/internal/mvcckey/testdata/codec_v1_golden.json`; round-trip, malformed
+input, ordering, bound, and fuzz properties remain in the codec package.
+
+## Supported semantics for the restricted Alpha
+
+| Surface | Supported contract |
+| --- | --- |
+| Timestamp ownership | The caller supplies a nonzero `uint64`. One successful commit uses one timestamp for its full mutation batch. |
+| Atomic mutation batch | Puts and tombstones publish through one TreeDB batch. Duplicate logical keys in a batch are rejected; nil and empty keys are the same identity. |
+| Point visibility | `GetAt(k, ts)` returns the newest retained version at or below `ts`, distinguishing absent, present-empty, present-nonempty, and tombstone. |
+| Same key/timestamp | A later successful commit replaces the one physical version at the same logical key and timestamp. |
+| Logical keys | Arbitrary bytes, including empty, zero bytes, and `0xff`, within the codec envelope. |
+| All-version iteration | Snapshot-bound forward/reverse iteration, logical bounds, prefix, read-time ceiling, directional seek, explicit tombstones, owned returned bytes, and accounting. |
+| Discard floor | One durable monotonic global floor. Reads/scans at or below it fail; commits must be strictly above it. |
+| Pruning | Bounded, restartable value/tombstone pruning with pinned-reader safety and no value resurrection. `Skipped` is a subset of retained records. |
+| Durability | `CommitDurable` and durable floor/prune operations require `DurabilityDurable` and acknowledge through sync publication. Relaxed operations are atomic but not fsync acknowledgements. |
+| Reopen/crash | Durable commits and floor-first pruning survive reopen and abrupt child-process exit in the committed MVCC crash tests. |
+| Concurrency | Concurrent point readers, commits, snapshot iterators, pruning, and serialized floor advancement are race-tested. |
+| Ownership | Exactly one `mvcc.Store` owns one open TreeDB handle and reserved MVCC namespace. |
+| Errors | Validation, malformed-record, storage, floor, and durability failures remain distinguishable with `errors.Is`. Storage acknowledgement errors may be commit-ambiguous but never expose a partial batch. |
+
+## Unsupported or Dgraph-owned semantics
+
+These are not silently emulated by TreeDB MVCC:
+
+- encryption at rest or Badger encryption-key rotation;
+- TTL/expiry, leases, subscriptions, backup streams, bulk loaders, or managed
+  compaction scheduling;
+- Badger transaction objects, optimistic conflict detection, predicates,
+  compare-and-set, or conditional transaction semantics;
+- Dgraph posting-list metadata, namespace policy, rollup/split envelopes,
+  cache accounting, iterator prefetch/value callbacks, or Alpha lifecycle;
+- multiple `mvcc.Store` owners for one handle, raw writes in the reserved MVCC
+  namespace, or per-key discard floors;
+- stable cross-version on-disk migration or a public physical codec API.
+
+Dgraph owns any translation from its backend-neutral seam to this surface. A
+missing envelope is an explicit restricted-runtime capability error, not a
+reason to expand TreeDB's generic MVCC layer in this closeout.
+
+## Correctness evidence matrix
+
+| Contract | Committed evidence |
+| --- | --- |
+| Codec bytes/order/bounds | `TreeDB/internal/mvcckey/codec_golden_test.go`, `codec_test.go`, `codec_fuzz_test.go` |
+| Atomic commit and point histories | `TreeDB/mvcc/mvcc_test.go`, golden and randomized public harness cases |
+| Iteration, tombstones, seek, ownership | `TreeDB/mvcc/versions_test.go`, public golden trace |
+| Floor/reopen/prune/idempotence | `versions_test.go`, `mvcctest.Run/golden_reopen_floor_prune` |
+| Abrupt exit | `TestCommitAtDurableProcessCrashRecovery`, `TestPruneDurableProcessCrashAfterDeleteBatch` |
+| Reader/writer/prune concurrency | `TestGetAtConcurrentReaders`, `TestPruneConcurrentSnapshotReaders`, `TestPruneAfterSnapshotCaptureDoesNotBlockForegroundOperations`, public concurrency case |
+| Downstream public-only compilation | `TestPublicSurfaceConformance`, `ExampleFromStore` |
+
+Focused reproducible gates:
+
+```sh
+GOWORK=off go test ./TreeDB/internal/mvcckey ./TreeDB/mvcc/...
+GOWORK=off go test -race ./TreeDB/mvcc/... -run \
+  'TestPublicSurfaceConformance|TestGetAtConcurrentReaders|TestPruneConcurrentSnapshotReaders|TestPruneAfterSnapshotCaptureDoesNotBlockForegroundOperations|TestFloorAdvanceRaceNeverServesPrunedHistoricalRead'
+GOWORK=off go test ./TreeDB/mvcc -run \
+  'TestCommitAtDurableProcessCrashRecovery|TestPruneDurableProcessCrashAfterDeleteBatch'
+GOWORK=off go test ./TreeDB/internal/mvcckey -run '^$' \
+  -fuzz '^FuzzRoundTrip$' -fuzztime=10s
+GOWORK=off go test ./TreeDB/internal/mvcckey -run '^$' \
+  -fuzz '^FuzzDecodeNeverPanics$' -fuzztime=10s
+```
+
+The two codec fuzz targets are run separately because `go test -fuzz` accepts
+only one matching target per invocation.
+
+## Performance evidence and boundaries
+
+The raw-path no-regression gate remains `scripts/mvcc_raw_path_gate.sh`: it
+compiles identical base/head TreeDB/db benchmark binaries, alternates samples
+on one pinned CPU, and rejects a median timing regression over 5%, any
+allocation increase, or a material `B/op` increase.
+
+`scripts/mvcc_closeout_matrix.sh` captures the final downstream matrix at an
+exact checkout. It emits host/CPU/Go metadata, benchmark-binary checksum, raw
+samples, `/usr/bin/time -v` CPU/RSS evidence, a CPU profile/top, and JSON plus
+Markdown medians. The matrix separates these acknowledgement classes:
+
+- `durable_sync`: durable TreeDB plus `CommitDurable`/durable floor/prune;
+- `wal_on_relaxed`: WAL-on TreeDB plus `CommitRelaxed`/relaxed floor/prune;
+- `wal_off_relaxed`: WAL-off TreeDB plus relaxed operations.
+
+Each class covers `CommitAt` batches 1/32, `GetAt` depths 1/64, 64-key
+all-version scans at depths 1/32, and 64-key depth-16 pruning at floors 4/12.
+Go benchmark rows report latency, throughput, `B/op`, and `allocs/op`.
+`storage_bytes/op` is normalized final logical file footprint, including fixed
+TreeDB files and preallocation; `durable_bytes/op` is emitted only for the
+sync-acknowledged rows. It is storage-footprint context, not physical device
+write amplification. Prune's existing delete-write-amplification metric is
+reported separately.
+
+Reproduction:
+
+```sh
+OUT_DIR=/absolute/output/path \
+CANDIDATE_HASH=<exact-commit> RUNS=5 BENCHTIME=750ms CPUSET=0 \
+GOWORK=off ./scripts/mvcc_closeout_matrix.sh
+```
+
+The committed compact evidence index is
+`TreeDB/docs/spec/artifacts/dgraph-mvcc-closeout/README.md`. Raw local evidence
+is retained outside git and the exact-head CI raw-path artifact is attached to
+the pull request run; generated CPU profiles are not committed.
+
+Performance results compare only like-for-like rows. In particular, relaxed
+writes are never described as equivalent to synced writes, and one-iteration
+smokes are not used as stable throughput evidence.
