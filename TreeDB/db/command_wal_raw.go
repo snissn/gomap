@@ -1536,12 +1536,16 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		}
 		return 0, err
 	}
-	if err := durabilitycut.EmitLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, db.dir, lsn); err != nil {
-		return lsn, err
-	}
 	if lsn != 0 {
 		intent.lsn = lsn
 		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
+	}
+	if err := durabilitycut.EmitLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, db.dir, lsn); err != nil {
+		// The frame already owns this LSN and may become replay-visible later.
+		// Keep the intent identity and fail the open handle closed so a retry
+		// cannot append a second frame for the same public mutation.
+		db.poisonCommandWALAfterPostAppendFailure(intent)
+		return lsn, err
 	}
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	if requestTiming != nil {

@@ -13,6 +13,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -845,6 +846,33 @@ func TestAppendCommandWALIntentReturnsLSNOnFlushFailure(t *testing.T) {
 		t.Fatalf("intent AssignedLSN=%d, want %d", got, lsn)
 	}
 	db.testFailCommandWALFlush.Store(false)
+	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestAppendCommandWALIntentPostAppendCutRecordsLSNAndPoisonsHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "k", "v")
+	wantErr := errors.New("injected post-append cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.AfterDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
+			return wantErr
+		}
+		return nil
+	})
+	lsn, err := db.AppendCommandWALIntent(intent, true)
+	restore()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("AppendCommandWALIntent error=%v, want post-append cut", err)
+	}
+	if lsn != 1 || intent.AssignedLSN() != lsn {
+		t.Fatalf("post-append cut lsn=%d assigned=%d, want 1", lsn, intent.AssignedLSN())
+	}
 	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
 	}
