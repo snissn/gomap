@@ -93,12 +93,16 @@ type Model struct {
 }
 
 // Capture imports a real directory as an initially stable image. Process-local
-// LOCK files coordinate live handles rather than representing durable database
+// Lock files coordinate live handles rather than representing durable database
 // state, and may be unreadable while held on Windows. Composite TreeDB layouts
-// can contain independently-opened nested databases, so omit LOCK at every
-// depth rather than only at the capture root.
+// can contain independently-opened nested databases and command-WAL owners, so
+// omit their process-local lock files at every depth.
 func Capture(root string) (*Model, error) {
 	return capture(root, true, nil)
+}
+
+func isProcessLocalLockFile(name string) bool {
+	return name == "LOCK" || name == "command-wal-journal-owner.lock"
 }
 
 func captureExcluding(root string, excluded ...string) (*Model, error) {
@@ -134,7 +138,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 			}
 			return nil
 		}
-		if excludeLockFiles && !entry.IsDir() && entry.Name() == "LOCK" {
+		if excludeLockFiles && !entry.IsDir() && isProcessLocalLockFile(entry.Name()) {
 			return nil
 		}
 		if entry.IsDir() {
@@ -239,7 +243,7 @@ func (m *Model) Overlay(root string) error {
 		if err != nil {
 			return err
 		}
-		if m.excludeLockFiles && !entry.IsDir() && entry.Name() == "LOCK" {
+		if m.excludeLockFiles && !entry.IsDir() && isProcessLocalLockFile(entry.Name()) {
 			return nil
 		}
 		if entry.IsDir() {

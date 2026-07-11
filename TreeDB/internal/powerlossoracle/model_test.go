@@ -52,11 +52,21 @@ func TestCaptureOmitsNestedProcessLocalLocks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	walDir := filepath.Join(root, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "command-wal-journal-owner.lock"), []byte("process-local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "000001.wal"), []byte("durable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	model, err := Capture(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := model.StablePaths(), []string{"dictdb/data", "maindb/data", "nested/leafdb/data"}; !reflect.DeepEqual(got, want) {
+	if got, want := model.StablePaths(), []string{"dictdb/data", "maindb/data", "maindb/wal/000001.wal", "nested/leafdb/data"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("stable paths=%v want=%v", got, want)
 	}
 }
@@ -89,6 +99,10 @@ func TestCapturedModelObserveContinuesToOmitNestedLocks(t *testing.T) {
 	}
 	lockPath := filepath.Join(dictDir, "LOCK")
 	if err := os.WriteFile(lockPath, []byte("process-local"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ownerLockPath := filepath.Join(dictDir, "command-wal-journal-owner.lock")
+	if err := os.WriteFile(ownerLockPath, []byte("process-local"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	dataPath := filepath.Join(dictDir, "data")
