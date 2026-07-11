@@ -175,10 +175,19 @@ func TestCachingValueLogExternalRefFlusherAccountsForRotatedCommandFrameSegment(
 		"treedb.cache.value_log.file_sync.rotated_segment.ns_total",
 		"treedb.cache.value_log.file_sync.ns_total",
 	} {
-		got := requireStatUint64(t, after, key) - requireStatUint64(t, before, key)
-		if got == 0 {
-			t.Fatalf("%s delta=0, want observed time", key)
+		beforeNs := requireStatUint64(t, before, key)
+		afterNs := requireStatUint64(t, after, key)
+		// A completed file sync can fit inside one timer tick on Windows. Calls
+		// and errors above are the exact accounting boundary; elapsed counters
+		// are cumulative and may legitimately have a zero delta.
+		if afterNs < beforeNs {
+			t.Fatalf("%s decreased from %d to %d", key, beforeNs, afterNs)
 		}
+	}
+	if aggregate, rotated :=
+		requireStatUint64(t, after, "treedb.cache.value_log.file_sync.ns_total"),
+		requireStatUint64(t, after, "treedb.cache.value_log.file_sync.rotated_segment.ns_total"); aggregate < rotated {
+		t.Fatalf("aggregate file-sync ns=%d, want >= rotated-segment ns=%d", aggregate, rotated)
 	}
 }
 

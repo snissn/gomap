@@ -4165,6 +4165,12 @@ func TestPublicCommandWALCheckpointPostFrontierAdmissionPropagatesPublishError(t
 	if err := <-checkpointDone; !errors.Is(err, publishErr) {
 		t.Fatalf("Checkpoint error=%v, want %v", err, publishErr)
 	}
+	// SetSync publishes into the cache before a background flush finishes its
+	// backend commit post-work. Drain serializes with that flush so the Stats
+	// snapshot below cannot overlap leaf-generation finalization.
+	if err := db.cached.Drain(); err != nil {
+		t.Fatalf("Drain after failed checkpoint: %v", err)
+	}
 	if first, last := db.publicCommandWALPendingRange(); first != 1 || last != 2 {
 		t.Fatalf("pending command-WAL range after failed publish=(%d,%d), want (1,2)", first, last)
 	}
