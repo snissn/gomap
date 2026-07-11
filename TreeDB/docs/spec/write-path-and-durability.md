@@ -2,6 +2,91 @@
 
 This document defines write semantics for TreeDB cached mode and backend mode.
 
+## 0. Frozen Publication Contract
+
+This section is normative for every production durability profile. It freezes
+the target contract used by the deterministic power-loss oracle and by the
+implementation tickets under [#1595](https://github.com/snissn/gomap/issues/1595).
+The counterexamples in `TreeDB/power_loss_oracle_test.go` intentionally describe
+gaps in the implementation at the time this contract was adopted; later tickets
+convert those stable test names into positive conformance cases.
+
+For every generation `N`:
+
+```text
+Recoverable(Meta[N]) =>
+  Stable(IndexClosure[N]) &&
+  Stable(FreelistGeneration[N]) &&
+  Stable(ValueLogClosure[N]) &&
+  Stable(OuterLeafClosure[N]) &&
+  Stable(AuxiliaryAssetClosure[N]) &&
+  Stable(RequiredDirectoryEntries[N]) &&
+  Stable(PublicationSeal[N]) &&
+  Stable(AppliedWALCoverage[N])
+```
+
+`Stable` means present in the modeled image after process-volatile file bytes
+and unsynced namespace mutations have been discarded. `Write`, mapped dirtying,
+and userspace `Flush` affect only volatile state. File sync promotes the covered
+file bytes. Directory sync promotes creation, rename, and unlink of names in
+that directory. A file sync cannot substitute for the required directory sync.
+
+The fixed consequences are:
+
+- A relaxed acknowledgement may lose a recent complete suffix after power
+  loss. It may not create an incomplete recoverable root or a hole in replay.
+- Recovery considers exactly the two alternating sealed meta generations,
+  validates each bounded closure, selects the newest complete generation, and
+  may fall back to the older complete generation.
+- Until a newer sealed root supersedes it, every index page, freelist page,
+  value-log record, outer-leaf record, auxiliary asset, command-WAL range, and
+  directory entry needed by either recoverable generation remains intact.
+- `visibleCommitSeq`, `durableCommitSeq`, and
+  `oldestRecoverableCommitSeq` are distinct. Candidate visibility does not make
+  a meta recoverable and cannot move the reclamation horizon.
+- Composite and nested roots carry the deterministic transitive union of their
+  child dependencies. Publication does not rediscover dependency closure by
+  scanning filenames.
+- `Checkpoint`, clean `Close`, and every public `*Sync` operation are durable
+  boundaries in every production profile. Command-WAL `*Sync` may stop at a
+  stable complete frame closure without forcing a backend root; journal-free `*Sync`
+  waits for a sealed root covering the call.
+- A write or sync error after target-meta bytes may have been dirtied poisons
+  the writable handle. Writes, publication, cleanup, GC, rewrite, and
+  reclamation fail with the public recovery-required error until reopen.
+
+### 0.1 Normative publication state machine
+
+| State | Stable authority | Permitted next action | Failure rule |
+|---|---|---|---|
+| `visible` | last sealed complete meta; candidate is process-local | prepare a complete candidate and its transitive dependency set | discard private work; retain the old recovery horizon |
+| `dependencies-stable` | old sealed metas plus synced dependency bytes and names | write/sync COW index, freelist, manifest, and seal pages, excluding meta | retain dependencies and retry; no new meta is recoverable |
+| `sealed-candidate` | old sealed metas plus complete stable candidate closure | write the alternate meta exactly once | any error after target-meta dirtying poisons the handle |
+| `meta-dirtied` | old sealed metas remain the only proven recovery authority | sync the target meta | any error poisons the handle; recovery validates both slots |
+| `meta-stable` | newly synced, validated meta and its complete closure | advance `durableCommitSeq`, then the recovery/reclamation horizon when safe | cleanup still requires exact sealed coverage proof |
+| `cleanup-eligible` | both recoverable metas and all pins remain protected | unlink only proof-covered WAL/assets, then sync deletion directories | a stale plan deletes nothing; unsynced unlink is not durable deletion |
+
+The alternate meta slot is selected from the last successfully synced durable
+meta slot, never from visible or candidate state. No dependency, directory,
+index, meta, or durability wait occurs while DB/write/commit/root-build
+serialization locks are held.
+
+### 0.2 Normative mode and API matrix
+
+These canonical profiles are the target production surface. `bench_unsafe` is
+explicitly outside the production guarantee.
+
+| Profile | Ordinary acknowledgement | Public `*Sync` | `Flush` / `FlushAll` | `Checkpoint` and clean `Close` | Modeled power-loss result |
+|---|---|---|---|---|---|
+| `command_wal_durable` | waits for stable complete command-frame closure | same durable frame closure; root publication is not required | visibility/draining only | waits for a sealed complete root covering the captured frontier | every durable acknowledgement recovers; selected root is complete |
+| `command_wal_relaxed` | may lead WAL and root sync | waits for stable complete command-frame closure | visibility/draining only | waits for a sealed complete root covering the captured frontier | may lose only a complete recent suffix; replay remains contiguous |
+| `no_wal_fast` (canonical target name retaining legacy-compatible spelling) | may lead sealed-root publication | waits for a sealed complete root covering the call | visibility/draining only | waits for a sealed complete root covering the captured frontier | may lose only a complete recent suffix back to the last sealed root |
+| `bench_unsafe` | benchmark-defined | benchmark-defined | benchmark-defined | benchmark-defined | no production guarantee |
+
+All production profiles enable integrity checks. `Flush` never means file or
+directory sync. There is no implicit relaxed downgrade for an explicit sync
+request and no public fast-close/abort alias in this contract.
+
 ## 1. Durability Modes
 
 `Options.Durability` selects one of three modes.
