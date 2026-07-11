@@ -3232,6 +3232,39 @@ func BenchmarkPublicCommandWALRawKVBatchWrite(b *testing.B) {
 	}
 }
 
+func publicCommandWALSequentialDecimalKeyBytes(count int) uint64 {
+	if count <= 0 {
+		return 0
+	}
+	total := uint64(1) // key "0"
+	for lower, digits := 1, uint64(1); lower < count; digits++ {
+		upper := count
+		if lower <= count/10 {
+			upper = lower * 10
+		}
+		total += uint64(upper-lower) * digits
+		lower = upper
+	}
+	return total
+}
+
+func TestPublicCommandWALDurableTinyBatchWriteSyncByteAccounting(t *testing.T) {
+	for count, want := range map[int]uint64{
+		0:    0,
+		1:    1,
+		10:   10,
+		11:   12,
+		100:  190,
+		101:  193,
+		1000: 2890,
+		1001: 2894,
+	} {
+		if got := publicCommandWALSequentialDecimalKeyBytes(count); got != want {
+			t.Fatalf("sequential decimal key bytes for count=%d: got %d, want %d", count, got, want)
+		}
+	}
+}
+
 func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 	for _, batchSize := range []int{1, 8, 32} {
 		b.Run(fmt.Sprintf("ops=%d", batchSize), func(b *testing.B) {
@@ -3244,7 +3277,6 @@ func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 			value := []byte("public-command-wal-value")
 			before := db.Stats()
 			latencies := make([]time.Duration, 0, b.N)
-			var totalBatchBytes uint64
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -3257,12 +3289,6 @@ func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 						b.Fatalf("batch Set(%d): %v", j, err)
 					}
 				}
-				byteSize, err := batch.GetByteSize()
-				if err != nil {
-					_ = batch.Close()
-					b.Fatalf("batch GetByteSize: %v", err)
-				}
-				totalBatchBytes += uint64(byteSize)
 				start := time.Now()
 				if err := batch.WriteSync(); err != nil {
 					_ = batch.Close()
@@ -3274,6 +3300,9 @@ func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 				}
 			}
 			b.StopTimer()
+			totalWrites := b.N * batchSize
+			totalBatchBytes := publicCommandWALSequentialDecimalKeyBytes(totalWrites) +
+				uint64(totalWrites)*uint64(len(value))
 
 			after := db.Stats()
 			requireBenchmarkStatDelta(b, before, after, "treedb.command_wal.append.count_total", uint64(b.N))
