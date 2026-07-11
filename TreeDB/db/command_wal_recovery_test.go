@@ -105,6 +105,7 @@ func TestCommandWALCrashAfterFrameBeforeRootPublishRecovers(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
 	db := openCommandWALDB(t, dir)
+	beforeFileSyncs := commandWALTestStatUint64(t, db.Stats(), "treedb.command_wal.file_sync.calls_total")
 	db.testFailFinalizeCommit.Store(true)
 	b := db.NewBatch()
 	if err := b.Set([]byte("k"), []byte("v")); err != nil {
@@ -113,6 +114,9 @@ func TestCommandWALCrashAfterFrameBeforeRootPublishRecovers(t *testing.T) {
 	err := b.WriteSync()
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
 		t.Fatalf("WriteSync error=%v, want failpoint", err)
+	}
+	if got := commandWALTestStatUint64(t, db.Stats(), "treedb.command_wal.file_sync.calls_total"); got != beforeFileSyncs+1 {
+		t.Fatalf("command WAL file sync calls=%d, want %d before publication failpoint", got, beforeFileSyncs+1)
 	}
 	_ = b.Close()
 	if err := db.Close(); err != nil {

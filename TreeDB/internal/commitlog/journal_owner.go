@@ -552,6 +552,22 @@ func (j *CommandJournal) WriterBufferStats() WriterBufferStats {
 	return j.writer.BufferStats()
 }
 
+// WriterDurabilityStats reports cumulative file and directory sync hook calls
+// for the active writer, including calls made while rotating prior segments.
+// The writer object is reused across rotations, so the snapshot is journal
+// lifetime cumulative.
+func (j *CommandJournal) WriterDurabilityStats() DurabilityStats {
+	if j == nil {
+		return DurabilityStats{}
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
+		return DurabilityStats{}
+	}
+	return j.writer.DurabilityStats()
+}
+
 // ActiveSegmentSnapshot reports the active segment path and accepted bytes under
 // one journal lock acquisition.
 func (j *CommandJournal) ActiveSegmentSnapshot() (path string, bytes int64) {

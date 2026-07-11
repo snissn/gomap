@@ -29,7 +29,29 @@ const (
 	commandWALAppendStatsPayload
 	commandWALAppendStatsEntryScan
 	commandWALAppendStatsIntent
+	// commandWALAppendStatsBarrier is not an append path. It attributes a
+	// FlushCommandWAL call that has no frame append in the same operation, such
+	// as an empty public WriteSync or checkpoint publication boundary.
+	commandWALAppendStatsBarrier
+	commandWALStatsPathCount
 )
+
+func (p commandWALAppendStatsPath) statName() string {
+	switch p {
+	case commandWALAppendStatsPoint:
+		return "point"
+	case commandWALAppendStatsPayload:
+		return "payload"
+	case commandWALAppendStatsEntryScan:
+		return "entry_scan"
+	case commandWALAppendStatsIntent:
+		return "intent"
+	case commandWALAppendStatsBarrier:
+		return "barrier"
+	default:
+		return "unknown"
+	}
+}
 
 func writeCommandWALStats(stats map[string]string, db *DB) {
 	if stats == nil || db == nil {
@@ -111,6 +133,23 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 	stats["treedb.command_wal.flush.ns_total"] = "0"
 	stats["treedb.command_wal.sync.count_total"] = "0"
 	stats["treedb.command_wal.sync.ns_total"] = "0"
+	for path := commandWALAppendStatsPoint; path < commandWALStatsPathCount; path++ {
+		name := path.statName()
+		stats["treedb.command_wal.flush."+name+".count_total"] = "0"
+		stats["treedb.command_wal.flush."+name+".ns_total"] = "0"
+		stats["treedb.command_wal.sync."+name+".count_total"] = "0"
+		stats["treedb.command_wal.sync."+name+".ns_total"] = "0"
+	}
+	stats["treedb.command_wal.file_sync.calls_total"] = "0"
+	stats["treedb.command_wal.file_sync.ns_total"] = "0"
+	stats["treedb.command_wal.file_sync.errors_total"] = "0"
+	stats["treedb.command_wal.write.syscalls_total"] = "0"
+	stats["treedb.command_wal.write.bytes_total"] = "0"
+	stats["treedb.command_wal.write.ns_total"] = "0"
+	stats["treedb.command_wal.write.errors_total"] = "0"
+	stats["treedb.command_wal.directory_sync.calls_total"] = "0"
+	stats["treedb.command_wal.directory_sync.ns_total"] = "0"
+	stats["treedb.command_wal.directory_sync.errors_total"] = "0"
 	stats["treedb.command_wal.cleanup.scans"] = "0"
 	stats["treedb.command_wal.cleanup.scan.count_total"] = "0"
 	stats["treedb.command_wal.cleanup.scan.ns_total"] = "0"
@@ -160,6 +199,14 @@ func writeCommandWALLifecycleStats(stats map[string]string, db *DB) {
 	stats["treedb.command_wal.flush.ns_total"] = fmt.Sprintf("%d", db.commandWALFlushNs.Load())
 	stats["treedb.command_wal.sync.count_total"] = fmt.Sprintf("%d", db.commandWALSyncCount.Load())
 	stats["treedb.command_wal.sync.ns_total"] = fmt.Sprintf("%d", db.commandWALSyncNs.Load())
+	for path := commandWALAppendStatsPoint; path < commandWALStatsPathCount; path++ {
+		name := path.statName()
+		stats["treedb.command_wal.flush."+name+".count_total"] = fmt.Sprintf("%d", db.commandWALFlushPathCount[path].Load())
+		stats["treedb.command_wal.flush."+name+".ns_total"] = fmt.Sprintf("%d", db.commandWALFlushPathNs[path].Load())
+		stats["treedb.command_wal.sync."+name+".count_total"] = fmt.Sprintf("%d", db.commandWALSyncPathCount[path].Load())
+		stats["treedb.command_wal.sync."+name+".ns_total"] = fmt.Sprintf("%d", db.commandWALSyncPathNs[path].Load())
+	}
+	writeCommandWALDurabilityStats(stats, db)
 	stats["treedb.command_wal.cleanup.scans"] = fmt.Sprintf("%d", db.commandWALCleanupScans.Load())
 	stats["treedb.command_wal.cleanup.scan.count_total"] = fmt.Sprintf("%d", db.commandWALCleanupScans.Load())
 	stats["treedb.command_wal.cleanup.scan.ns_total"] = fmt.Sprintf("%d", db.commandWALCleanupScanNs.Load())
@@ -186,6 +233,23 @@ func writeCommandWALWriterBufferStats(stats map[string]string, db *DB) {
 	stats["treedb.command_wal.writer.command_buffer.dropped_bytes_total"] = fmt.Sprintf("%d", snap.CommandBufferDroppedBytes)
 	stats["treedb.command_wal.writer.pending_batch.length_bytes"] = fmt.Sprintf("%d", snap.PendingBatchLength)
 	stats["treedb.command_wal.writer.pending_batch.capacity_bytes"] = fmt.Sprintf("%d", snap.PendingBatchCapacity)
+}
+
+func writeCommandWALDurabilityStats(stats map[string]string, db *DB) {
+	if stats == nil || db == nil || db.commandJournal == nil {
+		return
+	}
+	snap := db.commandJournal.WriterDurabilityStats()
+	stats["treedb.command_wal.write.syscalls_total"] = fmt.Sprintf("%d", snap.WriteSyscalls)
+	stats["treedb.command_wal.write.bytes_total"] = fmt.Sprintf("%d", snap.WriteBytes)
+	stats["treedb.command_wal.write.ns_total"] = fmt.Sprintf("%d", snap.WriteNs)
+	stats["treedb.command_wal.write.errors_total"] = fmt.Sprintf("%d", snap.WriteErrors)
+	stats["treedb.command_wal.file_sync.calls_total"] = fmt.Sprintf("%d", snap.FileSyncCalls)
+	stats["treedb.command_wal.file_sync.ns_total"] = fmt.Sprintf("%d", snap.FileSyncNs)
+	stats["treedb.command_wal.file_sync.errors_total"] = fmt.Sprintf("%d", snap.FileSyncErrors)
+	stats["treedb.command_wal.directory_sync.calls_total"] = fmt.Sprintf("%d", snap.DirectorySyncCalls)
+	stats["treedb.command_wal.directory_sync.ns_total"] = fmt.Sprintf("%d", snap.DirectorySyncNs)
+	stats["treedb.command_wal.directory_sync.errors_total"] = fmt.Sprintf("%d", snap.DirectorySyncErrors)
 }
 
 func (db *DB) observeCommandWALAccepted(lsn uint64) {
@@ -237,21 +301,33 @@ func (db *DB) observeCommandWALAppend(path commandWALAppendStatsPath, elapsed ti
 	}
 }
 
-func (db *DB) observeCommandWALFlush(sync bool, elapsed time.Duration) {
+func (db *DB) observeCommandWALFlush(path commandWALAppendStatsPath, sync bool, elapsed time.Duration) {
 	if db == nil {
 		return
 	}
 	ns := commandWALDurationNs(elapsed)
 	if sync {
 		db.commandWALSyncCount.Add(1)
+		if path < commandWALStatsPathCount {
+			db.commandWALSyncPathCount[path].Add(1)
+		}
 		if ns > 0 {
 			db.commandWALSyncNs.Add(ns)
+			if path < commandWALStatsPathCount {
+				db.commandWALSyncPathNs[path].Add(ns)
+			}
 		}
 		return
 	}
 	db.commandWALFlushCount.Add(1)
+	if path < commandWALStatsPathCount {
+		db.commandWALFlushPathCount[path].Add(1)
+	}
 	if ns > 0 {
 		db.commandWALFlushNs.Add(ns)
+		if path < commandWALStatsPathCount {
+			db.commandWALFlushPathNs[path].Add(ns)
+		}
 	}
 }
 
