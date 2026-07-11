@@ -43,9 +43,11 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set, excludePinIDs []ui
 	}
 	m.enabled = true
 
-	db.writeMu.RLock()
+	// leafGenerationManifest is published under mu. Clone while holding the
+	// same lock so post-commit publication cannot race metrics collection.
+	db.mu.RLock()
 	manifest := db.leafGenerationManifest.clone()
-	db.writeMu.RUnlock()
+	db.mu.RUnlock()
 	if manifest == nil {
 		return m
 	}
