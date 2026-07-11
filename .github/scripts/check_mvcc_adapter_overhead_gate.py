@@ -106,7 +106,7 @@ def render(baseline_sha, candidate_sha, samples, max_regression, max_ratio, pass
         "## TreeDB MVCC adapter-overhead gate", "",
         f"- result: **{'PASS' if passed else 'FAIL'}**",
         f"- baseline: `{baseline_sha}`", f"- candidate: `{candidate_sha}`",
-        f"- samples: {samples} per revision, alternating sequential order",
+        f"- samples: {samples} per revision, benchmark-group-paired alternating AB/BA order",
         f"- base/head timing threshold: +{max_regression:g}%",
         f"- candidate MVCC/direct ratio threshold: {max_ratio:g}x", "",
         "| Benchmark | Base ns/op | Head ns/op | Delta | Base B/op | Head B/op | Base allocs/op | Head allocs/op | Result |",

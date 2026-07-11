@@ -89,24 +89,27 @@ sha256sum "$BASELINE_BIN" "$CANDIDATE_BIN" >"$OUT_DIR/binary-sha256.txt"
 run_group() {
   local revision="$1" sample="$2" binary="$3" regex="$4" output="$5"
   echo "--- revision=$revision sample=$sample regex=$regex ---" >>"$output"
+  {
+    echo "--- before revision=$revision sample=$sample regex=$regex at $(date -Iseconds) ---"
+    ps -eo pid,ppid,etime,%cpu,cmd --sort=-%cpu | head -20 || true
+  } >>"$OUT_DIR/processes.txt"
   taskset -c "$CPUSET" env GOMAXPROCS=1 "$binary" -test.run '^$' \
     -test.bench "$regex" -test.benchmem -test.benchtime="$BENCHTIME" -test.count=1 >>"$output"
 }
-run_revision() {
-  local revision="$1" sample="$2" binary="$3" output="$4"
-  ps -eo pid,ppid,etime,%cpu,cmd --sort=-%cpu | head -20 >>"$OUT_DIR/processes.txt" || true
-  run_group "$revision" "$sample" "$binary" "$COMMIT_REGEX" "$output"
-  run_group "$revision" "$sample" "$binary" "$GET_REGEX" "$output"
-  run_group "$revision" "$sample" "$binary" "$ITER_REGEX" "$output"
+run_pair() {
+  local sample="$1" baseline_binary="$2" candidate_binary="$3" regex="$4"
+  if ((sample % 2 == 1)); then
+    run_group baseline "$sample" "$baseline_binary" "$regex" "$OUT_DIR/baseline.txt"
+    run_group candidate "$sample" "$candidate_binary" "$regex" "$OUT_DIR/candidate.txt"
+  else
+    run_group candidate "$sample" "$candidate_binary" "$regex" "$OUT_DIR/candidate.txt"
+    run_group baseline "$sample" "$baseline_binary" "$regex" "$OUT_DIR/baseline.txt"
+  fi
 }
 for ((sample = 1; sample <= RUNS; sample++)); do
-  if ((sample % 2 == 1)); then
-    run_revision baseline "$sample" "$BASELINE_BIN" "$OUT_DIR/baseline.txt"
-    run_revision candidate "$sample" "$CANDIDATE_BIN" "$OUT_DIR/candidate.txt"
-  else
-    run_revision candidate "$sample" "$CANDIDATE_BIN" "$OUT_DIR/candidate.txt"
-    run_revision baseline "$sample" "$BASELINE_BIN" "$OUT_DIR/baseline.txt"
-  fi
+  run_pair "$sample" "$BASELINE_BIN" "$CANDIDATE_BIN" "$COMMIT_REGEX"
+  run_pair "$sample" "$BASELINE_BIN" "$CANDIDATE_BIN" "$GET_REGEX"
+  run_pair "$sample" "$BASELINE_BIN" "$CANDIDATE_BIN" "$ITER_REGEX"
 done
 
 profile_mvcc() {

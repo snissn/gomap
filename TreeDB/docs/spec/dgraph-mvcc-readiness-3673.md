@@ -126,16 +126,19 @@ only one matching target per invocation.
 ## Performance evidence and boundaries
 
 The raw-path no-regression gate remains `scripts/mvcc_raw_path_gate.sh`: it
-compiles identical base/head benchmark binaries, alternates samples on one
-pinned CPU, and covers point reads, batch writes, snapshot seek, iterator
-reuse, and durable synced writes. It rejects a median timing regression over
-5%, any allocation increase, or a material `B/op` increase.
+compiles base/head benchmark binaries, pairs each individual benchmark group
+immediately in alternating AB/BA order on one pinned CPU, and covers point
+reads, batch writes, snapshot seek, iterator reuse, and durable synced writes.
+The point-read and batch-write rows use separate invocations so one row cannot
+delay the base/head pair for the other. It rejects a median timing regression
+over 5%, any allocation increase, or a material `B/op` increase.
 
 `scripts/mvcc_adapter_overhead_gate.sh` separately compares public MVCC commit,
 get, and all-version iteration rows with their direct TreeDB/physical controls.
-It applies the same base/head regression limits and rejects candidate MVCC
-overhead above 2x. Candidate MVCC CPU profiles and top reports are emitted for
-all three pairs on every run, including a failing run.
+Each benchmark group is paired immediately in the same alternating AB/BA order.
+The gate applies the same base/head regression limits and rejects candidate
+MVCC overhead above 2x. Candidate MVCC CPU profiles and top reports are emitted
+for all three pairs on every run, including a failing run.
 
 `scripts/mvcc_closeout_matrix.sh` captures the final downstream matrix at an
 exact checkout. It emits host/CPU/Go metadata, benchmark-binary checksum, raw

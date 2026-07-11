@@ -6,6 +6,16 @@
 > records of the first measurement only and MUST NOT be cited as exact-head
 > evidence. A clean-checkout exact-head rerun and replacement evidence commit
 > are required before this PR is merge-ready.
+>
+> A later exact-`c6515de296bb89fa0ce4730a4df4561cab4b688a` raw-path run is
+> retained outside git at
+> `/mnt/fast4tb/gomap-3673-evidence/raw-path-c6515de`. It failed the point-read
+> timing row, but is not valid replacement evidence: the old harness separated
+> same-row base/head measurements with whole revision blocks, and its process
+> snapshots captured unexpected 65% and 80% CPU Ironbird analysis processes
+> during later candidate blocks. Preserve that failed run for audit; supersede
+> it only after the benchmark-group-paired harness change is reviewed and an
+> exact-new-head clean-window run is recorded.
 
 This directory indexes the compact, reproducible evidence for gomap #3673.
 The measured code commit is
@@ -29,9 +39,11 @@ commit.
 
 ## Performance gates
 
-The raw-path gate used seven alternating sequential samples per revision,
-`-benchtime=2s`, a 5% median timing ceiling, no allocation increase, and a
-`B/op` increase ceiling of the smaller of 1% or 64 bytes:
+The historical raw-path gate used seven revision-block-alternating samples per
+revision, `-benchtime=2s`, a 5% median timing ceiling, no allocation increase,
+and a `B/op` increase ceiling of the smaller of 1% or 64 bytes. Current harness
+code instead pairs every individual benchmark group immediately in alternating
+AB/BA order; these historical summaries predate that methodology correction:
 
 ```sh
 BASELINE_HASH=f9c9b2a37838909d0e669818cfa2840c0a8d5f85 \

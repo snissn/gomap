@@ -129,7 +129,7 @@ def render_markdown(
         f"- result: **{'PASS' if passed else 'FAIL'}**",
         f"- baseline: `{baseline_sha}`",
         f"- candidate: `{candidate_sha}`",
-        f"- samples: {expected_samples} per revision, alternating sequential order",
+        f"- samples: {expected_samples} per revision, benchmark-group-paired alternating AB/BA order",
         f"- timing threshold: candidate median <= baseline median + {max_regression_percent:g}%",
         "- allocs/op threshold: candidate median must not increase",
         "- B/op jitter threshold: candidate median may increase by at most the smaller of "
