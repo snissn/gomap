@@ -12,6 +12,8 @@ jobs:
     name: mvcc raw-path gate (linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout))\.py$|\.github/workflows/treedb-tests\.yml$)'
     steps:
       - name: Resolve open PR and relevant paths
         id: scope
@@ -39,7 +41,7 @@ jobs:
             "/repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
             --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
           cat "$RUNNER_TEMP/pr-files.txt"
-          if grep -Eq '^((TreeDB/(mvcc|internal/mvcckey|db)/)|scripts/mvcc_raw_path_gate\.sh$|\.github/scripts/check_mvcc_raw_path_gate\.py$|\.github/workflows/treedb-tests\.yml$)' \
+          if grep -Eq "$MVCC_GATE_PATH_RE" \
             "$RUNNER_TEMP/pr-files.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -66,16 +68,51 @@ jobs:
 
       - name: Gate self-checks
         if: steps.scope.outputs.run == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          bash -n scripts/mvcc_raw_path_gate.sh
+          for script in \
+            scripts/mvcc_raw_path_gate.sh \
+            scripts/mvcc_adapter_overhead_gate.sh \
+            scripts/mvcc_closeout_matrix.sh \
+            scripts/mvcc_candidate_checkout_guard.sh; do
+            bash -n "$script"
+          done
           python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
+          python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
+          python3 .github/scripts/test_mvcc_raw_path_equivalence.py
+          python3 .github/scripts/test_mvcc_benchmark_pairing.py
+          python3 .github/scripts/test_summarize_mvcc_closeout.py
+          python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
+          for path in \
+            TreeDB/snapshot_seek_iterator_bench_test.go \
+            TreeDB/command_wal_public_test.go \
+            TreeDB/caching/bench_test.go \
+            TreeDB/bg_vacuum.go \
+            TreeDB/node/leaf_prefix_v2.go \
+            TreeDB/page/freelist.go \
+            TreeDB/pager/madvise_linux.go \
+            TreeDB/internal/valuelog/autotune_options.go \
+            TreeDB/docs/spec/native-ann-vector-index.md \
+            scripts/mvcc_raw_path_gate.sh \
+            scripts/mvcc_adapter_overhead_gate.sh \
+            scripts/mvcc_closeout_matrix.sh \
+            scripts/mvcc_candidate_checkout_guard.sh \
+            .github/scripts/summarize_mvcc_closeout.py \
+            .github/scripts/test_summarize_mvcc_closeout.py \
+            .github/scripts/test_mvcc_candidate_checkout_guard.py; do
+            if ! grep -Eq "$MVCC_GATE_PATH_RE" <<< "$path"; then
+              echo "MVCC gate path scope unexpectedly excludes: $path" >&2
+              exit 1
+            fi
+          done
 
       - name: Compare exact base and head
         if: steps.scope.outputs.run == 'true'
         env:
           BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
           CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
-          RUNS: "7"
+          RUNS: "8"
           BENCHTIME: 2s
           CPUSET: "0"
           MAX_REGRESSION_PERCENT: "5"
@@ -83,7 +120,14 @@ jobs:
           MAX_BYTES_REGRESSION_ABSOLUTE: "64"
           SCRIPT_GOWORK: "off"
           OUT_DIR: ${{ runner.temp }}/mvcc-raw-path-gate
-        run: ./scripts/mvcc_raw_path_gate.sh
+        run: |
+          status=$(git status --porcelain --untracked-files=normal)
+          if [[ -n "$status" ]]; then
+            echo "candidate checkout became dirty before the raw-path gate:" >&2
+            printf '%s\n' "$status" >&2
+            exit 2
+          fi
+          ./scripts/mvcc_raw_path_gate.sh
 
       - name: Add benchmark summary
         if: always() && steps.scope.outputs.run == 'true'
