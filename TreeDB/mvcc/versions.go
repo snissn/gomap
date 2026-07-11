@@ -231,7 +231,12 @@ func (it *VersionIterator) advance() {
 			it.raw.Next()
 			continue
 		}
-		state, value, err := decodeRecordView(it.raw.Value())
+		record := it.raw.Value()
+		if rawErr := it.raw.Error(); rawErr != nil {
+			it.err = storageError("read version iterator value", rawErr)
+			return
+		}
+		state, value, err := decodeRecordView(record)
 		if err != nil {
 			it.err = err
 			return
@@ -508,7 +513,11 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			return stats, fmt.Errorf("%w: %w", ErrMalformedRecord, decodeErr)
 		}
 		logical := logicalBuf
-		state, decodeErr := validateRecord(raw.Value())
+		record := raw.Value()
+		if rawErr := raw.Error(); rawErr != nil {
+			return stats, storageError("read prune iterator value", rawErr)
+		}
+		state, decodeErr := validateRecord(record)
 		if decodeErr != nil {
 			return stats, decodeErr
 		}
@@ -519,7 +528,7 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 			currentLogical = append(currentLogical[:0], logical...)
 			haveLogical = true
 		}
-		recordBytes := uint64(len(physical) + len(raw.Value()))
+		recordBytes := uint64(len(physical) + len(record))
 		if timestamp > floor {
 			if err := finalizeAnchor(); err != nil {
 				return stats, err

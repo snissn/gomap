@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -283,6 +284,55 @@ func TestDiscardFloorLoadPreservesIteratorCloseError(t *testing.T) {
 	closeDB.fail.Store(false)
 	if floor, err := store.DiscardFloor(); err != nil || floor != 0 {
 		t.Fatalf("DiscardFloor retry floor=%d err=%v", floor, err)
+	}
+}
+
+func TestVersionValueReadErrorsRemainStorageErrors(t *testing.T) {
+	t.Run("version iterator", func(t *testing.T) {
+		db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+		defer db.Close()
+		injected := errors.New("version value read failure")
+		store := newStore(&snapshotValueErrorDB{DB: db, err: injected})
+		if err := store.CommitAt(10, []Mutation{{Key: []byte("k"), Value: []byte("value")}}, CommitRelaxed); err != nil {
+			t.Fatalf("CommitAt: %v", err)
+		}
+		it, err := store.IterateVersions(VersionIteratorOptions{})
+		if err != nil {
+			t.Fatalf("IterateVersions: %v", err)
+		}
+		if it.Valid() {
+			t.Fatal("iterator remained valid after value read failure")
+		}
+		assertStorageValueError(t, it.Error(), injected, "read version iterator value")
+		if err := it.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+
+	t.Run("prune", func(t *testing.T) {
+		db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+		defer db.Close()
+		injected := errors.New("prune value read failure")
+		store := newStore(&snapshotValueErrorDB{DB: db, err: injected})
+		commitHistory(t, store, "k", MutationAt{10, []byte("old"), false}, MutationAt{20, []byte("new"), false})
+		if err := store.AdvanceDiscardFloor(15, CommitDurable); err != nil {
+			t.Fatalf("AdvanceDiscardFloor: %v", err)
+		}
+		_, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: CommitDurable})
+		assertStorageValueError(t, err, injected, "read prune iterator value")
+	})
+}
+
+func assertStorageValueError(t testing.TB, err, injected error, operation string) {
+	t.Helper()
+	if !errors.Is(err, ErrStorage) || !errors.Is(err, injected) {
+		t.Fatalf("error=%v want ErrStorage and injected cause", err)
+	}
+	if errors.Is(err, ErrMalformedRecord) {
+		t.Fatalf("error=%v was misclassified as ErrMalformedRecord", err)
+	}
+	if !strings.Contains(err.Error(), operation) {
+		t.Fatalf("error=%v missing operation %q", err, operation)
 	}
 }
 
@@ -621,6 +671,61 @@ func (it *floorCloseErrorIterator) Close() error {
 }
 
 var _ treeDB = (*floorCloseErrorDB)(nil)
+
+type snapshotValueErrorDB struct {
+	*treedb.DB
+	err error
+}
+
+func (db *snapshotValueErrorDB) AcquireSnapshot() treedb.Snapshot {
+	snapshot := db.DB.AcquireSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	return &snapshotValueErrorSnapshot{Snapshot: snapshot, err: db.err}
+}
+
+type snapshotValueErrorSnapshot struct {
+	treedb.Snapshot
+	err error
+}
+
+func (snapshot *snapshotValueErrorSnapshot) Iterator(start, end []byte) (treedb.Iterator, error) {
+	it, err := snapshot.Snapshot.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return &valueErrorIterator{Iterator: it, err: snapshot.err}, nil
+}
+
+func (snapshot *snapshotValueErrorSnapshot) ReverseIterator(start, end []byte) (treedb.Iterator, error) {
+	it, err := snapshot.Snapshot.ReverseIterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return &valueErrorIterator{Iterator: it, err: snapshot.err}, nil
+}
+
+type valueErrorIterator struct {
+	treedb.Iterator
+	err       error
+	valueRead bool
+}
+
+func (it *valueErrorIterator) Value() []byte {
+	it.valueRead = true
+	return nil
+}
+
+func (it *valueErrorIterator) Error() error {
+	if it.valueRead {
+		return errors.Join(it.Iterator.Error(), it.err)
+	}
+	return it.Iterator.Error()
+}
+
+var _ treeDB = (*snapshotValueErrorDB)(nil)
+var _ snapshotDB = (*snapshotValueErrorDB)(nil)
 
 type pruneCrashDB struct {
 	*treedb.DB
