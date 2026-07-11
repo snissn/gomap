@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -40,6 +41,17 @@ const (
 
 var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
+
+func syncNewFileDirectory(w *Writer, path string) error {
+	dir := filepath.Dir(path)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, "", "", dir); err != nil {
+		return err
+	}
+	if err := w.syncDirectory(path); err != nil {
+		return err
+	}
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, "", "", dir)
+}
 
 func recordSizeExceedsMax(valueLen uint32) bool {
 	if limits.MaxRecordSize <= 0 {
@@ -562,7 +574,7 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		f:      f,
 		syncFn: func(file *os.File) error { return file.Sync() },
 	}
-	if err := w.syncDirectory(path); err != nil {
+	if err := syncNewFileDirectory(w, path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -876,7 +888,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			return err
 		}
 		if syncCurrent {
-			if err := w.syncDirectory(path); err != nil {
+			if err := syncNewFileDirectory(w, path); err != nil {
 				_ = f.Close()
 				return err
 			}
@@ -916,7 +928,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		return err
 	}
 	if syncCurrent {
-		if err := w.syncDirectory(path); err != nil {
+		if err := syncNewFileDirectory(w, path); err != nil {
 			_ = f.Close()
 			return err
 		}

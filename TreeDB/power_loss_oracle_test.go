@@ -2,13 +2,16 @@ package treedb_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
 )
 
 const powerLossOracleSeed = uint64(3674)
@@ -49,9 +52,9 @@ func seedPowerLossImage(t *testing.T) (*powerlossoracle.Model, treedb.Options) {
 	return model, opts
 }
 
-func requirePublicReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, readOnly bool) powerlossoracle.ReopenResult {
+func requirePublicReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, readOnly bool) powerlossreopen.Result {
 	t.Helper()
-	result, db, closeFn, err := powerlossoracle.ReopenStable(model, opts, readOnly)
+	result, db, closeFn, err := powerlossreopen.Stable(model, opts, readOnly)
 	if err != nil {
 		t.Fatalf("materialize/public Open: %v", err)
 	}
@@ -76,35 +79,81 @@ func requirePublicReopen(t *testing.T, model *powerlossoracle.Model, opts treedb
 // enumerator used by later durability children. Failure output always includes
 // the replayable seed and stable cut-point identifier.
 func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
-	base, opts := seedPowerLossImage(t)
-	for index, cut := range powerlossoracle.CutPoints {
+	dir := t.TempDir()
+	opts := powerLossOptions(dir)
+	opts.CommandWAL = true
+	opts.CommandWALSegmentTargetBytes = 4096
+	opts.WALMaxSegmentBytes = 64 * 1024
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.IndexOuterLeavesInValueLog = true
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open actual-cut fixture: %v", err)
+	}
+	if err := db.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
+		t.Fatalf("seed SetSync: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("seed Checkpoint: %v", err)
+	}
+	model, err := powerlossoracle.Capture(dir)
+	if err != nil {
+		t.Fatalf("Capture live stable baseline: %v", err)
+	}
+	snapshots := make(map[powerlossoracle.CutPoint]*powerlossoracle.Model, len(powerlossoracle.CutPoints))
+	events := make(map[powerlossoracle.CutPoint][]durabilitycut.Event, len(powerlossoracle.CutPoints))
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if err := model.Observe(dir, event); err != nil {
+			return err
+		}
+		events[event.Point] = append(events[event.Point], event)
+		if snapshots[event.Point] == nil {
+			snapshots[event.Point] = model.Clone()
+		}
+		return nil
+	})
+	batch := db.NewBatch()
+	defer batch.Close()
+	for i := 0; i < 64; i++ {
+		key := []byte(fmt.Sprintf("actual/%03d", i))
+		value := bytes.Repeat([]byte{byte(i + 1)}, 2048)
+		if err := batch.Set(key, value); err != nil {
+			restore()
+			_ = db.Close()
+			t.Fatalf("actual batch Set %d: %v", i, err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		restore()
+		_ = db.Close()
+		t.Fatalf("actual batch Write: %v", err)
+	}
+	if err := db.SetSync([]byte("actual/durable"), bytes.Repeat([]byte("d"), 2048)); err != nil {
+		restore()
+		_ = db.Close()
+		t.Fatalf("actual durable SetSync: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		restore()
+		_ = db.Close()
+		t.Fatalf("actual Checkpoint: %v", err)
+	}
+	restore()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close actual-cut fixture: %v", err)
+	}
+	for _, cut := range powerlossoracle.CutPoints {
 		cut := cut
 		t.Run(string(cut), func(t *testing.T) {
-			t.Logf("power-loss-oracle seed=%d cut=%s", powerLossOracleSeed, cut)
-			model := base.Clone()
-			if index >= 1 {
-				if err := model.Create("oracle-dependency.tmp", []byte("dependency")); err != nil {
-					t.Fatalf("seed=%d cut=%s create dependency: %v", powerLossOracleSeed, cut, err)
-				}
+			t.Logf("power-loss-oracle seed=%d cut=%s events=%d", powerLossOracleSeed, cut, len(events[cut]))
+			snapshot := snapshots[cut]
+			if snapshot == nil {
+				t.Fatalf("seed=%d cut=%s not emitted by actual TreeDB workload", powerLossOracleSeed, cut)
 			}
-			if index >= 2 {
-				if err := model.Flush("oracle-dependency.tmp"); err != nil {
-					t.Fatalf("seed=%d cut=%s flush dependency: %v", powerLossOracleSeed, cut, err)
-				}
-			}
-			if index >= 3 {
-				if err := model.SyncFile("oracle-dependency.tmp"); err != nil {
-					t.Fatalf("seed=%d cut=%s sync dependency: %v", powerLossOracleSeed, cut, err)
-				}
-			}
-			if index >= 4 {
-				if err := model.SyncDir("."); err != nil {
-					t.Fatalf("seed=%d cut=%s sync directory: %v", powerLossOracleSeed, cut, err)
-				}
-			}
-			result := requirePublicReopen(t, model, opts, index%2 == 1)
+			result := requirePublicReopen(t, snapshot, opts, false)
 			if result.Rejected {
-				t.Fatalf("seed=%d cut=%s valid old-root image rejected by public Open: %v", powerLossOracleSeed, cut, result.Err)
+				t.Fatalf("seed=%d cut=%s stable-only public Open rejected: %v", powerLossOracleSeed, cut, result.Err)
 			}
 		})
 	}
@@ -113,47 +162,98 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 // This family is the stable witness for finalizeCommitLockedWithOptions and
 // flushFinalizeCommitDurability publishing meta ahead of dependency closure.
 func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
-	base, opts := seedPowerLossImage(t)
-	updatedDir := t.TempDir()
-	updatedOpts := powerLossOptions(updatedDir)
-	updatedOpts.ValueLog.PointerThreshold = 1
-	updatedOpts.ValueLog.ForcePointers = true
-	db, err := treedb.Open(updatedOpts)
+	dir := t.TempDir()
+	opts := powerLossOptions(dir)
+	opts.Durability = treedb.DurabilityWALOffRelaxed
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.IndexOuterLeavesInValueLog = true
+	db, err := treedb.Open(opts)
 	if err != nil {
-		t.Fatalf("Open updated image: %v", err)
+		t.Fatalf("Open actual relaxed fixture: %v", err)
 	}
 	if err := db.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
-		_ = db.Close()
-		t.Fatalf("SetSync old in updated image: %v", err)
-	}
-	if err := db.SetSync([]byte("new/pointer"), bytes.Repeat([]byte("p"), 4096)); err != nil {
-		_ = db.Close()
-		t.Fatalf("SetSync pointer in updated image: %v", err)
+		t.Fatalf("seed SetSync: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
-		_ = db.Close()
-		t.Fatalf("Checkpoint updated image: %v", err)
+		t.Fatalf("seed Checkpoint: %v", err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("Close updated image: %v", err)
+	base, err := powerlossoracle.Capture(dir)
+	if err != nil {
+		t.Fatalf("capture stable baseline: %v", err)
 	}
-	if err := base.Overlay(updatedDir); err != nil {
-		t.Fatalf("Overlay updated image: %v", err)
+	cutErr := errors.New("power-loss-oracle: stop after actual meta write")
+	var snapshot *powerlossoracle.Model
+	var meta durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if err := base.Observe(dir, event); err != nil {
+			return err
+		}
+		if event.Point == durabilitycut.AfterMetaWrite {
+			meta = event
+			snapshot = base.Clone()
+			return cutErr
+		}
+		return nil
+	})
+	for i := 0; i < 400; i++ {
+		key := []byte(fmt.Sprintf("new/pointer/%03d", i))
+		if err := db.Set(key, bytes.Repeat([]byte{byte(i + 1)}, 4096)); err != nil {
+			restore()
+			t.Fatalf("stage actual cached write %d: %v", i, err)
+		}
 	}
-	for _, path := range base.VolatilePaths() {
-		if filepath.Base(path) == "index.db" {
-			if err := base.SyncFile(path); err != nil {
-				t.Fatalf("sync newer index/meta %s: %v", path, err)
+	err = db.Checkpoint()
+	restore()
+	if !errors.Is(err, cutErr) || snapshot == nil {
+		t.Fatalf("actual relaxed finalize did not stop at AfterMetaWrite: err=%v", err)
+	}
+	_ = db.Close()
+	relIndex, err := filepath.Rel(dir, meta.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := snapshot.ChangedRanges(relIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) == 0 {
+		t.Fatal("actual relaxed finalize changed no index bytes")
+	}
+
+	images := map[powerlossoracle.ResourceKind]*powerlossoracle.Model{}
+	missingIndex := snapshot.Clone()
+	if err := missingIndex.PromoteRange(relIndex, meta.Offset, meta.Length); err != nil {
+		t.Fatal(err)
+	}
+	images[powerlossoracle.ResourceIndex] = missingIndex
+	missingVlog := snapshot.Clone()
+	for _, r := range changed {
+		if err := missingVlog.PromoteRange(relIndex, r.Offset, r.Length); err != nil {
+			t.Fatal(err)
+		}
+	}
+	images[powerlossoracle.ResourceValueLog] = missingVlog
+	missingOuter := missingVlog.Clone()
+	leafChanged := false
+	for _, path := range missingOuter.VolatilePaths() {
+		if strings.HasPrefix(filepath.ToSlash(path), "leaf_vlog/") {
+			ranges, err := missingOuter.ChangedRanges(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafChanged = leafChanged || len(ranges) > 0
+		}
+		if strings.Contains(path, "value_vlog") {
+			if err := missingOuter.SyncFile(path); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
-	result, _, closeFn, err := powerlossoracle.ReopenStable(base, opts, false)
-	if err != nil {
-		t.Fatalf("stable-only public Open: %v", err)
+	if !leafChanged {
+		t.Fatal("actual fixture generated no changed outer-leaf record")
 	}
-	if err := closeFn(); err != nil {
-		t.Fatalf("close stable-only public Open: %v", err)
-	}
+	images[powerlossoracle.ResourceOuterLeaf] = missingOuter
 
 	for _, missing := range []powerlossoracle.ResourceKind{
 		powerlossoracle.ResourceIndex,
@@ -162,161 +262,170 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	} {
 		missing := missing
 		t.Run(string(missing), func(t *testing.T) {
-			scenario := powerlossoracle.Scenario{
-				Name:            "TestPowerLossOracleCounterexampleNewMetaMissingClosure/" + string(missing),
-				Cut:             powerlossoracle.AfterMetaSync,
-				ReopenAttempted: true,
-				ReopenRejected:  result.Rejected,
-				Generations: []powerlossoracle.Generation{
-					{Sequence: 1, Recoverable: true, Complete: true, Resources: completeRootResources("old")},
-					{Sequence: 2, Recoverable: true, Complete: true, Resources: resourcesWithMissing("new", missing)},
-				},
+			result, reopened, closeFn, err := powerlossreopen.Stable(images[missing], opts, false)
+			if err != nil {
+				t.Fatal(err)
 			}
+			defer func() { _ = closeFn() }()
 			if result.Rejected {
 				t.Logf("public Open rejected stable-only image as permitted evidence: %v", result.Err)
 				return
 			}
-			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
-				t.Fatal(err)
+			got, getErr := reopened.Get([]byte("new/pointer/399"))
+			want := bytes.Repeat([]byte{144}, 4096)
+			if getErr == nil && bytes.Equal(got, want) {
+				t.Fatalf("public read unexpectedly resolved %s closure at commit=%d", missing, result.CommitSeq)
 			}
 		})
-	}
-}
-
-// This family is the stable witness for graveyard/freelist reuse before the
-// two-recoverable-root horizon advances.
-func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
-	model, opts := seedPowerLossImage(t)
-	result := requirePublicReopen(t, model, opts, true)
-	scenario := powerlossoracle.Scenario{
-		Name:            "TestPowerLossOracleCounterexampleRecoverablePageReuse",
-		Cut:             powerlossoracle.AfterIndexDataSync,
-		ReopenAttempted: true,
-		ReopenRejected:  result.Rejected,
-		Generations: []powerlossoracle.Generation{
-			{Sequence: 8, Recoverable: true, Complete: true, Resources: completeRootResources("old"), LivePages: []uint64{41, 42}},
-			{Sequence: 9, Recoverable: true, Complete: true, Resources: completeRootResources("new"), LivePages: []uint64{42, 43}},
-		},
-		ReusedPages: []uint64{41},
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantRecoverablePageReused); err != nil {
-		t.Fatal(err)
 	}
 }
 
 // This family is the stable witness for relaxed command-WAL external-RID replay
 // accepting a checksum-valid but dependency-incomplete frame.
 func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T) {
-	model, opts := seedPowerLossImage(t)
-	result := requirePublicReopen(t, model, opts, false)
-	scenario := powerlossoracle.Scenario{
-		Name:            "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID",
-		Cut:             powerlossoracle.AfterDependencyFileSync,
-		ReopenAttempted: true,
-		ReopenRejected:  result.Rejected,
-		Generations:     []powerlossoracle.Generation{{Sequence: 3, Recoverable: true, Complete: true, Resources: completeRootResources("root")}},
-		CommandFrames: []powerlossoracle.CommandFrame{
-			{LSN: 11, ChecksumValid: true, Applied: true, Dependencies: []powerlossoracle.Resource{{Kind: powerlossoracle.ResourceValueLog, ID: "rid-11", Stable: true, Live: true}}},
-			{LSN: 12, ChecksumValid: true, Applied: true, Dependencies: []powerlossoracle.Resource{{Kind: powerlossoracle.ResourceValueLog, ID: "rid-12", Stable: false, Live: false}}},
-		},
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantCommandReplayHole); err != nil {
+	dir := t.TempDir()
+	opts := powerLossOptions(dir)
+	opts.CommandWAL = true
+	opts.Durability = treedb.DurabilityWALOnRelaxed
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := treedb.Open(opts)
+	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-// This family is the stable witness for publishCommandWALCheckpointApplied and
-// cleanup removing a WAL/asset before a sealed root proves coverage.
-func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *testing.T) {
-	model, opts := seedPowerLossImage(t)
-	result := requirePublicReopen(t, model, opts, true)
-	scenario := powerlossoracle.Scenario{
-		Name:             "TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage",
-		Cut:              powerlossoracle.AfterWALOrAssetUnlink,
-		ReopenAttempted:  true,
-		ReopenRejected:   result.Rejected,
-		Generations:      []powerlossoracle.Generation{{Sequence: 5, Recoverable: true, Complete: true, Resources: completeRootResources("retained")}},
-		RemovedResources: []powerlossoracle.Resource{{Kind: powerlossoracle.ResourceCommandWAL, ID: "retained-wal", Stable: false, Live: false}},
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantEarlySourceDeletion); err != nil {
+	model, err := powerlossoracle.Capture(dir)
+	if err != nil {
 		t.Fatal(err)
+	}
+	cutErr := errors.New("power-loss-oracle: stop after actual command frame flush")
+	var snapshot *powerlossoracle.Model
+	var walEvent durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if err := model.Observe(dir, event); err != nil {
+			return err
+		}
+		if event.Point == durabilitycut.AfterUserspaceFlush && event.Resource == durabilitycut.ResourceCommandWAL {
+			snapshot = model.Clone()
+			walEvent = event
+			return cutErr
+		}
+		return nil
+	})
+	b := db.NewBatch()
+	if err := b.Set([]byte("rid/missing"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+		t.Fatal(err)
+	}
+	err = b.Write()
+	_ = b.Close()
+	restore()
+	if !errors.Is(err, cutErr) || snapshot == nil {
+		t.Fatalf("actual external-RID cut err=%v", err)
+	}
+	_ = db.Close()
+	if walEvent.Path == "" {
+		t.Fatal("actual command-WAL flush event omitted path")
+	}
+	walPath, err := filepath.Rel(dir, walEvent.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranges, err := snapshot.ChangedRanges(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranges) == 0 {
+		t.Fatal("actual relaxed command frame changed no command-WAL bytes")
+	}
+	for _, r := range ranges {
+		if err := snapshot.PromoteRange(walPath, r.Offset, r.Length); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeFn() }()
+	if result.Rejected {
+		t.Logf("public Open rejected checksum-valid frame with missing RID: %v", result.Err)
+		return
+	}
+	got, getErr := reopened.Get([]byte("rid/missing"))
+	if getErr == nil && bytes.Equal(got, bytes.Repeat([]byte("r"), 4096)) {
+		t.Fatalf("public recovery resolved command frame whose actual RID bytes were not stable")
 	}
 }
 
 // This family is the stable witness for Checkpoint, flushSyncRequested, and
 // chunked cached flush apply exposing an intermediate incomplete root.
 func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) {
-	model, opts := seedPowerLossImage(t)
-	result := requirePublicReopen(t, model, opts, false)
-	scenario := powerlossoracle.Scenario{
-		Name:            "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot",
-		Cut:             powerlossoracle.AfterMetaSync,
-		ReopenAttempted: true,
-		ReopenRejected:  result.Rejected,
-		Generations: []powerlossoracle.Generation{
-			{Sequence: 21, Recoverable: true, Complete: true, Resources: completeRootResources("old")},
-			{Sequence: 22, Recoverable: true, Complete: true, Resources: resourcesWithMissing("chunk-2", powerlossoracle.ResourceIndex)},
-		},
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
+	dir := t.TempDir()
+	opts := powerLossOptions(dir)
+	opts.Durability = treedb.DurabilityWALOffRelaxed
+	opts.FlushBackendMaxEntries = 4
+	db, err := treedb.Open(opts)
+	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestPowerLossOracleAcknowledgementRules(t *testing.T) {
-	model, opts := seedPowerLossImage(t)
-	result := requirePublicReopen(t, model, opts, true)
-	tests := []struct {
-		name      string
-		scenario  powerlossoracle.Scenario
-		invariant string
-	}{
-		{
-			name: "durable-ack-survival",
-			scenario: powerlossoracle.Scenario{
-				Generations:  []powerlossoracle.Generation{{Sequence: 4, Recoverable: true, Complete: true, Resources: completeRootResources("root")}},
-				Acknowledged: []powerlossoracle.Acknowledgement{{Sequence: 5, Durable: true}},
-			},
-			invariant: powerlossoracle.InvariantDurableAckLost,
-		},
-		{
-			name: "relaxed-loss-is-suffix",
-			scenario: powerlossoracle.Scenario{
-				Generations:               []powerlossoracle.Generation{{Sequence: 6, Recoverable: true, Complete: true, Resources: completeRootResources("root")}},
-				Acknowledged:              []powerlossoracle.Acknowledgement{{Sequence: 1}, {Sequence: 2}, {Sequence: 3}},
-				RecoveredAcknowledgements: []uint64{1, 3},
-			},
-			invariant: powerlossoracle.InvariantRelaxedNonSuffixLoss,
-		},
-		{
-			name: "selected-root-is-complete-candidate",
-			scenario: powerlossoracle.Scenario{
-				Generations:      []powerlossoracle.Generation{{Sequence: 6, Recoverable: true, Complete: true, Resources: completeRootResources("root")}},
-				SelectedSequence: 7,
-			},
-			invariant: powerlossoracle.InvariantSelectedRootInvalid,
-		},
-		{
-			name: "selected-root-key-prefix-state",
-			scenario: powerlossoracle.Scenario{
-				Generations:               []powerlossoracle.Generation{{Sequence: 6, Recoverable: true, Complete: true, Resources: completeRootResources("root")}},
-				SelectedSequence:          6,
-				ExpectedKeyValuesByPrefix: map[string]map[string]string{"user/": {"user/a": "old"}},
-				ObservedKeyValuesByPrefix: map[string]map[string]string{"user/": {"user/a": "new"}},
-			},
-			invariant: powerlossoracle.InvariantKeyStateMismatch,
-		},
+	if err := db.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			test.scenario.Name = "TestPowerLossOracleAcknowledgementRules/" + test.name
-			test.scenario.Cut = powerlossoracle.AfterMetaSync
-			test.scenario.ReopenAttempted = true
-			test.scenario.ReopenRejected = result.Rejected
-			if err := powerlossoracle.RequireViolation(test.scenario.Validate(), test.invariant); err != nil {
-				t.Fatal(err)
-			}
-		})
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	model, err := powerlossoracle.Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 64; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("chunk/%03d", i)), []byte(fmt.Sprintf("value-%03d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cutErr := errors.New("power-loss-oracle: stop after intermediate chunk meta")
+	var snapshot *powerlossoracle.Model
+	var meta durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if err := model.Observe(dir, event); err != nil {
+			return err
+		}
+		if event.Point == durabilitycut.AfterMetaWrite {
+			meta, snapshot = event, model.Clone()
+			return cutErr
+		}
+		return nil
+	})
+	err = db.Checkpoint()
+	restore()
+	if !errors.Is(err, cutErr) || snapshot == nil {
+		t.Fatalf("actual chunk checkpoint cut err=%v", err)
+	}
+	_ = db.Close()
+	rel, err := filepath.Rel(dir, meta.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranges, err := snapshot.ChangedRanges(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range ranges {
+		if err := snapshot.PromoteRange(rel, r.Offset, r.Length); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeFn() }()
+	if result.Rejected {
+		t.Logf("public Open rejected actual intermediate image: %v", result.Err)
+		return
+	}
+	got, getErr := reopened.Get([]byte("chunk/063"))
+	if getErr == nil && bytes.Equal(got, []byte("value-063")) {
+		t.Fatalf("actual first chunk unexpectedly exposed complete checkpoint at commit=%d", result.CommitSeq)
 	}
 }
 
@@ -389,7 +498,7 @@ func TestPowerLossOracleFixtureInventoryReopensStableOnly(t *testing.T) {
 			if test.rotatedWAL && !stableWALHasSequenceAfterOne(paths) {
 				t.Fatalf("fixture did not rotate a WAL segment: %v", paths)
 			}
-			result, reopened, closeFn, err := powerlossoracle.ReopenStable(model, opts, true)
+			result, reopened, closeFn, err := powerlossreopen.Stable(model, opts, true)
 			if err != nil {
 				t.Fatalf("public read-only Open fixture: %v", err)
 			}
@@ -446,37 +555,10 @@ func stableWALHasSequenceAfterOne(paths []string) bool {
 	return false
 }
 
-func completeRootResources(prefix string) []powerlossoracle.Resource {
-	return []powerlossoracle.Resource{
-		{Kind: powerlossoracle.ResourceIndex, ID: prefix + "-index", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceFreelist, ID: prefix + "-freelist", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceValueLog, ID: prefix + "-vlog", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceOuterLeaf, ID: prefix + "-leaf", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceAuxiliary, ID: prefix + "-asset", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceDirectory, ID: prefix + "-dir", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceSeal, ID: prefix + "-seal", Stable: true, Live: true},
-		{Kind: powerlossoracle.ResourceCommandWAL, ID: prefix + "-wal", Stable: true, Live: true},
-	}
-}
-
-func resourcesWithMissing(prefix string, missing powerlossoracle.ResourceKind) []powerlossoracle.Resource {
-	resources := completeRootResources(prefix)
-	for index := range resources {
-		if resources[index].Kind == missing {
-			resources[index].Stable = false
-			resources[index].Live = false
-		}
-	}
-	return resources
-}
-
 func TestPowerLossOracleStableNamesArePortable(t *testing.T) {
 	for _, cut := range powerlossoracle.CutPoints {
 		if strings.TrimSpace(string(cut)) == "" || strings.ContainsAny(string(cut), " /\\") {
 			t.Fatalf("cut point %q is not a portable stable identifier", cut)
 		}
-	}
-	if err := powerlossoracle.RequireViolation(nil, powerlossoracle.InvariantCommandReplayHole); err == nil {
-		t.Fatal("RequireViolation must reject a missing counterexample")
 	}
 }

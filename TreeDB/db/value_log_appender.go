@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -102,8 +103,14 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	}
 	db.publishPrepareMu.RLock()
 	defer db.publishPrepareMu.RUnlock()
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceValueLog, db.dir); err != nil {
+		return nil, err
+	}
 	ptrs, err := appender.AppendValues(values)
 	if err != nil {
+		return nil, err
+	}
+	if err := durabilitycut.EmitBasic(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceValueLog, db.dir); err != nil {
 		return nil, err
 	}
 	db.protectPendingValueLogAppendPtrs(ptrs)

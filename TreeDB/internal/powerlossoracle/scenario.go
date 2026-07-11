@@ -33,11 +33,13 @@ type Resource struct {
 type Generation struct {
 	Sequence    uint64
 	Recoverable bool
-	Complete    bool
-	Resources   []Resource
-	KeyValues   map[string]string
-	AppliedLSN  uint64
-	LivePages   []uint64
+	// Complete is retained for fixture readability but is never trusted by the
+	// validator; completeness is derived from the resource-kind closure below.
+	Complete   bool
+	Resources  []Resource
+	KeyValues  map[string]string
+	AppliedLSN uint64
+	LivePages  []uint64
 }
 
 // Acknowledgement records the state promised when a public call returned.
@@ -61,7 +63,13 @@ type Scenario struct {
 	Generations               []Generation
 	Acknowledged              []Acknowledgement
 	RecoveredAcknowledgements []uint64
+	// LatestSealedSequence is the newest generation whose publication seal is
+	// stable in the crash image. Public recovery may only select complete
+	// candidates at or below this boundary.
+	LatestSealedSequence      uint64
 	SelectedSequence          uint64
+	OpenedSequence            uint64
+	OpenedAppliedLSN          uint64
 	ExpectedKeyValuesByPrefix map[string]map[string]string
 	ObservedKeyValuesByPrefix map[string]map[string]string
 	CommandFrames             []CommandFrame
@@ -97,10 +105,10 @@ func (s Scenario) Validate() error {
 		return Violation{Invariant: InvariantPublicReopenMissing, Detail: "stable-only image was not passed through public Open"}
 	}
 	newest := s.newestRecoverable()
-	if newest != nil && !generationComplete(*newest) {
-		missing := missingResources(newest.Resources)
-		if !s.ReopenRejected {
-			return Violation{Invariant: InvariantIncompleteRecoverableRoot, Detail: fmt.Sprintf("generation=%d missing=%s cut=%s", newest.Sequence, strings.Join(missing, ","), s.Cut)}
+	for _, generation := range s.Generations {
+		if generation.Recoverable && generation.Sequence <= s.LatestSealedSequence && !generationComplete(generation) && !s.ReopenRejected {
+			missing := missingGenerationResources(generation)
+			return Violation{Invariant: InvariantIncompleteRecoverableRoot, Detail: fmt.Sprintf("generation=%d missing=%s cut=%s", generation.Sequence, strings.Join(missing, ","), s.Cut)}
 		}
 	}
 	if err := s.validateSelectedState(); err != nil {
@@ -122,24 +130,47 @@ func (s Scenario) Validate() error {
 	}
 	frames := append([]CommandFrame(nil), s.CommandFrames...)
 	sort.Slice(frames, func(i, j int) bool { return frames[i].LSN < frames[j].LSN })
-	var lastApplied uint64
-	missingSeen := false
+	baseAppliedLSN := uint64(0)
+	if selected := s.selectedGeneration(); selected != nil {
+		baseAppliedLSN = selected.AppliedLSN
+	} else if newest != nil {
+		baseAppliedLSN = newest.AppliedLSN
+	}
+	expectedLSN := baseAppliedLSN + 1
+	holeSeen := false
 	for _, frame := range frames {
+		if frame.LSN <= baseAppliedLSN {
+			continue
+		}
+		if frame.LSN != expectedLSN {
+			holeSeen = true
+		}
 		complete := frame.ChecksumValid && len(missingResources(frame.Dependencies)) == 0
 		if frame.Applied {
-			if !complete || missingSeen || (lastApplied != 0 && frame.LSN != lastApplied+1) {
-				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("lsn=%d complete=%t prior-hole=%t cut=%s", frame.LSN, complete, missingSeen, s.Cut)}
+			if !complete || holeSeen {
+				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("base=%d lsn=%d complete=%t prior-hole=%t cut=%s", baseAppliedLSN, frame.LSN, complete, holeSeen, s.Cut)}
 			}
-			lastApplied = frame.LSN
-		} else if !complete {
-			missingSeen = true
+		} else {
+			if complete && !holeSeen {
+				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("base=%d skipped-complete-lsn=%d cut=%s", baseAppliedLSN, frame.LSN, s.Cut)}
+			}
+			holeSeen = true
 		}
+		expectedLSN = frame.LSN + 1
 	}
-	if newest != nil {
-		for _, ack := range s.Acknowledged {
-			if ack.Durable && ack.Sequence > newest.Sequence {
-				return Violation{Invariant: InvariantDurableAckLost, Detail: fmt.Sprintf("ack=%d recovered=%d cut=%s", ack.Sequence, newest.Sequence, s.Cut)}
+	recovered := make(map[uint64]struct{}, len(s.RecoveredAcknowledgements))
+	for _, sequence := range s.RecoveredAcknowledgements {
+		recovered[sequence] = struct{}{}
+	}
+	for _, ack := range s.Acknowledged {
+		_, recoveredByWAL := recovered[ack.Sequence]
+		recoveredByRoot := newest != nil && ack.Sequence <= newest.Sequence
+		if ack.Durable && !recoveredByRoot && !recoveredByWAL {
+			recoveredSequence := uint64(0)
+			if newest != nil {
+				recoveredSequence = newest.Sequence
 			}
+			return Violation{Invariant: InvariantDurableAckLost, Detail: fmt.Sprintf("ack=%d recovered=%d cut=%s", ack.Sequence, recoveredSequence, s.Cut)}
 		}
 	}
 	if err := s.validateRelaxedSuffix(); err != nil {
@@ -161,18 +192,34 @@ func (s Scenario) Validate() error {
 }
 
 func (s Scenario) validateSelectedState() error {
-	if s.SelectedSequence == 0 {
+	newest := s.newestRecoverable()
+	if s.ReopenRejected {
+		if s.SelectedSequence != 0 || s.OpenedSequence != 0 {
+			return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("public Open rejected but selected=(scenario=%d opened=%d) cut=%s", s.SelectedSequence, s.OpenedSequence, s.Cut)}
+		}
 		return nil
 	}
-	var selected *Generation
-	for index := range s.Generations {
-		if s.Generations[index].Sequence == s.SelectedSequence {
-			selected = &s.Generations[index]
-			break
+	if newest == nil {
+		if s.SelectedSequence != 0 || s.OpenedSequence != 0 {
+			return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected generation without complete candidate at-or-below seal=%d scenario=%d opened=%d cut=%s", s.LatestSealedSequence, s.SelectedSequence, s.OpenedSequence, s.Cut)}
 		}
+		return nil
 	}
+	if s.SelectedSequence == 0 {
+		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("public Open selected none but newest complete generation=%d at-or-below seal=%d cut=%s", newest.Sequence, s.LatestSealedSequence, s.Cut)}
+	}
+	selected := s.selectedGeneration()
 	if selected == nil || !selected.Recoverable || !generationComplete(*selected) {
 		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected generation=%d is not a complete recovery candidate cut=%s", s.SelectedSequence, s.Cut)}
+	}
+	if selected.Sequence > s.LatestSealedSequence {
+		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected generation=%d exceeds latest sealed generation=%d cut=%s", selected.Sequence, s.LatestSealedSequence, s.Cut)}
+	}
+	if selected.Sequence != newest.Sequence {
+		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected generation=%d is not newest complete generation=%d at-or-below seal=%d cut=%s", selected.Sequence, newest.Sequence, s.LatestSealedSequence, s.Cut)}
+	}
+	if s.ReopenRejected || s.OpenedSequence != s.SelectedSequence || s.OpenedAppliedLSN != selected.AppliedLSN {
+		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected=(generation=%d applied=%d) public-open=(rejected=%t generation=%d applied=%d) cut=%s", s.SelectedSequence, selected.AppliedLSN, s.ReopenRejected, s.OpenedSequence, s.OpenedAppliedLSN, s.Cut)}
 	}
 	for prefix, expected := range s.ExpectedKeyValuesByPrefix {
 		observed, ok := s.ObservedKeyValuesByPrefix[prefix]
@@ -211,7 +258,7 @@ func (s Scenario) validateRelaxedSuffix() error {
 			lost = true
 			continue
 		}
-		if lost && !ack.Durable {
+		if lost {
 			return Violation{Invariant: InvariantRelaxedNonSuffixLoss, Detail: fmt.Sprintf("recovered sequence=%d after earlier acknowledged loss cut=%s", ack.Sequence, s.Cut)}
 		}
 	}
@@ -237,11 +284,20 @@ func (s Scenario) newestRecoverable() *Generation {
 	var newest *Generation
 	for i := range s.Generations {
 		candidate := &s.Generations[i]
-		if candidate.Recoverable && (newest == nil || candidate.Sequence > newest.Sequence) {
+		if candidate.Recoverable && candidate.Sequence <= s.LatestSealedSequence && generationComplete(*candidate) && (newest == nil || candidate.Sequence > newest.Sequence) {
 			newest = candidate
 		}
 	}
 	return newest
+}
+
+func (s Scenario) selectedGeneration() *Generation {
+	for index := range s.Generations {
+		if s.Generations[index].Sequence == s.SelectedSequence {
+			return &s.Generations[index]
+		}
+	}
+	return nil
 }
 
 func missingResources(resources []Resource) []string {
@@ -256,5 +312,33 @@ func missingResources(resources []Resource) []string {
 }
 
 func generationComplete(generation Generation) bool {
-	return generation.Complete && len(missingResources(generation.Resources)) == 0
+	return len(missingGenerationResources(generation)) == 0
+}
+
+var requiredRootResourceKinds = []ResourceKind{
+	ResourceIndex,
+	ResourceFreelist,
+	ResourceValueLog,
+	ResourceOuterLeaf,
+	ResourceAuxiliary,
+	ResourceDirectory,
+	ResourceSeal,
+	ResourceCommandWAL,
+}
+
+func missingGenerationResources(generation Generation) []string {
+	missing := missingResources(generation.Resources)
+	present := make(map[ResourceKind]bool, len(generation.Resources))
+	for _, resource := range generation.Resources {
+		if resource.Stable && resource.Live {
+			present[resource.Kind] = true
+		}
+	}
+	for _, kind := range requiredRootResourceKinds {
+		if !present[kind] {
+			missing = append(missing, string(kind)+"/<closure>")
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }

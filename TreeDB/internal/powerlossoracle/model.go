@@ -3,6 +3,7 @@
 package powerlossoracle
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,47 +11,61 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 // CutPoint is a stable identifier emitted by the durability harness.
-type CutPoint string
+type CutPoint = durabilitycut.Point
 
 const (
-	BeforeDependencyAppend     CutPoint = "before-dependency-append"
-	AfterDependencyAppend      CutPoint = "after-dependency-append"
-	AfterUserspaceFlush        CutPoint = "after-userspace-flush"
-	AfterDependencyFileSync    CutPoint = "after-dependency-file-sync"
-	AfterNewFileDirectorySync  CutPoint = "after-new-file-directory-sync"
-	AfterIndexDataSync         CutPoint = "after-index-data-sync"
-	BeforePublicationSealWrite CutPoint = "before-publication-seal-write"
-	AfterPublicationSealWrite  CutPoint = "after-publication-seal-write"
-	BeforeMetaWrite            CutPoint = "before-meta-write"
-	AfterMetaWrite             CutPoint = "after-meta-write"
-	AfterMetaSync              CutPoint = "after-meta-sync"
-	BeforeAppliedLSNAdvance    CutPoint = "before-applied-lsn-advance"
-	AfterAppliedLSNAdvance     CutPoint = "after-applied-lsn-advance"
-	BeforeWALOrAssetUnlink     CutPoint = "before-wal-or-asset-unlink"
-	AfterWALOrAssetUnlink      CutPoint = "after-wal-or-asset-unlink"
-	AfterDeletionDirectorySync CutPoint = "after-deletion-directory-sync"
+	BeforeDependencyAppend      = durabilitycut.BeforeDependencyAppend
+	AfterDependencyAppend       = durabilitycut.AfterDependencyAppend
+	BeforeUserspaceFlush        = durabilitycut.BeforeUserspaceFlush
+	AfterUserspaceFlush         = durabilitycut.AfterUserspaceFlush
+	BeforeDependencyFileSync    = durabilitycut.BeforeDependencyFileSync
+	AfterDependencyFileSync     = durabilitycut.AfterDependencyFileSync
+	BeforeNewFileDirectorySync  = durabilitycut.BeforeNewFileDirectorySync
+	AfterNewFileDirectorySync   = durabilitycut.AfterNewFileDirectorySync
+	BeforeIndexDataSync         = durabilitycut.BeforeIndexDataSync
+	AfterIndexDataSync          = durabilitycut.AfterIndexDataSync
+	BeforePublicationSealWrite  = durabilitycut.BeforePublicationSealWrite
+	AfterPublicationSealWrite   = durabilitycut.AfterPublicationSealWrite
+	BeforeMetaWrite             = durabilitycut.BeforeMetaWrite
+	AfterMetaWrite              = durabilitycut.AfterMetaWrite
+	BeforeMetaSync              = durabilitycut.BeforeMetaSync
+	AfterMetaSync               = durabilitycut.AfterMetaSync
+	BeforeAppliedLSNAdvance     = durabilitycut.BeforeAppliedLSNAdvance
+	AfterAppliedLSNAdvance      = durabilitycut.AfterAppliedLSNAdvance
+	BeforeWALOrAssetUnlink      = durabilitycut.BeforeWALOrAssetUnlink
+	AfterWALOrAssetUnlink       = durabilitycut.AfterWALOrAssetUnlink
+	BeforeDeletionDirectorySync = durabilitycut.BeforeDeletionDirectorySync
+	AfterDeletionDirectorySync  = durabilitycut.AfterDeletionDirectorySync
 )
 
 // CutPoints is the canonical deterministic enumeration order.
 var CutPoints = []CutPoint{
 	BeforeDependencyAppend,
 	AfterDependencyAppend,
+	BeforeUserspaceFlush,
 	AfterUserspaceFlush,
+	BeforeDependencyFileSync,
 	AfterDependencyFileSync,
+	BeforeNewFileDirectorySync,
 	AfterNewFileDirectorySync,
+	BeforeIndexDataSync,
 	AfterIndexDataSync,
 	BeforePublicationSealWrite,
 	AfterPublicationSealWrite,
 	BeforeMetaWrite,
 	AfterMetaWrite,
+	BeforeMetaSync,
 	AfterMetaSync,
 	BeforeAppliedLSNAdvance,
 	AfterAppliedLSNAdvance,
 	BeforeWALOrAssetUnlink,
 	AfterWALOrAssetUnlink,
+	BeforeDeletionDirectorySync,
 	AfterDeletionDirectorySync,
 }
 
@@ -58,6 +73,8 @@ type inode struct {
 	volatile []byte
 	stable   []byte
 }
+
+type ByteRange struct{ Offset, Length int64 }
 
 // Model separates the process-visible namespace and bytes from the bytes and
 // names that survive power loss. Names reference inode identities so that file
@@ -83,7 +100,10 @@ func Capture(root string) (*Model, error) {
 		if err != nil {
 			return err
 		}
-		rel = clean(rel)
+		rel, err = normalize(rel)
+		if err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			m.volatileDirs[rel] = struct{}{}
 			m.stableDirs[rel] = struct{}{}
@@ -159,7 +179,10 @@ func (m *Model) Overlay(root string) error {
 		if err != nil {
 			return err
 		}
-		rel = clean(rel)
+		rel, err = normalize(rel)
+		if err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			seenDirs[rel] = struct{}{}
 			return nil
@@ -192,9 +215,146 @@ func (m *Model) Overlay(root string) error {
 	return nil
 }
 
+// Observe imports the process-visible bytes from an actual TreeDB cut event
+// and promotes only the persistence boundary completed by that event.
+func (m *Model) Observe(root string, event durabilitycut.Event) error {
+	pathRequired := false
+	switch event.Point {
+	case durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync,
+		durabilitycut.BeforeNewFileDirectorySync, durabilitycut.AfterNewFileDirectorySync,
+		durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync,
+		durabilitycut.BeforeMetaSync, durabilitycut.AfterMetaSync,
+		durabilitycut.BeforeDeletionDirectorySync, durabilitycut.AfterDeletionDirectorySync:
+		pathRequired = true
+	}
+	var eventPaths []string
+	if pathRequired {
+		rawPaths := event.Paths
+		if event.Path != "" {
+			rawPaths = append(append([]string(nil), rawPaths...), event.Path)
+		}
+		if len(rawPaths) == 0 {
+			return fmt.Errorf("powerlossoracle: cut %s requires an exact path", event.Point)
+		}
+		eventPaths = make([]string, 0, len(rawPaths))
+		for _, path := range rawPaths {
+			if path == "" {
+				return fmt.Errorf("powerlossoracle: cut %s contains an empty exact path", event.Point)
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return fmt.Errorf("powerlossoracle: cut %s path %q: %w", event.Point, path, err)
+			}
+			normalized, err := normalize(rel)
+			if err != nil {
+				return fmt.Errorf("powerlossoracle: cut %s path %q is outside root %q: %w", event.Point, path, root, err)
+			}
+			eventPaths = append(eventPaths, normalized)
+		}
+	}
+	if err := m.Overlay(root); err != nil {
+		return err
+	}
+	switch event.Point {
+	case durabilitycut.AfterDependencyFileSync:
+		for _, path := range eventPaths {
+			if err := m.SyncFile(path); err != nil {
+				return err
+			}
+		}
+	case durabilitycut.AfterNewFileDirectorySync:
+		if err := m.SyncDir(eventPaths[0]); err != nil {
+			return err
+		}
+	case durabilitycut.AfterIndexDataSync, durabilitycut.AfterMetaSync:
+		if err := m.SyncFile(eventPaths[0]); err != nil {
+			return err
+		}
+	case durabilitycut.AfterDeletionDirectorySync:
+		if err := m.SyncDir(eventPaths[0]); err != nil {
+			return err
+		}
+	}
+	m.trace = append(m.trace, "cut:"+string(event.Point)+":"+string(event.Resource))
+	return nil
+}
+
+// PromoteRange models a physically permitted partial dirty-byte writeback.
+// The bytes must have been imported from the actual process-visible file first.
+func (m *Model) PromoteRange(path string, offset, length int64) error {
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return err
+	}
+	id, ok := m.volatile[path]
+	if !ok {
+		return fmt.Errorf("powerlossoracle: promote missing file %q", path)
+	}
+	n := m.inodes[id]
+	if offset < 0 || length < 0 || offset > int64(len(n.volatile)) || offset+length > int64(len(n.volatile)) {
+		return fmt.Errorf("powerlossoracle: promote range %s [%d,%d) outside %d", path, offset, offset+length, len(n.volatile))
+	}
+	end := offset + length
+	if int64(len(n.stable)) < end {
+		n.stable = append(n.stable, make([]byte, end-int64(len(n.stable)))...)
+	}
+	copy(n.stable[offset:end], n.volatile[offset:end])
+	m.trace = append(m.trace, fmt.Sprintf("promote-range:%s:%d:%d", path, offset, length))
+	return nil
+}
+
+// ChangedRanges returns actual process-visible byte runs that differ from the
+// captured stable bytes. Adjacent changed bytes are coalesced deterministically.
+func (m *Model) ChangedRanges(path string) ([]ByteRange, error) {
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return nil, err
+	}
+	id, ok := m.volatile[path]
+	if !ok {
+		return nil, fmt.Errorf("powerlossoracle: diff missing file %q", path)
+	}
+	n := m.inodes[id]
+	max := len(n.volatile)
+	if len(n.stable) > max {
+		max = len(n.stable)
+	}
+	var out []ByteRange
+	for i := 0; i < max; {
+		equal := i < len(n.volatile) && i < len(n.stable) && n.volatile[i] == n.stable[i]
+		if equal {
+			i++
+			continue
+		}
+		start := i
+		for i < max {
+			eq := i < len(n.volatile) && i < len(n.stable) && n.volatile[i] == n.stable[i]
+			if eq {
+				break
+			}
+			i++
+		}
+		// Only volatile bytes can be promoted; truncation remains a namespace/file-size operation.
+		if start < len(n.volatile) {
+			end := i
+			if end > len(n.volatile) {
+				end = len(n.volatile)
+			}
+			out = append(out, ByteRange{Offset: int64(start), Length: int64(end - start)})
+		}
+	}
+	return out, nil
+}
+
 // Write dirties process-visible file bytes without making them stable.
 func (m *Model) Write(path string, data []byte) error {
-	path = clean(path)
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return err
+	}
 	id, ok := m.volatile[path]
 	if !ok {
 		return fmt.Errorf("powerlossoracle: write missing file %q", path)
@@ -206,7 +366,11 @@ func (m *Model) Write(path string, data []byte) error {
 
 // Create creates a volatile file and any volatile parent directories.
 func (m *Model) Create(path string, data []byte) error {
-	path = clean(path)
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return err
+	}
 	if path == "." {
 		return errors.New("powerlossoracle: cannot create root")
 	}
@@ -221,7 +385,18 @@ func (m *Model) Create(path string, data []byte) error {
 
 // Rename changes only the volatile namespace.
 func (m *Model) Rename(oldPath, newPath string) error {
-	oldPath, newPath = clean(oldPath), clean(newPath)
+	var err error
+	oldPath, err = normalize(oldPath)
+	if err != nil {
+		return err
+	}
+	newPath, err = normalize(newPath)
+	if err != nil {
+		return err
+	}
+	if oldPath == "." || newPath == "." {
+		return errors.New("powerlossoracle: cannot rename root")
+	}
 	id, ok := m.volatile[oldPath]
 	if !ok {
 		return fmt.Errorf("powerlossoracle: rename missing file %q", oldPath)
@@ -235,7 +410,11 @@ func (m *Model) Rename(oldPath, newPath string) error {
 
 // Unlink changes only the volatile namespace.
 func (m *Model) Unlink(path string) error {
-	path = clean(path)
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return err
+	}
 	if _, ok := m.volatile[path]; !ok {
 		return fmt.Errorf("powerlossoracle: unlink missing file %q", path)
 	}
@@ -247,7 +426,11 @@ func (m *Model) Unlink(path string) error {
 // Flush is deliberately stability-neutral: it represents userspace/kernel
 // visibility, not an fsync boundary.
 func (m *Model) Flush(path string) error {
-	path = clean(path)
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return err
+	}
 	if _, ok := m.volatile[path]; !ok {
 		return fmt.Errorf("powerlossoracle: flush missing file %q", path)
 	}
@@ -258,7 +441,11 @@ func (m *Model) Flush(path string) error {
 // SyncFile promotes all process-visible bytes for one inode. It does not make a
 // newly-created or renamed name stable; that requires SyncDir.
 func (m *Model) SyncFile(path string) error {
-	path = clean(path)
+	var err error
+	path, err = normalize(path)
+	if err != nil {
+		return err
+	}
 	id, ok := m.volatile[path]
 	if !ok {
 		return fmt.Errorf("powerlossoracle: sync missing file %q", path)
@@ -270,27 +457,36 @@ func (m *Model) SyncFile(path string) error {
 
 // SyncDir promotes immediate child names and removals for one directory.
 func (m *Model) SyncDir(dir string) error {
-	dir = clean(dir)
+	var err error
+	dir, err = normalize(dir)
+	if err != nil {
+		return err
+	}
 	if _, ok := m.volatileDirs[dir]; !ok {
 		return fmt.Errorf("powerlossoracle: sync missing directory %q", dir)
 	}
+	if dir != "." {
+		if _, ok := m.stableDirs[dir]; !ok {
+			return fmt.Errorf("powerlossoracle: sync unreachable directory %q before parent directory entry", dir)
+		}
+	}
 	for path := range m.stable {
-		if clean(filepath.Dir(path)) == dir {
+		if cleanInternal(filepath.Dir(path)) == dir {
 			delete(m.stable, path)
 		}
 	}
 	for path, id := range m.volatile {
-		if clean(filepath.Dir(path)) == dir {
+		if cleanInternal(filepath.Dir(path)) == dir {
 			m.stable[path] = id
 		}
 	}
 	for child := range m.stableDirs {
-		if child != "." && clean(filepath.Dir(child)) == dir {
+		if child != "." && cleanInternal(filepath.Dir(child)) == dir {
 			delete(m.stableDirs, child)
 		}
 	}
 	for child := range m.volatileDirs {
-		if child != "." && clean(filepath.Dir(child)) == dir {
+		if child != "." && cleanInternal(filepath.Dir(child)) == dir {
 			m.stableDirs[child] = struct{}{}
 		}
 	}
@@ -330,7 +526,11 @@ func (m *Model) MaterializeStable(root string) error {
 		if dir == "." {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+		parent := cleanInternal(filepath.Dir(dir))
+		if _, ok := m.stableDirs[parent]; !ok {
+			return fmt.Errorf("powerlossoracle: stable directory %q has unstable parent %q", dir, parent)
+		}
+		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
 	}
@@ -340,7 +540,7 @@ func (m *Model) MaterializeStable(root string) error {
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		parent := clean(filepath.Dir(path))
+		parent := cleanInternal(filepath.Dir(path))
 		if _, ok := m.stableDirs[parent]; !ok {
 			return fmt.Errorf("powerlossoracle: stable file %q has unstable parent %q", path, parent)
 		}
@@ -374,8 +574,26 @@ func (m *Model) VolatilePaths() []string {
 // Trace returns the deterministic operation trace used in failure diagnostics.
 func (m *Model) Trace() []string { return append([]string(nil), m.trace...) }
 
+// StableFingerprint identifies the exact stable namespace, inode identities,
+// and bytes at a cut without materializing them.
+func (m *Model) StableFingerprint() string {
+	h := sha256.New()
+	dirs := keys(m.stableDirs)
+	sort.Strings(dirs)
+	for _, dir := range dirs {
+		_, _ = fmt.Fprintf(h, "d:%s\x00", dir)
+	}
+	for _, path := range m.StablePaths() {
+		id := m.stable[path]
+		_, _ = fmt.Fprintf(h, "f:%s:%d:", path, id)
+		_, _ = h.Write(m.inodes[id].stable)
+		_, _ = h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
 func (m *Model) ensureVolatileParents(path string) {
-	for dir := clean(filepath.Dir(path)); ; dir = clean(filepath.Dir(dir)) {
+	for dir := cleanInternal(filepath.Dir(path)); ; dir = cleanInternal(filepath.Dir(dir)) {
 		m.volatileDirs[dir] = struct{}{}
 		if dir == "." {
 			return
@@ -383,9 +601,19 @@ func (m *Model) ensureVolatileParents(path string) {
 	}
 }
 
-func clean(path string) string {
+func normalize(path string) (string, error) {
+	if path == "" || filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
+		return "", fmt.Errorf("powerlossoracle: path must be relative: %q", path)
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("powerlossoracle: path escapes root: %q", path)
+	}
+	return cleaned, nil
+}
+
+func cleanInternal(path string) string {
 	path = filepath.Clean(path)
-	path = strings.TrimPrefix(path, string(filepath.Separator))
 	if path == "" {
 		return "."
 	}

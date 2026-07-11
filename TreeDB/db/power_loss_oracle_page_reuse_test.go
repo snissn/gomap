@@ -1,0 +1,178 @@
+package db
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+// TestPowerLossOracleCounterexampleRecoverablePageReuse is the stable witness
+// for graveyard/freelist reuse before the older recoverable root is displaced.
+// It uses package-local access only to identify actual live and reused page IDs;
+// every mutation and the crash-image reopen use exported production methods.
+func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                    dir,
+		ChunkSize:              64 * 1024,
+		Durability:             DurabilityWALOffRelaxed,
+		KeepRecent:             1,
+		DisableBackgroundPrune: true,
+		FreelistRegionRadius:   -1,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open actual reuse fixture: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+
+	const keys = 5000
+	writeGeneration := func(tag byte, sync bool) error {
+		b := d.NewBatch().(*Batch)
+		defer b.Close()
+		value := bytes.Repeat([]byte{tag}, 32)
+		for i := 0; i < keys; i++ {
+			key := []byte(fmt.Sprintf("reuse/%04d", i))
+			if err := b.Set(key, value); err != nil {
+				return err
+			}
+		}
+		if sync {
+			return b.WriteSync()
+		}
+		return b.Write()
+	}
+
+	if err := writeGeneration('a', true); err != nil {
+		t.Fatalf("write stable generation: %v", err)
+	}
+	oldState := d.State()
+	if oldState == nil || oldState.RootPageID == 0 {
+		t.Fatalf("missing stable root: %+v", oldState)
+	}
+	oldPages := collectRootPageIDs(t, d, oldState.RootPageID)
+	oldLive := make(map[uint64]struct{}, len(oldPages))
+	for _, id := range oldPages {
+		oldLive[id] = struct{}{}
+	}
+	if len(oldLive) < 2 {
+		t.Fatalf("stable generation has too few live pages: root=%d pages=%v", oldState.RootPageID, oldPages)
+	}
+	model, err := powerlossoracle.Capture(dir)
+	if err != nil {
+		t.Fatalf("capture stable generation: %v", err)
+	}
+
+	// Generation 2 retires generation 1. Generation 3 advances KeepRecent=1
+	// far enough for synchronous pruning to put those actual page IDs on the
+	// freelist. Neither relaxed commit changes the model's stable image.
+	if err := writeGeneration('b', false); err != nil {
+		t.Fatalf("write retirement generation: %v", err)
+	}
+	if err := writeGeneration('c', false); err != nil {
+		t.Fatalf("write prune generation: %v", err)
+	}
+	idx := d.idx.Load()
+	if idx == nil {
+		t.Fatal("missing current index generation")
+	}
+	beforeReuse := idx.allocator.Counters()
+	if beforeReuse.FreeIDs == 0 {
+		t.Fatalf("actual prune exposed no reusable pages: counters=%+v", beforeReuse)
+	}
+
+	cutErr := errors.New("power-loss-oracle: stop after actual reuse meta write")
+	var snapshot *powerlossoracle.Model
+	var meta durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if err := model.Observe(dir, event); err != nil {
+			return err
+		}
+		if event.Point == durabilitycut.AfterMetaWrite {
+			meta = event
+			snapshot = model.Clone()
+			return cutErr
+		}
+		return nil
+	})
+	err = writeGeneration('d', false)
+	restore()
+	if !errors.Is(err, cutErr) || snapshot == nil {
+		t.Fatalf("actual reuse generation did not stop at AfterMetaWrite: err=%v", err)
+	}
+	afterReuse := idx.allocator.Counters()
+	if afterReuse.ReuseAllocPages <= beforeReuse.ReuseAllocPages {
+		t.Fatalf("actual generation reused no freelist pages: before=%+v after=%+v", beforeReuse, afterReuse)
+	}
+
+	indexPath, err := filepath.Rel(dir, meta.Path)
+	if err != nil {
+		t.Fatalf("relative index path: %v", err)
+	}
+	changed, err := snapshot.ChangedRanges(indexPath)
+	if err != nil {
+		t.Fatalf("changed index ranges: %v", err)
+	}
+	changedOldPage := func(pageID uint64) bool {
+		start := int64(pageID) * int64(page.PageSize)
+		end := start + int64(page.PageSize)
+		for _, r := range changed {
+			if r.Offset < end && r.Offset+r.Length > start {
+				return true
+			}
+		}
+		return false
+	}
+	var reusedPage uint64
+	for _, id := range oldPages {
+		if changedOldPage(id) {
+			reusedPage = id
+			break
+		}
+	}
+	if reusedPage == 0 {
+		t.Fatalf("freelist reuse did not overwrite an old-live page: root=%d old_pages=%d changed_ranges=%d before=%+v after=%+v", oldState.RootPageID, len(oldPages), len(changed), beforeReuse, afterReuse)
+	}
+
+	// Model the physically permitted writeback of the actual reused page while
+	// keeping the older synced meta page. The resulting image must never read as
+	// the complete older generation.
+	pageOffset := int64(reusedPage) * int64(page.PageSize)
+	if err := snapshot.PromoteRange(indexPath, pageOffset, int64(page.PageSize)); err != nil {
+		t.Fatalf("persist actual reused page %d: %v", reusedPage, err)
+	}
+	crashDir := t.TempDir()
+	if err := snapshot.MaterializeStable(crashDir); err != nil {
+		t.Fatalf("materialize stable-only image: %v", err)
+	}
+	reopenOpts := opts
+	reopenOpts.Dir = crashDir
+	reopenOpts.ReadOnly = true
+	reopened, openErr := Open(reopenOpts)
+	if openErr != nil {
+		t.Logf("public db.Open rejected old root with reused page %d: %v", reusedPage, openErr)
+		return
+	}
+	defer reopened.Close()
+	want := bytes.Repeat([]byte{'a'}, 32)
+	for i := 0; i < keys; i++ {
+		key := []byte(fmt.Sprintf("reuse/%04d", i))
+		got, getErr := reopened.Get(key)
+		if getErr != nil || !bytes.Equal(got, want) {
+			t.Logf("public read diagnosed reused page %d at key=%q: value=%x err=%v", reusedPage, key, got, getErr)
+			return
+		}
+	}
+	t.Fatalf("public db.Open/read accepted old root after actual live page %d was reused", reusedPage)
+}

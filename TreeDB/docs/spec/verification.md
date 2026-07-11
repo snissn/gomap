@@ -22,9 +22,9 @@ Durability evidence uses exactly one of these labels:
 separate process-visible and stable bytes, inode-aware names, file-sync
 promotion, and directory-sync promotion for create/rename/unlink. `Crash`
 discards volatile state. `MaterializeStable` writes only stable bytes reachable
-through stable directory entries, and `ReopenStable` passes that directory to
-normal public read-write or read-only `treedb.Open`; it does not invoke recovery
-internals.
+through stable directory entries, and `internal/powerlossreopen.Stable` passes
+that directory to normal public read-write or read-only `treedb.Open`; it does
+not invoke recovery internals.
 
 The canonical cut-point enumeration command is:
 
@@ -34,16 +34,21 @@ GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleEnumerateCutPoints$' -v -c
 
 Failure output includes `seed=3674` and the stable cut-point name. The command
 enumerates cuts before/after dependency append, userspace flush, dependency
-file sync, new-file directory sync, index-data sync, publication-seal write,
-meta write/sync, applied-LSN advancement, WAL/asset unlink, and deletion
-directory sync.
+file sync, new-file directory sync, index-data sync, the logical publication
+boundary, meta write/sync, applied-LSN advancement, WAL/asset unlink, and
+deletion directory sync. The stable identifiers
+`before-publication-seal-write` and `after-publication-seal-write` are currently
+logical placeholders around the existing publication-registration boundary;
+there is no on-disk publication seal yet. DUR-09
+[#3679](https://github.com/snissn/gomap/issues/3679) will retarget those hooks
+to the real seal write.
 
 ### 0.2 Counterexample-to-conformance map
 
-Counterexamples pass by asserting a named invariant violation or a public-open
-rejection; they do not keep the branch red while the production graph is in
-progress. Later children update these stable scenarios rather than duplicating
-them.
+Counterexamples use real production calls and bytes, then pass only when normal
+public open/read rejects or diagnoses the selectively persisted image. They do
+not keep the branch red while the production graph is in progress. Later
+children update these stable test names rather than duplicating them.
 
 | Stable scenario | Current counterexample | Positive-conformance owner |
 |---|---|---|
@@ -52,7 +57,6 @@ them.
 | `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3676 |
 | `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | `caching.DB.publishCommandWALCheckpointApplied` or cleanup removes command WAL/assets before sealed coverage | DUR-07 #3682 and DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | `caching.DB.Checkpoint`, `caching.DB.flushSyncRequested`, or chunked cached flush apply exposes an incomplete intermediate root | DUR-06 #3680 |
-| `TestPowerLossOracleAcknowledgementRules` | durable acknowledgement loss or non-suffix relaxed loss | DUR-02/#3675, DUR-05/#3676, and profile closeout DUR-10/#3683 |
 
 `TestPowerLossOracleFixtureInventoryReopensStableOnly` covers inline values,
 `ValueLog.PointerThreshold=1` forced pointers, forced outer leaves, combined
@@ -60,11 +64,17 @@ value pointers plus outer leaves, multi-lane value-log configuration, and
 segment rotation. Every fixture is checkpointed, captured, materialized from
 stable state only, and reopened through normal public read-only `Open`.
 
+Pure scenario-validator unit tests under
+`TreeDB/internal/powerlossoracle/scenario_test.go` cover durable acknowledgement
+loss, relaxed non-suffix loss, invalid selected roots, and key-state mismatch.
+
 The oracle asserts complete old-or-new roots, full dependency/pointer closure,
 freelist/live-page disjointness, contiguous command replay, durable
 acknowledgement survival, relaxed suffix-only loss, and no early source
-deletion. Production packages do not import the oracle, so it adds no runtime
-interface dispatch, allocation, I/O, or steady-state throughput cost.
+deletion. Production packages do not import the oracle model. They emit only
+coarse durability-boundary events through `internal/durabilitycut`; when no test
+observer is installed the seam is an atomic load and nil branch, with path
+collection skipped.
 
 ## 1. Pointer Durability and Reopen
 
