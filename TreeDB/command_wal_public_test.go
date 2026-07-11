@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -3328,6 +3329,111 @@ func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 	}
 }
 
+func BenchmarkPublicCommandWALCheckpointOverlapWriteSync(b *testing.B) {
+	opts := commandWALDurabilityProofOptions(b.TempDir())
+	opts.FlushThreshold = 64 << 10
+	db, err := Open(opts)
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	defer db.cached.SetCommandWALCheckpointPublishHook(db.preparePublicCommandWALPendingPublish)
+
+	// Seed one pre-cut command so every measured checkpoint has a real mutable
+	// frontier and an AppliedCommandLSN publication boundary. Each measured
+	// write then becomes the next iteration's pre-cut command.
+	if err := db.SetSync([]byte("tx-index/overlap/seed"), []byte("value")); err != nil {
+		b.Fatalf("seed SetSync: %v", err)
+	}
+
+	const checkpointDwell = 20 * time.Millisecond
+	before := db.Stats()
+	latencies := make([]time.Duration, 0, b.N)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		publishReached := make(chan struct{})
+		releasePublish := make(chan struct{})
+		var publishOnce sync.Once
+		db.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+			publishOnce.Do(func() { close(publishReached) })
+			<-releasePublish
+			return db.preparePublicCommandWALPendingPublish(sync)
+		})
+
+		checkpointDone := make(chan error, 1)
+		go func() { checkpointDone <- db.cached.Checkpoint() }()
+		if err := waitForPublicCommandWALCheckpointPhase(publishReached, "benchmark checkpoint publish hook"); err != nil {
+			b.Fatal(err)
+		}
+
+		batch := db.NewBatchWithSize(1)
+		var keyBuf [64]byte
+		key := append(keyBuf[:0], "tx-index/overlap/"...)
+		key = strconv.AppendInt(key, int64(i), 10)
+		if err := batch.Set(key, []byte("value")); err != nil {
+			_ = batch.Close()
+			close(releasePublish)
+			b.Fatalf("batch Set: %v", err)
+		}
+
+		releaseTimer := time.AfterFunc(checkpointDwell, func() { close(releasePublish) })
+		writeStart := time.Now()
+		writeErr := batch.WriteSync()
+		latencies = append(latencies, time.Since(writeStart))
+		if writeErr != nil {
+			_ = batch.Close()
+			if releaseTimer.Stop() {
+				close(releasePublish)
+			}
+			b.Fatalf("batch WriteSync: %v", writeErr)
+		}
+		if err := batch.Close(); err != nil {
+			if releaseTimer.Stop() {
+				close(releasePublish)
+			}
+			b.Fatalf("batch Close: %v", err)
+		}
+		if err := <-checkpointDone; err != nil {
+			b.Fatalf("Checkpoint: %v", err)
+		}
+		_ = releaseTimer.Stop()
+	}
+	b.StopTimer()
+
+	after := db.Stats()
+	reportWriteSyncLatencyDistribution(b, latencies)
+	b.ReportMetric(float64(checkpointDwell.Nanoseconds()), "checkpoint_dwell_ns")
+	for _, key := range []string{
+		"treedb.cache.write.wait_for_checkpoint.count_total",
+		"treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait.frontier_cutover.count_total",
+		"treedb.cache.write.wait.frontier_cutover.ns_total",
+		"treedb.cache.write.wait.checkpoint_drain.count_total",
+		"treedb.cache.write.wait.checkpoint_drain.ns_total",
+		"treedb.cache.write.wait.maintenance.count_total",
+		"treedb.cache.write.wait.maintenance.ns_total",
+		"treedb.cache.write.post_frontier_admission.count_total",
+	} {
+		beforeValue, beforeOK := benchmarkOptionalStatUint64(before, key)
+		afterValue, afterOK := benchmarkOptionalStatUint64(after, key)
+		if !beforeOK || !afterOK {
+			continue
+		}
+		name := strings.TrimPrefix(key, "treedb.cache.")
+		b.ReportMetric(float64(afterValue-beforeValue)/float64(b.N), name+"/op")
+	}
+}
+
+func benchmarkOptionalStatUint64(stats map[string]string, key string) (uint64, bool) {
+	raw, ok := stats[key]
+	if !ok || raw == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	return value, err == nil
+}
+
 func BenchmarkPublicCommandWALTinyBatchWriteSyncPhaseStatsOverhead(b *testing.B) {
 	for _, durability := range []struct {
 		name string
@@ -3419,7 +3525,7 @@ func TestPublicCommandWALDurableTinyBatchWriteSyncShapes(t *testing.T) {
 	}
 }
 
-func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
+func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	opts.BackgroundCheckpointInterval = time.Hour // Starts the existing loop; the test triggers its pass explicitly.
 	opts.FlushThreshold = 64 << 10
@@ -3511,26 +3617,34 @@ func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
 			writeResults <- writeResult{index: index, err: writeErr}
 		}(i, batch)
 	}
-	if err := waitForPublicCommandWALActiveCheckpointWriters(db, len(overlapBatches)); err != nil {
-		t.Fatal(err)
-	}
-	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
-	if err := waitForPublicCommandWALCheckpointPhase(checkpointComplete, "checkpoint cleanup hook"); err != nil {
-		t.Fatal(err)
-	}
+	// The publish hook is after the command-LSN/mutable frontier cut and before
+	// the checkpoint can complete. Post-cut Write and WriteSync calls must finish
+	// in the fresh command-WAL/mutable generation while this old frontier remains
+	// latched.
 	writeCompletionTimer := time.NewTimer(publicCommandWALCheckpointTestTimeout)
 	defer writeCompletionTimer.Stop()
-	for i := 0; i < 16; i++ {
+	for i := 0; i < len(overlapBatches); i++ {
 		select {
 		case result := <-writeResults:
 			if result.err != nil {
 				t.Fatalf("overlap Write(%d): %v", result.index, result.err)
 			}
+		case <-checkpointComplete:
+			t.Fatalf("checkpoint completed before publish latch released after %d/%d overlap writes", i, len(overlapBatches))
 		case <-writeCompletionTimer.C:
-			t.Fatalf("timed out waiting for overlap write completion %d/16", i+1)
+			t.Fatalf("timed out waiting for post-frontier write completion %d/%d", i+1, len(overlapBatches))
 		}
 	}
 	writeCompletionTimer.Stop()
+	select {
+	case <-checkpointComplete:
+		t.Fatal("checkpoint completed while publish hook remained latched")
+	default:
+	}
+	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
+	if err := waitForPublicCommandWALCheckpointPhase(checkpointComplete, "checkpoint cleanup hook"); err != nil {
+		t.Fatal(err)
+	}
 
 	wantAutoCheckpointCount := statMapUint64(t, before, "treedb.cache.auto_checkpoint.count") + 1
 	if err := waitForPublicCommandWALAutoCheckpointCount(db, wantAutoCheckpointCount); err != nil {
@@ -3547,10 +3661,9 @@ func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
 	if got := statMapUint64(t, after, "treedb.cache.checkpoint.frontier.drained_units_last"); got == 0 {
 		t.Fatal("checkpoint frontier drained no units")
 	}
-	requirePublicStatDelta(t, before, after, "treedb.cache.write.wait_for_checkpoint.count_total", 16)
-	if got := statMapUint64(t, after, "treedb.cache.write.wait_for_checkpoint.ns_total") - statMapUint64(t, before, "treedb.cache.write.wait_for_checkpoint.ns_total"); got == 0 {
-		t.Fatal("overlap writes recorded no checkpoint wait time")
-	}
+	requirePublicStatDelta(t, before, after, "treedb.cache.write.wait_for_checkpoint.count_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.cache.write.post_frontier_admission.count_total", 16)
+	requirePublicStatDelta(t, before, after, "treedb.cache.write.wait.checkpoint_drain.count_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.public.batch.write.calls_total", 8)
 	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 8)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 16)
@@ -3558,6 +3671,330 @@ func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
 	// the eight durable overlap writes.
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 9)
 	requirePublicStatDelta(t, before, after, "treedb.public.checkpoint.calls_total", 0)
+}
+
+func TestPublicCommandWALCheckpointPostFrontierRangeWritesWaitForDrain(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(*DB) error
+	}{
+		{
+			name: "delete_range",
+			write: func(db *DB) error {
+				return db.DeleteRange([]byte("range/"), []byte("range0"))
+			},
+		},
+		{
+			name: "pure_range_batch",
+			write: func(db *DB) error {
+				b := db.NewBatch()
+				if err := b.DeleteRange([]byte("range/"), []byte("range0")); err != nil {
+					_ = b.Close()
+					return err
+				}
+				err := b.WriteSync()
+				if closeErr := b.Close(); err == nil {
+					err = closeErr
+				}
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			for _, key := range []string{"range/a", "range/b", "outside"} {
+				if err := db.SetSync([]byte(key), []byte("value")); err != nil {
+					t.Fatalf("seed SetSync(%q): %v", key, err)
+				}
+			}
+
+			publishEntered := make(chan struct{})
+			releasePublish := make(chan struct{})
+			var publishOnce, releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(releasePublish) })
+			db.cached.SetCommandWALCheckpointPublishHook(func(syncWrite bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+				publishOnce.Do(func() { close(publishEntered) })
+				if err := waitForPublicCommandWALCheckpointPhase(releasePublish, "range checkpoint publish release"); err != nil {
+					return 0, nil, err
+				}
+				return db.preparePublicCommandWALPendingPublish(syncWrite)
+			})
+
+			before := db.Stats()
+			checkpointDone := make(chan error, 1)
+			go func() { checkpointDone <- db.cached.Checkpoint() }()
+			if err := waitForPublicCommandWALCheckpointPhase(publishEntered, "range checkpoint publish hook"); err != nil {
+				t.Fatal(err)
+			}
+			if got := db.cached.Stats()["treedb.cache.checkpoint.post_frontier_admission.active"]; got != "true" {
+				t.Fatalf("post-frontier admission active=%q, want true", got)
+			}
+
+			writeDone := make(chan error, 1)
+			go func() { writeDone <- tc.write(db) }()
+			if err := waitForPublicCommandWALCheckpointWriterWaiters(db, 1); err != nil {
+				t.Fatal(err)
+			}
+			blocked := db.Stats()
+			requirePublicStatDelta(t, before, blocked, "treedb.command_wal.append.count_total", 0)
+			requirePublicStatDelta(t, before, blocked, "treedb.cache.write.post_frontier_admission.count_total", 0)
+			select {
+			case err := <-writeDone:
+				t.Fatalf("range write completed while checkpoint publish remained latched: %v", err)
+			default:
+			}
+
+			releaseOnce.Do(func() { close(releasePublish) })
+			if err := <-checkpointDone; err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if err := <-writeDone; err != nil {
+				t.Fatalf("range write after checkpoint drain: %v", err)
+			}
+
+			after := db.Stats()
+			requirePublicStatDelta(t, before, after, "treedb.cache.write.wait_for_checkpoint.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.cache.write.wait.checkpoint_drain.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.cache.write.post_frontier_admission.count_total", 0)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+			for _, key := range []string{"range/a", "range/b"} {
+				if got, err := db.Get([]byte(key)); err != nil || got != nil {
+					t.Fatalf("Get(%q) after range write=(%q, %v), want missing", key, got, err)
+				}
+			}
+			requireRawKVValue(t, db, []byte("outside"), []byte("value"))
+		})
+	}
+}
+
+func TestPublicCommandWALCheckpointPostFrontierAdmissionPropagatesPublishError(t *testing.T) {
+	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetSync([]byte("publish-error/pre-cut"), []byte("pre-value")); err != nil {
+		t.Fatalf("pre-cut SetSync: %v", err)
+	}
+
+	publishErr := errors.New("forced checkpoint publish failure")
+	publishEntered := make(chan struct{})
+	releasePublish := make(chan struct{})
+	var publishOnce sync.Once
+	db.cached.SetCommandWALCheckpointPublishHook(func(bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		publishOnce.Do(func() { close(publishEntered) })
+		if err := waitForPublicCommandWALCheckpointPhase(releasePublish, "publish-error release"); err != nil {
+			return 0, nil, err
+		}
+		return 0, nil, publishErr
+	})
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- db.Checkpoint() }()
+	if err := waitForPublicCommandWALCheckpointPhase(publishEntered, "publish-error hook"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync([]byte("publish-error/post-cut"), []byte("post-value")); err != nil {
+		t.Fatalf("post-cut SetSync: %v", err)
+	}
+	close(releasePublish)
+	if err := <-checkpointDone; !errors.Is(err, publishErr) {
+		t.Fatalf("Checkpoint error=%v, want %v", err, publishErr)
+	}
+	if first, last := db.publicCommandWALPendingRange(); first != 1 || last != 2 {
+		t.Fatalf("pending command-WAL range after failed publish=(%d,%d), want (1,2)", first, last)
+	}
+	requireRawKVValue(t, db, []byte("publish-error/pre-cut"), []byte("pre-value"))
+	requireRawKVValue(t, db, []byte("publish-error/post-cut"), []byte("post-value"))
+	if got := db.cached.Stats()["treedb.cache.checkpoint.active"]; got != "false" {
+		t.Fatalf("checkpoint active after error=%q, want false", got)
+	}
+
+	// Restore the public owner hooks and prove the failed checkpoint left both
+	// command generations available for a later strict boundary.
+	db.cached.SetCommandWALCheckpointPublishHook(db.preparePublicCommandWALPendingPublish)
+	db.cached.SetCommandWALCheckpointCleanupHook(db.cleanupPublicCommandWALCheckpoint)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("retry Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after retry=%d, want 2", got)
+	}
+}
+
+func TestPublicCommandWALCheckpointDefaultCutoverAdmitsPostFrontierWriteSync(t *testing.T) {
+	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetSync([]byte("default-cutover/pre"), []byte("pre-value")); err != nil {
+		t.Fatalf("pre-cut SetSync: %v", err)
+	}
+
+	publishEntered := make(chan struct{})
+	releasePublish := make(chan struct{})
+	var publishOnce sync.Once
+	db.cached.SetCommandWALCheckpointPublishHook(func(syncWrite bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		publishOnce.Do(func() { close(publishEntered) })
+		if err := waitForPublicCommandWALCheckpointPhase(releasePublish, "default cutover publish release"); err != nil {
+			return 0, nil, err
+		}
+		return db.preparePublicCommandWALPendingPublish(syncWrite)
+	})
+	before := db.Stats()
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- db.cached.Checkpoint() }()
+	if err := waitForPublicCommandWALCheckpointPhase(publishEntered, "default cutover publish hook"); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.cached.Stats()["treedb.cache.checkpoint.post_frontier_admission.active"]; got != "true" {
+		t.Fatalf("post-frontier admission active=%q, want true", got)
+	}
+	if err := db.SetSync([]byte("default-cutover/post"), []byte("post-value")); err != nil {
+		t.Fatalf("post-cut SetSync: %v", err)
+	}
+	close(releasePublish)
+	if err := <-checkpointDone; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.cache.write.post_frontier_admission.count_total", 1)
+}
+
+func TestHelperPublicCommandWALCheckpointPostFrontierCrashWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CHECKPOINT_FRONTIER_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+	dir := os.Getenv("TREEDB_CHECKPOINT_FRONTIER_CRASH_DIR")
+	if dir == "" {
+		t.Fatal("missing TREEDB_CHECKPOINT_FRONTIER_CRASH_DIR")
+	}
+
+	opts := commandWALDurabilityProofOptions(dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	preValue := bytes.Repeat([]byte("a"), 64<<10)
+	postValue := bytes.Repeat([]byte("b"), 64<<10)
+	if err := db.SetSync([]byte("frontier/pre-cut"), preValue); err != nil {
+		t.Fatalf("pre-cut SetSync: %v", err)
+	}
+	segmentsBefore := publicCommandWALSegmentNames(t, dir)
+	if len(segmentsBefore) == 0 {
+		t.Fatal("missing pre-cut command-WAL segment")
+	}
+
+	publishEntered := make(chan struct{})
+	releasePublish := make(chan struct{})
+	cleanupComplete := make(chan struct{})
+	var publishOnce, cleanupOnce sync.Once
+	db.cached.SetCommandWALCheckpointCutoverHook(db.snapshotPublicCommandWALCheckpointCutover)
+	db.cached.SetCommandWALCheckpointPublishHook(func(syncWrite bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		publishOnce.Do(func() { close(publishEntered) })
+		if err := waitForPublicCommandWALCheckpointPhase(releasePublish, "crash helper publish release"); err != nil {
+			return 0, nil, err
+		}
+		return db.preparePublicCommandWALPendingPublish(syncWrite)
+	})
+	db.cached.SetCommandWALCheckpointCleanupHook(func(syncWrite bool) error {
+		err := db.cleanupPublicCommandWALCheckpoint(syncWrite)
+		if err == nil {
+			cleanupOnce.Do(func() { close(cleanupComplete) })
+		}
+		return err
+	})
+
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- db.Checkpoint() }()
+	if err := waitForPublicCommandWALCheckpointPhase(publishEntered, "crash helper checkpoint publish"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync([]byte("frontier/post-cut"), postValue); err != nil {
+		t.Fatalf("post-cut SetSync while checkpoint publish latched: %v", err)
+	}
+	select {
+	case err := <-checkpointDone:
+		t.Fatalf("checkpoint completed while publish remained latched: %v", err)
+	default:
+	}
+	close(releasePublish)
+	if err := <-checkpointDone; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := waitForPublicCommandWALCheckpointPhase(cleanupComplete, "crash helper checkpoint cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want pre-cut LSN 1", got)
+	}
+	if first, last := db.publicCommandWALPendingRange(); first != 2 || last != 2 {
+		t.Fatalf("pending command-WAL range=(%d,%d), want post-cut range (2,2)", first, last)
+	}
+	segmentsAfter := publicCommandWALSegmentNames(t, dir)
+	if len(segmentsAfter) == 0 {
+		t.Fatalf("checkpoint cleanup removed the post-cut command-WAL generation; before=%v", segmentsBefore)
+	}
+	beforeSet := make(map[string]struct{}, len(segmentsBefore))
+	for _, name := range segmentsBefore {
+		beforeSet[name] = struct{}{}
+	}
+	for _, name := range segmentsAfter {
+		if _, covered := beforeSet[name]; covered {
+			t.Fatalf("checkpoint cleanup retained covered segment %s; before=%v after=%v", name, segmentsBefore, segmentsAfter)
+		}
+	}
+
+	// Simulate a process crash after cleanup without the close-time checkpoint.
+	// The only durable owner of the post-cut generation is its fresh command-WAL
+	// segment (plus the synced value-log external reference).
+	os.Exit(0)
+}
+
+func TestPublicCommandWALCheckpointPostFrontierGenerationSurvivesCrashReopen(t *testing.T) {
+	dir := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestHelperPublicCommandWALCheckpointPostFrontierCrashWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CHECKPOINT_FRONTIER_CRASH_HELPER=1",
+		"TREEDB_CHECKPOINT_FRONTIER_CRASH_DIR="+dir,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("frontier crash helper failed: %v\n%s", err, out)
+	}
+
+	opts := commandWALDurabilityProofOptions(dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after post-frontier crash: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	preValue := bytes.Repeat([]byte("a"), 64<<10)
+	postValue := bytes.Repeat([]byte("b"), 64<<10)
+	requireRawKVValue(t, reopen, []byte("frontier/pre-cut"), preValue)
+	requireRawKVValue(t, reopen, []byte("frontier/post-cut"), postValue)
+	if got := reopen.backend.State().AppliedCommandLSN; got < 2 {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want post-cut LSN 2 replayed", got)
+	}
+	if _, err := reopen.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC after post-frontier replay: %v", err)
+	}
+	requireRawKVValue(t, reopen, []byte("frontier/pre-cut"), preValue)
+	requireRawKVValue(t, reopen, []byte("frontier/post-cut"), postValue)
 }
 
 // triggerAutoCheckpointForTest is test-only coordination for an already-running
@@ -3576,31 +4013,6 @@ func waitForPublicCommandWALCheckpointPhase(ch <-chan struct{}, phase string) er
 		return nil
 	case <-timer.C:
 		return fmt.Errorf("timed out waiting for %s", phase)
-	}
-}
-
-func waitForPublicCommandWALActiveCheckpointWriters(db *DB, want int) error {
-	timer := time.NewTimer(publicCommandWALCheckpointTestTimeout)
-	defer timer.Stop()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for {
-		stats := db.cached.Stats()
-		got, err := strconv.Atoi(stats["treedb.cache.write.wait_for_checkpoint.active"])
-		if err != nil {
-			return fmt.Errorf("parse active checkpoint writers %q: %w", stats["treedb.cache.write.wait_for_checkpoint.active"], err)
-		}
-		if got == want {
-			return nil
-		}
-		if got > want {
-			return fmt.Errorf("active checkpoint writers=%d, want %d", got, want)
-		}
-		select {
-		case <-ticker.C:
-		case <-timer.C:
-			return fmt.Errorf("timed out waiting for active checkpoint writers=%d (last=%d)", want, got)
-		}
 	}
 }
 
@@ -3625,6 +4037,28 @@ func waitForPublicCommandWALAutoCheckpointCount(db *DB, want uint64) error {
 		case <-ticker.C:
 		case <-timer.C:
 			return fmt.Errorf("timed out waiting for auto-checkpoint count=%d (last=%d)", want, got)
+		}
+	}
+}
+
+func waitForPublicCommandWALCheckpointWriterWaiters(db *DB, want uint64) error {
+	timer := time.NewTimer(publicCommandWALCheckpointTestTimeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		stats := db.Stats()
+		got, err := strconv.ParseUint(stats["treedb.cache.write.wait_for_checkpoint.active"], 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse checkpoint writer waiters %q: %w", stats["treedb.cache.write.wait_for_checkpoint.active"], err)
+		}
+		if got == want {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-timer.C:
+			return fmt.Errorf("timed out waiting for checkpoint writer waiters=%d (last=%d)", want, got)
 		}
 	}
 }

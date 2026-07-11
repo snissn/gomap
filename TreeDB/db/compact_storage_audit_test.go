@@ -211,7 +211,7 @@ func TestCompactStorageAudit_ValueLogCollectorsMatchLegacyGroupedAliases(t *test
 	if err != nil {
 		t.Fatalf("legacy refs: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
 	if err != nil {
 		t.Fatalf("legacy live bytes: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	if err != nil {
 		t.Fatalf("legacy refs: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
 	if err != nil {
 		t.Fatalf("legacy live bytes: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestCompactStorageAudit_ProtectedPagerRootsMatchLegacyWithMemoReuse(t *test
 	if err != nil {
 		t.Fatalf("legacy refs: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
 	if err != nil {
 		t.Fatalf("legacy live bytes: %v", err)
 	}

@@ -262,24 +262,54 @@ promise that every safe-to-delete WAL file was physically removed.
 
 `DB.Checkpoint()` in cached mode is a forced durability/cleanup boundary.
 
-Current behavior:
+Checkpoint ownership and writer admission are separate states:
+
+- `flushMu` serializes checkpoint/flush ownership. `checkpointMu` and its
+  condition variable serialize checkpoints and wake writers when an admission
+  phase changes. The `checkpointing` state remains active for the entire
+  operation.
+- `writeMu` is held only for the frontier cut. While it is held, checkpoint
+  rotates the non-empty mutable memtable into a stable queue, captures the
+  queue frontier, and invokes the command-WAL cutover hook. The hook snapshots
+  the maximum covered command LSN and rotates the active command-WAL segment.
+- Once that hook has run, command-WAL point writes may enter the fresh mutable,
+  command-WAL, and value-log generation while the captured frontier drains.
+  Those post-cut writes remain visible in cached state but are not part of the
+  active checkpoint's backend publication or `AppliedCommandLSN` boundary.
+  Range-span writes remain gated through checkpoint drain because their atomic
+  command append and span-layer publication still require `flushMu`; their wait
+  is reported under `checkpoint_drain`, not as post-frontier admission.
+- Cached redo-WAL mode, unsafe WAL-off mode, and external command-WAL mode
+  without an installed cutover hook retain the full-checkpoint writer stop.
+  They do not have the command-LSN/segment ownership proof needed for safe
+  post-frontier admission. Maintenance also retains its full writer stop.
+
+The active checkpoint then:
 
 1. serialize with flush/checkpoint locks,
 2. rotate non-empty mutable memtable into queue,
-3. rotate WAL writers so future writes use fresh segments,
-4. flush queued memtables with sync intent,
-5. force backend boundary even if queue was empty,
-6. remove old WAL segments not currently active and not retained,
-7. run value-log retention checks and pruning.
+3. capture a stable queue/command-LSN frontier and rotate WAL ownership,
+4. reopen command-WAL admission into the fresh post-cut generation when the
+   cutover hook established that ownership,
+5. flush only the captured frontier with sync intent,
+6. publish roots and the covered `AppliedCommandLSN`,
+7. force a backend boundary even if the queue was empty,
+8. remove only WAL segments covered by that published boundary, and
+9. run value-log retention checks and pruning while preserving active,
+   retained, and command-WAL-protected references.
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
 
-Under the user-command WAL target, `DB.Checkpoint()` is also a command-WAL
-boundary. That later gate must close admission for the checkpoint cut, wait for
-in-flight commands admitted before the cut, drain async publish and write
-domains, publish roots, advance durable `AppliedLSN`, create the backend
-durability boundary containing that `AppliedLSN`, and only then report a clean
-command WAL state or clean commit-log ranges. Root publication and `AppliedLSN`
+With user-command WAL, `DB.Checkpoint()` is also a command-WAL boundary. The
+short cutover gate closes admission for the checkpoint cut and waits for
+in-flight commands admitted before the cut. The checkpoint then drains its
+captured publish/write domains, publishes roots, advances durable `AppliedLSN`,
+creates the backend durability boundary containing that `AppliedLSN`, and only
+then reports a clean command WAL state or clean commit-log ranges. Reopening
+admission after the cut does not relax `Checkpoint()` completion: success still
+means the entire captured frontier, durability metadata, and covered-segment
+cleanup completed. A publish or cleanup failure is returned to the caller, and
+post-cut segments remain recovery-owned. Root publication and `AppliedLSN`
 advancement must be atomic with respect to meta/root recovery: after any crash,
 open must select either the old roots plus old `AppliedLSN` or the new roots
 plus new `AppliedLSN`, never a split state. A future
@@ -297,6 +327,17 @@ Under the user-command WAL target, `DB.Checkpoint()` success must cover command
 WAL. A checkpoint that cannot publish `AppliedLSN` covering pre-cut command
 frames must return an error or expose explicit command WAL debt through a new
 API; it must not return `nil` and call the command WAL state clean.
+
+Checkpoint/write coordination is observable without conflating unrelated
+causes. `treedb.cache.write.wait.<reason>.*` reports totals, maximum/last
+latency, count, fixed cumulative latency buckets, and p50/p95/p99 bucket upper
+bounds for `frontier_cutover`, `checkpoint_drain`, and `maintenance`.
+`treedb.cache.write.post_frontier_admission.count_total` counts point writes
+admitted while an older command-WAL frontier remains active. The compatibility
+aggregate `treedb.cache.write.wait_for_checkpoint.*` remains available.
+Flush-lock and I/O ownership stay separate in
+`treedb.cache.checkpoint.flushmu_wait_*` and
+`treedb.cache.checkpoint.stage.<cutover|wal_rotate|value_log_flush|command_wal_publish|flush_all|backend_boundary|wal_cleanup>.*`.
 
 ## 7. Auto-Checkpoint Defaults (Cached Mode)
 

@@ -27,6 +27,26 @@ func countCommitLogFiles(entries []os.DirEntry) int {
 	return n
 }
 
+func awaitCheckpointTestSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func awaitCheckpointWriterWaiters(t *testing.T, db *DB, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+	for db.writeWaitForCheckpointActive.Load() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("checkpoint writer waiters=%d, want %d", db.writeWaitForCheckpointActive.Load(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
@@ -91,6 +111,216 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	walFilesAfter := countCommitLogFiles(after)
 	if walFilesAfter != len(db.lanes) {
 		t.Fatalf("expected exactly %d WAL segments after checkpoint, got %d", len(db.lanes), walFilesAfter)
+	}
+}
+
+func TestCachingDB_CheckpointExternalCommandWALAdmitsAfterFrontierCut(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 30,
+		JournalLanes:       1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// A command-WAL owner installs this hook to rotate the active segment and
+	// capture the LSN covered by the checkpoint. The latch hooks below expose all
+	// three state-machine boundaries without relying on scheduler sleeps.
+	db.SetCommandWALCheckpointCutoverHook(func() {})
+	writePoint := func(key, value string) error {
+		return db.SetAfterCommandWALAppend([]byte(key), []byte(value), func() error { return nil })
+	}
+	if err := writePoint("pre-cut", "pre-value"); err != nil {
+		t.Fatalf("seed pre-cut point: %v", err)
+	}
+
+	beforeCapture := make(chan struct{})
+	releaseCapture := make(chan struct{})
+	afterCapture := make(chan struct{})
+	releaseAfterCapture := make(chan struct{})
+	beforeDrain := make(chan struct{})
+	releaseDrain := make(chan struct{})
+	db.testBeforeCheckpointFrontierCapture = func() {
+		close(beforeCapture)
+		<-releaseCapture
+	}
+	db.testAfterCheckpointFrontierCapture = func() {
+		close(afterCapture)
+		<-releaseAfterCapture
+	}
+	db.testBeforeCheckpointFrontierDrain = func() {
+		close(beforeDrain)
+		<-releaseDrain
+	}
+
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- db.Checkpoint() }()
+	awaitCheckpointTestSignal(t, beforeCapture, "pre-frontier capture latch")
+
+	cutoverWriteDone := make(chan error, 1)
+	go func() { cutoverWriteDone <- writePoint("during-cut", "during-value") }()
+	awaitCheckpointWriterWaiters(t, db, 1)
+	select {
+	case err := <-cutoverWriteDone:
+		t.Fatalf("write crossed the frontier cut before release: %v", err)
+	default:
+	}
+	close(releaseCapture)
+	awaitCheckpointTestSignal(t, afterCapture, "post-frontier capture latch")
+	if err := <-cutoverWriteDone; err != nil {
+		t.Fatalf("write waiting at frontier cut: %v", err)
+	}
+
+	if err := writePoint("after-cut", "after-value"); err != nil {
+		t.Fatalf("post-frontier point write: %v", err)
+	}
+	close(releaseAfterCapture)
+	awaitCheckpointTestSignal(t, beforeDrain, "pre-frontier drain latch")
+
+	writeBatch := func(syncWrite bool, key, value string) error {
+		batch := db.NewBatch()
+		defer func() { _ = batch.Close() }()
+		if err := batch.Set([]byte(key), []byte(value)); err != nil {
+			return err
+		}
+		return batch.WriteAfterCommandWALAppend(syncWrite, func() error { return nil })
+	}
+	if err := writeBatch(false, "drain-write", "drain-value"); err != nil {
+		t.Fatalf("post-frontier Write: %v", err)
+	}
+	if err := writeBatch(true, "drain-writesync", "drain-sync-value"); err != nil {
+		t.Fatalf("post-frontier WriteSync: %v", err)
+	}
+	select {
+	case err := <-checkpointDone:
+		t.Fatalf("checkpoint completed while frontier drain was latched: %v", err)
+	default:
+	}
+	close(releaseDrain)
+	if err := <-checkpointDone; err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	got, err := backend.Get([]byte("pre-cut"))
+	if err != nil || !bytes.Equal(got, []byte("pre-value")) {
+		t.Fatalf("backend pre-cut value=(%q, %v), want pre-value", got, err)
+	}
+	for _, key := range []string{"during-cut", "after-cut", "drain-write", "drain-writesync"} {
+		got, err := backend.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("backend Get(%q): %v", key, err)
+		}
+		if got != nil {
+			t.Fatalf("active checkpoint included post-frontier key %q=%q", key, got)
+		}
+		if got, err = db.Get([]byte(key)); err != nil || got == nil {
+			t.Fatalf("cached Get(%q)=(%q, %v), want post-frontier value", key, got, err)
+		}
+	}
+
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait.frontier_cutover.count_total"); got != 1 {
+		t.Fatalf("frontier_cutover waits=%d, want 1", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait.checkpoint_drain.count_total"); got != 0 {
+		t.Fatalf("checkpoint_drain waits=%d, want 0", got)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.write.post_frontier_admission.count_total"); got != 4 {
+		t.Fatalf("post-frontier admissions=%d, want 4", got)
+	}
+
+	// A successful checkpoint remains a strict boundary: only a later checkpoint
+	// may publish the post-cut generation to the backend.
+	db.testBeforeCheckpointFrontierCapture = nil
+	db.testAfterCheckpointFrontierCapture = nil
+	db.testBeforeCheckpointFrontierDrain = nil
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("second Checkpoint: %v", err)
+	}
+	for _, key := range []string{"during-cut", "after-cut", "drain-write", "drain-writesync"} {
+		if got, err := backend.Get([]byte(key)); err != nil || got == nil {
+			t.Fatalf("backend Get(%q) after second checkpoint=(%q, %v), want value", key, got, err)
+		}
+	}
+}
+
+func TestCachingDB_CheckpointDrainRetainsWriterGateWithoutCommandWALCutover(t *testing.T) {
+	tests := []struct {
+		name  string
+		opts  Options
+		write func(*DB, string, string) error
+	}{
+		{
+			name: "cached_redo_wal",
+			opts: Options{FlushThreshold: 1 << 30, JournalLanes: 1},
+			write: func(db *DB, key, value string) error {
+				return db.Set([]byte(key), []byte(value))
+			},
+		},
+		{
+			name: "external_command_wal_without_cutover_hook",
+			opts: Options{ExternalCommandWAL: true, FlushThreshold: 1 << 30, JournalLanes: 1},
+			write: func(db *DB, key, value string) error {
+				return db.SetAfterCommandWALAppend([]byte(key), []byte(value), func() error { return nil })
+			},
+		},
+		{
+			name: "unsafe_wal_off",
+			opts: Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, JournalLanes: 1},
+			write: func(db *DB, key, value string) error {
+				return db.Set([]byte(key), []byte(value))
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(t.TempDir(), NewMockBackend(), tc.opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			if err := tc.write(db, "pre-cut", "pre-value"); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			beforeDrain := make(chan struct{})
+			releaseDrain := make(chan struct{})
+			db.testBeforeCheckpointFrontierDrain = func() {
+				close(beforeDrain)
+				<-releaseDrain
+			}
+			checkpointDone := make(chan error, 1)
+			go func() { checkpointDone <- db.Checkpoint() }()
+			awaitCheckpointTestSignal(t, beforeDrain, "checkpoint drain latch")
+
+			writeDone := make(chan error, 1)
+			go func() { writeDone <- tc.write(db, "during-drain", "during-value") }()
+			awaitCheckpointWriterWaiters(t, db, 1)
+			select {
+			case err := <-writeDone:
+				t.Fatalf("write bypassed checkpoint drain without a safe command-WAL cut: %v", err)
+			default:
+			}
+			close(releaseDrain)
+			if err := <-checkpointDone; err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if err := <-writeDone; err != nil {
+				t.Fatalf("write after checkpoint: %v", err)
+			}
+			db.testBeforeCheckpointFrontierDrain = nil
+
+			stats := db.Stats()
+			if got := requireStatUint64(t, stats, "treedb.cache.write.wait.checkpoint_drain.count_total"); got != 1 {
+				t.Fatalf("checkpoint_drain waits=%d, want 1", got)
+			}
+			if got := requireStatUint64(t, stats, "treedb.cache.write.post_frontier_admission.count_total"); got != 0 {
+				t.Fatalf("post-frontier admissions=%d, want 0", got)
+			}
+		})
 	}
 }
 
@@ -264,6 +494,10 @@ func TestCachingDB_ExclusiveWriteWithFlushMuHeldReleasesFlushMuWhileWaiting(t *t
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("exclusive writer with flushMu held did not resume after maintenance")
+	}
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait.maintenance.count_total"); got != 1 {
+		t.Fatalf("maintenance waits=%d, want 1", got)
 	}
 }
 
