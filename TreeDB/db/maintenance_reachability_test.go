@@ -153,6 +153,9 @@ func TestScanValueLogRefCountsUsesSharedCollectorAndMatchesLegacy(t *testing.T) 
 	if err != nil {
 		t.Fatalf("legacy scanValueLogRefCounts: %v", err)
 	}
+	if len(want) == 0 {
+		t.Fatal("legacy ref-count fixture produced no value-log references")
+	}
 	var hookCalls int
 	restore := registerScanValueLogRefCountsHook(func() { hookCalls++ })
 	defer restore()
