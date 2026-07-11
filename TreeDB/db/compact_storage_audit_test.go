@@ -330,6 +330,17 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 	if err != nil {
 		t.Fatalf("shared protected audit: %v", err)
 	}
+	wantLeafStats, err := db.scanLeafGenerationLiveStatsWithOptionsLegacy(context.Background(), input.snap, leafGenerationLiveStatsScanOptions{
+		DisableCache:           true,
+		ProtectedRootIDs:       input.protectedRootIDs,
+		ProtectedSystemRootIDs: input.protectedSystemRootIDs,
+	})
+	if err != nil {
+		t.Fatalf("legacy protected leaf scan: %v", err)
+	}
+	if !reflect.DeepEqual(got.leafGenerationLive, wantLeafStats) {
+		t.Fatalf("protected leaf totals mismatch: shared=%v legacy=%v", got.leafGenerationLive, wantLeafStats)
+	}
 
 	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
 		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)

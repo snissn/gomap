@@ -1073,6 +1073,25 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil || snap.idx == nil || snap.idx.pager == nil {
 		return stats, nil
 	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:              maintenanceReachabilityLeafGenerationTotals,
+		ProtectedRootIDs:        opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs:  opts.ProtectedSystemRootIDs,
+		DisableLeafSubtreeCache: opts.DisableCache,
+	})
+	if err != nil {
+		return leafGenerationLiveScanStats{}, err
+	}
+	return result.leafGenerationLive, nil
+}
+
+func (db *DB) scanLeafGenerationLiveStatsWithOptionsLegacy(ctx context.Context, snap *Snapshot, opts leafGenerationLiveStatsScanOptions) (leafGenerationLiveScanStats, error) {
+	stats := leafGenerationLiveScanStats{
+		Generations: make(map[uint64]leafGenerationLiveTotals),
+	}
+	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil || snap.idx == nil || snap.idx.pager == nil {
+		return stats, nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
