@@ -808,7 +808,6 @@ func (db *DB) newCompactStorageLeafScanContext(snap *Snapshot) (*leafGenerationS
 	return &leafGenerationScanContext{
 		snap:          snap,
 		fileStateByID: fileStateByID,
-		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
 		groupedFrames: newLeafGenerationGroupedFrameScanCache(leafGenerationGroupedFrameScanCacheEntries),
 	}, nil
 }

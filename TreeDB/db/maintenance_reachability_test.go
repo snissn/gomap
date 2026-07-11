@@ -55,7 +55,7 @@ func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchLegacy(t *testing
 		t.Fatal("AcquireSnapshot returned nil")
 	}
 	defer closeNoErr(t, snap)
-	wantLeaf, err := db.scanLeafGenerationLiveStats(context.Background(), snap)
+	wantLeaf, err := db.scanLeafGenerationLiveStatsWithOptionsLegacy(context.Background(), snap, leafGenerationLiveStatsScanOptions{})
 	if err != nil {
 		t.Fatalf("legacy leaf-generation totals: %v", err)
 	}
@@ -383,6 +383,32 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			b.StartTimer()
 			if _, err := db.estimateValueLogLiveBytesBySegment(ctx); err != nil {
 				b.Fatalf("estimateValueLogLiveBytesBySegment: %v", err)
+			}
+		}
+	})
+	b.Run("legacy_leaf_generation", func(b *testing.B) {
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			b.Fatal("AcquireSnapshot returned nil")
+		}
+		defer func() { _ = snap.Close() }()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := db.scanLeafGenerationLiveStatsWithOptionsLegacy(ctx, snap, leafGenerationLiveStatsScanOptions{DisableCache: true}); err != nil {
+				b.Fatalf("scanLeafGenerationLiveStatsWithOptionsLegacy: %v", err)
+			}
+		}
+	})
+	b.Run("shared_leaf_generation", func(b *testing.B) {
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			b.Fatal("AcquireSnapshot returned nil")
+		}
+		defer func() { _ = snap.Close() }()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{DisableCache: true}); err != nil {
+				b.Fatalf("scanLeafGenerationLiveStatsWithOptions: %v", err)
 			}
 		}
 	})
