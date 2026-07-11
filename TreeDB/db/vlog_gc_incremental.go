@@ -630,6 +630,31 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 		return nil, 0, fmt.Errorf("missing db state")
 	}
 	commitSeq := snap.state.CommitSeq
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors: maintenanceReachabilityValueLogRefCounts,
+	})
+	if err != nil {
+		_ = snap.Close()
+		return nil, 0, err
+	}
+	if err := snap.Close(); err != nil {
+		return nil, 0, err
+	}
+	return result.valueLogRefCounts, commitSeq, nil
+}
+
+func (db *DB) scanValueLogRefCountsLegacy(ctx context.Context) (map[uint32]uint64, uint64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return nil, 0, fmt.Errorf("missing db state")
+	}
+	commitSeq := snap.state.CommitSeq
 	counts := make(map[uint32]uint64)
 
 	roots, err := maintenanceRootsForSnapshot(snap)
