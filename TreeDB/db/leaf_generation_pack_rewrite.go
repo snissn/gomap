@@ -115,7 +115,7 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 		}
 		if db != nil && db.valueLogManager != nil && db.valueLogManager.HasSegment(seg.fileID) {
 			if err := db.valueLogManager.RemoveSegmentForce(seg.fileID); err != nil {
-				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, err))
+				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, errors.Join(err, ErrRecoveryRequired)))
 			}
 			continue
 		}

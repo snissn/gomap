@@ -951,8 +951,8 @@ func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T
 	})
 	defer restoreObserver()
 
-	if err := db.CleanupCommandWALCoveredSegments(true); !errors.Is(err, wantErr) {
-		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want %v", err, wantErr)
+	if err := db.CleanupCommandWALCoveredSegments(true); !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want %v and ErrRecoveryRequired", err, wantErr)
 	}
 	wantPoints := []durabilitycut.Point{
 		durabilitycut.BeforeWALOrAssetUnlink,
@@ -961,6 +961,50 @@ func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T
 	}
 	if !reflect.DeepEqual(points, wantPoints) {
 		t.Fatalf("cut points=%v, want %v", points, wantPoints)
+	}
+}
+
+func TestCommandWALCleanupPartialUnlinkFailureRequiresRecoveryWithoutSync(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+	writeCommandWALFrame(t, dir, 3, 3)
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	db.state.Store(&DBState{AppliedCommandLSN: 2})
+
+	wantErr := errors.New("injected second-unlink cut")
+	var unlinkAttempts int
+	var points []durabilitycut.Point
+	restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
+		points = append(points, event.Point)
+		if event.Point == durabilitycut.BeforeWALOrAssetUnlink {
+			unlinkAttempts++
+			if unlinkAttempts == 2 {
+				return wantErr
+			}
+		}
+		return nil
+	})
+	defer restoreObserver()
+
+	err := db.CleanupCommandWALCoveredSegments(true)
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want injected cut and ErrRecoveryRequired", err)
+	}
+	wantPoints := []durabilitycut.Point{
+		durabilitycut.BeforeWALOrAssetUnlink,
+		durabilitycut.AfterWALOrAssetUnlink,
+		durabilitycut.BeforeWALOrAssetUnlink,
+	}
+	if !reflect.DeepEqual(points, wantPoints) {
+		t.Fatalf("cut points=%v, want %v", points, wantPoints)
+	}
+	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(statErr) {
+		t.Fatalf("first covered segment stat=%v, want removed", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); statErr != nil {
+		t.Fatalf("second covered segment stat=%v, want present", statErr)
 	}
 }
 

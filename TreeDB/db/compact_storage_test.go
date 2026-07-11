@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -214,6 +215,59 @@ func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
 	}
 	if !stats.FullyCompacted {
 		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageManagerSegmentPostUnlinkCutRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	const emptyName = "value-l42-000001.log"
+	emptyPath := filepath.Join(valueLogDir, emptyName)
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+	fileID, ok := compactStorageValueLogFileID(emptyName)
+	if !ok {
+		t.Fatalf("parse %s failed", emptyName)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
+	}
+
+	cutErr := errors.New("injected post-unlink cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == durabilitycut.NamespaceUnlink &&
+			event.Resource == durabilitycut.ResourceValueLog &&
+			filepath.Clean(event.OldPath) == filepath.Clean(emptyPath) {
+			return cutErr
+		}
+		return nil
+	})
+	_, compactErr := reopened.CompactStorage(context.Background(), CompactStorageOptions{})
+	restore()
+	if !errors.Is(compactErr, cutErr) || !errors.Is(compactErr, ErrRecoveryRequired) {
+		t.Fatalf("CompactStorage error=%v, want injected cut and ErrRecoveryRequired", compactErr)
+	}
+	if _, statErr := os.Stat(emptyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("post-unlink cut path stat=%v, want removed", statErr)
 	}
 }
 

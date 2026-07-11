@@ -3633,7 +3633,9 @@ func (db *DB) RefreshValueLogSet() error {
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
 
 	if oldState.ValueLogSet != nil {
-		return db.valueLogManager.Release(oldState.ValueLogSet)
+		if err := db.valueLogManager.Release(oldState.ValueLogSet); err != nil {
+			return errors.Join(err, ErrRecoveryRequired)
+		}
 	}
 	return nil
 }
@@ -3678,7 +3680,9 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
 
 	if oldState.ValueLogSet != nil {
-		return db.valueLogManager.Release(oldState.ValueLogSet)
+		if err := db.valueLogManager.Release(oldState.ValueLogSet); err != nil {
+			return errors.Join(err, ErrRecoveryRequired)
+		}
 	}
 	return nil
 }

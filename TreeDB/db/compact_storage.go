@@ -1618,7 +1618,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 						return deleted, err
 					}
 					if removed, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil {
-						return deleted, err
+						return deleted, errors.Join(err, ErrRecoveryRequired)
 					} else if removed {
 						deleted++
 						continue

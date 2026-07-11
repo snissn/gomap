@@ -456,10 +456,15 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 				after.Namespace = durabilitycut.NamespaceUnlink
 				after.OldPath = decision.Path
 			}
+			// Preserve the completed namespace mutation in the returned decisions
+			// even when the post-unlink observer reports a simulated crash cut.
+			decision.Removed = true
 			if err := durabilitycut.Emit(after); err != nil {
+				if removeErr == nil {
+					return decisions, errors.Join(err, ErrRecoveryRequired)
+				}
 				return decisions, err
 			}
-			decision.Removed = true
 		}
 	}
 	return decisions, nil

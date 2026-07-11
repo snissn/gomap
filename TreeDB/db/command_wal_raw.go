@@ -467,18 +467,20 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		if removedBytes > 0 {
 			db.commandWALClosedBytes.Add(-int64(removedBytes))
 		}
+		if err != nil {
+			// At least one unlink completed, but cleanup stopped before the
+			// deletion directory could be proven durable.
+			return errors.Join(err, ErrRecoveryRequired)
+		}
 		if sync && db.durability != DurabilityWALOnRelaxed {
-			if syncErr := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil && err == nil {
-				err = syncErr
-			}
-			if err != nil {
-				return err
+			if syncErr := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil {
+				return errors.Join(syncErr, ErrRecoveryRequired)
 			}
 			if syncErr := syncDirFn(WALDirPath(db.dir)); syncErr != nil {
-				return syncErr
+				return errors.Join(syncErr, ErrRecoveryRequired)
 			}
-			if syncErr := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil && err == nil {
-				err = syncErr
+			if syncErr := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil {
+				return errors.Join(syncErr, ErrRecoveryRequired)
 			}
 		}
 	}
