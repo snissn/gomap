@@ -82,8 +82,8 @@ def render_markdown(
         f"system {resources['total_system_seconds']:.2f}s",
         "- durability classes are separate rows; relaxed rows are not durability-equivalent to durable sync",
         "",
-        "| Benchmark | ns/op | Throughput | B/op | allocs/op | storage bytes/op | durable bytes/op |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Benchmark | ns/op | Throughput | B/op | allocs/op | storage bytes/op | durable bytes/op | delete write amp |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for name in sorted(medians):
         metrics = medians[name]
@@ -93,7 +93,8 @@ def render_markdown(
             f"| `{name}` | {metrics['ns/op']:.3f} | {rate_text} | "
             f"{metrics.get('B/op', 0):.3f} | {metrics.get('allocs/op', 0):.3f} | "
             f"{metrics.get('storage_bytes/op', 0):.3f} | "
-            f"{metrics.get('durable_bytes/op', 0):.3f} |"
+            f"{metrics.get('durable_bytes/op', 0):.3f} | "
+            f"{metrics.get('delete_write_amplification', 0):.3f} |"
         )
     lines.append("")
     return "\n".join(lines)

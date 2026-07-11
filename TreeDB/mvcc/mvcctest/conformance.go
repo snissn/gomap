@@ -65,6 +65,7 @@ func Run(t *testing.T, open OpenFunc) {
 	}
 	t.Run("golden_reopen_floor_prune", func(t *testing.T) { runGolden(t, open) })
 	t.Run("validation_boundaries", func(t *testing.T) { runBoundaries(t, open) })
+	t.Run("iterator_options_seek_stats_ownership", func(t *testing.T) { runIteratorSurface(t, open) })
 	t.Run("randomized_oracle", func(t *testing.T) { runRandomized(t, open) })
 	t.Run("concurrent_snapshot_readers", func(t *testing.T) { runConcurrent(t, open) })
 }
@@ -158,6 +159,104 @@ func runBoundaries(t *testing.T, open OpenFunc) {
 	}
 	if err := adapter.CommitAt(5, []mvcc.Mutation{{Key: []byte("late")}}, mvcc.CommitRelaxed); !errors.Is(err, mvcc.ErrVersionBelowDiscardFloor) {
 		t.Fatalf("commit at floor err=%v", err)
+	}
+}
+
+func runIteratorSurface(t *testing.T, open OpenFunc) {
+	adapter := requireOpen(t, open, t.TempDir(), DurabilityWALOffRelaxed)
+	defer requireClose(t, adapter)
+	type mutationAt struct {
+		key       string
+		timestamp uint64
+		value     string
+		deleted   bool
+	}
+	for _, mutation := range []mutationAt{
+		{key: "a", timestamp: 10, value: "a10"},
+		{key: "a", timestamp: 20, deleted: true},
+		{key: "a", timestamp: 30, value: "a30"},
+		{key: "b", timestamp: 5, value: "b5"},
+		{key: "b", timestamp: 25, value: "b25"},
+		{key: "ba", timestamp: 15, value: "ba15"},
+		{key: "c", timestamp: 1, value: "c1"},
+	} {
+		err := adapter.CommitAt(mutation.timestamp, []mvcc.Mutation{{
+			Key: []byte(mutation.key), Value: []byte(mutation.value), Delete: mutation.deleted,
+		}}, mvcc.CommitRelaxed)
+		if err != nil {
+			t.Fatalf("CommitAt(%q,%d): %v", mutation.key, mutation.timestamp, err)
+		}
+	}
+
+	forward, err := adapter.IterateVersions(mvcc.VersionIteratorOptions{
+		LowerBound: []byte("a"), UpperBound: []byte("c"),
+	})
+	if err != nil {
+		t.Fatalf("forward bounded iterator: %v", err)
+	}
+	requireIteratorLabels(t, forward, []string{
+		"61@30:present:613330", "61@20:tombstone:", "61@10:present:613130",
+		"62@25:present:623235", "62@5:present:6235", "6261@15:present:62613135",
+	})
+
+	reverse, err := adapter.IterateVersions(mvcc.VersionIteratorOptions{
+		Prefix: []byte("b"), ReadTimestamp: 20, Reverse: true,
+	})
+	if err != nil {
+		t.Fatalf("reverse prefix iterator: %v", err)
+	}
+	stats := requireIteratorLabels(t, reverse, []string{
+		"6261@15:present:62613135", "62@5:present:6235",
+	})
+	if stats.Visited != 3 || stats.Skipped != 1 || stats.Retained != 2 || stats.Visited != stats.Skipped+stats.Retained {
+		t.Fatalf("reverse iterator stats=%+v", stats)
+	}
+
+	seek, err := adapter.IterateVersions(mvcc.VersionIteratorOptions{})
+	if err != nil {
+		t.Fatalf("forward seek iterator: %v", err)
+	}
+	seek.Seek([]byte("b"), 20)
+	if !seek.Valid() {
+		t.Fatalf("forward Seek invalid: %v", seek.Error())
+	}
+	owned := seek.Entry()
+	if string(owned.Key) != "b" || owned.Timestamp != 5 || string(owned.Value) != "b5" {
+		t.Fatalf("forward Seek entry=%+v", owned)
+	}
+	seek.Next()
+	if string(owned.Key) != "b" || owned.Timestamp != 5 || string(owned.Value) != "b5" {
+		t.Fatalf("Entry bytes changed after Next: %+v", owned)
+	}
+	seek.Seek([]byte("b"), 20)
+	mutableCopy := seek.Entry()
+	mutableCopy.Key[0], mutableCopy.Value[0] = 'x', 'x'
+	seek.Seek([]byte("b"), 20)
+	again := seek.Entry()
+	if string(again.Key) != "b" || again.Timestamp != 5 || string(again.Value) != "b5" {
+		t.Fatalf("Entry bytes were not caller-owned: %+v", again)
+	}
+	if err := seek.Close(); err != nil {
+		t.Fatalf("close forward seek iterator: %v", err)
+	}
+	if string(owned.Key) != "b" || owned.Timestamp != 5 || string(owned.Value) != "b5" {
+		t.Fatalf("Entry bytes changed after Close: %+v", owned)
+	}
+
+	reverseSeek, err := adapter.IterateVersions(mvcc.VersionIteratorOptions{Reverse: true})
+	if err != nil {
+		t.Fatalf("reverse seek iterator: %v", err)
+	}
+	reverseSeek.Seek([]byte("b"), 20)
+	if !reverseSeek.Valid() {
+		t.Fatalf("reverse Seek invalid: %v", reverseSeek.Error())
+	}
+	reverseEntry := reverseSeek.Entry()
+	if string(reverseEntry.Key) != "b" || reverseEntry.Timestamp != 25 || string(reverseEntry.Value) != "b25" {
+		t.Fatalf("reverse Seek entry=%+v", reverseEntry)
+	}
+	if err := reverseSeek.Close(); err != nil {
+		t.Fatalf("close reverse seek iterator: %v", err)
 	}
 }
 
@@ -257,7 +356,7 @@ func runConcurrent(t *testing.T, open OpenFunc) {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
 				got, err := adapter.GetAt([]byte("k"), 80)
-				if err != nil || (got.State != mvcc.Present && got.State != mvcc.Absent) {
+				if err != nil || got.State != mvcc.Present || got.Timestamp < 1 || got.Timestamp > 80 || string(got.Value) != fmt.Sprint(got.Timestamp) {
 					errCh <- fmt.Errorf("concurrent GetAt result=%+v err=%v", got, err)
 					return
 				}
@@ -339,12 +438,18 @@ func requireVersions(t testing.TB, adapter Adapter, want []string) {
 	if err != nil {
 		t.Fatalf("IterateVersions: %v", err)
 	}
+	requireIteratorLabels(t, it, want)
+}
+
+func requireIteratorLabels(t testing.TB, it Iterator, want []string) mvcc.VersionIteratorStats {
+	t.Helper()
 	var got []string
 	for it.Valid() {
 		entry := it.Entry()
 		got = append(got, versionLabel(entry.Key, entry.Timestamp, entry.State, entry.Value))
 		it.Next()
 	}
+	stats := it.Stats()
 	iterErr := it.Error()
 	closeErr := it.Close()
 	if iterErr != nil || closeErr != nil {
@@ -353,6 +458,7 @@ func requireVersions(t testing.TB, adapter Adapter, want []string) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("versions:\n got %v\nwant %v", got, want)
 	}
+	return stats
 }
 
 func oracleAt(versions []oracleVersion, timestamp uint64) oracleVersion {

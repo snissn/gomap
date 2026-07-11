@@ -34,6 +34,9 @@ TreeDB example. `mvcctest.Run` executes:
 - durable close/reopen before and after floor advancement and pruning;
 - nil/empty-key duplicate handling, zero timestamps, durability rejection,
   monotonic floors, and commit/read rejection at the floor;
+- forward/reverse iterator order, logical bounds, prefix and read-time ceiling,
+  directional seek, exact accounting, and caller-owned entry bytes across
+  `Next`, `Seek`, and `Close`;
 - a deterministic seed-3673 randomized point-read and all-version oracle over
   empty, embedded-zero, and `0xff` logical keys;
 - concurrent point readers and writers while an older iterator retains its
