@@ -81,8 +81,13 @@ type treeDB interface {
 type Store struct {
 	db treeDB
 
-	// mu serializes namespace maintenance against commits and snapshot acquire.
-	// Reads release it as soon as their point-in-time iterator is pinned.
+	// maintenanceMu serializes floor advancement and pruning. The lock order is
+	// maintenanceMu then mu; foreground reads and commits never take it.
+	maintenanceMu sync.Mutex
+
+	// mu guards the discard-floor cache and serializes its publication against
+	// commits and snapshot acquisition. Reads release it as soon as their
+	// point-in-time iterator is pinned.
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool

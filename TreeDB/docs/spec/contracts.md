@@ -102,6 +102,17 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   re-syncs the floor before its first delete; interrupted runs are safe and
   idempotent. TreeDB snapshots acquired before floor advancement keep their
   pinned physical view until close.
+- Floor advancement and pruning are serialized by one owner-local maintenance
+  lock. Pruning holds the floor lock only while it loads/re-syncs the captured
+  floor and pins its snapshot, then releases that lock before scanning or
+  publishing delete batches. Foreground reads and retained-version iterators
+  may therefore pin snapshots, and commits strictly above the captured floor
+  may publish, while pruning continues. The maintenance lock prevents the
+  captured floor from advancing underneath that prune.
+- Successful prune accounting satisfies `Visited = Retained + Pruned`.
+  `Skipped` is the subset of `Retained` with timestamps above the captured
+  floor, not a disjoint outcome counter. Partial-error statistics report only
+  deletes whose batches committed, so the success equality need not yet hold.
 
 Dgraph-specific metadata, TTL, subscriptions, and conditional transactions
 remain separate contracts. `TreeDB/mvcc` does not reinterpret `EntryRevision`

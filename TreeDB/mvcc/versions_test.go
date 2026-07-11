@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
@@ -201,8 +202,11 @@ func TestDiscardFloorPruneReopenAndIdempotence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PruneVersions: %v", err)
 	}
-	if stats.Visited != 8 || stats.Pruned != 5 || stats.Retained != 3 || stats.Batches != 5 {
+	if stats.Visited != 8 || stats.Skipped != 2 || stats.Pruned != 5 || stats.Retained != 3 || stats.Batches != 5 {
 		t.Fatalf("prune stats=%+v", stats)
+	}
+	if stats.Visited != stats.Retained+stats.Pruned || stats.Skipped > stats.Retained {
+		t.Fatalf("prune accounting relationship=%+v", stats)
 	}
 	if stats.PrunedBytes == 0 || stats.DeleteWriteBytes == 0 {
 		t.Fatalf("prune byte accounting=%+v", stats)
@@ -486,6 +490,142 @@ func TestPruneConcurrentSnapshotReaders(t *testing.T) {
 	}
 }
 
+func TestPruneAfterSnapshotCaptureDoesNotBlockForegroundOperations(t *testing.T) {
+	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+	defer db.Close()
+	pausingDB := &pruneSnapshotPauseDB{
+		DB:      db,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	store := newStore(pausingDB)
+	for timestamp := uint64(1); timestamp <= 8; timestamp++ {
+		if err := store.CommitAt(timestamp, []Mutation{{Key: []byte("k"), Value: []byte(fmt.Sprint(timestamp))}}, CommitRelaxed); err != nil {
+			t.Fatalf("CommitAt(%d): %v", timestamp, err)
+		}
+	}
+
+	pinned, err := store.IterateVersions(VersionIteratorOptions{})
+	if err != nil {
+		t.Fatalf("open pinned iterator: %v", err)
+	}
+	defer func() { _ = pinned.Close() }()
+	if err := store.AdvanceDiscardFloor(5, CommitDurable); err != nil {
+		t.Fatalf("AdvanceDiscardFloor: %v", err)
+	}
+
+	type pruneResult struct {
+		stats PruneStats
+		err   error
+	}
+	pausingDB.pauseNextReverse.Store(true)
+	pruneDone := make(chan pruneResult, 1)
+	go func() {
+		stats, err := store.PruneVersions(PruneOptions{BatchSize: 2, Mode: CommitDurable})
+		pruneDone <- pruneResult{stats: stats, err: err}
+	}()
+
+	select {
+	case <-pausingDB.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prune did not pause after snapshot capture")
+	}
+	if !store.mu.TryLock() {
+		t.Fatal("prune retained floor lock after snapshot capture")
+	}
+	store.mu.Unlock()
+	if store.maintenanceMu.TryLock() {
+		store.maintenanceMu.Unlock()
+		t.Fatal("prune released maintenance lock before completion")
+	}
+	var releaseOnce sync.Once
+	releasePrune := func() { releaseOnce.Do(func() { close(pausingDB.release) }) }
+	defer releasePrune()
+
+	advanceStarted := make(chan struct{})
+	advanceDone := make(chan error, 1)
+	go func() {
+		close(advanceStarted)
+		advanceDone <- store.AdvanceDiscardFloor(6, CommitDurable)
+	}()
+	<-advanceStarted
+
+	requireMVCCOperationCompletes(t, "GetAt while prune paused", func() error {
+		result, err := store.GetAt([]byte("k"), 8)
+		if err != nil {
+			return err
+		}
+		if result.State != Present || result.Timestamp != 8 || string(result.Value) != "8" {
+			return fmt.Errorf("GetAt result=%+v want k@8", result)
+		}
+		return nil
+	})
+	requireMVCCOperationCompletes(t, "CommitAt while prune paused", func() error {
+		return store.CommitAt(9, []Mutation{{Key: []byte("k"), Value: []byte("9")}}, CommitRelaxed)
+	})
+	requireMVCCOperationCompletes(t, "IterateVersions acquisition while prune paused", func() error {
+		it, err := store.IterateVersions(VersionIteratorOptions{ReadTimestamp: 9})
+		if err != nil {
+			return err
+		}
+		return it.Close()
+	})
+	select {
+	case err := <-advanceDone:
+		t.Fatalf("floor advance completed while prune held maintenance lock: %v", err)
+	default:
+	}
+
+	releasePrune()
+	var pruned pruneResult
+	select {
+	case pruned = <-pruneDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("prune did not complete after release")
+	}
+	if pruned.err != nil {
+		t.Fatalf("PruneVersions: %v", pruned.err)
+	}
+	if pruned.stats.Visited != 8 || pruned.stats.Skipped != 3 || pruned.stats.Retained != 4 || pruned.stats.Pruned != 4 {
+		t.Fatalf("prune stats=%+v", pruned.stats)
+	}
+	select {
+	case err := <-advanceDone:
+		if err != nil {
+			t.Fatalf("serialized AdvanceDiscardFloor: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("floor advance did not complete after prune")
+	}
+	if floor, err := store.DiscardFloor(); err != nil || floor != 6 {
+		t.Fatalf("final discard floor=%d err=%v want 6", floor, err)
+	}
+
+	requireVersionLabels(t, collectVersions(t, pinned),
+		"k@8:1:8", "k@7:1:7", "k@6:1:6", "k@5:1:5",
+		"k@4:1:4", "k@3:1:3", "k@2:1:2", "k@1:1:1")
+	fresh, err := store.IterateVersions(VersionIteratorOptions{})
+	if err != nil {
+		t.Fatalf("open fresh iterator: %v", err)
+	}
+	requireVersionLabels(t, collectVersions(t, fresh),
+		"k@9:1:9", "k@8:1:8", "k@7:1:7", "k@6:1:6", "k@5:1:5")
+}
+
+func requireMVCCOperationCompletes(t testing.TB, name string, operation func() error) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- operation() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s blocked", name)
+	}
+}
+
 func TestFloorAdvanceRaceNeverServesPrunedHistoricalRead(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
 	defer db.Close()
@@ -619,6 +759,37 @@ func (b *pruneFailureBatch) WriteSync() error {
 }
 
 var _ treeDB = (*pruneFailureDB)(nil)
+
+type pruneSnapshotPauseDB struct {
+	*treedb.DB
+	pauseNextReverse atomic.Bool
+	entered          chan struct{}
+	release          chan struct{}
+}
+
+func (db *pruneSnapshotPauseDB) AcquireSnapshot() treedb.Snapshot {
+	snapshot := db.DB.AcquireSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	return &pruneSnapshotPause{Snapshot: snapshot, owner: db}
+}
+
+type pruneSnapshotPause struct {
+	treedb.Snapshot
+	owner *pruneSnapshotPauseDB
+}
+
+func (snapshot *pruneSnapshotPause) ReverseIterator(start, end []byte) (treedb.Iterator, error) {
+	if snapshot.owner.pauseNextReverse.CompareAndSwap(true, false) {
+		close(snapshot.owner.entered)
+		<-snapshot.owner.release
+	}
+	return snapshot.Snapshot.ReverseIterator(start, end)
+}
+
+var _ treeDB = (*pruneSnapshotPauseDB)(nil)
+var _ snapshotDB = (*pruneSnapshotPauseDB)(nil)
 
 type writeSyncCountingDB struct {
 	*treedb.DB

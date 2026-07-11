@@ -336,6 +336,8 @@ func (s *Store) AdvanceDiscardFloor(timestamp uint64, mode CommitMode) error {
 	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
 		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
 	}
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.loadDiscardFloorLocked(); err != nil {
@@ -369,10 +371,14 @@ type PruneOptions struct {
 }
 
 // PruneStats accounts for the snapshot scanned and successfully committed
-// deletes. RetainedBytes is the physical key/value bytes observed and kept;
-// PrunedBytes is the physical key+value record bytes deleted (TreeDB
-// tombstones add their own implementation-specific write amplification).
-// DeleteWriteBytes is the sum of TreeDB's delete-batch byte-size estimates.
+// deletes. On success, Visited equals Retained plus Pruned. Skipped is the
+// subset of Retained whose timestamps are above the discard floor; it is not a
+// disjoint outcome counter. On error, staged but uncommitted deletes can make
+// the success relationship incomplete. RetainedBytes is the physical key/value
+// bytes observed and kept; PrunedBytes is the physical key+value record bytes
+// deleted (TreeDB tombstones add their own implementation-specific write
+// amplification). DeleteWriteBytes is the sum of TreeDB's delete-batch
+// byte-size estimates.
 type PruneStats struct {
 	Visited, Skipped, Retained, Pruned uint64
 	RetainedBytes, PrunedBytes         uint64
@@ -399,25 +405,32 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 	if options.BatchSize <= 0 {
 		options.BatchSize = 256
 	}
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := s.loadDiscardFloorLocked(); err != nil {
+		s.mu.Unlock()
 		return stats, err
 	}
 	floor := s.discardFloor
 	if floor == 0 {
+		s.mu.Unlock()
 		return stats, nil
 	}
 	if options.Mode == CommitDurable {
 		if err := s.persistDiscardFloorLocked(floor, CommitDurable); err != nil {
+			s.mu.Unlock()
 			return stats, err
 		}
 	}
 	snapshotter, ok := s.db.(snapshotDB)
 	if !ok {
+		s.mu.Unlock()
 		return stats, ErrSnapshotUnavailable
 	}
 	snapshot := snapshotter.AcquireSnapshot()
+	s.mu.Unlock()
 	if snapshot == nil {
 		return stats, storageError("acquire prune snapshot", treedb.ErrClosed)
 	}
