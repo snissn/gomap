@@ -3969,6 +3969,12 @@ func TestColumnPhysicalQuerySerialDictInt64SidecarParityM1634(t *testing.T) {
 	}
 }
 
+// columnPhysicalQueryOneShotSnapshotHandleAllocsM1634 accounts for the unique
+// cached and backend snapshot handles acquired by RunColumnPhysicalQuery. The
+// handles intentionally cannot be pooled because a stale exported pointer must
+// never become valid for a later snapshot.
+const columnPhysicalQueryOneShotSnapshotHandleAllocsM1634 = 2
+
 func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(2048)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
@@ -4037,7 +4043,7 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 					panic(fmt.Sprintf("bad sidecar result groups=%d diagnostics=%+v", len(result.Groups), result.Diagnostics))
 				}
 			})
-			maxAllocs := tc.maxAllocs
+			maxAllocs := tc.maxAllocs + columnPhysicalQueryOneShotSnapshotHandleAllocsM1634
 			if runtime.GOOS == "windows" {
 				// Windows CI carries extra runtime/path allocation noise in this
 				// routed one-shot path; keep the stricter budget on Unix hosts
