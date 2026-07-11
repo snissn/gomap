@@ -10,7 +10,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func newCachedSnapshotPoolTestDB(t *testing.T) (*DB, *backenddb.DB) {
+func newCachedSnapshotTestDB(t *testing.T) (*DB, *backenddb.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -26,7 +26,7 @@ func newCachedSnapshotPoolTestDB(t *testing.T) (*DB, *backenddb.DB) {
 }
 
 func TestAcquireSnapshot_CachedPathAllocsAreBounded(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
@@ -67,14 +67,14 @@ func TestAcquireSnapshot_CachedPathAllocsAreBounded(t *testing.T) {
 	}
 }
 
-func TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossReuse(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+func TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossAcquisitions(t *testing.T) {
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
 	}()
 
-	key := []byte("snapshot-reuse-isolation")
+	key := []byte("snapshot-acquisition-isolation")
 	if err := cached.Set(key, []byte("old")); err != nil {
 		t.Fatalf("Set old: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestAcquireSnapshot_CachedPathSnapshotIsolationAcrossReuse(t *testing.T) {
 }
 
 func TestAcquireSnapshot_CachedPathConcurrentAcquireCloseWithWrites(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()

@@ -44,7 +44,7 @@ func TestRawKVParityKeyRangePreservesConcreteEmptyKey(t *testing.T) {
 }
 
 func TestRawKVParitySnapshotGetEntryPreservesEmptyKeyAndValue(t *testing.T) {
-	db, backend := newCachedSnapshotPoolTestDB(t)
+	db, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = db.Close()
 		_ = backend.Close()
@@ -80,7 +80,7 @@ func TestRawKVParitySnapshotGetEntryPreservesEmptyKeyAndValue(t *testing.T) {
 }
 
 func TestRawKVParityCachedUpdateEmptyKeyNilValue(t *testing.T) {
-	db, backend := newCachedSnapshotPoolTestDB(t)
+	db, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = db.Close()
 		_ = backend.Close()

@@ -11,7 +11,7 @@ import (
 )
 
 func TestCachedSnapshotIteratorCreationSerializesCloseAndRelease(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
@@ -91,7 +91,7 @@ func TestCachedSnapshotIteratorCreationSerializesCloseAndRelease(t *testing.T) {
 }
 
 func TestCachedSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
@@ -127,7 +127,7 @@ func TestCachedSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
 }
 
 func TestCachedSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
@@ -170,7 +170,7 @@ func TestCachedSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition(t 
 }
 
 func TestCachedSnapshotIteratorDoubleCloseCannotMutateDetachedOwner(t *testing.T) {
-	cached, backend := newCachedSnapshotPoolTestDB(t)
+	cached, backend := newCachedSnapshotTestDB(t)
 	defer func() {
 		_ = cached.Close()
 		_ = backend.Close()
