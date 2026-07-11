@@ -91,14 +91,20 @@ type Model struct {
 	trace        []string
 }
 
-// Capture imports a real directory as an initially stable image. The root
-// process-local LOCK file coordinates a live handle rather than representing
-// durable database state, and may be unreadable while held on Windows.
+// Capture imports a real directory as an initially stable image. Process-local
+// LOCK files coordinate live handles rather than representing durable database
+// state, and may be unreadable while held on Windows. Composite TreeDB layouts
+// can contain independently-opened nested databases, so omit LOCK at every
+// depth rather than only at the capture root.
 func Capture(root string) (*Model, error) {
-	return captureExcluding(root, "LOCK")
+	return capture(root, true, nil)
 }
 
 func captureExcluding(root string, excluded ...string) (*Model, error) {
+	return capture(root, false, excluded)
+}
+
+func capture(root string, excludeLockFiles bool, excluded []string) (*Model, error) {
 	excludedPaths := make(map[string]struct{}, len(excluded))
 	for _, path := range excluded {
 		rel, err := normalize(path)
@@ -124,6 +130,9 @@ func captureExcluding(root string, excluded ...string) (*Model, error) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if excludeLockFiles && !entry.IsDir() && entry.Name() == "LOCK" {
 			return nil
 		}
 		if entry.IsDir() {

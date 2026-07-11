@@ -39,6 +39,48 @@ func TestCaptureOmitsProcessLocalLock(t *testing.T) {
 	}
 }
 
+func TestCaptureOmitsNestedProcessLocalLocks(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"maindb", "dictdb", "nested/leafdb"} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(dir), "LOCK"), []byte("process-local"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(dir), "data"), []byte(dir), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := model.StablePaths(), []string{"dictdb/data", "maindb/data", "nested/leafdb/data"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stable paths=%v want=%v", got, want)
+	}
+}
+
+func TestCaptureExcludingKeepsNonExcludedNestedLock(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dictdb", "LOCK"), []byte("captured explicitly"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "skip"), []byte("excluded"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model, err := captureExcluding(root, "skip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := model.StablePaths(), []string{"dictdb/LOCK"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stable paths=%v want=%v", got, want)
+	}
+}
+
 func TestObserveDependencyFileSyncPromotesOnlyExactPath(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"value.log", "leaf.log"} {
