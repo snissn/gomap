@@ -319,6 +319,68 @@ The raw regression gate uses unchanged existing point/batch benchmarks from the
 same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,
 any repeatable raw-path regression or allocation increase blocks closeout.
 
+## 10.4 Retained-Version Iteration and Safe Pruning
+
+Invariants:
+
+- forward scans order `(logical asc, timestamp desc)` and reverse scans order
+  `(logical desc, timestamp asc)` while honoring prefix, logical bounds, and a
+  read-timestamp ceiling;
+- iterators pin one snapshot, copy options and returned bytes, exclude the
+  discard metadata key, and surface tombstones plus exact
+  visited/skipped/retained accounting;
+- the persisted floor is the greatest discardable timestamp: reads at or below
+  it and commits at or below it fail, while the floor never moves backward;
+- pruning is streaming/bounded, retains the newest value anchor at/below the
+  floor, and removes a tombstone only after older versions cannot resurrect;
+- durable floor-first interruption can be reopened and resumed idempotently;
+  pinned pre-prune snapshots remain readable under the race detector;
+- a prune paused after snapshot capture does not block foreground `GetAt`,
+  `CommitAt`, or `IterateVersions` acquisition, while a concurrent floor
+  advance remains serialized behind the prune.
+
+Coverage:
+
+- `TreeDB/mvcc/versions_test.go` covers directional golden histories, binary
+  keys, seek, copied ownership, prefix/bound/read-time filters, tombstones,
+  floor rejection/regression, value and tombstone anchors, reopen,
+  interrupted-batch restart, idempotence, and concurrent snapshot readers.
+- The same suite deterministically pauses prune iterator creation after its
+  snapshot is pinned, proves foreground point reads, commits, and retained-
+  version iterator acquisition complete, and then verifies both the old pinned
+  view and the newly committed version after pruning resumes.
+- `TreeDB/mvcc/mvcc_bench_test.go` compares all-version scans with physical
+  encoded-key scans with the same owned key/value output across key counts
+  `{64,256}`, version depths `{1,8,32}`, and both directions. Filtered scans use
+  depth 16/read timestamp 8 and cover all 128 keys plus all, 100, 10, and 1 of
+  512 keys (100%, 19.5%, 1.95%, and 0.195% selectivity). Pruning uses depth 16:
+  64-key cases cover 3/16 and 11/16 discard densities, while 256-key cases
+  cover 3/16, 7/16, and 11/16. The matrix reports useful/skipped rates,
+  bytes/op, allocs/op,
+  prune throughput, physical bytes per pruned version, delete-batch write
+  amplification, and retained physical bytes/versions per operation. Retained
+  bytes are physical records still reachable in the pinned prune snapshot, not
+  immediate filesystem reclamation.
+
+Measurement boundary:
+
+- scan fixtures are built before `ResetTimer`; scan time and allocations cover
+  iterator open, owned decode/copy, traversal, accounting, and close;
+- filtered fixtures are also outside the measurement and cover the same MVCC
+  iterator lifecycle with prefix/read-time rejection included;
+- pruning rebuilds its fixture and advances the floor with the timer stopped on
+  every iteration because pruning is destructive. Timed bytes, allocations,
+  and throughput cover only `PruneVersions`; DB close is also outside the
+  measurement. The floor and prune use relaxed mode so the benchmark measures
+  version selection and bounded delete publication rather than fsync latency.
+
+The bounded matrix smoke is `GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench
+'BenchmarkVersionIteration|BenchmarkPruneVersions' -benchmem -benchtime=1x
+-count=1`. Omit `-benchtime=1x` for measurements. Existing raw `BenchmarkScan`
+is compared on the same base/head with ten samples; because the MVCC path is
+opt-in, its acceptable raw-path regression is at most 5% with no allocation
+increase.
+
 ## 11. Collections Native Fast Path
 
 Invariant:

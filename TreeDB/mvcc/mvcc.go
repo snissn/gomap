@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
@@ -79,10 +80,23 @@ type treeDB interface {
 // Store owns the external-version namespace of one TreeDB handle.
 type Store struct {
 	db treeDB
+
+	// maintenanceMu serializes floor advancement and pruning. The lock order is
+	// maintenanceMu then mu; foreground reads and commits never take it.
+	maintenanceMu sync.Mutex
+
+	// mu guards the discard-floor cache and serializes its publication against
+	// commits and snapshot acquisition. Reads release it as soon as their
+	// point-in-time iterator is pinned.
+	mu           sync.RWMutex
+	discardFloor uint64
+	floorLoaded  bool
 }
 
-// New returns an opt-in MVCC store over db. Callers must not use raw writes in
-// the reserved MVCC namespace while the Store owns it.
+// New returns the one opt-in MVCC owner for db. Callers must keep exactly one
+// Store per TreeDB handle and must not use raw writes in the reserved MVCC
+// namespace while it owns that handle. A second Store would have independent
+// in-memory floor cache and maintenance serialization and is unsupported.
 func New(db *treedb.DB) *Store {
 	if db == nil {
 		return &Store{}
@@ -119,7 +133,6 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
 		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
 	}
-
 	type stagedMutation struct {
 		physical []byte
 		record   []byte
@@ -156,6 +169,14 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 		copy(record[1:], mutation.Value)
 		staged[i].record = record
 	}
+	if err := s.lockDiscardFloorRead(); err != nil {
+		return err
+	}
+	defer s.mu.RUnlock()
+	floor := s.discardFloor
+	if timestamp <= floor {
+		return fmt.Errorf("%w: commit timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, timestamp, floor)
+	}
 
 	batch := s.db.NewBatchWithSize(len(staged))
 	if batch == nil {
@@ -190,7 +211,6 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	if s == nil || s.db == nil {
 		return Result{}, storageError("open iterator", treedb.ErrClosed)
 	}
-
 	lower, err := mvcckey.Encode(logical, timestamp)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
@@ -199,7 +219,16 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
 	}
+	if err := s.lockDiscardFloorRead(); err != nil {
+		return Result{}, err
+	}
+	floor := s.discardFloor
+	if floor != 0 && timestamp <= floor {
+		s.mu.RUnlock()
+		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
+	}
 	it, err := s.db.Iterator(lower, upper)
+	s.mu.RUnlock()
 	if err != nil {
 		return Result{}, storageError("open iterator", err)
 	}
