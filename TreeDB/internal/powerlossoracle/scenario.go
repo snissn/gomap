@@ -106,9 +106,24 @@ func (s Scenario) Validate() error {
 	}
 	newest := s.newestRecoverable()
 	for _, generation := range s.Generations {
-		if generation.Recoverable && generation.Sequence <= s.LatestSealedSequence && !generationComplete(generation) && !s.ReopenRejected {
+		if generation.Recoverable && generation.Sequence <= s.LatestSealedSequence && !generationComplete(generation) {
 			missing := missingGenerationResources(generation)
 			return Violation{Invariant: InvariantIncompleteRecoverableRoot, Detail: fmt.Sprintf("generation=%d missing=%s cut=%s", generation.Sequence, strings.Join(missing, ","), s.Cut)}
+		}
+	}
+	recovered := make(map[uint64]struct{}, len(s.RecoveredAcknowledgements))
+	for _, sequence := range s.RecoveredAcknowledgements {
+		recovered[sequence] = struct{}{}
+	}
+	for _, ack := range s.Acknowledged {
+		_, recoveredByWAL := recovered[ack.Sequence]
+		recoveredByRoot := newest != nil && ack.Sequence <= newest.Sequence
+		if ack.Durable && !recoveredByRoot && !recoveredByWAL {
+			recoveredSequence := uint64(0)
+			if newest != nil {
+				recoveredSequence = newest.Sequence
+			}
+			return Violation{Invariant: InvariantDurableAckLost, Detail: fmt.Sprintf("ack=%d recovered=%d cut=%s", ack.Sequence, recoveredSequence, s.Cut)}
 		}
 	}
 	if err := s.validateSelectedState(); err != nil {
@@ -158,21 +173,6 @@ func (s Scenario) Validate() error {
 		}
 		expectedLSN = frame.LSN + 1
 	}
-	recovered := make(map[uint64]struct{}, len(s.RecoveredAcknowledgements))
-	for _, sequence := range s.RecoveredAcknowledgements {
-		recovered[sequence] = struct{}{}
-	}
-	for _, ack := range s.Acknowledged {
-		_, recoveredByWAL := recovered[ack.Sequence]
-		recoveredByRoot := newest != nil && ack.Sequence <= newest.Sequence
-		if ack.Durable && !recoveredByRoot && !recoveredByWAL {
-			recoveredSequence := uint64(0)
-			if newest != nil {
-				recoveredSequence = newest.Sequence
-			}
-			return Violation{Invariant: InvariantDurableAckLost, Detail: fmt.Sprintf("ack=%d recovered=%d cut=%s", ack.Sequence, recoveredSequence, s.Cut)}
-		}
-	}
 	if err := s.validateRelaxedSuffix(); err != nil {
 		return err
 	}
@@ -197,6 +197,9 @@ func (s Scenario) validateSelectedState() error {
 		if s.SelectedSequence != 0 || s.OpenedSequence != 0 {
 			return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("public Open rejected but selected=(scenario=%d opened=%d) cut=%s", s.SelectedSequence, s.OpenedSequence, s.Cut)}
 		}
+		if newest != nil {
+			return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("public Open rejected despite complete generation=%d at-or-below seal=%d cut=%s", newest.Sequence, s.LatestSealedSequence, s.Cut)}
+		}
 		return nil
 	}
 	if newest == nil {
@@ -204,9 +207,6 @@ func (s Scenario) validateSelectedState() error {
 			return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected generation without complete candidate at-or-below seal=%d scenario=%d opened=%d cut=%s", s.LatestSealedSequence, s.SelectedSequence, s.OpenedSequence, s.Cut)}
 		}
 		return nil
-	}
-	if s.SelectedSequence == 0 {
-		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("public Open selected none but newest complete generation=%d at-or-below seal=%d cut=%s", newest.Sequence, s.LatestSealedSequence, s.Cut)}
 	}
 	selected := s.selectedGeneration()
 	if selected == nil || !selected.Recoverable || !generationComplete(*selected) {
@@ -221,24 +221,44 @@ func (s Scenario) validateSelectedState() error {
 	if s.ReopenRejected || s.OpenedSequence != s.SelectedSequence || s.OpenedAppliedLSN != selected.AppliedLSN {
 		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected=(generation=%d applied=%d) public-open=(rejected=%t generation=%d applied=%d) cut=%s", s.SelectedSequence, selected.AppliedLSN, s.ReopenRejected, s.OpenedSequence, s.OpenedAppliedLSN, s.Cut)}
 	}
-	for prefix, expected := range s.ExpectedKeyValuesByPrefix {
+	for _, prefix := range sortedPrefixKeys(s.ExpectedKeyValuesByPrefix) {
+		expected := s.ExpectedKeyValuesByPrefix[prefix]
 		observed, ok := s.ObservedKeyValuesByPrefix[prefix]
 		if !ok {
 			return Violation{Invariant: InvariantKeyStateMismatch, Detail: fmt.Sprintf("generation=%d prefix=%q was not observed cut=%s", s.SelectedSequence, prefix, s.Cut)}
 		}
-		for key, value := range expected {
+		for _, key := range sortedStringKeys(expected) {
+			value := expected[key]
 			got, ok := observed[key]
 			if !ok || got != value {
 				return Violation{Invariant: InvariantKeyStateMismatch, Detail: fmt.Sprintf("generation=%d prefix=%q key=%q got=%q want=%q cut=%s", s.SelectedSequence, prefix, key, got, value, s.Cut)}
 			}
 		}
-		for key := range observed {
+		for _, key := range sortedStringKeys(observed) {
 			if _, ok := expected[key]; !ok {
 				return Violation{Invariant: InvariantKeyStateMismatch, Detail: fmt.Sprintf("generation=%d prefix=%q unexpected-key=%q cut=%s", s.SelectedSequence, prefix, key, s.Cut)}
 			}
 		}
 	}
 	return nil
+}
+
+func sortedStringKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedPrefixKeys(values map[string]map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (s Scenario) validateRelaxedSuffix() error {

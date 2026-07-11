@@ -49,7 +49,7 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	if err != nil {
 		return nil, err
 	}
-	if err := durabilitycut.EmitBasic(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceValueLog, a.db.dir); err != nil {
+	if err := a.emitDependencyAppend(ptrs); err != nil {
 		putValueLogPtrs(ptrs)
 		return nil, err
 	}
@@ -60,6 +60,28 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	out := append([]page.ValuePtr(nil), ptrs...)
 	putValueLogPtrs(ptrs)
 	return out, nil
+}
+
+func (a *cachingValueLogAppender) emitDependencyAppend(ptrs []page.ValuePtr) error {
+	if !durabilitycut.Enabled() {
+		return nil
+	}
+	paths := make([]string, 0, len(ptrs))
+	seen := make(map[string]struct{}, len(ptrs))
+	for _, ptr := range ptrs {
+		path := valuelog.SegmentPath(a.db.valueLogDir, ptr.FileID)
+		if lane := a.db.valueLogLaneForFileID(ptr.FileID); lane != nil {
+			if dir := a.db.valueLogDirForLane(lane); dir != "" {
+				path = valuelog.SegmentPath(dir, ptr.FileID)
+			}
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return durabilitycut.Emit(durabilitycut.Event{Point: durabilitycut.AfterDependencyAppend, Resource: durabilitycut.ResourceValueLog, Root: a.db.dir, Paths: paths})
 }
 
 func (a *cachingValueLogAppender) ReserveRIDs(count int) (uint64, error) {

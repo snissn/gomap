@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -118,7 +119,7 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 			}
 			continue
 		}
-		if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
+		if _, err := removePersistentFile(filepath.Dir(seg.path), seg.path, valueLogResourceForPath(seg.path)); err != nil {
 			errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, err))
 		}
 	}
@@ -1144,7 +1145,12 @@ func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir 
 		} else if !os.IsNotExist(err) {
 			return promoted, err
 		}
-		if err := os.Rename(promoted[i].path, destination); err != nil {
+		oldPath := promoted[i].path
+		renamed, err := renamePersistentFile(leafDir, oldPath, destination, durabilitycut.ResourceOuterLeaf)
+		if err != nil {
+			if renamed {
+				promoted[i].path = destination
+			}
 			return promoted, err
 		}
 		promoted[i].path = destination
@@ -1493,7 +1499,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		if len(createdSegments) > 0 {
 			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-			if syncErr := syncDirFn(leafVLogDir); syncErr != nil {
+			if syncErr := syncDeletionNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf); syncErr != nil {
 				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
 			}
 		}
@@ -1514,7 +1520,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if len(createdSegments) > 0 {
 		dirSyncCh = make(chan error, 1)
 		leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-		go func() { dirSyncCh <- syncDirFn(leafVLogDir) }()
+		go func() {
+			dirSyncCh <- syncNewFileNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf)
+		}()
 	}
 
 	var leafManifest *leafGenerationManifest

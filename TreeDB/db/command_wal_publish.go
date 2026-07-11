@@ -443,10 +443,20 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 			if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
 				return decisions, err
 			}
-			if err := os.Remove(decision.Path); err != nil && !os.IsNotExist(err) {
-				return decisions, err
+			removeErr := os.Remove(decision.Path)
+			if removeErr != nil && !os.IsNotExist(removeErr) {
+				return decisions, removeErr
 			}
-			if err := durabilitycut.EmitPath(durabilitycut.AfterWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
+			after := durabilitycut.Event{
+				Point:    durabilitycut.AfterWALOrAssetUnlink,
+				Resource: durabilitycut.ResourceCommandWAL,
+				Path:     decision.Path,
+			}
+			if removeErr == nil {
+				after.Namespace = durabilitycut.NamespaceUnlink
+				after.OldPath = decision.Path
+			}
+			if err := durabilitycut.Emit(after); err != nil {
 				return decisions, err
 			}
 			decision.Removed = true

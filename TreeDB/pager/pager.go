@@ -4,10 +4,12 @@ import (
 	"errors" // Added import
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -755,6 +757,27 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 // Sync msyncs the memory maps and syncs the backing file to disk.
 func (p *Pager) Sync() error {
 	return p.syncDirtyChunks(true, 0)
+}
+
+// SyncIndexData is the production index-publication data barrier. It performs
+// the same durable pager sync as Sync while exposing the named before/after
+// boundary used by the power-loss oracle. Meta-page syncs continue to use Sync
+// and therefore are not mislabeled as pre-publication index-data barriers.
+func (p *Pager) SyncIndexData() error {
+	if !p.readOnly && !p.memoryOnly {
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
+			return err
+		}
+	}
+	if err := p.Sync(); err != nil {
+		return err
+	}
+	if !p.readOnly && !p.memoryOnly {
+		if err := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {

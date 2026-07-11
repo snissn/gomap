@@ -319,6 +319,46 @@ func TestUnlinkStableNamePersistsUntilContainingDirectorySync(t *testing.T) {
 	}
 }
 
+func TestUnlinkTreePersistsUntilParentDirectorySync(t *testing.T) {
+	model := newModel()
+	if err := model.Create("leaf/.leaf-pack-copy-1/leaf_vlog/segment.log", []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("leaf/.leaf-pack-copy-1/leaf_vlog/segment.log"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".", "leaf", "leaf/.leaf-pack-copy-1", "leaf/.leaf-pack-copy-1/leaf_vlog"} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.Unlink("leaf/.leaf-pack-copy-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := model.StablePaths(); !reflect.DeepEqual(got, []string{"leaf/.leaf-pack-copy-1/leaf_vlog/segment.log"}) {
+		t.Fatalf("stable paths before staging-parent sync=%v", got)
+	}
+	if err := model.SyncDir("leaf"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := model.stableDirs["leaf/.leaf-pack-copy-1"]; ok {
+		t.Fatal("removed staging directory remained stable after parent sync")
+	}
+	if got := model.StablePaths(); len(got) != 0 {
+		t.Fatalf("stable descendant paths after staging-parent sync=%v", got)
+	}
+	if _, ok := model.stableDirs["leaf/.leaf-pack-copy-1/leaf_vlog"]; ok {
+		t.Fatal("removed staging descendant directory remained stable after parent sync")
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatalf("materialize stable tree after recursive unlink: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "leaf", ".leaf-pack-copy-1")); !os.IsNotExist(err) {
+		t.Fatalf("materialized staging tree stat error=%v, want not-exist", err)
+	}
+}
+
 func TestRejectsAbsoluteAndTraversalPaths(t *testing.T) {
 	model := newModel()
 	for _, path := range []string{"../escape", filepath.Join("..", "escape"), filepath.Join(string(filepath.Separator), "absolute")} {

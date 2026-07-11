@@ -46,6 +46,19 @@ const (
 	ResourceIndex      Resource = "index"
 	ResourceSeal       Resource = "publication-seal"
 	ResourceMeta       Resource = "meta"
+	ResourceAuxiliary  Resource = "auxiliary"
+)
+
+// NamespaceOperation records a completed production namespace mutation. It is
+// orthogonal to Point: named cut points describe persistence boundaries, while
+// namespace operations let the stable/volatile model preserve inode identity
+// across create, rename, and unlink instead of inferring names from a scan.
+type NamespaceOperation string
+
+const (
+	NamespaceCreate NamespaceOperation = "create"
+	NamespaceRename NamespaceOperation = "rename"
+	NamespaceUnlink NamespaceOperation = "unlink"
 )
 
 type Event struct {
@@ -59,6 +72,28 @@ type Event struct {
 	LSN    uint64
 	Offset int64
 	Length int64
+	// Namespace, OldPath, and NewPath describe one completed filesystem
+	// namespace mutation. Create uses NewPath, unlink uses OldPath, and rename
+	// uses both.
+	Namespace NamespaceOperation
+	OldPath   string
+	NewPath   string
+}
+
+// EmitNamespace avoids constructing a namespace event on the
+// production-disabled path.
+func EmitNamespace(operation NamespaceOperation, resource Resource, root, oldPath, newPath string) error {
+	h := installed.Load()
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	return h.observe(Event{
+		Resource:  resource,
+		Root:      root,
+		Namespace: operation,
+		OldPath:   oldPath,
+		NewPath:   newPath,
+	})
 }
 
 type Observer func(Event) error

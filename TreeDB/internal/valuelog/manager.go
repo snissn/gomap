@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -2461,7 +2462,10 @@ func closeAndRemoveSegmentFile(f *File) error {
 
 func removeSegmentFileOnce(path string) error {
 	err := removeSegmentPath(path)
-	if err == nil || os.IsNotExist(err) {
+	if err == nil {
+		return durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceValueLog, filepath.Dir(path), path, "")
+	}
+	if os.IsNotExist(err) {
 		return nil
 	}
 	return err

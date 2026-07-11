@@ -110,11 +110,34 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := durabilitycut.EmitBasic(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceValueLog, db.dir); err != nil {
+	if err := db.emitValueLogDependencyAppend(ptrs); err != nil {
 		return nil, err
 	}
 	db.protectPendingValueLogAppendPtrs(ptrs)
 	return ptrs, nil
+}
+
+func (db *DB) emitValueLogDependencyAppend(ptrs []page.ValuePtr) error {
+	if !durabilitycut.Enabled() {
+		return nil
+	}
+	if db == nil || db.valueLogManager == nil {
+		return durabilitycut.EmitBasic(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceValueLog, "")
+	}
+	paths := make([]string, 0, len(ptrs))
+	seen := make(map[string]struct{}, len(ptrs))
+	for _, ptr := range ptrs {
+		path := db.valueLogManager.SegmentPath(ptr.FileID)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return durabilitycut.Emit(durabilitycut.Event{Point: durabilitycut.AfterDependencyAppend, Resource: durabilitycut.ResourceValueLog, Root: db.dir, Paths: paths})
 }
 
 // protectPendingValueLogAppendPtrs pins value-log files returned to native-root

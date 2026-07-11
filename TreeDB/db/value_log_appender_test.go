@@ -3,13 +3,45 @@ package db
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestAppendValueLogValuesEmitsExactDependencyPath(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	appender, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = appender.close() }()
+	db.SetValueLogAppender(appender)
+	defer db.SetValueLogAppender(nil)
+	var paths []string
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.AfterDependencyAppend {
+			paths = append(paths, event.Paths...)
+		}
+		return nil
+	})
+	defer restore()
+	if _, err := db.AppendValueLogValues([][]byte{bytes.Repeat([]byte("value"), 512)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 || !strings.Contains(filepath.ToSlash(paths[0]), "/value_vlog/") {
+		t.Fatalf("after-append exact paths=%v", paths)
+	}
+}
 
 func TestAppendValueLogValuesUnavailableReturnsSentinel(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})

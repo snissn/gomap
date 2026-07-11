@@ -2955,8 +2955,17 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
 		return post, prePublishErr(err)
 	}
+	postMetaWriteErr := func(err error) error {
+		if err == nil {
+			return nil
+		}
+		// The target meta page has been dirtied. Any failure from this point
+		// leaves publication outcome ambiguous until the database is reopened.
+		db.publicationPoisoned.Store(true)
+		return wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+	}
 	if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return post, prePublishErr(err)
+		return post, postMetaWriteErr(err)
 	}
 	if debugTiming {
 		durMeta = time.Since(t0)
@@ -2967,7 +2976,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		t1 := time.Now()
 		var err error
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-			return post, err
+			return post, postMetaWriteErr(err)
 		}
 		if db.testFailSyncMeta.Load() {
 			err = errTestSyncMetaFailpoint
@@ -2977,10 +2986,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			err = idx.pager.Sync()
 		}
 		if err != nil {
-			return post, err
+			return post, postMetaWriteErr(err)
 		}
 		if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-			return post, err
+			return post, postMetaWriteErr(err)
 		}
 		if debugTiming {
 			durSync2 = time.Since(t1)

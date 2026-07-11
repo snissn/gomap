@@ -153,6 +153,42 @@ func TestValidateSelectedRootMustBeNewestCompleteCandidate(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsPublicOpenRejectionWhenCompleteCandidateExists(t *testing.T) {
+	scenario := Scenario{
+		Cut:                  AfterMetaSync,
+		ReopenAttempted:      true,
+		ReopenRejected:       true,
+		Generations:          []Generation{completeGeneration(5, 0)},
+		LatestSealedSequence: 5,
+	}
+	if err := RequireViolation(scenario.Validate(), InvariantSelectedRootInvalid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateKeyStateDiagnosisIsDeterministic(t *testing.T) {
+	scenario := Scenario{
+		Cut:                  AfterMetaSync,
+		ReopenAttempted:      true,
+		Generations:          []Generation{completeGeneration(5, 0)},
+		LatestSealedSequence: 5,
+		SelectedSequence:     5,
+		OpenedSequence:       5,
+		ExpectedKeyValuesByPrefix: map[string]map[string]string{
+			"z/": {},
+			"a/": {},
+		},
+		ObservedKeyValuesByPrefix: map[string]map[string]string{
+			"z/": {"z/2": "two", "z/1": "one"},
+			"a/": {"a/2": "two", "a/1": "one"},
+		},
+	}
+	err := scenario.Validate()
+	if err == nil || err.Error() != `key-state-mismatch: generation=5 prefix="a/" unexpected-key="a/1" cut=after-meta-sync` {
+		t.Fatalf("diagnosis=%v", err)
+	}
+}
+
 func TestValidateAcknowledgementAndSelectedRootViolations(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -249,6 +285,20 @@ func TestValidateIgnoresIncompleteVolatileCandidateAboveLatestSeal(t *testing.T)
 	}
 	if err := scenario.Validate(); err != nil {
 		t.Fatalf("incomplete volatile candidate above latest seal invalidated sealed selection: %v", err)
+	}
+}
+
+func TestValidateAcceptsInitialGenerationZeroSelection(t *testing.T) {
+	scenario := Scenario{
+		Cut:                  AfterMetaSync,
+		ReopenAttempted:      true,
+		Generations:          []Generation{completeGeneration(0, 0)},
+		LatestSealedSequence: 0,
+		SelectedSequence:     0,
+		OpenedSequence:       0,
+	}
+	if err := scenario.Validate(); err != nil {
+		t.Fatalf("initial generation zero selection rejected: %v", err)
 	}
 }
 

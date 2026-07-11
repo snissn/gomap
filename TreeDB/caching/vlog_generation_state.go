@@ -2,6 +2,7 @@ package caching
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 const valueLogGenerationStateFileName = "vlog_generation_state.json"
@@ -207,8 +209,20 @@ func saveValueLogGenerationState(path string, raw valueLogGenerationStateFile) e
 		return nil
 	}
 	if len(raw.RewriteSourceFileIDs) == 0 && len(raw.RewriteDebtLedger) == 0 && len(raw.RewriteDebtChunks) == 0 && len(raw.RewriteHistory) == 0 && len(raw.RewritePenalties) == 0 {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
+		}
+		if err := durabilitycut.EmitNamespace(
+			durabilitycut.NamespaceUnlink,
+			durabilitycut.ResourceValueLog,
+			filepath.Dir(path),
+			path,
+			"",
+		); err != nil {
+			return errors.Join(err, backenddb.ErrRecoveryRequired)
 		}
 		return nil
 	}

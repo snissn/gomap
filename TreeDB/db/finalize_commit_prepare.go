@@ -3,7 +3,6 @@ package db
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -87,14 +86,7 @@ func (db *DB) flushFinalizeCommitDurability(idx *indexGen, valueLogAppender Valu
 	// extra unreferenced data pages/records behind, while the root swap still
 	// happens only after validation under commit serialization.
 	if sync {
-		indexPath := filepath.Join(db.dir, "index.db")
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, db.dir, indexPath); err != nil {
-			return err
-		}
-		if err := idx.pager.Sync(); err != nil {
-			return err
-		}
-		if err := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, db.dir, indexPath); err != nil {
+		if err := idx.pager.SyncIndexData(); err != nil {
 			return err
 		}
 	}

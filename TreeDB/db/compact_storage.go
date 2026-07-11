@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -1633,14 +1634,15 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 				}
 			}
 		}
-		if err := os.Remove(path); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
+		removed, err := removePersistentFile(layout.valueVLogDir, path, durabilitycut.ResourceValueLog)
+		if err != nil {
 			if compactStorageIsBusyRemoveError(err) {
 				continue
 			}
 			return deleted, err
+		}
+		if !removed {
+			continue
 		}
 		deleted++
 	}

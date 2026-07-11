@@ -29,6 +29,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
@@ -2635,21 +2636,50 @@ func (db *DB) checkpointFlushValueLogLanes() error {
 	return db.flushPendingValueLogLanes(true, valueLogSyncPathCheckpoint)
 }
 
-func (db *DB) syncDirBestEffort(dir string) {
+func (db *DB) syncDirBestEffort(dir string, resource durabilitycut.Resource) {
 	if dir == "" || runtime.GOOS == "windows" {
+		return
+	}
+	reportObservationFailure := func(err error) {
+		if err == nil {
+			return
+		}
+		if resource == durabilitycut.ResourceCommandWAL {
+			if marker, ok := db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+				marker.MarkCommandWALRecoveryRequired()
+			}
+		}
+		db.reportError(errors.Join(err, backenddb.ErrRecoveryRequired))
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, resource, dir, dir); err != nil {
+		reportObservationFailure(err)
 		return
 	}
 	f, err := os.Open(dir)
 	if err != nil {
-		db.reportError(fmt.Errorf("cachingdb: failed to open dir %q for sync: %w", dir, err))
+		reportObservationFailure(fmt.Errorf("cachingdb: failed to open dir %q for sync: %w", dir, err))
 		return
 	}
 	if err := f.Sync(); err != nil {
-		db.reportError(fmt.Errorf("cachingdb: failed to sync dir %q: %w", dir, err))
+		reportObservationFailure(fmt.Errorf("cachingdb: failed to sync dir %q: %w", dir, err))
+	} else {
+		if err := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, resource, dir, dir); err != nil {
+			reportObservationFailure(err)
+		}
 	}
 	if err := f.Close(); err != nil {
 		db.reportError(fmt.Errorf("cachingdb: failed to close dir %q after sync: %w", dir, err))
 	}
+}
+
+func persistentLogResourceForPath(path string) durabilitycut.Resource {
+	if _, _, valueLog, ok := parseLogSeq(filepath.Base(path)); ok && valueLog {
+		if filepath.Base(filepath.Dir(filepath.Clean(path))) == "leaf_vlog" {
+			return durabilitycut.ResourceOuterLeaf
+		}
+		return durabilitycut.ResourceValueLog
+	}
+	return durabilitycut.ResourceCommandWAL
 }
 
 func (db *DB) removeFileRetry(path string) error {
@@ -2657,7 +2687,25 @@ func (db *DB) removeFileRetry(path string) error {
 	backoff := 25 * time.Millisecond
 	for i := 0; i < 40; i++ {
 		err = os.Remove(path)
-		if err == nil || os.IsNotExist(err) {
+		if err == nil {
+			resource := persistentLogResourceForPath(path)
+			if observeErr := durabilitycut.EmitNamespace(
+				durabilitycut.NamespaceUnlink,
+				resource,
+				filepath.Dir(path),
+				path,
+				"",
+			); observeErr != nil {
+				if resource == durabilitycut.ResourceCommandWAL {
+					if marker, ok := db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+						marker.MarkCommandWALRecoveryRequired()
+					}
+				}
+				return errors.Join(observeErr, backenddb.ErrRecoveryRequired)
+			}
+			return nil
+		}
+		if os.IsNotExist(err) {
 			return nil
 		}
 		if runtime.GOOS != "windows" {
@@ -5116,7 +5164,7 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	db.untrackValueLogSegmentLocked(path)
 	db.mu.Unlock()
 	db.forgetValueLogRetain(path)
-	db.syncDirBestEffort(filepath.Dir(path))
+	db.syncDirBestEffort(filepath.Dir(path), persistentLogResourceForPath(path))
 	return true
 }
 
@@ -6938,9 +6986,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 			}
 		}
 		if removed {
-			db.syncDirBestEffort(db.valueLogDir)
+			db.syncDirBestEffort(db.valueLogDir, durabilitycut.ResourceValueLog)
 			if db.leafLogDir != "" {
-				db.syncDirBestEffort(db.leafLogDir)
+				db.syncDirBestEffort(db.leafLogDir, durabilitycut.ResourceOuterLeaf)
 			}
 		}
 		return out
@@ -7087,9 +7135,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 		}
 	}
 	if removed {
-		db.syncDirBestEffort(db.valueLogDir)
+		db.syncDirBestEffort(db.valueLogDir, durabilitycut.ResourceValueLog)
 		if db.leafLogDir != "" {
-			db.syncDirBestEffort(db.leafLogDir)
+			db.syncDirBestEffort(db.leafLogDir, durabilitycut.ResourceOuterLeaf)
 		}
 	}
 	return out
@@ -24198,7 +24246,7 @@ func (db *DB) Checkpoint() error {
 		db.forgetValueLogRetain(path)
 	}
 	if removed && !db.relaxedSync {
-		db.syncDirBestEffort(db.dir)
+		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	db.observeCheckpointWALCleanupCoverage(cleanupConsidered, cleanupRemoved, cleanupSkippedCurrent, cleanupSkippedPreRotate, cleanupSkippedRetained)
 	recordCheckpointStageSince(&db.checkpointStageWALCleanup, walCleanupStart)
@@ -24831,7 +24879,7 @@ func (db *DB) Close() error {
 		db.forgetValueLogRetain(path)
 	}
 	if removed {
-		db.syncDirBestEffort(db.dir)
+		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	if db.journalOwner != nil {
 		if err := db.journalOwner.Close(); err != nil {
@@ -28312,7 +28360,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		db.untrackWALSegmentLocked(walPath)
 		db.mu.Unlock()
 		db.forgetValueLogRetain(walPath)
-		db.syncDirBestEffort(db.dir)
+		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	db.checkValueLogRetention()
 

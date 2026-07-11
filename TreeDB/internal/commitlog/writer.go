@@ -31,6 +31,21 @@ const (
 
 var syncDirFn = syncDir
 
+func openLogFile(path string, flags int) (*os.File, error) {
+	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
+			_ = created.Close()
+			return nil, observeErr
+		}
+		return created, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+}
+
 func syncNewLogFileDirectory(w *Writer, path string) error {
 	dir := filepath.Dir(path)
 	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, "", dir); err != nil {
@@ -201,7 +216,7 @@ func NewWriter(path string) (*Writer, error) {
 }
 
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	f, err := openLogFile(path, os.O_RDWR)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +504,7 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 	}
 
 	if w.f == nil {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		f, err := openLogFile(path, os.O_WRONLY|os.O_APPEND)
 		if err != nil {
 			return err
 		}
@@ -529,7 +544,7 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := openLogFile(path, os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return err
 	}

@@ -42,15 +42,31 @@ const (
 var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
+func openLogFile(path string) (*os.File, error) {
+	const flags = os.O_WRONLY | os.O_APPEND
+	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+			_ = created.Close()
+			return nil, observeErr
+		}
+		return created, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+}
+
 func syncNewFileDirectory(w *Writer, path string) error {
 	dir := filepath.Dir(path)
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, "", "", dir); err != nil {
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceValueLog, "", dir); err != nil {
 		return err
 	}
 	if err := w.syncDirectory(path); err != nil {
 		return err
 	}
-	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, "", "", dir)
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceValueLog, "", dir)
 }
 
 func recordSizeExceedsMax(valueLen uint32) bool {
@@ -566,7 +582,7 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 }
 
 func NewWriter(path string, fileID uint32) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := openLogFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -883,7 +899,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 				return err
 			}
 		}
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		f, err := openLogFile(path)
 		if err != nil {
 			return err
 		}
@@ -918,7 +934,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := openLogFile(path)
 	if err != nil {
 		return err
 	}

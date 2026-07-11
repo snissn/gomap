@@ -165,14 +165,42 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 		return
 	}
 	defer reopened.Close()
-	want := bytes.Repeat([]byte{'a'}, 32)
-	for i := 0; i < keys; i++ {
-		key := []byte(fmt.Sprintf("reuse/%04d", i))
-		got, getErr := reopened.Get(key)
-		if getErr != nil || !bytes.Equal(got, want) {
-			t.Logf("public read diagnosed reused page %d at key=%q: value=%x err=%v", reusedPage, key, got, getErr)
-			return
-		}
+	opened := reopened.State()
+	if opened == nil {
+		t.Fatal("public db.Open returned no state")
 	}
-	t.Fatalf("public db.Open/read accepted old root after actual live page %d was reused", reusedPage)
+	generation := powerLossDBCompleteGeneration(oldState.CommitSeq, oldState.AppliedCommandLSN)
+	generation.LivePages = append([]uint64(nil), oldPages...)
+	scenario := powerlossoracle.Scenario{
+		Name:                 "actual-recoverable-page-reuse",
+		Cut:                  powerlossoracle.AfterMetaWrite,
+		Generations:          []powerlossoracle.Generation{generation},
+		LatestSealedSequence: oldState.CommitSeq,
+		SelectedSequence:     opened.CommitSeq,
+		OpenedSequence:       opened.CommitSeq,
+		OpenedAppliedLSN:     opened.AppliedCommandLSN,
+		ReusedPages:          []uint64{reusedPage},
+		ReopenAttempted:      true,
+	}
+	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantRecoverablePageReused); err != nil {
+		t.Fatalf("successful public Open did not produce recoverable-page-reused diagnosis: %v", err)
+	}
+}
+
+func powerLossDBCompleteGeneration(sequence, applied uint64) powerlossoracle.Generation {
+	kinds := []powerlossoracle.ResourceKind{
+		powerlossoracle.ResourceIndex,
+		powerlossoracle.ResourceFreelist,
+		powerlossoracle.ResourceValueLog,
+		powerlossoracle.ResourceOuterLeaf,
+		powerlossoracle.ResourceAuxiliary,
+		powerlossoracle.ResourceDirectory,
+		powerlossoracle.ResourceSeal,
+		powerlossoracle.ResourceCommandWAL,
+	}
+	resources := make([]powerlossoracle.Resource, 0, len(kinds))
+	for _, kind := range kinds {
+		resources = append(resources, powerlossoracle.Resource{Kind: kind, ID: string(kind), Stable: true, Live: true})
+	}
+	return powerlossoracle.Generation{Sequence: sequence, Recoverable: true, Resources: resources, AppliedLSN: applied}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 )
@@ -1338,7 +1339,7 @@ func (db *DB) finishFlushedCanonicalUnits(syncFlush bool, units []flushUnit, ids
 		db.forgetValueLogRetain(walPath)
 	}
 	if removed {
-		db.syncDirBestEffort(db.dir)
+		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	db.checkValueLogRetention()
 }

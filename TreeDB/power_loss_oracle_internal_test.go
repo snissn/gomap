@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -34,7 +35,6 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 			_ = d.Close()
 		}
 	}()
-
 	key := []byte("cleanup/acknowledged")
 	value := []byte("durable-command-value")
 	lsn, err := d.backend.AppendRawKVSingleCommandWAL(commitlog.RawKVOperation{
@@ -47,6 +47,10 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 	}
 	if err := d.backend.RotateCommandWALActiveSegment(true); err != nil {
 		t.Fatalf("rotate synced command-WAL segment: %v", err)
+	}
+	baseline := d.backend.State()
+	if baseline == nil {
+		t.Fatal("missing baseline state")
 	}
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
@@ -98,5 +102,54 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 	if getErr == nil && bytes.Equal(got, value) {
 		t.Fatalf("public TreeDB.Open/read recovered acknowledged command after its only stable source was deleted")
 	}
-	t.Logf("public read diagnosed acknowledged-command loss after stable source deletion: value=%q err=%v", got, getErr)
+	stats := reopened.Stats()
+	openedSequence, err := strconv.ParseUint(stats["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse reopened commit sequence: %v", err)
+	}
+	openedApplied, err := strconv.ParseUint(stats["treedb.applied_command_lsn"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse reopened applied LSN: %v", err)
+	}
+	generation := powerLossCompleteGeneration(baseline.CommitSeq, baseline.AppliedCommandLSN)
+	for i := range generation.Resources {
+		if generation.Resources[i].Kind == powerlossoracle.ResourceCommandWAL {
+			generation.Resources[i].ID = deletionSync.Path
+		}
+	}
+	scenario := powerlossoracle.Scenario{
+		Name:                 "actual-source-deletion-before-stable-coverage",
+		Cut:                  powerlossoracle.AfterDeletionDirectorySync,
+		Generations:          []powerlossoracle.Generation{generation},
+		LatestSealedSequence: baseline.CommitSeq,
+		SelectedSequence:     openedSequence,
+		OpenedSequence:       openedSequence,
+		OpenedAppliedLSN:     openedApplied,
+		RemovedResources: []powerlossoracle.Resource{{
+			Kind: powerlossoracle.ResourceCommandWAL,
+			ID:   deletionSync.Path,
+		}},
+		ReopenAttempted: true,
+	}
+	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantEarlySourceDeletion); err != nil {
+		t.Fatalf("successful public Open did not produce early-source-deletion diagnosis: %v (value=%q get=%v)", err, got, getErr)
+	}
+}
+
+func powerLossCompleteGeneration(sequence, applied uint64) powerlossoracle.Generation {
+	kinds := []powerlossoracle.ResourceKind{
+		powerlossoracle.ResourceIndex,
+		powerlossoracle.ResourceFreelist,
+		powerlossoracle.ResourceValueLog,
+		powerlossoracle.ResourceOuterLeaf,
+		powerlossoracle.ResourceAuxiliary,
+		powerlossoracle.ResourceDirectory,
+		powerlossoracle.ResourceSeal,
+		powerlossoracle.ResourceCommandWAL,
+	}
+	resources := make([]powerlossoracle.Resource, 0, len(kinds))
+	for _, kind := range kinds {
+		resources = append(resources, powerlossoracle.Resource{Kind: kind, ID: string(kind), Stable: true, Live: true})
+	}
+	return powerlossoracle.Generation{Sequence: sequence, Recoverable: true, Resources: resources, AppliedLSN: applied}
 }

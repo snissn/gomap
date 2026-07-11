@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -90,11 +91,24 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	readyPath := filepath.Join(opts.Dir, indexReadyFileName)
 
 	// Clean up any previous partial artifacts (best-effort).
-	_ = os.Remove(newPath)
-	_ = os.Remove(readyPath)
+	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
+		_ = d.Close()
+		return err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		_ = d.Close()
+		return err
+	}
 
+	_, newStatErr := os.Stat(newPath)
+	newCreated := os.IsNotExist(newStatErr)
 	newPager, err := pager.Open(newPath, opts.ChunkSize)
 	if err != nil {
+		_ = d.Close()
+		return err
+	}
+	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
+		_ = newPager.Close()
 		_ = d.Close()
 		return err
 	}
@@ -218,15 +232,16 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return errVacuumFailpoint
 	}
 
-	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
+	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err
 	}
 	if runtime.GOOS != "windows" {
-		if dir, err := os.Open(opts.Dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
 		}
 	}
 	if fail == vacuumFailAfterReady {
@@ -252,27 +267,35 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	}
 
 	// Swap in the new index file.
-	_ = os.Remove(bakPath)
-	if err := os.Rename(indexPath, bakPath); err != nil {
+	if err := removePersistentFileBestEffort(opts.Dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if _, err := renamePersistentFile(opts.Dir, indexPath, bakPath, durabilitycut.ResourceIndex); err != nil {
 		return err
 	}
 	if fail == vacuumFailAfterRenameOld {
 		return errVacuumFailpoint
 	}
-	if err := os.Rename(newPath, indexPath); err != nil {
-		_ = os.Rename(bakPath, indexPath)
+	if renamed, err := renamePersistentFile(opts.Dir, newPath, indexPath, durabilitycut.ResourceIndex); err != nil {
+		if !renamed {
+			_, rollbackErr := renamePersistentFile(opts.Dir, bakPath, indexPath, durabilitycut.ResourceIndex)
+			return errors.Join(err, rollbackErr)
+		}
 		return err
 	}
 	if fail == vacuumFailAfterRenameNew {
 		return errVacuumFailpoint
 	}
 
-	_ = os.Remove(readyPath)
-	_ = os.Remove(bakPath)
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
 	if runtime.GOOS != "windows" {
-		if dir, err := os.Open(opts.Dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
+			return err
 		}
 	}
 
@@ -386,7 +409,7 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSe
 	if err := saveLeafGenerationManifest(leafDir, newLeafGenerationManifest(commitSeq)); err != nil {
 		return fmt.Errorf("vacuum: reset leaf generation manifest: %w", err)
 	}
-	if err := syncDirFn(leafDir); err != nil {
+	if err := syncNewFileNamespaceDirectory(leafDir, durabilitycut.ResourceAuxiliary); err != nil {
 		return fmt.Errorf("vacuum: sync leaf_vlog dir after manifest reset: %w", err)
 	}
 
@@ -397,20 +420,20 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSe
 			}
 		}
 		path := leafGenerationFallbackPath(dir, file.rawFileID)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if _, err := removePersistentFile(leafDir, path, durabilitycut.ResourceOuterLeaf); err != nil {
 			return fmt.Errorf("vacuum: remove stale leaf generation file %s: %w", path, err)
 		}
 		indexPath := leafGenerationRecordLengthIndexPath(dir, file.rawFileID)
-		if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+		if _, err := removePersistentFile(leafDir, indexPath, durabilitycut.ResourceAuxiliary); err != nil {
 			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
 		}
 	}
 	for _, indexPath := range sidecarPaths {
-		if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+		if _, err := removePersistentFile(leafDir, indexPath, durabilitycut.ResourceAuxiliary); err != nil {
 			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
 		}
 	}
-	if err := syncDirFn(leafDir); err != nil {
+	if err := syncDeletionNamespaceDirectory(leafDir, durabilitycut.ResourceOuterLeaf); err != nil {
 		return fmt.Errorf("vacuum: sync leaf_vlog dir after stale file removal: %w", err)
 	}
 	return nil
@@ -428,10 +451,10 @@ func writeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
 		return fmt.Errorf("vacuum: create leaf_vlog dir for reset marker: %w", err)
 	}
 	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
-	if err := os.WriteFile(path, []byte("v1\n"), 0o600); err != nil {
+	if err := writePersistentFile(leafDir, path, []byte("v1\n"), 0o600, durabilitycut.ResourceAuxiliary); err != nil {
 		return fmt.Errorf("vacuum: write leaf_vlog reset marker: %w", err)
 	}
-	if err := syncDirFn(leafDir); err != nil {
+	if err := syncNewFileNamespaceDirectory(leafDir, durabilitycut.ResourceAuxiliary); err != nil {
 		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker: %w", err)
 	}
 	return nil
@@ -440,10 +463,10 @@ func writeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
 func removeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
 	leafDir := LeafLogDirPath(dir)
 	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if _, err := removePersistentFile(leafDir, path, durabilitycut.ResourceAuxiliary); err != nil {
 		return fmt.Errorf("vacuum: remove leaf_vlog reset marker: %w", err)
 	}
-	if err := syncDirFn(leafDir); err != nil {
+	if err := syncDeletionNamespaceDirectory(leafDir, durabilitycut.ResourceAuxiliary); err != nil {
 		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker removal: %w", err)
 	}
 	return nil

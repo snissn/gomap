@@ -3,6 +3,7 @@
 package powerlossoracle
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -166,6 +167,28 @@ func (m *Model) Clone() *Model {
 	return out
 }
 
+// PathStable reports whether path's process-visible name and complete bytes
+// are present in the stable image under the same inode identity. Callers use
+// this to derive resource-closure evidence from the model instead of assuming
+// that a named sync cut made an entire generation complete.
+func (m *Model) PathStable(root, path string) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false, err
+	}
+	rel, err = normalize(rel)
+	if err != nil {
+		return false, err
+	}
+	volatileID, volatileOK := m.volatile[rel]
+	stableID, stableOK := m.stable[rel]
+	if !volatileOK || !stableOK || volatileID != stableID {
+		return false, nil
+	}
+	node := m.inodes[volatileID]
+	return node != nil && bytes.Equal(node.volatile, node.stable), nil
+}
+
 // Overlay makes another real directory the volatile process-visible state.
 // No stable bytes or names change until SyncFile or SyncDir is called.
 func (m *Model) Overlay(root string) error {
@@ -218,6 +241,11 @@ func (m *Model) Overlay(root string) error {
 // Observe imports the process-visible bytes from an actual TreeDB cut event
 // and promotes only the persistence boundary completed by that event.
 func (m *Model) Observe(root string, event durabilitycut.Event) error {
+	if event.Namespace != "" {
+		if err := m.observeNamespace(root, event); err != nil {
+			return err
+		}
+	}
 	pathRequired := false
 	switch event.Point {
 	case durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync,
@@ -277,6 +305,58 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 	}
 	m.trace = append(m.trace, "cut:"+string(event.Point)+":"+string(event.Resource))
 	return nil
+}
+
+// observeNamespace applies the explicit production mutation before Overlay.
+// Doing this first is what preserves the source inode across rename: a plain
+// post-operation directory scan would otherwise misclassify the destination
+// as a newly-created inode and lose file-sync-versus-directory-sync semantics.
+func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
+	rel := func(path string) (string, error) {
+		if path == "" {
+			return "", errors.New("powerlossoracle: namespace event contains an empty path")
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return "", err
+		}
+		normalized, err := normalize(relative)
+		if err != nil {
+			return "", fmt.Errorf("powerlossoracle: namespace path %q is outside root %q: %w", path, root, err)
+		}
+		return normalized, nil
+	}
+
+	switch event.Namespace {
+	case durabilitycut.NamespaceCreate:
+		path, err := rel(event.NewPath)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(event.NewPath)
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
+		}
+		return m.Create(path, data)
+	case durabilitycut.NamespaceRename:
+		oldPath, err := rel(event.OldPath)
+		if err != nil {
+			return err
+		}
+		newPath, err := rel(event.NewPath)
+		if err != nil {
+			return err
+		}
+		return m.Rename(oldPath, newPath)
+	case durabilitycut.NamespaceUnlink:
+		path, err := rel(event.OldPath)
+		if err != nil {
+			return err
+		}
+		return m.Unlink(path)
+	default:
+		return fmt.Errorf("powerlossoracle: unknown namespace operation %q", event.Namespace)
+	}
 }
 
 // PromoteRange models a physically permitted partial dirty-byte writeback.
@@ -415,11 +495,29 @@ func (m *Model) Unlink(path string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := m.volatile[path]; !ok {
-		return fmt.Errorf("powerlossoracle: unlink missing file %q", path)
+	if _, ok := m.volatile[path]; ok {
+		delete(m.volatile, path)
+		m.trace = append(m.trace, "unlink:"+path)
+		return nil
 	}
-	delete(m.volatile, path)
-	m.trace = append(m.trace, "unlink:"+path)
+	if path == "." {
+		return errors.New("powerlossoracle: cannot unlink root")
+	}
+	if _, ok := m.volatileDirs[path]; !ok {
+		return fmt.Errorf("powerlossoracle: unlink missing file or directory %q", path)
+	}
+	prefix := path + "/"
+	for file := range m.volatile {
+		if strings.HasPrefix(file, prefix) {
+			delete(m.volatile, file)
+		}
+	}
+	for dir := range m.volatileDirs {
+		if dir == path || strings.HasPrefix(dir, prefix) {
+			delete(m.volatileDirs, dir)
+		}
+	}
+	m.trace = append(m.trace, "unlink-tree:"+path)
 	return nil
 }
 
@@ -480,9 +578,29 @@ func (m *Model) SyncDir(dir string) error {
 			m.stable[path] = id
 		}
 	}
+	removedTrees := make([]string, 0)
 	for child := range m.stableDirs {
 		if child != "." && cleanInternal(filepath.Dir(child)) == dir {
+			if _, stillVisible := m.volatileDirs[child]; !stillVisible {
+				removedTrees = append(removedTrees, child)
+			}
 			delete(m.stableDirs, child)
+		}
+	}
+	// A durable removal of a directory entry makes the entire old subtree
+	// unreachable. Its descendants do not each need an independent parent
+	// directory sync: the synced removal of the top-level name is sufficient.
+	for _, tree := range removedTrees {
+		prefix := tree + "/"
+		for path := range m.stable {
+			if strings.HasPrefix(path, prefix) {
+				delete(m.stable, path)
+			}
+		}
+		for child := range m.stableDirs {
+			if strings.HasPrefix(child, prefix) {
+				delete(m.stableDirs, child)
+			}
 		}
 	}
 	for child := range m.volatileDirs {
