@@ -194,6 +194,34 @@ The committed compact evidence index is
 is retained outside git and the exact-head CI raw-path artifact is attached to
 the pull request run; generated CPU profiles are not committed.
 
+### Exact-target closeout outcome
+
+The measured code target is
+`dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a`, compared with base
+`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final evidence commit is a
+docs-only descendant: it does not change the production MVCC implementation,
+benchmark definitions, or harnesses measured at `dbea38e0`.
+
+- The hosted raw-path verdict is **EQUIVALENT**, not PASS. Its durable-sync row
+  measured +27.94% and failed the timing threshold, while all three
+  row-producing base/head binary pairs were byte-identical. The other four
+  measured rows ranged from -1.76% to +1.12%.
+- The adapter-overhead gate verdict is **FAIL**. Direct/MVCC commit co-moved at
+  +9.77%/+7.03%, and physical/MVCC all-version iteration co-moved at
+  +18.88%/+13.41%. Get rows remained within the 5% revision ceiling.
+  Allocations were unchanged, bytes remained flat, and every candidate
+  adapter/direct ratio passed the 2x ceiling; the maximum was 1.121x.
+- The five-sample durability-matched closeout matrix completed successfully
+  with all 24 rows and required metrics present.
+
+The four adapter revision-ceiling misses are accepted only as a scoped risk for
+the first restricted pre-alpha Dgraph benchmark. They are not relabeled as a
+passing adapter gate. The acceptance is based on the non-production nature of
+the base-to-target diff, direct and MVCC co-movement, passing adapter/direct
+ratios, unchanged allocations, flat bytes, byte-identical hosted raw-path
+binaries, and the successful matrix. Exact samples and the full rationale are
+preserved in the compact evidence index.
+
 Performance results compare only like-for-like rows. In particular, relaxed
 writes are never described as equivalent to synced writes, and one-iteration
 smokes are not used as stable throughput evidence.

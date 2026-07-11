@@ -1,104 +1,129 @@
 # Dgraph MVCC closeout evidence
 
-> [!CAUTION]
-> The committed summaries below are superseded by post-review code changes
-> after `5ea704c4892191c509aa76e4551148b77db018f0`. They remain historical
-> records of the first measurement only and MUST NOT be cited as exact-head
-> evidence. A clean-checkout exact-head rerun and replacement evidence commit
-> are required before this PR is merge-ready.
->
-> A later exact-`c6515de296bb89fa0ce4730a4df4561cab4b688a` raw-path run is
-> retained outside git at
-> `/mnt/fast4tb/gomap-3673-evidence/raw-path-c6515de`. It failed the point-read
-> timing row, but is not valid replacement evidence: the old harness separated
-> same-row base/head measurements with whole revision blocks, and its process
-> snapshots captured unexpected 65% and 80% CPU Ironbird analysis processes
-> during later candidate blocks. Preserve that failed run for audit; supersede
-> it only after the benchmark-group-paired harness change is reviewed and an
-> exact-new-head clean-window run is recorded.
-> Its measured `BenchmarkGetVersioned` median remains a FAIL observation
-> (+11.24%). All three recorded base/head package binaries were byte-identical,
-> which supports `EQUIVALENT` revision attribution rather than PASS: the
-> observation remains visible, while identical executable code means it is not
-> an attributable candidate regression. The historical seven-sample run itself
-> is not accepted by the current gate, which requires balanced even AB/BA pairs.
+This directory contains the compact exact-target evidence for gomap #3673.
+The measured code target is
+`dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a`; the paired comparison base is
+`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The final pull-request head is a
+docs-and-evidence-only descendant of the measured target. It does not change
+production MVCC code, benchmark definitions, or the benchmark harnesses.
+Dgraph must still pin the first merged-main descendant containing this PR, not
+the worker-branch commit.
 
-This directory indexes the compact, reproducible evidence for gomap #3673.
-The measured code commit is
-`2f0a687f048ece277ab039303f6e28a1a7906bcb`; the base commit for paired
-no-regression gates is
-`f9c9b2a37838909d0e669818cfa2840c0a8d5f85`. The following evidence-only
-commit changes no production or benchmark code. Dgraph must still pin the
-first merged-main descendant that contains the closeout PR, not this worker
-commit.
+## Host, method, and retained evidence
 
-## Host and correctness
-
-- host: `mikers-B560-DS3H-AC-Y1`, Linux `6.8.0-124-generic`;
+- local host: `mikers-B560-DS3H-AC-Y1`, Linux `6.8.0-124-generic`;
 - CPU: 11th Gen Intel Core i5-11400F, 6 cores / 12 threads;
 - Go: `go1.26.0 linux/amd64`;
 - timing CPU: `0`, `GOMAXPROCS=1`, `GOWORK=off`;
-- `go vet ./...` and `go test ./... -count=1`: PASS;
-- `go test -race ./TreeDB/mvcc/... -count=1`: PASS;
-- durable commit/prune crash tests, `-count=3`: PASS;
-- codec `FuzzRoundTrip` and `FuzzDecodeNeverPanics`, 10 seconds each: PASS.
+- final local preflight: exact clean target, 92.21% average idle, 0.38%
+  iowait, no `simd`, and no competing benchmark/build/test job;
+- the unrelated Ironbird durability campaign completed 15/15 accepted rows
+  before the local adapter and matrix measurements started.
 
-## Performance gates
+Raw logs, environment/process captures, checksums, and profiles are retained
+outside git at:
 
-The historical raw-path gate used seven revision-block-alternating samples per
-revision, `-benchtime=2s`, a 5% median timing ceiling, no allocation increase,
-and a `B/op` increase ceiling of the smaller of 1% or 64 bytes. Current harness
-code instead pairs every individual benchmark group immediately in alternating
-AB/BA order; these historical summaries predate that methodology correction:
+- hosted raw-path artifact:
+  `/mnt/fast4tb/gomap-3673-evidence/hosted-raw-dbea38e0`;
+- local adapter artifact:
+  `/mnt/fast4tb/gomap-3673-evidence/adapter-dbea38e0`;
+- local closeout matrix:
+  `/mnt/fast4tb/gomap-3673-evidence/closeout-matrix-dbea38e0`;
+- passing final quiet audit:
+  `/mnt/fast4tb/gomap-3673-evidence/quiet-window-dbea38e0-final`.
 
-```sh
-BASELINE_HASH=f9c9b2a37838909d0e669818cfa2840c0a8d5f85 \
-CANDIDATE_HASH=2f0a687f048ece277ab039303f6e28a1a7906bcb \
-RUNS=7 BENCHTIME=2s CPUSET=0 GOWORK=off \
-OUT_DIR=/mnt/fast4tb/gomap-3673-evidence/raw-path-2f0a687 \
-./scripts/mvcc_raw_path_gate.sh
-```
+Large raw logs, test binaries, and binary CPU profiles are deliberately not
+committed. The generated Markdown and JSON summaries in this directory are
+copied without changing their verdicts or samples.
 
-Result: PASS for raw point, batch, snapshot, iterator, and durable synced write
-rows. See [raw-path-summary.md](raw-path-summary.md) and its machine-readable
-companion `raw-path-summary.json`.
+## Raw-path gate: EQUIVALENT
 
-The adapter-overhead gate used the same samples and thresholds, plus a 2x
-candidate MVCC/direct ceiling. It always captured candidate MVCC CPU profiles:
+The hosted exact-target raw gate used eight benchmark-group-paired samples per
+revision, exactly four AB and four BA pairs, at `-benchtime=2s`. Its verdict is
+**EQUIVALENT**, with the measured threshold observation preserved as **FAIL**:
 
-```sh
-BASELINE_HASH=f9c9b2a37838909d0e669818cfa2840c0a8d5f85 \
-CANDIDATE_HASH=2f0a687f048ece277ab039303f6e28a1a7906bcb \
-RUNS=7 BENCHTIME=2s PROFILE_BENCHTIME=1s CPUSET=0 GOWORK=off \
-OUT_DIR=/mnt/fast4tb/gomap-3673-evidence/adapter-overhead-2f0a687 \
-./scripts/mvcc_adapter_overhead_gate.sh
-```
+- point read: +1.12%, PASS;
+- batch write: +0.36%, PASS;
+- snapshot seek: -0.47%, PASS;
+- repeated iterator: -1.76%, PASS;
+- durable synced write: +27.94%, measured FAIL.
 
-Result: PASS. Candidate MVCC/direct medians were 1.042x for commit, 1.119x for
-get, and 1.109x for all-version iteration. See
+Every row-producing base/head test binary was byte-identical: `db`, `caching`,
+and root `treedb`. The checker therefore accepts the result as EQUIVALENT—no
+observed delta can be attributed to candidate code—without relabeling the
+durable timing observation as PASS. See [raw-path-summary.md](raw-path-summary.md)
+and `raw-path-summary.json`.
+
+## Adapter-overhead gate: FAIL, scoped acceptance
+
+The local exact-target adapter gate used eight benchmark-group-paired samples
+per revision at `-benchtime=2s`, plus 1-second candidate profiles. Its gate
+verdict is **FAIL** and remains a FAIL in the committed generated summaries.
+Four base/head timing rows exceeded the 5% ceiling:
+
+- direct commit +9.77% and MVCC commit +7.03%;
+- physical all-version iteration +18.88% and MVCC iteration +13.41%.
+
+Direct and MVCC controls co-moved within each failing operation family. The
+candidate adapter/direct ratios all passed the independent 2x ceiling:
+0.936x commit, 1.008x get, and 1.121x iteration. Allocations were unchanged in
+all six rows, and bytes were flat within the gate tolerance. Point reads also
+remained within the revision threshold: +2.63% direct and +4.35% MVCC.
+
+The four revision-ceiling misses are accepted only for this restricted
+pre-alpha downstream benchmark closeout, not erased or promoted to a passing
+gate, because all of the following scoped evidence agrees:
+
+- the base-to-target production diff is test/conformance harness, benchmark,
+  documentation, scripts, and workflow code; it does not change TreeDB's
+  production read, commit, or iteration implementation;
+- direct and MVCC rows co-moved while all candidate adapter/direct ratios
+  passed, with a maximum of 1.121x;
+- allocations were unchanged and bytes remained flat;
+- the hosted raw-path production binaries were byte-identical and received an
+  EQUIVALENT verdict; and
+- the durability-matched closeout matrix completed successfully.
+
+This rationale does not establish a general performance guarantee. It accepts
+the measured closeout risk for the first restricted Dgraph Alpha benchmark and
+keeps the exact samples and profiles available for follow-up. See
 [adapter-overhead-summary.md](adapter-overhead-summary.md) and
 `adapter-overhead-summary.json`.
 
-## Durability-matched matrix
+## Durability-matched closeout matrix: PASS
 
-```sh
-CANDIDATE_HASH=2f0a687f048ece277ab039303f6e28a1a7906bcb \
-RUNS=5 BENCHTIME=750ms CPUSET=0 GOWORK=off \
-OUT_DIR=/mnt/fast4tb/gomap-3673-evidence/closeout-matrix-2f0a687 \
-./scripts/mvcc_closeout_matrix.sh
-```
+The exact-target closeout matrix used five samples and `-benchtime=750ms` for
+regular rows; each prune row used one fresh fixture per sample. The summarizer
+completed successfully with all 24 benchmark rows, ten measured invocations,
+600,640 KiB maximum RSS, 109.07 seconds aggregate user CPU, and 7.49 seconds
+aggregate system CPU. Representative durable-sync medians were:
 
-Result: all 24 exact benchmark rows and all required metrics were present for
-five samples in durable-sync, WAL-on relaxed, and WAL-off relaxed classes. The
-ten timed processes used 100.64 seconds user and 6.85 seconds system CPU in
-aggregate. Maximum RSS was 622,068 KiB for a duration-calibrated regular
-process. The five one-operation prune processes used 82,624-91,004 KiB, so the
-622 MiB headline must not be attributed to one prune fixture. Prune delete
-write amplification was 0.829 in every row. See
-[closeout-matrix-summary.md](closeout-matrix-summary.md) and
+- commit: 152.5 mutations/s at batch 1 and 4,833 mutations/s at batch 32;
+- point read: 870,369 lookups/s at depth 1 and 567,989 lookups/s at depth 64;
+- all-version iteration: 2,996,840 versions/s at depth 1 and 3,582,446
+  versions/s at depth 32;
+- prune: 14,400 pruned versions/s at floor 4 and 26,322/s at floor 12.
+
+Prune delete write amplification was 0.8286 in every row. Durable-sync,
+WAL-on relaxed, and WAL-off relaxed results remain separate acknowledgement
+classes; relaxed rows are not described as durability-equivalent to synced
+rows. See [closeout-matrix-summary.md](closeout-matrix-summary.md) and
 `closeout-matrix-summary.json`.
 
-The three `OUT_DIR` paths above contain the retained raw logs, environment and
-process snapshots, binary checksums, and profiles on the measurement host.
-Large raw logs, benchmark binaries, and binary CPU profiles are deliberately
-not committed.
+## Reproduction
+
+```sh
+BASELINE_HASH=f9c9b2a37838909d0e669818cfa2840c0a8d5f85 \
+CANDIDATE_HASH=dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a \
+RUNS=8 BENCHTIME=2s CPUSET=0 GOWORK=off \
+OUT_DIR=/absolute/raw-path ./scripts/mvcc_raw_path_gate.sh
+
+BASELINE_HASH=f9c9b2a37838909d0e669818cfa2840c0a8d5f85 \
+CANDIDATE_HASH=dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a \
+RUNS=8 BENCHTIME=2s PROFILE_BENCHTIME=1s CPUSET=0 GOWORK=off \
+OUT_DIR=/absolute/adapter ./scripts/mvcc_adapter_overhead_gate.sh
+
+CANDIDATE_HASH=dbea38e0e8ad0c7d1e0bb05ac564bd9b57dd747a \
+RUNS=5 BENCHTIME=750ms CPUSET=0 GOWORK=off \
+OUT_DIR=/absolute/matrix ./scripts/mvcc_closeout_matrix.sh
+```
