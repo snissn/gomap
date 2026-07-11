@@ -137,6 +137,7 @@ func benchmarkCloseoutAllVersions(b *testing.B, profile closeoutProfile, keys, d
 }
 
 func benchmarkCloseoutPrune(b *testing.B, profile closeoutProfile, keys, depth, floor int) {
+	b.StopTimer()
 	var total PruneStats
 	var storageBytes uint64
 	parentDir := b.TempDir()

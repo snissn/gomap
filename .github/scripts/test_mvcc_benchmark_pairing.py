@@ -98,6 +98,23 @@ class BenchmarkPairingTests(unittest.TestCase):
                 self.assertIn("if ((RUNS % 2 != 0)); then", source)
                 self.assertIn("RUNS must be even to balance AB/BA sample order", source)
 
+    def test_closeout_prune_stops_timer_before_all_setup(self) -> None:
+        source = normalized(ROOT / "TreeDB" / "mvcc" / "closeout_bench_test.go")
+        body = source.split("func benchmarkCloseoutPrune", 1)[1].split(
+            "func openCloseoutBench", 1
+        )[0]
+        self.assertRegex(body, r"^\(b .*\) \{ b\.StopTimer\(\) var total")
+        assert_in_order(
+            self,
+            body,
+            [
+                "b.StopTimer()",
+                "parentDir := b.TempDir()",
+                "b.StartTimer() stats, err := store.PruneVersions",
+                "b.StopTimer() if err := db.Close()",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
