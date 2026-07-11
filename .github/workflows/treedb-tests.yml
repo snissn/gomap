@@ -66,6 +66,8 @@ jobs:
 
       - name: Gate self-checks
         if: steps.scope.outputs.run == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           bash -n scripts/mvcc_raw_path_gate.sh scripts/mvcc_adapter_overhead_gate.sh
           python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
@@ -86,7 +88,14 @@ jobs:
           MAX_BYTES_REGRESSION_ABSOLUTE: "64"
           SCRIPT_GOWORK: "off"
           OUT_DIR: ${{ runner.temp }}/mvcc-raw-path-gate
-        run: ./scripts/mvcc_raw_path_gate.sh
+        run: |
+          status=$(git status --porcelain --untracked-files=normal)
+          if [[ -n "$status" ]]; then
+            echo "candidate checkout became dirty before the raw-path gate:" >&2
+            printf '%s\n' "$status" >&2
+            exit 2
+          fi
+          ./scripts/mvcc_raw_path_gate.sh
 
       - name: Add benchmark summary
         if: always() && steps.scope.outputs.run == 'true'
