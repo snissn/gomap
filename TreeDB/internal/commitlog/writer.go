@@ -499,6 +499,10 @@ func (w *Writer) RotateTo(path string) error {
 // the provided path and reuses the writer's buffers for future appends. When
 // syncCurrent is false, the current file is flushed to the OS but not fsynced.
 func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
+	return w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+}
+
+func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) error {
 	if w == nil {
 		return errors.New("commitlog: nil writer")
 	}
@@ -527,6 +531,15 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		return nil
 	}
 
+	before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
+	if syncCurrent {
+		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+	}
+	if observe {
+		if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
+			return err
+		}
+	}
 	if w.pendingBatchRecs != 0 {
 		if err := w.flushPendingBatch(); err != nil {
 			return err
@@ -540,6 +553,11 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 	}
 	if syncCurrent {
 		if err := w.syncFile(); err != nil {
+			return err
+		}
+	}
+	if observe {
+		if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
 			return err
 		}
 	}

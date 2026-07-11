@@ -150,6 +150,16 @@ func EmitLSN(point Point, resource Resource, root string, lsn uint64) error {
 	return h.observe(Event{Point: point, Resource: resource, Root: root, LSN: lsn})
 }
 
+// EmitPathLSN avoids constructing a path-and-LSN event on the
+// production-disabled path.
+func EmitPathLSN(point Point, resource Resource, root, path string, lsn uint64) error {
+	h := installed.Load()
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path, LSN: lsn})
+}
+
 // Enabled lets coarse production boundaries avoid collecting diagnostic path
 // metadata when no test observer is installed.
 func Enabled() bool {

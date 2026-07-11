@@ -99,6 +99,100 @@ func TestValidateDurableAckMayBeRecoveredFromWAL(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsPublicOpenToAdvanceBeyondSelectedRootByCommandReplay(t *testing.T) {
+	scenario := Scenario{
+		Name:                 "command-replay-after-root-selection",
+		Cut:                  AfterDependencyFileSync,
+		Generations:          []Generation{completeGeneration(1, 1)},
+		LatestSealedSequence: 1,
+		SelectedSequence:     1,
+		OpenedSequence:       3,
+		OpenedAppliedLSN:     3,
+		ReopenAttempted:      true,
+		CommandFrames: []CommandFrame{
+			{LSN: 2, ChecksumValid: true, Applied: true},
+			{LSN: 3, ChecksumValid: true, Applied: true},
+		},
+	}
+	if err := scenario.Validate(); err != nil {
+		t.Fatalf("command replay after root selection should validate: %v", err)
+	}
+}
+
+func TestValidateAllowsLossOfAppendedUnstableCommandSuffix(t *testing.T) {
+	scenario := Scenario{
+		Name:                 "unstable-command-suffix",
+		Cut:                  AfterDependencyAppend,
+		Generations:          []Generation{completeGeneration(1, 1)},
+		LatestSealedSequence: 1,
+		SelectedSequence:     1,
+		OpenedSequence:       2,
+		OpenedAppliedLSN:     2,
+		ReopenAttempted:      true,
+		CommandFrames: []CommandFrame{
+			{LSN: 2, ChecksumValid: true, Applied: true},
+			{LSN: 3, ChecksumValid: false},
+		},
+	}
+	if err := scenario.Validate(); err != nil {
+		t.Fatalf("loss of appended unstable suffix should validate: %v", err)
+	}
+}
+
+func TestValidateRejectsUnexplainedPublicReplayAdvance(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		frames []CommandFrame
+	}{
+		{name: "no-frames"},
+		{name: "partial-frontier", frames: []CommandFrame{{LSN: 2, ChecksumValid: true, Applied: true}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			scenario := Scenario{
+				Name:                 "unexplained-command-replay-advance",
+				Cut:                  AfterDependencyFileSync,
+				Generations:          []Generation{completeGeneration(1, 1)},
+				LatestSealedSequence: 1,
+				SelectedSequence:     1,
+				OpenedSequence:       3,
+				OpenedAppliedLSN:     3,
+				ReopenAttempted:      true,
+				CommandFrames:        tt.frames,
+			}
+			if err := RequireViolation(scenario.Validate(), InvariantCommandReplayHole); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsPublicOpenBehindSelectedRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		openedSequence   uint64
+		openedAppliedLSN uint64
+	}{
+		{name: "commit-sequence", openedSequence: 2, openedAppliedLSN: 3},
+		{name: "applied-lsn", openedSequence: 3, openedAppliedLSN: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			scenario := Scenario{
+				Name:                 "public-open-behind-selected-root",
+				Cut:                  AfterDependencyFileSync,
+				Generations:          []Generation{completeGeneration(3, 3)},
+				LatestSealedSequence: 3,
+				SelectedSequence:     3,
+				OpenedSequence:       tt.openedSequence,
+				OpenedAppliedLSN:     tt.openedAppliedLSN,
+				ReopenAttempted:      true,
+			}
+			if err := RequireViolation(scenario.Validate(), InvariantSelectedRootInvalid); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestValidateDurableAckWithoutRootUsesRecoveredAcknowledgements(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		scenario := Scenario{

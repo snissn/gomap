@@ -66,7 +66,10 @@ type Scenario struct {
 	// LatestSealedSequence is the newest generation whose publication seal is
 	// stable in the crash image. Public recovery may only select complete
 	// candidates at or below this boundary.
-	LatestSealedSequence      uint64
+	LatestSealedSequence uint64
+	// SelectedSequence identifies the complete sealed root chosen before any
+	// command-WAL replay. OpenedSequence and OpenedAppliedLSN describe the
+	// public handle after replay and may therefore be newer.
 	SelectedSequence          uint64
 	OpenedSequence            uint64
 	OpenedAppliedLSN          uint64
@@ -152,6 +155,7 @@ func (s Scenario) Validate() error {
 		baseAppliedLSN = newest.AppliedLSN
 	}
 	expectedLSN := baseAppliedLSN + 1
+	contiguousAppliedLSN := baseAppliedLSN
 	holeSeen := false
 	for _, frame := range frames {
 		if frame.LSN <= baseAppliedLSN {
@@ -165,6 +169,7 @@ func (s Scenario) Validate() error {
 			if !complete || holeSeen {
 				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("base=%d lsn=%d complete=%t prior-hole=%t cut=%s", baseAppliedLSN, frame.LSN, complete, holeSeen, s.Cut)}
 			}
+			contiguousAppliedLSN = frame.LSN
 		} else {
 			if complete && !holeSeen {
 				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("base=%d skipped-complete-lsn=%d cut=%s", baseAppliedLSN, frame.LSN, s.Cut)}
@@ -172,6 +177,12 @@ func (s Scenario) Validate() error {
 			holeSeen = true
 		}
 		expectedLSN = frame.LSN + 1
+	}
+	if s.OpenedAppliedLSN != contiguousAppliedLSN {
+		return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("base=%d contiguous-applied=%d public-open-applied=%d cut=%s", baseAppliedLSN, contiguousAppliedLSN, s.OpenedAppliedLSN, s.Cut)}
+	}
+	if selected := s.selectedGeneration(); selected != nil && s.OpenedSequence > selected.Sequence && contiguousAppliedLSN == baseAppliedLSN {
+		return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("selected-generation=%d public-open-generation=%d without replay cut=%s", selected.Sequence, s.OpenedSequence, s.Cut)}
 	}
 	if err := s.validateRelaxedSuffix(); err != nil {
 		return err
@@ -218,7 +229,7 @@ func (s Scenario) validateSelectedState() error {
 	if selected.Sequence != newest.Sequence {
 		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected generation=%d is not newest complete generation=%d at-or-below seal=%d cut=%s", selected.Sequence, newest.Sequence, s.LatestSealedSequence, s.Cut)}
 	}
-	if s.ReopenRejected || s.OpenedSequence != s.SelectedSequence || s.OpenedAppliedLSN != selected.AppliedLSN {
+	if s.ReopenRejected || s.OpenedSequence < s.SelectedSequence || s.OpenedAppliedLSN < selected.AppliedLSN {
 		return Violation{Invariant: InvariantSelectedRootInvalid, Detail: fmt.Sprintf("selected=(generation=%d applied=%d) public-open=(rejected=%t generation=%d applied=%d) cut=%s", s.SelectedSequence, selected.AppliedLSN, s.ReopenRejected, s.OpenedSequence, s.OpenedAppliedLSN, s.Cut)}
 	}
 	for _, prefix := range sortedPrefixKeys(s.ExpectedKeyValuesByPrefix) {

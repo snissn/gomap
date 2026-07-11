@@ -878,6 +878,57 @@ func TestAppendCommandWALIntentPostAppendCutRecordsLSNAndPoisonsHandle(t *testin
 	}
 }
 
+func TestCommandWALDirectPostAppendCutRecordsLSNAndPoisonsHandle(t *testing.T) {
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("batch"), Value: []byte("value")}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	tests := []struct {
+		name   string
+		append func(*DB) (uint64, error)
+	}{
+		{
+			name: "point",
+			append: func(db *DB) (uint64, error) {
+				return db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), true)
+			},
+		},
+		{
+			name: "encoded-payload",
+			append: func(db *DB) (uint64, error) {
+				return db.AppendRawKVBatchPayloadCommandWALTrusted(payload, true)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			defer db.Close()
+
+			wantErr := errors.New("injected direct post-append cut")
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == durabilitycut.AfterDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
+					return wantErr
+				}
+				return nil
+			})
+			lsn, err := tt.append(db)
+			restore()
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("append error=%v, want post-append cut", err)
+			}
+			if lsn != 1 {
+				t.Fatalf("post-append cut lsn=%d, want 1", lsn)
+			}
+			if _, err := tt.append(db); !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("append retry error=%v, want ErrRecoveryRequired", err)
+			}
+		})
+	}
+}
+
 func TestCommandWALPointAppendFlushesAsyncFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
