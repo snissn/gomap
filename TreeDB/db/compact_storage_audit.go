@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -455,41 +454,6 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		runCompactStorageSharedAuditScanHook(raw.counters)
 	}
 	return raw, err
-}
-
-func (db *DB) newLeafGenerationScanContext(snap *Snapshot) (*leafGenerationScanContext, error) {
-	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil {
-		return nil, nil
-	}
-	view := snap.state.LeafGenerations
-	fileStateByID := make(map[uint32]*leafGenerationScanFileState, len(view.FileToGeneration))
-	fileStates := make([]leafGenerationScanFileState, 0, len(view.FileToGeneration))
-	for fileID, genID := range view.FileToGeneration {
-		gen, ok := view.Generations[genID]
-		if !ok {
-			return nil, fmt.Errorf("maintenance reachability: missing generation for leaf file %d", fileID)
-		}
-		persist := gen.State == leafGenerationStateSealed
-		idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(fileID, snap.state.ValueLogSet, persist)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, err
-		}
-		fileStates = append(fileStates, leafGenerationScanFileState{
-			fileID:  fileID,
-			genID:   genID,
-			persist: persist,
-			idx:     idx,
-		})
-		fileStateByID[fileID] = &fileStates[len(fileStates)-1]
-	}
-	return &leafGenerationScanContext{
-		snap:          snap,
-		fileStateByID: fileStateByID,
-		groupedFrames: newLeafGenerationGroupedFrameScanCache(leafGenerationGroupedFrameScanCacheEntries),
-	}, nil
 }
 
 func (db *DB) compactStorageAuditRevalidate(in *compactStorageAuditInput, opts CompactStorageOptions, raw compactStorageAuditRaw, attempt int) (bool, error) {
