@@ -82,13 +82,14 @@ type ByteRange struct{ Offset, Length int64 }
 // names that survive power loss. Names reference inode identities so that file
 // sync followed by rename and directory sync has realistic semantics.
 type Model struct {
-	nextID       uint64
-	inodes       map[uint64]*inode
-	volatile     map[string]uint64
-	stable       map[string]uint64
-	volatileDirs map[string]struct{}
-	stableDirs   map[string]struct{}
-	trace        []string
+	nextID           uint64
+	inodes           map[uint64]*inode
+	volatile         map[string]uint64
+	stable           map[string]uint64
+	volatileDirs     map[string]struct{}
+	stableDirs       map[string]struct{}
+	excludeLockFiles bool
+	trace            []string
 }
 
 // Capture imports a real directory as an initially stable image. Process-local
@@ -114,6 +115,7 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 		excludedPaths[rel] = struct{}{}
 	}
 	m := newModel()
+	m.excludeLockFiles = excludeLockFiles
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -178,6 +180,7 @@ func (m *Model) allocate(volatile, stable []byte) uint64 {
 func (m *Model) Clone() *Model {
 	out := newModel()
 	out.nextID = m.nextID
+	out.excludeLockFiles = m.excludeLockFiles
 	for id, node := range m.inodes {
 		out.inodes[id] = &inode{volatile: clone(node.volatile), stable: clone(node.stable)}
 	}
@@ -235,6 +238,9 @@ func (m *Model) Overlay(root string) error {
 		rel, err = normalize(filepath.ToSlash(rel))
 		if err != nil {
 			return err
+		}
+		if m.excludeLockFiles && !entry.IsDir() && entry.Name() == "LOCK" {
+			return nil
 		}
 		if entry.IsDir() {
 			seenDirs[rel] = struct{}{}

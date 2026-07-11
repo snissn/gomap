@@ -81,6 +81,57 @@ func TestCaptureExcludingKeepsNonExcludedNestedLock(t *testing.T) {
 	}
 }
 
+func TestCapturedModelObserveContinuesToOmitNestedLocks(t *testing.T) {
+	root := t.TempDir()
+	dictDir := filepath.Join(root, "dictdb")
+	if err := os.Mkdir(dictDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dictDir, "LOCK")
+	if err := os.WriteFile(lockPath, []byte("process-local"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataPath := filepath.Join(dictDir, "data")
+	if err := os.WriteFile(dataPath, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := []struct {
+		name  string
+		model *Model
+	}{{"captured", model}, {"clone", model.Clone()}}
+	if err := os.WriteFile(dataPath, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range models {
+		t.Run(candidate.name, func(t *testing.T) {
+			if err := candidate.model.Observe(root, durabilitycut.Event{
+				Point: durabilitycut.AfterDependencyFileSync,
+				Path:  dataPath,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := candidate.model.StablePaths(), []string{"dictdb/data"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("stable paths=%v want=%v", got, want)
+			}
+			crashDir := t.TempDir()
+			if err := candidate.model.MaterializeStable(crashDir); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(crashDir, "dictdb", "data"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != "new" {
+				t.Fatalf("stable data=%q want new", got)
+			}
+		})
+	}
+}
+
 func TestObserveDependencyFileSyncPromotesOnlyExactPath(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"value.log", "leaf.log"} {
