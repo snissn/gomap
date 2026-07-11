@@ -39,7 +39,7 @@ jobs:
             "/repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
             --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
           cat "$RUNNER_TEMP/pr-files.txt"
-          if grep -Eq '^((TreeDB/(mvcc|internal/mvcckey|db)/)|scripts/mvcc_raw_path_gate\.sh$|\.github/scripts/check_mvcc_raw_path_gate\.py$|\.github/workflows/treedb-tests\.yml$)' \
+          if grep -Eq '^((TreeDB/(mvcc|internal/mvcckey|db)/)|scripts/mvcc_(raw_path|adapter_overhead)_gate\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|test_mvcc_(raw_path_equivalence|benchmark_pairing))\.py$|\.github/workflows/treedb-tests\.yml$)' \
             "$RUNNER_TEMP/pr-files.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -67,15 +67,18 @@ jobs:
       - name: Gate self-checks
         if: steps.scope.outputs.run == 'true'
         run: |
-          bash -n scripts/mvcc_raw_path_gate.sh
+          bash -n scripts/mvcc_raw_path_gate.sh scripts/mvcc_adapter_overhead_gate.sh
           python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
+          python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
+          python3 .github/scripts/test_mvcc_raw_path_equivalence.py
+          python3 .github/scripts/test_mvcc_benchmark_pairing.py
 
       - name: Compare exact base and head
         if: steps.scope.outputs.run == 'true'
         env:
           BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
           CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
-          RUNS: "7"
+          RUNS: "8"
           BENCHTIME: 2s
           CPUSET: "0"
           MAX_REGRESSION_PERCENT: "5"
