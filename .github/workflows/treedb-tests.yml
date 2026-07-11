@@ -12,6 +12,8 @@ jobs:
     name: mvcc raw-path gate (linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      MVCC_GATE_PATH_RE: '^((TreeDB/((mvcc|internal/mvcckey|db|caching)/|[^/]+\.go$))|scripts/mvcc_(raw_path|adapter_overhead)_gate\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|test_mvcc_(raw_path_equivalence|benchmark_pairing))\.py$|\.github/workflows/treedb-tests\.yml$)'
     steps:
       - name: Resolve open PR and relevant paths
         id: scope
@@ -39,7 +41,7 @@ jobs:
             "/repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
             --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
           cat "$RUNNER_TEMP/pr-files.txt"
-          if grep -Eq '^((TreeDB/(mvcc|internal/mvcckey|db)/)|scripts/mvcc_(raw_path|adapter_overhead)_gate\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|test_mvcc_(raw_path_equivalence|benchmark_pairing))\.py$|\.github/workflows/treedb-tests\.yml$)' \
+          if grep -Eq "$MVCC_GATE_PATH_RE" \
             "$RUNNER_TEMP/pr-files.txt"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -74,6 +76,20 @@ jobs:
           python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
           python3 .github/scripts/test_mvcc_raw_path_equivalence.py
           python3 .github/scripts/test_mvcc_benchmark_pairing.py
+          for path in \
+            TreeDB/snapshot_seek_iterator_bench_test.go \
+            TreeDB/command_wal_public_test.go \
+            TreeDB/caching/bench_test.go \
+            TreeDB/bg_vacuum.go; do
+            if ! grep -Eq "$MVCC_GATE_PATH_RE" <<< "$path"; then
+              echo "MVCC gate path scope unexpectedly excludes: $path" >&2
+              exit 1
+            fi
+          done
+          if grep -Eq "$MVCC_GATE_PATH_RE" <<< 'TreeDB/docs/spec/native-ann-vector-index.md'; then
+            echo "MVCC gate path scope unexpectedly includes TreeDB docs" >&2
+            exit 1
+          fi
 
       - name: Compare exact base and head
         if: steps.scope.outputs.run == 'true'
