@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -45,6 +46,24 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 	return err
 }
 
+func (tdb *DB) appendPublicRawKVCommandPayloadMeasured(payload []byte, sync bool) (db.CommandWALRequestTiming, error) {
+	var timing db.CommandWALRequestTiming
+	if tdb == nil || !tdb.commandWALCached || len(payload) == 0 {
+		return timing, nil
+	}
+	if tdb.backend == nil {
+		return timing, ErrClosed
+	}
+	lsn, timing, err := tdb.backend.AppendRawKVBatchPayloadCommandWALTrustedMeasured(payload, sync)
+	postAppendStart := time.Now()
+	timing.PostAppendPendingLSNBookkeepingObserved = true
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	timing.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+	return timing, err
+}
+
 func (tdb *DB) appendPublicRawKVCommandEntries(entries []batch.Entry, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || len(entries) == 0 {
 		return nil
@@ -71,6 +90,24 @@ func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Ent
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
 	return err
+}
+
+func (tdb *DB) appendPublicRawKVCommandEntryScanMeasured(scanEntries func(func(batch.Entry) error) error, opHint int, sync bool) (db.CommandWALRequestTiming, error) {
+	var timing db.CommandWALRequestTiming
+	if tdb == nil || !tdb.commandWALCached || scanEntries == nil {
+		return timing, nil
+	}
+	if tdb.backend == nil {
+		return timing, ErrClosed
+	}
+	lsn, timing, err := tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintMeasured(scanEntries, opHint, sync)
+	postAppendStart := time.Now()
+	timing.PostAppendPendingLSNBookkeepingObserved = true
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	timing.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+	return timing, err
 }
 
 func (tdb *DB) commandWALPayloadShouldBypassForValue(key, value []byte) bool {
@@ -812,6 +849,13 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 			b.db.observePublicBatchWrite(sync, start, err)
 		}()
 	}
+	phaseEnabled := sync && b.db != nil && b.db.publicBatchWriteSyncPhaseEnabled
+	var phaseSample publicBatchWriteSyncPhaseSample
+	if phaseEnabled {
+		defer func() {
+			b.db.publicBatchWriteSyncPhase.observe(start, err, phaseSample)
+		}()
+	}
 	if b.db != nil {
 		if err := b.db.beginPublicOperation(); err != nil {
 			return err
@@ -819,20 +863,63 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 		defer b.db.lifecycleMu.RUnlock()
 	}
 	if b.dirty {
-		writer, ok := b.inner.(interface {
-			WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error
-		})
-		if !ok {
-			return fmt.Errorf("treedb: command wal batch requires cached command append hook")
+		leaseAttached := false
+		var writeErr error
+		if phaseEnabled {
+			writer, ok := b.inner.(interface {
+				WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func() error) (caching.CommandWALBatchWriteTiming, error)
+			})
+			if !ok {
+				return fmt.Errorf("treedb: command wal batch requires measured cached command append hook")
+			}
+			leaseAttached = b.attachStableViewValueLease()
+			var commandTiming db.CommandWALRequestTiming
+			cachedTiming, measuredErr := writer.WriteAfterCommandWALAppendMeasured(sync, func() error {
+				var appendErr error
+				commandTiming, appendErr = b.appendCommandWALMeasured(sync)
+				return appendErr
+			})
+			phaseSample.checkpointGate = cachedTiming.CheckpointGate
+			phaseSample.preflightMaterialization = cachedTiming.PreflightMaterialization
+			phaseSample.commandCallback = cachedTiming.CommandCallback
+			phaseSample.memtablePublicationReset = cachedTiming.MemtablePublicationReset
+			phaseSample.commandPublicPayloadEntryScanPreparation = commandTiming.PublicPayloadEntryScanPreparation
+			phaseSample.commandPublicPreparationObserved = commandTiming.PublicPreparationObserved
+			phaseSample.commandPublishLockBarrierWait = commandTiming.PublishLockBarrierWait
+			phaseSample.commandPublishLockBarrierWaitObserved = commandTiming.PublishLockBarrierWaitObserved
+			phaseSample.commandBackendIntentPlanningSerialization = commandTiming.BackendIntentPlanningSerialization
+			phaseSample.commandBackendIntentPlanningObserved = commandTiming.BackendIntentPlanningSerializationObserved
+			phaseSample.commandExternalRefOrdering = commandTiming.ExternalRefOrdering
+			phaseSample.commandExternalRefOrderingObserved = commandTiming.ExternalRefOrderingObserved
+			phaseSample.commandAppend = commandTiming.Append
+			phaseSample.commandAppendObserved = commandTiming.AppendObserved
+			if commandTiming.Sync {
+				phaseSample.commandSync = commandTiming.Flush
+				phaseSample.commandSyncObserved = commandTiming.FlushObserved
+			} else {
+				phaseSample.commandFlush = commandTiming.Flush
+				phaseSample.commandFlushObserved = commandTiming.FlushObserved
+			}
+			phaseSample.commandPostAppendPendingLSNBookkeeping = commandTiming.PostAppendPendingLSNBookkeeping
+			phaseSample.commandPostAppendPendingLSNBookkeepingObserved = commandTiming.PostAppendPendingLSNBookkeepingObserved
+			writeErr = measuredErr
+		} else {
+			writer, ok := b.inner.(interface {
+				WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error
+			})
+			if !ok {
+				return fmt.Errorf("treedb: command wal batch requires cached command append hook")
+			}
+			leaseAttached = b.attachStableViewValueLease()
+			writeErr = writer.WriteAfterCommandWALAppend(sync, func() error {
+				return b.appendCommandWAL(sync)
+			})
 		}
-		leaseAttached := b.attachStableViewValueLease()
-		if err := writer.WriteAfterCommandWALAppend(sync, func() error {
-			return b.appendCommandWAL(sync)
-		}); err != nil {
+		if writeErr != nil {
 			if leaseAttached {
 				b.noteStableViewValueLeaseConsumed()
 			}
-			return err
+			return writeErr
 		}
 		if leaseAttached {
 			b.noteStableViewValueLeaseConsumed()
@@ -849,7 +936,16 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 		return nil
 	}
 	if sync {
-		if err := b.db.syncPublicCommandWAL(); err != nil {
+		if phaseEnabled {
+			commandStart := time.Now()
+			syncErr := b.db.syncPublicCommandWAL()
+			phaseSample.commandCallback = time.Since(commandStart)
+			phaseSample.commandEmptyBarrier = phaseSample.commandCallback
+			phaseSample.commandEmptyBarrierObserved = true
+			if syncErr != nil {
+				return syncErr
+			}
+		} else if err := b.db.syncPublicCommandWAL(); err != nil {
 			return err
 		}
 	} else {
@@ -1113,6 +1209,31 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 		return b.db.appendPublicRawKVCommandPayload(payload, sync)
 	}
 	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, b.opCount, sync)
+}
+
+func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandWALRequestTiming, error) {
+	var timing db.CommandWALRequestTiming
+	if b == nil || b.inner == nil || b.db == nil {
+		return timing, ErrClosed
+	}
+	preparationStart := time.Now()
+	timing.PublicPreparationObserved = true
+	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+		payload, err := b.commandWALPayload()
+		timing.PublicPayloadEntryScanPreparation = time.Since(preparationStart)
+		if err != nil {
+			return timing, err
+		}
+		backendTiming, appendErr := b.db.appendPublicRawKVCommandPayloadMeasured(payload, sync)
+		backendTiming.PublicPayloadEntryScanPreparation += timing.PublicPayloadEntryScanPreparation
+		backendTiming.PublicPreparationObserved = true
+		return backendTiming, appendErr
+	}
+	timing.PublicPayloadEntryScanPreparation = time.Since(preparationStart)
+	backendTiming, appendErr := b.db.appendPublicRawKVCommandEntryScanMeasured(b.inner.Replay, b.opCount, sync)
+	backendTiming.PublicPayloadEntryScanPreparation += timing.PublicPayloadEntryScanPreparation
+	backendTiming.PublicPreparationObserved = true
+	return backendTiming, appendErr
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {

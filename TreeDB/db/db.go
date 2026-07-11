@@ -977,6 +977,11 @@ type Options struct {
 	// command-WAL segment files for frame counts and max LSN. Keep this disabled
 	// for normal telemetry; benchmark proof paths can opt in explicitly.
 	CommandWALStatsScan bool
+	// PublicBatchWriteSyncPhaseStats enables request-scoped phase timing for
+	// command-WAL public Batch.WriteSync calls. It is intended for focused
+	// profiling only and remains disabled by default so normal writes do not pay
+	// the additional clock and atomic-counter overhead.
+	PublicBatchWriteSyncPhaseStats bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported. Under the collection WAL

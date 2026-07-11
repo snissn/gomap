@@ -172,6 +172,28 @@ func (db *DB) CommandWALEnabled() bool {
 	return db != nil && db.commandWAL
 }
 
+// CommandWALRequestTiming reports request-scoped command-journal phases for an
+// opt-in diagnostic caller. All durations are exclusive. Append and Flush are
+// non-overlapping; Sync reports whether the flush phase used the durable sync
+// path rather than a kernel flush.
+type CommandWALRequestTiming struct {
+	PublicPayloadEntryScanPreparation          time.Duration
+	PublishLockBarrierWait                     time.Duration
+	BackendIntentPlanningSerialization         time.Duration
+	ExternalRefOrdering                        time.Duration
+	Append                                     time.Duration
+	Flush                                      time.Duration
+	PostAppendPendingLSNBookkeeping            time.Duration
+	PublicPreparationObserved                  bool
+	PublishLockBarrierWaitObserved             bool
+	BackendIntentPlanningSerializationObserved bool
+	ExternalRefOrderingObserved                bool
+	AppendObserved                             bool
+	FlushObserved                              bool
+	PostAppendPendingLSNBookkeepingObserved    bool
+	Sync                                       bool
+}
+
 // FlushCommandWAL flushes the command WAL writer. When sync is true, durable
 // modes fsync the command WAL; DurabilityWALOnRelaxed intentionally downgrades
 // this to a flush-to-kernel boundary to preserve relaxed-sync semantics.
@@ -654,6 +676,43 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHint(scanEntries func(fun
 		return 0, err
 	}
 	return db.AppendCommandWALIntent(&CommandWALIntent{inner: *intent}, sync)
+}
+
+// AppendRawKVCommandWALOrderedEntryScanWithHintMeasured is the opt-in
+// diagnostic variant of AppendRawKVCommandWALOrderedEntryScanWithHint. It
+// partitions intent planning, publish serialization/barriers, append,
+// flush/sync, and post-append bookkeeping without changing their ordering.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintMeasured(scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, CommandWALRequestTiming, error) {
+	var timing CommandWALRequestTiming
+	if db == nil || !db.commandWAL {
+		return 0, timing, nil
+	}
+	if db.readOnly {
+		return 0, timing, ErrReadOnly
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, timing, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if scanEntries == nil {
+		return 0, timing, nil
+	}
+	planningStart := time.Now()
+	timing.BackendIntentPlanningSerializationObserved = true
+	intent, err := db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, opHint)
+	timing.BackendIntentPlanningSerialization += time.Since(planningStart)
+	if intent == nil || err != nil {
+		return 0, timing, err
+	}
+	publishStart := time.Now()
+	timing.PublishLockBarrierWaitObserved = true
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	timing.PublishLockBarrierWait += time.Since(publishStart)
+	if err != nil {
+		return 0, timing, err
+	}
+	defer unlockCommandWALPublish()
+	lsn, err := db.appendCommandWALIntentWithTiming(intent, sync, &timing)
+	return lsn, timing, err
 }
 
 func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
@@ -1161,7 +1220,8 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 // allocated LSN; callers must record the command as pending and treat subsequent
 // command-WAL appends as recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint64, error) {
-	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, false)
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, sync, false, false)
+	return lsn, err
 }
 
 // AppendRawKVBatchPayloadCommandWALTrusted appends a prebuilt RawKVBatch
@@ -1169,29 +1229,55 @@ func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint
 // It has the same post-append flush-failure contract as
 // AppendRawKVBatchPayloadCommandWAL.
 func (db *DB) AppendRawKVBatchPayloadCommandWALTrusted(payload []byte, sync bool) (uint64, error) {
-	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, true)
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWAL(payload, sync, true, false)
+	return lsn, err
 }
 
-func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trusted bool) (uint64, error) {
+// AppendRawKVBatchPayloadCommandWALTrustedMeasured is the opt-in diagnostic
+// variant of AppendRawKVBatchPayloadCommandWALTrusted. It partitions publish
+// serialization/barriers, backend preparation, append, flush/sync, and
+// post-append bookkeeping without changing write ordering.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedMeasured(payload []byte, sync bool) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, true, true)
+}
+
+func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
+	var requestTiming CommandWALRequestTiming
 	if db == nil || !db.commandWAL {
-		return 0, nil
+		return 0, requestTiming, nil
 	}
 	if db.durability == DurabilityWALOffRelaxed {
-		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+		return 0, requestTiming, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	publishStart := time.Time{}
+	if measured {
+		publishStart = time.Now()
+		requestTiming.PublishLockBarrierWaitObserved = true
 	}
 	unlockRawPublish := db.lockCommandWALRawPublish()
 	defer unlockRawPublish()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		return 0, err
+		if measured {
+			requestTiming.PublishLockBarrierWait += time.Since(publishStart)
+		}
+		return 0, requestTiming, err
+	}
+	if measured {
+		requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 	}
 	if db.closing.Load() {
-		return 0, ErrClosed
+		return 0, requestTiming, ErrClosed
 	}
 	if db.commandJournal == nil {
-		return 0, db.commandWALJournalUnavailableError()
+		return 0, requestTiming, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
-		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+		return 0, requestTiming, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	backendStart := time.Time{}
+	if measured {
+		backendStart = time.Now()
+		requestTiming.BackendIntentPlanningSerializationObserved = true
 	}
 	baseAppliedLSN := uint64(0)
 	if state := db.state.Load(); state != nil {
@@ -1201,15 +1287,42 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	var err error
 	var timing commitlog.CommandJournalAppendFlushTiming
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	journalStart := time.Time{}
+	if measured {
+		journalStart = time.Now()
+	}
 	if trusted {
 		lsn, timing, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrustedAndFlushMeasured(baseAppliedLSN, payload, actualSync)
 	} else {
 		lsn, timing, err = db.commandJournal.AppendRawKVBatchPayloadCommandAndFlushMeasured(baseAppliedLSN, payload, actualSync)
 	}
-	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPayload, actualSync, lsn, timing, err); err != nil {
-		return lsn, err
+	if measured {
+		journalElapsed := time.Since(journalStart)
+		knownJournalElapsed := timing.Append + timing.Flush
+		journalRemainder := time.Duration(0)
+		if knownJournalElapsed <= journalElapsed {
+			journalRemainder = journalElapsed - knownJournalElapsed
+		}
+		requestTiming.BackendIntentPlanningSerialization += journalStart.Sub(backendStart) + journalRemainder
+		requestTiming.Append = timing.Append
+		requestTiming.Flush = timing.Flush
+		requestTiming.AppendObserved = lsn != 0 || err == nil
+		requestTiming.FlushObserved = lsn != 0
+		requestTiming.Sync = actualSync
 	}
-	return lsn, nil
+	postAppendStart := time.Time{}
+	if measured {
+		postAppendStart = time.Now()
+		requestTiming.PostAppendPendingLSNBookkeepingObserved = true
+	}
+	finishErr := db.finishCommandWALAppendFlush(commandWALAppendStatsPayload, actualSync, lsn, timing, err)
+	if measured {
+		requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+	}
+	if finishErr != nil {
+		return lsn, requestTiming, finishErr
+	}
+	return lsn, requestTiming, nil
 }
 
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
@@ -1282,6 +1395,10 @@ func commandWALIntentPublishSync(intent *CommandWALIntent, sync bool) bool {
 }
 
 func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
+	return db.appendCommandWALIntentWithTiming(intent, sync, nil)
+}
+
+func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sync bool, requestTiming *CommandWALRequestTiming) (uint64, error) {
 	if intent == nil {
 		return 0, nil
 	}
@@ -1310,6 +1427,11 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
+	planningStart := time.Time{}
+	if requestTiming != nil {
+		planningStart = time.Now()
+		requestTiming.BackendIntentPlanningSerializationObserved = true
+	}
 	if intent.rawKVDirect && intent.rawKVRIDCache != nil {
 		defer intent.rawKVRIDCache.release()
 	}
@@ -1319,13 +1441,29 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 		// WriteSync also fsyncs referenced value-log segments for power-loss
 		// durability. Non-sync Write only flushes process buffers, matching the
 		// command-journal Flush path's non-fsync durability contract.
-		if err := db.flushCommandWALExternalRefs(sync, intent.externalRefFileIDs); err != nil {
-			return 0, err
+		if requestTiming != nil {
+			requestTiming.BackendIntentPlanningSerialization += time.Since(planningStart)
+			requestTiming.ExternalRefOrderingObserved = true
+		}
+		externalRefStart := time.Time{}
+		if requestTiming != nil {
+			externalRefStart = time.Now()
+		}
+		externalRefErr := db.flushCommandWALExternalRefs(sync, intent.externalRefFileIDs)
+		if requestTiming != nil {
+			requestTiming.ExternalRefOrdering += time.Since(externalRefStart)
+			planningStart = time.Now()
+		}
+		if externalRefErr != nil {
+			return 0, externalRefErr
 		}
 	}
 	db.mu.RLock()
 	baseAppliedLSN := db.meta.AppliedCommandLSN
 	db.mu.RUnlock()
+	if requestTiming != nil {
+		requestTiming.BackendIntentPlanningSerialization += time.Since(planningStart)
+	}
 	var lsn uint64
 	var err error
 	appendPath := commandWALAppendStatsIntent
@@ -1349,25 +1487,56 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 			Payload:        intent.payload,
 		})
 	}
+	appendElapsed := time.Since(appendStart)
+	postAppendStart := time.Time{}
+	if requestTiming != nil {
+		requestTiming.Append = appendElapsed
+		requestTiming.AppendObserved = lsn != 0 || err == nil
+		requestTiming.PostAppendPendingLSNBookkeepingObserved = true
+		postAppendStart = time.Now()
+	}
 	if lsn != 0 || err == nil {
-		db.observeCommandWALAppend(appendPath, time.Since(appendStart))
+		db.observeCommandWALAppend(appendPath, appendElapsed)
 	}
 	if err != nil {
+		if requestTiming != nil {
+			requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+		}
 		return 0, err
 	}
 	if lsn != 0 {
 		intent.lsn = lsn
 		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	}
-	if err := db.FlushCommandWAL(sync); err != nil {
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	if requestTiming != nil {
+		requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+	}
+	flushStart := time.Time{}
+	if requestTiming != nil {
+		requestTiming.FlushObserved = true
+		requestTiming.Sync = actualSync
+		flushStart = time.Now()
+	}
+	flushErr := db.FlushCommandWAL(sync)
+	if requestTiming != nil {
+		requestTiming.Flush = time.Since(flushStart)
+	}
+	if flushErr != nil {
 		// AppendCommand already assigned a logical LSN, and the frame may be
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
 		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
-		return lsn, err
+		return lsn, flushErr
+	}
+	if requestTiming != nil {
+		postAppendStart = time.Now()
 	}
 	db.observeCommandWALAccepted(lsn)
+	if requestTiming != nil {
+		requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
+	}
 	return lsn, nil
 }
 

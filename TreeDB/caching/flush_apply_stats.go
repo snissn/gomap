@@ -272,11 +272,13 @@ func (db *DB) observeWriteWaitForCheckpoint(wait time.Duration) {
 	if db == nil {
 		return
 	}
-	if wait <= 0 {
-		db.writeWaitForCheckpointLastNs.Store(0)
-		return
+	// Reaching this observer means a writer saw an active checkpoint and took
+	// the checkpoint wait path. Preserve that sample even when a platform's
+	// monotonic clock rounds the short wait to zero (notably on Windows).
+	ns := uint64(1)
+	if wait > 0 && wait.Nanoseconds() > 0 {
+		ns = uint64(wait.Nanoseconds())
 	}
-	ns := uint64(wait.Nanoseconds())
 	db.writeWaitForCheckpointNs.Add(ns)
 	db.writeWaitForCheckpointLastNs.Store(ns)
 	db.writeWaitForCheckpointSamples.Add(1)
@@ -291,6 +293,7 @@ func (db *DB) appendWriteWaitForCheckpointStats(stats map[string]string) {
 	stats["treedb.cache.write.wait_for_checkpoint.ns_max"] = fmt.Sprintf("%d", db.writeWaitForCheckpointMaxNs.Load())
 	stats["treedb.cache.write.wait_for_checkpoint.ns_last"] = fmt.Sprintf("%d", db.writeWaitForCheckpointLastNs.Load())
 	stats["treedb.cache.write.wait_for_checkpoint.count_total"] = fmt.Sprintf("%d", db.writeWaitForCheckpointSamples.Load())
+	stats["treedb.cache.write.wait_for_checkpoint.active"] = fmt.Sprintf("%d", db.writeWaitForCheckpointActive.Load())
 }
 
 const flushCoordinatorProgressWait = 10 * time.Millisecond
