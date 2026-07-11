@@ -1,11 +1,150 @@
 package powerlossoracle
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+func TestObserveDependencyFileSyncPromotesOnlyExactPath(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"value.log", "leaf.log"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("old-"+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"value.log", "leaf.log"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("new-"+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterDependencyFileSync,
+		Path:  filepath.Join(root, "value.log"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Missing exact instrumentation must fail rather than silently promote an
+	// inaccurate image or accept a false no-op.
+	if err := model.Observe(root, durabilitycut.Event{Point: durabilitycut.AfterDependencyFileSync}); err == nil {
+		t.Fatal("empty dependency-sync path was accepted")
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"value.log": "new-value.log",
+		"leaf.log":  "old-leaf.log",
+	} {
+		got, err := os.ReadFile(filepath.Join(crashDir, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("stable %s=%q err=%v want %q", name, got, err, want)
+		}
+	}
+}
+
+func TestObserveGroupedDependencySyncPromotesExactSetAtomically(t *testing.T) {
+	root := t.TempDir()
+	names := []string{"value.log", "leaf.log", "unrelated.log"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("old-"+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("new-"+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterDependencyFileSync,
+		Paths: []string{filepath.Join(root, "value.log"), filepath.Join(root, "leaf.log")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"value.log":     "new-value.log",
+		"leaf.log":      "new-leaf.log",
+		"unrelated.log": "old-unrelated.log",
+	} {
+		got, err := os.ReadFile(filepath.Join(crashDir, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("stable %s=%q err=%v want %q", name, got, err, want)
+		}
+	}
+}
+
+func TestObserveRejectsMissingOrOutOfRootPersistencePaths(t *testing.T) {
+	root := t.TempDir()
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	points := []durabilitycut.Point{
+		durabilitycut.AfterDependencyFileSync,
+		durabilitycut.AfterNewFileDirectorySync,
+		durabilitycut.AfterIndexDataSync,
+		durabilitycut.AfterMetaSync,
+		durabilitycut.AfterDeletionDirectorySync,
+	}
+	for _, point := range points {
+		if err := model.Observe(root, durabilitycut.Event{Point: point}); err == nil {
+			t.Errorf("cut %s accepted empty path", point)
+		}
+		if err := model.Observe(root, durabilitycut.Event{Point: point, Path: filepath.Join(root, "..", "outside")}); err == nil {
+			t.Errorf("cut %s accepted out-of-root path", point)
+		}
+	}
+}
+
+func TestObserveNewFileDirectorySyncPromotesExactDirectoryChildren(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"value_vlog", "unrelated"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valuePath := filepath.Join(root, "value_vlog", "value-l0-1.log")
+	unrelatedPath := filepath.Join(root, "unrelated", "other.log")
+	for _, path := range []string{valuePath, unrelatedPath} {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.Observe(root, durabilitycut.Event{Point: durabilitycut.AfterDependencyFileSync, Path: path}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point: durabilitycut.AfterNewFileDirectorySync,
+		Path:  filepath.Join(root, "value_vlog"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := model.StablePaths(), []string{"value_vlog/value-l0-1.log"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stable paths after exact directory sync=%v want=%v", got, want)
+	}
+}
 
 func TestStableAndVolatileBytesAreIndependent(t *testing.T) {
 	source := t.TempDir()
@@ -46,6 +185,146 @@ func TestStableAndVolatileBytesAreIndependent(t *testing.T) {
 	}
 	if string(got) != "new" {
 		t.Fatalf("synced stable bytes=%q want new", got)
+	}
+}
+
+func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
+	model := newModel()
+	if err := model.Create("a/b/value", []byte("stable")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("a/b/value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("a/b"); err == nil {
+		t.Fatal("SyncDir(a/b) succeeded before parent entries were stable")
+	}
+	for _, dir := range []string{".", "a", "a/b"} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatalf("SyncDir(%q): %v", dir, err)
+		}
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(crashDir, "a", "b", "value"))
+	if err != nil || string(got) != "stable" {
+		t.Fatalf("nested stable value=%q err=%v", got, err)
+	}
+}
+
+func TestRenameOverwritePreservesInodeUntilDestinationDirectorySync(t *testing.T) {
+	model := newModel()
+	for path, value := range map[string]string{"dir/source": "source", "dir/destination": "destination"} {
+		if err := model.Create(path, []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.SyncFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("dir"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Rename("dir/source", "dir/destination"); err != nil {
+		t.Fatal(err)
+	}
+	before := t.TempDir()
+	if err := model.MaterializeStable(before); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(before, "dir", "destination"))
+	if err != nil || string(got) != "destination" {
+		t.Fatalf("pre-sync destination=%q err=%v", got, err)
+	}
+	if err := model.SyncDir("dir"); err != nil {
+		t.Fatal(err)
+	}
+	after := t.TempDir()
+	if err := model.MaterializeStable(after); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(after, "dir", "destination"))
+	if err != nil || string(got) != "source" {
+		t.Fatalf("post-sync destination=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(after, "dir", "source")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("post-sync source err=%v want not-exist", err)
+	}
+}
+
+func TestCrossDirectoryRenameNeedsBothDirectorySyncs(t *testing.T) {
+	model := newModel()
+	if err := model.Create("from/value", []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Create("to/keep", []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"from/value", "to/keep"} {
+		if err := model.SyncFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{".", "from", "to"} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.Rename("from/value", "to/value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncDir("to"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := model.StablePaths(), []string{"from/value", "to/keep", "to/value"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("destination-only sync paths=%v want=%v", got, want)
+	}
+	if err := model.SyncDir("from"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := model.StablePaths(), []string{"to/keep", "to/value"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("both dirs synced paths=%v want=%v", got, want)
+	}
+}
+
+func TestUnlinkStableNamePersistsUntilContainingDirectorySync(t *testing.T) {
+	model := newModel()
+	if err := model.Create("dir/value", []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("dir/value"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".", "dir"} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.Unlink("dir/value"); err != nil {
+		t.Fatal(err)
+	}
+	if got := model.StablePaths(); !reflect.DeepEqual(got, []string{"dir/value"}) {
+		t.Fatalf("stable paths before deletion dir sync=%v", got)
+	}
+	if err := model.SyncDir("dir"); err != nil {
+		t.Fatal(err)
+	}
+	if got := model.StablePaths(); len(got) != 0 {
+		t.Fatalf("stable paths after deletion dir sync=%v", got)
+	}
+}
+
+func TestRejectsAbsoluteAndTraversalPaths(t *testing.T) {
+	model := newModel()
+	for _, path := range []string{"../escape", filepath.Join("..", "escape"), filepath.Join(string(filepath.Separator), "absolute")} {
+		if err := model.Create(path, nil); err == nil {
+			t.Fatalf("Create(%q) succeeded", path)
+		}
 	}
 }
 

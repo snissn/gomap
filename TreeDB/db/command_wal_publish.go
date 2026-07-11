@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -439,7 +440,13 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 	for i := range decisions {
 		decision := &decisions[i]
 		if decision.Covered && !decision.Active {
+			if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
+				return decisions, err
+			}
 			if err := os.Remove(decision.Path); err != nil && !os.IsNotExist(err) {
+				return decisions, err
+			}
+			if err := durabilitycut.EmitPath(durabilitycut.AfterWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
 				return decisions, err
 			}
 			decision.Removed = true

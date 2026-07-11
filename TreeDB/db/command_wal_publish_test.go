@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -927,6 +928,39 @@ func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
 		t.Fatalf("uncovered segment stat=%v, want present", err)
+	}
+}
+
+func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	db.state.Store(&DBState{AppliedCommandLSN: 1})
+
+	originalSyncDir := syncDirFn
+	defer func() { syncDirFn = originalSyncDir }()
+	wantErr := errors.New("injected directory sync failure")
+	syncDirFn = func(string) error { return wantErr }
+
+	var points []durabilitycut.Point
+	restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
+		points = append(points, event.Point)
+		return nil
+	})
+	defer restoreObserver()
+
+	if err := db.CleanupCommandWALCoveredSegments(true); !errors.Is(err, wantErr) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want %v", err, wantErr)
+	}
+	wantPoints := []durabilitycut.Point{
+		durabilitycut.BeforeWALOrAssetUnlink,
+		durabilitycut.AfterWALOrAssetUnlink,
+		durabilitycut.BeforeDeletionDirectorySync,
+	}
+	if !reflect.DeepEqual(points, wantPoints) {
+		t.Fatalf("cut points=%v, want %v", points, wantPoints)
 	}
 }
 

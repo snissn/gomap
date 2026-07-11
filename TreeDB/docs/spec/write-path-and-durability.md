@@ -25,6 +25,14 @@ Recoverable(Meta[N]) =>
   Stable(AppliedWALCoverage[N])
 ```
 
+`PublicationSeal[N]` is part of the target contract, not a claim about the
+current on-disk format. TreeDB does not yet write an on-disk publication seal.
+The oracle's `before-publication-seal-write` and
+`after-publication-seal-write` cut names are logical placeholders at the
+current publication-registration boundary; DUR-09
+[#3679](https://github.com/snissn/gomap/issues/3679) will retarget them to the
+real seal write.
+
 `Stable` means present in the modeled image after process-volatile file bytes
 and unsynced namespace mutations have been discarded. `Write`, mapped dirtying,
 and userspace `Flush` affect only volatile state. File sync promotes the covered

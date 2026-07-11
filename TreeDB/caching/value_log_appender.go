@@ -5,6 +5,7 @@ import (
 	"os"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -28,6 +29,9 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	if len(values) == 0 {
 		return nil, nil
 	}
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceValueLog, a.db.dir); err != nil {
+		return nil, err
+	}
 	startRID, err := a.db.ReserveValueLogRIDs(len(values))
 	if err != nil {
 		return nil, err
@@ -42,6 +46,10 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	}
 	ptrs, err := a.db.appendValueLogForRecords(a.lane, records, journalDurabilityNone)
 	if err != nil {
+		return nil, err
+	}
+	if err := durabilitycut.EmitBasic(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceValueLog, a.db.dir); err != nil {
+		putValueLogPtrs(ptrs)
 		return nil, err
 	}
 	if len(ptrs) != len(values) {

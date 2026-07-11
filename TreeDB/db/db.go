@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -2881,12 +2882,22 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	nextMeta.FreelistHeadID = idx.allocator.Head()
 	nextMeta.TotalPages = idx.pager.PageCount()
 	if opts.commandWALPublish {
+		if err := durabilitycut.EmitLSN(durabilitycut.BeforeAppliedLSNAdvance, durabilitycut.ResourceMeta, db.dir, opts.appliedCommandLSN); err != nil {
+			db.mu.Unlock()
+			watermarkHold += time.Since(holdStart)
+			return post, prePublishErr(err)
+		}
 		if err := validateCommandWALPublishLocked(db.meta, newRootID, sysRootID, opts); err != nil {
 			db.mu.Unlock()
 			watermarkHold += time.Since(holdStart)
 			return post, prePublishErr(err)
 		}
 		nextMeta.AppliedCommandLSN = opts.appliedCommandLSN
+		if err := durabilitycut.EmitLSN(durabilitycut.AfterAppliedLSNAdvance, durabilitycut.ResourceMeta, db.dir, opts.appliedCommandLSN); err != nil {
+			db.mu.Unlock()
+			watermarkHold += time.Since(holdStart)
+			return post, prePublishErr(err)
+		}
 	}
 	if opts.maxEntryRevision != page.LegacyEntryRevision && uint64(opts.maxEntryRevision) > nextMeta.MaxEntryRevision {
 		nextMeta.MaxEntryRevision = uint64(opts.maxEntryRevision)
@@ -2906,6 +2917,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
 	if forceValueLogRefresh && db.valueLogManager != nil {
+		if err := durabilitycut.EmitBasic(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
+			return post, prePublishErr(err)
+		}
 		registered, err := db.registerLeafPageLogSegmentsForPublish()
 		if err != nil {
 			return post, prePublishErr(err)
@@ -2922,11 +2936,22 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 				valueLogSegmentRegistered = registered
 			}
 		}
+		if err := durabilitycut.EmitBasic(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
+			return post, prePublishErr(err)
+		}
 	}
 
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
+	metaPath := filepath.Join(db.dir, "index.db")
+	metaOffset := int64(targetPageID) * int64(page.PageSize)
+	if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
+		return post, prePublishErr(err)
+	}
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
+		return post, prePublishErr(err)
+	}
+	if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
 		return post, prePublishErr(err)
 	}
 	if debugTiming {
@@ -2937,6 +2962,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if sync {
 		t1 := time.Now()
 		var err error
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
+			return post, err
+		}
 		if db.testFailSyncMeta.Load() {
 			err = errTestSyncMetaFailpoint
 		} else if opts.syncMetaPageOnly {
@@ -2945,6 +2973,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			err = idx.pager.Sync()
 		}
 		if err != nil {
+			return post, err
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
 			return post, err
 		}
 		if debugTiming {

@@ -12,6 +12,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -235,15 +236,28 @@ func (db *DB) flushCommandWAL(sync bool, observe bool) error {
 		return err
 	}
 	var err error
+	walPath := db.commandJournal.Path()
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	start := time.Time{}
 	if observe {
 		start = time.Now()
 	}
 	if actualSync {
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, db.dir, walPath); err != nil {
+			return err
+		}
 		err = db.commandJournal.Sync()
+		if err == nil {
+			err = durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, db.dir, walPath)
+		}
 	} else {
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeUserspaceFlush, durabilitycut.ResourceCommandWAL, db.dir, walPath); err != nil {
+			return err
+		}
 		err = db.commandJournal.Flush()
+		if err == nil {
+			err = durabilitycut.EmitPath(durabilitycut.AfterUserspaceFlush, durabilitycut.ResourceCommandWAL, db.dir, walPath)
+		}
 	}
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint
@@ -450,7 +464,16 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 			db.commandWALClosedBytes.Add(-int64(removedBytes))
 		}
 		if sync && db.durability != DurabilityWALOnRelaxed {
-			if syncErr := syncDirFn(WALDirPath(db.dir)); err == nil {
+			if syncErr := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil && err == nil {
+				err = syncErr
+			}
+			if err != nil {
+				return err
+			}
+			if syncErr := syncDirFn(WALDirPath(db.dir)); syncErr != nil {
+				return syncErr
+			}
+			if syncErr := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil && err == nil {
 				err = syncErr
 			}
 		}
@@ -1467,6 +1490,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	var lsn uint64
 	var err error
 	appendPath := commandWALAppendStatsIntent
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, db.dir); err != nil {
+		return 0, err
+	}
 	appendStart := time.Now()
 	if intent.rawKVDirect {
 		appendPath = commandWALAppendStatsEntryScan
@@ -1503,6 +1529,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 			requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
 		}
 		return 0, err
+	}
+	if err := durabilitycut.EmitLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, db.dir, lsn); err != nil {
+		return lsn, err
 	}
 	if lsn != 0 {
 		intent.lsn = lsn
