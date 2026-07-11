@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -115,7 +116,7 @@ func captureExcluding(root string, excluded ...string) (*Model, error) {
 		if err != nil {
 			return err
 		}
-		rel, err = normalize(rel)
+		rel, err = normalize(filepath.ToSlash(rel))
 		if err != nil {
 			return err
 		}
@@ -196,7 +197,7 @@ func (m *Model) PathStable(root, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rel, err = normalize(rel)
+	rel, err = normalize(filepath.ToSlash(rel))
 	if err != nil {
 		return false, err
 	}
@@ -222,7 +223,7 @@ func (m *Model) Overlay(root string) error {
 		if err != nil {
 			return err
 		}
-		rel, err = normalize(rel)
+		rel, err = normalize(filepath.ToSlash(rel))
 		if err != nil {
 			return err
 		}
@@ -293,7 +294,7 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 			if err != nil {
 				return fmt.Errorf("powerlossoracle: cut %s path %q: %w", event.Point, path, err)
 			}
-			normalized, err := normalize(rel)
+			normalized, err := normalize(filepath.ToSlash(rel))
 			if err != nil {
 				return fmt.Errorf("powerlossoracle: cut %s path %q is outside root %q: %w", event.Point, path, root, err)
 			}
@@ -340,7 +341,7 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return "", err
 		}
-		normalized, err := normalize(relative)
+		normalized, err := normalize(filepath.ToSlash(relative))
 		if err != nil {
 			return "", fmt.Errorf("powerlossoracle: namespace path %q is outside root %q: %w", path, root, err)
 		}
@@ -526,7 +527,7 @@ func (m *Model) Unlink(path string) error {
 	if _, ok := m.volatileDirs[path]; !ok {
 		return fmt.Errorf("powerlossoracle: unlink missing file or directory %q", path)
 	}
-	prefix := path + string(filepath.Separator)
+	prefix := path + "/"
 	for file := range m.volatile {
 		if strings.HasPrefix(file, prefix) {
 			delete(m.volatile, file)
@@ -589,18 +590,18 @@ func (m *Model) SyncDir(dir string) error {
 		}
 	}
 	for path := range m.stable {
-		if cleanInternal(filepath.Dir(path)) == dir {
+		if cleanInternal(pathpkg.Dir(path)) == dir {
 			delete(m.stable, path)
 		}
 	}
 	for path, id := range m.volatile {
-		if cleanInternal(filepath.Dir(path)) == dir {
+		if cleanInternal(pathpkg.Dir(path)) == dir {
 			m.stable[path] = id
 		}
 	}
 	removedTrees := make([]string, 0)
 	for child := range m.stableDirs {
-		if child != "." && cleanInternal(filepath.Dir(child)) == dir {
+		if child != "." && cleanInternal(pathpkg.Dir(child)) == dir {
 			if _, stillVisible := m.volatileDirs[child]; !stillVisible {
 				removedTrees = append(removedTrees, child)
 			}
@@ -611,7 +612,7 @@ func (m *Model) SyncDir(dir string) error {
 	// unreachable. Its descendants do not each need an independent parent
 	// directory sync: the synced removal of the top-level name is sufficient.
 	for _, tree := range removedTrees {
-		prefix := tree + string(filepath.Separator)
+		prefix := tree + "/"
 		for path := range m.stable {
 			if strings.HasPrefix(path, prefix) {
 				delete(m.stable, path)
@@ -624,7 +625,7 @@ func (m *Model) SyncDir(dir string) error {
 		}
 	}
 	for child := range m.volatileDirs {
-		if child != "." && cleanInternal(filepath.Dir(child)) == dir {
+		if child != "." && cleanInternal(pathpkg.Dir(child)) == dir {
 			m.stableDirs[child] = struct{}{}
 		}
 	}
@@ -654,7 +655,7 @@ func (m *Model) MaterializeStable(root string) error {
 	}
 	dirs := keys(m.stableDirs)
 	sort.Slice(dirs, func(i, j int) bool {
-		di, dj := strings.Count(dirs[i], string(filepath.Separator)), strings.Count(dirs[j], string(filepath.Separator))
+		di, dj := strings.Count(dirs[i], "/"), strings.Count(dirs[j], "/")
 		if di == dj {
 			return dirs[i] < dirs[j]
 		}
@@ -664,11 +665,11 @@ func (m *Model) MaterializeStable(root string) error {
 		if dir == "." {
 			continue
 		}
-		parent := cleanInternal(filepath.Dir(dir))
+		parent := cleanInternal(pathpkg.Dir(dir))
 		if _, ok := m.stableDirs[parent]; !ok {
 			return fmt.Errorf("powerlossoracle: stable directory %q has unstable parent %q", dir, parent)
 		}
-		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		if err := os.Mkdir(filepath.Join(root, filepath.FromSlash(dir)), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
 	}
@@ -678,11 +679,11 @@ func (m *Model) MaterializeStable(root string) error {
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		parent := cleanInternal(filepath.Dir(path))
+		parent := cleanInternal(pathpkg.Dir(path))
 		if _, ok := m.stableDirs[parent]; !ok {
 			return fmt.Errorf("powerlossoracle: stable file %q has unstable parent %q", path, parent)
 		}
-		if err := os.WriteFile(filepath.Join(root, path), m.inodes[m.stable[path]].stable, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(path)), m.inodes[m.stable[path]].stable, 0o644); err != nil {
 			return err
 		}
 	}
@@ -731,7 +732,7 @@ func (m *Model) StableFingerprint() string {
 }
 
 func (m *Model) ensureVolatileParents(path string) {
-	for dir := cleanInternal(filepath.Dir(path)); ; dir = cleanInternal(filepath.Dir(dir)) {
+	for dir := cleanInternal(pathpkg.Dir(path)); ; dir = cleanInternal(pathpkg.Dir(dir)) {
 		m.volatileDirs[dir] = struct{}{}
 		if dir == "." {
 			return
@@ -739,23 +740,32 @@ func (m *Model) ensureVolatileParents(path string) {
 	}
 }
 
-func normalize(path string) (string, error) {
-	if path == "" || filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
-		return "", fmt.Errorf("powerlossoracle: path must be relative: %q", path)
+func normalize(name string) (string, error) {
+	// Model paths are logical root-relative names, not host filesystem paths.
+	// Canonicalizing both separator spellings here keeps traces, fingerprints,
+	// and path lists identical on every platform. It also prevents a Windows
+	// rooted path (for example `\\absolute`) from reaching parent traversal.
+	logical := strings.ReplaceAll(name, "\\", "/")
+	if logical == "" || strings.HasPrefix(logical, "/") || hasWindowsVolume(logical) {
+		return "", fmt.Errorf("powerlossoracle: path must be relative: %q", name)
 	}
-	cleaned := filepath.Clean(path)
-	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("powerlossoracle: path escapes root: %q", path)
+	cleaned := pathpkg.Clean(logical)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("powerlossoracle: path escapes root: %q", name)
 	}
 	return cleaned, nil
 }
 
-func cleanInternal(path string) string {
-	path = filepath.Clean(path)
-	if path == "" {
+func cleanInternal(name string) string {
+	name = pathpkg.Clean(name)
+	if name == "" {
 		return "."
 	}
-	return path
+	return name
+}
+
+func hasWindowsVolume(name string) bool {
+	return len(name) >= 2 && ((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':'
 }
 
 func clone(in []byte) []byte { return append([]byte(nil), in...) }

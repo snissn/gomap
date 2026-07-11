@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -389,9 +390,40 @@ func TestUnlinkTreePersistsUntilParentDirectorySync(t *testing.T) {
 
 func TestRejectsAbsoluteAndTraversalPaths(t *testing.T) {
 	model := newModel()
-	for _, path := range []string{"../escape", filepath.Join("..", "escape"), filepath.Join(string(filepath.Separator), "absolute")} {
+	for _, path := range []string{
+		"../escape",
+		`..\escape`,
+		"/absolute",
+		`\absolute`,
+		`C:\absolute`,
+		`C:/absolute`,
+		`\\server\share\absolute`,
+	} {
 		if err := model.Create(path, nil); err == nil {
 			t.Fatalf("Create(%q) succeeded", path)
+		}
+	}
+}
+
+func TestLogicalPathsUseCanonicalSlashSeparators(t *testing.T) {
+	model := newModel()
+	if err := model.Create(`dir\nested\value`, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("dir/nested/value"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".", "dir", "dir/nested"} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatalf("SyncDir(%q): %v", dir, err)
+		}
+	}
+	if got, want := model.StablePaths(), []string{"dir/nested/value"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stable paths=%v want=%v", got, want)
+	}
+	for _, entry := range model.Trace() {
+		if strings.Contains(entry, `\`) {
+			t.Fatalf("trace contains host-specific separator: %v", model.Trace())
 		}
 	}
 }
