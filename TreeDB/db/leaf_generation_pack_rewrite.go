@@ -1543,11 +1543,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if len(createdSegments) > 0 {
 		dirSyncCh = make(chan leafGenerationPackDirectorySyncResult, 1)
 		leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-		go func() {
-			started := time.Now()
+		started := time.Now()
+		go func(started time.Time) {
 			err := syncDirFn(leafVLogDir)
 			dirSyncCh <- leafGenerationPackDirectorySyncResult{err: err, timeNanos: time.Since(started).Nanoseconds()}
-		}()
+		}(started)
 	}
 
 	var leafManifest *leafGenerationManifest
