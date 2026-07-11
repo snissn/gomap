@@ -6,6 +6,8 @@ Parent: [#3652](https://github.com/snissn/gomap/issues/3652)
 
 Base commit: `851d8e89c1e38fd1af6edc682ebe1722852d4215`
 
+Candidate mechanism commit: `b8f9625fc4965fad9a912437176334f3c7632ef6`
+
 This candidate removes one proven duplicate value-log file sync without
 weakening the durable return boundary. It is a partial mechanism win and a
 latency-gate no-go: #3657 remains open because the required 20% focused
@@ -159,6 +161,10 @@ go test -race ./TreeDB/caching ./TreeDB \
 
 go test ./TreeDB/db ./TreeDB/caching ./TreeDB -count=1
 go test ./... -count=1
+
+go test ./TreeDB/db \
+  -run '^TestAppendRawKVCommandWALOrderedEntriesRejectsMalformedValueLogPointerBeforeDurability$' \
+  -count=1
 ```
 
 The full repository run passed; notable package durations were 406.987 s for
@@ -166,6 +172,62 @@ The full repository run passed; notable package durations were 406.987 s for
 
 ## Ironbird diagnostic
 
-The required candidate-pinned diagnostic row is recorded in this report before
-PR handoff. It is diagnostic only: one row cannot establish the parent issue's
-paired throughput gate.
+The required candidate-pinned production-shape diagnostic completed without a
+runner or result error. The scenario dependency manifest resolves the exact
+candidate source:
+
+```text
+github.com/snissn/gomap@v0.6.2-0.20260711055505-b8f9625fc496
+=> b8f9625fc4965fad9a912437176334f3c7632ef6
+```
+
+The backend verifier observed TreeDB for both app and node databases and the
+`kv` transaction indexer, matching the requested configuration. The run used
+one validator, no non-validator nodes, 100,000 preseeded accounts, 5,000 active
+wallets, 500 requested transactions per block, and 450 requested blocks:
+
+```sh
+/mnt/fast4tb/bin/ironbird-local-report-runner-3657 \
+  -scenario simapp-treedb-all \
+  -validators 1 -nodes 0 -wallets 5000 \
+  -preseed-profile accounts -preseed-accounts 100000 \
+  -cosmos-txs 500 -cosmos-blocks 450 \
+  -tx-indexer kv \
+  -load-window-min-duration 5m \
+  -load-window-target-fraction 0.995 \
+  -stop-catalyst-after-load-window \
+  -app-debug-vars -raw-tx-audit=false \
+  -out /mnt/fast4tb/ironbird-gomap-3657-m3-20260710T2005HST/accepted/result.json
+```
+
+| Signal | Result |
+| --- | ---: |
+| intended transactions | 225,000 |
+| accepted target at 99.5% | 223,875 |
+| included and successful | 223,997 (99.55422% of intended) |
+| accepted load window | 331.580154797 s |
+| accepted throughput | 675.544047976 tx/s |
+| backend verification | valid |
+| runner/result errors | 0 |
+
+Whole-scenario TreeDB stat deltas give these public batch `WriteSync` rows:
+
+| Store | Calls | Total | Mean | Checkpoint barrier wait |
+| --- | ---: | ---: | ---: | ---: |
+| `application.db` | 1,313 | 18.973057 s | 14.450157 ms | 900.581200 ms |
+| `state.db` | 1,313 | 18.511351 s | 14.098515 ms | 0.002928 ms |
+| `blockstore.db` | 2,626 | 25.622918 s | 9.757395 ms | not selected |
+
+The application and state means are below the issue's absolute production-row
+ceilings of 17 ms and 16 ms, respectively. This is not evidence that the M3
+mechanism caused those results: every production store records zero public
+preflight-materialization time and zero public external-reference-ordering
+calls. The optimized forced-pointer branch was therefore inactive in this row;
+the relevant public `WriteSync` values stayed inline.
+
+This single candidate row is diagnostic only. It is not a paired baseline and
+does not establish a throughput delta or the required 20% focused latency
+reduction. The canonical forced-pointer comparison remains the decision
+evidence: it proves the physical sync reduction but fails the latency gate and
+the focused 16 ms state target. The accepted Ironbird artifacts are under
+`/mnt/fast4tb/ironbird-gomap-3657-m3-20260710T2005HST/accepted`.
