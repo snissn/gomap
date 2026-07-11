@@ -10,7 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchLegacy(t *testing.T) {
+func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
 	grouped := appendPointersInNewSegment(t, db.dir, 0, 1, 410_000, 1, func(int) []byte {
@@ -42,22 +42,22 @@ func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchLegacy(t *testing
 	}
 	writeLeafGenerationKeys(t, db, "current", 1, 'z')
 
-	wantRefs, _, err := db.scanValueLogRefCountsLegacy(context.Background())
+	wantRefs, _, err := db.scanValueLogRefCounts(context.Background())
 	if err != nil {
-		t.Fatalf("legacy ref counts: %v", err)
+		t.Fatalf("standalone ref counts: %v", err)
 	}
-	wantLive, err := db.estimateValueLogLiveBytesBySegmentLegacy(context.Background())
+	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
 	if err != nil {
-		t.Fatalf("legacy live bytes: %v", err)
+		t.Fatalf("standalone live bytes: %v", err)
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		t.Fatal("AcquireSnapshot returned nil")
 	}
 	defer closeNoErr(t, snap)
-	wantLeaf, err := db.scanLeafGenerationLiveStatsWithOptionsLegacy(context.Background(), snap, leafGenerationLiveStatsScanOptions{})
+	wantLeaf, err := db.scanLeafGenerationLiveStats(context.Background(), snap)
 	if err != nil {
-		t.Fatalf("legacy leaf-generation totals: %v", err)
+		t.Fatalf("standalone leaf-generation totals: %v", err)
 	}
 
 	got, err := db.maintenanceReachabilityScan(context.Background(), snap, maintenanceReachabilityScanOptions{
@@ -69,13 +69,13 @@ func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchLegacy(t *testing
 		t.Fatalf("maintenanceReachabilityScan: %v", err)
 	}
 	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
-		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+		t.Fatalf("ref counts mismatch: combined=%v standalone=%v", got.valueLogRefCounts, wantRefs)
 	}
 	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
-		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got.valueLogLiveBytesBySegment, wantLive)
+		t.Fatalf("live bytes mismatch: combined=%v standalone=%v", got.valueLogLiveBytesBySegment, wantLive)
 	}
 	if !reflect.DeepEqual(got.leafGenerationLive, wantLeaf) {
-		t.Fatalf("leaf-generation totals mismatch: shared=%v legacy=%v", got.leafGenerationLive, wantLeaf)
+		t.Fatalf("leaf-generation totals mismatch: combined=%v standalone=%v", got.leafGenerationLive, wantLeaf)
 	}
 	if got.valueLogRefCounts[grouped.FileID] != 3 {
 		t.Fatalf("grouped ref count=%d want 3", got.valueLogRefCounts[grouped.FileID])
@@ -131,7 +131,7 @@ func TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork(t *testing.T) 
 	}
 }
 
-func TestScanValueLogRefCountsUsesSharedCollectorAndMatchesLegacy(t *testing.T) {
+func TestScanValueLogRefCountsUsesSharedCollectorAndPreservesHook(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	ptr := appendPointersInNewSegment(t, db.dir, 0, 1, 430_000, 1, func(int) []byte {
 		return bytes.Repeat([]byte("maintenance-reachability-ref-migration|"), 32)
@@ -149,13 +149,6 @@ func TestScanValueLogRefCountsUsesSharedCollectorAndMatchesLegacy(t *testing.T) 
 	closeNoErr(t, b)
 	ctx := context.Background()
 
-	want, wantSeq, err := db.scanValueLogRefCountsLegacy(ctx)
-	if err != nil {
-		t.Fatalf("legacy scanValueLogRefCounts: %v", err)
-	}
-	if len(want) == 0 {
-		t.Fatal("legacy ref-count fixture produced no value-log references")
-	}
 	var hookCalls int
 	restore := registerScanValueLogRefCountsHook(func() { hookCalls++ })
 	defer restore()
@@ -167,11 +160,11 @@ func TestScanValueLogRefCountsUsesSharedCollectorAndMatchesLegacy(t *testing.T) 
 	if hookCalls != 1 {
 		t.Fatalf("scan hook calls=%d want 1", hookCalls)
 	}
-	if gotSeq != wantSeq {
-		t.Fatalf("commit sequence=%d want %d", gotSeq, wantSeq)
+	if gotSeq != db.State().CommitSeq {
+		t.Fatalf("commit sequence=%d want published %d", gotSeq, db.State().CommitSeq)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got, want)
+	if got[ptr.FileID] != 1 {
+		t.Fatalf("ref count for segment %d=%d want 1", ptr.FileID, got[ptr.FileID])
 	}
 }
 
@@ -181,7 +174,7 @@ func clearRewritePlanLiveBytesCacheForTest(db *DB) {
 	db.rewritePlanLiveBytesMu.Unlock()
 }
 
-func TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndMatchesLegacy(t *testing.T) {
+func TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndCaches(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	grouped := appendPointersInNewSegment(t, db.dir, 0, 1, 440_000, 1, func(int) []byte {
 		return bytes.Repeat([]byte("maintenance-reachability-live-migration|"), 32)
@@ -205,18 +198,6 @@ func TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndMatchesLegacy(t
 	ctx := context.Background()
 
 	clearRewritePlanLiveBytesCacheForTest(db)
-	want, err := db.estimateValueLogLiveBytesBySegmentLegacy(ctx)
-	if err != nil {
-		t.Fatalf("legacy estimateValueLogLiveBytesBySegment: %v", err)
-	}
-	if len(want) == 0 {
-		t.Fatal("legacy live-byte fixture produced no value-log references")
-	}
-	if got := want[grouped.FileID]; got != int64(recordLen) {
-		t.Fatalf("legacy grouped live bytes=%d want one record=%d", got, recordLen)
-	}
-
-	clearRewritePlanLiveBytesCacheForTest(db)
 	var hookCalls int
 	restore := registerRewritePlanLiveEstimateHook(func() { hookCalls++ })
 	defer restore()
@@ -227,8 +208,8 @@ func TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndMatchesLegacy(t
 	if hookCalls != 1 {
 		t.Fatalf("uncached live-estimate hook calls=%d want 1", hookCalls)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got, want)
+	if got[grouped.FileID] != int64(recordLen) {
+		t.Fatalf("grouped live bytes=%d want one record=%d", got[grouped.FileID], recordLen)
 	}
 	if _, err := db.estimateValueLogLiveBytesBySegment(ctx); err != nil {
 		t.Fatalf("cached estimateValueLogLiveBytesBySegment: %v", err)
@@ -338,15 +319,7 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 	db := openCompactStorageAuditBenchmarkFixture(b, 4096, 256)
 	ctx := context.Background()
 
-	b.Run("legacy_ref_counts", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			if _, _, err := db.scanValueLogRefCountsLegacy(ctx); err != nil {
-				b.Fatalf("scanValueLogRefCountsLegacy: %v", err)
-			}
-		}
-	})
-	b.Run("shared_ref_counts", func(b *testing.B) {
+	b.Run("ref_counts", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			snap := db.AcquireSnapshot()
@@ -364,18 +337,7 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			}
 		}
 	})
-	b.Run("legacy_live_bytes", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			b.StopTimer()
-			clearRewritePlanLiveBytesCacheForTest(db)
-			b.StartTimer()
-			if _, err := db.estimateValueLogLiveBytesBySegmentLegacy(ctx); err != nil {
-				b.Fatalf("estimateValueLogLiveBytesBySegmentLegacy: %v", err)
-			}
-		}
-	})
-	b.Run("shared_live_bytes", func(b *testing.B) {
+	b.Run("live_bytes", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
@@ -386,20 +348,7 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			}
 		}
 	})
-	b.Run("legacy_leaf_generation", func(b *testing.B) {
-		snap := db.AcquireSnapshot()
-		if snap == nil {
-			b.Fatal("AcquireSnapshot returned nil")
-		}
-		defer func() { _ = snap.Close() }()
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			if _, err := db.scanLeafGenerationLiveStatsWithOptionsLegacy(ctx, snap, leafGenerationLiveStatsScanOptions{DisableCache: true}); err != nil {
-				b.Fatalf("scanLeafGenerationLiveStatsWithOptionsLegacy: %v", err)
-			}
-		}
-	})
-	b.Run("shared_leaf_generation", func(b *testing.B) {
+	b.Run("leaf_generation", func(b *testing.B) {
 		snap := db.AcquireSnapshot()
 		if snap == nil {
 			b.Fatal("AcquireSnapshot returned nil")
@@ -412,21 +361,7 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 			}
 		}
 	})
-	b.Run("legacy_all_collectors", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			in, err := db.acquireCompactStorageAuditInput(CompactStorageOptions{})
-			if err != nil {
-				b.Fatalf("acquireCompactStorageAuditInput: %v", err)
-			}
-			_, err = db.scanCompactStorageAuditLegacy(ctx, in)
-			in.close()
-			if err != nil {
-				b.Fatalf("scanCompactStorageAuditLegacy: %v", err)
-			}
-		}
-	})
-	b.Run("shared_all_collectors", func(b *testing.B) {
+	b.Run("all_collectors", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			in, err := db.acquireCompactStorageAuditInput(CompactStorageOptions{})
