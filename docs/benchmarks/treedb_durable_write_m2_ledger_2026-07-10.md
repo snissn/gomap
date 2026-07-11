@@ -27,6 +27,10 @@ durability boundary and does not claim a throughput improvement.
   value-log sync. Its focused ceiling is 1.35-1.46 ms per affected batch. It
   is not safe to remove without proving byte coverage and exclusion of an
   intervening writer or rotation.
+- A rotated external reference is a distinct case: the current lane writer is
+  synced first and each referenced non-current segment is then synced directly.
+  M2 now attributes those direct attempts to both logical `external_ref` and
+  aggregate physical value-log counters without changing the ordering.
 
 The normative byte and ordering contract is in
 `TreeDB/docs/spec/command-wal-durable-write-contract.md`.
@@ -57,6 +61,8 @@ Primary artifacts:
 | `block.pprof`, `mutex.pprof`, `trace.out` | blocking, mutex, and runtime trace evidence |
 | `*_top.txt`, `trace_sync_top.txt` | text profile summaries |
 | `strace.log`, `strace_active_window.txt` | production Linux syscall validation |
+| `rotated_segment_test.txt`, `rotated_segment_strace.log`, `rotated_segment_strace_fsync.txt` | rotated command-reference counter and syscall reconciliation |
+| `rotated_segment_focused_count10.txt`, `rotated_segment_race.txt`, `rotated_segment_public_regression.txt` | focused repeat, race, and public-ledger regressions |
 | `perf_stat.txt`, `perf_benchmark.txt` | hardware/runtime counter sample |
 | `environment.txt` | commit, Go, kernel, filesystem, device, and capacity |
 
@@ -118,7 +124,18 @@ The command-write byte mean can be fractional because key lengths cross a
 decimal digit boundary during the 20-iteration samples. Logical sync-path
 counts and actual file-sync-hook counts agree for every isolated row. Segment
 creation/rotation directory syncs are outside the delta window and remain
-separate counters.
+separate counters. None of the 12 measured active windows rotated a referenced
+value-log segment, so the ledger values above are unchanged by the follow-up
+counter fix and `file_sync.rotated_segment.calls_total` is zero for those rows.
+
+The deterministic rotated-reference regression constructs a real command
+frame whose value pointer names a deliberately rotated non-current segment. Its
+delta is two logical `external_ref` calls and two aggregate value-log file-sync
+attempts: one through the active lane writer and one direct old-segment sync.
+The rotated-segment subcounter is exactly one. An injected direct-sync failure
+increments both logical and physical error counters, while a segment-open
+failure increments only the logical error counter because no file-sync hook was
+reached.
 
 ## Latency, publication, and residual ledger
 
@@ -166,6 +183,12 @@ charged to the five measured public operations.
 This validates both the production mapping and the deterministic hook tests.
 It also proves that the two pointer value-log sync observations are two
 physical syscalls on this host.
+
+The rotated-reference follow-up retains a separate path-specific Linux trace.
+It verifies that the direct production hook for the deliberately old segment
+also maps to `fsync(2)`; the in-process regression supplies the exact active
+window reconciliation because test setup, rotation, and close add unrelated
+directory and checkpoint calls to the whole-process trace.
 
 ## State and application interval reconciliation
 

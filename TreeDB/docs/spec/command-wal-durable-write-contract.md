@@ -78,6 +78,17 @@ command-WAL sync remains strictly later. The measured ceiling is at most the
 second value-log file-sync time; it is not the sum of both syncs and is not a
 throughput claim.
 
+When a command frame references a rotated, non-current value-log segment, the
+current implementation first flushes and syncs the referenced lane's active
+writer, then opens and syncs each distinct referenced old segment directly.
+Each operation is a logical `external_ref` observation. The active-writer call
+records its lane-lock wait; the direct old-segment call has zero lock wait and
+records the direct request time. Failure to open an old segment is a logical error
+without a physical file-sync attempt. A reached direct sync hook is both a
+logical observation and a physical rotated-segment attempt. This is measured
+ordering, not a required sync count, and it makes segment rotation an explicit
+exclusion in any M3 coalescing proof.
+
 ### `Write` followed by `WriteSync`
 
 ```text
@@ -119,8 +130,9 @@ window.
 | command writes | `treedb.command_wal.write.{syscalls,bytes,ns,errors}_total` | actual underlying `write`/`writev` calls made by the command writer |
 | command file sync | `treedb.command_wal.file_sync.{calls,ns,errors}_total` | calls at the injected production hook, which is `os.File.Sync` |
 | directory sync | `treedb.command_wal.directory_sync.{calls,ns,errors}_total` | parent-directory sync on segment creation/rotation |
-| value-log logical sync | `treedb.cache.value_log.sync.<path>.{calls,ns,wait_ns,errors}_total` | `materialization`, `external_ref`, `pending_barrier`, or `checkpoint` sync, including lane-lock wait separately |
-| value-log file sync | `treedb.cache.value_log.file_sync.{calls,ns,errors}_total` | actual value-log writer file-sync hook calls |
+| value-log logical sync | `treedb.cache.value_log.sync.<path>.{calls,ns,wait_ns,errors}_total` | `materialization`, `external_ref`, `pending_barrier`, or `checkpoint` sync, including lane-lock wait separately; rotated-segment `external_ref` observations report zero wait |
+| value-log file sync | `treedb.cache.value_log.file_sync.{calls,ns,errors}_total` | actual active-writer file-sync hooks plus direct rotated-segment hooks, each counted once |
+| rotated value-log file sync | `treedb.cache.value_log.file_sync.rotated_segment.{calls,ns,errors}_total` | direct non-current segment sync-hook attempts; this is a subset of aggregate value-log file syncs |
 | request partition | `treedb.public.batch.write_sync.phase.*` | exclusive top-level wall partition plus nested command subphases; enabled only by the diagnostic option |
 
 `Flush` means buffered bytes were passed to the kernel and is not an fsync

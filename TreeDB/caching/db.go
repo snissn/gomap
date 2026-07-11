@@ -8649,6 +8649,10 @@ type DB struct {
 	valueLogSyncPathWaitNs    [valueLogSyncPathCount]atomic.Uint64
 	valueLogSyncPathErrors    [valueLogSyncPathCount]atomic.Uint64
 
+	valueLogRotatedFileSyncCalls  atomic.Uint64
+	valueLogRotatedFileSyncNs     atomic.Uint64
+	valueLogRotatedFileSyncErrors atomic.Uint64
+
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog            bool
 	splitValueLog              bool
@@ -9539,6 +9543,7 @@ type DB struct {
 	// testing hooks
 	testOnVlogFlush                     func(laneID int)
 	testOnVlogSync                      func(laneID int)
+	testSyncRotatedValueLogFile         func(*os.File) error
 	testBeforeVlogUnlock                func(laneID int)
 	testBeforeCheckpointFrontierCapture func()
 	testAfterCheckpointFrontierCapture  func()
@@ -29877,6 +29882,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.value_log.sync.ns_total"] = fmt.Sprintf("%d", valueLogSyncNs)
 	stats["treedb.cache.value_log.sync.wait_ns_total"] = fmt.Sprintf("%d", valueLogSyncWaitNs)
 	stats["treedb.cache.value_log.sync.errors_total"] = fmt.Sprintf("%d", valueLogSyncErrors)
+	rotatedSyncCalls := db.valueLogRotatedFileSyncCalls.Load()
+	rotatedSyncNs := db.valueLogRotatedFileSyncNs.Load()
+	rotatedSyncErrors := db.valueLogRotatedFileSyncErrors.Load()
+	valueLogFileSyncCalls += rotatedSyncCalls
+	valueLogFileSyncNs += rotatedSyncNs
+	valueLogFileSyncErrors += rotatedSyncErrors
+	stats["treedb.cache.value_log.file_sync.rotated_segment.calls_total"] = fmt.Sprintf("%d", rotatedSyncCalls)
+	stats["treedb.cache.value_log.file_sync.rotated_segment.ns_total"] = fmt.Sprintf("%d", rotatedSyncNs)
+	stats["treedb.cache.value_log.file_sync.rotated_segment.errors_total"] = fmt.Sprintf("%d", rotatedSyncErrors)
 	stats["treedb.cache.value_log.file_sync.calls_total"] = fmt.Sprintf("%d", valueLogFileSyncCalls)
 	stats["treedb.cache.value_log.file_sync.ns_total"] = fmt.Sprintf("%d", valueLogFileSyncNs)
 	stats["treedb.cache.value_log.file_sync.errors_total"] = fmt.Sprintf("%d", valueLogFileSyncErrors)

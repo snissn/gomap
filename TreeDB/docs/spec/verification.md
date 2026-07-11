@@ -146,6 +146,9 @@ Coverage:
   - `TestPublicCommandWALPointerEmptyWriteSyncSweepsPriorUnsyncedWrite`
   - `TestPublicCommandWALWriteThenDirtyWriteSyncDurabilityLedger`
   - `BenchmarkPublicCommandWALDurableTinyBatchWriteSync`
+- `TreeDB/caching/value_log_appender_test.go`:
+  - `TestCachingValueLogExternalRefFlusherSyncsRotatedSegments`
+  - `TestCachingValueLogExternalRefFlusherAccountsForRotatedCommandFrameSegment`
 - `TreeDB/internal/commitlog/commitlog_test.go` and
   `TreeDB/internal/valuelog/valuelog_test.go`:
   deterministic file/directory sync-hook count and rotation tests.

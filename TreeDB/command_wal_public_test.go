@@ -3632,10 +3632,12 @@ func benchmarkPublicCommandWALBatchWithSetView(b *testing.B, db *DB, prefix stri
 
 func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers bool) map[string]uint64 {
 	want := map[string]uint64{
-		"treedb.command_wal.write.errors_total":         0,
-		"treedb.command_wal.file_sync.errors_total":     0,
-		"treedb.cache.value_log.sync.errors_total":      0,
-		"treedb.cache.value_log.file_sync.errors_total": 0,
+		"treedb.command_wal.write.errors_total":                         0,
+		"treedb.command_wal.file_sync.errors_total":                     0,
+		"treedb.cache.value_log.sync.errors_total":                      0,
+		"treedb.cache.value_log.file_sync.errors_total":                 0,
+		"treedb.cache.value_log.file_sync.rotated_segment.calls_total":  0,
+		"treedb.cache.value_log.file_sync.rotated_segment.errors_total": 0,
 	}
 	var appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls uint64
 	var batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls uint64
@@ -4484,6 +4486,8 @@ func reportCommandWALBenchmarkDeltas(b *testing.B, before, after map[string]stri
 		"treedb.cache.value_log.sync.pending_barrier.wait_ns_total",
 		"treedb.cache.value_log.file_sync.calls_total",
 		"treedb.cache.value_log.file_sync.ns_total",
+		"treedb.cache.value_log.file_sync.rotated_segment.calls_total",
+		"treedb.cache.value_log.file_sync.rotated_segment.ns_total",
 		"treedb.public.batch.write_sync.phase.wall.ns_total",
 		"treedb.public.batch.write_sync.phase.checkpoint_gate.ns_total",
 		"treedb.public.batch.write_sync.phase.preflight_materialization.ns_total",
