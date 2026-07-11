@@ -6,7 +6,7 @@ cd "$ROOT"
 
 BASELINE_HASH="${BASELINE_HASH:?BASELINE_HASH is required}"
 CANDIDATE_HASH="${CANDIDATE_HASH:-HEAD}"
-RUNS="${RUNS:-7}"
+RUNS="${RUNS:-8}"
 BENCHTIME="${BENCHTIME:-2s}"
 PROFILE_BENCHTIME="${PROFILE_BENCHTIME:-1s}"
 CPUSET="${CPUSET:-0}"
@@ -23,6 +23,10 @@ ITER_REGEX='^BenchmarkVersionIteration/(Physical|MVCC)/keys=64/depth=32/reverse=
 
 if ! [[ "$RUNS" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNS must be a positive integer" >&2
+  exit 2
+fi
+if ((RUNS % 2 != 0)); then
+  echo "RUNS must be even to balance AB/BA sample order" >&2
   exit 2
 fi
 for value in "$BENCHTIME" "$PROFILE_BENCHTIME"; do

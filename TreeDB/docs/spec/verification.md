@@ -437,7 +437,13 @@ Coverage:
   trace; existing codec property/fuzz tests continue to cover larger domains.
 - Existing MVCC tests retain direct fault-injection and abrupt-child-exit
   coverage that a generic in-process adapter factory cannot express.
-- `scripts/mvcc_raw_path_gate.sh` is the <=5% raw-path base/head gate.
+- `scripts/mvcc_raw_path_gate.sh` is the <=5% raw-path base/head gate. Its
+  machine-readable verdict distinguishes measured `PASS`/`FAIL` from overall
+  `EQUIVALENT` acceptance. Equivalence requires checker-computed matching
+  SHA-256 digests from all six actual row-producing benchmark binaries; mixed,
+  missing, or malformed binary evidence cannot override a failed measurement.
+  Raw and adapter gates require balanced even AB/BA sample counts and default
+  to eight samples per revision.
   `scripts/mvcc_closeout_matrix.sh` runs the pinned CommitAt, GetAt,
   all-version, and pruning depth/durability matrix and captures CPU, peak RSS,
   normalized storage footprint, `B/op`, and `allocs/op`.

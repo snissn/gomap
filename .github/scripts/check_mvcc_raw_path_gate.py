@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Check paired TreeDB raw-path benchmark medians without third-party modules."""
+"""Check paired TreeDB raw-path medians and benchmark-binary equivalence."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import stat
 import statistics
 import tempfile
 from dataclasses import dataclass
@@ -19,6 +22,14 @@ BENCHMARKS = (
     "BenchmarkRepeatedIterator",
     "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
 )
+BINARY_PACKAGE_BY_BENCHMARK = {
+    "BenchmarkGetVersioned": "db",
+    "BenchmarkConditionalTxnBaselineBatchWrite": "db",
+    "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek": "treedb",
+    "BenchmarkRepeatedIterator": "caching",
+    "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1": "treedb",
+}
+BINARY_PACKAGES = ("db", "caching", "treedb")
 BENCH_RE = re.compile(
     r"^(Benchmark.+?)(?:-\d+)?\s+\d+\s+([0-9.]+)\s+ns/op\s+(.*)$"
 )
@@ -30,6 +41,53 @@ class Sample:
     ns_per_op: float
     bytes_per_op: float
     allocs_per_op: float
+
+
+def sha256_file(path: Path) -> tuple[str, tuple[int, int]]:
+    if path.is_symlink():
+        raise ValueError(f"benchmark binary evidence must not be a symlink: {path}")
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source:
+            metadata = os.fstat(source.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"benchmark binary evidence must be a regular file: {path}"
+                )
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise ValueError(f"missing benchmark binary evidence: {path}: {error}") from error
+    return digest.hexdigest(), (metadata.st_dev, metadata.st_ino)
+
+
+def compute_binary_digests(
+    binary_paths: dict[str, dict[str, Path]],
+) -> dict[str, dict[str, str]]:
+    if set(binary_paths) != set(BINARY_PACKAGES):
+        raise ValueError("binary path mapping must contain exactly db, caching, and treedb")
+    digests: dict[str, dict[str, str]] = {}
+    identities: set[tuple[int, int]] = set()
+    for package in BINARY_PACKAGES:
+        revisions = binary_paths[package]
+        if set(revisions) != {"baseline", "candidate"}:
+            raise ValueError(
+                f"binary path mapping for {package} must contain exactly baseline and candidate"
+            )
+        digests[package] = {}
+        for revision in ("baseline", "candidate"):
+            path = revisions[revision]
+            expected_name = f"{revision}-{package}.test"
+            if path.name != expected_name:
+                raise ValueError(
+                    f"{revision} {package} binary must be named {expected_name}: {path}"
+                )
+            digest, identity = sha256_file(path)
+            if identity in identities:
+                raise ValueError(f"benchmark binary paths must identify six files: {path}")
+            identities.add(identity)
+            digests[package][revision] = digest
+    return digests
 
 
 def parse_benchmarks(path: Path, expected_samples: int) -> dict[str, list[Sample]]:
@@ -107,10 +165,39 @@ def evaluate(
                 "timing_pass": timing_pass,
                 "bytes_pass": bytes_pass,
                 "allocs_pass": allocs_pass,
-                "pass": row_pass,
+                "measurement_pass": row_pass,
             }
         )
     return passed, results
+
+
+def annotate_binary_equivalence(
+    results: list[dict[str, object]],
+    binary_digests: dict[str, dict[str, str]],
+) -> tuple[bool, list[dict[str, object]]]:
+    annotated: list[dict[str, object]] = []
+    all_equivalent = True
+    for result in results:
+        benchmark = result["benchmark"]
+        assert isinstance(benchmark, str)
+        package = BINARY_PACKAGE_BY_BENCHMARK[benchmark]
+        package_digests = binary_digests[package]
+        equivalent = package_digests["baseline"] == package_digests["candidate"]
+        all_equivalent = all_equivalent and equivalent
+        annotated.append(
+            {
+                **result,
+                "binary_package": package,
+                "binary_equivalent": equivalent,
+            }
+        )
+    return all_equivalent, annotated
+
+
+def acceptance_verdict(measurement_pass: bool, all_equivalent: bool) -> str:
+    if all_equivalent:
+        return "EQUIVALENT"
+    return "PASS" if measurement_pass else "FAIL"
 
 
 def render_markdown(
@@ -120,13 +207,16 @@ def render_markdown(
     max_regression_percent: float,
     max_bytes_regression_percent: float,
     max_bytes_regression_absolute: float,
-    passed: bool,
+    measurement_pass: bool,
+    verdict: str,
+    binary_digests: dict[str, dict[str, str]],
     results: list[dict[str, object]],
 ) -> str:
     lines = [
         "## TreeDB MVCC raw-path gate",
         "",
-        f"- result: **{'PASS' if passed else 'FAIL'}**",
+        f"- verdict: **{verdict}**",
+        f"- measured threshold observation: **{'PASS' if measurement_pass else 'FAIL'}**",
         f"- baseline: `{baseline_sha}`",
         f"- candidate: `{candidate_sha}`",
         f"- samples: {expected_samples} per revision, benchmark-group-paired alternating AB/BA order",
@@ -135,20 +225,51 @@ def render_markdown(
         "- B/op jitter threshold: candidate median may increase by at most the smaller of "
         f"{max_bytes_regression_percent:g}% or {max_bytes_regression_absolute:g} B; "
         "zero-B baselines remain strict",
-        "",
-        "| Benchmark | Base ns/op | Head ns/op | Delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Result |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
+    if verdict == "EQUIVALENT":
+        lines.extend(
+            [
+                "- equivalence acceptance: every row-producing base/head benchmark binary "
+                "is byte-identical, so the measured delta is retained but is not "
+                "attributable to the candidate revision",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| Package | Baseline SHA-256 | Candidate SHA-256 | Relation |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for package in BINARY_PACKAGES:
+        base_digest = binary_digests[package]["baseline"]
+        candidate_digest = binary_digests[package]["candidate"]
+        relation = "EQUIVALENT" if base_digest == candidate_digest else "DIFFERENT"
+        lines.append(
+            f"| {package} | `{base_digest}` | `{candidate_digest}` | {relation} |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Benchmark | Binary | Base ns/op | Head ns/op | Delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Measured |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
     for row in results:
         base = row["baseline"]
         head = row["candidate"]
         assert isinstance(base, dict)
         assert isinstance(head, dict)
         lines.append(
-            "| {benchmark} | {base_ns:.3f} | {head_ns:.3f} | {delta:+.2f}% | "
+            "| {benchmark} | {binary} | {base_ns:.3f} | {head_ns:.3f} | {delta:+.2f}% | "
             "{base_bytes:.3f} | {head_bytes:.3f} | {bytes_tolerance:.3f} | {base_allocs:.3f} | "
             "{head_allocs:.3f} | {status} |".format(
                 benchmark=row["benchmark"],
+                binary=(
+                    f"{row['binary_package']} EQUIVALENT"
+                    if row["binary_equivalent"]
+                    else f"{row['binary_package']} DIFFERENT"
+                ),
                 base_ns=base["ns_per_op"],
                 head_ns=head["ns_per_op"],
                 delta=row["ns_delta_percent"],
@@ -157,7 +278,7 @@ def render_markdown(
                 bytes_tolerance=row["bytes_tolerance"],
                 base_allocs=base["allocs_per_op"],
                 head_allocs=head["allocs_per_op"],
-                status="PASS" if row["pass"] else "FAIL",
+                status="PASS" if row["measurement_pass"] else "FAIL",
             )
         )
     lines.append("")
@@ -169,7 +290,7 @@ def synthetic_log(
     bytes_base: float = 128.0,
     bytes_delta: float = 0.0,
     alloc_delta: float = 0.0,
-    runs: int = 7,
+    runs: int = 8,
 ) -> str:
     lines: list[str] = []
     for index in range(runs):
@@ -192,20 +313,20 @@ def self_test() -> None:
         candidate_path = root / "candidate.txt"
         baseline_path.write_text(synthetic_log(), encoding="utf-8")
         candidate_path.write_text(synthetic_log(ns_scale=1.04), encoding="utf-8")
-        baseline = parse_benchmarks(baseline_path, 7)
-        candidate = parse_benchmarks(candidate_path, 7)
+        baseline = parse_benchmarks(baseline_path, 8)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if not passed:
             raise AssertionError("4% timing change should pass")
 
         candidate_path.write_text(synthetic_log(ns_scale=1.06), encoding="utf-8")
-        candidate = parse_benchmarks(candidate_path, 7)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("6% timing regression should fail")
 
         candidate_path.write_text(synthetic_log(alloc_delta=1.0), encoding="utf-8")
-        candidate = parse_benchmarks(candidate_path, 7)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("allocation regression should fail")
@@ -214,8 +335,8 @@ def self_test() -> None:
         candidate_path.write_text(
             synthetic_log(bytes_base=100.0, bytes_delta=1.0), encoding="utf-8"
         )
-        baseline = parse_benchmarks(baseline_path, 7)
-        candidate = parse_benchmarks(candidate_path, 7)
+        baseline = parse_benchmarks(baseline_path, 8)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if not passed:
             raise AssertionError("B/op increase at the 1% boundary should pass")
@@ -223,7 +344,7 @@ def self_test() -> None:
         candidate_path.write_text(
             synthetic_log(bytes_base=100.0, bytes_delta=1.001), encoding="utf-8"
         )
-        candidate = parse_benchmarks(candidate_path, 7)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("B/op increase above the 1% boundary should fail")
@@ -232,8 +353,8 @@ def self_test() -> None:
         candidate_path.write_text(
             synthetic_log(bytes_base=10000.0, bytes_delta=64.0), encoding="utf-8"
         )
-        baseline = parse_benchmarks(baseline_path, 7)
-        candidate = parse_benchmarks(candidate_path, 7)
+        baseline = parse_benchmarks(baseline_path, 8)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if not passed:
             raise AssertionError("B/op increase at the 64 B boundary should pass")
@@ -241,14 +362,14 @@ def self_test() -> None:
         candidate_path.write_text(
             synthetic_log(bytes_base=10000.0, bytes_delta=64.001), encoding="utf-8"
         )
-        candidate = parse_benchmarks(candidate_path, 7)
+        candidate = parse_benchmarks(candidate_path, 8)
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("B/op increase above the 64 B boundary should fail")
 
-        candidate_path.write_text(synthetic_log(runs=6), encoding="utf-8")
+        candidate_path.write_text(synthetic_log(runs=7), encoding="utf-8")
         try:
-            parse_benchmarks(candidate_path, 7)
+            parse_benchmarks(candidate_path, 8)
         except ValueError:
             pass
         else:
@@ -259,7 +380,7 @@ def self_test() -> None:
             encoding="utf-8",
         )
         try:
-            parse_benchmarks(candidate_path, 7)
+            parse_benchmarks(candidate_path, 8)
         except ValueError:
             pass
         else:
@@ -273,7 +394,10 @@ def main() -> int:
     parser.add_argument("--candidate")
     parser.add_argument("--baseline-sha")
     parser.add_argument("--candidate-sha")
-    parser.add_argument("--expected-samples", type=int, default=7)
+    for package in BINARY_PACKAGES:
+        parser.add_argument(f"--baseline-{package}-binary")
+        parser.add_argument(f"--candidate-{package}-binary")
+    parser.add_argument("--expected-samples", type=int, default=8)
     parser.add_argument("--max-regression-percent", type=float, default=5.0)
     parser.add_argument("--max-bytes-regression-percent", type=float, default=1.0)
     parser.add_argument("--max-bytes-regression-absolute", type=float, default=64.0)
@@ -302,21 +426,44 @@ def main() -> int:
         "json_output",
         "markdown_output",
     )
+    required += tuple(
+        f"{revision}_{package}_binary"
+        for package in BINARY_PACKAGES
+        for revision in ("baseline", "candidate")
+    )
     missing = [name for name in required if getattr(args, name) in (None, "")]
     if missing:
         parser.error("missing required arguments: " + ", ".join(missing))
+    if args.expected_samples <= 0 or args.expected_samples % 2 != 0:
+        parser.error("--expected-samples must be a positive even integer")
 
     baseline = parse_benchmarks(Path(args.baseline), args.expected_samples)
     candidate = parse_benchmarks(Path(args.candidate), args.expected_samples)
-    passed, results = evaluate(
+    binary_digests = compute_binary_digests(
+        {
+            package: {
+                revision: Path(getattr(args, f"{revision}_{package}_binary"))
+                for revision in ("baseline", "candidate")
+            }
+            for package in BINARY_PACKAGES
+        }
+    )
+    measurement_pass, results = evaluate(
         baseline,
         candidate,
         args.max_regression_percent,
         args.max_bytes_regression_percent,
         args.max_bytes_regression_absolute,
     )
+    all_equivalent, results = annotate_binary_equivalence(results, binary_digests)
+    verdict = acceptance_verdict(measurement_pass, all_equivalent)
+    accepted = verdict in {"PASS", "EQUIVALENT"}
     payload = {
-        "pass": passed,
+        "accepted": accepted,
+        "verdict": verdict,
+        "measurement_pass": measurement_pass,
+        "all_row_binaries_equivalent": all_equivalent,
+        "binary_digests": binary_digests,
         "baseline_sha": args.baseline_sha,
         "candidate_sha": args.candidate_sha,
         "expected_samples": args.expected_samples,
@@ -335,12 +482,14 @@ def main() -> int:
         args.max_regression_percent,
         args.max_bytes_regression_percent,
         args.max_bytes_regression_absolute,
-        passed,
+        measurement_pass,
+        verdict,
+        binary_digests,
         results,
     )
     Path(args.markdown_output).write_text(markdown, encoding="utf-8")
     print(markdown, end="")
-    return 0 if passed else 1
+    return 0 if accepted else 1
 
 
 if __name__ == "__main__":

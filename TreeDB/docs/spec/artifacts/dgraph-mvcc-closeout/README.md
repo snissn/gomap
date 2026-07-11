@@ -16,6 +16,12 @@
 > during later candidate blocks. Preserve that failed run for audit; supersede
 > it only after the benchmark-group-paired harness change is reviewed and an
 > exact-new-head clean-window run is recorded.
+> Its measured `BenchmarkGetVersioned` median remains a FAIL observation
+> (+11.24%). All three recorded base/head package binaries were byte-identical,
+> which supports `EQUIVALENT` revision attribution rather than PASS: the
+> observation remains visible, while identical executable code means it is not
+> an attributable candidate regression. The historical seven-sample run itself
+> is not accepted by the current gate, which requires balanced even AB/BA pairs.
 
 This directory indexes the compact, reproducible evidence for gomap #3673.
 The measured code commit is

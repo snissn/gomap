@@ -129,7 +129,7 @@ def render(baseline_sha, candidate_sha, samples, max_regression, max_ratio, pass
     return "\n".join(lines)
 
 
-def synthetic(scale=1.0, adapter_ratio=1.5, bytes_delta=0.0, alloc_delta=0.0, runs=7):
+def synthetic(scale=1.0, adapter_ratio=1.5, bytes_delta=0.0, alloc_delta=0.0, runs=8):
     lines = []
     adapter_names = {adapter for _, _, adapter in PAIRS}
     for run in range(runs):
@@ -147,26 +147,26 @@ def self_test():
         base_path, head_path = Path(tmp) / "base", Path(tmp) / "head"
         base_path.write_text(synthetic(), encoding="utf-8")
         head_path.write_text(synthetic(scale=1.04), encoding="utf-8")
-        base, head = parse(base_path, 7), parse(head_path, 7)
+        base, head = parse(base_path, 8), parse(head_path, 8)
         assert evaluate(base, head, 5, 1, 64, 2)[0]
         head_path.write_text(synthetic(scale=1.06), encoding="utf-8")
-        assert not evaluate(base, parse(head_path, 7), 5, 1, 64, 2)[0]
+        assert not evaluate(base, parse(head_path, 8), 5, 1, 64, 2)[0]
         head_path.write_text(synthetic(bytes_delta=1.01), encoding="utf-8")
-        assert not evaluate(base, parse(head_path, 7), 5, 1, 64, 2)[0]
+        assert not evaluate(base, parse(head_path, 8), 5, 1, 64, 2)[0]
         head_path.write_text(synthetic(alloc_delta=1), encoding="utf-8")
-        assert not evaluate(base, parse(head_path, 7), 5, 1, 64, 2)[0]
+        assert not evaluate(base, parse(head_path, 8), 5, 1, 64, 2)[0]
         head_path.write_text(synthetic(adapter_ratio=2.01), encoding="utf-8")
-        assert not evaluate(base, parse(head_path, 7), 5, 1, 64, 2)[0]
-        head_path.write_text(synthetic(runs=6), encoding="utf-8")
+        assert not evaluate(base, parse(head_path, 8), 5, 1, 64, 2)[0]
+        head_path.write_text(synthetic(runs=7), encoding="utf-8")
         try:
-            parse(head_path, 7)
+            parse(head_path, 8)
         except ValueError:
             pass
         else:
             raise AssertionError("wrong sample count should fail")
         head_path.write_text(synthetic().replace(BENCHMARKS[0] + "-1", "ignored-1"), encoding="utf-8")
         try:
-            parse(head_path, 7)
+            parse(head_path, 8)
         except ValueError:
             pass
         else:
@@ -180,7 +180,7 @@ def main():
     parser.add_argument("--candidate")
     parser.add_argument("--baseline-sha")
     parser.add_argument("--candidate-sha")
-    parser.add_argument("--expected-samples", type=int, default=7)
+    parser.add_argument("--expected-samples", type=int, default=8)
     parser.add_argument("--max-regression-percent", type=float, default=5)
     parser.add_argument("--max-bytes-regression-percent", type=float, default=1)
     parser.add_argument("--max-bytes-regression-absolute", type=float, default=64)
@@ -196,13 +196,13 @@ def main():
     missing = [name for name in required if not getattr(args, name)]
     if missing:
         parser.error("missing required arguments: " + ", ".join(missing))
-    if args.expected_samples < 1 or min(
+    if args.expected_samples < 1 or args.expected_samples % 2 != 0 or min(
         args.max_regression_percent,
         args.max_bytes_regression_percent,
         args.max_bytes_regression_absolute,
         args.max_adapter_ratio,
     ) < 0:
-        parser.error("sample count must be positive and thresholds non-negative")
+        parser.error("sample count must be positive/even and thresholds non-negative")
     baseline = parse(Path(args.baseline), args.expected_samples)
     candidate = parse(Path(args.candidate), args.expected_samples)
     passed, results, ratios = evaluate(

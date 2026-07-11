@@ -6,7 +6,7 @@ cd "$ROOT"
 
 BASELINE_HASH="${BASELINE_HASH:?BASELINE_HASH is required}"
 CANDIDATE_HASH="${CANDIDATE_HASH:-HEAD}"
-RUNS="${RUNS:-7}"
+RUNS="${RUNS:-8}"
 BENCHTIME="${BENCHTIME:-2s}"
 CPUSET="${CPUSET:-0}"
 MAX_REGRESSION_PERCENT="${MAX_REGRESSION_PERCENT:-5}"
@@ -22,6 +22,10 @@ DURABILITY_BENCH_REGEX='^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/plac
 
 if ! [[ "$RUNS" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNS must be a positive integer" >&2
+  exit 2
+fi
+if ((RUNS % 2 != 0)); then
+  echo "RUNS must be even to balance AB/BA sample order" >&2
   exit 2
 fi
 if ! [[ "$BENCHTIME" =~ ^[1-9][0-9]*(ms|s|x)$ ]]; then
@@ -159,11 +163,19 @@ for ((sample = 1; sample <= RUNS; sample++)); do
   run_pair "$sample" durable_sync "$BASELINE_TREEDB_BIN" "$CANDIDATE_TREEDB_BIN" "$DURABILITY_BENCH_REGEX"
 done
 
+# Hash the six actual benchmark executables while TMP_ROOT is still live. The
+# EXIT trap removes them only after the checker has emitted a verdict or error.
 python3 .github/scripts/check_mvcc_raw_path_gate.py \
   --baseline "$BASELINE_LOG" \
   --candidate "$CANDIDATE_LOG" \
   --baseline-sha "$BASELINE_SHA" \
   --candidate-sha "$CANDIDATE_SHA" \
+  --baseline-db-binary "$BASELINE_DB_BIN" \
+  --candidate-db-binary "$CANDIDATE_DB_BIN" \
+  --baseline-caching-binary "$BASELINE_CACHING_BIN" \
+  --candidate-caching-binary "$CANDIDATE_CACHING_BIN" \
+  --baseline-treedb-binary "$BASELINE_TREEDB_BIN" \
+  --candidate-treedb-binary "$CANDIDATE_TREEDB_BIN" \
   --expected-samples "$RUNS" \
   --max-regression-percent "$MAX_REGRESSION_PERCENT" \
   --max-bytes-regression-percent "$MAX_BYTES_REGRESSION_PERCENT" \

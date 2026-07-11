@@ -30,6 +30,15 @@ class BenchmarkPairingTests(unittest.TestCase):
             "BATCH_WRITE_BENCH_REGEX='^BenchmarkConditionalTxnBaselineBatchWrite$'",
             source,
         )
+        for package in ("DB", "CACHING", "TREEDB"):
+            self.assertIn(
+                f'--baseline-{package.lower()}-binary "$BASELINE_{package}_BIN"',
+                source,
+            )
+            self.assertIn(
+                f'--candidate-{package.lower()}-binary "$CANDIDATE_{package}_BIN"',
+                source,
+            )
         assert_in_order(
             self,
             source,
@@ -80,6 +89,14 @@ class BenchmarkPairingTests(unittest.TestCase):
                 'run_group baseline',
             ],
         )
+
+    def test_raw_and_adapter_require_balanced_even_sample_counts(self) -> None:
+        for name in ("mvcc_raw_path_gate.sh", "mvcc_adapter_overhead_gate.sh"):
+            source = normalized(ROOT / "scripts" / name)
+            with self.subTest(script=name):
+                self.assertIn('RUNS="${RUNS:-8}"', source)
+                self.assertIn("if ((RUNS % 2 != 0)); then", source)
+                self.assertIn("RUNS must be even to balance AB/BA sample order", source)
 
 
 if __name__ == "__main__":

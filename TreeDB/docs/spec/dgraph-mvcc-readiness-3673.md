@@ -130,15 +130,23 @@ compiles base/head benchmark binaries, pairs each individual benchmark group
 immediately in alternating AB/BA order on one pinned CPU, and covers point
 reads, batch writes, snapshot seek, iterator reuse, and durable synced writes.
 The point-read and batch-write rows use separate invocations so one row cannot
-delay the base/head pair for the other. It rejects a median timing regression
-over 5%, any allocation increase, or a material `B/op` increase.
+delay the base/head pair for the other. Eight samples provide exactly four AB
+and four BA pairs; odd sample counts are rejected. The gate rejects a median
+timing regression over 5%, any allocation increase, or a material `B/op`
+increase. A distinct `EQUIVALENT` acceptance is available only when the checker
+hashes all six actual test-binary paths and every row-producing base/head pair
+matches (`db`, `caching`, and `treedb`). `EQUIVALENT` preserves the measured
+PASS/FAIL medians and deltas but states that no observed difference can be
+attributed to the candidate code; mixed, missing, or malformed binary evidence
+fails closed and cannot produce equivalence acceptance.
 
 `scripts/mvcc_adapter_overhead_gate.sh` separately compares public MVCC commit,
 get, and all-version iteration rows with their direct TreeDB/physical controls.
 Each benchmark group is paired immediately in the same alternating AB/BA order.
-The gate applies the same base/head regression limits and rejects candidate
-MVCC overhead above 2x. Candidate MVCC CPU profiles and top reports are emitted
-for all three pairs on every run, including a failing run.
+The gate also requires an even sample count and defaults to eight. It applies
+the same base/head regression limits and rejects candidate MVCC overhead above
+2x. Candidate MVCC CPU profiles and top reports are emitted for all three pairs
+on every run, including a failing run.
 
 `scripts/mvcc_closeout_matrix.sh` captures the final downstream matrix at an
 exact checkout. It emits host/CPU/Go metadata, benchmark-binary checksum, raw
