@@ -3074,32 +3074,21 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		touchedIndexPages = idx.pager.DirtyIndexPages()
 	}
 	touchedIndexPages = append([]uint64(nil), touchedIndexPages...)
-	// Alloc may pop an ID by mutating the active freelist head in place. Until
-	// freelist updates become copy-on-write, every candidate that references a
-	// nonzero head owns that page's durability even when the allocated output
-	// IDs came from an explicit allocation tracker.
-	if nextMeta.FreelistHeadID != 0 {
-		found := false
-		for _, pageID := range touchedIndexPages {
-			if pageID == nextMeta.FreelistHeadID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			touchedIndexPages = append(touchedIndexPages, nextMeta.FreelistHeadID)
-		}
-	}
 	ownedBytes := rootPublicationOwnedBytes(touchedIndexPages, retired, metrics, opts.sideStoreBytes)
-	dependencyEvent, hasDependencyEvent, err := db.finalizeDependencySyncEvent(valueLogAppender)
+	dependencyEvent, hasDependencyEvent, err := db.finalizeDependencySyncEvent(valueLogAppender, len(touchedValueLogSegments) != 0)
 	if err != nil {
 		db.mu.Unlock()
 		return post, prePublishErr(err)
 	}
+	var dependencyPath string
 	var dependencyPaths []string
 	if hasDependencyEvent {
-		dependencyPaths = append(dependencyPaths, dependencyEvent.Paths...)
-		if dependencyEvent.Path != "" {
+		if len(dependencyEvent.Paths) == 0 {
+			dependencyPath = dependencyEvent.Path
+		} else {
+			dependencyPaths = append(dependencyPaths, dependencyEvent.Paths...)
+		}
+		if dependencyEvent.Path != "" && dependencyPath == "" {
 			dependencyPaths = append(dependencyPaths, dependencyEvent.Path)
 		}
 		sort.Strings(dependencyPaths)
@@ -3119,6 +3108,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		TouchedIndexPages:    touchedIndexPages,
 		RetiredPages:         append([]uint64(nil), retired...),
 		TouchedValueLogFiles: append([]uint32(nil), touchedValueLogSegments...),
+		DependencyPath:       dependencyPath,
 		DependencyPaths:      dependencyPaths,
 		OuterLeafFrontier:    outerLeafFrontier,
 		Meta:                 nextMeta,

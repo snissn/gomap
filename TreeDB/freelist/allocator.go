@@ -228,6 +228,58 @@ func (a *Allocator) SetPreferAppend(prefer bool) {
 	a.preferAppend = prefer
 }
 
+// BeginPublicationFence keeps the current freelist generation immutable while
+// a prepared root's index-page images are written. Allocations append and frees
+// are deferred until publication completes. DUR-04 replaces this conservative
+// bridge with complete COW freelist generations.
+func (a *Allocator) BeginPublicationFence() error {
+	a.publicationMu.Lock()
+	a.mu.Lock()
+	if a.publicationFence.Load() {
+		a.mu.Unlock()
+		a.publicationMu.Unlock()
+		return errors.New("freelist publication fence already active")
+	}
+	a.publicationFence.Store(true)
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *Allocator) EndPublicationFence() error {
+	a.mu.Lock()
+	deferred := append([]uint64(nil), a.publicationDeferredFree...)
+	a.publicationDeferredFree = a.publicationDeferredFree[:0]
+	a.publicationFence.Store(false)
+	a.mu.Unlock()
+	a.publicationMu.Unlock()
+	if len(deferred) != 0 {
+		return a.FreeMany(deferred)
+	}
+	return nil
+}
+
+func (a *Allocator) appendOnlyLocked() bool {
+	return a.preferAppend || a.publicationFence.Load()
+}
+
+func (a *Allocator) appendAllocManyLocked(ids []uint64, count int) ([]uint64, error) {
+	allocCount := count - len(ids)
+	if allocCount <= 0 {
+		return ids, nil
+	}
+	id, err := a.pager.Alloc(allocCount)
+	if err != nil {
+		return ids, err
+	}
+	a.stats.AllocPages += uint64(allocCount)
+	a.stats.AppendAllocPages += uint64(allocCount)
+	for i := 0; i < allocCount; i++ {
+		ids = append(ids, id+uint64(i))
+	}
+	a.lastAlloc = ids[len(ids)-1]
+	return ids, nil
+}
+
 func (a *Allocator) SetFreelistRegion(pages uint64, radius int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -249,26 +301,14 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
 	if a.regionPages > 0 && a.regionRadius > 0 {
 		return a.allocManyRegionLocked(count, hint)
 	}
 
 	ids := make([]uint64, 0, count)
 	for len(ids) < count {
-		if a.preferAppend || a.head == 0 {
-			allocCount := count - len(ids)
-			id, err := a.pager.Alloc(allocCount)
-			if err != nil {
-				return ids, err
-			}
-			a.stats.AllocPages += uint64(allocCount)
-			a.stats.AppendAllocPages += uint64(allocCount)
-			for i := 0; i < allocCount; i++ {
-				ids = append(ids, id+uint64(i))
-			}
-			a.lastAlloc = ids[len(ids)-1]
-			return ids, nil
+		if a.appendOnlyLocked() || a.head == 0 {
+			return a.appendAllocManyLocked(ids, count)
 		}
 
 		headID := a.head
@@ -286,6 +326,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 		countFree := int(n.Count())
 		if countFree == 0 {
+			if a.publicationFence.Load() {
+				return a.appendAllocManyLocked(ids, count)
+			}
 			next := freelistNextPageID(data)
 			a.batchUpdateChecksum(headID, n)
 
@@ -356,16 +399,8 @@ func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, err
 
 func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, 2)
-	if a.preferAppend || a.head == 0 {
-		id, err := a.pager.Alloc(2)
-		if err != nil {
-			return ids, err
-		}
-		ids = append(ids, id, id+1)
-		a.stats.AllocPages += 2
-		a.stats.AppendAllocPages += 2
-		a.lastAlloc = id + 1
-		return ids, nil
+	if a.appendOnlyLocked() || a.head == 0 {
+		return a.appendAllocManyLocked(ids, 2)
 	}
 
 	headID := a.head
@@ -383,6 +418,9 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 
 	countFree := int(n.Count())
 	if countFree == 0 {
+		if a.publicationFence.Load() {
+			return a.appendAllocManyLocked(ids, 2)
+		}
 		next := freelistNextPageID(data)
 		a.batchUpdateChecksum(headID, n)
 		a.head = next
@@ -431,6 +469,9 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 	n.SetCount(uint16(countFree))
 	a.batchUpdateChecksum(headID, n)
 	if countFree == 0 && len(ids) < 2 {
+		if a.publicationFence.Load() {
+			return a.appendAllocManyLocked(ids, 2)
+		}
 		next := freelistNextPageID(data)
 		a.head = next
 		a.pager.MarkUnverified(headID)
@@ -449,19 +490,8 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 	ids := make([]uint64, 0, count)
 	target := hint
 	for len(ids) < count {
-		if a.preferAppend || a.head == 0 {
-			allocCount := count - len(ids)
-			id, err := a.pager.Alloc(allocCount)
-			if err != nil {
-				return ids, err
-			}
-			a.stats.AllocPages += uint64(allocCount)
-			a.stats.AppendAllocPages += uint64(allocCount)
-			for i := 0; i < allocCount; i++ {
-				ids = append(ids, id+uint64(i))
-			}
-			a.lastAlloc = ids[len(ids)-1]
-			return ids, nil
+		if a.appendOnlyLocked() || a.head == 0 {
+			return a.appendAllocManyLocked(ids, count)
 		}
 
 		headID := a.head
@@ -479,6 +509,9 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 
 		countFree := int(n.Count())
 		if countFree == 0 {
+			if a.publicationFence.Load() {
+				return a.appendAllocManyLocked(ids, count)
+			}
 			next := freelistNextPageID(data)
 			a.batchUpdateChecksum(headID, n)
 			a.head = next
@@ -522,6 +555,9 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 			a.recordReuseAllocation(id)
 		}
 		if countFree == 0 && len(ids) < count {
+			if a.publicationFence.Load() {
+				return a.appendAllocManyLocked(ids, count)
+			}
 			next := freelistNextPageID(data)
 			a.head = next
 			a.pager.MarkUnverified(headID)
@@ -547,19 +583,8 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 	ids := make([]uint64, 0, count)
 	target := hint
 	for len(ids) < count {
-		if a.preferAppend || a.head == 0 {
-			allocCount := count - len(ids)
-			id, err := a.pager.Alloc(allocCount)
-			if err != nil {
-				return ids, err
-			}
-			a.stats.AllocPages += uint64(allocCount)
-			a.stats.AppendAllocPages += uint64(allocCount)
-			for i := 0; i < allocCount; i++ {
-				ids = append(ids, id+uint64(i))
-			}
-			a.lastAlloc = ids[len(ids)-1]
-			return ids, nil
+		if a.appendOnlyLocked() || a.head == 0 {
+			return a.appendAllocManyLocked(ids, count)
 		}
 
 		headID := a.head
@@ -577,6 +602,9 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 
 		countFree := int(n.Count())
 		if countFree == 0 {
+			if a.publicationFence.Load() {
+				return a.appendAllocManyLocked(ids, count)
+			}
 			next := freelistNextPageID(data)
 			a.batchUpdateChecksum(headID, n)
 			recycled := headID
@@ -635,6 +663,9 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 			a.recordReuseAllocation(id)
 		}
 		if countFree == 0 && len(ids) < count {
+			if a.publicationFence.Load() {
+				return a.appendAllocManyLocked(ids, count)
+			}
 			next := freelistNextPageID(data)
 			a.head = next
 			a.pager.MarkUnverified(headID)
@@ -662,7 +693,7 @@ func (a *Allocator) recordReuseAllocation(id uint64) {
 }
 
 func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
-	if a.preferAppend {
+	if a.appendOnlyLocked() {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
 			a.lastAlloc = id
@@ -671,7 +702,6 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		}
 		return id, err
 	}
-
 	if a.head == 0 {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
@@ -755,9 +785,17 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		}
 		return id, nil
 	}
+	if a.publicationFence.Load() {
+		id, err := a.pager.Alloc(1)
+		if err == nil {
+			a.lastAlloc = id
+			a.stats.AllocPages++
+			a.stats.AppendAllocPages++
+		}
+		return id, err
+	}
 
 	next := freelistNextPageID(data)
-
 	recycled := a.head
 	a.head = next
 
@@ -788,6 +826,10 @@ func (a *Allocator) Free(id uint64) error {
 
 	if id == 0 {
 		return errCannotFreePageZero
+	}
+	if a.publicationFence.Load() {
+		a.publicationDeferredFree = append(a.publicationDeferredFree, id)
+		return nil
 	}
 
 	if a.head == 0 {
@@ -858,6 +900,10 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	processed := 0
+	if a.publicationFence.Load() {
+		a.publicationDeferredFree = append(a.publicationDeferredFree, ids...)
+		return nil
+	}
 
 	if a.head != 0 {
 		headID := a.head

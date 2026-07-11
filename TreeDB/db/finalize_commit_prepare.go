@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 // finalizeCommitPrepareGuard keeps value-log GC from scanning reachability and
@@ -41,7 +42,7 @@ func (db *DB) flushFinalizeCommitDurability(idx *indexGen, valueLogAppender Valu
 	var hasDependencyEvent bool
 	if sync && durabilitycut.Enabled() {
 		var err error
-		dependencyEvent, hasDependencyEvent, err = db.finalizeDependencySyncEvent(valueLogAppender)
+		dependencyEvent, hasDependencyEvent, err = db.finalizeDependencySyncEvent(valueLogAppender, true)
 		if err != nil {
 			return err
 		}
@@ -107,7 +108,7 @@ func (db *DB) flushFinalizeCommitDurability(idx *indexGen, valueLogAppender Valu
 // for a coalesced publication durable. In particular, a later candidate may
 // use a different value-log appender/lane after rotation, so syncing only the
 // frontier appender is insufficient.
-func (db *DB) flushRootPublicationClosureDurability(idx *indexGen, candidates []*PreparedRootCandidate) error {
+func (db *DB) flushRootPublicationClosureDurability(idx *indexGen, candidates []*PreparedRootCandidate, indexSnapshots ...*pager.IndexPageSnapshot) error {
 	if idx == nil {
 		return errors.New("missing index")
 	}
@@ -115,6 +116,9 @@ func (db *DB) flushRootPublicationClosureDurability(idx *indexGen, candidates []
 	for _, candidate := range candidates {
 		if candidate == nil {
 			continue
+		}
+		if candidate.DependencyPath != "" {
+			dependencySet[candidate.DependencyPath] = struct{}{}
 		}
 		for _, path := range candidate.DependencyPaths {
 			if path != "" {
@@ -170,6 +174,13 @@ func (db *DB) flushRootPublicationClosureDurability(idx *indexGen, candidates []
 			continue
 		}
 		fileIDs := append([]uint32(nil), candidate.TouchedValueLogFiles...)
+		// A dependency-complete candidate with no external value-log records
+		// owns no value-log durability work. Passing an empty list to the
+		// appender means "sync every pending lane", which is only the intended
+		// conservative fallback for legacy/incomplete candidates.
+		if len(fileIDs) == 0 && candidate.DependenciesFlushed {
+			continue
+		}
 		if flusher, ok := candidate.ValueLogAppender.(ValueLogDurableExternalRefFlusher); ok {
 			if err := flusher.SyncValueLogExternalRefsDurable(fileIDs); err != nil {
 				return err
@@ -191,33 +202,72 @@ func (db *DB) flushRootPublicationClosureDurability(idx *indexGen, candidates []
 			return err
 		}
 	}
-	// A newly grown mmap needs one file-wide size fence. It belongs to the
-	// index stage: dependency files must be durable before this file-wide sync
-	// can persist any index bytes, and no target meta has been written yet.
+	if len(indexSnapshots) != 0 && indexSnapshots[0] != nil {
+		// The immutable snapshot path writes exact non-meta ranges and ends with
+		// a file sync. That one boundary makes both a newly grown file size and
+		// the captured data stable before the target meta is written; a separate
+		// size sync would duplicate the same file-wide durability work.
+		return idx.pager.SyncIndexPageSnapshot(indexSnapshots[0])
+	}
+	// Legacy/test callers that sync mapped ranges still need a durable file size
+	// before a range operation can safely cover newly grown pages.
 	if err := idx.pager.SyncIndexFileSize(); err != nil {
 		return err
 	}
+	return idx.pager.SyncIndexPages(rootPublicationIndexPages(candidates))
+}
+
+func rootPublicationIndexPages(candidates []*PreparedRootCandidate) []uint64 {
 	pageSet := make(map[uint64]struct{})
+	var frontierFreelistHeadID uint64
 	for _, candidate := range candidates {
 		if candidate == nil {
 			continue
 		}
+		frontierFreelistHeadID = candidate.FreelistHeadID
 		for _, pageID := range candidate.TouchedIndexPages {
 			pageSet[pageID] = struct{}{}
 		}
+		// A coalesced frontier only needs the pages that remain reachable at
+		// that frontier. A later candidate can retire a page first touched by
+		// an earlier candidate; writing the earlier image after publication
+		// could otherwise overwrite a page that has already been recycled.
+		for _, pageID := range candidate.RetiredPages {
+			delete(pageSet, pageID)
+		}
+	}
+	// Freelist heads are mutable metadata, not COW tree output. Capturing every
+	// historical head in a coalesced closure is unsafe because a later candidate
+	// may have recycled an old head as a tree page. The frontier head contains the
+	// complete allocator state needed by the target meta.
+	if frontierFreelistHeadID != 0 {
+		pageSet[frontierFreelistHeadID] = struct{}{}
 	}
 	pageIDs := make([]uint64, 0, len(pageSet))
 	for pageID := range pageSet {
 		pageIDs = append(pageIDs, pageID)
 	}
 	sort.Slice(pageIDs, func(i, j int) bool { return pageIDs[i] < pageIDs[j] })
-	// Candidate page sets are captured under writer serialization. Sync only
-	// their immutable closure; global dirty pages may belong to a later builder
-	// that is still mutating its returned mmap slice.
-	return idx.pager.SyncIndexPages(pageIDs)
+	return pageIDs
 }
 
-func (db *DB) finalizeDependencySyncEvent(valueLogAppender ValueLogAppender) (durabilitycut.Event, bool, error) {
+func (db *DB) finalizeDependencySyncEvent(valueLogAppender ValueLogAppender, includeValueLog bool) (durabilitycut.Event, bool, error) {
+	// The ordinary KV path has no outer-leaf log and exactly one current value
+	// log lane. Preserve that singular identity without allocating a temporary
+	// map and slice on every visible commit.
+	if db.leafPageLog == nil {
+		if valueLogAppender == nil || !includeValueLog {
+			return durabilitycut.Event{}, false, nil
+		}
+		if path, _, ok := valueLogAppender.CurrentValueLogSegment(); ok && path != "" {
+			return durabilitycut.Event{
+				Resource: durabilitycut.ResourceValueLog,
+				Root:     db.dir,
+				Path:     path,
+			}, true, nil
+		}
+		return durabilitycut.Event{}, false, nil
+	}
 	eventsByPath := make(map[string]durabilitycut.Event)
 	if db.leafPageLog != nil {
 		segments, err := leafPageLogCurrentSegments(db.leafPageLog)
@@ -230,7 +280,7 @@ func (db *DB) finalizeDependencySyncEvent(valueLogAppender ValueLogAppender) (du
 			}
 		}
 	}
-	if valueLogAppender != nil {
+	if valueLogAppender != nil && includeValueLog {
 		if path, _, ok := valueLogAppender.CurrentValueLogSegment(); ok && path != "" {
 			eventsByPath[path] = durabilitycut.Event{Resource: durabilitycut.ResourceValueLog, Root: db.dir, Path: path}
 		}

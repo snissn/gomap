@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 const (
@@ -31,6 +33,7 @@ type PreparedRootCandidate struct {
 	TouchedIndexPages    []uint64
 	RetiredPages         []uint64
 	TouchedValueLogFiles []uint32
+	DependencyPath       string
 	DependencyPaths      []string
 	OuterLeafFrontier    uint64
 	Meta                 page.MetaPageBody
@@ -64,13 +67,14 @@ type rootPublicationSnapshot struct {
 type RootPublicationCoordinator struct {
 	db *DB
 
-	publishMu  sync.Mutex
-	recoveryMu sync.RWMutex
-	mu         sync.Mutex
-	cond       *sync.Cond
-	wake       chan struct{}
-	stop       chan struct{}
-	done       chan struct{}
+	publishMu     sync.Mutex
+	recoveryMu    sync.RWMutex
+	mu            sync.Mutex
+	cond          *sync.Cond
+	wake          chan struct{}
+	stop          chan struct{}
+	done          chan struct{}
+	indexSnapshot *pager.IndexPageSnapshot
 
 	pending                    []*PreparedRootCandidate
 	pendingBytes               uint64
@@ -86,6 +90,7 @@ type RootPublicationCoordinator struct {
 	stall                      error
 	stallCommitSeq             uint64
 	stallAttempt               uint64
+	durabilityDemandSeq        uint64
 	poison                     error
 	attempts                   uint64
 	stopped                    bool
@@ -106,6 +111,7 @@ func newRootPublicationCoordinator(db *DB) *RootPublicationCoordinator {
 		wake:                       make(chan struct{}, 1),
 		stop:                       make(chan struct{}),
 		done:                       make(chan struct{}),
+		indexSnapshot:              pager.NewIndexPageSnapshot(),
 		durableMeta:                db.meta,
 		durableMetaPageID:          db.metaPageID,
 		visibleCommitSeq:           db.meta.CommitSeq,
@@ -241,10 +247,16 @@ func (r *RootPublicationCoordinator) register(candidate *PreparedRootCandidate) 
 	hadStall := r.stall != nil
 	debtExceeded := r.pendingBytes > rootPublicationMaxPendingBytes ||
 		candidate.OwnedBytes > rootPublicationMaxPendingBytes-r.pendingBytes
-	if hadStall && (len(r.pending) >= rootPublicationMaxPendingCommits || debtExceeded) {
+	if len(r.pending) >= rootPublicationMaxPendingCommits || debtExceeded {
+		if r.stall == nil {
+			r.stall = ErrPublicationStalled
+			r.stallCommitSeq = candidate.CommitSeq
+			r.publicationStalls++
+		}
 		err := r.stall
 		r.mu.Unlock()
 		releaseOnError()
+		r.signal()
 		return err
 	}
 	wasEmpty := len(r.pending) == 0
@@ -276,43 +288,72 @@ func (r *RootPublicationCoordinator) run() {
 		select {
 		case <-r.wake:
 			for {
-				r.publishMu.Lock()
 				r.mu.Lock()
 				if len(r.pending) == 0 || r.poison != nil {
 					r.mu.Unlock()
-					r.publishMu.Unlock()
 					break
 				}
 				r.mu.Unlock()
-				// Registration happens inside visible-root serialization. Do not
-				// begin dependency/index/meta I/O until the registering writer (and
-				// any overlapping builder) has released every root lock. TryLock
-				// keeps the coordinator from participating in lock-order waits.
-				if !r.rootSerializationLocksAvailable() {
-					r.publishMu.Unlock()
-					time.Sleep(50 * time.Microsecond)
-					continue
+				// Publication is event-driven. Acquiring the writer barrier drains
+				// already-admitted builders; the latest complete candidate observed
+				// after that barrier becomes the coalesced frontier.
+				idx, lockErr := r.lockRootSerialization()
+				if lockErr != nil {
+					r.recordFailure(0, lockErr, false)
+					break
 				}
 				r.mu.Lock()
 				if len(r.pending) == 0 || r.poison != nil {
 					r.mu.Unlock()
+					fenceErr := idx.allocator.EndPublicationFence()
+					r.unlockRootSerialization()
 					r.publishMu.Unlock()
+					if fenceErr != nil {
+						r.recordFailure(0, fenceErr, false)
+					}
 					break
 				}
 				frontier := r.pending[len(r.pending)-1]
 				closure := r.closureThroughLocked(frontier)
 				r.attempts++
 				r.mu.Unlock()
+				publicationFrontier := r.sealedAllocatorFrontier(idx, frontier)
+				publicationClosure := append([]*PreparedRootCandidate(nil), closure...)
+				publicationClosure[len(publicationClosure)-1] = publicationFrontier
+				publicationPages := rootPublicationIndexPages(publicationClosure)
+				r.unlockRootSerialization()
+
+				// The fence defers frees and forces successor allocations to append,
+				// keeping every page in the captured publication generation immutable.
+				// Copy outside root serialization to keep foreground builders moving.
+				captureErr := idx.pager.CaptureIndexPagesInto(r.indexSnapshot, publicationPages)
+				if captureErr != nil {
+					captureErr = errors.Join(captureErr, r.closePublicationFence(idx))
+					r.recordFailure(frontier.CommitSeq, captureErr, false)
+					break
+				}
+
 				r.recoveryMu.Lock()
-				if err, postMeta := r.publish(frontier, closure); err != nil {
-					r.recordFailure(frontier.CommitSeq, err, postMeta)
+				err, postMeta := r.publish(publicationFrontier, publicationClosure, r.indexSnapshot)
+				if err != nil {
 					r.recoveryMu.Unlock()
-					r.publishMu.Unlock()
+					err = errors.Join(err, r.closePublicationFence(idx))
+					r.recordFailure(frontier.CommitSeq, err, postMeta)
 					break
 				}
 				r.completeLocked(frontier)
 				r.recoveryMu.Unlock()
+
+				// The pwrite/meta phase is complete. Drain builders admitted during
+				// it before ending the append-only/deferred-free freelist fence.
+				r.relockRootSerialization()
+				fenceErr := idx.allocator.EndPublicationFence()
+				r.unlockRootSerialization()
 				r.publishMu.Unlock()
+				if fenceErr != nil {
+					r.recordFailure(frontier.CommitSeq, fenceErr, true)
+					break
+				}
 			}
 		case <-r.stop:
 			return
@@ -320,20 +361,104 @@ func (r *RootPublicationCoordinator) run() {
 	}
 }
 
-func (r *RootPublicationCoordinator) rootSerializationLocksAvailable() bool {
-	if !r.db.mu.TryLock() {
-		return false
+// sealAllocatorFrontier captures the mutable allocator state only after the
+// writer barrier has drained every admitted optimistic builder. A builder that
+// loses validation can allocate and return pages without registering a root
+// candidate, so the head recorded at candidate preparation is not necessarily
+// the allocator image that exists when publication begins.
+func (r *RootPublicationCoordinator) sealedAllocatorFrontier(idx *indexGen, frontier *PreparedRootCandidate) *PreparedRootCandidate {
+	if idx == nil || idx.allocator == nil || idx.pager == nil || frontier == nil {
+		return frontier
 	}
-	defer r.db.mu.Unlock()
-	if !r.db.writeMu.TryLock() {
-		return false
+	sealed := *frontier
+	head := idx.allocator.Head()
+	totalPages := idx.pager.PageCount()
+	sealed.FreelistHeadID = head
+	sealed.TotalPages = totalPages
+	sealed.Meta.FreelistHeadID = head
+	sealed.Meta.TotalPages = totalPages
+	return &sealed
+}
+
+func (r *RootPublicationCoordinator) lockRootSerialization() (*indexGen, error) {
+	// Queue as a writer before publishMu. Destructive maintenance serializes on
+	// publishMu before attempting the preparation gate, so it cannot queue an
+	// exclusive preparation waiter that blocks an admitted builder here.
+	// First give already-runnable foreground builders a bounded chance to join
+	// this frontier. The blocking fallback is essential: a continuous reader
+	// stream must not starve stable publication.
+	const optimisticWriterAttempts = 64
+	locked := false
+	for attempt := 0; attempt < optimisticWriterAttempts; attempt++ {
+		if r.db.writeMu.TryLock() {
+			locked = true
+			break
+		}
+		runtime.Gosched()
 	}
-	defer r.db.writeMu.Unlock()
-	if !r.db.commitMu.TryLock() {
-		return false
+	if !locked {
+		r.db.writeMu.Lock()
 	}
+	r.publishMu.Lock()
+	r.db.commitMu.Lock()
+	r.db.mu.Lock()
+	idx := r.db.idx.Load()
+	if idx == nil || idx.allocator == nil {
+		r.db.mu.Unlock()
+		r.db.commitMu.Unlock()
+		r.publishMu.Unlock()
+		r.db.writeMu.Unlock()
+		return nil, errors.New("missing index")
+	}
+	if err := idx.allocator.BeginPublicationFence(); err != nil {
+		r.db.mu.Unlock()
+		r.db.commitMu.Unlock()
+		r.publishMu.Unlock()
+		r.db.writeMu.Unlock()
+		return nil, err
+	}
+	return idx, nil
+}
+
+func (r *RootPublicationCoordinator) unlockRootSerialization() {
+	r.db.mu.Unlock()
 	r.db.commitMu.Unlock()
-	return true
+	r.db.writeMu.Unlock()
+}
+
+func (r *RootPublicationCoordinator) relockRootSerialization() {
+	// Do not queue an RWMutex writer here. An admitted optimistic builder may
+	// legitimately enter another read-side build before releasing its outer read
+	// lock; Go's writer preference would block that nested read and deadlock the
+	// fence. The append-only fence remains safe while we wait for a quiet point.
+	for !r.db.writeMu.TryLock() {
+		runtime.Gosched()
+	}
+	r.db.commitMu.Lock()
+	r.db.mu.Lock()
+}
+
+func (r *RootPublicationCoordinator) closePublicationFence(idx *indexGen) error {
+	r.relockRootSerialization()
+	err := idx.allocator.EndPublicationFence()
+	r.unlockRootSerialization()
+	r.publishMu.Unlock()
+	return err
+}
+
+// lockMaintenancePublication excludes the publisher before attempting the
+// preparation gate. TryLock is essential: queuing an RWMutex writer would stop
+// an admitted builder from obtaining its preparation read pin, while the
+// publisher may be waiting for that builder to release writeMu.RLock.
+func (r *RootPublicationCoordinator) lockMaintenancePublication() {
+	for {
+		r.publishMu.Lock()
+		if r.db.publishPrepareMu.TryLock() {
+			return
+		}
+		r.publishMu.Unlock()
+		runtime.Gosched()
+	}
 }
 
 func (r *RootPublicationCoordinator) closureThroughLocked(frontier *PreparedRootCandidate) []*PreparedRootCandidate {
@@ -347,7 +472,7 @@ func (r *RootPublicationCoordinator) closureThroughLocked(frontier *PreparedRoot
 	return closure
 }
 
-func (r *RootPublicationCoordinator) publish(candidate *PreparedRootCandidate, closure []*PreparedRootCandidate) (error, bool) {
+func (r *RootPublicationCoordinator) publish(candidate *PreparedRootCandidate, closure []*PreparedRootCandidate, indexSnapshot *pager.IndexPageSnapshot) (error, bool) {
 	if hook := r.db.testRootPublicationBeforeDependencySync; hook != nil {
 		hook()
 	}
@@ -355,7 +480,7 @@ func (r *RootPublicationCoordinator) publish(candidate *PreparedRootCandidate, c
 	if idx == nil || idx.pager == nil {
 		return errors.New("missing index"), false
 	}
-	if err := r.db.flushRootPublicationClosureDurability(idx, closure); err != nil {
+	if err := r.db.flushRootPublicationClosureDurability(idx, closure, indexSnapshot); err != nil {
 		return err, false
 	}
 	r.mu.Lock()
@@ -444,6 +569,9 @@ func (r *RootPublicationCoordinator) completeLocked(frontier *PreparedRootCandid
 	r.metaSlotMeta[target] = frontier.Meta
 	r.recoveryClosureGeneration++
 	r.durableCommitSeq = frontier.CommitSeq
+	if r.durabilityDemandSeq <= r.durableCommitSeq {
+		r.durabilityDemandSeq = 0
+	}
 	r.recomputeOldestRecoverableLocked()
 	r.stall = nil
 	r.stallCommitSeq = 0
@@ -479,14 +607,13 @@ func (r *RootPublicationCoordinator) stabilizeRecoveryWindow(seq uint64) error {
 		return err
 	}
 
-	r.db.publishPrepareMu.Lock()
-	defer r.db.publishPrepareMu.Unlock()
-	// Exclude new candidate registration before taking the publisher mutex.
-	// An already-registered candidate owns a publishPrepareMu read pin until the
-	// publisher completes it; taking publishMu first would prevent that completion
-	// while waiting for the pin and deadlock maintenance.
-	r.publishMu.Lock()
+	// Exclude the publisher before attempting the preparation gate. The
+	// non-queueing attempt lets an already-admitted builder obtain its read pin,
+	// register, and be completed by the publisher instead of forming an RWMutex
+	// writer-preference cycle.
+	r.lockMaintenancePublication()
 	defer r.publishMu.Unlock()
+	defer r.db.publishPrepareMu.Unlock()
 	r.recoveryMu.Lock()
 	defer r.recoveryMu.Unlock()
 
@@ -618,6 +745,9 @@ func (r *RootPublicationCoordinator) waitDurableMode(seq uint64, retryStall bool
 		return err
 	}
 	if r.durableCommitSeq < seq && r.poison == nil {
+		if seq > r.durabilityDemandSeq {
+			r.durabilityDemandSeq = seq
+		}
 		r.mu.Unlock()
 		r.signal()
 		r.mu.Lock()

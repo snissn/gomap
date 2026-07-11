@@ -178,6 +178,84 @@ func TestRootPublicationCoalescedFrontierSyncsDependencyClosure(t *testing.T) {
 	}
 }
 
+func TestRootPublicationIndexPagesExcludePagesRetiredByFrontier(t *testing.T) {
+	candidates := []*PreparedRootCandidate{
+		{TouchedIndexPages: []uint64{9, 3, 7}, FreelistHeadID: 17},
+		{TouchedIndexPages: []uint64{11}, RetiredPages: []uint64{7}, FreelistHeadID: 19},
+		{TouchedIndexPages: []uint64{13}, RetiredPages: []uint64{11}, FreelistHeadID: 23},
+	}
+
+	got := rootPublicationIndexPages(candidates)
+	want := []uint64{3, 9, 13, 23}
+	if len(got) != len(want) {
+		t.Fatalf("root publication pages=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("root publication pages=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestRootPublicationIndexPagesKeepReusedFormerFreelistHeadAsTreeOutput(t *testing.T) {
+	candidates := []*PreparedRootCandidate{
+		{TouchedIndexPages: []uint64{3}, FreelistHeadID: 7},
+		{TouchedIndexPages: []uint64{7}, FreelistHeadID: 9},
+	}
+
+	got := rootPublicationIndexPages(candidates)
+	want := []uint64{3, 7, 9}
+	if len(got) != len(want) {
+		t.Fatalf("root publication pages=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("root publication pages=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestRootPublicationSealsCurrentAllocatorStateWithoutMutatingCandidate(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	idx := db.idx.Load()
+	pageID, err := idx.pager.Alloc(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.allocator.Free(pageID); err != nil {
+		t.Fatal(err)
+	}
+	candidate := &PreparedRootCandidate{
+		FreelistHeadID: 1,
+		TotalPages:     2,
+		Meta: page.MetaPageBody{
+			FreelistHeadID: 1,
+			TotalPages:     2,
+		},
+	}
+
+	sealed := db.rootPublication.sealedAllocatorFrontier(idx, candidate)
+	if sealed == candidate {
+		t.Fatal("sealed frontier must not mutate the registered candidate")
+	}
+	if got, want := sealed.FreelistHeadID, idx.allocator.Head(); got != want {
+		t.Fatalf("sealed freelist head=%d want=%d", got, want)
+	}
+	if got, want := sealed.TotalPages, idx.pager.PageCount(); got != want {
+		t.Fatalf("sealed total pages=%d want=%d", got, want)
+	}
+	if sealed.Meta.FreelistHeadID != sealed.FreelistHeadID || sealed.Meta.TotalPages != sealed.TotalPages {
+		t.Fatalf("sealed meta=%+v candidate=%+v", sealed.Meta, sealed)
+	}
+	if candidate.FreelistHeadID != 1 || candidate.TotalPages != 2 {
+		t.Fatalf("registered candidate mutated: %+v", candidate)
+	}
+}
+
 func TestRootPublicationDebtCapsRejectBeforeVisibility(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -892,15 +970,21 @@ func TestRootPublicationFreelistHeadIncludedAndDurableOnReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := <-registered
-	found := false
+	if candidate.FreelistHeadID != head {
+		t.Fatalf("candidate freelist head=%d want=%d", candidate.FreelistHeadID, head)
+	}
 	for _, pageID := range candidate.TouchedIndexPages {
 		if pageID == head {
-			found = true
-			break
+			t.Fatalf("freelist head %d must not be owned as a COW tree page: %v", head, candidate.TouchedIndexPages)
 		}
 	}
+	publicationPages := rootPublicationIndexPages([]*PreparedRootCandidate{candidate})
+	found := false
+	for _, pageID := range publicationPages {
+		found = found || pageID == head
+	}
 	if !found {
-		t.Fatalf("freelist head %d absent from candidate pages %v", head, candidate.TouchedIndexPages)
+		t.Fatalf("frontier freelist head %d absent from publication pages %v", head, publicationPages)
 	}
 	db.testRootPublicationRegistered = nil
 	if err := db.Close(); err != nil {

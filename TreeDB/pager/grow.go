@@ -6,6 +6,12 @@ import "fmt"
 // while still avoiding excessive churn for very small side-store chunks.
 const minAsyncPregrowChunkSize = 256 << 10 // 256KiB
 
+// Grow a bounded window rather than one chunk at a time. Append-heavy bursts
+// (including conservative root-publication fences) otherwise repeat file
+// preallocation, truncation, and mapping work every 256KiB. Logical page count
+// still advances only through Alloc; this is physical capacity only.
+const asyncPregrowChunks = 8
+
 func (p *Pager) startGrower() {
 	p.growStop = make(chan struct{})
 	p.growWake = make(chan struct{}, 1)
@@ -31,7 +37,7 @@ func (p *Pager) maybeSchedulePreGrow(requiredBytes int64) {
 		return
 	}
 
-	desired := currentCapacity + p.chunkSize
+	desired := currentCapacity + asyncPregrowChunks*p.chunkSize
 	for {
 		cur := p.growTarget.Load()
 		if desired <= cur {

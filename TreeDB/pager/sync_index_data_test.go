@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -117,6 +118,99 @@ func TestSyncIndexPagesDoesNotConsumeLaterBuilderDirtyPage(t *testing.T) {
 	}
 	if got := p.DirtyIndexPages(); !reflect.DeepEqual(got, []uint64{3}) {
 		t.Fatalf("dirty pages after prior candidate sync=%v want [3]", got)
+	}
+}
+
+func TestSyncIndexPageSnapshotDoesNotHoldPagerLockDuringDurabilityFence(t *testing.T) {
+	p, err := Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetForWrite(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SyncIndexFileSize(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := p.CaptureIndexPages([]uint64{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ReleaseIndexPageSnapshot(snapshot)
+
+	originalSync := syncIndexPageSnapshotFn
+	t.Cleanup(func() { syncIndexPageSnapshotFn = originalSync })
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	syncIndexPageSnapshotFn = func(_ *os.File, _ uint64, _ []uint64, _ []byte) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.SyncIndexPageSnapshot(snapshot) }()
+	<-entered
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := p.GetForWrite(3)
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetForWrite blocked behind index durability fence")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncIndexPageSnapshotUsesOneBarrierAndRecordsDurableSize(t *testing.T) {
+	p, err := Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetForWrite(2); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := p.CaptureIndexPages([]uint64{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ReleaseIndexPageSnapshot(snapshot)
+
+	originalBarrier := syncPageFileBarrierFn
+	t.Cleanup(func() { syncPageFileBarrierFn = originalBarrier })
+	barriers := 0
+	syncPageFileBarrierFn = func(_ *os.File) error {
+		barriers++
+		return nil
+	}
+	p.durableFileSize.Store(0)
+	if err := p.SyncIndexPageSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if barriers != 1 {
+		t.Fatalf("snapshot barriers=%d want 1", barriers)
+	}
+	p.mu.RLock()
+	want := int64(len(p.chunks)) * p.chunkSize
+	p.mu.RUnlock()
+	if got := p.durableFileSize.Load(); got < want {
+		t.Fatalf("durable file size=%d want at least %d", got, want)
 	}
 }
 

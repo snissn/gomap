@@ -4,6 +4,7 @@ package freelist
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -24,6 +25,10 @@ type Allocator struct {
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
 	preferAppend bool
+
+	publicationMu           sync.RWMutex
+	publicationFence        atomic.Bool
+	publicationDeferredFree []uint64
 }
 
 func (a *Allocator) batchGetForWrite(pageID uint64) ([]byte, error) {

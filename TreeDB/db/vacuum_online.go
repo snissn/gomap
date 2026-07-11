@@ -647,7 +647,14 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 				return err
 			}
 			db.writeMu.Lock()
-			db.publishPrepareMu.Lock()
+			db.rootPublication.publishMu.Lock()
+			if !db.publishPrepareMu.TryLock() {
+				db.rootPublication.publishMu.Unlock()
+				db.writeMu.Unlock()
+				runtime.Gosched()
+				continue
+			}
+			db.rootPublication.publishMu.Unlock()
 			if db.rootPublication.snapshot().pendingCandidates == 0 {
 				break
 			}

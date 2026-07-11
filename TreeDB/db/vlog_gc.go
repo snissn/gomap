@@ -186,7 +186,12 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			break
 		}
 
-		db.publishPrepareMu.Lock()
+		if db.rootPublication != nil {
+			db.rootPublication.lockMaintenancePublication()
+			db.rootPublication.publishMu.Unlock()
+		} else {
+			db.publishPrepareMu.Lock()
+		}
 		generationMatches := recoveryGeneration == 0
 		if db.rootPublication != nil {
 			unlockRecoveryRoots, generationMatches = db.rootPublication.lockRecoverableValueLogRoots(recoveryGeneration)

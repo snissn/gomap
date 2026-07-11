@@ -896,12 +896,20 @@ func (p *Pager) SyncIndexFileSize() error {
 		p.mu.RUnlock()
 		return nil
 	}
-	err := syncPageFile(p.file)
-	if err == nil {
-		p.durableFileSize.Store(want)
-	}
 	p.mu.RUnlock()
+	err := syncPageFileBarrier(p.file)
+	if err == nil {
+		p.recordDurableFileSize(want)
+	}
 	return err
+}
+
+func (p *Pager) recordDurableFileSize(size int64) {
+	for current := p.durableFileSize.Load(); current < size; current = p.durableFileSize.Load() {
+		if p.durableFileSize.CompareAndSwap(current, size) {
+			return
+		}
+	}
 }
 
 // syncIndexDataPages durably writes only the planned non-meta ranges. Unlike
@@ -963,7 +971,7 @@ func (p *Pager) syncIndexDataPages(pageIDs []uint64) error {
 			offset += int64(n)
 		}
 	}
-	return p.file.Sync()
+	return syncPageFileBarrier(p.file)
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
@@ -1153,28 +1161,29 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 	for _, pageID := range pageIDs {
 		pageGenerations[pageID] = p.dirtyPages[pageID]
 	}
-	chunkLengths := make([]int, len(p.chunks))
-	for i := range p.chunks {
-		chunkLengths[i] = len(p.chunks[i])
+	chunks := append([][]byte(nil), p.chunks...)
+	chunkLengths := make([]int, len(chunks))
+	for i := range chunks {
+		chunkLengths[i] = len(chunks[i])
 	}
 	ranges, err := planSyncPageRanges(pageIDs, p.pageIDBase, p.numPages.Load(), p.chunkSize, mmapOffsetGranularity(), chunkLengths)
 	if err != nil {
 		p.mu.RUnlock()
 		return err
 	}
+	durableFileSize := p.durableFileSize.Load()
+	p.mu.RUnlock()
 	handled := false
-	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
-		handled, err = syncPageRangesFn(p.file, p.chunks, ranges, p.chunkSize)
+	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, durableFileSize) {
+		handled, err = syncPageRangesFn(p.file, chunks, ranges, p.chunkSize)
 		if err != nil {
-			p.mu.RUnlock()
 			return err
 		}
 	}
 	if !handled && mappedRangeSyncRequired() {
 		for _, r := range ranges {
-			err := msyncFile(p.chunks[r.chunk][r.start:r.end])
+			err := msyncFile(chunks[r.chunk][r.start:r.end])
 			if err != nil {
-				p.mu.RUnlock()
 				return err
 			}
 		}
@@ -1182,10 +1191,9 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 	if !handled {
 		err = syncPageFile(p.file)
 		if err == nil {
-			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
+			p.recordDurableFileSize(int64(len(chunks)) * p.chunkSize)
 		}
 	}
-	p.mu.RUnlock()
 	if err == nil {
 		p.mu.Lock()
 		for pageID, generation := range pageGenerations {
