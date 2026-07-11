@@ -71,15 +71,28 @@ sha256sum "$BENCH_BIN" >"$OUT_DIR/binary-sha256.txt"
 : >"$OUT_DIR/bench.txt"
 : >"$OUT_DIR/resources.txt"
 
-for ((sample = 1; sample <= RUNS; sample++)); do
-  echo "--- sample=$sample ---" >>"$OUT_DIR/bench.txt"
+run_group() {
+  local sample="$1"
+  local group="$2"
+  local regex="$3"
+  local benchtime="$4"
+  echo "--- sample=$sample group=$group benchtime=$benchtime ---" >>"$OUT_DIR/bench.txt"
+  echo "--- sample=$sample group=$group benchtime=$benchtime ---" >>"$OUT_DIR/resources.txt"
   /usr/bin/time -v -a -o "$OUT_DIR/resources.txt" \
     taskset -c "$CPUSET" env GOMAXPROCS=1 "$BENCH_BIN" \
       -test.run '^$' \
-      -test.bench '^BenchmarkDgraphMVCCCloseout$' \
+      -test.bench "$regex" \
       -test.benchmem \
-      -test.benchtime="$BENCHTIME" \
+      -test.benchtime="$benchtime" \
       -test.count=1 >>"$OUT_DIR/bench.txt"
+}
+
+for ((sample = 1; sample <= RUNS; sample++)); do
+  run_group "$sample" regular '^BenchmarkDgraphMVCCCloseout/(CommitAt|GetAt|AllVersions)/' "$BENCHTIME"
+  # Prune requires a fresh populated database per operation. Keep exactly one
+  # fixture per external sample instead of allowing Go's duration calibration
+  # to multiply setup databases and distort process RSS.
+  run_group "$sample" prune '^BenchmarkDgraphMVCCCloseout/Prune/' '1x'
 done
 
 taskset -c "$CPUSET" env GOMAXPROCS=1 "$BENCH_BIN" \

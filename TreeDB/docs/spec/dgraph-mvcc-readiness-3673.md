@@ -134,6 +134,11 @@ Markdown medians. The matrix separates these acknowledgement classes:
 Each class covers `CommitAt` batches 1/32, `GetAt` depths 1/64, 64-key
 all-version scans at depths 1/32, and 64-key depth-16 pruning at floors 4/12.
 Go benchmark rows report latency, throughput, `B/op`, and `allocs/op`.
+Commit, get, and scan rows use duration calibration. Prune rows use exactly one
+fresh populated database per external sample (`-benchtime=1x`), because
+duration calibration would multiply excluded fixture setup and make process RSS
+describe fixture churn rather than the bounded pruning operation. Five external
+samples still provide five independent prune latency/throughput observations.
 `storage_bytes/op` is normalized final logical file footprint, including fixed
 TreeDB files and preallocation; `durable_bytes/op` is emitted only for the
 sync-acknowledged rows. It is storage-footprint context, not physical device

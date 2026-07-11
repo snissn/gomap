@@ -51,9 +51,10 @@ def parse_resources(path: Path) -> dict[str, float]:
     if not rss or not user or not system:
         raise ValueError(f"{path}: incomplete /usr/bin/time evidence")
     return {
+        "invocations": float(len(rss)),
         "max_rss_kib": float(max(rss)),
-        "median_user_seconds": statistics.median(user),
-        "median_system_seconds": statistics.median(system),
+        "total_user_seconds": sum(user),
+        "total_system_seconds": sum(system),
     }
 
 
@@ -75,9 +76,10 @@ def render_markdown(
         "",
         f"- candidate: `{candidate_sha}`",
         f"- samples: {expected}",
+        f"- measured benchmark invocations: {resources['invocations']:.0f}",
         f"- maximum benchmark-process RSS: {resources['max_rss_kib']:.0f} KiB",
-        f"- median process CPU: user {resources['median_user_seconds']:.2f}s, "
-        f"system {resources['median_system_seconds']:.2f}s",
+        f"- aggregate process CPU: user {resources['total_user_seconds']:.2f}s, "
+        f"system {resources['total_system_seconds']:.2f}s",
         "- durability classes are separate rows; relaxed rows are not durability-equivalent to durable sync",
         "",
         "| Benchmark | ns/op | Throughput | B/op | allocs/op | storage bytes/op | durable bytes/op |",
