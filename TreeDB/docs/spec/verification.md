@@ -343,17 +343,36 @@ Coverage:
   floor rejection/regression, value and tombstone anchors, reopen,
   interrupted-batch restart, idempotence, and concurrent snapshot readers.
 - `TreeDB/mvcc/mvcc_bench_test.go` compares all-version scans with physical
-  encoded-key scans with the same owned key/value output across version depth
-  and direction; separately reports filtered useful/skipped versions, prune
-  throughput/physical bytes, and delete-batch write amplification. Retained
+  encoded-key scans with the same owned key/value output across key counts
+  `{64,256}`, version depths `{1,8,32}`, and both directions. Filtered scans use
+  depth 16/read timestamp 8 and cover all 128 keys plus all, 100, 10, and 1 of
+  512 keys (100%, 19.5%, 1.95%, and 0.195% selectivity). Pruning uses depth 16:
+  64-key cases cover 3/16 and 11/16 discard densities, while 256-key cases
+  cover 3/16, 7/16, and 11/16. The matrix reports useful/skipped rates,
+  bytes/op, allocs/op,
+  prune throughput, physical bytes per pruned version, delete-batch write
+  amplification, and retained physical bytes/versions per operation. Retained
   bytes are physical records still reachable in the pinned prune snapshot, not
   immediate filesystem reclamation.
 
-The reproducible benchmark gate is `GOWORK=off go test ./TreeDB/mvcc -run '^$'
--bench 'BenchmarkVersionIteration|BenchmarkPruneVersions' -benchmem`. Existing
-raw `BenchmarkScan` is compared on the same base/head with ten samples; because
-the MVCC path is opt-in, its acceptable raw-path regression is at most 5% with
-no allocation increase.
+Measurement boundary:
+
+- scan fixtures are built before `ResetTimer`; scan time and allocations cover
+  iterator open, owned decode/copy, traversal, accounting, and close;
+- filtered fixtures are also outside the measurement and cover the same MVCC
+  iterator lifecycle with prefix/read-time rejection included;
+- pruning rebuilds its fixture and advances the floor with the timer stopped on
+  every iteration because pruning is destructive. Timed bytes, allocations,
+  and throughput cover only `PruneVersions`; DB close is also outside the
+  measurement. The floor and prune use relaxed mode so the benchmark measures
+  version selection and bounded delete publication rather than fsync latency.
+
+The bounded matrix smoke is `GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench
+'BenchmarkVersionIteration|BenchmarkPruneVersions' -benchmem -benchtime=1x
+-count=1`. Omit `-benchtime=1x` for measurements. Existing raw `BenchmarkScan`
+is compared on the same base/head with ten samples; because the MVCC path is
+opt-in, its acceptable raw-path regression is at most 5% with no allocation
+increase.
 
 ## 11. Collections Native Fast Path
 
