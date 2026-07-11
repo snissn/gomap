@@ -76,7 +76,9 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 	externalErr := errors.New("external value-log sync failed")
 	appender := &commandWALBarrierTestAppender{externalErr: externalErr}
 	d.SetValueLogAppender(appender)
-	before := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total")
+	beforeStats := d.Stats()
+	before := commandWALTestStatUint64(t, beforeStats, "treedb.command_wal.sync.count_total")
+	beforeFileSyncs := commandWALTestStatUint64(t, beforeStats, "treedb.command_wal.file_sync.calls_total")
 	if err := d.FlushCommandWALBarrier(true); !errors.Is(err, externalErr) {
 		t.Fatalf("FlushCommandWALBarrier error=%v, want %v", err, externalErr)
 	}
@@ -86,6 +88,9 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before {
 		t.Fatalf("command WAL sync count=%d, want %d when external barrier fails", got, before)
 	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != beforeFileSyncs {
+		t.Fatalf("command WAL file sync calls=%d, want %d when external barrier fails", got, beforeFileSyncs)
+	}
 
 	appender.externalErr = nil
 	if err := d.FlushCommandWALBarrier(true); err != nil {
@@ -93,6 +98,9 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 	}
 	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before+1 {
 		t.Fatalf("command WAL sync count=%d, want %d", got, before+1)
+	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != beforeFileSyncs+1 {
+		t.Fatalf("command WAL file sync calls=%d, want %d", got, beforeFileSyncs+1)
 	}
 }
 

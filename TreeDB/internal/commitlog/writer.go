@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
+	"time"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -90,6 +92,7 @@ func sameNonEmptyBytesData(a, b []byte) bool {
 type Writer struct {
 	f                      *os.File
 	bw                     *bufio.Writer
+	fileSink               writerFileSink
 	scratch                []byte
 	encScratch             []byte
 	commandBuf             []byte
@@ -108,6 +111,33 @@ type Writer struct {
 	compress               bool
 	enc                    *zstd.Encoder
 	syncFn                 func(*os.File) error
+	fileSyncCalls          atomic.Uint64
+	fileSyncNs             atomic.Uint64
+	fileSyncErrors         atomic.Uint64
+	directorySyncCalls     atomic.Uint64
+	directorySyncNs        atomic.Uint64
+	directorySyncErrors    atomic.Uint64
+	writeSyscalls          atomic.Uint64
+	writeBytes             atomic.Uint64
+	writeNs                atomic.Uint64
+	writeErrors            atomic.Uint64
+}
+
+type writerFileSink struct {
+	owner *Writer
+	file  *os.File
+}
+
+func (s *writerFileSink) Write(p []byte) (int, error) {
+	if s == nil || s.file == nil {
+		return 0, os.ErrInvalid
+	}
+	start := time.Now()
+	n, err := s.file.Write(p)
+	if s.owner != nil {
+		s.owner.observeWriteSyscalls(1, uint64(max(n, 0)), time.Since(start), err)
+	}
+	return n, err
 }
 
 type WriterBufferStats struct {
@@ -122,6 +152,24 @@ type WriterBufferStats struct {
 	CommandBufferDroppedBytes   uint64
 	PendingBatchLength          int
 	PendingBatchCapacity        int
+}
+
+// DurabilityStats reports underlying writer calls plus injected durability
+// boundaries. The production hooks are os.File.Sync for FileSync and a parent
+// directory os.File.Sync for DirectorySync. Keeping sync counters at the hook
+// boundary makes tests deterministic while Linux strace can validate the
+// production write/writev and sync mappings.
+type DurabilityStats struct {
+	WriteSyscalls       uint64
+	WriteBytes          uint64
+	WriteNs             uint64
+	WriteErrors         uint64
+	FileSyncCalls       uint64
+	FileSyncNs          uint64
+	FileSyncErrors      uint64
+	DirectorySyncCalls  uint64
+	DirectorySyncNs     uint64
+	DirectorySyncErrors uint64
 }
 
 func (w *Writer) ActiveBytes() int64 {
@@ -145,7 +193,12 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syncDirFn(path); err != nil {
+	w := &Writer{
+		f:      f,
+		syncFn: func(file *os.File) error { return file.Sync() },
+	}
+	w.fileSink = writerFileSink{owner: w, file: f}
+	if err := w.syncDirectory(path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -164,17 +217,91 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		commandBufLimit = opts.DeferredCommandBufferSize
 	}
 	commandBufRetain := normalizeCommandBufferRetainSize(opts.DeferredCommandBufferRetainSize, commandBufLimit)
-	return &Writer{
-		f:                f,
-		bw:               bufio.NewWriterSize(f, normalizeBufferSize(opts.BufferSize)),
-		commandBuf:       commandBuf,
-		commandBufLimit:  commandBufLimit,
-		commandBufRetain: commandBufRetain,
-		size:             info.Size(),
-		maxSegmentSize:   normalizeMaxSegmentSize(opts.MaxSegmentSize),
-		compress:         opts.Compress,
-		syncFn:           func(file *os.File) error { return file.Sync() },
-	}, nil
+	w.bw = bufio.NewWriterSize(&w.fileSink, normalizeBufferSize(opts.BufferSize))
+	w.commandBuf = commandBuf
+	w.commandBufLimit = commandBufLimit
+	w.commandBufRetain = commandBufRetain
+	w.size = info.Size()
+	w.maxSegmentSize = normalizeMaxSegmentSize(opts.MaxSegmentSize)
+	w.compress = opts.Compress
+	return w, nil
+}
+
+// DurabilityStats returns a lock-free cumulative snapshot. Writer callers
+// already serialize mutations; atomics keep diagnostic snapshots race-safe.
+func (w *Writer) DurabilityStats() DurabilityStats {
+	if w == nil {
+		return DurabilityStats{}
+	}
+	return DurabilityStats{
+		WriteSyscalls:       w.writeSyscalls.Load(),
+		WriteBytes:          w.writeBytes.Load(),
+		WriteNs:             w.writeNs.Load(),
+		WriteErrors:         w.writeErrors.Load(),
+		FileSyncCalls:       w.fileSyncCalls.Load(),
+		FileSyncNs:          w.fileSyncNs.Load(),
+		FileSyncErrors:      w.fileSyncErrors.Load(),
+		DirectorySyncCalls:  w.directorySyncCalls.Load(),
+		DirectorySyncNs:     w.directorySyncNs.Load(),
+		DirectorySyncErrors: w.directorySyncErrors.Load(),
+	}
+}
+
+func (w *Writer) observeWriteSyscalls(calls, bytes uint64, elapsed time.Duration, err error) {
+	if w == nil {
+		return
+	}
+	if calls > 0 {
+		w.writeSyscalls.Add(calls)
+	}
+	if bytes > 0 {
+		w.writeBytes.Add(bytes)
+	}
+	if ns := elapsed.Nanoseconds(); calls > 0 && ns > 0 {
+		w.writeNs.Add(uint64(ns))
+	}
+	if err != nil {
+		w.writeErrors.Add(1)
+	}
+}
+
+func (w *Writer) writev(parts [][]byte) error {
+	start := time.Now()
+	stats, err := writevFull(w.f, parts)
+	w.observeWriteSyscalls(stats.syscalls, stats.bytes, time.Since(start), err)
+	return err
+}
+
+func (w *Writer) syncFile() error {
+	if w == nil || w.f == nil || w.syncFn == nil {
+		return nil
+	}
+	start := time.Now()
+	err := w.syncFn(w.f)
+	w.fileSyncCalls.Add(1)
+	if ns := time.Since(start).Nanoseconds(); ns > 0 {
+		w.fileSyncNs.Add(uint64(ns))
+	}
+	if err != nil {
+		w.fileSyncErrors.Add(1)
+	}
+	return err
+}
+
+func (w *Writer) syncDirectory(path string) error {
+	if w == nil {
+		return syncDirFn(path)
+	}
+	start := time.Now()
+	err := syncDirFn(path)
+	w.directorySyncCalls.Add(1)
+	if ns := time.Since(start).Nanoseconds(); ns > 0 {
+		w.directorySyncNs.Add(uint64(ns))
+	}
+	if err != nil {
+		w.directorySyncErrors.Add(1)
+	}
+	return err
 }
 
 func normalizeCommandBufferRetainSize(retain, limit int) int {
@@ -350,7 +477,7 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 			return err
 		}
 		if syncCurrent {
-			if err := syncDirFn(path); err != nil {
+			if err := w.syncDirectory(path); err != nil {
 				_ = f.Close()
 				return err
 			}
@@ -361,7 +488,8 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 			return err
 		}
 		w.f = f
-		w.bw.Reset(f)
+		w.fileSink.file = f
+		w.bw.Reset(&w.fileSink)
 		w.size = info.Size()
 		w.scratch = w.scratch[:0]
 		return nil
@@ -378,8 +506,8 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
-	if syncCurrent && w.syncFn != nil {
-		if err := w.syncFn(w.f); err != nil {
+	if syncCurrent {
+		if err := w.syncFile(); err != nil {
 			return err
 		}
 	}
@@ -394,7 +522,7 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		return err
 	}
 	if syncCurrent {
-		if err := syncDirFn(path); err != nil {
+		if err := w.syncDirectory(path); err != nil {
 			_ = f.Close()
 			return err
 		}
@@ -402,7 +530,8 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 
 	old := w.f
 	w.f = f
-	w.bw.Reset(f)
+	w.fileSink.file = f
+	w.bw.Reset(&w.fileSink)
 	w.size = info.Size()
 	w.scratch = w.scratch[:0]
 	if err := old.Close(); err != nil {
@@ -1073,7 +1202,7 @@ func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 			return err
 		}
 		parts := [2][]byte{prefix[:], payload}
-		if err := writevFull(w.f, parts[:]); err != nil {
+		if err := w.writev(parts[:]); err != nil {
 			return w.poisonCommandBuffer(err)
 		}
 		w.size += int64(segmentHeaderSize + size)
@@ -1113,7 +1242,7 @@ func (w *Writer) appendRawKVBatchPayloadScanCommandDirect(lsn, baseAppliedLSN ui
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
-	if err := writeFull(w.f, prefix[:]); err != nil {
+	if err := w.writeFull(prefix[:]); err != nil {
 		return w.poisonCommandBuffer(err)
 	}
 	scratch := w.scratch[:0]
@@ -1124,7 +1253,7 @@ func (w *Writer) appendRawKVBatchPayloadScanCommandDirect(lsn, baseAppliedLSN ui
 		if len(scratch) == 0 {
 			return nil
 		}
-		if err := writeFull(w.f, scratch); err != nil {
+		if err := w.writeFull(scratch); err != nil {
 			return err
 		}
 		scratch = scratch[:0]
@@ -1178,7 +1307,7 @@ func (w *Writer) appendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 			return err
 		}
 		parts := [2][]byte{prefix[:], payload}
-		if err := writevFull(w.f, parts[:]); err != nil {
+		if err := w.writev(parts[:]); err != nil {
 			return w.poisonCommandBuffer(err)
 		}
 		w.size += int64(segmentHeaderSize + size)
@@ -1257,9 +1386,9 @@ func (w *Writer) commandBufferLimit() int {
 	return w.commandBufLimit
 }
 
-func writeFull(f *os.File, p []byte) error {
+func (w *Writer) writeFull(p []byte) error {
 	for len(p) > 0 {
-		n, err := f.Write(p)
+		n, err := w.fileSink.Write(p)
 		if err != nil {
 			return err
 		}
@@ -1306,7 +1435,7 @@ func (w *Writer) flushBufferedCommandFrames() error {
 		return w.poisonCommandBuffer(err)
 	}
 	flushed := len(w.commandBuf)
-	if err := writeFull(w.f, w.commandBuf); err != nil {
+	if err := w.writeFull(w.commandBuf); err != nil {
 		return w.poisonCommandBuffer(err)
 	}
 	w.size += int64(flushed)
@@ -1396,10 +1525,10 @@ func (w *Writer) writeSegment(payload []byte) error {
 			return err
 		}
 		if length&segmentFlagCompressed != 0 {
-			if err := writevFull(w.f, [][]byte{header, rawLenPrefix, stored}); err != nil {
+			if err := w.writev([][]byte{header, rawLenPrefix, stored}); err != nil {
 				return err
 			}
-		} else if err := writevFull(w.f, [][]byte{header, stored}); err != nil {
+		} else if err := w.writev([][]byte{header, stored}); err != nil {
 			return err
 		}
 		w.size += int64(segmentHeaderSize) + int64(storedLen)
@@ -1447,7 +1576,7 @@ func (w *Writer) writeRawSegmentWithChecksumNoPending(payload []byte, wantCRC ui
 		if err := w.bw.Flush(); err != nil {
 			return err
 		}
-		if err := writevFull(w.f, [][]byte{header, payload}); err != nil {
+		if err := w.writev([][]byte{header, payload}); err != nil {
 			return err
 		}
 		w.size += int64(segmentHeaderSize) + int64(storedLen)
@@ -1524,10 +1653,7 @@ func (w *Writer) Sync() error {
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
-	if w.syncFn != nil {
-		return w.syncFn(w.f)
-	}
-	return nil
+	return w.syncFile()
 }
 
 func (w *Writer) Close() error {

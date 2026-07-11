@@ -9,27 +9,35 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func writevFull(f *os.File, parts [][]byte) error {
+type writevStats struct {
+	syscalls uint64
+	bytes    uint64
+}
+
+func writevFull(f *os.File, parts [][]byte) (writevStats, error) {
+	var stats writevStats
 	if f == nil {
-		return errors.New("commitlog: nil file")
+		return stats, errors.New("commitlog: nil file")
 	}
 	for len(parts) > 0 {
 		for len(parts) > 0 && len(parts[0]) == 0 {
 			parts = parts[1:]
 		}
 		if len(parts) == 0 {
-			return nil
+			return stats, nil
 		}
+		stats.syscalls++
 		n, err := unix.Writev(int(f.Fd()), parts)
 		if err != nil {
 			if err == unix.EINTR || err == unix.EAGAIN {
 				continue
 			}
-			return err
+			return stats, err
 		}
 		if n <= 0 {
-			return errors.New("commitlog: short writev")
+			return stats, errors.New("commitlog: short writev")
 		}
+		stats.bytes += uint64(n)
 		written := n
 		for written > 0 && len(parts) > 0 {
 			if written >= len(parts[0]) {
@@ -41,5 +49,5 @@ func writevFull(f *os.File, parts [][]byte) error {
 			written = 0
 		}
 	}
-	return nil
+	return stats, nil
 }

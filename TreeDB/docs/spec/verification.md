@@ -125,6 +125,31 @@ Coverage:
 - `TreeDB/db/api_test.go`:
   - `TestValuePlacement_PerDomainThreshold_DefaultFallback`
 
+### 6.1 Command-WAL durable-write ordering and syscall ledger
+
+Invariant:
+- external value-log bytes pass their required durability boundary before the
+  command frame; the complete command frame passes the command-WAL file-sync
+  boundary before cached publication; and an empty `WriteSync` covers pending
+  value-log lanes before its command-WAL barrier.
+- logical append/flush/sync counters remain distinguishable from actual writer
+  `write`/`writev`, file-sync, and directory-sync hook counts.
+
+Coverage:
+- `TreeDB/db/command_wal_raw_test.go`:
+  - `TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL`
+- `TreeDB/db/command_wal_recovery_test.go`:
+  - `TestCommandWALCrashAfterFrameBeforeRootPublishRecovers`
+- `TreeDB/command_wal_public_test.go`:
+  - `TestPublicCommandWALStateShapedDurabilityLedger`
+  - `TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats`
+  - `TestPublicCommandWALPointerEmptyWriteSyncSweepsPriorUnsyncedWrite`
+  - `TestPublicCommandWALWriteThenDirtyWriteSyncDurabilityLedger`
+  - `BenchmarkPublicCommandWALDurableTinyBatchWriteSync`
+- `TreeDB/internal/commitlog/commitlog_test.go` and
+  `TreeDB/internal/valuelog/valuelog_test.go`:
+  deterministic file/directory sync-hook count and rotation tests.
+
 ## 7. Maintenance/Compaction Behavior
 
 Invariant:

@@ -701,6 +701,14 @@ func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
 		t.Fatalf("new writer: %v", err)
 	}
 	defer func() { _ = writer.Close() }()
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != 1 {
+		t.Fatalf("initial directory sync calls=%d, want 1", got)
+	}
+	fileSyncs := 0
+	writer.syncFn = func(*os.File) error {
+		fileSyncs++
+		return nil
+	}
 	calls = 0
 	if err := writer.RotateToWithSync(path1, false); err != nil {
 		t.Fatalf("relaxed RotateToWithSync: %v", err)
@@ -708,11 +716,20 @@ func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("relaxed RotateToWithSync syncDir calls=%d, want 0", calls)
 	}
+	if got := writer.DurabilityStats(); got.FileSyncCalls != 0 || got.DirectorySyncCalls != 1 {
+		t.Fatalf("durability stats after relaxed rotate=%+v, want file=0 directory=1", got)
+	}
 	if err := writer.RotateToWithSync(path2, true); err != nil {
 		t.Fatalf("strict RotateToWithSync: %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("strict RotateToWithSync syncDir calls=%d, want 1", calls)
+	}
+	if fileSyncs != 1 {
+		t.Fatalf("strict RotateToWithSync file sync calls=%d, want 1", fileSyncs)
+	}
+	if got := writer.DurabilityStats(); got.FileSyncCalls != 1 || got.DirectorySyncCalls != 2 || got.FileSyncErrors != 0 || got.DirectorySyncErrors != 0 {
+		t.Fatalf("durability stats after strict rotate=%+v, want file=1 directory=2 and no errors", got)
 	}
 }
 

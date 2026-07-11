@@ -112,6 +112,7 @@ func TestCommandWALRuntimeStatsExposeAppendPaths(t *testing.T) {
 		"treedb.command_wal.append.entry_scan.count_total",
 		"treedb.command_wal.flush.count_total",
 		"treedb.command_wal.sync.count_total",
+		"treedb.command_wal.write.syscalls_total",
 	} {
 		if got := commandWALTestStatUint64(t, before, key); got != 0 {
 			t.Fatalf("%s before writes=%d, want 0 (stats=%#v)", key, got, before)
@@ -149,6 +150,14 @@ func TestCommandWALRuntimeStatsExposeAppendPaths(t *testing.T) {
 		"treedb.command_wal.append.intent.count_total":     0,
 		"treedb.command_wal.flush.count_total":             2,
 		"treedb.command_wal.sync.count_total":              1,
+		"treedb.command_wal.flush.point.count_total":       1,
+		"treedb.command_wal.flush.payload.count_total":     1,
+		"treedb.command_wal.sync.entry_scan.count_total":   1,
+		"treedb.command_wal.sync.barrier.count_total":      0,
+		"treedb.command_wal.write.syscalls_total":          3,
+		"treedb.command_wal.write.errors_total":            0,
+		"treedb.command_wal.file_sync.calls_total":         1,
+		"treedb.command_wal.file_sync.errors_total":        0,
 	} {
 		if got := commandWALTestStatUint64(t, stats, key); got != want {
 			t.Fatalf("%s=%d, want %d (stats=%#v)", key, got, want, stats)
@@ -158,6 +167,8 @@ func TestCommandWALRuntimeStatsExposeAppendPaths(t *testing.T) {
 		"treedb.command_wal.append.ns_total",
 		"treedb.command_wal.flush.ns_total",
 		"treedb.command_wal.sync.ns_total",
+		"treedb.command_wal.write.ns_total",
+		"treedb.command_wal.file_sync.ns_total",
 	} {
 		// Path-level count stats above prove the append/flush/sync paths ran.
 		// Short operations can report zero elapsed nanoseconds on platforms

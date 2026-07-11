@@ -228,6 +228,10 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 }
 
 func (db *DB) flushCommandWAL(sync bool, observe bool) error {
+	return db.flushCommandWALForPath(sync, observe, commandWALAppendStatsBarrier)
+}
+
+func (db *DB) flushCommandWALForPath(sync bool, observe bool, path commandWALAppendStatsPath) error {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil
 	}
@@ -249,7 +253,7 @@ func (db *DB) flushCommandWAL(sync bool, observe bool) error {
 		err = errTestCommandWALFlushFailpoint
 	}
 	if observe {
-		db.observeCommandWALFlush(actualSync, time.Since(start))
+		db.observeCommandWALFlush(path, actualSync, time.Since(start))
 	}
 	if err != nil {
 		db.commandWALFlushPoisoned.Store(true)
@@ -265,7 +269,7 @@ func (db *DB) finishCommandWALAppendFlush(path commandWALAppendStatsPath, actual
 		if err == nil && db.testFailCommandWALFlush.Load() {
 			err = errTestCommandWALFlushFailpoint
 		}
-		db.observeCommandWALFlush(actualSync, timing.Flush)
+		db.observeCommandWALFlush(path, actualSync, timing.Flush)
 	}
 	if err != nil {
 		if lsn != 0 {
@@ -1518,7 +1522,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		requestTiming.Sync = actualSync
 		flushStart = time.Now()
 	}
-	flushErr := db.FlushCommandWAL(sync)
+	flushErr := db.flushCommandWALForPath(sync, true, appendPath)
 	if requestTiming != nil {
 		requestTiming.Flush = time.Since(flushStart)
 	}
