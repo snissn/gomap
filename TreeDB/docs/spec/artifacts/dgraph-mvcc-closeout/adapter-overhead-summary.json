@@ -1,0 +1,124 @@
+{
+  "baseline_sha": "f9c9b2a37838909d0e669818cfa2840c0a8d5f85",
+  "candidate_sha": "2f0a687f048ece277ab039303f6e28a1a7906bcb",
+  "expected_samples": 7,
+  "pass": true,
+  "ratios": [
+    {
+      "baseline_ratio": 1.0469572541587702,
+      "candidate_ratio": 1.0417633410672853,
+      "pair": "CommitAt",
+      "pass": true
+    },
+    {
+      "baseline_ratio": 1.1069669247009148,
+      "candidate_ratio": 1.119434628975265,
+      "pair": "GetAt",
+      "pass": true
+    },
+    {
+      "baseline_ratio": 1.0588019161168376,
+      "candidate_ratio": 1.1089710275358828,
+      "pair": "VersionIteration",
+      "pass": true
+    }
+  ],
+  "results": [
+    {
+      "baseline": {
+        "allocs_per_op": 8.0,
+        "bytes_per_op": 7556.0,
+        "ns_per_op": 4749.0
+      },
+      "benchmark": "BenchmarkCommitAt/DirectTreeDB/1",
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 8.0,
+        "bytes_per_op": 7555.0,
+        "ns_per_op": 4741.0
+      },
+      "ns_delta_percent": -0.16845651716150822,
+      "pass": true
+    },
+    {
+      "baseline": {
+        "allocs_per_op": 9.0,
+        "bytes_per_op": 7567.0,
+        "ns_per_op": 4972.0
+      },
+      "benchmark": "BenchmarkCommitAt/MVCC/1",
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 9.0,
+        "bytes_per_op": 7560.0,
+        "ns_per_op": 4939.0
+      },
+      "ns_delta_percent": -0.6637168141592875,
+      "pass": true
+    },
+    {
+      "baseline": {
+        "allocs_per_op": 15.0,
+        "bytes_per_op": 992.0,
+        "ns_per_op": 1421.0
+      },
+      "benchmark": "BenchmarkGetAt/DirectSeek/64",
+      "bytes_tolerance": 9.92,
+      "candidate": {
+        "allocs_per_op": 15.0,
+        "bytes_per_op": 992.0,
+        "ns_per_op": 1415.0
+      },
+      "ns_delta_percent": -0.4222378606615007,
+      "pass": true
+    },
+    {
+      "baseline": {
+        "allocs_per_op": 16.0,
+        "bytes_per_op": 1008.0,
+        "ns_per_op": 1573.0
+      },
+      "benchmark": "BenchmarkGetAt/MVCC/64",
+      "bytes_tolerance": 10.08,
+      "candidate": {
+        "allocs_per_op": 16.0,
+        "bytes_per_op": 1008.0,
+        "ns_per_op": 1584.0
+      },
+      "ns_delta_percent": 0.6993006993007089,
+      "pass": true
+    },
+    {
+      "baseline": {
+        "allocs_per_op": 4108.0,
+        "bytes_per_op": 50102.0,
+        "ns_per_op": 508946.0
+      },
+      "benchmark": "BenchmarkVersionIteration/Physical/keys=64/depth=32/reverse=false",
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 4108.0,
+        "bytes_per_op": 50100.0,
+        "ns_per_op": 473346.0
+      },
+      "ns_delta_percent": -6.994848176427359,
+      "pass": true
+    },
+    {
+      "baseline": {
+        "allocs_per_op": 4118.0,
+        "bytes_per_op": 51831.0,
+        "ns_per_op": 538873.0
+      },
+      "benchmark": "BenchmarkVersionIteration/MVCC/keys=64/depth=32/reverse=false",
+      "bytes_tolerance": 64.0,
+      "candidate": {
+        "allocs_per_op": 4118.0,
+        "bytes_per_op": 51831.0,
+        "ns_per_op": 524927.0
+      },
+      "ns_delta_percent": -2.5879938315707007,
+      "pass": true
+    }
+  ]
+}
