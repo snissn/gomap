@@ -42,7 +42,7 @@ func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchLegacy(t *testing
 	}
 	writeLeafGenerationKeys(t, db, "current", 1, 'z')
 
-	wantRefs, _, err := db.scanValueLogRefCounts(context.Background())
+	wantRefs, _, err := db.scanValueLogRefCountsLegacy(context.Background())
 	if err != nil {
 		t.Fatalf("legacy ref counts: %v", err)
 	}
@@ -131,6 +131,47 @@ func TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork(t *testing.T) 
 	}
 }
 
+func TestScanValueLogRefCountsUsesSharedCollectorAndMatchesLegacy(t *testing.T) {
+	db, _ := openLeafGenerationGCTestDB(t)
+	ptr := appendPointersInNewSegment(t, db.dir, 0, 1, 430_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("maintenance-reachability-ref-migration|"), 32)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("pointer"), ptr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	closeNoErr(t, b)
+	ctx := context.Background()
+
+	want, wantSeq, err := db.scanValueLogRefCountsLegacy(ctx)
+	if err != nil {
+		t.Fatalf("legacy scanValueLogRefCounts: %v", err)
+	}
+	var hookCalls int
+	restore := registerScanValueLogRefCountsHook(func() { hookCalls++ })
+	defer restore()
+
+	got, gotSeq, err := db.scanValueLogRefCounts(ctx)
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("scan hook calls=%d want 1", hookCalls)
+	}
+	if gotSeq != wantSeq {
+		t.Fatalf("commit sequence=%d want %d", gotSeq, wantSeq)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got, want)
+	}
+}
+
 func TestMaintenanceReachabilityLeafSubtreeCachePolicy(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	writeLeafGenerationKeys(t, db, "cache", 1024, 'c')
@@ -176,8 +217,8 @@ func BenchmarkMaintenanceReachability(b *testing.B) {
 	b.Run("legacy_ref_counts", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := db.scanValueLogRefCounts(ctx); err != nil {
-				b.Fatalf("scanValueLogRefCounts: %v", err)
+			if _, _, err := db.scanValueLogRefCountsLegacy(ctx); err != nil {
+				b.Fatalf("scanValueLogRefCountsLegacy: %v", err)
 			}
 		}
 	})
