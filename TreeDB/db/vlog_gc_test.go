@@ -295,6 +295,14 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("delete k1: %v", err)
 	}
+	// The previous meta slot still names the root containing k1. Advance the
+	// alternating recovery window before expecting its value-log segment to be
+	// reclaimable.
+	for i := 0; i < 2; i++ {
+		if err := db.SetSync([]byte(fmt.Sprintf("gc-advance-%d", i)), []byte("1")); err != nil {
+			t.Fatalf("advance recovery meta %d: %v", i, err)
+		}
+	}
 
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
@@ -309,6 +317,125 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 	if _, err := os.Stat(path2); err != nil {
 		t.Fatalf("expected segment2 to remain, err=%v", err)
+	}
+}
+
+func TestValueLogGCKeepsSegmentReachableOnlyFromFallbackMeta(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	oldValue := bytes.Repeat([]byte("fallback-meta-value|"), 32)
+	newValue := bytes.Repeat([]byte("newest-meta-value|"), 32)
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 100, 1, func(int) []byte { return oldValue })[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 2, 200, 1, func(int) []byte { return newValue })[0]
+
+	writePointerSync := func(ptr page.ValuePtr) {
+		b := d.NewBatch().(*Batch)
+		defer b.Close()
+		if err := b.SetPointer([]byte("k"), ptr); err != nil {
+			t.Fatalf("SetPointer: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("WriteSync: %v", err)
+		}
+	}
+	writePointerSync(oldPtr)
+	oldMetaPageID := d.metaPageID
+	writePointerSync(newPtr)
+	newMetaPageID := d.metaPageID
+	if newMetaPageID == oldMetaPageID {
+		t.Fatalf("meta page did not alternate: old=%d new=%d", oldMetaPageID, newMetaPageID)
+	}
+
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	oldPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("fallback-only segment removed: %v (stats=%+v)", err, stats)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	corruptIndexPageByte(t, dir, newMetaPageID)
+	reopened, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("reopen from fallback meta: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get fallback value: %v", err)
+	}
+	if !bytes.Equal(got, oldValue) {
+		t.Fatalf("fallback value mismatch: got %d bytes want %d", len(got), len(oldValue))
+	}
+}
+
+func TestValueLogGCRescansWhenRecoveryMetaSlotsRotate(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	values := [4][]byte{}
+	ptrs := [4]page.ValuePtr{}
+	for i := range ptrs {
+		values[i] = bytes.Repeat([]byte(fmt.Sprintf("generation-%d|", i+1)), 32)
+		ptrs[i] = appendPointersInNewSegment(t, dir, 0, uint32(i+1), uint64(100+i), 1, func(int) []byte { return values[i] })[0]
+	}
+	writePointerSync := func(ptr page.ValuePtr) {
+		b := d.NewBatch().(*Batch)
+		defer b.Close()
+		if err := b.SetPointer([]byte("k"), ptr); err != nil {
+			t.Fatalf("SetPointer: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("WriteSync: %v", err)
+		}
+	}
+	writePointerSync(ptrs[0])
+	writePointerSync(ptrs[1])
+
+	var rotateOnce sync.Once
+	restore := registerValueLogGCPostScanHook(func() {
+		rotateOnce.Do(func() {
+			writePointerSync(ptrs[2])
+			writePointerSync(ptrs[3])
+		})
+	})
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	restore()
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	newestMetaPageID := d.metaPageID
+	fallbackPath := filepath.Join(dir, "value_vlog", "value-l0-000003.log")
+	if _, err := os.Stat(fallbackPath); err != nil {
+		t.Fatalf("rotated fallback segment removed: %v (stats=%+v)", err, stats)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	corruptIndexPageByte(t, dir, newestMetaPageID)
+	reopened, err := Open(Options{Dir: dir, Durability: DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("reopen from rotated fallback meta: %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get rotated fallback value: %v", err)
+	}
+	if !bytes.Equal(got, values[2]) {
+		t.Fatalf("rotated fallback value mismatch: got %d bytes want %d", len(got), len(values[2]))
 	}
 }
 
@@ -1274,6 +1401,7 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("delete k1: %v", err)
 	}
+	stabilizeRecoveryWindowForTest(t, db)
 	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}

@@ -937,6 +937,28 @@ func (b *Batch) ByteSize() int {
 	return b.byteSize
 }
 
+// ValueLogPointerBytes returns a conservative byte total for value-log records
+// referenced by pointer puts in this batch. Grouped-record aliases may be
+// counted more than once intentionally: publication debt must never
+// under-account side-store bytes while durability is stalled.
+func (b *Batch) ValueLogPointerBytes() uint64 {
+	if b == nil || !b.hasValueLogPointers {
+		return 0
+	}
+	var total uint64
+	for _, entry := range b.entries {
+		if entry.Type != OpPut || !entry.IsPtr || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+			continue
+		}
+		length := uint64(page.ValuePtrRecordLength(entry.ValuePtr))
+		if length > ^uint64(0)-total {
+			return ^uint64(0)
+		}
+		total += length
+	}
+	return total
+}
+
 // HasValueLogPointers reports whether this batch contains any value-log
 // pointer operations.
 func (b *Batch) HasValueLogPointers() bool {

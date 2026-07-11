@@ -131,6 +131,12 @@ func TestCachingLeafPageLog_SyncRespectsRelaxedSync(t *testing.T) {
 	if got := syncCalls.Load(); got != 0 {
 		t.Fatalf("sync calls=%d want 0", got)
 	}
+	if err := leafLog.SyncLeafPageLogDurable(); err != nil {
+		t.Fatalf("SyncLeafPageLogDurable: %v", err)
+	}
+	if got := syncCalls.Load(); got != 1 {
+		t.Fatalf("durable publication sync calls=%d want 1", got)
+	}
 }
 
 type leafRecordLengthNotifierBackendStub struct {

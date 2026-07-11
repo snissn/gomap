@@ -2617,10 +2617,14 @@ func (db *DB) recordValueLogMaterializationSyncCoverageMuHeld(l *lane, w valueWr
 }
 
 func (db *DB) flushPendingValueLogLanes(sync bool, syncPath valueLogSyncPath) error {
+	return db.flushPendingValueLogLanesWithPolicy(sync, false, syncPath)
+}
+
+func (db *DB) flushPendingValueLogLanesWithPolicy(sync, forceDurable bool, syncPath valueLogSyncPath) error {
 	if db == nil || !db.splitValueLogEnabled() {
 		return nil
 	}
-	actualSync := sync && !db.relaxedSync
+	actualSync := sync && (forceDurable || !db.relaxedSync)
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		if !l.vlogDirty.Load() && !(actualSync && l.vlogSyncPending.Load()) {
@@ -2643,7 +2647,7 @@ func (db *DB) flushPendingValueLogLanes(sync bool, syncPath valueLogSyncPath) er
 		}
 		if err == nil {
 			l.vlogDirty.Store(false)
-			if syncBoundary || db.relaxedSync {
+			if syncBoundary || (db.relaxedSync && !forceDurable) {
 				l.vlogSyncPending.Store(false)
 			}
 			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
@@ -23997,14 +24001,14 @@ func (db *DB) Checkpoint() error {
 				hook()
 			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
-				commandWALAppliedLSN, commandWALRanges, err := publishHook(!db.relaxedSync)
+				commandWALAppliedLSN, commandWALRanges, err := publishHook(true)
 				if err != nil {
 					return err
 				}
 				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+				if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 					return err
 				}
 			}
@@ -24088,7 +24092,7 @@ func (db *DB) Checkpoint() error {
 	if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
 		commandWALPublishStart := time.Now()
-		commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+		commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
@@ -24176,7 +24180,7 @@ func (db *DB) Checkpoint() error {
 		if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 			var err error
 			commandWALPublishStart := time.Now()
-			commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+			commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 			recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 			if err != nil {
 				return err
@@ -24202,7 +24206,7 @@ func (db *DB) Checkpoint() error {
 		}
 		segments = filtered
 	}
-	// New logic: perform sync write only if not relaxedSync
+	// Checkpoint is an explicit durable boundary in every configured write mode.
 	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
 	var commitErr error
 	if nonEmptyBytes > 0 || needsCommandWALPublish {
@@ -24212,14 +24216,6 @@ func (db *DB) Checkpoint() error {
 			// non-command WAL segments observed above, so command-LSN publication and
 			// ordinary cached checkpoint proof are not mutually exclusive.
 			_, commitErr = db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges)
-		} else if db.relaxedSync {
-			backendBatch := db.backend.NewBatch()
-			// If relaxed sync, just write the batch without forcing sync
-			commitErr = backendBatch.Write()
-			cerr := backendBatch.Close()
-			if commitErr == nil {
-				commitErr = cerr
-			}
 		} else {
 			// Otherwise, force a backend durability boundary without publishing
 			// an artificial same-root commit.
@@ -24231,7 +24227,7 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 			return err
 		}
 	}
@@ -24314,12 +24310,7 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 		_ = backendBatch.Close()
 		return false, err
 	}
-	var err error
-	if db.relaxedSync {
-		err = backendBatch.Write()
-	} else {
-		err = backendBatch.WriteSync()
-	}
+	err := backendBatch.WriteSync()
 	cerr := backendBatch.Close()
 	if err == nil {
 		err = cerr
@@ -25115,21 +25106,9 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 		// - relaxed: flush-to-kernel (no fsync)
 		return nil
 	}
-	if db.relaxedSync {
-		if db.indexOuterLeavesInValueLog {
-			// ProfileFast-style workloads rely on WriteSync for immediate
-			// read-after-write visibility, not per-batch backend publication.
-			// Forcing a backend flush boundary on every sync write with WAL off and
-			// outer leaves in the value log turns live catch-up into thousands of
-			// tiny backend commits, which explodes page count and sparse internal
-			// nodes. Keep these writes visible in memory and let checkpoint/rotation
-			// establish the backend boundary.
-			return nil
-		}
-		// Journal disabled: enforce a backend flush boundary without fsync.
-		return db.flushAllMemtablesForSync(false)
-	}
-	// Journal disabled: enforce a durable backend boundary.
+	// With no redo journal, every explicit *Sync operation must wait for exact
+	// durable root coverage. The configured relaxed mode still governs ordinary
+	// writes; it cannot weaken an explicit sync request when no WAL exists.
 	return db.Checkpoint()
 }
 
@@ -27293,7 +27272,7 @@ func (db *DB) flushLoop() {
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
-	return sync && !db.relaxedSync
+	return sync
 }
 
 func (db *DB) pickFlushLane() (int, bool) {

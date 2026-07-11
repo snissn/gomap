@@ -124,7 +124,31 @@ func formatMaybeNegativeDurationMs(d time.Duration) string {
 	return fmt.Sprintf("%d", d.Milliseconds())
 }
 
+// effectivePruneCurrent converts the oldest recovery-selectable root into the
+// current sequence expected by graveyard.Extract*. Those methods subtract
+// KeepRecent themselves, so adding it here avoids applying the retention
+// window twice while still capping reclamation at the redundant-meta boundary.
+func (db *DB) effectivePruneCurrent(current uint64) uint64 {
+	if db.rootPublication == nil {
+		return current
+	}
+	oldestRecoverable := db.rootPublication.snapshot().oldestRecoverableCommitSeq
+	recoverableCurrent := oldestRecoverable
+	if db.keepRecent > ^uint64(0)-recoverableCurrent {
+		recoverableCurrent = ^uint64(0)
+	} else {
+		recoverableCurrent += db.keepRecent
+	}
+	if recoverableCurrent < current {
+		return recoverableCurrent
+	}
+	return current
+}
+
 func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.Duration) (int, error) {
+	if err := db.publicationPoisonedError(); err != nil {
+		return 0, err
+	}
 	if maxPages == 0 {
 		return 0, nil
 	}
@@ -157,7 +181,7 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 		if state == nil {
 			return freedPages, nil
 		}
-		currentSeq := state.CommitSeq
+		currentSeq := db.effectivePruneCurrent(state.CommitSeq)
 		minPinned := db.MinPinnedSnapshotCommitSeq()
 
 		remaining := maxPages

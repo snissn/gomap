@@ -131,6 +131,23 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		_ = snap.Close()
 		return stats, false, err
 	}
+	if db.rootPublication != nil {
+		recoveryRoots, recoverySystemRoots, _ := db.rootPublication.recoverableValueLogRoots()
+		recovery, scanErr := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+			Collectors:             maintenanceReachabilityLeafLogFileIDs,
+			ProtectedRootIDs:       recoveryRoots,
+			ProtectedSystemRootIDs: recoverySystemRoots,
+		})
+		if scanErr != nil {
+			_ = snap.Close()
+			return stats, false, scanErr
+		}
+		for rawFileID := range recovery.leafLogFileIDs {
+			if generationID, ok := snap.state.LeafGenerations.FileToGeneration[rawFileID]; ok {
+				liveGenerations[generationID] = struct{}{}
+			}
+		}
+	}
 	if err := snap.Close(); err != nil {
 		return stats, false, err
 	}

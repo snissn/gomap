@@ -39,7 +39,10 @@ func TestPruneReclaimsRetiredPagesAfterKeepRecentWindow(t *testing.T) {
 				t.Fatalf("set: %v", err)
 			}
 		}
-		if err := b.Write(); err != nil {
+		// Keep the two durable meta slots advancing deterministically. Relaxed
+		// writes may otherwise coalesce seq 1 and seq 2 into a single publication,
+		// legitimately leaving the redundant recovery slot at seq 0.
+		if err := b.WriteSync(); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 		_ = b.Close()
@@ -75,6 +78,27 @@ func TestPruneReclaimsRetiredPagesAfterKeepRecentWindow(t *testing.T) {
 		}
 		_ = b.Close()
 	}
+	// Visibility can lead the redundant-meta durability frontier. Reclamation
+	// remains fenced until the new root is durable.
+	d.Prune()
+	visibleOnly, err := d.FragmentationReport()
+	if err != nil {
+		t.Fatalf("FragmentationReport(visible seq3): %v", err)
+	}
+	visibleFreeIDs, err := strconv.ParseUint(visibleOnly["treedb.freelist.free_ids"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse freelist.free_ids(visible seq3): %v", err)
+	}
+	if visibleFreeIDs != freeIDs2 {
+		t.Fatalf("visible-only seq3 reclaimed pages before redundant-meta coverage: before=%d after=%d", freeIDs2, visibleFreeIDs)
+	}
+
+	// Once the new root is durable, request pruning explicitly for this
+	// deterministic background-prune-disabled test.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint seq3: %v", err)
+	}
+	d.Prune()
 
 	rep3, err := d.FragmentationReport()
 	if err != nil {

@@ -479,10 +479,7 @@ func (db *DB) currentCommitSeq() uint64 {
 	if state := db.state.Load(); state != nil {
 		return state.CommitSeq
 	}
-	db.mu.RLock()
-	seq := db.meta.CommitSeq
-	db.mu.RUnlock()
-	return seq
+	return 0
 }
 
 func (db *DB) initValueLogRefTracker() error {
@@ -574,8 +571,24 @@ func (db *DB) referencedValueLogSegmentsWithSourceAtSeq(ctx context.Context) (ma
 	return db.referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx, false)
 }
 
-func (db *DB) referencedValueLogSegmentsForGCAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
-	return db.referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx, true)
+func (db *DB) referencedValueLogSegmentsForGCAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, uint64, error) {
+	counts, scannedSeq, recoveryGeneration, err := db.scanValueLogRefCountsForGC(ctx)
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, valueLogRefResolutionSourceFallbackScan, 0, 0, refreshErr
+		}
+		counts, scannedSeq, recoveryGeneration, err = db.scanValueLogRefCountsForGC(ctx)
+	}
+	if err != nil {
+		return nil, valueLogRefResolutionSourceFallbackScan, 0, 0, err
+	}
+	refs := make(map[uint32]struct{}, len(counts))
+	for fileID, n := range counts {
+		if n != 0 {
+			refs[fileID] = struct{}{}
+		}
+	}
+	return refs, valueLogRefResolutionSourceFallbackScan, scannedSeq, recoveryGeneration, nil
 }
 
 func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Context, guardConcurrentAdvance bool) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
@@ -618,6 +631,15 @@ func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Contex
 }
 
 func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {
+	counts, seq, _, err := db.scanValueLogRefCountsWithRecoveryRoots(ctx, false)
+	return counts, seq, err
+}
+
+func (db *DB) scanValueLogRefCountsForGC(ctx context.Context) (map[uint32]uint64, uint64, uint64, error) {
+	return db.scanValueLogRefCountsWithRecoveryRoots(ctx, true)
+}
+
+func (db *DB) scanValueLogRefCountsWithRecoveryRoots(ctx context.Context, includeRecoveryRoots bool) (map[uint32]uint64, uint64, uint64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -627,20 +649,23 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 		if snap != nil {
 			_ = snap.Close()
 		}
-		return nil, 0, fmt.Errorf("missing db state")
+		return nil, 0, 0, fmt.Errorf("missing db state")
 	}
 	commitSeq := snap.state.CommitSeq
-	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
-		Collectors: maintenanceReachabilityValueLogRefCounts,
-	})
+	opts := maintenanceReachabilityScanOptions{Collectors: maintenanceReachabilityValueLogRefCounts}
+	var recoveryGeneration uint64
+	if includeRecoveryRoots && db.rootPublication != nil {
+		opts.ProtectedValueLogRootIDs, opts.ProtectedValueLogSystemRootIDs, recoveryGeneration = db.rootPublication.recoverableValueLogRoots()
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, opts)
 	if err != nil {
 		_ = snap.Close()
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if err := snap.Close(); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	return result.valueLogRefCounts, commitSeq, nil
+	return result.valueLogRefCounts, commitSeq, recoveryGeneration, nil
 }
 
 func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iterator.UnsafeIterator {

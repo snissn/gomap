@@ -717,6 +717,9 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	if got, want := gen1.State, leafGenerationStateSealed; got != want {
 		t.Fatalf("generation1 state=%q, want %q", got, want)
 	}
+	if err := db.SetSync([]byte("leaf-gc-advance"), []byte("1")); err != nil {
+		t.Fatalf("advance recovery meta: %v", err)
+	}
 
 	stats1, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
@@ -960,6 +963,9 @@ func TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen(t *test
 	midIDs := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
 	midOnly := leafGenerationRawFileIDsWithout(midIDs, baseIDs)
 	putBatch(t, db, 0, 4096, "final")
+	if err := db.SetSync([]byte("leaf-gc-reopen-advance"), []byte("1")); err != nil {
+		t.Fatalf("advance recovery meta: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
@@ -1366,6 +1372,10 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 	if got, want := db.leafGenerationPinCountForTesting(gen1.GenerationID), uint64(1); got != want {
 		closeNoErr(t, snap)
 		t.Fatalf("pin count after republish=%d, want %d", got, want)
+	}
+	if err := db.SetSync([]byte("leaf-gc-pinned-advance"), []byte("1")); err != nil {
+		closeNoErr(t, snap)
+		t.Fatalf("advance recovery meta: %v", err)
 	}
 
 	stats1, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})

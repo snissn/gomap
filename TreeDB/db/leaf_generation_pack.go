@@ -268,7 +268,11 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	if set == nil {
 		return stats, fmt.Errorf("leaf generation pack: value-log set unavailable")
 	}
-	leafStartSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+	leafStartSeq, err := leafGenerationPackStartSeq(set, db.leafPageLog)
+	if err != nil {
+		_ = db.valueLogManager.Release(set)
+		return stats, fmt.Errorf("leaf generation pack: inspect leaf-page-log frontier: %w", err)
+	}
 	nextRID := uint64(0)
 	if opts.ReserveRIDs == nil {
 		nextRID, err = leafGenerationPackRIDStartScanner(set)
@@ -387,6 +391,27 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		return stats, nil
 	}
 	return stats, errLeafGenerationPackPublishConflict
+}
+
+// leafGenerationPackStartSeq prevents pack output from reusing a lane/path
+// still owned by the active leaf-page writer. Manager snapshots intentionally
+// omit zombies, so their maximum alone is not a sufficient allocation floor.
+func leafGenerationPackStartSeq(set *valuelog.Set, log LeafPageLog) (uint32, error) {
+	maxSeq := maxRewriteLaneSeqFromSet(set, rewriteLeafLogLaneID)
+	segments, err := leafPageLogCurrentSegments(log)
+	if err != nil {
+		return 0, err
+	}
+	for _, segment := range segments {
+		if segment.FileID == 0 || !page.IsValueLogFileID(segment.FileID) {
+			continue
+		}
+		lane, seq := valuelog.DecodeFileID(segment.FileID)
+		if lane == rewriteLeafLogLaneID && seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	return maxSeq, nil
 }
 
 func (db *DB) leafGenerationPackAllocators(leafStartSeq uint32, nextRID uint64, reserveRIDs func(int) (uint64, error)) (*leafLogSeqAllocator, *rewriteRIDAllocator) {

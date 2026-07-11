@@ -2142,7 +2142,7 @@ func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {
 		wantSync   bool
 	}{
 		{name: "durable", durability: DurabilityDurable, wantSync: true},
-		{name: "relaxed", durability: DurabilityWALOnRelaxed, wantSync: false},
+		{name: "relaxed", durability: DurabilityWALOnRelaxed, wantSync: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2171,6 +2171,7 @@ func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {
 			if err := db.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint: %v", err)
 			}
+			db.cached.SetCommandWALCheckpointPublishHook(nil)
 			if !called {
 				t.Fatal("checkpoint publish hook was not called")
 			}

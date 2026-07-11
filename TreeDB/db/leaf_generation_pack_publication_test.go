@@ -52,6 +52,16 @@ func closeLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rew
 	}
 }
 
+func closePoisonedLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rewriteWriter) {
+	t.Helper()
+	if err := db.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Close poisoned DB: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("Close leaf log: %v", err)
+	}
+}
+
 func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
@@ -438,12 +448,15 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 			t.Fatalf("candidate segment %d was unregistered after ambiguous publish", id)
 		}
 	}
-	if snap := db.AcquireSnapshot(); snap != nil {
+	if snap := db.AcquireSnapshot(); snap == nil {
+		t.Fatal("AcquireSnapshot failed on readable poisoned handle")
+	} else {
 		_ = snap.Close()
-		t.Fatal("AcquireSnapshot succeeded on poisoned handle")
+	}
+	if _, err := db.Get([]byte("pack-concurrent-0000")); err != nil {
+		t.Fatalf("Get on readable poisoned handle: %v", err)
 	}
 	for name, err := range map[string]error{
-		"Get": func() error { _, err := db.Get([]byte("pack-concurrent-0000")); return err }(),
 		"Pack": func() error {
 			_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{Force: true})
 			return err
@@ -465,7 +478,7 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 	if err := db.idx.Load().pager.Sync(); err != nil {
 		t.Fatalf("later raw pager sync: %v", err)
 	}
-	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	closePoisonedLeafGenerationPackPublicationTestDB(t, db, leafLog)
 
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
@@ -527,7 +540,7 @@ func TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta(t *testing.T) {
 	if err := db.idx.Load().pager.SyncPages([]uint64{targetMetaPageID}); err != nil {
 		t.Fatalf("sync restored alternate meta: %v", err)
 	}
-	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	closePoisonedLeafGenerationPackPublicationTestDB(t, db, leafLog)
 
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
@@ -631,7 +644,7 @@ func TestLeafGenerationPack_RefreshAndSnapshotCannotObserveFailedRegistration(t 
 func TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
-	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	defer closePoisonedLeafGenerationPackPublicationTestDB(t, db, leafLog)
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 
 	registered := make(chan struct{})

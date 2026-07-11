@@ -1,155 +1,89 @@
 package treedb
 
 import (
-	"bytes"
 	"errors"
-	"strconv"
+	"os"
+	"path/filepath"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
-	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 )
 
-// TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage is the
-// stable witness for deleting a command-WAL source before its AppliedCommandLSN
-// coverage reaches stable metadata. Package-local access is used only to drive
-// the backend publication and cleanup sequence; the crash image is reopened
-// through the actual public TreeDB Open/read path.
-func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *testing.T) {
+// TestPowerLossOracleSourceDeletionWaitsForStableCoverage is the converted
+// witness for the former source-deletion counterexample. Cleanup must consume
+// durable AppliedCommandLSN coverage, never a merely visible candidate.
+func TestPowerLossOracleSourceDeletionWaitsForStableCoverage(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{
+	d, err := Open(Options{
 		Dir:                    dir,
 		CommandWAL:             true,
 		Durability:             DurabilityDurable,
 		DisableBackgroundPrune: true,
-	}
-	d, err := Open(opts)
+	})
 	if err != nil {
-		t.Fatalf("open command-WAL fixture: %v", err)
+		t.Fatal(err)
 	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = d.Close()
-		}
-	}()
-	key := []byte("cleanup/acknowledged")
-	value := []byte("durable-command-value")
+	defer func() { _ = d.Close() }()
+
 	lsn, err := d.backend.AppendRawKVSingleCommandWAL(commitlog.RawKVOperation{
-		Op:    commitlog.RawKVOpSet,
-		Key:   key,
-		Value: value,
+		Op: commitlog.RawKVOpSet, Key: []byte("cleanup/acknowledged"), Value: []byte("durable-command-value"),
 	}, true)
 	if err != nil || lsn == 0 {
-		t.Fatalf("append synced command-WAL frame: lsn=%d err=%v", lsn, err)
+		t.Fatalf("append synced command frame: lsn=%d err=%v", lsn, err)
 	}
 	if err := d.backend.RotateCommandWALActiveSegment(true); err != nil {
-		t.Fatalf("rotate synced command-WAL segment: %v", err)
+		t.Fatal(err)
 	}
-	baseline := d.backend.State()
-	if baseline == nil {
-		t.Fatal("missing baseline state")
+	segments, err := filepath.Glob(filepath.Join(dir, "*", "wal", "commit-*.log"))
+	if err != nil || len(segments) < 2 {
+		t.Fatalf("rotated command-WAL segments=%v err=%v", segments, err)
 	}
-	model, err := powerlossoracle.Capture(dir)
-	if err != nil {
-		t.Fatalf("capture stable command-WAL image: %v", err)
-	}
+	source := segments[0]
 
-	cutErr := errors.New("power-loss-oracle: stop after actual deletion directory sync")
-	var snapshot *powerlossoracle.Model
-	var deletionSync durabilitycut.Event
+	cutErr := errors.New("power-loss-oracle: pre-meta publication stall")
+	var unlinks int
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if err := model.Observe(dir, event); err != nil {
-			return err
+		if event.Namespace == durabilitycut.NamespaceUnlink && event.Resource == durabilitycut.ResourceCommandWAL {
+			unlinks++
 		}
-		if event.Point == durabilitycut.AfterDeletionDirectorySync && event.Resource == durabilitycut.ResourceCommandWAL {
-			deletionSync = event
-			snapshot = model.Clone()
+		if event.Point == durabilitycut.BeforeIndexDataSync {
 			return cutErr
 		}
 		return nil
 	})
 	if err := d.backend.PublishCommandWALAppliedLSN(lsn, []backenddb.CommandWALLSNRange{{First: lsn, Last: lsn}}, false); err != nil {
 		restore()
-		t.Fatalf("publish unsynced AppliedCommandLSN: %v", err)
+		t.Fatalf("publish visible AppliedCommandLSN: %v", err)
 	}
-	err = d.backend.CleanupCommandWALCoveredSegments(true)
+	if err := d.backend.Checkpoint(); !errors.Is(err, backenddb.ErrPublicationStalled) {
+		restore()
+		t.Fatalf("checkpoint during pre-meta stall err=%v", err)
+	}
+	if err := d.backend.CleanupCommandWALCoveredSegments(true); err != nil {
+		restore()
+		t.Fatalf("cleanup against durable coverage: %v", err)
+	}
+	if unlinks != 0 {
+		restore()
+		t.Fatalf("cleanup unlinked %d command-WAL sources before stable AppliedCommandLSN coverage", unlinks)
+	}
+	if _, err := os.Stat(source); err != nil {
+		restore()
+		t.Fatalf("stable command-WAL source removed before meta coverage: %v", err)
+	}
 	restore()
-	if !errors.Is(err, cutErr) || snapshot == nil || deletionSync.Path == "" {
-		t.Fatalf("actual deletion-directory cut err=%v path=%q", err, deletionSync.Path)
-	}
-	if err := d.Close(); err != nil {
-		t.Fatalf("close source fixture: %v", err)
-	}
-	closed = true
 
-	crashDir := t.TempDir()
-	if err := snapshot.MaterializeStable(crashDir); err != nil {
-		t.Fatalf("materialize stable-only image: %v", err)
+	// A later explicit boundary retries the pre-meta stall. Once coverage is in
+	// stable metadata, ordinary cleanup may remove the covered source.
+	if err := d.backend.Checkpoint(); err != nil {
+		t.Fatalf("retry publication: %v", err)
 	}
-	reopenOpts := opts
-	reopenOpts.Dir = crashDir
-	reopenOpts.ReadOnly = true
-	reopened, openErr := Open(reopenOpts)
-	if openErr != nil {
-		t.Logf("public TreeDB.Open rejected image after early actual WAL deletion: %v", openErr)
-		return
+	if err := d.backend.CleanupCommandWALCoveredSegments(true); err != nil {
+		t.Fatalf("cleanup after stable coverage: %v", err)
 	}
-	defer reopened.Close()
-	got, getErr := reopened.Get(key)
-	if getErr == nil && bytes.Equal(got, value) {
-		t.Fatalf("public TreeDB.Open/read recovered acknowledged command after its only stable source was deleted")
+	if _, err := os.Stat(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("covered command-WAL source still present after stable coverage: %v", err)
 	}
-	stats := reopened.Stats()
-	openedSequence, err := strconv.ParseUint(stats["treedb.commit_seq"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse reopened commit sequence: %v", err)
-	}
-	openedApplied, err := strconv.ParseUint(stats["treedb.applied_command_lsn"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse reopened applied LSN: %v", err)
-	}
-	generation := powerLossCompleteGeneration(baseline.CommitSeq, baseline.AppliedCommandLSN)
-	for i := range generation.Resources {
-		if generation.Resources[i].Kind == powerlossoracle.ResourceCommandWAL {
-			generation.Resources[i].ID = deletionSync.Path
-		}
-	}
-	scenario := powerlossoracle.Scenario{
-		Name:                 "actual-source-deletion-before-stable-coverage",
-		Cut:                  powerlossoracle.AfterDeletionDirectorySync,
-		Generations:          []powerlossoracle.Generation{generation},
-		LatestSealedSequence: baseline.CommitSeq,
-		SelectedSequence:     openedSequence,
-		OpenedSequence:       openedSequence,
-		OpenedAppliedLSN:     openedApplied,
-		RemovedResources: []powerlossoracle.Resource{{
-			Kind: powerlossoracle.ResourceCommandWAL,
-			ID:   deletionSync.Path,
-		}},
-		ReopenAttempted: true,
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantEarlySourceDeletion); err != nil {
-		t.Fatalf("successful public Open did not produce early-source-deletion diagnosis: %v (value=%q get=%v)", err, got, getErr)
-	}
-}
-
-func powerLossCompleteGeneration(sequence, applied uint64) powerlossoracle.Generation {
-	kinds := []powerlossoracle.ResourceKind{
-		powerlossoracle.ResourceIndex,
-		powerlossoracle.ResourceFreelist,
-		powerlossoracle.ResourceValueLog,
-		powerlossoracle.ResourceOuterLeaf,
-		powerlossoracle.ResourceAuxiliary,
-		powerlossoracle.ResourceDirectory,
-		powerlossoracle.ResourceSeal,
-		powerlossoracle.ResourceCommandWAL,
-	}
-	resources := make([]powerlossoracle.Resource, 0, len(kinds))
-	for _, kind := range kinds {
-		resources = append(resources, powerlossoracle.Resource{Kind: kind, ID: string(kind), Stable: true, Live: true})
-	}
-	return powerlossoracle.Generation{Sequence: sequence, Recoverable: true, Resources: resources, AppliedLSN: applied}
 }

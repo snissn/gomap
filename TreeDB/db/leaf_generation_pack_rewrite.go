@@ -1452,9 +1452,8 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	visibilityLocked := false
-	publishPrepareLocked := false
 	db.publishPrepareMu.RLock()
-	publishPrepareLocked = true
+	publishPrepareGuard := &finalizeCommitPrepareGuard{db: db}
 	db.valueLogPublicationMu.Lock()
 	visibilityLocked = true
 	previousUnlockPublish := unlockPublish
@@ -1463,10 +1462,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			db.valueLogPublicationMu.Unlock()
 			visibilityLocked = false
 		}
-		if publishPrepareLocked {
-			db.publishPrepareMu.RUnlock()
-			publishPrepareLocked = false
-		}
+		publishPrepareGuard.Release()
 		previousUnlockPublish()
 	}
 	// Refresh can publish a new state without writeMu. Revalidate once more after
@@ -1510,8 +1506,17 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		result := <-dirSyncCh
 		dirSyncCh = nil
 		if runStats != nil {
-			runStats.ApplyStages.DirectorySyncTimeNanos += result.timeNanos
-			runStats.ApplyStages.DirectorySyncWaitTimeNanos += time.Since(waitStarted).Nanoseconds()
+			waitNanos := time.Since(waitStarted).Nanoseconds()
+			operationNanos := result.timeNanos
+			// The worker records the syscall endpoint before handing the result
+			// through the channel. Include that handoff in the caller-observed
+			// operation wall so its non-overlapping wait attribution cannot exceed
+			// the operation that produced it.
+			if waitNanos > operationNanos {
+				operationNanos = waitNanos
+			}
+			runStats.ApplyStages.DirectorySyncTimeNanos += operationNanos
+			runStats.ApplyStages.DirectorySyncWaitTimeNanos += waitNanos
 		}
 		return result.err
 	}
@@ -1562,6 +1567,41 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}(started)
 	}
 
+	// Directory durability can block, so wait without root/value-log
+	// serialization. Keep the preparation read pin: destructive maintenance
+	// cannot remove the promoted-but-unregistered files, and exact basis
+	// revalidation below detects any ordinary root change while unlocked.
+	db.valueLogPublicationMu.Unlock()
+	visibilityLocked = false
+	db.writeMu.Unlock()
+	dirWaitStarted := time.Now()
+	dirSyncErr := waitDirectorySync()
+	dirWaitDuration := time.Since(dirWaitStarted)
+	db.writeMu.Lock()
+	if db.closing.Load() {
+		unlockPublish()
+		return cleanupCreatedSegments(ErrClosed)
+	}
+	db.valueLogPublicationMu.Lock()
+	visibilityLocked = true
+	if dirSyncErr != nil {
+		unlockPublish()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", dirSyncErr))
+	}
+	if !db.leafGenerationPackCopyBasisMatches(basis) {
+		if runStats != nil {
+			runStats.PublishConflict = true
+			runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
+		}
+		unlockPublish()
+		return cleanupCreatedSegments(errLeafGenerationPackPublishConflict)
+	}
+	publishEvent.Phase = leafGenerationPackAfterDirectorySync
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		unlockPublish()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: directory sync failpoint: %w", err))
+	}
+
 	var leafManifest *leafGenerationManifest
 	var leafManifestRawFileIDs []uint32
 	if db.leafGenerationManifest != nil {
@@ -1599,25 +1639,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.ApplyStages.RelocationTimeNanos += relocateDuration.Nanoseconds()
 	}
 	publishRetired := leafGenerationPackCommittedRetired(leafCtx.retired)
-	// The target-directory and index-page durability fences are independent and
-	// can run concurrently. Both complete before registration or meta write.
-	pageSyncStarted := time.Now()
-	if err := idx.pager.SyncPages(publishAlloc.Pages()); err != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published index pages: %w", err))
-	}
-	pageSyncDuration := time.Since(pageSyncStarted)
-	if runStats != nil {
-		runStats.ApplyStages.PageSyncTimeNanos += pageSyncDuration.Nanoseconds()
-	}
-	dirWaitStarted := time.Now()
-	if err := waitDirectorySync(); err != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", err))
-	}
-	dirWaitDuration := time.Since(dirWaitStarted)
-	publishEvent.Phase = leafGenerationPackAfterDirectorySync
-	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: directory sync failpoint: %w", err))
-	}
+	// Root publication owns exact candidate-page durability after serialization
+	// is released.
+	pageSyncDuration := time.Duration(0)
 
 	publishEvent.Phase = leafGenerationPackBeforeRegistration
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
@@ -1663,11 +1687,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish collection descriptors: %w", err))
 		}
 		publishRetired = append(publishRetired, publishCtx.retired...)
-		if err := db.leafPageLog.Sync(); err != nil {
-			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection descriptors: %w", err))
-		}
-		if err := idx.pager.SyncPages(publishAlloc.Pages()); err != nil {
-			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection index pages: %w", err))
+	}
+	// Collection replacement can append outer leaves through the installed live
+	// leaf log after the private pack writer was closed. Drain those userspace
+	// buffers while writeMu still excludes a successor builder; the publication
+	// worker will fsync the captured paths without touching this mutable writer.
+	if db.leafPageLog != nil {
+		if err := db.leafPageLog.Flush(); err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: flush published collection leaf refs: %w", err))
 		}
 	}
 	if runStats != nil {
@@ -1679,9 +1706,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	finalizeStarted := time.Now()
-	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
+	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, nil, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
 		skipPrePublishFlush: true,
+		dependenciesFlushed: true,
 		syncMetaPageOnly:    true,
+		publishPrepareGuard: publishPrepareGuard,
+		touchedIndexPages:   publishAlloc.Pages(),
 	})
 	finalizeDuration := time.Since(finalizeStarted)
 	if runStats != nil {
@@ -1709,6 +1739,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()
+	if db.rootPublication != nil {
+		if err := db.rootPublication.stabilizeRecoveryWindow(post.commitSeq); err != nil {
+			return 0, 0, errors.Join(fmt.Errorf("vlog-rewrite: publish rewritten leaf refs: %w", err), db.commandWALPoisonedError())
+		}
+	}
 	postWorkStarted := time.Now()
 	db.finalizeCommitPostWork(post)
 	if runStats != nil {

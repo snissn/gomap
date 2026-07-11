@@ -37,6 +37,14 @@ type ValueLogExternalRefFlusher interface {
 	FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error
 }
 
+// ValueLogDurableExternalRefFlusher is the publication-only durability
+// extension. Unlike foreground Sync policy, this method must force the named
+// value-log dependencies to stable storage even when the DB uses relaxed
+// durability for ordinary writes.
+type ValueLogDurableExternalRefFlusher interface {
+	SyncValueLogExternalRefsDurable(fileIDs []uint32) error
+}
+
 type valueLogAppenderHolder struct {
 	appender ValueLogAppender
 }

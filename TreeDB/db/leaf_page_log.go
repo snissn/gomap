@@ -23,6 +23,13 @@ type LeafPageLog interface {
 	Sync() error
 }
 
+// LeafPageLogDurableSyncer is the publication-only stable-storage barrier.
+// Implementations must not weaken it according to foreground relaxed-sync
+// policy.
+type LeafPageLogDurableSyncer interface {
+	SyncLeafPageLogDurable() error
+}
+
 type LeafPageBatchLog interface {
 	// AppendLeafPages appends every leaf page and returns one pointer per input
 	// page in the same order. Callers use that positional relationship for

@@ -30,19 +30,25 @@ type finalizeCommitOptions struct {
 	appliedCommandLSN           uint64
 	appliedRanges               []CommandWALLSNRange
 	skipPrePublishFlush         bool
+	dependenciesFlushed         bool
 	syncMetaPageOnly            bool
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
+	publishPrepareGuard         *finalizeCommitPrepareGuard
+	touchedIndexPages           []uint64
+	sideStoreBytes              uint64
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 
-	db.mu.RLock()
-	baseSeq := db.meta.CommitSeq
-	rootsUnchanged := newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	if visible == nil {
+		db.writeMu.Unlock()
+		return ErrClosed
+	}
+	baseSeq := visible.CommitSeq
+	rootsUnchanged := newRootID == visible.RootPageID && sysRootID == visible.SystemRootPageID
 
 	var vlogRefDelta *valueLogRefDelta
 	if rootsUnchanged {
@@ -70,9 +76,15 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
+		db.writeMu.Unlock()
 		return err
 	}
 	db.finalizeCommitPostWork(post)
+	target := post.commitSeq
+	db.writeMu.Unlock()
+	if sync && db.rootPublication != nil {
+		return db.rootPublication.waitDurable(target)
+	}
 	return nil
 }
 

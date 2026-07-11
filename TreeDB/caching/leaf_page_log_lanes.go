@@ -12,6 +12,7 @@ type cachingLeafPageLogGroup struct {
 }
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageLogDurableSyncer = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedBatchLog = (*cachingLeafPageLogGroup)(nil)
@@ -215,6 +216,10 @@ func (g *cachingLeafPageLogGroup) Flush() error {
 
 func (g *cachingLeafPageLogGroup) Sync() error {
 	return g.forEachLane(func(log *cachingLeafPageLog) error { return log.Sync() })
+}
+
+func (g *cachingLeafPageLogGroup) SyncLeafPageLogDurable() error {
+	return g.forEachLane(func(log *cachingLeafPageLog) error { return log.SyncLeafPageLogDurable() })
 }
 
 func (g *cachingLeafPageLogGroup) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {

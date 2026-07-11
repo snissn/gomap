@@ -18,7 +18,12 @@ type commitCombineReq struct {
 	value  []byte
 	del    bool
 	sync   bool
-	result chan error
+	result chan commitCombineResult
+}
+
+type commitCombineResult struct {
+	publishedCommitSeq uint64
+	err                error
 }
 
 func (db *DB) startCommitCombiner() {
@@ -90,7 +95,7 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 		key:    append([]byte(nil), key...),
 		del:    del,
 		sync:   sync,
-		result: make(chan error, 1),
+		result: make(chan commitCombineResult, 1),
 	}
 	if !del {
 		req.value = append([]byte(nil), value...)
@@ -106,8 +111,14 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 	}
 
 	select {
-	case err := <-req.result:
-		return true, err
+	case result := <-req.result:
+		if result.err != nil || !sync || db.commandWAL {
+			return true, result.err
+		}
+		if result.publishedCommitSeq == 0 || db.rootPublication == nil {
+			return true, ErrClosed
+		}
+		return true, db.rootPublication.waitDurable(result.publishedCommitSeq)
 	case <-stopCh:
 		return true, errCommitCombinerClosed
 	}
@@ -134,9 +145,9 @@ func (db *DB) writeSingleKV(key, value []byte, del, sync bool) error {
 	return err
 }
 
-func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
+func (db *DB) applyCombinedBatch(batch []*commitCombineReq) (uint64, error) {
 	if len(batch) == 0 {
-		return nil
+		return 0, nil
 	}
 	anySync := false
 	b := db.newBatchWithEntryReserve(len(batch)).(*Batch)
@@ -153,30 +164,31 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 		}
 		if err != nil {
 			_ = b.Close()
-			return err
+			return 0, err
 		}
 		if req.sync {
 			anySync = true
 		}
 	}
 	var err error
-	if anySync {
+	if anySync && db.commandWAL {
 		err = b.WriteSync()
 	} else {
 		err = b.Write()
 	}
+	publishedCommitSeq := b.publishedCommitSeq
 	if closeErr := b.Close(); err == nil {
 		err = closeErr
 	}
-	return err
+	return publishedCommitSeq, err
 }
 
-func (db *DB) finishCombined(batch []*commitCombineReq, err error) {
+func (db *DB) finishCombined(batch []*commitCombineReq, publishedCommitSeq uint64, err error) {
 	for _, req := range batch {
 		if req == nil {
 			continue
 		}
-		req.result <- err
+		req.result <- commitCombineResult{publishedCommitSeq: publishedCommitSeq, err: err}
 	}
 }
 
@@ -187,7 +199,7 @@ func (db *DB) drainCombined(reqCh <-chan *commitCombineReq, err error) {
 			if req == nil {
 				return
 			}
-			req.result <- err
+			req.result <- commitCombineResult{err: err}
 		default:
 			return
 		}
@@ -235,8 +247,8 @@ func (db *DB) commitCombinerLoop(reqCh <-chan *commitCombineReq, stopCh <-chan s
 						default:
 						}
 					}
-					err := db.applyCombinedBatch(batch)
-					db.finishCombined(batch, err)
+					publishedCommitSeq, err := db.applyCombinedBatch(batch)
+					db.finishCombined(batch, publishedCommitSeq, err)
 					db.drainCombined(reqCh, errCommitCombinerClosed)
 					return
 				}
@@ -250,8 +262,8 @@ func (db *DB) commitCombinerLoop(reqCh <-chan *commitCombineReq, stopCh <-chan s
 				default:
 				}
 			}
-			err := db.applyCombinedBatch(batch)
-			db.finishCombined(batch, err)
+			publishedCommitSeq, err := db.applyCombinedBatch(batch)
+			db.finishCombined(batch, publishedCommitSeq, err)
 		}
 	}
 }

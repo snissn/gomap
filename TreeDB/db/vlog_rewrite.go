@@ -2029,13 +2029,26 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 		}
 	}
+	// Cleanup may unlink both source and historical rewrite-lane segments. Fence
+	// it at the exact visible root frontier so reachability is never evaluated
+	// against pointer swaps whose redundant meta is still only queued.
+	if db.rootPublication == nil {
+		return stats, ErrClosed
+	}
+	visible := db.state.Load()
+	if visible == nil {
+		return stats, ErrClosed
+	}
+	if err := db.rootPublication.stabilizeRecoveryWindow(visible.CommitSeq); err != nil {
+		return stats, err
+	}
 
-	// After swaps are published (i.e. pointer updates have been flushed and made
-	// visible), run cleanup against a non-cancelable context. At this point the
+	// After swaps are published and durable, run cleanup against a non-cancelable
+	// context. At this point the
 	// rewrite is logically committed, so value-log segment bookkeeping must always
 	// complete to keep the value-log set and on-disk metadata consistent with the
 	// already-committed pointer swaps, even if the caller's context is canceled.
-	referencedAfter, err := db.referencedValueLogSegments(context.Background())
+	referencedAfter, _, _, _, err := db.referencedValueLogSegmentsForGCAtSeq(context.Background())
 	if err != nil {
 		return stats, err
 	}
@@ -2099,19 +2112,17 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
-	// Enable active-segment skip whenever callers provide explicit protected
-	// scope, and also for internal unlocked rewrite flows where concurrent
-	// writers may append pointers after the index reachability scan.
-	allowActiveSkip := !lockMaintenance || len(opts.ProtectedPaths) > 0 || len(opts.SourceFileIDs) > 0 || len(opts.SourceChunks) > 0
+	// Existing active source segments may still receive foreground or cached
+	// writes after the exact backend-root reachability scan. maintenanceMu only
+	// excludes other maintenance; it does not freeze appenders. Keep every active
+	// pre-existing source until a rotate-and-revalidate path proves it unreachable.
+	allowActiveSkip := true
 	{
 		currentSet := db.valueLogManager.CurrentSetNoRefresh()
 		if currentSet != nil {
 			if len(protectedPaths) > 0 {
 				if allowActiveSkip {
 					activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
-					if len(activeIDs) == 0 {
-						activeIDs = currentValueLogIDs(currentSet)
-					}
 				}
 				protectedIDs = make(map[uint32]struct{})
 				for id, f := range currentSet.Files {
@@ -2122,10 +2133,39 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 						protectedIDs[id] = struct{}{}
 					}
 				}
-			} else if allowActiveSkip {
-				activeIDs = currentValueLogIDs(currentSet)
 			}
 			_ = db.valueLogManager.Release(currentSet)
+		}
+	}
+	if allowActiveSkip {
+		if activeIDs == nil {
+			activeIDs = make(map[uint32]struct{})
+		}
+		// The highest on-disk ID in a lane is not proof that the file is still
+		// writable. Keep only segments with an explicit in-process ownership or
+		// append-in-flight signal; otherwise a sealed source would remain visible
+		// forever after all of its pointers were rewritten.
+		for _, id := range db.valueLogManager.CurrentWritableFileIDs() {
+			activeIDs[id] = struct{}{}
+		}
+		for id := range db.pendingValueLogAppendFileIDs() {
+			activeIDs[id] = struct{}{}
+		}
+		if appender := db.currentValueLogAppender(); appender != nil {
+			if _, id, ok := appender.CurrentValueLogSegment(); ok && id != 0 {
+				activeIDs[id] = struct{}{}
+			}
+		}
+		if db.leafPageLog != nil {
+			segments, err := leafPageLogCurrentSegments(db.leafPageLog)
+			if err != nil {
+				return stats, err
+			}
+			for _, segment := range segments {
+				if segment.FileID != 0 {
+					activeIDs[segment.FileID] = struct{}{}
+				}
+			}
 		}
 	}
 	markZombieCandidate := func(id uint32, existedBefore bool) error {
@@ -2135,19 +2175,12 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if _, ok := protectedIDs[id]; ok {
 			return nil
 		}
-		// When active-segment skipping is enabled, avoid marking currently
-		// active pre-existing segments zombie. Concurrent writers may still be
-		// appending records whose pointers are not yet visible in the backend
-		// index.
 		if existedBefore && allowActiveSkip {
 			if _, ok := activeIDs[id]; ok {
 				return nil
 			}
 		}
-		if err := db.valueLogManager.MarkZombie(id); err != nil {
-			return err
-		}
-		return nil
+		return db.valueLogManager.MarkZombie(id)
 	}
 	for id := range oldValueIDs {
 		if err := markZombieCandidate(id, true); err != nil {
@@ -2429,11 +2462,10 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	systemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	systemRoot := visible.SystemRootPageID
+	baseSeq := visible.CommitSeq
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2480,11 +2512,10 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	systemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	systemRoot := visible.SystemRootPageID
+	baseSeq := visible.CommitSeq
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2669,9 +2700,9 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 
 	var vlogSet *valuelog.Set
 	db.mu.RLock()
-	rootID := db.meta.UserRootPageID
-	baseSeq := db.meta.CommitSeq
 	state := db.state.Load()
+	rootID := state.RootPageID
+	baseSeq := state.CommitSeq
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}
@@ -2724,10 +2755,9 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	}()
 
 	db.commitMu.Lock()
-	db.mu.RLock()
-	currentRoot := db.meta.UserRootPageID
-	sysRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	currentRoot := visible.RootPageID
+	sysRoot := visible.SystemRootPageID
 	if currentRoot != rootID {
 		db.commitMu.Unlock()
 		freeErr := tracker.FreeAll()
@@ -2737,7 +2767,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, nil
 	}
 
-	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	post, err := db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{touchedIndexPages: tracker.Pages()})
 	db.commitMu.Unlock()
 	if err != nil {
 		return false, err
@@ -2762,10 +2792,10 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 
 	var vlogSet *valuelog.Set
 	db.mu.RLock()
-	rootID := db.meta.UserRootPageID
-	sysRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
 	state := db.state.Load()
+	rootID := state.RootPageID
+	sysRoot := state.SystemRootPageID
+	baseSeq := state.CommitSeq
 	if state != nil {
 		vlogSet = state.ValueLogSet
 	}

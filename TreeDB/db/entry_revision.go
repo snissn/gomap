@@ -9,9 +9,13 @@ func (db *DB) seedEntryRevisionFloor() {
 	if db == nil {
 		return
 	}
+	visible := db.state.Load()
 	floor := db.meta.MaxEntryRevision
-	if db.meta.CommitSeq > floor {
-		floor = db.meta.CommitSeq
+	if visible != nil && uint64(visible.MaxEntryRevision) > floor {
+		floor = uint64(visible.MaxEntryRevision)
+	}
+	if visible != nil && visible.CommitSeq > floor {
+		floor = visible.CommitSeq
 	}
 	db.entryRevisionFloor.Store(floor)
 }

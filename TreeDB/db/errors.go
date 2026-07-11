@@ -17,6 +17,10 @@ var (
 	// ErrConcurrentModification indicates a publish or maintenance operation
 	// observed that a root changed after its validation point.
 	ErrConcurrentModification = errors.New("treedb: concurrent modification")
+	// ErrPublicationStalled reports that background root publication failed
+	// before touching the alternate meta page. The prior durable root remains
+	// authoritative and an explicit durability boundary may retry publication.
+	ErrPublicationStalled = errors.New("treedb: root publication stalled")
 	// ErrLeafGenerationGCStaleScan indicates both bounded dry-run attempts were
 	// invalidated by concurrent publishes before their results could be used.
 	ErrLeafGenerationGCStaleScan = errors.New("treedb: leaf generation gc scan invalidated")

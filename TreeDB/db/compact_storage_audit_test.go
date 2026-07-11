@@ -599,8 +599,8 @@ func TestCompactStorageAudit_ProtectedRootsDoNotPoisonTrackerOrSubsequentGC(t *t
 	if err != nil {
 		t.Fatalf("ValueLogGC after removing protection: %v", err)
 	}
-	if got := scans.Load(); got != 0 {
-		t.Fatalf("ValueLogGC legacy ref scans=%d want tracker-only resolution", got)
+	if got := scans.Load(); got != 1 {
+		t.Fatalf("ValueLogGC recovery-closure scans=%d want 1 exact meta-slot scan", got)
 	}
 	if stats.SegmentsDeleted != 1 {
 		t.Fatalf("SegmentsDeleted=%d want 1: %+v", stats.SegmentsDeleted, stats)

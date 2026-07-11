@@ -42,10 +42,11 @@ func readOnlyPrepareRootSeq(d *DB) (root, seq uint64) {
 	if d == nil {
 		return 0, 0
 	}
-	d.mu.RLock()
-	root = d.meta.UserRootPageID
-	seq = d.meta.CommitSeq
-	d.mu.RUnlock()
+	state := d.state.Load()
+	if state != nil {
+		root = state.RootPageID
+		seq = state.CommitSeq
+	}
 	return root, seq
 }
 

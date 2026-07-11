@@ -1502,21 +1502,19 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		return 0, err
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	systemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	systemRoot := visible.SystemRootPageID
+	baseSeq := visible.CommitSeq
 
 	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db), false)
 	if err != nil {
 		return 0, err
 	}
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != systemRoot {
 		return 0, errors.New("concurrent modification detected during ordered root publish")
 	}
@@ -1600,11 +1598,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, err
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
+	baseSeq := visible.CommitSeq
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs = make([]uint64, len(ordered))
@@ -1683,10 +1680,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		}
 		vlogRefDelta = nil
 	}
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -2064,10 +2060,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		}
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
 	if preflight != nil {
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
@@ -2157,10 +2152,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
@@ -2237,10 +2231,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
 	if preflight != nil {
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
@@ -2357,10 +2350,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		err = errOrderedRootCommandWALContextConcurrentModification(userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
 		return 0, nil, err
@@ -2608,12 +2600,11 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, false, err
 	}
 
-	db.mu.RLock()
-	baseUserRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
+	visible := db.state.Load()
+	baseUserRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
+	baseSeq := visible.CommitSeq
 	regID := idx.registry.Register(baseSeq)
-	db.mu.RUnlock()
 
 	defer func() {
 		idx.registry.Unregister(regID)
@@ -2725,9 +2716,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		_ = systemDelta.Close()
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
-		db.mu.RLock()
-		observedSystemRoot := db.meta.SystemRootPageID
-		db.mu.RUnlock()
+		observedSystemRoot := db.state.Load().SystemRootPageID
 		if observedSystemRoot != systemBaseRoot {
 			if freeErr := systemTracker.FreeAll(); freeErr != nil {
 				err = freeErr
@@ -2765,10 +2754,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		db.commitMu.Lock()
 		holdStart := time.Now()
 		wait := holdStart.Sub(lockStart)
-		db.mu.RLock()
-		curUserRoot := db.meta.UserRootPageID
-		curSystemRoot := db.meta.SystemRootPageID
-		db.mu.RUnlock()
+		visible = db.state.Load()
+		curUserRoot := visible.RootPageID
+		curSystemRoot := visible.SystemRootPageID
 		if curSystemRoot != systemBaseRoot {
 			db.commitMu.Unlock()
 			releasePublishPrepare()
@@ -2804,7 +2792,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
-		post, err = db.finalizeCommitLockedWithOptions(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true})
+		touchedIndexPages := append(rootTracker.Pages(), systemTracker.Pages()...)
+		post, err = db.finalizeCommitLockedWithOptions(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, publishPrepareGuard: publishPrepareGuard, touchedIndexPages: touchedIndexPages})
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
 		hold := time.Since(holdStart)
@@ -2875,10 +2864,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, err
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
 	if preflight != nil {
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
@@ -2969,10 +2957,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
@@ -3046,10 +3033,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
 	if preflight != nil {
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
@@ -3175,10 +3161,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		err = errOrderedRootCommandWALContextConcurrentModification(userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
 		return 0, nil, err
@@ -3266,11 +3251,10 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, err
 	}
 
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
+	baseSeq := visible.CommitSeq
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	newSystemRoot := baseSystemRoot
@@ -3356,10 +3340,9 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		vlogRefDelta = refDelta
 	}
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}

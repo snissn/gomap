@@ -15,6 +15,7 @@ const (
 	maintenanceReachabilityValueLogRefCounts maintenanceReachabilityCollectors = 1 << iota
 	maintenanceReachabilityValueLogLiveBytes
 	maintenanceReachabilityLeafGenerationTotals
+	maintenanceReachabilityLeafLogFileIDs
 )
 
 func (c maintenanceReachabilityCollectors) has(want maintenanceReachabilityCollectors) bool {
@@ -22,10 +23,12 @@ func (c maintenanceReachabilityCollectors) has(want maintenanceReachabilityColle
 }
 
 type maintenanceReachabilityScanOptions struct {
-	Collectors              maintenanceReachabilityCollectors
-	ProtectedRootIDs        []uint64
-	ProtectedSystemRootIDs  []uint64
-	DisableLeafSubtreeCache bool
+	Collectors                     maintenanceReachabilityCollectors
+	ProtectedRootIDs               []uint64
+	ProtectedSystemRootIDs         []uint64
+	ProtectedValueLogRootIDs       []uint64
+	ProtectedValueLogSystemRootIDs []uint64
+	DisableLeafSubtreeCache        bool
 }
 
 type maintenanceReachabilityResult struct {
@@ -33,6 +36,7 @@ type maintenanceReachabilityResult struct {
 	valueLogReferencedSegments map[uint32]struct{}
 	valueLogLiveBytesBySegment map[uint32]int64
 	leafGenerationLive         leafGenerationLiveScanStats
+	leafLogFileIDs             map[uint32]struct{}
 	counters                   CompactStorageAuditStats
 
 	// Internal evidence for collector-selection tests. These count actual
@@ -41,7 +45,7 @@ type maintenanceReachabilityResult struct {
 	leafFrameProjections uint64
 }
 
-func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64, projectValueLog bool) ([]maintenanceRoot, int, error) {
+func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protectedValueLogRootIDs, protectedValueLogSystemRootIDs, protectedRootIDs, protectedSystemRootIDs []uint64, projectValueLog bool) ([]maintenanceRoot, int, error) {
 	roots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
 	if err != nil {
 		return nil, 0, err
@@ -51,7 +55,7 @@ func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protected
 	if projectValueLog {
 		valueLogRootCount = len(roots)
 	}
-	if len(protectedRootIDs) == 0 && len(protectedSystemRootIDs) == 0 {
+	if len(protectedValueLogRootIDs) == 0 && len(protectedValueLogSystemRootIDs) == 0 && len(protectedRootIDs) == 0 && len(protectedSystemRootIDs) == 0 {
 		return roots, valueLogRootCount, nil
 	}
 	seen := make(map[uint64]struct{}, len(roots)+len(protectedRootIDs)+len(protectedSystemRootIDs))
@@ -67,6 +71,21 @@ func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protected
 		}
 		seen[root.rootID] = struct{}{}
 		roots = append(roots, root)
+	}
+	for _, rootID := range protectedValueLogRootIDs {
+		addProtected(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
+	}
+	for _, systemRootID := range protectedValueLogSystemRootIDs {
+		protected, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, systemRootID)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, root := range protected {
+			addProtected(root)
+		}
+	}
+	if projectValueLog {
+		valueLogRootCount = len(roots)
 	}
 	for _, rootID := range protectedRootIDs {
 		addProtected(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
@@ -94,6 +113,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	collectRefs := opts.Collectors.has(maintenanceReachabilityValueLogRefCounts)
 	collectLive := opts.Collectors.has(maintenanceReachabilityValueLogLiveBytes)
 	collectLeaf := opts.Collectors.has(maintenanceReachabilityLeafGenerationTotals)
+	collectLeafFiles := opts.Collectors.has(maintenanceReachabilityLeafLogFileIDs)
 	collectValueLog := collectRefs || collectLive
 	if collectRefs {
 		result.valueLogRefCounts = make(map[uint32]uint64)
@@ -104,6 +124,9 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	}
 	if collectLeaf {
 		result.leafGenerationLive.Generations = make(map[uint64]leafGenerationLiveTotals)
+	}
+	if collectLeafFiles {
+		result.leafLogFileIDs = make(map[uint32]struct{})
 	}
 	if opts.Collectors == 0 {
 		return result, nil
@@ -117,7 +140,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 			return result, err
 		}
 	}
-	roots, valueLogRootCount, err := maintenanceReachabilityRoots(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs, collectValueLog)
+	roots, valueLogRootCount, err := maintenanceReachabilityRoots(ctx, snap, opts.ProtectedValueLogRootIDs, opts.ProtectedValueLogSystemRootIDs, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs, collectValueLog)
 	if err != nil {
 		return result, err
 	}
@@ -356,6 +379,9 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 			}
 			children := childStacks[depth][:0]
 			err := n.WalkInternalChildren(&children, func(ptr page.LeafLogPtr) error {
+				if collectLeafFiles {
+					result.leafLogFileIDs[page.ValueLogSegmentID(ptr.FileID)] = struct{}{}
+				}
 				if leafScan != nil {
 					result.leafFrameProjections++
 					var visitErr error

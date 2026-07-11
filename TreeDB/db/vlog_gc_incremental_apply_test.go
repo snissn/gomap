@@ -70,10 +70,12 @@ func TestBuildValueLogRefDeltaFallsBackWhenApplyEvidenceMissing(t *testing.T) {
 	_ = seed.Close()
 
 	idx := d.idx.Load()
-	d.mu.RLock()
-	rootID := d.meta.UserRootPageID
-	baseSeq := d.meta.CommitSeq
-	d.mu.RUnlock()
+	state := d.state.Load()
+	if state == nil {
+		t.Fatal("missing visible state")
+	}
+	rootID := state.RootPageID
+	baseSeq := state.CommitSeq
 	entries := make([]batchpkg.Entry, 4)
 	for i := range entries {
 		entries[i] = batchpkg.Entry{Key: []byte(fmt.Sprintf("key-%06d", i)), Type: batchpkg.OpDelete}

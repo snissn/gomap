@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const powerLossOracleSeed = uint64(3674)
@@ -156,6 +157,7 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	}
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if err := model.Observe(dir, event); err != nil {
+			t.Logf("power-loss oracle observe point=%s resource=%s path=%s: %v", event.Point, event.Resource, event.Path, err)
 			return err
 		}
 		if event.Point == durabilitycut.AfterDependencyAppend && (event.Resource == durabilitycut.ResourceValueLog || event.Resource == durabilitycut.ResourceOuterLeaf) {
@@ -293,9 +295,11 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	}
 }
 
-// This family is the stable witness for finalizeCommitLockedWithOptions and
-// flushFinalizeCommitDurability publishing meta ahead of dependency closure.
-func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
+// This is the converted witness for the former relaxed meta-before-closure
+// counterexample. The coordinator must make the complete dependency/index
+// closure stable before attempting meta, and an unsynced target meta must leave
+// the previous durable root authoritative after a crash.
+func TestPowerLossOracleNewMetaCutKeepsPreviousRootAuthoritative(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
 	opts.Durability = treedb.DurabilityWALOffRelaxed
@@ -340,97 +344,23 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	}
 	err = db.Checkpoint()
 	restore()
-	if !errors.Is(err, cutErr) || snapshot == nil {
+	if snapshot == nil || (!errors.Is(err, cutErr) && !errors.Is(err, treedb.ErrRecoveryRequired)) {
 		t.Fatalf("actual relaxed finalize did not stop at AfterMetaWrite: err=%v", err)
 	}
+	if meta.Path == "" || meta.Length != int64(page.PageSize) {
+		t.Fatalf("meta cut omitted exact target range: %+v", meta)
+	}
 	_ = db.Close()
-	relIndex, err := filepath.Rel(dir, meta.Path)
+	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed, err := snapshot.ChangedRanges(relIndex)
-	if err != nil {
-		t.Fatal(err)
+	defer func() { _ = closeFn() }()
+	if result.Rejected || result.CommitSeq != baseSequence {
+		t.Fatalf("pre-sync meta cut selected commit=%d rejected=%t err=%v; want prior durable=%d", result.CommitSeq, result.Rejected, result.Err, baseSequence)
 	}
-	if len(changed) == 0 {
-		t.Fatal("actual relaxed finalize changed no index bytes")
-	}
-
-	images := map[powerlossoracle.ResourceKind]*powerlossoracle.Model{}
-	missingIndex := snapshot.Clone()
-	if err := missingIndex.PromoteRange(relIndex, meta.Offset, meta.Length); err != nil {
-		t.Fatal(err)
-	}
-	images[powerlossoracle.ResourceIndex] = missingIndex
-	missingVlog := snapshot.Clone()
-	for _, r := range changed {
-		if err := missingVlog.PromoteRange(relIndex, r.Offset, r.Length); err != nil {
-			t.Fatal(err)
-		}
-	}
-	images[powerlossoracle.ResourceValueLog] = missingVlog
-	missingOuter := missingVlog.Clone()
-	leafChanged := false
-	for _, path := range missingOuter.VolatilePaths() {
-		if strings.HasPrefix(filepath.ToSlash(path), "leaf_vlog/") {
-			ranges, err := missingOuter.ChangedRanges(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			leafChanged = leafChanged || len(ranges) > 0
-		}
-		if strings.Contains(path, "value_vlog") {
-			if err := missingOuter.SyncFile(path); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if !leafChanged {
-		t.Fatal("actual fixture generated no changed outer-leaf record")
-	}
-	images[powerlossoracle.ResourceOuterLeaf] = missingOuter
-
-	for _, missing := range []powerlossoracle.ResourceKind{
-		powerlossoracle.ResourceIndex,
-		powerlossoracle.ResourceValueLog,
-		powerlossoracle.ResourceOuterLeaf,
-	} {
-		missing := missing
-		t.Run(string(missing), func(t *testing.T) {
-			result, _, closeFn, err := powerlossreopen.Stable(images[missing], opts, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = closeFn() }()
-			dependencyPaths := make([]string, 0)
-			for _, path := range images[missing].VolatilePaths() {
-				slashed := filepath.ToSlash(path)
-				if strings.Contains(slashed, "value_vlog/") || strings.Contains(slashed, "leaf_vlog/") {
-					dependencyPaths = append(dependencyPaths, filepath.Join(dir, filepath.FromSlash(path)))
-				}
-			}
-			newResources, err := observedPowerLossClosure(images[missing], dir, meta.Path, dependencyPaths, true, 0, false)
-			if err != nil {
-				t.Fatalf("derive actual %s closure: %v", missing, err)
-			}
-			scenario := powerlossoracle.Scenario{
-				Name:                 "actual-new-meta-missing-" + string(missing),
-				Cut:                  powerlossoracle.AfterMetaWrite,
-				LatestSealedSequence: baseSequence + 1,
-				SelectedSequence:     result.CommitSeq,
-				OpenedSequence:       result.CommitSeq,
-				OpenedAppliedLSN:     result.AppliedLSN,
-				ReopenAttempted:      true,
-				ReopenRejected:       result.Rejected,
-				Generations: []powerlossoracle.Generation{
-					{Sequence: baseSequence, Recoverable: true, Resources: completePowerLossClosure("old")},
-					{Sequence: baseSequence + 1, Recoverable: true, Resources: newResources},
-				},
-			}
-			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
-				t.Fatalf("actual %s image did not produce named diagnosis: %v (open=%v)", missing, err, result.Err)
-			}
-		})
+	if value, err := reopened.Get([]byte("new/pointer/000")); err == nil && len(value) != 0 {
+		t.Fatalf("pre-sync meta cut exposed the new root value=%q", value)
 	}
 }
 
@@ -536,9 +466,9 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	}
 }
 
-// This family is the stable witness for Checkpoint, flushSyncRequested, and
-// chunked cached flush apply exposing an intermediate incomplete root.
-func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) {
+// Chunked checkpoint application may prepare several visible candidates, but
+// an unsynced target meta can never expose an intermediate root after crash.
+func TestPowerLossOracleChunkedSyncMetaCutKeepsPreviousRoot(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
 	opts.Durability = treedb.DurabilityWALOffRelaxed
@@ -553,10 +483,12 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	baseSequence := publicCommitSequence(t, db)
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	requirePublicReopen(t, model, opts, false)
 	for i := 0; i < 64; i++ {
 		if err := db.Set([]byte(fmt.Sprintf("chunk/%03d", i)), []byte(fmt.Sprintf("value-%03d", i))); err != nil {
 			t.Fatal(err)
@@ -577,60 +509,32 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	})
 	err = db.Checkpoint()
 	restore()
-	if !errors.Is(err, cutErr) || snapshot == nil {
+	if snapshot == nil || (!errors.Is(err, cutErr) && !errors.Is(err, treedb.ErrRecoveryRequired)) {
 		t.Fatalf("actual chunk checkpoint cut err=%v", err)
 	}
+	if meta.Path == "" || meta.Length != int64(page.PageSize) {
+		t.Fatalf("meta cut omitted exact target range: %+v", meta)
+	}
 	_ = db.Close()
-	rel, err := filepath.Rel(dir, meta.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ranges, err := snapshot.ChangedRanges(rel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range ranges {
-		if err := snapshot.PromoteRange(rel, r.Offset, r.Length); err != nil {
-			t.Fatal(err)
-		}
-	}
 	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = closeFn() }()
 	if result.Rejected {
-		t.Logf("public Open rejected actual intermediate chunk image: %v", result.Err)
-		return
+		t.Fatalf("public Open rejected previous durable root: %v", result.Err)
 	}
-	first, firstErr := reopened.Get([]byte("chunk/000"))
-	if firstErr != nil || !bytes.Equal(first, []byte("value-000")) {
-		t.Fatalf("actual cut selected the wholly old root instead of an intermediate chunk: first=%q err=%v commit=%d", first, firstErr, result.CommitSeq)
+	if result.CommitSeq != baseSequence {
+		t.Fatalf("pre-sync meta cut selected commit=%d want previous durable=%d", result.CommitSeq, baseSequence)
 	}
-	expected := map[string]map[string]string{"chunk/": {}}
-	observed := map[string]map[string]string{"chunk/": {}}
+	if value, err := reopened.Get([]byte("stable/old")); err != nil || !bytes.Equal(value, []byte("old-value")) {
+		t.Fatalf("previous durable key=%q err=%v commit=%d want=%d", value, err, result.CommitSeq, baseSequence)
+	}
 	for i := 0; i < 64; i++ {
 		key := fmt.Sprintf("chunk/%03d", i)
-		value := fmt.Sprintf("value-%03d", i)
-		expected["chunk/"][key] = value
-		if got, err := reopened.Get([]byte(key)); err == nil {
-			observed["chunk/"][key] = string(got)
+		if got, err := reopened.Get([]byte(key)); err == nil && len(got) != 0 {
+			t.Fatalf("pre-sync meta cut exposed chunk key %q=%q", key, got)
 		}
-	}
-	scenario := powerlossoracle.Scenario{
-		Name:                      "actual-chunked-sync-intermediate-root",
-		Cut:                       powerlossoracle.AfterMetaWrite,
-		Generations:               []powerlossoracle.Generation{{Sequence: result.CommitSeq, Recoverable: true, Resources: completePowerLossClosure("chunk"), AppliedLSN: result.AppliedLSN}},
-		LatestSealedSequence:      result.CommitSeq,
-		SelectedSequence:          result.CommitSeq,
-		OpenedSequence:            result.CommitSeq,
-		OpenedAppliedLSN:          result.AppliedLSN,
-		ExpectedKeyValuesByPrefix: expected,
-		ObservedKeyValuesByPrefix: observed,
-		ReopenAttempted:           true,
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantKeyStateMismatch); err != nil {
-		t.Fatalf("successful public Open did not produce intermediate-root diagnosis: %v", err)
 	}
 }
 

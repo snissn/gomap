@@ -91,9 +91,6 @@ func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
 	if db == nil {
 		return nil, ErrClosed
 	}
-	if err := db.publicationPoisonedError(); err != nil {
-		return nil, err
-	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
@@ -816,6 +813,26 @@ func (db *DB) Stats() map[string]string {
 	idx := snap.idx
 
 	stats["treedb.commit_seq"] = fmt.Sprintf("%d", state.CommitSeq)
+	publication := db.rootPublication.snapshot()
+	lagCommits := uint64(0)
+	if publication.visibleCommitSeq > publication.durableCommitSeq {
+		lagCommits = publication.visibleCommitSeq - publication.durableCommitSeq
+	}
+	stats["treedb.publication.visible_commit_seq"] = fmt.Sprintf("%d", publication.visibleCommitSeq)
+	stats["treedb.publication.durable_commit_seq"] = fmt.Sprintf("%d", publication.durableCommitSeq)
+	stats["treedb.publication.oldest_recoverable_commit_seq"] = fmt.Sprintf("%d", publication.oldestRecoverableCommitSeq)
+	stats["treedb.publication.durable_lag_commits"] = fmt.Sprintf("%d", lagCommits)
+	stats["treedb.publication.durable_lag_bytes"] = fmt.Sprintf("%d", publication.pendingBytes)
+	stats["treedb.publication.pending_candidates"] = fmt.Sprintf("%d", publication.pendingCandidates)
+	stats["treedb.publication.pending_bytes"] = fmt.Sprintf("%d", publication.pendingBytes)
+	stats["treedb.publication.candidates_coalesced_total"] = fmt.Sprintf("%d", publication.candidatesCoalesced)
+	stats["treedb.publication.dependency_syncs_total"] = fmt.Sprintf("%d", publication.dependencySyncs)
+	stats["treedb.publication.meta_syncs_total"] = fmt.Sprintf("%d", publication.metaSyncs)
+	stats["treedb.publication.stalls_total"] = fmt.Sprintf("%d", publication.publicationStalls)
+	stats["treedb.publication.poison_events_total"] = fmt.Sprintf("%d", publication.poisonEvents)
+	stats["treedb.publication.waiters_total"] = fmt.Sprintf("%d", publication.waiterCount)
+	stats["treedb.publication.waiter_latency_ns_total"] = fmt.Sprintf("%d", publication.waiterLatency.Nanoseconds())
+	stats["treedb.publication.waiter_latency_ns_max"] = fmt.Sprintf("%d", publication.waiterLatencyMax.Nanoseconds())
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 	stats["treedb.applied_command_lsn"] = fmt.Sprintf("%d", state.AppliedCommandLSN)

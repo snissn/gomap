@@ -2029,6 +2029,9 @@ func TestValueLogRewriteOnline_ExplicitSourceDoesNotDeleteActiveSegment(t *testi
 		t.Fatalf("write pointer key: %v", err)
 	}
 	closeNoErr(t, b)
+	if err := db.valueLogManager.PromoteCurrentWritable(ptrs[0].FileID); err != nil {
+		t.Fatalf("promote active source: %v", err)
+	}
 
 	if err := db.Delete([]byte("k")); err != nil {
 		t.Fatalf("delete pointer key: %v", err)
@@ -2047,6 +2050,50 @@ func TestValueLogRewriteOnline_ExplicitSourceDoesNotDeleteActiveSegment(t *testi
 
 	if _, err := os.Stat(targetPath); err != nil {
 		t.Fatalf("expected active segment %s to remain, stat=%v", filepath.Base(targetPath), err)
+	}
+}
+
+func TestValueLogRewriteOnline_DefaultCleanupDoesNotDeleteActiveSegment(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 200_000, 1, func(_ int) []byte {
+		return bytes.Repeat([]byte("active-default-protected|"), 64)
+	})
+	targetPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	b := db.NewBatch()
+	ptrBatch := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if err := ptrBatch.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatal(err)
+	}
+	closeNoErr(t, b)
+	if err := db.valueLogManager.PromoteCurrentWritable(ptrs[0].FileID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete([]byte("k")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{BatchSize: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(targetPath); err != nil {
+		t.Fatalf("default online rewrite removed active segment %s: %v", filepath.Base(targetPath), err)
 	}
 }
 
@@ -2085,6 +2132,9 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 		t.Fatalf("write pointer key: %v", err)
 	}
 	closeNoErr(t, b)
+	if err := db.valueLogManager.PromoteCurrentWritable(sourceID); err != nil {
+		t.Fatalf("promote active source: %v", err)
+	}
 
 	rewriteStats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		SourceFileIDs: []uint32{sourceID},

@@ -31,11 +31,35 @@ func expectLeafGenerationValue(t *testing.T, db *DB, key []byte, fill byte) {
 	}
 }
 
+func TestLeafGenerationPackStartSeqIncludesCurrentLeafPageLogFrontier(t *testing.T) {
+	managerID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 26)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 27)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := &valuelog.Set{Files: map[uint32]*valuelog.File{managerID: nil}}
+	log := &registeredLeafPageLog{registered: true, path: "leaf-l255-000027.log", fileID: currentID}
+	got, err := leafGenerationPackStartSeq(set, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 27 {
+		t.Fatalf("start seq=%d want current leaf writer frontier 27", got)
+	}
+}
+
 func leafGenerationKey(prefix string, i int) []byte {
 	return []byte(fmt.Sprintf("%s-%04d", prefix, i))
 }
 
 func openLeafGenerationPackTestDB(t *testing.T) (*DB, *rewriteWriter, string) {
+	return openLeafGenerationPackTestDBWithRecoveryClose(t, false)
+}
+
+func openLeafGenerationPackTestDBWithRecoveryClose(t *testing.T, allowRecoveryRequired bool) (*DB, *rewriteWriter, string) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := Open(Options{
@@ -54,7 +78,11 @@ func openLeafGenerationPackTestDB(t *testing.T) (*DB, *rewriteWriter, string) {
 	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
 	db.SetLeafPageLog(leafLog)
 	t.Cleanup(func() { closeNoErr(t, leafLog) })
-	t.Cleanup(func() { closeNoErr(t, db) })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil && !(allowRecoveryRequired && errors.Is(err, ErrRecoveryRequired)) {
+			t.Fatalf("close: %v", err)
+		}
+	})
 	return db, leafLog, dir
 }
 
@@ -242,8 +270,8 @@ func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T)
 	}
 }
 
-func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T) {
-	db, leafLog, dir := openLeafGenerationPackTestDB(t)
+func TestLeafGenerationPack_WriteMetaFailpointRetainsCandidateSegmentsAndPoisons(t *testing.T) {
+	db, leafLog, dir := openLeafGenerationPackTestDBWithRecoveryClose(t, true)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
 	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
@@ -264,21 +292,24 @@ func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T
 	db.testFailWriteMeta.Store(true)
 	_, err = db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{GenerationIDs: []uint64{gen1.GenerationID}, Force: true})
 	db.testFailWriteMeta.Store(false)
-	if !errors.Is(err, errTestWriteMetaFailpoint) {
-		t.Fatalf("LeafGenerationPack writeMeta failpoint err=%v, want %v", err, errTestWriteMetaFailpoint)
+	if !errors.Is(err, errTestWriteMetaFailpoint) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack writeMeta failpoint err=%v, want %v and ErrRecoveryRequired", err, errTestWriteMetaFailpoint)
 	}
 
 	afterFiles, err := listLeafGenerationBootstrapFiles(LeafLogDirPath(dir))
 	if err != nil {
 		t.Fatalf("listLeafGenerationBootstrapFiles(after): %v", err)
 	}
-	if len(afterFiles) != len(beforeFiles) {
-		t.Fatalf("bootstrap file count=%d, want %d", len(afterFiles), len(beforeFiles))
+	if len(afterFiles) <= len(beforeFiles) {
+		t.Fatalf("bootstrap file count=%d, want candidate files retained beyond %d", len(afterFiles), len(beforeFiles))
 	}
 	for i := range beforeFiles {
 		if afterFiles[i] != beforeFiles[i] {
 			t.Fatalf("bootstrap files[%d]=%+v, want %+v", i, afterFiles[i], beforeFiles[i])
 		}
+	}
+	if err := db.Set([]byte("blocked-after-write-meta"), []byte("mutation")); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("mutation after write-meta attempt err=%v, want ErrRecoveryRequired", err)
 	}
 	manifestAfter := loadLeafGenerationManifestOrFatal(t, dir)
 	if len(manifestAfter.Generations) != len(manifestBefore.Generations) {

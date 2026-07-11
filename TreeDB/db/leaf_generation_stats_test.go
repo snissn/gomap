@@ -90,6 +90,7 @@ func TestStats_LeafGenerationLifecycle(t *testing.T) {
 		t.Fatalf("plan_cache.subtree_pages after planning=%d, want > 0", got)
 	}
 
+	stabilizeRecoveryWindowForTest(t, db)
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		closeNoErr(t, snap)
 		t.Fatalf("LeafGenerationGC while pinned: %v", err)

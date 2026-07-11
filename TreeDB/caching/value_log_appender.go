@@ -18,6 +18,7 @@ type cachingValueLogAppender struct {
 
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
 var _ backenddb.ValueLogExternalRefFlusher = (*cachingValueLogAppender)(nil)
+var _ backenddb.ValueLogDurableExternalRefFlusher = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}
@@ -112,11 +113,19 @@ func (a *cachingValueLogAppender) Sync() error {
 }
 
 func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error {
+	return a.flushValueLogExternalRefs(fileIDs, sync, false)
+}
+
+func (a *cachingValueLogAppender) SyncValueLogExternalRefsDurable(fileIDs []uint32) error {
+	return a.flushValueLogExternalRefs(fileIDs, true, true)
+}
+
+func (a *cachingValueLogAppender) flushValueLogExternalRefs(fileIDs []uint32, sync, forceDurable bool) error {
 	if a == nil || a.db == nil || a.lane == nil {
 		return errWALUnavailable
 	}
 	if len(fileIDs) == 0 {
-		return a.db.flushPendingValueLogLanes(sync, valueLogSyncPathPendingBarrier)
+		return a.db.flushPendingValueLogLanesWithPolicy(sync, forceDurable, valueLogSyncPathPendingBarrier)
 	}
 	seenLanes := make(map[*lane]struct{}, len(fileIDs))
 	activeFileIDs := make(map[uint32]struct{}, len(fileIDs))
@@ -130,7 +139,7 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 		}
 		if _, ok := seenLanes[l]; !ok {
 			seenLanes[l] = struct{}{}
-			activeFileID, err := a.db.flushValueLogLaneForExternalRefFileIDs(l, fileIDs, sync)
+			activeFileID, err := a.db.flushValueLogLaneForExternalRefFileIDs(l, fileIDs, sync, forceDurable)
 			if err != nil {
 				return err
 			}
@@ -161,7 +170,7 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 	return nil
 }
 
-func (db *DB) flushValueLogLaneForExternalRefFileIDs(l *lane, fileIDs []uint32, sync bool) (uint32, error) {
+func (db *DB) flushValueLogLaneForExternalRefFileIDs(l *lane, fileIDs []uint32, sync, forceDurable bool) (uint32, error) {
 	if db == nil || l == nil {
 		return 0, errWALUnavailable
 	}
@@ -169,7 +178,7 @@ func (db *DB) flushValueLogLaneForExternalRefFileIDs(l *lane, fileIDs []uint32, 
 		if err := db.flushValueLogLane(l); err != nil {
 			return 0, err
 		}
-		if sync && !db.relaxedSync {
+		if sync && (forceDurable || !db.relaxedSync) {
 			if err := db.syncValueLogLane(l); err != nil {
 				return 0, err
 			}
@@ -205,12 +214,12 @@ func (db *DB) flushValueLogLaneForExternalRefFileIDs(l *lane, fileIDs []uint32, 
 			return activeFileID, err
 		}
 		l.vlogDirty.Store(false)
-		if db.relaxedSync {
+		if db.relaxedSync && !forceDurable {
 			l.vlogSyncPending.Store(false)
 		}
 		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 	}
-	if !sync || db.relaxedSync {
+	if !sync || (db.relaxedSync && !forceDurable) {
 		return activeFileID, nil
 	}
 	if db.valueLogMaterializationSyncCoversFileIDMuHeld(l, w, activeFileID, fileIDs) {

@@ -16,6 +16,7 @@ type cachingLeafPageLog struct {
 }
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageLogDurableSyncer = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
 
@@ -502,6 +503,16 @@ func (l *cachingLeafPageLog) Sync() error {
 	}
 	if l.db.relaxedSync {
 		return nil
+	}
+	return l.db.syncValueLogLane(l.lane)
+}
+
+func (l *cachingLeafPageLog) SyncLeafPageLogDurable() error {
+	if l == nil || l.db == nil || l.lane == nil {
+		return errWALUnavailable
+	}
+	if err := l.db.flushValueLogLane(l.lane); err != nil {
+		return err
 	}
 	return l.db.syncValueLogLane(l.lane)
 }

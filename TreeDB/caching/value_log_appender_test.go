@@ -132,6 +132,41 @@ func TestCachingValueLogExternalRefSyncCoalescingGuards(t *testing.T) {
 	})
 }
 
+func TestCachingValueLogPublicationDurabilityOverridesRelaxedSync(t *testing.T) {
+	db := &DB{
+		closeCh:       make(chan struct{}),
+		splitValueLog: true,
+		relaxedSync:   true,
+		valueLogDir:   t.TempDir(),
+		lanes:         make([]lane, 1),
+	}
+	l := &db.lanes[0]
+	l.id = 0
+	l.vlogSeq = 1
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.vlogPath = valuelog.SegmentPath(db.valueLogDir, fileID)
+	w := &vlogDirtyOrderWriter{size: 64}
+	l.vlog = w
+	l.vlogDirty.Store(true)
+	appender := &cachingValueLogAppender{db: db, lane: l}
+
+	if err := appender.FlushValueLogExternalRefs([]uint32{fileID}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.syncs.Load(); got != 0 {
+		t.Fatalf("foreground relaxed barrier synced %d times, want 0", got)
+	}
+	if err := appender.SyncValueLogExternalRefsDurable([]uint32{fileID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.syncs.Load(); got != 1 {
+		t.Fatalf("publication durable barrier synced %d times, want 1", got)
+	}
+}
+
 func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 	dir := t.TempDir()
 	oldFileID, err := valuelog.EncodeFileID(0, 1)

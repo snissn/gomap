@@ -87,7 +87,7 @@ func EmitNamespace(operation NamespaceOperation, resource Resource, root, oldPat
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(Event{
+	return h.emit(Event{
 		Resource:  resource,
 		Root:      root,
 		Namespace: operation,
@@ -98,7 +98,22 @@ func EmitNamespace(operation NamespaceOperation, resource Resource, root, oldPat
 
 type Observer func(Event) error
 
-type holder struct{ observe Observer }
+type holder struct {
+	observe Observer
+	mu      sync.Mutex
+}
+
+func (h *holder) emit(event Event) error {
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	// Publication is asynchronous and may overlap foreground checkpoint work.
+	// Observers model one deterministic persistence timeline, so callbacks must
+	// never execute concurrently.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.observe(event)
+}
 
 var (
 	installed atomic.Pointer[holder]
@@ -110,7 +125,7 @@ func Emit(event Event) error {
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(event)
+	return h.emit(event)
 }
 
 // EmitBasic avoids constructing an Event on the production-disabled path.
@@ -119,7 +134,7 @@ func EmitBasic(point Point, resource Resource, root string) error {
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(Event{Point: point, Resource: resource, Root: root})
+	return h.emit(Event{Point: point, Resource: resource, Root: root})
 }
 
 // EmitPath avoids constructing a path event on the production-disabled path.
@@ -128,7 +143,7 @@ func EmitPath(point Point, resource Resource, root, path string) error {
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path})
+	return h.emit(Event{Point: point, Resource: resource, Root: root, Path: path})
 }
 
 // EmitRange avoids constructing a byte-range event on the
@@ -138,7 +153,7 @@ func EmitRange(point Point, resource Resource, root, path string, offset, length
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path, Offset: offset, Length: length})
+	return h.emit(Event{Point: point, Resource: resource, Root: root, Path: path, Offset: offset, Length: length})
 }
 
 // EmitLSN avoids constructing an LSN event on the production-disabled path.
@@ -147,7 +162,7 @@ func EmitLSN(point Point, resource Resource, root string, lsn uint64) error {
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(Event{Point: point, Resource: resource, Root: root, LSN: lsn})
+	return h.emit(Event{Point: point, Resource: resource, Root: root, LSN: lsn})
 }
 
 // EmitPathLSN avoids constructing a path-and-LSN event on the
@@ -157,7 +172,7 @@ func EmitPathLSN(point Point, resource Resource, root, path string, lsn uint64) 
 	if h == nil || h.observe == nil {
 		return nil
 	}
-	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path, LSN: lsn})
+	return h.emit(Event{Point: point, Resource: resource, Root: root, Path: path, LSN: lsn})
 }
 
 // Enabled lets coarse production boundaries avoid collecting diagnostic path
@@ -171,9 +186,14 @@ func Enabled() bool {
 // function. It is intended only for deterministic, non-parallel tests.
 func Install(observer Observer) func() {
 	installMu.Lock()
-	installed.Store(&holder{observe: observer})
+	h := &holder{observe: observer}
+	installed.Store(h)
 	return func() {
 		installed.Store(nil)
+		// Drain a callback that loaded the holder before the atomic removal so
+		// callers may safely inspect observer-owned state after restore returns.
+		h.mu.Lock()
+		h.mu.Unlock()
 		installMu.Unlock()
 	}
 }

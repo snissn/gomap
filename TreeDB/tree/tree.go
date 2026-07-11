@@ -439,7 +439,7 @@ func (t *Tree) loadLeafLogNodeViewInto(dst *node.Node, ptr page.LogRecordRef, it
 		data, err = t.slabReader.ReadUnsafe(ptr.ValuePtr())
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("read leaf-log ref file=%d offset=%d length=%d: %w", ptr.FileID, ptr.Offset, ptr.RecordLength(), err)
 	}
 	verifiedNow, err := validateLeafLogNodeIntoWithState(dst, data, ptr, t.shouldVerifyLeafRefChecksum(), iterator, state)
 	if err != nil {

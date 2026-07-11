@@ -229,6 +229,12 @@ func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, 
 	if err != nil {
 		return err
 	}
+	// Legacy replay applies ordinary batches before Open installs its final
+	// snapshot view. Give those batches the same provisional state and root
+	// publication coordinator used by typed command-WAL recovery.
+	if db != nil {
+		db.ensureCommandWALRecoverySnapshotView()
+	}
 	return replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes)
 }
 
@@ -598,7 +604,13 @@ func (db *DB) nextCommandWALReplayToken() uint64 {
 }
 
 func (db *DB) ensureCommandWALRecoverySnapshotView() {
-	if db == nil || db.state.Load() != nil {
+	if db == nil {
+		return
+	}
+	if db.state.Load() != nil {
+		if db.rootPublication == nil {
+			db.rootPublication = newRootPublicationCoordinator(db)
+		}
 		return
 	}
 	db.mu.RLock()
@@ -617,10 +629,16 @@ func (db *DB) ensureCommandWALRecoverySnapshotView() {
 	}
 	if db.state.CompareAndSwap(nil, state) {
 		db.publishSnapshotView(db.idx.Load(), state, db.valueLogManager)
+		if db.rootPublication == nil {
+			db.rootPublication = newRootPublicationCoordinator(db)
+		}
 		return
 	}
 	if state.ValueLogSet != nil && db.valueLogManager != nil {
 		_ = db.valueLogManager.Release(state.ValueLogSet)
+	}
+	if db.rootPublication == nil {
+		db.rootPublication = newRootPublicationCoordinator(db)
 	}
 }
 

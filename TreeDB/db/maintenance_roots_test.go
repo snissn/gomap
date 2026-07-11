@@ -491,6 +491,7 @@ func TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval(t *testing.T) {
 	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
 		t.Fatal("expected descriptor removal to invalidate value-log ref tracker")
 	}
+	stabilizeRecoveryWindowForTest(t, d)
 
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
@@ -537,6 +538,7 @@ func TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval(t *testing
 	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
 		t.Fatal("expected grouped descriptor removal to invalidate value-log ref tracker")
 	}
+	stabilizeRecoveryWindowForTest(t, d)
 
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
@@ -588,6 +590,7 @@ func TestValueLogGC_RemovesSegmentAfterDeltaGroupSystemDescriptorRemoval(t *test
 	if _, ok := d.valueLogRefTracker.referencedSet(d.currentCommitSeq()); ok {
 		t.Fatal("expected delta group descriptor removal to invalidate value-log ref tracker")
 	}
+	stabilizeRecoveryWindowForTest(t, d)
 
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {

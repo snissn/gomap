@@ -1,8 +1,9 @@
 package pager
 
 import (
-	"errors" // Added import
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,7 +15,7 @@ import (
 )
 
 var (
-	ErrPageOutOfBounds = errors.New("page index out of bounds") // Added declaration
+	ErrPageOutOfBounds = errors.New("page index out of bounds")
 	ErrFileSize        = errors.New("file size is not a multiple of page size")
 	ErrReadOnly        = errors.New("pager is read-only")
 )
@@ -54,6 +55,11 @@ type Pager struct {
 	// durability fence. Sparse range durability is restricted to this prefix.
 	durableFileSize atomic.Int64
 	dirtyChunks     map[int]struct{}
+	// dirtyPages records page-granular index writes so root publication can
+	// stabilize data pages without flushing either recovery-selectable meta
+	// page. dirtyChunks remains the file-wide Sync bookkeeping.
+	dirtyPages      map[uint64]uint64
+	dirtyGeneration uint64
 	mu              sync.RWMutex
 	allocMu         sync.Mutex
 	path            string
@@ -103,6 +109,7 @@ func NewOverlay(chunkSize int64, pageIDBase uint64, fallback *Pager) (*Pager, er
 	p := &Pager{
 		chunkSize:   chunkSize,
 		dirtyChunks: make(map[int]struct{}),
+		dirtyPages:  make(map[uint64]uint64),
 		memoryOnly:  true,
 		pageIDBase:  pageIDBase,
 		fallback:    fallback,
@@ -167,6 +174,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		chunkSize:      chunkSize,
 		path:           path,
 		dirtyChunks:    make(map[int]struct{}),
+		dirtyPages:     make(map[uint64]uint64),
 		mmapPopulate:   opts.MmapPopulate,
 		prefetchOnRead: opts.PrefetchOnRead,
 	}
@@ -579,6 +587,8 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 	}
 
 	p.dirtyChunks[chunkIdx] = struct{}{}
+	p.dirtyGeneration++
+	p.dirtyPages[pageID] = p.dirtyGeneration
 
 	chunk := p.chunks[chunkIdx]
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
@@ -742,6 +752,8 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 
 	// Mark chunk as dirty
 	p.dirtyChunks[int(chunkIdx)] = struct{}{}
+	p.dirtyGeneration++
+	p.dirtyPages[pageID] = p.dirtyGeneration
 
 	chunk := p.chunks[chunkIdx]
 	dst := chunk[offsetInChunk : offsetInChunk+page.PageSize]
@@ -761,28 +773,197 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 
 // Sync msyncs the memory maps and syncs the backing file to disk.
 func (p *Pager) Sync() error {
-	return p.syncDirtyChunks(true, 0)
+	p.mu.RLock()
+	generations := make(map[uint64]uint64, len(p.dirtyPages))
+	for id, generation := range p.dirtyPages {
+		generations[id] = generation
+	}
+	p.mu.RUnlock()
+	if err := p.syncDirtyChunks(true, 0); err != nil {
+		return err
+	}
+	p.clearDirtyPageGenerations(generations)
+	return nil
 }
 
-// SyncIndexData is the production index-publication data barrier. It performs
-// the same durable pager sync as Sync while exposing the named before/after
-// boundary used by the power-loss oracle. Meta-page syncs continue to use Sync
-// and therefore are not mislabeled as pre-publication index-data barriers.
+func (p *Pager) clearDirtyPageGenerations(generations map[uint64]uint64) {
+	p.mu.Lock()
+	for id, generation := range generations {
+		if p.dirtyPages[id] == generation {
+			delete(p.dirtyPages, id)
+		}
+	}
+	p.mu.Unlock()
+}
+
+// DirtyIndexPages returns a stable sorted snapshot of dirty non-meta pages.
+// Meta pages 0 and 1 are deliberately excluded from this publication set.
+func (p *Pager) DirtyIndexPages() []uint64 {
+	if p == nil {
+		return nil
+	}
+	p.mu.RLock()
+	ids := make([]uint64, 0, len(p.dirtyPages))
+	for id := range p.dirtyPages {
+		if id == 0 || id == 1 {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	p.mu.RUnlock()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func (p *Pager) dirtyIndexPageSnapshot() (map[uint64]uint64, []uint64) {
+	p.mu.RLock()
+	generations := make(map[uint64]uint64, len(p.dirtyPages))
+	ids := make([]uint64, 0, len(p.dirtyPages))
+	for id, generation := range p.dirtyPages {
+		if id == 0 || id == 1 {
+			continue
+		}
+		generations[id] = generation
+		ids = append(ids, id)
+	}
+	p.mu.RUnlock()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return generations, ids
+}
+
+// SyncIndexData is the production index-publication data barrier. It syncs
+// only page-granular non-meta writes; the coordinator performs the target-meta
+// write and target-only SyncPages call after this method returns.
 func (p *Pager) SyncIndexData() error {
+	_, ids := p.dirtyIndexPageSnapshot()
+	return p.SyncIndexPages(ids)
+}
+
+// SyncIndexPages is the publication data barrier for an immutable candidate
+// closure. It deliberately does not discover global dirty pages: a later root
+// builder may already be mutating a different writable mmap slice and owns
+// those pages until its own candidate is registered.
+func (p *Pager) SyncIndexPages(ids []uint64) error {
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
 			return err
 		}
 	}
-	if err := p.Sync(); err != nil {
+	p.mu.RLock()
+	generations := make(map[uint64]uint64, len(ids))
+	for _, id := range ids {
+		if id == 0 || id == 1 {
+			p.mu.RUnlock()
+			return errors.New("pager: index data fence includes meta page")
+		}
+		generations[id] = p.dirtyPages[id]
+	}
+	p.mu.RUnlock()
+	if err := p.syncIndexDataPages(ids); err != nil {
 		return err
 	}
+	p.clearDirtyPageGenerations(generations)
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// SyncIndexFileSize makes the current mapped length durable before a
+// publication attempts range-only index-data synchronization. The root
+// coordinator calls this before writing its target meta slot, so a necessary
+// file-wide size fence cannot accidentally install that meta early.
+func (p *Pager) SyncIndexFileSize() error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
+	if p.memoryOnly {
+		return nil
+	}
+	p.mu.RLock()
+	if _, dirty := p.dirtyPages[0]; dirty {
+		p.mu.RUnlock()
+		return errors.New("pager: meta page 0 dirty before index data fence")
+	}
+	if _, dirty := p.dirtyPages[1]; dirty {
+		p.mu.RUnlock()
+		return errors.New("pager: meta page 1 dirty before index data fence")
+	}
+	want := int64(len(p.chunks)) * p.chunkSize
+	if p.durableFileSize.Load() >= want {
+		p.mu.RUnlock()
+		return nil
+	}
+	err := syncPageFile(p.file)
+	if err == nil {
+		p.durableFileSize.Store(want)
+	}
+	p.mu.RUnlock()
+	return err
+}
+
+// syncIndexDataPages durably writes only the planned non-meta ranges. Unlike
+// SyncPages, it never falls back to a file-wide sync: file-size durability is
+// an explicit preceding coordinator step, and mapped MS_SYNC is the portable
+// range fallback when platform-specific durable range writes are unavailable.
+func (p *Pager) syncIndexDataPages(pageIDs []uint64) error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
+	if p.memoryOnly || len(pageIDs) == 0 {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	chunkLengths := make([]int, len(p.chunks))
+	for i := range p.chunks {
+		chunkLengths[i] = len(p.chunks[i])
+	}
+	if _, dirty := p.dirtyPages[0]; dirty {
+		return errors.New("pager: meta page 0 dirty before index data fence")
+	}
+	if _, dirty := p.dirtyPages[1]; dirty {
+		return errors.New("pager: meta page 1 dirty before index data fence")
+	}
+	// Logical page granularity is intentional. On Darwin, mmap MS_SYNC needs a
+	// 16-KiB-aligned range and would therefore include both 4-KiB meta slots when
+	// syncing page 2. Exact pwrite below preserves the physical exclusion.
+	ranges, err := planSyncPageRanges(pageIDs, p.pageIDBase, p.numPages.Load(), p.chunkSize, int64(page.PageSize), chunkLengths)
+	if err != nil {
+		return err
+	}
+	if !syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
+		return errors.New("pager: index file size is not durable")
+	}
+	handled, err := syncPageRangesFn(p.file, p.chunks, ranges, p.chunkSize)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
+	}
+	// Portable exact-range path. The clean-meta invariant above makes the final
+	// file durability boundary safe: only these logical index bytes have been
+	// written since the preceding publication meta fence.
+	for _, r := range ranges {
+		buf := p.chunks[r.chunk][r.start:r.end]
+		rangeOffset := int64(r.chunk)*p.chunkSize + int64(r.start)
+		offset := rangeOffset
+		for len(buf) > 0 {
+			n, err := p.file.WriteAt(buf, offset)
+			if err != nil {
+				return err
+			}
+			if n <= 0 {
+				return io.ErrShortWrite
+			}
+			buf = buf[n:]
+			offset += int64(n)
+		}
+	}
+	return p.file.Sync()
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
@@ -968,6 +1149,10 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 	}
 
 	p.mu.RLock()
+	pageGenerations := make(map[uint64]uint64, len(pageIDs))
+	for _, pageID := range pageIDs {
+		pageGenerations[pageID] = p.dirtyPages[pageID]
+	}
 	chunkLengths := make([]int, len(p.chunks))
 	for i := range p.chunks {
 		chunkLengths[i] = len(p.chunks[i])
@@ -1001,5 +1186,14 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 		}
 	}
 	p.mu.RUnlock()
+	if err == nil {
+		p.mu.Lock()
+		for pageID, generation := range pageGenerations {
+			if p.dirtyPages[pageID] == generation {
+				delete(p.dirtyPages, pageID)
+			}
+		}
+		p.mu.Unlock()
+	}
 	return err
 }

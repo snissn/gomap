@@ -65,9 +65,9 @@ type ValueLogGCOptions struct {
 	// source segments). IDs not present in the current set are ignored.
 	ObservedSourceFileIDs []uint32
 	// ObservedSourceAssumeUnreferenced indicates ObservedSourceFileIDs are
-	// already known to be unreferenced. When true, ValueLogGC skips the
-	// reachability scan and only classifies (and, if !DryRun, zombifies) the
-	// observed IDs; it does not attempt to reclaim other segments.
+	// expected to be unreferenced. ValueLogGC still verifies the current and
+	// fallback-meta recovery roots before deletion, but only classifies (and, if
+	// !DryRun, zombifies) the observed IDs; it does not reclaim other segments.
 	ObservedSourceAssumeUnreferenced bool
 	// ObservedSourceReclaimActive permits observed-only GC to reclaim an
 	// otherwise-active segment. Callers must first prove the source is
@@ -161,38 +161,46 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
 	var referenced map[uint32]struct{}
 	var scannedSeq uint64
-	if !observedOnly {
-		// A full scan is O(N), so it must never run while publishPrepareMu is
-		// exclusively held. Safety invariant: GC never zombifies a segment from a
-		// referenced set older than the root visible while the exclusive lock is
-		// held. A post-scan root can first-reference an old segment, so a changed
-		// commit sequence is retried outside the lock once and then conservatively
-		// aborts this GC pass.
-		const maxStaleScanRetries = 1
-		for attempt := 0; ; attempt++ {
-			var err error
-			referenced, _, scannedSeq, err = db.referencedValueLogSegmentsForGCAtSeq(ctx)
-			if err != nil {
+	unlockRecoveryRoots := func() {}
+	// A full scan is O(N), so it must never run while publishPrepareMu is
+	// exclusively held. Safety invariant: GC never zombifies a segment from a
+	// referenced set older than either the visible root or the two recovery meta
+	// slots while the exclusive lock is held. Once all earlier builders have
+	// registered, drain publication and validate both generations. A changed
+	// frontier is retried outside the lock once and then conservatively aborted.
+	const maxStaleScanRetries = 1
+	for attempt := 0; ; attempt++ {
+		if !opts.DryRun && db.rootPublication != nil {
+			if err := db.rootPublication.retryDurable(db.currentCommitSeq()); err != nil {
 				return stats, err
 			}
-			runValueLogGCPostScanHook()
-			if opts.DryRun {
-				break
-			}
-
-			db.publishPrepareMu.Lock()
-			if db.currentCommitSeq() == scannedSeq {
-				break
-			}
-			db.publishPrepareMu.Unlock()
-			if attempt == maxStaleScanRetries {
-				return stats, nil
-			}
 		}
-	} else if !opts.DryRun {
+		var recoveryGeneration uint64
+		var err error
+		referenced, _, scannedSeq, recoveryGeneration, err = db.referencedValueLogSegmentsForGCAtSeq(ctx)
+		if err != nil {
+			return stats, err
+		}
+		runValueLogGCPostScanHook()
+		if opts.DryRun {
+			break
+		}
+
 		db.publishPrepareMu.Lock()
+		generationMatches := recoveryGeneration == 0
+		if db.rootPublication != nil {
+			unlockRecoveryRoots, generationMatches = db.rootPublication.lockRecoverableValueLogRoots(recoveryGeneration)
+		}
+		if db.currentCommitSeq() == scannedSeq && generationMatches {
+			break
+		}
+		db.publishPrepareMu.Unlock()
+		if attempt == maxStaleScanRetries {
+			return stats, nil
+		}
 	}
 	if !opts.DryRun {
+		defer unlockRecoveryRoots()
 		defer db.publishPrepareMu.Unlock()
 	}
 
@@ -301,6 +309,13 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			stats.ObservedSourceBytes += size
 			stats.SegmentsTotal++
 			stats.BytesTotal += size
+			if _, ok := referenced[id]; ok {
+				stats.SegmentsReferenced++
+				stats.BytesReferenced += size
+				stats.ObservedSourceSegmentsReferenced++
+				stats.ObservedSourceBytesReferenced += size
+				continue
+			}
 
 			if _, ok := pendingAppendIDs[id]; ok {
 				stats.SegmentsProtected++

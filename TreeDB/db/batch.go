@@ -16,6 +16,7 @@ type Batch struct {
 	batch                              *batch.Batch
 	physicalOnly                       bool
 	commandWALPublishIntent            *commandWALBatchIntent
+	publishedCommitSeq                 uint64
 	conditionalTxnID                   uint64
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
 }
@@ -290,7 +291,18 @@ func (b *Batch) write(sync bool) error {
 			return err
 		}
 	}
-	return b.writeWithCommandWALIntent(sync, intent, maxEntryRevision)
+	err := b.writeWithCommandWALIntent(sync, intent, maxEntryRevision)
+	// Logical command-WAL batches may acknowledge once their command frame is
+	// durable. Physical batches (cached flush/checkpoint publication) have no
+	// replayable logical frame of their own, so WriteSync must wait for the exact
+	// root candidate even when the backend also has command WAL enabled.
+	if err != nil || !sync || (b.db.commandWAL && !b.physicalOnly) {
+		return err
+	}
+	if b.publishedCommitSeq == 0 || b.db.rootPublication == nil {
+		return ErrClosed
+	}
+	return b.db.rootPublication.waitDurable(b.publishedCommitSeq)
 }
 
 func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision) error {
@@ -298,6 +310,7 @@ func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchInte
 }
 
 func (b *Batch) writeWithCommandWALIntentPreflight(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) error {
+	b.publishedCommitSeq = 0
 	// If a command frame is appended but root publication later returns an
 	// error, the durable frame is intentionally left for reopen recovery. Reuse
 	// the same intent across optimistic/serialized attempts so one user batch
@@ -317,6 +330,7 @@ func (b *Batch) writeWithCommandWALIntentPreflight(sync bool, intent *commandWAL
 
 func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) (bool, error) {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
+	sideStoreBytes := b.batch.ValueLogPointerBytes()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
 	b.db.writeMu.RLock()
@@ -330,13 +344,16 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		return false, fmt.Errorf("missing index")
 	}
 
-	b.db.mu.RLock()
-	rootID := b.db.meta.UserRootPageID
-	baseSeq := b.db.meta.CommitSeq
+	visible := b.db.state.Load()
+	if visible == nil {
+		b.db.writeMu.RUnlock()
+		return false, ErrClosed
+	}
+	rootID := visible.RootPageID
+	baseSeq := visible.CommitSeq
 	// Register this writer as a "reader" of the base state to prevent the
 	// pruner from reclaiming pages we are about to read during z.Apply.
 	regID := idx.registry.Register(baseSeq)
-	b.db.mu.RUnlock()
 
 	defer idx.registry.Unregister(regID)
 
@@ -403,9 +420,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 	}()
-	b.db.mu.RLock()
-	currentRoot := b.db.meta.UserRootPageID
-	b.db.mu.RUnlock()
+	currentRoot := b.db.state.Load().RootPageID
 	if currentRoot != rootID {
 		b.db.observeFlushApplyMismatch()
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackRootMismatch)
@@ -450,10 +465,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	b.db.commitMu.Lock()
 	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
 	guardedPublishStart := time.Now()
-	b.db.mu.RLock()
-	currentRoot = b.db.meta.UserRootPageID
-	sysRoot := b.db.meta.SystemRootPageID
-	b.db.mu.RUnlock()
+	visible = b.db.state.Load()
+	currentRoot = visible.RootPageID
+	sysRoot := visible.SystemRootPageID
 	if currentRoot != rootID {
 		b.db.observeFlushApplyMismatch()
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackRootMismatch)
@@ -484,7 +498,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, publishPrepareGuard: publishPrepareGuard, touchedIndexPages: tracker.Pages(), sideStoreBytes: sideStoreBytes})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -501,8 +515,12 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
+		opts.dependenciesFlushed = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
+		opts.publishPrepareGuard = publishPrepareGuard
+		opts.touchedIndexPages = tracker.Pages()
+		opts.sideStoreBytes = sideStoreBytes
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu so that no concurrent writer can
 		// slip past the poison check in appendRawKVCommandWALIntent and publish a
@@ -526,6 +544,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		return false, err
 	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
+	b.publishedCommitSeq = post.commitSeq
 	vlogRefDelta = nil
 	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.finalizeCommitPostWork(post)
@@ -539,6 +558,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 
 func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
+	sideStoreBytes := b.batch.ValueLogPointerBytes()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
 	commitWaitStart := time.Now()
@@ -554,11 +574,13 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		return fmt.Errorf("missing index")
 	}
 
-	b.db.mu.RLock()
-	rootID := b.db.meta.UserRootPageID
-	baseSeq := b.db.meta.CommitSeq
+	visible := b.db.state.Load()
+	if visible == nil {
+		return ErrClosed
+	}
+	rootID := visible.RootPageID
+	baseSeq := visible.CommitSeq
 	regID := idx.registry.Register(baseSeq)
-	b.db.mu.RUnlock()
 
 	defer idx.registry.Unregister(regID)
 	if conditional != nil {
@@ -617,18 +639,16 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 	}()
 
-	b.db.mu.Lock()
-	if b.db.meta.UserRootPageID != rootID {
+	visible = b.db.state.Load()
+	if visible.RootPageID != rootID {
 		// This should not happen if writeMu is held and we are the only writer.
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeFlushApplyMismatch()
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackRootMismatch)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-		b.db.mu.Unlock()
 		return fmt.Errorf("concurrent modification detected during batch write")
 	}
-	sysRoot := b.db.meta.SystemRootPageID
-	b.db.mu.Unlock()
+	sysRoot := visible.SystemRootPageID
 
 	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
 	if err != nil {
@@ -641,7 +661,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, dependenciesFlushed: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, publishPrepareGuard: publishPrepareGuard, sideStoreBytes: sideStoreBytes})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -654,8 +674,11 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
+		opts.dependenciesFlushed = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
+		opts.publishPrepareGuard = publishPrepareGuard
+		opts.sideStoreBytes = sideStoreBytes
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
@@ -672,6 +695,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
 	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
+	b.publishedCommitSeq = post.commitSeq
 	vlogRefDelta = nil
 	b.db.finalizeCommitPostWork(post)
 	b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -710,6 +734,12 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 	if err == nil && intent != nil && intent.lsn != 0 {
 		b.db.conditionalTxnCommandWALPayloads.Add(1)
 	}
+	if err == nil && sync && (!b.db.commandWAL || b.physicalOnly) {
+		if b.publishedCommitSeq == 0 || b.db.rootPublication == nil {
+			return ErrClosed
+		}
+		return b.db.rootPublication.waitDurable(b.publishedCommitSeq)
+	}
 	return err
 }
 
@@ -718,12 +748,14 @@ func (b *Batch) Close() error {
 		err := b.batch.Close()
 		b.batch = nil
 		b.commandWALPublishIntent = nil
+		b.publishedCommitSeq = 0
 		b.conditionalTxnID = 0
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 		return err
 	}
 	b.batch = nil
 	b.commandWALPublishIntent = nil
+	b.publishedCommitSeq = 0
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 	return nil
@@ -736,6 +768,7 @@ func (b *Batch) Reset() {
 	}
 	b.batch.Reset()
 	b.commandWALPublishIntent = nil
+	b.publishedCommitSeq = 0
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 }

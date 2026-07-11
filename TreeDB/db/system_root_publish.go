@@ -71,10 +71,9 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if db.readOnly {
 		return 0, ErrReadOnly
 	}
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	userRoot := visible.RootPageID
+	baseSystemRoot := visible.SystemRootPageID
 
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
 	defer db.releasePendingValueLogAppendPtrCollector(ptrCollector)
@@ -100,10 +99,9 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		vlogRefDelta = nil
 	}
 
-	db.mu.Lock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.Unlock()
+	visible = db.state.Load()
+	curUserRoot := visible.RootPageID
+	curSystemRoot := visible.SystemRootPageID
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}

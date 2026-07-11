@@ -405,15 +405,28 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if db == nil || !db.commandWAL {
 		return nil
 	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
 	if db.readOnly {
 		return ErrReadOnly
 	}
-	state := db.state.Load()
-	if state == nil || state.AppliedCommandLSN == 0 {
+	appliedCommandLSN := uint64(0)
+	if db.rootPublication != nil {
+		appliedCommandLSN = db.rootPublication.durableAppliedCommandLSN()
+	} else {
+		// Open databases install the coordinator before cleanup is available.
+		// Keep the durable on-disk meta as the safe fallback for narrowly
+		// constructed internal DB values.
+		db.mu.Lock()
+		appliedCommandLSN = db.meta.AppliedCommandLSN
+		db.mu.Unlock()
+	}
+	if appliedCommandLSN == 0 {
 		return nil
 	}
 	scanStart := time.Now()
-	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, appliedCommandLSN, db.walMaxSegmentBytes)
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
@@ -1381,11 +1394,14 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		db.commitMu.Unlock()
 		return err
 	}
-	db.mu.RLock()
-	baseSeq := db.meta.CommitSeq
-	userRoot := db.meta.UserRootPageID
-	systemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
+	visible := db.state.Load()
+	if visible == nil {
+		db.commitMu.Unlock()
+		return ErrClosed
+	}
+	baseSeq := visible.CommitSeq
+	userRoot := visible.RootPageID
+	systemRoot := visible.SystemRootPageID
 	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(intent))
 	if err != nil {
@@ -1471,7 +1487,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		}
 	}
 	db.mu.RLock()
-	baseAppliedLSN := db.meta.AppliedCommandLSN
+	baseAppliedLSN := db.state.Load().AppliedCommandLSN
 	db.mu.RUnlock()
 	if requestTiming != nil {
 		requestTiming.BackendIntentPlanningSerialization += time.Since(planningStart)
@@ -1632,6 +1648,7 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
+	db.ensureCommandWALRecoverySnapshotView()
 	if env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
@@ -1646,8 +1663,9 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		// without changing roots. This path is only reached during recovery
 		// replay; there are no concurrent writers at that point.
 		db.mu.RLock()
-		rootID := db.meta.UserRootPageID
-		sysRootID := db.meta.SystemRootPageID
+		visible := db.state.Load()
+		rootID := visible.RootPageID
+		sysRootID := visible.SystemRootPageID
 		db.mu.RUnlock()
 		return db.publishCommandWALRoots(rootID, sysRootID, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
 	}
@@ -1726,8 +1744,18 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		}
 	}
 	maxEntryRevision := db.assignBatchEntryRevisions(b.batch)
-	return b.writeWithCommandWALIntent(true, &commandWALBatchIntent{
+	if err := b.writeWithCommandWALIntent(true, &commandWALBatchIntent{
 		lsn:          env.LSN,
 		coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
-	}, maxEntryRevision)
+	}, maxEntryRevision); err != nil {
+		return err
+	}
+	// Replay calls the internal batch path directly, bypassing Batch.write's
+	// public sync fence. Do not let recovery advance to the next frame (or
+	// reopen initialization replace the snapshot view) until this frame's
+	// visible root has reached durable meta.
+	if b.publishedCommitSeq == 0 || db.rootPublication == nil {
+		return ErrClosed
+	}
+	return db.rootPublication.waitDurable(b.publishedCommitSeq)
 }

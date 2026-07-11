@@ -84,7 +84,7 @@ func TestCommitCombinerFallback_QueueFullFastProbe(t *testing.T) {
 
 	reqCh := make(chan *commitCombineReq, 1)
 	stopCh := make(chan struct{})
-	sentinel := &commitCombineReq{result: make(chan error, 1)}
+	sentinel := &commitCombineReq{result: make(chan commitCombineResult, 1)}
 	reqCh <- sentinel
 
 	d.combineMu.Lock()
@@ -160,7 +160,7 @@ func TestWriteViaCommitCombiner_StopClosedDuringFastProbe(t *testing.T) {
 	d := &DB{}
 	reqCh := make(chan *commitCombineReq, 1)
 	stopCh := make(chan struct{})
-	reqCh <- &commitCombineReq{result: make(chan error, 1)}
+	reqCh <- &commitCombineReq{result: make(chan commitCombineResult, 1)}
 	close(stopCh)
 
 	d.combineMu.Lock()
@@ -232,26 +232,26 @@ func TestDrainCombined_PropagatesErrorToPendingRequests(t *testing.T) {
 	d := &DB{}
 	reqCh := make(chan *commitCombineReq, 2)
 	wantErr := errors.New("drain error")
-	req1 := &commitCombineReq{result: make(chan error, 1)}
-	req2 := &commitCombineReq{result: make(chan error, 1)}
+	req1 := &commitCombineReq{result: make(chan commitCombineResult, 1)}
+	req2 := &commitCombineReq{result: make(chan commitCombineResult, 1)}
 	reqCh <- req1
 	reqCh <- req2
 
 	d.drainCombined(reqCh, wantErr)
 
 	select {
-	case err := <-req1.result:
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("req1 err = %v, want %v", err, wantErr)
+	case result := <-req1.result:
+		if !errors.Is(result.err, wantErr) {
+			t.Fatalf("req1 err = %v, want %v", result.err, wantErr)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for req1 result")
 	}
 
 	select {
-	case err := <-req2.result:
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("req2 err = %v, want %v", err, wantErr)
+	case result := <-req2.result:
+		if !errors.Is(result.err, wantErr) {
+			t.Fatalf("req2 err = %v, want %v", result.err, wantErr)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for req2 result")

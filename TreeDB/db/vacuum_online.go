@@ -632,7 +632,28 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			hook(defers)
 		}
 
-		db.writeMu.Lock()
+		// Drain the visible frontier without writer locks, then acquire the writer
+		// and preparation fences. A writer can race into the gap and register one
+		// more candidate, so validate the queue under both locks and retry instead
+		// of waiting for the publisher while holding writeMu.
+		for {
+			visible := db.state.Load()
+			if visible == nil || db.rootPublication == nil {
+				cleanupNewPager()
+				return ErrClosed
+			}
+			if err := db.rootPublication.retryDurable(visible.CommitSeq); err != nil {
+				cleanupNewPager()
+				return err
+			}
+			db.writeMu.Lock()
+			db.publishPrepareMu.Lock()
+			if db.rootPublication.snapshot().pendingCandidates == 0 {
+				break
+			}
+			db.publishPrepareMu.Unlock()
+			db.writeMu.Unlock()
+		}
 		cutoverLocked = true
 		holdStarted := time.Now()
 		unlockCutover := func(completed bool) {
@@ -644,6 +665,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 				runStats.CutoverDuration = hold
 			}
 			cutoverLocked = false
+			db.publishPrepareMu.Unlock()
 			db.writeMu.Unlock()
 		}
 
@@ -940,6 +962,11 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		// Publish the new index generation (old readers keep oldGen pinned).
 		newGen := newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
 		db.trackIndex(newGen)
+		if err := db.rootPublication.adoptDurableGeneration(nextMeta, MetaPage0ID); err != nil {
+			unlockCutover(false)
+			cleanupNewPager()
+			return err
+		}
 
 		var oldState *DBState
 		db.mu.Lock()
@@ -979,7 +1006,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		}
 		if db.leafPageLog != nil {
 			db.commitMu.Lock()
-			currentCommitSeq := db.meta.CommitSeq
+			currentCommitSeq := uint64(0)
+			if visible := db.state.Load(); visible != nil {
+				currentCommitSeq = visible.CommitSeq
+			}
 			err := db.noteLeafGenerationPendingFileIDs(0, currentCommitSeq)
 			db.commitMu.Unlock()
 			if err != nil {
