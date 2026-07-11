@@ -608,6 +608,9 @@ func (s *Store) loadDiscardFloorLocked() (err error) {
 		return nil
 	}
 	record := it.Value()
+	if iterErr := it.Error(); iterErr != nil {
+		return storageError("read discard floor value", iterErr)
+	}
 	if len(record) != 9 || record[0] != discardFloorRecordV1 {
 		return fmt.Errorf("%w: invalid discard floor record", ErrMalformedRecord)
 	}

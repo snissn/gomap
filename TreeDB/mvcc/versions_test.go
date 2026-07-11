@@ -287,6 +287,32 @@ func TestDiscardFloorLoadPreservesIteratorCloseError(t *testing.T) {
 	}
 }
 
+func TestDiscardFloorValueReadErrorIsRetryableStorageError(t *testing.T) {
+	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+	defer db.Close()
+	injected := errors.New("floor value read failure")
+	failing := &floorValueErrorDB{DB: db, err: injected}
+	store := newStore(failing)
+	store.mu.Lock()
+	err := store.persistDiscardFloorLocked(25, CommitDurable)
+	store.mu.Unlock()
+	if err != nil {
+		t.Fatalf("persist discard floor fixture: %v", err)
+	}
+
+	failing.fail.Store(true)
+	_, err = store.DiscardFloor()
+	assertStorageValueError(t, err, injected, "read discard floor value")
+	if store.floorLoaded {
+		t.Fatal("failed floor value read populated cache")
+	}
+
+	failing.fail.Store(false)
+	if floor, err := store.DiscardFloor(); err != nil || floor != 25 {
+		t.Fatalf("retry floor=%d err=%v want 25", floor, err)
+	}
+}
+
 func TestVersionValueReadErrorsRemainStorageErrors(t *testing.T) {
 	t.Run("version iterator", func(t *testing.T) {
 		db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
@@ -671,6 +697,43 @@ func (it *floorCloseErrorIterator) Close() error {
 }
 
 var _ treeDB = (*floorCloseErrorDB)(nil)
+
+type floorValueErrorDB struct {
+	*treedb.DB
+	fail atomic.Bool
+	err  error
+}
+
+func (db *floorValueErrorDB) Iterator(start, end []byte) (treedb.Iterator, error) {
+	it, err := db.DB.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return &floorValueErrorIterator{Iterator: it, owner: db}, nil
+}
+
+type floorValueErrorIterator struct {
+	treedb.Iterator
+	owner     *floorValueErrorDB
+	valueRead bool
+}
+
+func (it *floorValueErrorIterator) Value() []byte {
+	if it.owner.fail.Load() {
+		it.valueRead = true
+		return nil
+	}
+	return it.Iterator.Value()
+}
+
+func (it *floorValueErrorIterator) Error() error {
+	if it.valueRead {
+		return errors.Join(it.Iterator.Error(), it.owner.err)
+	}
+	return it.Iterator.Error()
+}
+
+var _ treeDB = (*floorValueErrorDB)(nil)
 
 type snapshotValueErrorDB struct {
 	*treedb.DB
