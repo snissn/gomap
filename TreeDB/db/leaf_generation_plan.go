@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -115,13 +114,9 @@ type leafGenerationScanFileState struct {
 
 type leafGenerationScanContext struct {
 	snap          *Snapshot
-	verify        func(pageID uint64, n node.Node) error
 	fileStateByID map[uint32]*leafGenerationScanFileState
-	memo          map[uint64]leafGenerationSubtreeStats
-	cacheEnabled  bool
 	lastFileID    uint32
 	lastFileState *leafGenerationScanFileState
-	childStacks   [][]uint64
 	groupedFrames leafGenerationGroupedFrameScanCache
 }
 
@@ -932,6 +927,41 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 	return info, true, nil
 }
 
+func (db *DB) newLeafGenerationScanContext(snap *Snapshot) (*leafGenerationScanContext, error) {
+	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil {
+		return nil, nil
+	}
+	view := snap.state.LeafGenerations
+	fileStateByID := make(map[uint32]*leafGenerationScanFileState, len(view.FileToGeneration))
+	fileStates := make([]leafGenerationScanFileState, 0, len(view.FileToGeneration))
+	for fileID, genID := range view.FileToGeneration {
+		gen, ok := view.Generations[genID]
+		if !ok {
+			return nil, fmt.Errorf("maintenance reachability: missing generation for leaf file %d", fileID)
+		}
+		persist := gen.State == leafGenerationStateSealed
+		idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(fileID, snap.state.ValueLogSet, persist)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		fileStates = append(fileStates, leafGenerationScanFileState{
+			fileID:  fileID,
+			genID:   genID,
+			persist: persist,
+			idx:     idx,
+		})
+		fileStateByID[fileID] = &fileStates[len(fileStates)-1]
+	}
+	return &leafGenerationScanContext{
+		snap:          snap,
+		fileStateByID: fileStateByID,
+		groupedFrames: newLeafGenerationGroupedFrameScanCache(leafGenerationGroupedFrameScanCacheEntries),
+	}, nil
+}
+
 func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst leafGenerationSubtreeStats, ptr page.LeafLogPtr) (leafGenerationSubtreeStats, error) {
 	if scan == nil {
 		return dst, fmt.Errorf("leaf generation plan: missing scan context")
@@ -999,69 +1029,6 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 	return dst, nil
 }
 
-func (db *DB) scanLeafGenerationSubtreeStats(ctx context.Context, scan *leafGenerationScanContext, pageID uint64) (leafGenerationSubtreeStats, error) {
-	return db.scanLeafGenerationSubtreeStatsDepth(ctx, scan, pageID, 0)
-}
-
-func (db *DB) scanLeafGenerationSubtreeStatsDepth(ctx context.Context, scan *leafGenerationScanContext, pageID uint64, depth int) (leafGenerationSubtreeStats, error) {
-	if scan == nil || scan.snap == nil || scan.snap.idx == nil || scan.snap.idx.pager == nil {
-		return nil, nil
-	}
-	if scan.cacheEnabled {
-		if stats, ok := db.loadLeafGenerationSubtreeStats(pageID); ok {
-			return stats, nil
-		}
-	}
-	if stats, ok := scan.memo[pageID]; ok {
-		return stats, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	runLeafGenerationSubtreeCacheMissHook(pageID)
-	data, err := scan.snap.idx.pager.Get(pageID)
-	if err != nil {
-		return nil, err
-	}
-	n := node.NewNodeView(data)
-	if err := scan.verify(pageID, n); err != nil {
-		return nil, err
-	}
-	var stats leafGenerationSubtreeStats
-	switch n.Type() {
-	case page.PageTypeLeaf:
-		stats = nil
-	case page.PageTypeInternal:
-		for len(scan.childStacks) <= depth {
-			scan.childStacks = append(scan.childStacks, nil)
-		}
-		children := scan.childStacks[depth][:0]
-		err = n.WalkInternalChildren(&children, func(ptr page.LeafLogPtr) error {
-			var visitErr error
-			stats, visitErr = db.scanLeafGenerationPtrTotals(scan, stats, ptr)
-			return visitErr
-		})
-		if err != nil {
-			return nil, err
-		}
-		scan.childStacks[depth] = children[:0]
-		for _, childID := range children {
-			childStats, childErr := db.scanLeafGenerationSubtreeStatsDepth(ctx, scan, childID, depth+1)
-			if childErr != nil {
-				return nil, childErr
-			}
-			stats = mergeLeafGenerationTotals(stats, childStats)
-		}
-	default:
-		return nil, fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
-	}
-	scan.memo[pageID] = stats
-	if scan.cacheEnabled {
-		db.storeLeafGenerationSubtreeStats(pageID, stats)
-	}
-	return stats, nil
-}
-
 func (db *DB) scanLeafGenerationLiveStats(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
 	return db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{})
 }
@@ -1073,104 +1040,14 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil || snap.idx == nil || snap.idx.pager == nil {
 		return stats, nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	view := snap.state.LeafGenerations
-	fileStateByID := make(map[uint32]*leafGenerationScanFileState, len(view.FileToGeneration))
-	fileStates := make([]leafGenerationScanFileState, 0, len(view.FileToGeneration))
-	for fileID, genID := range view.FileToGeneration {
-		gen, ok := view.Generations[genID]
-		if !ok {
-			return leafGenerationLiveScanStats{}, fmt.Errorf("leaf generation plan: missing generation for leaf file %d", fileID)
-		}
-		persist := gen.State == leafGenerationStateSealed
-		idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(fileID, snap.state.ValueLogSet, persist)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return leafGenerationLiveScanStats{}, err
-		}
-		fileStates = append(fileStates, leafGenerationScanFileState{
-			fileID:  fileID,
-			genID:   genID,
-			persist: persist,
-			idx:     idx,
-		})
-		fileStateByID[fileID] = &fileStates[len(fileStates)-1]
-	}
-	verifyAlways := snap.idx.pager.VerifyOnRead()
-	verify := func(pageID uint64, n node.Node) error {
-		if verifyAlways || !snap.idx.pager.IsVerified(pageID) {
-			if !n.VerifyChecksum() {
-				return fmt.Errorf("leaf generation plan: checksum mismatch on page %d", pageID)
-			}
-			if !verifyAlways {
-				snap.idx.pager.MarkVerified(pageID)
-			}
-		}
-		return nil
-	}
-	scan := &leafGenerationScanContext{
-		snap:          snap,
-		verify:        verify,
-		fileStateByID: fileStateByID,
-		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
-		cacheEnabled:  !opts.DisableCache && !verifyAlways,
-		groupedFrames: newLeafGenerationGroupedFrameScanCache(leafGenerationGroupedFrameScanCacheEntries),
-	}
-	roots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:              maintenanceReachabilityLeafGenerationTotals,
+		ProtectedRootIDs:        opts.ProtectedRootIDs,
+		ProtectedSystemRootIDs:  opts.ProtectedSystemRootIDs,
+		DisableLeafSubtreeCache: opts.DisableCache,
+	})
 	if err != nil {
 		return leafGenerationLiveScanStats{}, err
 	}
-	roots = dedupeMaintenanceRootsByRootID(roots)
-	if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
-		seen := make(map[uint64]struct{}, len(roots)+len(opts.ProtectedRootIDs)+len(opts.ProtectedSystemRootIDs))
-		for _, root := range roots {
-			if root.rootID != 0 {
-				seen[root.rootID] = struct{}{}
-			}
-		}
-		addProtectedRoot := func(root maintenanceRoot) {
-			if root.rootID == 0 {
-				return
-			}
-			if _, ok := seen[root.rootID]; ok {
-				return
-			}
-			seen[root.rootID] = struct{}{}
-			roots = append(roots, root)
-		}
-		for _, rootID := range opts.ProtectedRootIDs {
-			if rootID == 0 {
-				continue
-			}
-			addProtectedRoot(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
-		}
-		for _, rootID := range opts.ProtectedSystemRootIDs {
-			if rootID == 0 {
-				continue
-			}
-			protectedRoots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, rootID)
-			if err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return leafGenerationLiveScanStats{}, ctxErr
-				}
-				return leafGenerationLiveScanStats{}, err
-			}
-			for _, root := range protectedRoots {
-				addProtectedRoot(root)
-			}
-		}
-	}
-	for _, root := range roots {
-		rootID := root.rootID
-		rootStats, err := db.scanLeafGenerationSubtreeStats(ctx, scan, rootID)
-		if err != nil {
-			return leafGenerationLiveScanStats{}, err
-		}
-		stats.Generations = mergeLeafGenerationTotals(stats.Generations, rootStats)
-	}
-	return stats, nil
+	return result.leafGenerationLive, nil
 }

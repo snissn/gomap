@@ -41,27 +41,21 @@ type maintenanceReachabilityResult struct {
 	leafFrameProjections uint64
 }
 
-type maintenanceReachabilityRoot struct {
-	maintenanceRoot
-	valueLogProjection bool
-}
-
-func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64, projectValueLog bool) ([]maintenanceReachabilityRoot, error) {
+func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protectedRootIDs, protectedSystemRootIDs []uint64, projectValueLog bool) ([]maintenanceRoot, int, error) {
 	roots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	roots = dedupeMaintenanceRootsByRootID(roots)
-	out := make([]maintenanceReachabilityRoot, 0, len(roots)+len(protectedRootIDs)+len(protectedSystemRootIDs))
-	for _, root := range roots {
-		out = append(out, maintenanceReachabilityRoot{
-			maintenanceRoot:    root,
-			valueLogProjection: projectValueLog,
-		})
+	valueLogRootCount := 0
+	if projectValueLog {
+		valueLogRootCount = len(roots)
 	}
-
-	seen := make(map[uint64]struct{}, len(out)+len(protectedRootIDs)+len(protectedSystemRootIDs))
-	for _, root := range out {
+	if len(protectedRootIDs) == 0 && len(protectedSystemRootIDs) == 0 {
+		return roots, valueLogRootCount, nil
+	}
+	seen := make(map[uint64]struct{}, len(roots)+len(protectedRootIDs)+len(protectedSystemRootIDs))
+	for _, root := range roots {
 		seen[root.rootID] = struct{}{}
 	}
 	addProtected := func(root maintenanceRoot) {
@@ -72,7 +66,7 @@ func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protected
 			return
 		}
 		seen[root.rootID] = struct{}{}
-		out = append(out, maintenanceReachabilityRoot{maintenanceRoot: root})
+		roots = append(roots, root)
 	}
 	for _, rootID := range protectedRootIDs {
 		addProtected(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
@@ -80,13 +74,13 @@ func maintenanceReachabilityRoots(ctx context.Context, snap *Snapshot, protected
 	for _, systemRootID := range protectedSystemRootIDs {
 		protected, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, systemRootID)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, root := range protected {
 			addProtected(root)
 		}
 	}
-	return out, nil
+	return roots, valueLogRootCount, nil
 }
 
 func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, opts maintenanceReachabilityScanOptions) (maintenanceReachabilityResult, error) {
@@ -118,22 +112,16 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	var leafScan *leafGenerationScanContext
 	var err error
 	if collectLeaf {
-		leafScan, err = db.newCompactStorageLeafScanContext(snap)
+		leafScan, err = db.newLeafGenerationScanContext(snap)
 		if err != nil {
 			return result, err
 		}
 	}
-	roots, err := maintenanceReachabilityRoots(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs, collectValueLog)
+	roots, valueLogRootCount, err := maintenanceReachabilityRoots(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs, collectValueLog)
 	if err != nil {
 		return result, err
 	}
 	result.counters.RootSets = uint64(len(roots))
-	valueLogRootCount := 0
-	for _, root := range roots {
-		if root.valueLogProjection {
-			valueLogRootCount++
-		}
-	}
 	directValueLogProjection := valueLogRootCount == 1
 
 	type valueLogSegmentTally struct {
@@ -160,12 +148,18 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	}
 	verifyAlways := snap.idx.pager.VerifyOnRead()
 	leafCacheOnly := collectLeaf && !collectValueLog && !opts.DisableLeafSubtreeCache && !verifyAlways
-	if leafScan != nil {
-		leafScan.cacheEnabled = leafCacheOnly
+	var memo map[uint64]memoEntry
+	var leafMemo map[uint64]leafGenerationSubtreeStats
+	if collectValueLog {
+		memo = make(map[uint64]memoEntry, 64)
+	} else {
+		leafMemo = make(map[uint64]leafGenerationSubtreeStats, 64)
 	}
-	memo := make(map[uint64]memoEntry, 64)
 	childStacks := make([][]uint64, 0, 8)
-	leafScratch := make([]byte, 0, page.PageSize)
+	var leafScratch []byte
+	if collectValueLog {
+		leafScratch = make([]byte, 0, page.PageSize)
+	}
 
 	scanLeafValues := func(n node.Node, entry *memoEntry) error {
 		for i := uint16(0); i < n.Count(); i++ {
@@ -307,17 +301,22 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 
 	var walk func(uint64, int, bool) (leafGenerationSubtreeStats, error)
 	walk = func(pageID uint64, depth int, valueLogProjection bool) (leafGenerationSubtreeStats, error) {
-		if entry, ok := memo[pageID]; ok {
-			if valueLogProjection && !entry.valueLogComplete {
-				return nil, fmt.Errorf("maintenance reachability: value-log projection reached protected-only memo page %d", pageID)
+		if collectValueLog {
+			if entry, ok := memo[pageID]; ok {
+				if valueLogProjection && !entry.valueLogComplete {
+					return nil, fmt.Errorf("maintenance reachability: value-log projection reached protected-only memo page %d", pageID)
+				}
+				result.counters.MemoHits++
+				return entry.leafTotals, nil
 			}
+		} else if stats, ok := leafMemo[pageID]; ok {
 			result.counters.MemoHits++
-			return entry.leafTotals, nil
+			return stats, nil
 		}
 		if leafCacheOnly {
 			if stats, ok := db.loadLeafGenerationSubtreeStats(pageID); ok {
 				result.counters.MemoHits++
-				memo[pageID] = memoEntry{leafTotals: stats}
+				leafMemo[pageID] = stats
 				return stats, nil
 			}
 		}
@@ -385,7 +384,11 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		default:
 			return nil, fmt.Errorf("maintenance reachability: invalid page type %d on page %d", n.Type(), pageID)
 		}
-		memo[pageID] = entry
+		if collectValueLog {
+			memo[pageID] = entry
+		} else {
+			leafMemo[pageID] = entry.leafTotals
+		}
 		if collectLeaf && !opts.DisableLeafSubtreeCache && !verifyAlways {
 			db.storeLeafGenerationSubtreeStats(pageID, entry.leafTotals)
 		}
@@ -433,15 +436,16 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		return nil
 	}
 
-	for _, root := range roots {
-		stats, err := walk(root.rootID, 0, root.valueLogProjection)
+	for i, root := range roots {
+		valueLogProjection := i < valueLogRootCount
+		stats, err := walk(root.rootID, 0, valueLogProjection)
 		if err != nil {
 			return result, err
 		}
 		if collectLeaf {
 			result.leafGenerationLive.Generations = mergeLeafGenerationTotals(result.leafGenerationLive.Generations, stats)
 		}
-		if root.valueLogProjection && !directValueLogProjection {
+		if valueLogProjection && !directValueLogProjection {
 			if err := projectValueLog(root.rootID); err != nil {
 				return result, err
 			}

@@ -43,8 +43,13 @@ func (db *DB) collectLeafGenerationMetrics(set *valuelog.Set, excludePinIDs []ui
 	}
 	m.enabled = true
 
+	// Manifest publication is serialized by writeMu in maintenance paths and
+	// by mu in post-commit paths. Take both in the documented lock order while
+	// cloning so metrics collection is synchronized with either publisher.
 	db.writeMu.RLock()
+	db.mu.RLock()
 	manifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
 	db.writeMu.RUnlock()
 	if manifest == nil {
 		return m

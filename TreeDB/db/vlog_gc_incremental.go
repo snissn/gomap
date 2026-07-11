@@ -643,62 +643,12 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return result.valueLogRefCounts, commitSeq, nil
 }
 
-func (db *DB) scanValueLogRefCountsLegacy(ctx context.Context) (map[uint32]uint64, uint64, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	snap := db.AcquireSnapshot()
-	if snap == nil || snap.idx == nil || snap.state == nil {
-		if snap != nil {
-			_ = snap.Close()
-		}
-		return nil, 0, fmt.Errorf("missing db state")
-	}
-	commitSeq := snap.state.CommitSeq
-	counts := make(map[uint32]uint64)
-
-	roots, err := maintenanceRootsForSnapshot(snap)
-	if err != nil {
-		_ = snap.Close()
-		return nil, 0, err
-	}
-	roots = dedupeMaintenanceRootsByRootID(roots)
-	for _, root := range roots {
-		iter := scanValueLogRefCountRootIterator(snap, root)
-		if err := collectValueLogRefCounts(ctx, db, iter, counts); err != nil {
-			_ = iter.Close()
-			_ = snap.Close()
-			return nil, 0, err
-		}
-		_ = iter.Close()
-	}
-
-	if err := snap.Close(); err != nil {
-		return nil, 0, err
-	}
-	return counts, commitSeq, nil
-}
-
 func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iterator.UnsafeIterator {
 	opts := tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}
 	if snap != nil && root.kind == maintenanceRootUser && root.rootID == snap.treeRoot {
 		return snap.tree.IteratorWithOptions(nil, nil, opts)
 	}
 	return tree.New(snap.idx.pager, &snap.reader, root.rootID).IteratorWithOptions(nil, nil, opts)
-}
-
-func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {
-	for it.Valid() {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		_, ptr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
-			refs[ptr.FileID]++
-		}
-		it.Next()
-	}
-	return it.Error()
 }
 
 func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
