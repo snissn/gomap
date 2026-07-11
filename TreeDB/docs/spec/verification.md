@@ -1017,6 +1017,26 @@ command-WAL cached mode feeds total command-WAL segment bytes into the
 size-triggered auto-checkpoint loop while the legacy cached redo journal is
 disabled.
 
+Post-frontier admission evidence includes
+`TestCachingDB_CheckpointExternalCommandWALAdmitsAfterFrontierCut`, which latches
+the pre-cut, post-cut, and pre-drain phases and proves that only the captured
+frontier reaches the first backend boundary;
+`TestCachingDB_CheckpointDrainRetainsWriterGateWithoutCommandWALCutover`, which
+keeps cached redo-WAL, unsafe WAL-off, and hookless external-WAL modes blocked
+through the drain; and
+`TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites`, which
+admits concurrent public `Write` and `WriteSync` calls while checkpoint publish
+remains latched. `TestPublicCommandWALCheckpointPostFrontierRangeWritesWaitForDrain`
+proves that DB-level and pure-batch range spans instead wait for the full drain,
+append no command frame while checkpoint publish is latched, record one
+`checkpoint_drain` wait, and do not increment point-write admission.
+Publish-error retry and crash/reopen cleanup coverage live in
+`TestPublicCommandWALCheckpointPostFrontierAdmissionPropagatesPublishError` and
+`TestPublicCommandWALCheckpointPostFrontierGenerationSurvivesCrashReopen`; the
+latter forces value-log pointers, crashes after covered command-WAL cleanup,
+replays the fresh post-cut segment, and verifies both values again after
+`ValueLogGC`.
+
 ## 12. Collections Document Formats
 
 Invariant:
