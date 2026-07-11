@@ -10,7 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
-func TestCaptureExcludingOmitsProcessLocalFiles(t *testing.T) {
+func TestCaptureOmitsProcessLocalLock(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "LOCK"), []byte("process-local"), 0o644); err != nil {
 		t.Fatal(err)
@@ -18,7 +18,7 @@ func TestCaptureExcludingOmitsProcessLocalFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "data"), []byte("durable"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	model, err := CaptureExcluding(root, "LOCK")
+	model, err := Capture(root)
 	if err != nil {
 		t.Fatal(err)
 	}

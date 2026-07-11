@@ -90,16 +90,14 @@ type Model struct {
 	trace        []string
 }
 
-// Capture imports a real directory as an initially stable image.
+// Capture imports a real directory as an initially stable image. The root
+// process-local LOCK file coordinates a live handle rather than representing
+// durable database state, and may be unreadable while held on Windows.
 func Capture(root string) (*Model, error) {
-	return CaptureExcluding(root)
+	return captureExcluding(root, "LOCK")
 }
 
-// CaptureExcluding imports a real directory as an initially stable image while
-// omitting exact root-relative paths that are not persistence resources. This
-// is primarily useful for live database captures where the process-local LOCK
-// file cannot be read on Windows and must not appear in a crash image anyway.
-func CaptureExcluding(root string, excluded ...string) (*Model, error) {
+func captureExcluding(root string, excluded ...string) (*Model, error) {
 	excludedPaths := make(map[string]struct{}, len(excluded))
 	for _, path := range excluded {
 		rel, err := normalize(path)
@@ -528,7 +526,7 @@ func (m *Model) Unlink(path string) error {
 	if _, ok := m.volatileDirs[path]; !ok {
 		return fmt.Errorf("powerlossoracle: unlink missing file or directory %q", path)
 	}
-	prefix := path + "/"
+	prefix := path + string(filepath.Separator)
 	for file := range m.volatile {
 		if strings.HasPrefix(file, prefix) {
 			delete(m.volatile, file)
@@ -613,7 +611,7 @@ func (m *Model) SyncDir(dir string) error {
 	// unreachable. Its descendants do not each need an independent parent
 	// directory sync: the synced removal of the top-level name is sufficient.
 	for _, tree := range removedTrees {
-		prefix := tree + "/"
+		prefix := tree + string(filepath.Separator)
 		for path := range m.stable {
 			if strings.HasPrefix(path, prefix) {
 				delete(m.stable, path)
