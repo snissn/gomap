@@ -185,6 +185,16 @@ boundary. Truncated WAL tails may discard an incomplete final batch but must not
 publish a prefix. Malformed MVCC key/value records are not guessed or repaired:
 `GetAt` reports them explicitly if they occupy the requested visible position.
 
+The external-version discard floor uses the same raw atomic-batch recovery
+path. A durable prune synchronizes that metadata record before synchronizing
+any physical delete batch. Recovery may therefore observe the old unpruned
+history, a partially pruned history with the new floor, or the completed prune;
+it must never observe pruning without the floor. New reads at or below a
+recovered nonzero floor fail. Pruning restart scans the recovered snapshot and
+is idempotent. Oldest-first processing retains a value anchor and removes a
+tombstone anchor only after all older versions have been removed, preventing
+interrupted maintenance from resurrecting a deleted value.
+
 ### 4.5 Cleanup
 
 After successful replay:

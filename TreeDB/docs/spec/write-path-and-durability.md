@@ -220,6 +220,17 @@ External timestamps are key bytes in the reserved MVCC subspace. They neither
 select TreeDB's internal commit sequence nor invoke conditional transactions;
 the caller owns conflict detection and timestamp assignment.
 
+`AdvanceDiscardFloor` and `PruneVersions` accept the same relaxed/durable mode
+split. Durable floor advancement requires `DurabilityDurable` and publishes its
+metadata record with `Batch.WriteSync`. Durable pruning first re-writes and
+syncs the already-published floor, then syncs each bounded delete batch. Thus a
+recovered physical deletion cannot exist without a recovered floor that rejects
+affected historical reads. Relaxed maintenance is atomic and ordered but has
+only the configured relaxed crash boundary; a later checkpoint/close is needed
+for a reopen guarantee. Repeating the current floor in durable mode is an
+explicit durability upgrade and re-syncs the metadata; only the equal relaxed
+advance is a no-op.
+
 ### 5.4 Collection API Durability
 
 Collection mutators do not have separate `*Sync` Go methods. Their baseline

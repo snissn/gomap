@@ -22,6 +22,20 @@ Conceptually, a value-log segment can be:
 3. eligible (unreferenced and not active),
 4. deleted/zombied.
 
+### 2.1 External-version logical pruning is not segment GC
+
+`TreeDB/mvcc.PruneVersions` deletes obsolete physical index keys only after its
+persisted external timestamp floor makes those historical reads invalid. It
+does not delete, truncate, or select value-log segments by timestamp or age.
+The ordinary raw delete path updates index reachability; existing snapshot
+roots remain retention roots. Value-log GC/rewrite may reclaim payload segments
+later only through the reachability rules in this document.
+
+The MVCC prune scan is snapshot-bound and bounded by its iterator plus delete
+batch size. A live pre-prune snapshot continues to protect and resolve its old
+value pointers. The prune's visited/retained/pruned byte accounting describes
+logical physical-record bytes, not immediately reclaimed segment bytes.
+
 ## 3. Reachability Source of Truth
 
 Reachability is defined by pointer references found in index trees.

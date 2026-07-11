@@ -77,10 +77,35 @@ The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
   underlying error for `errors.Is`/`errors.As`. Present values are caller-owned
   copies.
 
-Retained-version iteration, discard floors, Dgraph metadata, TTL,
-subscriptions, and conditional transactions remain separate contracts owned by
-descendant issues. `TreeDB/mvcc` does not reinterpret `EntryRevision` and does
-not perform conflict detection.
+Retained-version iteration and discard/pruning extend that opt-in owner:
+
+- Exactly one `Store` owns one open TreeDB handle. Creating multiple `Store`
+  values over the same handle is unsupported because floor caching and
+  maintenance serialization are owner-local.
+- `IterateVersions` pins one TreeDB snapshot. Forward order is logical key
+  ascending then timestamp descending; reverse order is logical key descending
+  then timestamp ascending. Prefix, inclusive logical lower bound, exclusive
+  logical upper bound, and optional read-timestamp ceiling are combined without
+  full-database materialization. Options are copied at open, returned keys and
+  values are caller-owned, and tombstones remain explicit records. Iterator
+  accounting reports physical versions visited, filtered/skipped, and returned.
+- A nonzero global discard floor is the greatest timestamp that may be
+  discarded, matching Badger managed-mode `SetDiscardTs` boundary semantics.
+  Reads and read-timestamp scans at or below it are rejected; commits must be
+  strictly above it. The floor advances monotonically and survives reopen.
+- Pruning retains every version above the floor. At or below the floor it
+  retains the newest value anchor required by later allowed reads and deletes
+  older versions. When that anchor is a tombstone, the tombstone is deleted
+  only after all older versions, so a crash cannot expose an older value;
+  allowed reads then observe absence until a newer value exists.
+- Pruning is a bounded reverse scan plus bounded delete batches. Durable mode
+  re-syncs the floor before its first delete; interrupted runs are safe and
+  idempotent. TreeDB snapshots acquired before floor advancement keep their
+  pinned physical view until close.
+
+Dgraph-specific metadata, TTL, subscriptions, and conditional transactions
+remain separate contracts. `TreeDB/mvcc` does not reinterpret `EntryRevision`
+and does not perform conflict detection.
 
 ## 2. Read Contracts
 

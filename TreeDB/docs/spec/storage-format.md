@@ -116,6 +116,23 @@ prefix in existing raw APIs. The MVCC owner must prevent unrelated raw writes
 from entering its reserved physical range. The namespace marker makes MVCC
 physical keys non-empty even when the logical key is empty.
 
+The same opt-in owner stores its global discard floor under an explicit
+metadata marker that cannot be mistaken for a physical-key codec version:
+
+```text
+00 54 44 42 4d 56 43 43 00 4d 01 64 66
+|--------- "TDBMVCC" ---------| M v1 d  f
+```
+
+Its value is `01 u64be(discard_floor)`. A zero floor is represented by absence;
+an encoded zero, unknown record version, or wrong record length is corruption.
+The floor is the greatest external timestamp declared discardable. It is
+monotonic and is persisted before physical version deletion starts. This
+metadata key sorts outside the half-open version-1 scan namespace, so retained-
+version iterators cannot surface it as a logical record. The zero marker plus
+`M` identifies metadata and leaves nonzero codec version markers available for
+future versioned-key formats.
+
 ## 2. Index Page Basics
 
 ### 2.1 Fixed page size
