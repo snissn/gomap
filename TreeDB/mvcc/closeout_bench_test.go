@@ -3,6 +3,7 @@ package mvcc
 import (
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -138,10 +139,16 @@ func benchmarkCloseoutAllVersions(b *testing.B, profile closeoutProfile, keys, d
 func benchmarkCloseoutPrune(b *testing.B, profile closeoutProfile, keys, depth, floor int) {
 	var total PruneStats
 	var storageBytes uint64
+	parentDir := b.TempDir()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		db, store, dir := openCloseoutBench(b, profile)
+		dir, err := os.MkdirTemp(parentDir, "prune-")
+		if err != nil {
+			b.Fatal(err)
+		}
+		db := openTestDB(b, dir, profile.durability)
+		store := New(db)
 		closeoutPrepareHistory(b, store, keys, depth, profile.mode)
 		if err := store.AdvanceDiscardFloor(uint64(floor), profile.mode); err != nil {
 			b.Fatal(err)
@@ -156,6 +163,9 @@ func benchmarkCloseoutPrune(b *testing.B, profile closeoutProfile, keys, depth, 
 			b.Fatal(err)
 		}
 		storageBytes += closeoutDirectoryBytes(b, dir)
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatal(err)
+		}
 		total.Visited += stats.Visited
 		total.Skipped += stats.Skipped
 		total.Retained += stats.Retained
