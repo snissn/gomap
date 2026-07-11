@@ -15,12 +15,14 @@ from pathlib import Path
 BENCHMARKS = (
     "BenchmarkGetVersioned",
     "BenchmarkConditionalTxnBaselineBatchWrite",
+    "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+    "BenchmarkRepeatedIterator",
+    "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
 )
 BENCH_RE = re.compile(
-    r"^(Benchmark(?:GetVersioned|ConditionalTxnBaselineBatchWrite))(?:-\d+)?\s+"
-    r"\d+\s+([0-9.]+)\s+ns/op\s+([0-9.]+)\s+B/op\s+"
-    r"([0-9.]+)\s+allocs/op\s*$"
+    r"^(Benchmark.+?)(?:-\d+)?\s+\d+\s+([0-9.]+)\s+ns/op\s+(.*)$"
 )
+METRIC_RE = re.compile(r"([0-9.eE+-]+)\s+(B/op|allocs/op)(?:\s|$)")
 
 
 @dataclass(frozen=True)
@@ -36,9 +38,15 @@ def parse_benchmarks(path: Path, expected_samples: int) -> dict[str, list[Sample
         match = BENCH_RE.match(line.strip())
         if match is None:
             continue
-        name, ns_per_op, bytes_per_op, allocs_per_op = match.groups()
+        name, ns_per_op, tail = match.groups()
+        if name not in samples:
+            continue
+        metrics = {unit: float(value) for value, unit in METRIC_RE.findall(tail)}
+        missing = {"B/op", "allocs/op"} - set(metrics)
+        if missing:
+            raise ValueError(f"{path}: {name}: missing metrics {sorted(missing)}")
         samples[name].append(
-            Sample(float(ns_per_op), float(bytes_per_op), float(allocs_per_op))
+            Sample(float(ns_per_op), metrics["B/op"], metrics["allocs/op"])
         )
 
     for name, rows in samples.items():
@@ -161,15 +169,17 @@ def synthetic_log(
     bytes_base: float = 128.0,
     bytes_delta: float = 0.0,
     alloc_delta: float = 0.0,
+    runs: int = 7,
 ) -> str:
     lines: list[str] = []
-    for index in range(7):
+    for index in range(runs):
         for bench_index, name in enumerate(BENCHMARKS):
             ns_per_op = (1000.0 + bench_index * 9000.0 + index) * ns_scale
             bytes_per_op = bytes_base + bench_index * bytes_base + bytes_delta
             allocs_per_op = 2.0 + bench_index + alloc_delta
             lines.append(
                 f"{name}-1 1000 {ns_per_op:.3f} ns/op "
+                f"7.000 custom_metric/op "
                 f"{bytes_per_op:.3f} B/op {allocs_per_op:.3f} allocs/op"
             )
     return "\n".join(lines) + "\n"
@@ -236,13 +246,24 @@ def self_test() -> None:
         if passed:
             raise AssertionError("B/op increase above the 64 B boundary should fail")
 
-        candidate_path.write_text("", encoding="utf-8")
+        candidate_path.write_text(synthetic_log(runs=6), encoding="utf-8")
         try:
             parse_benchmarks(candidate_path, 7)
         except ValueError:
             pass
         else:
-            raise AssertionError("missing benchmark rows should fail")
+            raise AssertionError("wrong sample count should fail")
+
+        candidate_path.write_text(
+            synthetic_log().replace(BENCHMARKS[0] + "-1", "IgnoredBenchmark-1"),
+            encoding="utf-8",
+        )
+        try:
+            parse_benchmarks(candidate_path, 7)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("missing required row should fail")
     print("check_mvcc_raw_path_gate.py self-test: PASS")
 
 

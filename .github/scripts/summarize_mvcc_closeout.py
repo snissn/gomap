@@ -19,6 +19,39 @@ RSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s+(\d+)")
 USER_RE = re.compile(r"User time \(seconds\):\s+([0-9.]+)")
 SYSTEM_RE = re.compile(r"System time \(seconds\):\s+([0-9.]+)")
 
+PROFILES = ("durable_sync", "wal_on_relaxed", "wal_off_relaxed")
+EXPECTED_BENCHMARKS = frozenset(
+    name
+    for profile in PROFILES
+    for name in (
+        f"BenchmarkDgraphMVCCCloseout/CommitAt/{profile}/batch=1",
+        f"BenchmarkDgraphMVCCCloseout/CommitAt/{profile}/batch=32",
+        f"BenchmarkDgraphMVCCCloseout/GetAt/{profile}/depth=1",
+        f"BenchmarkDgraphMVCCCloseout/GetAt/{profile}/depth=64",
+        f"BenchmarkDgraphMVCCCloseout/AllVersions/{profile}/keys=64/depth=1",
+        f"BenchmarkDgraphMVCCCloseout/AllVersions/{profile}/keys=64/depth=32",
+        f"BenchmarkDgraphMVCCCloseout/Prune/{profile}/keys=64/depth=16/floor=4",
+        f"BenchmarkDgraphMVCCCloseout/Prune/{profile}/keys=64/depth=16/floor=12",
+    )
+)
+
+
+def required_metrics(name: str) -> set[str]:
+    required = {"ns/op", "B/op", "allocs/op"}
+    if "/CommitAt/" in name:
+        required.update(("mutations/s", "storage_bytes/op"))
+    elif "/GetAt/" in name:
+        required.add("lookups/s")
+    elif "/AllVersions/" in name:
+        required.add("versions/s")
+    elif "/Prune/" in name:
+        required.update(
+            ("pruned_versions/s", "storage_bytes/op", "delete_write_amplification")
+        )
+    if "/durable_sync/" in name and ("/CommitAt/" in name or "/Prune/" in name):
+        required.add("durable_footprint_bytes/op")
+    return required
+
 
 def parse_benchmarks(path: Path, expected: int) -> dict[str, dict[str, float]]:
     samples: dict[str, list[dict[str, float]]] = {}
@@ -32,10 +65,20 @@ def parse_benchmarks(path: Path, expected: int) -> dict[str, dict[str, float]]:
         samples.setdefault(name, []).append(metrics)
     if not samples:
         raise ValueError(f"{path}: no closeout benchmarks found")
+    names = set(samples)
+    if names != EXPECTED_BENCHMARKS:
+        missing = sorted(EXPECTED_BENCHMARKS - names)
+        extra = sorted(names - EXPECTED_BENCHMARKS)
+        raise ValueError(f"{path}: benchmark set mismatch; missing={missing}; extra={extra}")
     medians: dict[str, dict[str, float]] = {}
     for name, rows in samples.items():
         if len(rows) != expected:
             raise ValueError(f"{path}: {name}: expected {expected} samples, got {len(rows)}")
+        required = required_metrics(name)
+        for index, row in enumerate(rows, 1):
+            missing = sorted(required - set(row))
+            if missing:
+                raise ValueError(f"{path}: {name}: sample {index} missing metrics {missing}")
         units = set.intersection(*(set(row) for row in rows))
         medians[name] = {
             unit: statistics.median(row[unit] for row in rows) for unit in sorted(units)
@@ -43,13 +86,18 @@ def parse_benchmarks(path: Path, expected: int) -> dict[str, dict[str, float]]:
     return medians
 
 
-def parse_resources(path: Path) -> dict[str, float]:
+def parse_resources(path: Path, expected_samples: int) -> dict[str, float]:
     text = path.read_text(encoding="utf-8", errors="replace")
     rss = [int(value) for value in RSS_RE.findall(text)]
     user = [float(value) for value in USER_RE.findall(text)]
     system = [float(value) for value in SYSTEM_RE.findall(text)]
-    if not rss or not user or not system:
-        raise ValueError(f"{path}: incomplete /usr/bin/time evidence")
+    expected_invocations = expected_samples * 2
+    counts = (len(rss), len(user), len(system))
+    if counts != (expected_invocations,) * 3:
+        raise ValueError(
+            f"{path}: expected {expected_invocations} complete /usr/bin/time "
+            f"invocations, got rss/user/system={counts}"
+        )
     return {
         "invocations": float(len(rss)),
         "max_rss_kib": float(max(rss)),
@@ -63,6 +111,11 @@ def throughput(metrics: dict[str, float]) -> tuple[float, str]:
         if unit in metrics:
             return metrics[unit], unit
     return 0.0, "-"
+
+
+def metric_text(metrics: dict[str, float], unit: str) -> str:
+    value = metrics.get(unit)
+    return "-" if value is None else f"{value:.3f}"
 
 
 def render_markdown(
@@ -82,7 +135,7 @@ def render_markdown(
         f"system {resources['total_system_seconds']:.2f}s",
         "- durability classes are separate rows; relaxed rows are not durability-equivalent to durable sync",
         "",
-        "| Benchmark | ns/op | Throughput | B/op | allocs/op | storage bytes/op | durable bytes/op | delete write amp |",
+        "| Benchmark | ns/op | Throughput | B/op | allocs/op | storage bytes/op | durable footprint bytes/op | delete write amp |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for name in sorted(medians):
@@ -91,10 +144,10 @@ def render_markdown(
         rate_text = f"{rate:.3f} {unit}" if unit != "-" else "-"
         lines.append(
             f"| `{name}` | {metrics['ns/op']:.3f} | {rate_text} | "
-            f"{metrics.get('B/op', 0):.3f} | {metrics.get('allocs/op', 0):.3f} | "
-            f"{metrics.get('storage_bytes/op', 0):.3f} | "
-            f"{metrics.get('durable_bytes/op', 0):.3f} | "
-            f"{metrics.get('delete_write_amplification', 0):.3f} |"
+            f"{metric_text(metrics, 'B/op')} | {metric_text(metrics, 'allocs/op')} | "
+            f"{metric_text(metrics, 'storage_bytes/op')} | "
+            f"{metric_text(metrics, 'durable_footprint_bytes/op')} | "
+            f"{metric_text(metrics, 'delete_write_amplification')} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -111,7 +164,7 @@ def main() -> None:
     args = parser.parse_args()
 
     medians = parse_benchmarks(args.bench, args.expected_samples)
-    resources = parse_resources(args.resources)
+    resources = parse_resources(args.resources, args.expected_samples)
     payload = {
         "schema": "treedb-dgraph-mvcc-closeout-v1",
         "candidate_sha": args.candidate_sha,

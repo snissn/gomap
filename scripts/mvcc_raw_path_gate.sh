@@ -14,7 +14,10 @@ MAX_BYTES_REGRESSION_PERCENT="${MAX_BYTES_REGRESSION_PERCENT:-1}"
 MAX_BYTES_REGRESSION_ABSOLUTE="${MAX_BYTES_REGRESSION_ABSOLUTE:-64}"
 SCRIPT_GOWORK="${SCRIPT_GOWORK:-off}"
 OUT_DIR="${OUT_DIR:-$ROOT/artifacts/mvcc_raw_path_gate}"
-BENCH_REGEX='^(BenchmarkGetVersioned|BenchmarkConditionalTxnBaselineBatchWrite)$'
+DB_BENCH_REGEX='^(BenchmarkGetVersioned|BenchmarkConditionalTxnBaselineBatchWrite)$'
+SNAPSHOT_BENCH_REGEX='^BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek$'
+CACHING_BENCH_REGEX='^BenchmarkRepeatedIterator$'
+DURABILITY_BENCH_REGEX='^BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1$'
 
 if ! [[ "$RUNS" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNS must be a positive integer" >&2
@@ -69,8 +72,12 @@ BASELINE_LOG="$OUT_DIR/baseline.txt"
 CANDIDATE_LOG="$OUT_DIR/candidate.txt"
 SUMMARY_JSON="$OUT_DIR/summary.json"
 SUMMARY_MD="$OUT_DIR/summary.md"
-BASELINE_BIN="$TMP_ROOT/baseline.test"
-CANDIDATE_BIN="$TMP_ROOT/candidate.test"
+BASELINE_DB_BIN="$TMP_ROOT/baseline-db.test"
+BASELINE_CACHING_BIN="$TMP_ROOT/baseline-caching.test"
+BASELINE_TREEDB_BIN="$TMP_ROOT/baseline-treedb.test"
+CANDIDATE_DB_BIN="$TMP_ROOT/candidate-db.test"
+CANDIDATE_CACHING_BIN="$TMP_ROOT/candidate-caching.test"
+CANDIDATE_TREEDB_BIN="$TMP_ROOT/candidate-treedb.test"
 
 {
   echo "baseline_sha=$BASELINE_SHA"
@@ -91,15 +98,23 @@ CANDIDATE_BIN="$TMP_ROOT/candidate.test"
 } >"$ENVIRONMENT"
 
 env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-  -o "$CANDIDATE_BIN" ./TreeDB/db
+  -o "$CANDIDATE_DB_BIN" ./TreeDB/db
+env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+  -o "$CANDIDATE_CACHING_BIN" ./TreeDB/caching
+env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+  -o "$CANDIDATE_TREEDB_BIN" ./TreeDB
 (
   cd "$BASELINE_WT"
   env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-    -o "$BASELINE_BIN" ./TreeDB/db
+    -o "$BASELINE_DB_BIN" ./TreeDB/db
+  env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+    -o "$BASELINE_CACHING_BIN" ./TreeDB/caching
+  env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+    -o "$BASELINE_TREEDB_BIN" ./TreeDB
 )
 (
   cd "$TMP_ROOT"
-  sha256sum baseline.test candidate.test
+  sha256sum baseline-*.test candidate-*.test
 ) | tee "$OUT_DIR/binary-sha256.txt"
 
 : >"$BASELINE_LOG"
@@ -109,25 +124,40 @@ run_sample() {
   local revision="$1"
   local sample="$2"
   local binary="$3"
-  local output="$4"
+  local regex="$4"
+  local output="$5"
   {
     echo "--- before revision=$revision sample=$sample at $(date -Iseconds) ---"
     ps -eo pid,ppid,etime,%cpu,cmd --sort=-%cpu | head -20 || true
   } >>"$PROCESSES"
   taskset -c "$CPUSET" env GOMAXPROCS=1 "$binary" \
     -test.run '^$' \
-    -test.bench "$BENCH_REGEX" \
+    -test.bench "$regex" \
+    -test.benchmem \
     -test.benchtime="$BENCHTIME" \
     -test.count=1 >>"$output"
 }
 
+run_revision() {
+  local revision="$1"
+  local sample="$2"
+  local db_binary="$3"
+  local caching_binary="$4"
+  local treedb_binary="$5"
+  local output="$6"
+  run_sample "$revision" "$sample" "$db_binary" "$DB_BENCH_REGEX" "$output"
+  run_sample "$revision" "$sample" "$treedb_binary" "$SNAPSHOT_BENCH_REGEX" "$output"
+  run_sample "$revision" "$sample" "$caching_binary" "$CACHING_BENCH_REGEX" "$output"
+  run_sample "$revision" "$sample" "$treedb_binary" "$DURABILITY_BENCH_REGEX" "$output"
+}
+
 for ((sample = 1; sample <= RUNS; sample++)); do
   if ((sample % 2 == 1)); then
-    run_sample baseline "$sample" "$BASELINE_BIN" "$BASELINE_LOG"
-    run_sample candidate "$sample" "$CANDIDATE_BIN" "$CANDIDATE_LOG"
+    run_revision baseline "$sample" "$BASELINE_DB_BIN" "$BASELINE_CACHING_BIN" "$BASELINE_TREEDB_BIN" "$BASELINE_LOG"
+    run_revision candidate "$sample" "$CANDIDATE_DB_BIN" "$CANDIDATE_CACHING_BIN" "$CANDIDATE_TREEDB_BIN" "$CANDIDATE_LOG"
   else
-    run_sample candidate "$sample" "$CANDIDATE_BIN" "$CANDIDATE_LOG"
-    run_sample baseline "$sample" "$BASELINE_BIN" "$BASELINE_LOG"
+    run_revision candidate "$sample" "$CANDIDATE_DB_BIN" "$CANDIDATE_CACHING_BIN" "$CANDIDATE_TREEDB_BIN" "$CANDIDATE_LOG"
+    run_revision baseline "$sample" "$BASELINE_DB_BIN" "$BASELINE_CACHING_BIN" "$BASELINE_TREEDB_BIN" "$BASELINE_LOG"
   fi
 done
 

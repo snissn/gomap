@@ -76,7 +76,7 @@ func benchmarkCloseoutCommitAt(b *testing.B, profile closeoutProfile, batchSize 
 	b.ReportMetric(float64(batchSize*b.N)/b.Elapsed().Seconds(), "mutations/s")
 	b.ReportMetric(float64(storageBytes)/float64(max(b.N, 1)), "storage_bytes/op")
 	if profile.mode == CommitDurable {
-		b.ReportMetric(float64(storageBytes)/float64(max(b.N, 1)), "durable_bytes/op")
+		b.ReportMetric(float64(storageBytes)/float64(max(b.N, 1)), "durable_footprint_bytes/op")
 	}
 }
 
@@ -183,7 +183,7 @@ func benchmarkCloseoutPrune(b *testing.B, profile closeoutProfile, keys, depth, 
 	b.ReportMetric(float64(total.DeleteWriteBytes)/float64(max(total.PrunedBytes, 1)), "delete_write_amplification")
 	b.ReportMetric(float64(storageBytes)/float64(max(b.N, 1)), "storage_bytes/op")
 	if profile.mode == CommitDurable {
-		b.ReportMetric(float64(storageBytes)/float64(max(b.N, 1)), "durable_bytes/op")
+		b.ReportMetric(float64(storageBytes)/float64(max(b.N, 1)), "durable_footprint_bytes/op")
 	}
 }
 

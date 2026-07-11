@@ -42,6 +42,10 @@ TreeDB example. `mvcctest.Run` executes:
 - concurrent point readers and writers while an older iterator retains its
   pinned snapshot.
 
+Except for the durable reopen trace, the public suite runs each case against
+both WAL-on relaxed and WAL-off relaxed stores. The durable trace separately
+pins sync acknowledgement and reopen behavior.
+
 `TreeDB/mvcc/conformance_external_test.go` invokes the suite from the external
 `mvcc_test` package, so package-private helpers cannot accidentally become part
 of the dependency. `TreeDB/mvcc/mvcctest/example_test.go` is a compiling example
@@ -63,8 +67,8 @@ input, ordering, bound, and fuzz properties remain in the codec package.
 | Logical keys | Arbitrary bytes, including empty, zero bytes, and `0xff`, within the codec envelope. |
 | All-version iteration | Snapshot-bound forward/reverse iteration, logical bounds, prefix, read-time ceiling, directional seek, explicit tombstones, owned returned bytes, and accounting. |
 | Discard floor | One durable monotonic global floor. Reads/scans at or below it fail; commits must be strictly above it. |
-| Pruning | Bounded, restartable value/tombstone pruning with pinned-reader safety and no value resurrection. `Skipped` is a subset of retained records. |
-| Durability | `CommitDurable` and durable floor/prune operations require `DurabilityDurable` and acknowledge through sync publication. Relaxed operations are atomic but not fsync acknowledgements. |
+| Pruning | Bounded, restartable value/tombstone pruning with pinned-reader safety and no value resurrection. Each delete batch is atomic, but a full prune pass is not operation-atomic. `Skipped` is a subset of retained records. |
+| Durability | `CommitDurable` and durable floor/prune operations require `DurabilityDurable` and acknowledge through sync publication. Relaxed commits and floor advances retain operation-level atomicity but are not fsync acknowledgements. Relaxed pruning is restartable and batch-atomic, not operation-atomic across a full pass. |
 | Reopen/crash | Durable commits and floor-first pruning survive reopen and abrupt child-process exit in the committed MVCC crash tests. |
 | Concurrency | Concurrent point readers, commits, snapshot iterators, pruning, and serialized floor advancement are race-tested. |
 | Ownership | Exactly one `mvcc.Store` owns one open TreeDB handle and reserved MVCC namespace. |
@@ -121,9 +125,16 @@ only one matching target per invocation.
 ## Performance evidence and boundaries
 
 The raw-path no-regression gate remains `scripts/mvcc_raw_path_gate.sh`: it
-compiles identical base/head TreeDB/db benchmark binaries, alternates samples
-on one pinned CPU, and rejects a median timing regression over 5%, any
-allocation increase, or a material `B/op` increase.
+compiles identical base/head benchmark binaries, alternates samples on one
+pinned CPU, and covers point reads, batch writes, snapshot seek, iterator
+reuse, and durable synced writes. It rejects a median timing regression over
+5%, any allocation increase, or a material `B/op` increase.
+
+`scripts/mvcc_adapter_overhead_gate.sh` separately compares public MVCC commit,
+get, and all-version iteration rows with their direct TreeDB/physical controls.
+It applies the same base/head regression limits and rejects candidate MVCC
+overhead above 2x. Candidate MVCC CPU profiles and top reports are emitted for
+all three pairs on every run, including a failing run.
 
 `scripts/mvcc_closeout_matrix.sh` captures the final downstream matrix at an
 exact checkout. It emits host/CPU/Go metadata, benchmark-binary checksum, raw
@@ -143,10 +154,10 @@ duration calibration would multiply excluded fixture setup and make process RSS
 describe fixture churn rather than the bounded pruning operation. Five external
 samples still provide five independent prune latency/throughput observations.
 `storage_bytes/op` is normalized final logical file footprint, including fixed
-TreeDB files and preallocation; `durable_bytes/op` is emitted only for the
-sync-acknowledged rows. It is storage-footprint context, not physical device
-write amplification. Prune's existing delete-write-amplification metric is
-reported separately.
+TreeDB files and preallocation. `durable_footprint_bytes/op` is emitted only for
+the sync-acknowledged rows and remains final logical footprint; it does not
+measure bytes forced to the physical device. Prune's existing
+delete-write-amplification metric is reported separately.
 
 Reproduction:
 
@@ -154,6 +165,12 @@ Reproduction:
 OUT_DIR=/absolute/output/path \
 CANDIDATE_HASH=<exact-commit> RUNS=5 BENCHTIME=750ms CPUSET=0 \
 GOWORK=off ./scripts/mvcc_closeout_matrix.sh
+
+OUT_DIR=/absolute/raw-gate-path BASELINE_HASH=<base> CANDIDATE_HASH=<head> \
+GOWORK=off ./scripts/mvcc_raw_path_gate.sh
+
+OUT_DIR=/absolute/adapter-gate-path BASELINE_HASH=<base> CANDIDATE_HASH=<head> \
+GOWORK=off ./scripts/mvcc_adapter_overhead_gate.sh
 ```
 
 The committed compact evidence index is

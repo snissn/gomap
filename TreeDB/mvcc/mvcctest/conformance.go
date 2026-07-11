@@ -64,10 +64,15 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Fatal("mvcctest: nil OpenFunc")
 	}
 	t.Run("golden_reopen_floor_prune", func(t *testing.T) { runGolden(t, open) })
-	t.Run("validation_boundaries", func(t *testing.T) { runBoundaries(t, open) })
-	t.Run("iterator_options_seek_stats_ownership", func(t *testing.T) { runIteratorSurface(t, open) })
-	t.Run("randomized_oracle", func(t *testing.T) { runRandomized(t, open) })
-	t.Run("concurrent_snapshot_readers", func(t *testing.T) { runConcurrent(t, open) })
+	for _, durability := range []DurabilityClass{DurabilityWALOnRelaxed, DurabilityWALOffRelaxed} {
+		durability := durability
+		t.Run(string(durability), func(t *testing.T) {
+			t.Run("validation_boundaries", func(t *testing.T) { runBoundaries(t, open, durability) })
+			t.Run("iterator_options_seek_stats_ownership", func(t *testing.T) { runIteratorSurface(t, open, durability) })
+			t.Run("randomized_oracle", func(t *testing.T) { runRandomized(t, open, durability) })
+			t.Run("concurrent_snapshot_readers", func(t *testing.T) { runConcurrent(t, open, durability) })
+		})
+	}
 }
 
 func runGolden(t *testing.T, open OpenFunc) {
@@ -133,8 +138,8 @@ func runGolden(t *testing.T, open OpenFunc) {
 	requireClose(t, adapter)
 }
 
-func runBoundaries(t *testing.T, open OpenFunc) {
-	adapter := requireOpen(t, open, t.TempDir(), DurabilityWALOffRelaxed)
+func runBoundaries(t *testing.T, open OpenFunc, durability DurabilityClass) {
+	adapter := requireOpen(t, open, t.TempDir(), durability)
 	defer requireClose(t, adapter)
 	if err := adapter.CommitAt(0, []mvcc.Mutation{{Key: []byte("k")}}, mvcc.CommitRelaxed); !errors.Is(err, mvcc.ErrZeroTimestamp) {
 		t.Fatalf("zero timestamp err=%v", err)
@@ -162,8 +167,8 @@ func runBoundaries(t *testing.T, open OpenFunc) {
 	}
 }
 
-func runIteratorSurface(t *testing.T, open OpenFunc) {
-	adapter := requireOpen(t, open, t.TempDir(), DurabilityWALOffRelaxed)
+func runIteratorSurface(t *testing.T, open OpenFunc, durability DurabilityClass) {
+	adapter := requireOpen(t, open, t.TempDir(), durability)
 	defer requireClose(t, adapter)
 	type mutationAt struct {
 		key       string
@@ -266,8 +271,8 @@ type oracleVersion struct {
 	value     []byte
 }
 
-func runRandomized(t *testing.T, open OpenFunc) {
-	adapter := requireOpen(t, open, t.TempDir(), DurabilityWALOffRelaxed)
+func runRandomized(t *testing.T, open OpenFunc, durability DurabilityClass) {
+	adapter := requireOpen(t, open, t.TempDir(), durability)
 	defer requireClose(t, adapter)
 	rng := rand.New(rand.NewSource(3673))
 	keys := [][]byte{nil, {0}, {0, 'a'}, {'a'}, {'a', 0, 'b'}, {0xff}, {0xff, 0, 1}}
@@ -319,8 +324,8 @@ func runRandomized(t *testing.T, open OpenFunc) {
 	requireVersions(t, adapter, want)
 }
 
-func runConcurrent(t *testing.T, open OpenFunc) {
-	adapter := requireOpen(t, open, t.TempDir(), DurabilityWALOffRelaxed)
+func runConcurrent(t *testing.T, open OpenFunc, durability DurabilityClass) {
+	adapter := requireOpen(t, open, t.TempDir(), durability)
 	defer requireClose(t, adapter)
 	for timestamp := uint64(1); timestamp <= 16; timestamp++ {
 		if err := adapter.CommitAt(timestamp, []mvcc.Mutation{{Key: []byte("k"), Value: []byte(fmt.Sprint(timestamp))}}, mvcc.CommitRelaxed); err != nil {
@@ -340,10 +345,22 @@ func runConcurrent(t *testing.T, open OpenFunc) {
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 9)
+	start := make(chan struct{})
+	writerStarted := make(chan struct{})
+	overlap := make(chan struct{})
+	readerProgress := make(chan struct{}, 8)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for timestamp := uint64(17); timestamp <= 80; timestamp++ {
+		<-start
+		if err := adapter.CommitAt(17, []mvcc.Mutation{{Key: []byte("k"), Value: []byte("17")}}, mvcc.CommitRelaxed); err != nil {
+			errCh <- err
+			close(writerStarted)
+			return
+		}
+		close(writerStarted)
+		<-overlap
+		for timestamp := uint64(18); timestamp <= 80; timestamp++ {
 			if err := adapter.CommitAt(timestamp, []mvcc.Mutation{{Key: []byte("k"), Value: []byte(fmt.Sprint(timestamp))}}, mvcc.CommitRelaxed); err != nil {
 				errCh <- err
 				return
@@ -354,15 +371,31 @@ func runConcurrent(t *testing.T, open OpenFunc) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
+			<-writerStarted
 			for i := 0; i < 100; i++ {
 				got, err := adapter.GetAt([]byte("k"), 80)
 				if err != nil || got.State != mvcc.Present || got.Timestamp < 1 || got.Timestamp > 80 || string(got.Value) != fmt.Sprint(got.Timestamp) {
 					errCh <- fmt.Errorf("concurrent GetAt result=%+v err=%v", got, err)
 					return
 				}
+				if i == 0 {
+					readerProgress <- struct{}{}
+					<-overlap
+				}
 			}
 		}()
 	}
+	close(start)
+	<-writerStarted
+	for reader := 0; reader < 8; reader++ {
+		select {
+		case <-readerProgress:
+		case err := <-errCh:
+			t.Fatalf("reader failed before overlap barrier: %v", err)
+		}
+	}
+	close(overlap)
 	wg.Wait()
 	close(errCh)
 	for err := range errCh {
