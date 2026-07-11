@@ -22828,6 +22828,51 @@ func (db *DB) waitForCheckpointForWriteSince(start time.Time) {
 	db.observeWriteWaitForCheckpoint(time.Since(start))
 }
 
+// rangeSpanWriteAdmissionWaitReason keeps command-WAL range-span publication
+// behind the full checkpoint drain. Range-span writers take flushMu before
+// appending their command frame, so they cannot use the point-write
+// post-frontier lane while an older checkpoint still owns that mutex.
+func (db *DB) rangeSpanWriteAdmissionWaitReason() writeWaitReason {
+	if db == nil {
+		return writeWaitReasonNone
+	}
+	if db.maintenanceActive.Load() {
+		return writeWaitReasonMaintenance
+	}
+	if db.checkpointing.Load() {
+		return writeWaitReasonCheckpointDrain
+	}
+	return writeWaitReasonNone
+}
+
+func (db *DB) waitForRangeSpanCheckpointDrain() {
+	if db == nil || db.rangeSpanWriteAdmissionWaitReason() == writeWaitReasonNone {
+		return
+	}
+	start := time.Now()
+	db.checkpointMu.Lock()
+	reason := db.rangeSpanWriteAdmissionWaitReason()
+	if reason == writeWaitReasonNone {
+		db.checkpointMu.Unlock()
+		return
+	}
+	db.writeWaitForCheckpointActive.Add(1)
+	defer addAtomicInt64FloorZero(&db.writeWaitForCheckpointActive, -1)
+	phaseStart := start
+	for reason != writeWaitReasonNone {
+		db.checkpointCond.Wait()
+		now := time.Now()
+		nextReason := db.rangeSpanWriteAdmissionWaitReason()
+		if nextReason != reason {
+			db.observeWriteWaitReason(reason, now.Sub(phaseStart))
+			phaseStart = now
+			reason = nextReason
+		}
+	}
+	db.checkpointMu.Unlock()
+	db.observeWriteWaitForCheckpoint(time.Since(start))
+}
+
 func (db *DB) beginDirectWrite() error {
 	for {
 		preWaitReason := db.writeAdmissionWaitReason()
@@ -23592,7 +23637,10 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 // Checkpoint forces a durable backend boundary and trims the WAL so long-running
 // cached-mode runs do not accumulate unbounded `wal/` growth.
 //
-// It blocks writers while it:
+// It blocks all writers through the frontier cut. With an external command-WAL
+// cutover hook, point writers can then enter the fresh post-frontier generation;
+// range-span writers remain blocked through the full drain because they require
+// flushMu for atomic command append and span publication. The checkpoint:
 //   - rotates the current mutable memtable (if non-empty),
 //   - rotates to a fresh WAL segment,
 //   - flushes all queued memtables with backend sync,
@@ -25344,6 +25392,7 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
+	db.waitForRangeSpanCheckpointDrain()
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 	db.beginExclusiveWriteWithFlushMuHeld()
@@ -35204,6 +35253,7 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 		}
 	}()
 
+	b.db.waitForRangeSpanCheckpointDrain()
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
 	b.db.beginExclusiveWriteWithFlushMuHeld()

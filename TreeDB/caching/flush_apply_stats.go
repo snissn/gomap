@@ -311,7 +311,6 @@ func (s *writeWaitReasonStats) observe(wait time.Duration) {
 	}
 	s.totalNs.Add(ns)
 	s.lastNs.Store(ns)
-	s.samples.Add(1)
 	updateAtomicMaxUint64(&s.maxNs, ns)
 	for i := range writeWaitLatencyBuckets {
 		if ns <= writeWaitLatencyBuckets[i].upperNs {
@@ -319,6 +318,10 @@ func (s *writeWaitReasonStats) observe(wait time.Duration) {
 			break
 		}
 	}
+	// Publish the sample only after its bucket is visible. Stats readers use the
+	// sample count as the quantile target, so the reverse order can transiently
+	// produce an incomplete cumulative histogram and an artificial +Inf result.
+	s.samples.Add(1)
 }
 
 func writeWaitQuantileUpperNs(s *writeWaitReasonStats, percentile uint64) uint64 {

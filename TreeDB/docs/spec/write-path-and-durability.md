@@ -261,10 +261,13 @@ Checkpoint ownership and writer admission are separate states:
   rotates the non-empty mutable memtable into a stable queue, captures the
   queue frontier, and invokes the command-WAL cutover hook. The hook snapshots
   the maximum covered command LSN and rotates the active command-WAL segment.
-- Once that hook has run, command-WAL writes may enter the fresh mutable,
+- Once that hook has run, command-WAL point writes may enter the fresh mutable,
   command-WAL, and value-log generation while the captured frontier drains.
   Those post-cut writes remain visible in cached state but are not part of the
   active checkpoint's backend publication or `AppliedCommandLSN` boundary.
+  Range-span writes remain gated through checkpoint drain because their atomic
+  command append and span-layer publication still require `flushMu`; their wait
+  is reported under `checkpoint_drain`, not as post-frontier admission.
 - Cached redo-WAL mode, unsafe WAL-off mode, and external command-WAL mode
   without an installed cutover hook retain the full-checkpoint writer stop.
   They do not have the command-LSN/segment ownership proof needed for safe
@@ -318,10 +321,11 @@ Checkpoint/write coordination is observable without conflating unrelated
 causes. `treedb.cache.write.wait.<reason>.*` reports totals, maximum/last
 latency, count, fixed cumulative latency buckets, and p50/p95/p99 bucket upper
 bounds for `frontier_cutover`, `checkpoint_drain`, and `maintenance`.
-`treedb.cache.write.post_frontier_admission.count_total` counts writes admitted
-while an older command-WAL frontier remains active. The compatibility aggregate
-`treedb.cache.write.wait_for_checkpoint.*` remains available. Flush-lock and
-I/O ownership stay separate in `treedb.cache.checkpoint.flushmu_wait_*` and
+`treedb.cache.write.post_frontier_admission.count_total` counts point writes
+admitted while an older command-WAL frontier remains active. The compatibility
+aggregate `treedb.cache.write.wait_for_checkpoint.*` remains available.
+Flush-lock and I/O ownership stay separate in
+`treedb.cache.checkpoint.flushmu_wait_*` and
 `treedb.cache.checkpoint.stage.<cutover|wal_rotate|value_log_flush|command_wal_publish|flush_all|backend_boundary|wal_cleanup>.*`.
 
 ## 7. Auto-Checkpoint Defaults (Cached Mode)

@@ -1026,7 +1026,11 @@ keeps cached redo-WAL, unsafe WAL-off, and hookless external-WAL modes blocked
 through the drain; and
 `TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites`, which
 admits concurrent public `Write` and `WriteSync` calls while checkpoint publish
-remains latched. Publish-error retry and crash/reopen cleanup coverage live in
+remains latched. `TestPublicCommandWALCheckpointPostFrontierRangeWritesWaitForDrain`
+proves that DB-level and pure-batch range spans instead wait for the full drain,
+append no command frame while checkpoint publish is latched, record one
+`checkpoint_drain` wait, and do not increment point-write admission.
+Publish-error retry and crash/reopen cleanup coverage live in
 `TestPublicCommandWALCheckpointPostFrontierAdmissionPropagatesPublishError` and
 `TestPublicCommandWALCheckpointPostFrontierGenerationSurvivesCrashReopen`; the
 latter forces value-log pointers, crashes after covered command-WAL cleanup,
