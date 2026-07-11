@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -102,12 +103,41 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	}
 	db.publishPrepareMu.RLock()
 	defer db.publishPrepareMu.RUnlock()
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceValueLog, db.dir); err != nil {
+		return nil, err
+	}
 	ptrs, err := appender.AppendValues(values)
 	if err != nil {
 		return nil, err
 	}
+	if err := db.emitValueLogDependencyAppend(ptrs); err != nil {
+		return nil, err
+	}
 	db.protectPendingValueLogAppendPtrs(ptrs)
 	return ptrs, nil
+}
+
+func (db *DB) emitValueLogDependencyAppend(ptrs []page.ValuePtr) error {
+	if !durabilitycut.Enabled() {
+		return nil
+	}
+	if db == nil || db.valueLogManager == nil {
+		return durabilitycut.EmitBasic(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceValueLog, "")
+	}
+	paths := make([]string, 0, len(ptrs))
+	seen := make(map[string]struct{}, len(ptrs))
+	for _, ptr := range ptrs {
+		path := db.valueLogManager.SegmentPath(ptr.FileID)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return durabilitycut.Emit(durabilitycut.Event{Point: durabilitycut.AfterDependencyAppend, Resource: durabilitycut.ResourceValueLog, Root: db.dir, Paths: paths})
 }
 
 // protectPendingValueLogAppendPtrs pins value-log files returned to native-root

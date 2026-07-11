@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -40,6 +41,33 @@ const (
 
 var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
+
+func openLogFile(path string) (*os.File, error) {
+	const flags = os.O_WRONLY | os.O_APPEND
+	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+			_ = created.Close()
+			return nil, observeErr
+		}
+		return created, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+}
+
+func syncNewFileDirectory(w *Writer, path string) error {
+	dir := filepath.Dir(path)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceValueLog, "", dir); err != nil {
+		return err
+	}
+	if err := w.syncDirectory(path); err != nil {
+		return err
+	}
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceValueLog, "", dir)
+}
 
 func recordSizeExceedsMax(valueLen uint32) bool {
 	if limits.MaxRecordSize <= 0 {
@@ -566,7 +594,7 @@ func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
 }
 
 func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := openLogFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +603,7 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		syncFn: syncFn,
 	}
 	if syncDirectory {
-		if err := w.syncDirectory(path); err != nil {
+		if err := syncNewFileDirectory(w, path); err != nil {
 			_ = f.Close()
 			return nil, err
 		}
@@ -885,12 +913,12 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 				return err
 			}
 		}
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		f, err := openLogFile(path)
 		if err != nil {
 			return err
 		}
 		if syncCurrent {
-			if err := w.syncDirectory(path); err != nil {
+			if err := syncNewFileDirectory(w, path); err != nil {
 				_ = f.Close()
 				return err
 			}
@@ -920,7 +948,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := openLogFile(path)
 	if err != nil {
 		return err
 	}
@@ -930,7 +958,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		return err
 	}
 	if syncCurrent {
-		if err := w.syncDirectory(path); err != nil {
+		if err := syncNewFileDirectory(w, path); err != nil {
 			_ = f.Close()
 			return err
 		}

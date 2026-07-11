@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -114,11 +115,11 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 		}
 		if db != nil && db.valueLogManager != nil && db.valueLogManager.HasSegment(seg.fileID) {
 			if err := db.valueLogManager.RemoveSegmentForce(seg.fileID); err != nil {
-				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, err))
+				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, errors.Join(err, ErrRecoveryRequired)))
 			}
 			continue
 		}
-		if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
+		if _, err := removePersistentFile(filepath.Dir(seg.path), seg.path, valueLogResourceForPath(seg.path)); err != nil {
 			errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, err))
 		}
 	}
@@ -1145,7 +1146,12 @@ func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir 
 		} else if !os.IsNotExist(err) {
 			return promoted, err
 		}
-		if err := os.Rename(promoted[i].path, destination); err != nil {
+		oldPath := promoted[i].path
+		renamed, err := renamePersistentFile(leafDir, oldPath, destination, durabilitycut.ResourceOuterLeaf)
+		if err != nil {
+			if renamed {
+				promoted[i].path = destination
+			}
 			return promoted, err
 		}
 		promoted[i].path = destination
@@ -1522,7 +1528,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		if len(createdSegments) > 0 {
 			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-			if syncErr := syncDirFn(leafVLogDir); syncErr != nil {
+			if syncErr := syncDeletionNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf); syncErr != nil {
 				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
 			}
 		}
@@ -1534,7 +1540,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return copied, copiedBytes, cleanupErr
 	}
 	if promoteErr != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr))
+		promoteErr = fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr)
+		if errors.Is(promoteErr, ErrRecoveryRequired) {
+			db.publicationPoisoned.Store(true)
+			unlockPublish()
+			return 0, 0, promoteErr
+		}
+		return cleanupAndUnlock(promoteErr)
 	}
 	publishEvent.Phase = leafGenerationPackAfterPromotion
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
@@ -1545,7 +1557,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
 		started := time.Now()
 		go func(started time.Time) {
-			err := syncDirFn(leafVLogDir)
+			err := syncNewFileNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf)
 			dirSyncCh <- leafGenerationPackDirectorySyncResult{err: err, timeNanos: time.Since(started).Nanoseconds()}
 		}(started)
 	}

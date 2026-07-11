@@ -1,10 +1,82 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestRecoverIndexSwap_CleanIndexDoesNotSyncDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, indexFileName), []byte("index"), 0600); err != nil {
+		t.Fatalf("WriteFile(index): %v", err)
+	}
+
+	origSync := syncDirFn
+	defer func() { syncDirFn = origSync }()
+	wantErr := errors.New("unexpected directory sync")
+	syncDirFn = func(_ string) error { return wantErr }
+
+	if err := recoverIndexSwap(dir); err != nil {
+		t.Fatalf("recoverIndexSwap clean index: %v", err)
+	}
+}
+
+func TestRecoverIndexSwap_FailedBestEffortRemovalDoesNotSyncDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, indexFileName), []byte("index"), 0600); err != nil {
+		t.Fatalf("WriteFile(index): %v", err)
+	}
+	newPath := filepath.Join(dir, indexNewFileName)
+	if err := os.Mkdir(newPath, 0700); err != nil {
+		t.Fatalf("Mkdir(new artifact): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(newPath, "child"), []byte("blocks removal"), 0600); err != nil {
+		t.Fatalf("WriteFile(new artifact child): %v", err)
+	}
+
+	origSync := syncDirFn
+	defer func() { syncDirFn = origSync }()
+	wantErr := errors.New("unexpected directory sync")
+	syncDirFn = func(_ string) error { return wantErr }
+
+	if err := recoverIndexSwap(dir); err != nil {
+		t.Fatalf("recoverIndexSwap failed best-effort removal: %v", err)
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("failed best-effort removal should retain artifact: %v", err)
+	}
+}
+
+func TestRecoverIndexSwap_RemovedArtifactSyncsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, indexFileName), []byte("index"), 0600); err != nil {
+		t.Fatalf("WriteFile(index): %v", err)
+	}
+	newPath := filepath.Join(dir, indexNewFileName)
+	if err := os.WriteFile(newPath, []byte("stale"), 0600); err != nil {
+		t.Fatalf("WriteFile(new artifact): %v", err)
+	}
+
+	origSync := syncDirFn
+	defer func() { syncDirFn = origSync }()
+	calls := 0
+	syncDirFn = func(_ string) error {
+		calls++
+		return nil
+	}
+
+	if err := recoverIndexSwap(dir); err != nil {
+		t.Fatalf("recoverIndexSwap removed artifact: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("directory sync calls=%d, want 1 after artifact removal", calls)
+	}
+	if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+		t.Fatalf("removed artifact stat error=%v, want not-exist", err)
+	}
+}
 
 func TestRecoverIndexSwap_SyncsAfterNewReadyRename(t *testing.T) {
 	dir := t.TempDir()

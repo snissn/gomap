@@ -2,6 +2,80 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+## 0. Durability Evidence Taxonomy
+
+Durability evidence uses exactly one of these labels:
+
+| Label | What it proves | What it does not prove |
+|---|---|---|
+| `clean-reopen` | data is readable after an orderly close and normal public reopen | crash or power-loss survival |
+| `process-crash` | data is readable after abrupt process termination while the OS/kernel remains alive | loss of volatile kernel/device state |
+| `modeled-power-loss` | a deterministic stable-only image, with volatile bytes and unsynced directory mutations discarded, is accepted or rejected through normal public `Open` as specified | physical block-device behavior outside the model |
+| `block-device-power-loss` | the guarded device fault harness removed volatile device writes and recovered through normal public open | behavior on devices/configurations outside the recorded harness |
+
+`os.Exit`, SIGKILL, subprocess termination, and failure to call `Close` are
+`process-crash` evidence. They are never described as power-loss evidence.
+
+### 0.1 Deterministic stable/volatile oracle
+
+`TreeDB/internal/powerlossoracle` is shared test infrastructure. It maintains
+separate process-visible and stable bytes, inode-aware names, file-sync
+promotion, and directory-sync promotion for create/rename/unlink. `Crash`
+discards volatile state. `MaterializeStable` writes only stable bytes reachable
+through stable directory entries, and `internal/powerlossreopen.Stable` passes
+that directory to normal public read-write or read-only `treedb.Open`; it does
+not invoke recovery internals.
+
+The canonical cut-point enumeration command is:
+
+```sh
+GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleEnumerateCutPoints$' -v -count=1
+```
+
+Failure output includes `seed=3674` and the stable cut-point name. The command
+enumerates cuts before/after dependency append, userspace flush, dependency
+file sync, new-file directory sync, index-data sync, the logical publication
+boundary, meta write/sync, applied-LSN advancement, WAL/asset unlink, and
+deletion directory sync. The stable identifiers
+`before-publication-seal-write` and `after-publication-seal-write` are currently
+logical placeholders around the existing publication-registration boundary;
+there is no on-disk publication seal yet. DUR-09
+[#3679](https://github.com/snissn/gomap/issues/3679) will retarget those hooks
+to the real seal write.
+
+### 0.2 Counterexample-to-conformance map
+
+Counterexamples use real production calls and bytes, then pass only when normal
+public open/read rejects or diagnoses the selectively persisted image. They do
+not keep the branch red while the production graph is in progress. Later
+children update these stable test names rather than duplicating them.
+
+| Stable scenario | Current counterexample | Positive-conformance owner |
+|---|---|---|
+| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | `db.finalizeCommitLockedWithOptions` / `db.flushFinalizeCommitDurability`: newer meta lacks stable index/value-log/outer-leaf closure | DUR-02 #3675, then sealed fallback in DUR-09 #3679 |
+| `TestPowerLossOracleCounterexampleRecoverablePageReuse` | graveyard/freelist reuse touches a page reachable from an older recoverable meta | DUR-04 #3678 and maintenance horizon DUR-08 #3681 |
+| `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3676 |
+| `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | `caching.DB.publishCommandWALCheckpointApplied` or cleanup removes command WAL/assets before sealed coverage | DUR-07 #3682 and DUR-08 #3681 |
+| `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | `caching.DB.Checkpoint`, `caching.DB.flushSyncRequested`, or chunked cached flush apply exposes an incomplete intermediate root | DUR-06 #3680 |
+
+`TestPowerLossOracleFixtureInventoryReopensStableOnly` covers inline values,
+`ValueLog.PointerThreshold=1` forced pointers, forced outer leaves, combined
+value pointers plus outer leaves, multi-lane value-log configuration, and
+segment rotation. Every fixture is checkpointed, captured, materialized from
+stable state only, and reopened through normal public read-only `Open`.
+
+Pure scenario-validator unit tests under
+`TreeDB/internal/powerlossoracle/scenario_test.go` cover durable acknowledgement
+loss, relaxed non-suffix loss, invalid selected roots, and key-state mismatch.
+
+The oracle asserts complete old-or-new roots, full dependency/pointer closure,
+freelist/live-page disjointness, contiguous command replay, durable
+acknowledgement survival, relaxed suffix-only loss, and no early source
+deletion. Production packages do not import the oracle model. They emit only
+coarse durability-boundary events through `internal/durabilitycut`; when no test
+observer is installed the seam is an atomic load and nil branch, with path
+collection skipped.
+
 ## 1. Pointer Durability and Reopen
 
 Invariant:
@@ -34,6 +108,10 @@ Coverage:
   - `TestRecovery_TruncatedCommitLogRecord`
   - `TestRecovery_TruncatedValueLogRecord`
   - `TestRecovery_MissingDictFails`
+
+Evidence label: `process-crash` for subprocess/`os.Exit` cases and
+`clean-reopen` for orderly reopen cases. These tests are not
+`modeled-power-loss` evidence.
 
 ## 2.1 Publication Readability
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -19,7 +20,9 @@ const leafGenerationPackDefaultMinReclaimPerByteCopiedPPM = 10000
 const leafGenerationPackDefaultLeafFrameK = 16
 
 var leafGenerationPackRIDStartScanner = nextRewriteRIDStartFromSet
-var removeLeafGenerationPackStagingDirFn = os.RemoveAll
+var removeLeafGenerationPackStagingDirFn = func(path string) error {
+	return removePersistentTree(filepath.Dir(path), path, durabilitycut.ResourceOuterLeaf)
+}
 
 func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 	entries, err := os.ReadDir(leafDir)
@@ -34,13 +37,13 @@ func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".leaf-pack-copy-") {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(leafDir, entry.Name())); err != nil {
+		if err := removeLeafGenerationPackStagingDirFn(filepath.Join(leafDir, entry.Name())); err != nil {
 			return fmt.Errorf("leaf generation pack: remove orphan staging directory %q: %w", entry.Name(), err)
 		}
 		removed = true
 	}
 	if removed {
-		return syncDirFn(leafDir)
+		return syncDeletionNamespaceDirectory(leafDir, durabilitycut.ResourceOuterLeaf)
 	}
 	return nil
 }
@@ -307,7 +310,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		}
 		privateLeafDir := filepath.Join(stagingDir, filepath.Base(layout.leafVLogDir))
 		if err := os.MkdirAll(privateLeafDir, 0o700); err != nil {
-			_ = os.RemoveAll(stagingDir)
+			_ = removeLeafGenerationPackStagingDirFn(stagingDir)
 			return stats, err
 		}
 		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
@@ -333,7 +336,10 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		rewriteStats.ApplyStages.SetupTimeNanos += rewriteStarted.Sub(attemptStarted).Nanoseconds()
 		cleanupStarted := time.Now()
 		closeErr := writer.Close()
-		removeErr := removeLeafGenerationPackStagingDirFn(stagingDir)
+		var removeErr error
+		if !errors.Is(rewriteErr, ErrRecoveryRequired) {
+			removeErr = removeLeafGenerationPackStagingDirFn(stagingDir)
+		}
 		rewriteStats.ApplyStages.CleanupTimeNanos += time.Since(cleanupStarted).Nanoseconds()
 		stats.CopyTimeNanos += rewriteStats.CopyTimeNanos
 		stats.PublishWaitNanos += rewriteStats.PublishWaitNanos

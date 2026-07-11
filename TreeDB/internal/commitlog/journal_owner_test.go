@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 var errCommandJournalInjectedWrite = errors.New("injected command journal write failure")
@@ -65,6 +67,68 @@ func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	for i, frame := range frames {
 		if want := uint64(41 + i); frame.LSN != want {
 			t.Fatalf("frame[%d].LSN=%d, want %d", i, frame.LSN, want)
+		}
+	}
+}
+
+func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
+	var (
+		events   []durabilitycut.Event
+		unlocked []durabilitycut.Point
+	)
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceCommandWAL || event.Point == "" {
+			return nil
+		}
+		events = append(events, event)
+		if j.mu.TryLock() {
+			unlocked = append(unlocked, event.Point)
+			j.mu.Unlock()
+		}
+		return nil
+	})
+	defer restore()
+
+	lsn, err := j.AppendCommandObserved(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommandObserved: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendCommandObserved LSN=%d, want 1", lsn)
+	}
+	if err := j.FlushObserved(true); err != nil {
+		t.Fatalf("FlushObserved: %v", err)
+	}
+	if len(unlocked) != 0 {
+		t.Fatalf("durability boundaries emitted without journal lock: %v", unlocked)
+	}
+	wantPoints := []durabilitycut.Point{
+		durabilitycut.BeforeDependencyAppend,
+		durabilitycut.AfterDependencyAppend,
+		durabilitycut.BeforeDependencyFileSync,
+		durabilitycut.AfterDependencyFileSync,
+	}
+	if len(events) != len(wantPoints) {
+		t.Fatalf("events=%#v, want points %v", events, wantPoints)
+	}
+	activePath, _ := j.ActiveSegmentSnapshot()
+	for i, want := range wantPoints {
+		if events[i].Point != want {
+			t.Fatalf("event[%d].Point=%q, want %q", i, events[i].Point, want)
+		}
+		if want != durabilitycut.BeforeDependencyAppend && events[i].Path != activePath {
+			t.Fatalf("event[%d].Path=%q, want active path %q", i, events[i].Path, activePath)
 		}
 	}
 }
@@ -297,6 +361,162 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	}
 	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
 		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
+	}
+}
+
+func TestCommandJournalDirectAppendAndFlushCutPoints(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: []byte("batch"), Value: []byte("value")}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	tests := []struct {
+		name   string
+		sync   bool
+		append func(*CommandJournal) (uint64, error)
+	}{
+		{
+			name: "single-relaxed",
+			append: func(j *CommandJournal) (uint64, error) {
+				return j.AppendRawKVSingleCommandAndFlush(0, RawKVOperation{Op: RawKVOpSet, Key: []byte("single"), Value: []byte("value")}, false)
+			},
+		},
+		{
+			name: "point-relaxed",
+			append: func(j *CommandJournal) (uint64, error) {
+				return j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("point"), []byte("value"), false)
+			},
+		},
+		{
+			name: "point-sync",
+			sync: true,
+			append: func(j *CommandJournal) (uint64, error) {
+				return j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("point"), []byte("value"), true)
+			},
+		},
+		{
+			name: "payload-relaxed",
+			append: func(j *CommandJournal) (uint64, error) {
+				return j.AppendRawKVBatchPayloadCommandTrustedAndFlush(0, payload, false)
+			},
+		},
+		{
+			name: "payload-sync",
+			sync: true,
+			append: func(j *CommandJournal) (uint64, error) {
+				return j.AppendRawKVBatchPayloadCommandTrustedAndFlush(0, payload, true)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+			if err != nil {
+				t.Fatalf("OpenCommandJournal: %v", err)
+			}
+			defer j.Close()
+
+			var events []durabilitycut.Event
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Resource == durabilitycut.ResourceCommandWAL && event.Point != "" {
+					events = append(events, event)
+				}
+				return nil
+			})
+			lsn, err := tt.append(j)
+			restore()
+			if err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			if lsn != 1 {
+				t.Fatalf("lsn=%d, want 1", lsn)
+			}
+
+			beforeFlush, afterFlush := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
+			if tt.sync {
+				beforeFlush, afterFlush = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+			}
+			want := []durabilitycut.Point{
+				durabilitycut.BeforeDependencyAppend,
+				durabilitycut.AfterDependencyAppend,
+				beforeFlush,
+				afterFlush,
+			}
+			if len(events) != len(want) {
+				t.Fatalf("events=%+v, want points %v", events, want)
+			}
+			for i, point := range want {
+				if events[i].Point != point {
+					t.Fatalf("event[%d].Point=%q, want %q (events=%+v)", i, events[i].Point, point, events)
+				}
+			}
+			if events[1].LSN != lsn {
+				t.Fatalf("after-append LSN=%d, want %d", events[1].LSN, lsn)
+			}
+			if events[1].Path == "" {
+				t.Fatal("after-append event omitted exact segment path")
+			}
+			if events[2].Path != j.Path() || events[3].Path != j.Path() {
+				t.Fatalf("flush paths=(%q,%q), want active path %q", events[2].Path, events[3].Path, j.Path())
+			}
+		})
+	}
+}
+
+func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+	if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("first"), []byte("value"), false); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	oldPath := j.Path()
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point != "" {
+			events = append(events, event)
+		}
+		return nil
+	})
+	lsn, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("second"), []byte("value"), true)
+	restore()
+	if err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+	if lsn != 2 {
+		t.Fatalf("second lsn=%d, want 2", lsn)
+	}
+	newPath := j.Path()
+	want := []durabilitycut.Point{
+		durabilitycut.BeforeDependencyAppend,
+		durabilitycut.BeforeDependencyFileSync,
+		durabilitycut.AfterDependencyFileSync,
+		durabilitycut.BeforeNewFileDirectorySync,
+		durabilitycut.AfterNewFileDirectorySync,
+		durabilitycut.AfterDependencyAppend,
+		durabilitycut.BeforeDependencyFileSync,
+		durabilitycut.AfterDependencyFileSync,
+	}
+	if len(events) != len(want) {
+		t.Fatalf("events=%+v, want points %v", events, want)
+	}
+	for i, point := range want {
+		if events[i].Point != point {
+			t.Fatalf("event[%d].Point=%q, want %q (events=%+v)", i, events[i].Point, point, events)
+		}
+	}
+	if events[1].Path != oldPath || events[2].Path != oldPath {
+		t.Fatalf("old-segment sync paths=(%q,%q), want %q", events[1].Path, events[2].Path, oldPath)
+	}
+	if events[5].LSN != lsn {
+		t.Fatalf("after-append LSN=%d, want %d", events[5].LSN, lsn)
+	}
+	if events[6].Path != newPath || events[7].Path != newPath {
+		t.Fatalf("new-segment sync paths=(%q,%q), want %q", events[6].Path, events[7].Path, newPath)
 	}
 }
 

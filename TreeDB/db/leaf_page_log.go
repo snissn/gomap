@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -136,8 +137,14 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 	if l == nil || l.inner == nil {
 		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
 	}
+	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
+		return page.LeafLogPtr{}, err
+	}
 	ptr, err := l.inner.AppendLeafPage(leafPage)
 	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptr); err != nil {
 		return page.LeafLogPtr{}, err
 	}
 	if l.db != nil {
@@ -184,6 +191,9 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 		return nil, nil
 	}
 	var ptrs []page.LeafLogPtr
+	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
+		return nil, err
+	}
 	if batcher, ok := l.inner.(LeafPageBatchLog); ok {
 		var err error
 		ptrs, err = batcher.AppendLeafPages(leafPages)
@@ -200,6 +210,9 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 			ptrs[i] = ptr
 		}
 	}
+	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
+		return nil, err
+	}
 	if err := l.noteLeafPageBatchPointers(leafPages, ptrs); err != nil {
 		return nil, err
 	}
@@ -214,8 +227,14 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPage(leafPage []byt
 	if !ok {
 		return l.AppendLeafPage(leafPage)
 	}
+	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
+		return page.LeafLogPtr{}, err
+	}
 	ptr, err := prepared.AppendPreparedLeafPage(leafPage, preparedPayload)
 	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptr); err != nil {
 		return page.LeafLogPtr{}, err
 	}
 	l.noteLeafPagePointer(leafPage, ptr)
@@ -236,8 +255,14 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPages(leafPages [][
 	if !ok {
 		return l.AppendLeafPages(leafPages)
 	}
+	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
+		return nil, err
+	}
 	ptrs, err := prepared.AppendPreparedLeafPages(leafPages, preparedPayloads)
 	if err != nil {
+		return nil, err
+	}
+	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
 		return nil, err
 	}
 	if err := l.noteLeafPageBatchPointers(leafPages, ptrs); err != nil {
@@ -258,6 +283,9 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefs(leafP
 		return nil, fmt.Errorf("leaf page prepared child-ref batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
 	}
 	if prepared, ok := l.inner.(LeafPagePreparedChildRefBatchLog); ok {
+		if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
+			return nil, err
+		}
 		out, err := prepared.AppendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs)
 		if err != nil {
 			return nil, err
@@ -270,6 +298,15 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefs(leafP
 				return nil, fmt.Errorf("leaf page prepared child-ref batch returned non-leaf-log ref at %d", i)
 			}
 			l.noteLeafPagePointer(leafPages[i], ref.Log)
+		}
+		if durabilitycut.Enabled() {
+			ptrs := make([]page.LeafLogPtr, len(out))
+			for i := range out {
+				ptrs[i] = out[i].Log
+			}
+			if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
+				return nil, err
+			}
 		}
 		return out, nil
 	}
@@ -286,6 +323,30 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefs(leafP
 		refs[i] = page.LeafLogChildRef(ptr)
 	}
 	return refs, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) emitDependencyAppend(point durabilitycut.Point, ptrs ...page.LeafLogPtr) error {
+	root := ""
+	if l != nil && l.db != nil {
+		root = l.db.dir
+	}
+	if point != durabilitycut.AfterDependencyAppend || len(ptrs) == 0 || !durabilitycut.Enabled() {
+		return durabilitycut.EmitBasic(point, durabilitycut.ResourceOuterLeaf, root)
+	}
+	paths := make([]string, 0, len(ptrs))
+	seen := make(map[string]struct{}, len(ptrs))
+	for _, ptr := range ptrs {
+		path := leafGenerationFallbackPath(root, ptr.FileID)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return durabilitycut.Emit(durabilitycut.Event{Point: point, Resource: durabilitycut.ResourceOuterLeaf, Root: root, Paths: paths})
 }
 
 func (l *leafPageLogWithRecordLengthHints) noteLeafPageBatchPointers(leafPages [][]byte, ptrs []page.LeafLogPtr) error {

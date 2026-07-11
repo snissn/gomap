@@ -23,6 +23,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -3065,11 +3066,24 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	bakPath := filepath.Join(opts.Dir, indexBakFileName)
 	readyPath := filepath.Join(opts.Dir, indexReadyFileName)
 
-	_ = os.Remove(newPath)
-	_ = os.Remove(readyPath)
+	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
+		_ = d.Close()
+		return stats, err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		_ = d.Close()
+		return stats, err
+	}
 
+	_, newStatErr := os.Stat(newPath)
+	newCreated := os.IsNotExist(newStatErr)
 	newPager, err := pager.Open(newPath, opts.ChunkSize)
 	if err != nil {
+		_ = d.Close()
+		return stats, err
+	}
+	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
+		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err
 	}
@@ -3229,15 +3243,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		_ = d.Close()
 		return stats, err
 	}
-	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
+	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err
 	}
 	if runtime.GOOS != "windows" {
-		if dir, err := os.Open(opts.Dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, err
 		}
 	}
 	if err := newPager.Close(); err != nil {
@@ -3248,20 +3263,28 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 
-	_ = os.Remove(bakPath)
-	if err := os.Rename(indexPath, bakPath); err != nil {
+	if err := removePersistentFileBestEffort(opts.Dir, bakPath, durabilitycut.ResourceIndex); err != nil {
 		return stats, err
 	}
-	if err := os.Rename(newPath, indexPath); err != nil {
-		_ = os.Rename(bakPath, indexPath)
+	if _, err := renamePersistentFile(opts.Dir, indexPath, bakPath, durabilitycut.ResourceIndex); err != nil {
 		return stats, err
 	}
-	_ = os.Remove(readyPath)
-	_ = os.Remove(bakPath)
+	if renamed, err := renamePersistentFile(opts.Dir, newPath, indexPath, durabilitycut.ResourceIndex); err != nil {
+		if !renamed {
+			_, rollbackErr := renamePersistentFile(opts.Dir, bakPath, indexPath, durabilitycut.ResourceIndex)
+			return stats, errors.Join(err, rollbackErr)
+		}
+		return stats, err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		return stats, err
+	}
+	if err := removePersistentFileBestEffort(opts.Dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+		return stats, err
+	}
 	if runtime.GOOS != "windows" {
-		if dir, err := os.Open(opts.Dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
+			return stats, err
 		}
 	}
 
@@ -5444,7 +5467,9 @@ func removeOldValueLogSegments(segments []logSegment) error {
 		if !seg.valueLog {
 			continue
 		}
-		_ = os.Remove(seg.path)
+		if err := removePersistentFileBestEffort(filepath.Dir(seg.path), seg.path, valueLogResourceForPath(seg.path)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

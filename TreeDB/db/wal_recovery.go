@@ -13,6 +13,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -757,7 +758,7 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		return err
 	}
 	for _, path := range commitPaths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if _, err := removePersistentFile(filepath.Dir(path), path, durabilitycut.ResourceCommandWAL); err != nil {
 			return err
 		}
 	}

@@ -18,7 +18,92 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                              dir,
+		Durability:                       DurabilityDurable,
+		CommandWAL:                       true,
+		DisableSideStores:                true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
+		BackgroundIndexVacuumInterval:    -1,
+		DisableBackgroundPrune:           true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer db.Close()
+
+	assertCuts := func(name string, sync bool, write func() error) {
+		t.Helper()
+		var events []durabilitycut.Event
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource == durabilitycut.ResourceCommandWAL && event.Point != "" {
+				events = append(events, event)
+			}
+			return nil
+		})
+		err := write()
+		restore()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		beforeFlush, afterFlush := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
+		if sync {
+			beforeFlush, afterFlush = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+		}
+		want := []durabilitycut.Point{
+			durabilitycut.BeforeDependencyAppend,
+			durabilitycut.AfterDependencyAppend,
+			beforeFlush,
+			afterFlush,
+		}
+		if len(events) != len(want) {
+			t.Fatalf("%s events=%+v, want points %v", name, events, want)
+		}
+		for i, point := range want {
+			if events[i].Point != point {
+				t.Fatalf("%s event[%d].Point=%q, want %q (events=%+v)", name, i, events[i].Point, point, events)
+			}
+		}
+		if events[1].LSN == 0 {
+			t.Fatalf("%s after-append LSN=0", name)
+		}
+		if events[1].Path == "" {
+			t.Fatalf("%s after-append omitted exact segment path", name)
+		}
+		if events[2].Path == "" || events[3].Path != events[2].Path {
+			t.Fatalf("%s flush paths=(%q,%q), want same non-empty path", name, events[2].Path, events[3].Path)
+		}
+	}
+
+	assertCuts("Set", false, func() error {
+		return db.Set([]byte("point"), []byte("value"))
+	})
+	assertCuts("SetSync", true, func() error {
+		return db.SetSync([]byte("point-sync"), []byte("value"))
+	})
+	assertCuts("batch Write", false, func() error {
+		b := db.NewBatch()
+		defer b.Close()
+		if err := b.Set([]byte("batch"), []byte("value")); err != nil {
+			return err
+		}
+		return b.Write()
+	})
+	assertCuts("batch WriteSync", true, func() error {
+		b := db.NewBatch()
+		defer b.Close()
+		if err := b.Set([]byte("batch-sync"), []byte("value")); err != nil {
+			return err
+		}
+		return b.WriteSync()
+	})
+}
 
 func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
 	dir := t.TempDir()

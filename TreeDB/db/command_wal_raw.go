@@ -12,6 +12,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -244,11 +245,7 @@ func (db *DB) flushCommandWALForPath(sync bool, observe bool, path commandWALApp
 	if observe {
 		start = time.Now()
 	}
-	if actualSync {
-		err = db.commandJournal.Sync()
-	} else {
-		err = db.commandJournal.Flush()
-	}
+	err = db.commandJournal.FlushObserved(actualSync)
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint
 	}
@@ -453,9 +450,20 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		if removedBytes > 0 {
 			db.commandWALClosedBytes.Add(-int64(removedBytes))
 		}
+		if err != nil {
+			// At least one unlink completed, but cleanup stopped before the
+			// deletion directory could be proven durable.
+			return errors.Join(err, ErrRecoveryRequired)
+		}
 		if sync && db.durability != DurabilityWALOnRelaxed {
-			if syncErr := syncDirFn(WALDirPath(db.dir)); err == nil {
-				err = syncErr
+			if syncErr := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil {
+				return errors.Join(syncErr, ErrRecoveryRequired)
+			}
+			if syncErr := syncDirFn(WALDirPath(db.dir)); syncErr != nil {
+				return errors.Join(syncErr, ErrRecoveryRequired)
+			}
+			if syncErr := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil {
+				return errors.Join(syncErr, ErrRecoveryRequired)
 			}
 		}
 	}
@@ -1478,12 +1486,12 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if scan == nil {
 			scan = db.rawKVCommandWALOperationScanner(intent.rawKVEntries, &intent.rawKVRIDCache, nil)
 		}
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, intent.rawKVPlan, scan)
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrustedObserved(baseAppliedLSN, intent.rawKVPlan, scan)
 	} else if intent.trustedPayload && !intent.externalRefs {
 		appendPath = commandWALAppendStatsPayload
-		lsn, err = db.commandJournal.AppendCommandPayloadTrusted(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
+		lsn, err = db.commandJournal.AppendCommandPayloadTrustedObserved(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
 	} else {
-		lsn, err = db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
+		lsn, err = db.commandJournal.AppendCommandObserved(commitlog.CommandEnvelope{
 			Kind:           intent.kind,
 			Scope:          intent.scope,
 			BaseAppliedLSN: baseAppliedLSN,
@@ -1502,15 +1510,21 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if lsn != 0 || err == nil {
 		db.observeCommandWALAppend(appendPath, appendElapsed)
 	}
+	if lsn != 0 {
+		intent.lsn = lsn
+		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
+	}
 	if err != nil {
 		if requestTiming != nil {
 			requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
 		}
-		return 0, err
-	}
-	if lsn != 0 {
-		intent.lsn = lsn
-		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
+		if lsn != 0 {
+			// The frame already owns this LSN and may become replay-visible later.
+			// Keep the intent identity and fail the open handle closed so a retry
+			// cannot append a second frame for the same public mutation.
+			db.poisonCommandWALAfterPostAppendFailure(intent)
+		}
+		return lsn, err
 	}
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	if requestTiming != nil {
@@ -1531,7 +1545,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
-		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
+		// Poison here rather than relying on FlushCommandWAL: pre-flush
+		// durability cuts return before that helper reaches its poison block.
+		db.poisonCommandWALAfterPostAppendFailure(intent)
 		return lsn, flushErr
 	}
 	if requestTiming != nil {
@@ -1573,13 +1589,11 @@ func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchInte
 	if db == nil || intent == nil || intent.lsn == 0 {
 		// intent.lsn == 0 means the frame was never durably appended
 		// (appendCommandWALIntent sets lsn once AppendCommand succeeds).
-		// No need to poison; appendCommandWALIntent already poisons its own
-		// flush/sync failures.
+		// No need to poison because no command identity was assigned.
 		return
 	}
-	// appendRawKVCommandWALIntent poisons its own flush/sync failures. This
-	// path covers the later case where a command frame was appended but root
-	// publication failed before AppliedCommandLSN could be published.
+	// This covers both flush/sync failures after append and the later case where
+	// root publication failed before AppliedCommandLSN could be published.
 	db.commandWALFlushPoisoned.Store(true)
 }
 

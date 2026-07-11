@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -439,10 +440,31 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 	for i := range decisions {
 		decision := &decisions[i]
 		if decision.Covered && !decision.Active {
-			if err := os.Remove(decision.Path); err != nil && !os.IsNotExist(err) {
+			if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
 				return decisions, err
 			}
+			removeErr := os.Remove(decision.Path)
+			if removeErr != nil && !os.IsNotExist(removeErr) {
+				return decisions, removeErr
+			}
+			after := durabilitycut.Event{
+				Point:    durabilitycut.AfterWALOrAssetUnlink,
+				Resource: durabilitycut.ResourceCommandWAL,
+				Path:     decision.Path,
+			}
+			if removeErr == nil {
+				after.Namespace = durabilitycut.NamespaceUnlink
+				after.OldPath = decision.Path
+			}
+			// Preserve the completed namespace mutation in the returned decisions
+			// even when the post-unlink observer reports a simulated crash cut.
 			decision.Removed = true
+			if err := durabilitycut.Emit(after); err != nil {
+				if removeErr == nil {
+					return decisions, errors.Join(err, ErrRecoveryRequired)
+				}
+				return decisions, err
+			}
 		}
 	}
 	return decisions, nil

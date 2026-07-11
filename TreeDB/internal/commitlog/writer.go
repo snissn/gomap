@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
@@ -29,6 +30,32 @@ const (
 )
 
 var syncDirFn = syncDir
+
+func openLogFile(path string, flags int) (*os.File, error) {
+	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
+			_ = created.Close()
+			return nil, observeErr
+		}
+		return created, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+}
+
+func syncNewLogFileDirectory(w *Writer, path string) error {
+	dir := filepath.Dir(path)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, "", dir); err != nil {
+		return err
+	}
+	if err := w.syncDirectory(path); err != nil {
+		return err
+	}
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, "", dir)
+}
 
 func normalizeMaxSegmentSize(size int64) int64 {
 	if size == 0 {
@@ -189,7 +216,7 @@ func NewWriter(path string) (*Writer, error) {
 }
 
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	f, err := openLogFile(path, os.O_RDWR)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +225,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		syncFn: func(file *os.File) error { return file.Sync() },
 	}
 	w.fileSink = writerFileSink{owner: w, file: f}
-	if err := w.syncDirectory(path); err != nil {
+	if err := syncNewLogFileDirectory(w, path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -472,17 +499,21 @@ func (w *Writer) RotateTo(path string) error {
 // the provided path and reuses the writer's buffers for future appends. When
 // syncCurrent is false, the current file is flushed to the OS but not fsynced.
 func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
+	return w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+}
+
+func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) error {
 	if w == nil {
 		return errors.New("commitlog: nil writer")
 	}
 
 	if w.f == nil {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		f, err := openLogFile(path, os.O_WRONLY|os.O_APPEND)
 		if err != nil {
 			return err
 		}
 		if syncCurrent {
-			if err := w.syncDirectory(path); err != nil {
+			if err := syncNewLogFileDirectory(w, path); err != nil {
 				_ = f.Close()
 				return err
 			}
@@ -500,6 +531,15 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		return nil
 	}
 
+	before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
+	if syncCurrent {
+		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+	}
+	if observe {
+		if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
+			return err
+		}
+	}
 	if w.pendingBatchRecs != 0 {
 		if err := w.flushPendingBatch(); err != nil {
 			return err
@@ -516,8 +556,13 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 			return err
 		}
 	}
+	if observe {
+		if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
+			return err
+		}
+	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := openLogFile(path, os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		return err
 	}
@@ -527,7 +572,7 @@ func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 		return err
 	}
 	if syncCurrent {
-		if err := w.syncDirectory(path); err != nil {
+		if err := syncNewLogFileDirectory(w, path); err != nil {
 			_ = f.Close()
 			return err
 		}

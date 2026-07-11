@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -323,8 +324,8 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
-	if db.closing.Load() {
-		return ErrClosed
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return err
 	}
 
 	if !db.vacuumInProgress.CompareAndSwap(false, true) {
@@ -342,17 +343,30 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 	readyPath := filepath.Join(db.dir, indexReadyFileName)
 
 	// Clean up any previous partial artifacts (best-effort).
-	_ = os.Remove(newPath)
-	_ = os.Remove(readyPath)
+	if err := removePersistentFileBestEffort(db.dir, newPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
+	if err := removePersistentFileBestEffort(db.dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+		return err
+	}
 
+	_, newStatErr := os.Stat(newPath)
+	newCreated := os.IsNotExist(newStatErr)
 	newPager, err := pager.Open(newPath, db.chunkSize)
 	if err != nil {
 		return err
 	}
-	cleanupNewPager := func() {
+	if err := observeCreatedPersistentFile(db.dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
 		_ = newPager.Close()
-		_ = os.Remove(newPath)
-		_ = os.Remove(readyPath)
+		return err
+	}
+	closeNewPager := func() {
+		_ = newPager.Close()
+	}
+	cleanupNewPager := func() {
+		closeNewPager()
+		_ = removePersistentFileBestEffort(db.dir, newPath, durabilitycut.ResourceIndex)
+		_ = removePersistentFileBestEffort(db.dir, readyPath, durabilitycut.ResourceIndex)
 	}
 
 	oldGen := db.idx.Load()
@@ -839,38 +853,81 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		}
 
 		swapPublishStarted := time.Now()
-		if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
+		if err := writePersistentFile(db.dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
 			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
 		if runtime.GOOS != "windows" {
-			if dir, err := os.Open(db.dir); err == nil {
-				_ = dir.Sync()
-				_ = dir.Close()
+			if err := syncNewFileNamespaceDirectory(db.dir, durabilitycut.ResourceIndex); err != nil {
+				if errors.Is(err, ErrRecoveryRequired) {
+					db.publicationPoisoned.Store(true)
+				}
+				unlockCutover(false)
+				cleanupNewPager()
+				return err
 			}
 		}
 
 		// Swap index.db -> index.db.bak, index.db.new -> index.db.
-		_ = os.Remove(bakPath)
-		if err := os.Rename(indexPath, bakPath); err != nil {
+		if err := removePersistentFileBestEffort(db.dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+			db.publicationPoisoned.Store(true)
 			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
-		if err := os.Rename(newPath, indexPath); err != nil {
-			_ = os.Rename(bakPath, indexPath)
+		if renamed, err := renamePersistentFile(db.dir, indexPath, bakPath, durabilitycut.ResourceIndex); err != nil {
+			if errors.Is(err, ErrRecoveryRequired) {
+				db.publicationPoisoned.Store(true)
+			}
 			unlockCutover(false)
+			if renamed && errors.Is(err, ErrRecoveryRequired) {
+				closeNewPager()
+				return err
+			}
+			cleanupNewPager()
+			return err
+		}
+		if renamed, err := renamePersistentFile(db.dir, newPath, indexPath, durabilitycut.ResourceIndex); err != nil {
+			if errors.Is(err, ErrRecoveryRequired) {
+				db.publicationPoisoned.Store(true)
+			}
+			if !renamed {
+				_, rollbackErr := renamePersistentFile(db.dir, bakPath, indexPath, durabilitycut.ResourceIndex)
+				err = errors.Join(err, rollbackErr)
+				if errors.Is(rollbackErr, ErrRecoveryRequired) {
+					db.publicationPoisoned.Store(true)
+				}
+			}
+			unlockCutover(false)
+			if renamed && errors.Is(err, ErrRecoveryRequired) {
+				closeNewPager()
+				return err
+			}
 			cleanupNewPager()
 			return err
 		}
 
-		_ = os.Remove(readyPath)
-		_ = os.Remove(bakPath)
+		if err := removePersistentFileBestEffort(db.dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+			db.publicationPoisoned.Store(true)
+			unlockCutover(false)
+			cleanupNewPager()
+			return err
+		}
+		if err := removePersistentFileBestEffort(db.dir, bakPath, durabilitycut.ResourceIndex); err != nil {
+			db.publicationPoisoned.Store(true)
+			unlockCutover(false)
+			cleanupNewPager()
+			return err
+		}
 		if runtime.GOOS != "windows" {
-			if dir, err := os.Open(db.dir); err == nil {
-				_ = dir.Sync()
-				_ = dir.Close()
+			if err := syncNewFileNamespaceDirectory(db.dir, durabilitycut.ResourceIndex); err != nil {
+				if errors.Is(err, ErrRecoveryRequired) {
+					db.publicationPoisoned.Store(true)
+				}
+				unlockCutover(false)
+				cleanupNewPager()
+				return err
 			}
 		}
 

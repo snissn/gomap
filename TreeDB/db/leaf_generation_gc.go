@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -662,7 +663,8 @@ func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {
 			continue
 		}
 		path := leafGenerationRecordLengthIndexPath(db.dir, fileID)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		_, err := removePersistentFile(filepath.Dir(path), path, durabilitycut.ResourceAuxiliary)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("remove leaf generation record-length index %d (%s): %w", fileID, path, err))
 			continue
 		}

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 const (
@@ -63,13 +65,26 @@ func recoverIndexSwap(dir string) error {
 	if indexExists {
 		// If a prior vacuum crashed before the swap, clean up the temp artifacts so
 		// future opens are unambiguous.
+		namespaceChanged := false
 		if newExists {
-			_ = os.Remove(newPath)
+			removed, err := removePersistentFileBestEffortResult(dir, newPath, durabilitycut.ResourceIndex)
+			if err != nil {
+				return err
+			}
+			namespaceChanged = namespaceChanged || removed
 		}
 		if readyExists {
-			_ = os.Remove(readyPath)
+			removed, err := removePersistentFileBestEffortResult(dir, readyPath, durabilitycut.ResourceIndex)
+			if err != nil {
+				return err
+			}
+			namespaceChanged = namespaceChanged || removed
 		}
-		_ = syncDirFn(dir)
+		if namespaceChanged {
+			if err := syncDeletionNamespaceDirectory(dir, durabilitycut.ResourceIndex); err != nil {
+				return err
+			}
+		}
 		// Keep bak around as a safety net; it will be removed by a successful
 		// vacuum run.
 		return nil
@@ -102,20 +117,26 @@ func recoverIndexSwap(dir string) error {
 
 	// Prefer the new index only if it was fully written and marked ready.
 	if newExists && readyExists {
-		if err := os.Rename(newPath, indexPath); err != nil {
+		if _, err := renamePersistentFile(dir, newPath, indexPath, durabilitycut.ResourceIndex); err != nil {
 			return err
 		}
-		_ = os.Remove(readyPath)
-		_ = syncDirFn(dir)
+		if err := removePersistentFileBestEffort(dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+			return err
+		}
+		if err := syncNewFileNamespaceDirectory(dir, durabilitycut.ResourceIndex); err != nil {
+			return err
+		}
 		return nil
 	}
 
 	// Fall back to restoring the backup.
 	if bakExists {
-		if err := os.Rename(bakPath, indexPath); err != nil {
+		if _, err := renamePersistentFile(dir, bakPath, indexPath, durabilitycut.ResourceIndex); err != nil {
 			return err
 		}
-		_ = syncDirFn(dir)
+		if err := syncNewFileNamespaceDirectory(dir, durabilitycut.ResourceIndex); err != nil {
+			return err
+		}
 		return nil
 	}
 

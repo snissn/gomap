@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 )
 
@@ -492,6 +493,10 @@ func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 }
 
 func (j *CommandJournal) maybeRotateForFrameLocked(frameSize int, syncCurrent bool) error {
+	return j.maybeRotateForFrameLockedObserved(frameSize, syncCurrent, false)
+}
+
+func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCurrent, observe bool) error {
 	if j == nil || j.writer == nil || j.segmentTargetBytes <= 0 || frameSize <= 0 {
 		return nil
 	}
@@ -500,10 +505,14 @@ func (j *CommandJournal) maybeRotateForFrameLocked(frameSize int, syncCurrent bo
 	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
 		return nil
 	}
-	return j.rotateActiveSegmentLocked(syncCurrent)
+	return j.rotateActiveSegmentLockedObserved(syncCurrent, observe)
 }
 
 func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
+	return j.rotateActiveSegmentLockedObserved(syncCurrent, false)
+}
+
+func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe bool) error {
 	if j == nil || j.writer == nil {
 		return errors.New("commitlog: command journal is closed")
 	}
@@ -513,7 +522,7 @@ func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
 	closedBytes := j.writer.ActiveBytes()
-	if err := j.writer.RotateToWithSync(nextPath, syncCurrent); err != nil {
+	if err := j.writer.rotateToWithSyncObserved(nextPath, syncCurrent, filepath.Dir(j.walDir), observe); err != nil {
 		return err
 	}
 	if closedBytes > 0 && j.onSegmentRotated != nil {
@@ -596,6 +605,17 @@ func (j *CommandJournal) NextLSN() uint64 {
 // journal mutex. This intentionally optimizes for deterministic frame order and
 // tail-only rollback, not parallel appends within one lane.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
+	return j.appendCommand(env, false)
+}
+
+// AppendCommandObserved appends a complete command frame and emits its
+// durability boundaries while the journal lock still identifies the exact
+// active segment that owns the frame.
+func (j *CommandJournal) AppendCommandObserved(env CommandEnvelope) (uint64, error) {
+	return j.appendCommand(env, durabilitycut.Enabled())
+}
+
+func (j *CommandJournal) appendCommand(env CommandEnvelope, observe bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -603,6 +623,9 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
 	}
 	if env.LSN != 0 {
 		return 0, errors.New("commitlog: command journal owns lsn assignment")
@@ -653,6 +676,9 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 		}
 		return 0, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, err
+	}
 	return lsn, nil
 }
 
@@ -662,7 +688,7 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, false)
+	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, false, false)
 }
 
 func (j *CommandJournal) AppendRawKVSingleCommandWithRotateSync(baseAppliedLSN uint64, op RawKVOperation, syncCurrent bool) (uint64, error) {
@@ -671,7 +697,7 @@ func (j *CommandJournal) AppendRawKVSingleCommandWithRotateSync(baseAppliedLSN u
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, syncCurrent)
+	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, syncCurrent, false)
 }
 
 // AppendRawKVSingleCommandAndFlush appends a one-operation RawKVBatch command
@@ -691,14 +717,18 @@ func (j *CommandJournal) AppendRawKVSingleCommandAndFlushMeasured(baseAppliedLSN
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	observe := durabilitycut.Enabled()
 	appendStart := time.Now()
-	lsn, err := j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, sync)
+	lsn, err := j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, sync, observe)
 	timing.Append = time.Since(appendStart)
 	if err != nil {
 		return 0, timing, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, timing, err
+	}
 	flushStart := time.Now()
-	if err := j.flushLocked(sync); err != nil {
+	if err := j.flushDirectCommandWALLocked(sync, observe); err != nil {
 		timing.Flush = time.Since(flushStart)
 		return lsn, timing, err
 	}
@@ -706,7 +736,7 @@ func (j *CommandJournal) AppendRawKVSingleCommandAndFlushMeasured(baseAppliedLSN
 	return lsn, timing, nil
 }
 
-func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, op RawKVOperation, syncCurrent bool) (uint64, error) {
+func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, op RawKVOperation, syncCurrent, observe bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -731,7 +761,10 @@ func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, o
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
+	}
+	if err := j.maybeRotateForFrameLockedObserved(size, syncCurrent, observe); err != nil {
 		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
@@ -757,7 +790,7 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, false)
+	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, false, false)
 }
 
 func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRotateSync(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
@@ -766,7 +799,7 @@ func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRotateSync(baseApplie
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, syncCurrent)
+	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, syncCurrent, false)
 }
 
 // AppendRawKVPointCommandTrustedAndFlush appends a caller-validated public raw
@@ -786,14 +819,18 @@ func (j *CommandJournal) AppendRawKVPointCommandTrustedAndFlushMeasured(baseAppl
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	observe := durabilitycut.Enabled()
 	appendStart := time.Now()
-	lsn, err := j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, sync)
+	lsn, err := j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, sync, observe)
 	timing.Append = time.Since(appendStart)
 	if err != nil {
 		return 0, timing, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, timing, err
+	}
 	flushStart := time.Now()
-	if err := j.flushLocked(sync); err != nil {
+	if err := j.flushDirectCommandWALLocked(sync, observe); err != nil {
 		timing.Flush = time.Since(flushStart)
 		return lsn, timing, err
 	}
@@ -819,14 +856,18 @@ func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRevisionAndFlushMeasu
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	observe := durabilitycut.Enabled()
 	appendStart := time.Now()
-	lsn, err := j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, revision, sync)
+	lsn, err := j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, revision, sync, observe)
 	timing.Append = time.Since(appendStart)
 	if err != nil {
 		return 0, timing, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, timing, err
+	}
 	flushStart := time.Now()
-	if err := j.flushLocked(sync); err != nil {
+	if err := j.flushDirectCommandWALLocked(sync, observe); err != nil {
 		timing.Flush = time.Since(flushStart)
 		return lsn, timing, err
 	}
@@ -843,14 +884,14 @@ func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRevisionAndRotateSync
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, revision, syncCurrent)
+	return j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, revision, syncCurrent, false)
 }
 
-func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
-	return j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, 0, syncCurrent)
+func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent, observe bool) (uint64, error) {
+	return j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, 0, syncCurrent, observe)
 }
 
-func (j *CommandJournal) appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, syncCurrent bool) (uint64, error) {
+func (j *CommandJournal) appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, syncCurrent, observe bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -864,7 +905,10 @@ func (j *CommandJournal) appendRawKVPointCommandTrustedWithRevisionLocked(baseAp
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
+	}
+	if err := j.maybeRotateForFrameLockedObserved(size, syncCurrent, observe); err != nil {
 		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
@@ -945,6 +989,16 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedWithRotateSync(bas
 // replayable RawKVBatch operation source without materializing the canonical
 // payload slice.
 func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (uint64, error) {
+	return j.appendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, plan, scan, false)
+}
+
+// AppendRawKVBatchPayloadScanCommandTrustedObserved appends a scanned payload
+// and emits append boundaries under the journal lock.
+func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrustedObserved(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (uint64, error) {
+	return j.appendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, plan, scan, durabilitycut.Enabled())
+}
+
+func (j *CommandJournal) appendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner, observe bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -952,6 +1006,9 @@ func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLS
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
 	}
 	if err := plan.validate(); err != nil {
 		return 0, err
@@ -979,6 +1036,9 @@ func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLS
 		}
 		return 0, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, err
+	}
 	return lsn, nil
 }
 
@@ -986,6 +1046,16 @@ func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLS
 // payload. It validates only command identity and frame size; callers must use
 // this only for payloads built by the matching commitlog encoder.
 func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	return j.appendCommandPayloadTrusted(kind, scope, format, baseAppliedLSN, payload, false)
+}
+
+// AppendCommandPayloadTrustedObserved appends a trusted payload and emits
+// append boundaries under the journal lock.
+func (j *CommandJournal) AppendCommandPayloadTrustedObserved(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	return j.appendCommandPayloadTrusted(kind, scope, format, baseAppliedLSN, payload, durabilitycut.Enabled())
+}
+
+func (j *CommandJournal) appendCommandPayloadTrusted(kind CommandKind, scope CommandScope, format PayloadFormat, baseAppliedLSN uint64, payload []byte, observe bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -993,6 +1063,9 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		return 0, err
 	}
 	if err := validateCommandEnvelopeIdentity(CommandEnvelope{
 		LSN:           1,
@@ -1025,6 +1098,9 @@ func (j *CommandJournal) AppendCommandPayloadTrusted(kind CommandKind, scope Com
 		}
 		return 0, err
 	}
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, err
+	}
 	return lsn, nil
 }
 
@@ -1036,6 +1112,37 @@ func (j *CommandJournal) flushLocked(sync bool) error {
 		return j.writer.Sync()
 	}
 	return j.writer.Flush()
+}
+
+func (j *CommandJournal) emitDirectCommandWALAppendBeforeLocked(observe bool) error {
+	if !observe {
+		return nil
+	}
+	return durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir))
+}
+
+func (j *CommandJournal) emitDirectCommandWALAppendAfterLocked(observe bool, lsn uint64) error {
+	if !observe {
+		return nil
+	}
+	return durabilitycut.EmitPathLSN(durabilitycut.AfterDependencyAppend, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path, lsn)
+}
+
+func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
+	if !observe {
+		return j.flushLocked(sync)
+	}
+	before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
+	if sync {
+		before, after = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
+	}
+	if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path); err != nil {
+		return err
+	}
+	if err := j.flushLocked(sync); err != nil {
+		return err
+	}
+	return durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, filepath.Dir(j.walDir), j.path)
 }
 
 // AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated
@@ -1072,7 +1179,12 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlushMeasured(b
 		timing.Append = time.Since(appendStart)
 		return 0, timing, ErrRecordTooLarge
 	}
-	if err := j.maybeRotateForFrameLocked(size, sync); err != nil {
+	observe := durabilitycut.Enabled()
+	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
+		timing.Append = time.Since(appendStart)
+		return 0, timing, err
+	}
+	if err := j.maybeRotateForFrameLockedObserved(size, sync, observe); err != nil {
 		timing.Append = time.Since(appendStart)
 		return 0, timing, err
 	}
@@ -1090,8 +1202,11 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlushMeasured(b
 		return 0, timing, err
 	}
 	timing.Append = time.Since(appendStart)
+	if err := j.emitDirectCommandWALAppendAfterLocked(observe, lsn); err != nil {
+		return lsn, timing, err
+	}
 	flushStart := time.Now()
-	err = j.flushLocked(sync)
+	err = j.flushDirectCommandWALLocked(sync, observe)
 	timing.Flush = time.Since(flushStart)
 	if err != nil {
 		return lsn, timing, err
@@ -1173,6 +1288,20 @@ func (j *CommandJournal) Sync() error {
 		return nil
 	}
 	return j.writer.Sync()
+}
+
+// FlushObserved flushes or syncs the exact active segment while holding the
+// same lock used to emit its durability boundaries.
+func (j *CommandJournal) FlushObserved(sync bool) error {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
+		return nil
+	}
+	return j.flushDirectCommandWALLocked(sync, durabilitycut.Enabled())
 }
 
 func (j *CommandJournal) Close() error {

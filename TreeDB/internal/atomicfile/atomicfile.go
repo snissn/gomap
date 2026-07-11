@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 // Write atomically replaces path with data using a temp file in the same
@@ -23,7 +25,11 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }()
+	defer func() { _ = removeObserved(dir, tmp) }()
+	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, dir, "", tmp); err != nil {
+		_ = f.Close()
+		return err
+	}
 	if err := f.Chmod(perm); err != nil {
 		_ = f.Close()
 		return err
@@ -41,7 +47,7 @@ func Write(path string, data []byte, perm os.FileMode) error {
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		if err := os.Rename(tmp, path); err == nil {
-			return nil
+			return durabilitycut.EmitNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceAuxiliary, dir, tmp, path)
 		}
 		lastErr = err
 		if runtime.GOOS != "windows" {
@@ -57,6 +63,13 @@ func Write(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return lastErr
+}
+
+func removeObserved(root, path string) error {
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceAuxiliary, root, path, "")
 }
 
 func isWindowsRenameRetryable(err error) bool {
