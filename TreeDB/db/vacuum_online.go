@@ -324,8 +324,8 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
-	if db.closing.Load() {
-		return ErrClosed
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return err
 	}
 
 	if !db.vacuumInProgress.CompareAndSwap(false, true) {
@@ -360,8 +360,11 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		_ = newPager.Close()
 		return err
 	}
-	cleanupNewPager := func() {
+	closeNewPager := func() {
 		_ = newPager.Close()
+	}
+	cleanupNewPager := func() {
+		closeNewPager()
 		_ = removePersistentFileBestEffort(db.dir, newPath, durabilitycut.ResourceIndex)
 		_ = removePersistentFileBestEffort(db.dir, readyPath, durabilitycut.ResourceIndex)
 	}
@@ -873,11 +876,15 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			cleanupNewPager()
 			return err
 		}
-		if _, err := renamePersistentFile(db.dir, indexPath, bakPath, durabilitycut.ResourceIndex); err != nil {
+		if renamed, err := renamePersistentFile(db.dir, indexPath, bakPath, durabilitycut.ResourceIndex); err != nil {
 			if errors.Is(err, ErrRecoveryRequired) {
 				db.publicationPoisoned.Store(true)
 			}
 			unlockCutover(false)
+			if renamed && errors.Is(err, ErrRecoveryRequired) {
+				closeNewPager()
+				return err
+			}
 			cleanupNewPager()
 			return err
 		}
@@ -893,6 +900,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 				}
 			}
 			unlockCutover(false)
+			if renamed && errors.Is(err, ErrRecoveryRequired) {
+				closeNewPager()
+				return err
+			}
 			cleanupNewPager()
 			return err
 		}

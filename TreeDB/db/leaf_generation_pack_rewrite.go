@@ -1540,7 +1540,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return copied, copiedBytes, cleanupErr
 	}
 	if promoteErr != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr))
+		promoteErr = fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr)
+		if errors.Is(promoteErr, ErrRecoveryRequired) {
+			db.publicationPoisoned.Store(true)
+			unlockPublish()
+			return 0, 0, promoteErr
+		}
+		return cleanupAndUnlock(promoteErr)
 	}
 	publishEvent.Phase = leafGenerationPackAfterPromotion
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {

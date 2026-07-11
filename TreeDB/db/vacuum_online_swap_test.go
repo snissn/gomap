@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -129,6 +130,74 @@ func TestVacuumIndexOnlineRefreshFailureLeavesOldIndexAuthoritative(t *testing.T
 	defer func() { _ = reopened.Close() }()
 	if got, err := reopened.Get([]byte("after-refresh-failure")); err != nil || string(got) != "still-open" {
 		t.Fatalf("reopen Get=%q err=%v", got, err)
+	}
+}
+
+func TestVacuumIndexOnline_PostOldIndexRenameCutStopsNamespaceCleanup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	if err := d.SetSync([]byte("vacuum-cut/key"), bytes.Repeat([]byte("v"), 256)); err != nil {
+		t.Fatalf("seed SetSync: %v", err)
+	}
+
+	indexPath := filepath.Join(dir, indexFileName)
+	newPath := filepath.Join(dir, indexNewFileName)
+	bakPath := filepath.Join(dir, indexBakFileName)
+	readyPath := filepath.Join(dir, indexReadyFileName)
+	cutErr := errors.New("injected post-old-index rename cut")
+	var namespaceEvents []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == "" {
+			return nil
+		}
+		namespaceEvents = append(namespaceEvents, event)
+		if event.Namespace == durabilitycut.NamespaceRename &&
+			event.Resource == durabilitycut.ResourceIndex &&
+			filepath.Clean(event.OldPath) == filepath.Clean(indexPath) &&
+			filepath.Clean(event.NewPath) == filepath.Clean(bakPath) {
+			return cutErr
+		}
+		return nil
+	})
+	defer restore()
+	err = d.VacuumIndexOnline(context.Background())
+
+	if !errors.Is(err, cutErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("VacuumIndexOnline error=%v, want injected cut and ErrRecoveryRequired", err)
+	}
+	if !d.publicationPoisoned.Load() {
+		t.Fatal("post-index-rename cut did not poison DB")
+	}
+	if len(namespaceEvents) == 0 {
+		t.Fatal("no namespace events observed")
+	}
+	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceRename || filepath.Clean(got.OldPath) != filepath.Clean(indexPath) || filepath.Clean(got.NewPath) != filepath.Clean(bakPath) {
+		t.Fatalf("last namespace event=%#v, want old-index rename as final mutation", got)
+	}
+	eventsAtCut := len(namespaceEvents)
+	if retryErr := d.VacuumIndexOnline(context.Background()); !errors.Is(retryErr, ErrRecoveryRequired) {
+		t.Fatalf("VacuumIndexOnline retry error=%v, want ErrRecoveryRequired", retryErr)
+	}
+	if len(namespaceEvents) != eventsAtCut {
+		t.Fatalf("VacuumIndexOnline retry emitted namespace events=%#v, want none after cut", namespaceEvents[eventsAtCut:])
+	}
+	for _, path := range []string{newPath, bakPath, readyPath} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("artifact %s stat=%v, want retained crash-cut namespace", filepath.Base(path), statErr)
+		}
+	}
+	if _, statErr := os.Stat(indexPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("index path stat=%v, want renamed away at crash cut", statErr)
+	}
+	if err := d.SetSync([]byte("after-vacuum-cut"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("SetSync after vacuum cut error=%v, want ErrRecoveryRequired", err)
 	}
 }
 

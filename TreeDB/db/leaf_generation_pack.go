@@ -336,7 +336,10 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		rewriteStats.ApplyStages.SetupTimeNanos += rewriteStarted.Sub(attemptStarted).Nanoseconds()
 		cleanupStarted := time.Now()
 		closeErr := writer.Close()
-		removeErr := removeLeafGenerationPackStagingDirFn(stagingDir)
+		var removeErr error
+		if !errors.Is(rewriteErr, ErrRecoveryRequired) {
+			removeErr = removeLeafGenerationPackStagingDirFn(stagingDir)
+		}
 		rewriteStats.ApplyStages.CleanupTimeNanos += time.Since(cleanupStarted).Nanoseconds()
 		stats.CopyTimeNanos += rewriteStats.CopyTimeNanos
 		stats.PublishWaitNanos += rewriteStats.PublishWaitNanos
