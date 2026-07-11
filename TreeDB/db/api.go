@@ -759,6 +759,10 @@ func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) 
 }
 
 func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) (err error) {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	s.endRead()
 	if fn == nil {
 		return errors.New("treedb: snapshot iterate nil callback")
 	}

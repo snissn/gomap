@@ -61,6 +61,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.registryID = 0
 	s.iteratorMu.Lock()
 	clear(s.iterators)
+	s.readState.Store(snapshotReadClosedBit)
 	s.closed.Store(true)
 	s.finalized.Store(false)
 	s.iteratorMu.Unlock()

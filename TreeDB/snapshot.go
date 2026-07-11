@@ -12,7 +12,9 @@ import (
 //
 // Iterators created from a snapshot are owned by it: Close invalidates every
 // outstanding iterator, which callers must still close to release its retained
-// resources. TreeDB is pre-alpha; this interface may change without notice.
+// resources. After Close, point reads return db.ErrClosed, Pager and State
+// return nil, and all iterator constructors return db.ErrClosed. TreeDB is
+// pre-alpha; this interface may change without notice.
 type Snapshot interface {
 	Pager() *pager.Pager
 	State() *backenddb.DBState

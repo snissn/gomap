@@ -1354,6 +1354,7 @@ type Snapshot struct {
 	closed                  atomic.Bool
 	generation              atomic.Uint64
 	finalized               atomic.Bool
+	readState               atomic.Uint64
 	iteratorMu              sync.Mutex
 	iterators               map[*snapshotBoundIterator]struct{}
 	treePager               *pager.Pager
@@ -1383,24 +1384,30 @@ func registryHintFromSnapshot(s *Snapshot) int {
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
-	if s == nil || s.idx == nil {
+	if err := s.beginRead(); err != nil {
+		return nil
+	}
+	defer s.endRead()
+	if s.idx == nil {
 		return nil
 	}
 	return s.idx.pager
 }
 
 func (s *Snapshot) State() *DBState {
-	if s == nil {
+	if err := s.beginRead(); err != nil {
 		return nil
 	}
+	defer s.endRead()
 	return cloneDBState(s.state)
 }
 
 // StateToken returns the immutable scalar state pinned by the snapshot.
 func (s *Snapshot) StateToken() (StateToken, bool) {
-	if s == nil {
+	if err := s.beginRead(); err != nil {
 		return StateToken{}, false
 	}
+	defer s.endRead()
 	return stateTokenFromState(s.state)
 }
 
@@ -1521,6 +1528,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	snap.iteratorMu.Lock()
 	snap.closed.Store(false)
+	snap.readState.Store(0)
 	snap.iteratorMu.Unlock()
 	return snap
 }
@@ -1556,6 +1564,7 @@ func (s *Snapshot) Close() error {
 		s.iteratorMu.Unlock()
 		return nil
 	}
+	s.readState.Or(snapshotReadClosedBit)
 	s.invalidateBoundIteratorsLocked()
 	s.iteratorMu.Unlock()
 	return s.finalizeCloseIfUnreferenced()
@@ -1563,7 +1572,7 @@ func (s *Snapshot) Close() error {
 
 func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.iteratorMu.Lock()
-	if len(s.iterators) != 0 || !s.finalized.CompareAndSwap(false, true) {
+	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
 		s.iteratorMu.Unlock()
 		return nil
 	}
@@ -3298,18 +3307,30 @@ func (db *DB) Prune() {
 
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	return s.tree.Get(normalizeRawKVPointKey(key))
 }
 
 // GetAppend appends the value for key to dst and returns the grown slice.
 // If key is not found, it returns dst and tree.ErrKeyNotFound.
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	if err := s.beginRead(); err != nil {
+		return dst, err
+	}
+	defer s.endRead()
 	return s.tree.GetAppend(normalizeRawKVPointKey(key), dst)
 }
 
 // GetVersionedAppend appends the value for key to dst and returns the native
 // entry revision stored with the visible leaf entry.
 func (s *Snapshot) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	if err := s.beginRead(); err != nil {
+		return dst, page.LegacyEntryRevision, err
+	}
+	defer s.endRead()
 	return s.tree.GetVersionedAppend(normalizeRawKVPointKey(key), dst)
 }
 
@@ -3334,33 +3355,54 @@ func (s *Snapshot) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) 
 // GetManyView calls fn once for each key with a read-only value view.
 // Values are valid until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
-	keys = normalizeRawKVPointKeys(keys)
-	if s == nil || s.closed.Load() {
-		return ErrClosed
+	if err := s.beginRead(); err != nil {
+		return err
 	}
+	defer s.endRead()
+	keys = normalizeRawKVPointKeys(keys)
 	return s.tree.GetManyView(keys, fn)
 }
 
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	return s.tree.GetUnsafe(normalizeRawKVPointKey(key))
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
+	if err := s.beginRead(); err != nil {
+		return false, err
+	}
+	defer s.endRead()
 	return s.tree.Has(normalizeRawKVPointKey(key))
 }
 
 func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	return s.tree.HasMany(normalizeRawKVPointKeys(keys))
 }
 
 func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, err
+	}
+	defer s.endRead()
 	return s.tree.HasPrefixes(prefixes)
 }
 
 // GetEntry returns the persisted leaf entry for key.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	if err := s.beginRead(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	defer s.endRead()
 	return s.tree.GetEntry(normalizeRawKVPointKey(key))
 }
 
