@@ -142,10 +142,10 @@ func GenerateVariants(spec CutSpec) ([]Variant, Coverage, error) {
 	if spec.TargetMeta != nil {
 		all = append(all, *spec.TargetMeta)
 	}
-	if err := validateResources(all); err != nil {
+	if err := validateResources(spec.Model, all); err != nil {
 		return nil, coverage, err
 	}
-	if err := validateResources(oldWrites); err != nil {
+	if err := validateResources(spec.Model, oldWrites); err != nil {
 		return nil, coverage, err
 	}
 
@@ -239,9 +239,6 @@ func GenerateVariants(spec CutSpec) ([]Variant, Coverage, error) {
 		torn := append([]TornBoundary(nil), tornResource.Torn...)
 		sort.Slice(torn, func(i, j int) bool { return torn[i].ID < torn[j].ID })
 		for _, boundary := range torn {
-			if boundary.ID == "" || boundary.Format == "" || boundary.Length < 2 || boundary.Persisted < 1 || boundary.Persisted >= boundary.Length {
-				return nil, coverage, errorsf("resource %s has invalid torn boundary %+v", tornResource.identity(), boundary)
-			}
 			model := spec.Model.Clone()
 			for _, resource := range all {
 				if resource.identity() == tornResource.identity() {
@@ -294,7 +291,7 @@ func validateRequiredFamilies(families []VariantFamily) error {
 	return nil
 }
 
-func validateResources(resources []DirtyResource) error {
+func validateResources(model *Model, resources []DirtyResource) error {
 	seen := make(map[string]struct{}, len(resources))
 	for _, resource := range resources {
 		if resource.Kind == "" || resource.ID == "" || resource.Path == "" {
@@ -308,8 +305,69 @@ func validateResources(resources []DirtyResource) error {
 		if resource.NewName && len(resource.NamespaceDirs) == 0 {
 			return errorsf("new resource %s has no namespace directory", identity)
 		}
+		ranges := append([]ByteRange(nil), resource.Ranges...)
+		if len(ranges) == 0 && len(resource.Torn) > 0 {
+			var err error
+			ranges, err = model.ChangedRanges(resource.Path)
+			if err != nil {
+				return err
+			}
+		}
+		var actualChanged []ByteRange
+		if len(resource.Torn) > 0 {
+			var err error
+			actualChanged, err = model.ChangedRanges(resource.Path)
+			if err != nil {
+				return err
+			}
+		}
+		tornIDs := make(map[string]bool, len(resource.Torn))
+		selectors := make(map[string]bool, len(resource.Torn))
+		for _, boundary := range resource.Torn {
+			if boundary.ID == "" || !knownFormat(boundary.Format) || boundary.Offset < 0 || boundary.Length < 2 || boundary.Persisted < 1 || boundary.Persisted >= boundary.Length || boundary.Offset > int64(^uint64(0)>>1)-boundary.Length {
+				return errorsf("resource %s has invalid torn boundary %+v", identity, boundary)
+			}
+			if tornIDs[boundary.ID] {
+				return errorsf("resource %s has duplicate torn boundary id %q", identity, boundary.ID)
+			}
+			tornIDs[boundary.ID] = true
+			selector := string(boundary.Format) + "/" + boundary.ID
+			if selectors[selector] {
+				return errorsf("resource %s has duplicate torn selector %q", identity, selector)
+			}
+			selectors[selector] = true
+			contained := false
+			for _, changed := range ranges {
+				if changed.Offset <= boundary.Offset && boundary.Offset+boundary.Length <= changed.Offset+changed.Length {
+					contained = true
+					break
+				}
+			}
+			if !contained {
+				return errorsf("resource %s torn boundary %q is outside its changed ranges", identity, boundary.ID)
+			}
+			actuallyChanged := false
+			for _, changed := range actualChanged {
+				if changed.Offset <= boundary.Offset && boundary.Offset+boundary.Length <= changed.Offset+changed.Length {
+					actuallyChanged = true
+					break
+				}
+			}
+			if !actuallyChanged {
+				return errorsf("resource %s torn boundary %q includes unchanged bytes", identity, boundary.ID)
+			}
+		}
 	}
 	return nil
+}
+
+func knownFormat(format FormatKind) bool {
+	switch format {
+	case FormatMeta, FormatRootRecord, FormatFreelist, FormatIndexPage:
+		return true
+	default:
+		return false
+	}
 }
 
 func sortResources(resources []DirtyResource) {

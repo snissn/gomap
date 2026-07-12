@@ -157,6 +157,7 @@ func TestCounterexampleLedgerFailsClosedOnDisappearanceAndCoverageDrift(t *testi
 	variant := requireVariantFamily(t, variants, VariantTargetMetaOnly)
 	entry := CounterexampleLedgerEntry{
 		ID:                "known-meta-dependency-hole",
+		Replay:            ReplaySpec{Package: "./TreeDB", TestName: "TestWitness", CutID: variant.CutID, VariantID: variant.ID, Seed: variant.Seed},
 		Invariant:         InvariantIncompleteRecoverableRoot,
 		ProducerOperation: "DB.Checkpoint",
 		CutID:             variant.CutID,
@@ -165,11 +166,14 @@ func TestCounterexampleLedgerFailsClosedOnDisappearanceAndCoverageDrift(t *testi
 		Seed:              variant.Seed,
 		VariantFamilies:   []VariantFamily{VariantTargetMetaOnly, VariantOneMissingDependency},
 		Expected:          ExpectedCorruption,
+		Observed:          ExpectedCorruption,
 		Owner:             "#3679",
 		Disposition:       DispositionKnown,
-		Replay: fmt.Sprintf("%s=%s %s=%s %s=%d GOWORK=off go test ./TreeDB -run TestWitness -count=1",
-			EnvReplayCut, variant.CutID, EnvReplayVariant, variant.ID, EnvReplaySeed, variant.Seed),
+		KnownViolation:    &KnownViolation{Kind: KnownViolationInvariant, Invariant: InvariantIncompleteRecoverableRoot},
 	}
+	originalWitnesses := CounterexampleWitnesses
+	CounterexampleWitnesses = []CounterexampleWitness{{ID: entry.ID, Package: entry.Replay.Package, TestName: entry.Replay.TestName}}
+	t.Cleanup(func() { CounterexampleWitnesses = originalWitnesses })
 	ledger := CounterexampleLedger{SchemaVersion: CounterexampleLedgerSchemaVersion, MaxVariantsPerCut: MaxVariantsPerCut, KnownCounterexamples: []string{entry.ID}, Entries: []CounterexampleLedgerEntry{entry}}
 	generated := map[string][]Variant{variant.CutID: variants}
 	if err := ValidateCounterexampleLedger(ledger, generated); err != nil {
@@ -197,6 +201,79 @@ func TestCounterexampleLedgerFailsClosedOnDisappearanceAndCoverageDrift(t *testi
 	}
 	if err := ValidateCounterexampleLedger(drift, map[string][]Variant{variant.CutID: generatedWithoutReuse}); err == nil || !strings.Contains(err.Error(), "silently skipped") {
 		t.Fatalf("coverage drift err=%v", err)
+	}
+	extra := ledger
+	extraEntry := entry
+	extraEntry.ID = "json-only-witness"
+	extra.Entries = append(append([]CounterexampleLedgerEntry(nil), ledger.Entries...), extraEntry)
+	extra.KnownCounterexamples = append(append([]string(nil), ledger.KnownCounterexamples...), extraEntry.ID)
+	if err := ValidateCounterexampleLedger(extra, generated); err == nil || !strings.Contains(err.Error(), "no code-owned real witness") {
+		t.Fatalf("json-only witness err=%v", err)
+	}
+}
+
+func TestValidateVariantObservationRequiresExactPublicClassification(t *testing.T) {
+	variant := Variant{CutID: "cut", ID: "variant", Seed: 1, Expected: ExpectedOldRoot}
+	if err := ValidateVariantObservation(variant, VariantObservation{Result: ExpectedOldRoot}, nil); err == nil {
+		t.Fatal("old-root without successful Open unexpectedly validated")
+	}
+	variant.Expected = ExpectedTypedError
+	if err := ValidateVariantObservation(variant, VariantObservation{Result: ExpectedTypedError}, nil); err == nil {
+		t.Fatal("typed error without sentinel unexpectedly validated")
+	}
+	variant.Expected = ExpectedCorruption
+	if err := ValidateVariantObservation(variant, VariantObservation{Opened: true, Result: ExpectedCorruption}, nil); err == nil {
+		t.Fatal("corruption without named invariant unexpectedly validated")
+	}
+	variant.Expected = ExpectedSuffixDiscard
+	if err := ValidateVariantObservation(variant, VariantObservation{Result: ExpectedSuffixDiscard}, nil); err == nil {
+		t.Fatal("suffix discard without successful Open unexpectedly validated")
+	}
+}
+
+func TestValidateVariantObservationAllowsOrthogonalKnownInvariant(t *testing.T) {
+	variant := Variant{CutID: "cut", ID: "variant", Seed: 1, Expected: ExpectedOldRoot}
+	entry := CounterexampleLedgerEntry{
+		ID: "known", CutID: variant.CutID, VariantID: variant.ID, Seed: variant.Seed,
+		Expected: ExpectedOldRoot, Observed: ExpectedOldRoot, Owner: "#1", Disposition: DispositionKnown,
+		KnownViolation: &KnownViolation{Kind: KnownViolationInvariant, Invariant: InvariantRequiredNamespaceEntryMissing},
+	}
+	observation := VariantObservation{Opened: true, Result: ExpectedOldRoot, NamedInvariant: InvariantRequiredNamespaceEntryMissing}
+	if err := ValidateVariantObservation(variant, observation, &entry); err != nil {
+		t.Fatal(err)
+	}
+	observation.NamedInvariant = InvariantKeyStateMismatch
+	if err := ValidateVariantObservation(variant, observation, &entry); err == nil {
+		t.Fatal("wrong named invariant unexpectedly validated")
+	}
+}
+
+func TestGenerateVariantsRejectsInvalidTornBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		boundary  TornBoundary
+		extra     *TornBoundary
+		unchanged bool
+	}{
+		{name: "unknown-format", boundary: TornBoundary{ID: "bad", Format: FormatKind("future"), Offset: 0, Length: 8, Persisted: 4}},
+		{name: "outside-changed-range", boundary: TornBoundary{ID: "bad", Format: FormatMeta, Offset: 8, Length: 8, Persisted: 4}},
+		{name: "declared-but-unchanged", boundary: TornBoundary{ID: "bad", Format: FormatMeta, Offset: 0, Length: 8, Persisted: 4}, unchanged: true},
+		{name: "duplicate-id", boundary: TornBoundary{ID: "same", Format: FormatMeta, Offset: 0, Length: 8, Persisted: 4}, extra: &TornBoundary{ID: "same", Format: FormatRootRecord, Offset: 0, Length: 8, Persisted: 4}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := variantFixture(t, test.name)
+			if test.unchanged {
+				id := spec.Model.volatile[spec.TargetMeta.Path]
+				copy(spec.Model.inodes[id].volatile[:8], spec.Model.inodes[id].stable[:8])
+			}
+			spec.TargetMeta.Torn = []TornBoundary{test.boundary}
+			if test.extra != nil {
+				spec.TargetMeta.Torn = append(spec.TargetMeta.Torn, *test.extra)
+			}
+			if _, _, err := GenerateVariants(spec); err == nil {
+				t.Fatal("invalid torn boundary unexpectedly generated")
+			}
+		})
 	}
 }
 
@@ -269,7 +346,7 @@ func variantFixture(t *testing.T, layout string) CutSpec {
 			VariantDataWithoutNamespace: ExpectedOldRoot,
 			VariantNamespaceWithoutData: ExpectedOldRoot,
 			VariantFullWriteback:        ExpectedNewRoot,
-			VariantTornFormat:           ExpectedTypedError,
+			VariantTornFormat:           ExpectedOldRoot,
 			VariantOldPageReuse:         ExpectedCorruption,
 		},
 	}

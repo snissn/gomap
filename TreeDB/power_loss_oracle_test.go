@@ -99,6 +99,42 @@ func requirePublicReopen(t *testing.T, model *powerlossoracle.Model, opts treedb
 	return result
 }
 
+func loadPowerLossCounterexampleLedger(t *testing.T) powerlossoracle.CounterexampleLedger {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "power_loss_counterexamples.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := powerlossoracle.ParseCounterexampleLedger(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger
+}
+
+func bindPowerLossCounterexamples(t *testing.T, testName string, variants []powerlossoracle.Variant) map[string]powerlossoracle.CounterexampleLedgerEntry {
+	t.Helper()
+	bound, err := powerlossoracle.BindCounterexampleWitnesses(loadPowerLossCounterexampleLedger(t), testName, variants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bound
+}
+
+func requirePowerLossObservation(t *testing.T, variant powerlossoracle.Variant, observation powerlossoracle.VariantObservation, bound map[string]powerlossoracle.CounterexampleLedgerEntry) {
+	t.Helper()
+	entry, ok := bound[variant.ID]
+	if !ok {
+		if err := powerlossoracle.ValidateVariantObservation(variant, observation, nil); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if err := powerlossoracle.ValidateVariantObservation(variant, observation, &entry); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestPowerLossOracleEnumerateCutPoints is the one-command deterministic cut
 // enumerator used by later durability children. Failure output always includes
 // the replayable seed and stable cut-point identifier.
@@ -367,6 +403,31 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	if len(changed) == 0 {
 		t.Fatal("actual relaxed finalize changed no index bytes")
 	}
+	metaEnd := meta.Offset + meta.Length
+	metaChanged := make([]powerlossoracle.ByteRange, 0)
+	indexChanged := make([]powerlossoracle.ByteRange, 0, len(changed))
+	for _, r := range changed {
+		start, end := r.Offset, r.Offset+r.Length
+		if start < meta.Offset {
+			beforeEnd := min(end, meta.Offset)
+			if beforeEnd > start {
+				indexChanged = append(indexChanged, powerlossoracle.ByteRange{Offset: start, Length: beforeEnd - start})
+			}
+		}
+		insideStart, insideEnd := max(start, meta.Offset), min(end, metaEnd)
+		if insideEnd > insideStart {
+			metaChanged = append(metaChanged, powerlossoracle.ByteRange{Offset: insideStart, Length: insideEnd - insideStart})
+		}
+		if end > metaEnd {
+			afterStart := max(start, metaEnd)
+			if end > afterStart {
+				indexChanged = append(indexChanged, powerlossoracle.ByteRange{Offset: afterStart, Length: end - afterStart})
+			}
+		}
+	}
+	if len(metaChanged) == 0 || len(indexChanged) == 0 {
+		t.Fatalf("actual cut did not separate meta and index changes: meta=%v index=%v", metaChanged, indexChanged)
+	}
 
 	stablePaths := make(map[string]bool)
 	for _, path := range snapshot.StablePaths() {
@@ -376,7 +437,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		Kind:   powerlossoracle.ResourceIndex,
 		ID:     "index-generation-2",
 		Path:   filepath.ToSlash(relIndex),
-		Ranges: changed,
+		Ranges: indexChanged,
 	}}
 	dependencyOrdinal := map[powerlossoracle.ResourceKind]int{}
 	leafChanged := false
@@ -419,10 +480,13 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		Kind:   powerlossoracle.ResourceIndex,
 		ID:     "target-meta-generation-2",
 		Path:   filepath.ToSlash(relIndex),
-		Ranges: []powerlossoracle.ByteRange{{Offset: meta.Offset, Length: meta.Length}},
+		Ranges: metaChanged,
 	}
-	if meta.Length > 1 {
-		target.Torn = []powerlossoracle.TornBoundary{{ID: "meta-body", Format: powerlossoracle.FormatMeta, Offset: meta.Offset, Length: meta.Length, Persisted: meta.Length / 2}}
+	// Persist half of the changed four-byte checksum without the body it
+	// authenticates. This is a real meta-format tear and invalidates the
+	// alternate page, forcing public Open to select the older valid meta.
+	if meta.Length >= 12 {
+		target.Torn = []powerlossoracle.TornBoundary{{ID: "meta-body", Format: powerlossoracle.FormatMeta, Offset: meta.Offset + 8, Length: 4, Persisted: 2}}
 	}
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:               "checkpoint-generation-2",
@@ -439,12 +503,13 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 			powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
 			powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
 			powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
-			powerlossoracle.VariantTornFormat:           powerlossoracle.ExpectedTypedError,
+			powerlossoracle.VariantTornFormat:           powerlossoracle.ExpectedOldRoot,
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleCounterexampleNewMetaMissingClosure", variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +524,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	for _, variant := range variants {
 		variant := variant
 		t.Run(variant.ID, func(t *testing.T) {
-			result, _, closeFn, err := powerlossreopen.Stable(variant.Model, opts, false)
+			result, reopened, closeFn, err := powerlossreopen.Stable(variant.Model, opts, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -467,49 +532,61 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 			if size := variant.Model.StableSizeBytes(); size > peakBytes {
 				peakBytes = size
 			}
+			if result.Rejected || reopened == nil {
+				t.Fatalf("public Open rejected %s image without an allowed typed-sentinel classification: %v", variant.Family, result.Err)
+			}
 			missing := powerlossoracle.ResourceKind("")
 			switch variant.Family {
 			case powerlossoracle.VariantTargetMetaOnly:
 				missing = powerlossoracle.ResourceIndex
 			case powerlossoracle.VariantOneMissingDependency:
-				for _, kind := range []powerlossoracle.ResourceKind{powerlossoracle.ResourceValueLog, powerlossoracle.ResourceOuterLeaf} {
-					if strings.HasPrefix(variant.Qualifier, string(kind)+"/") && !validated[kind] {
+				for _, kind := range []powerlossoracle.ResourceKind{powerlossoracle.ResourceIndex, powerlossoracle.ResourceValueLog, powerlossoracle.ResourceOuterLeaf} {
+					if strings.HasPrefix(variant.Qualifier, string(kind)+"/") {
 						missing = kind
 					}
 				}
 			}
-			if missing == "" {
+			if missing != "" {
+				validated[missing] = true
+				dependencyPaths := make([]string, 0)
+				for _, path := range variant.Model.VolatilePaths() {
+					slashed := filepath.ToSlash(path)
+					if strings.Contains(slashed, "value_vlog/") || strings.Contains(slashed, "leaf_vlog/") {
+						dependencyPaths = append(dependencyPaths, filepath.Join(dir, filepath.FromSlash(path)))
+					}
+				}
+				newResources, err := observedPowerLossClosure(variant.Model, dir, meta.Path, dependencyPaths, true, 0, false)
+				if err != nil {
+					t.Fatalf("derive actual %s closure: %v", missing, err)
+				}
+				scenario := powerlossoracle.Scenario{Name: "actual-new-meta-missing-" + string(missing), Cut: powerlossoracle.AfterMetaWrite, LatestSealedSequence: baseSequence + 1, SelectedSequence: result.CommitSeq, OpenedSequence: result.CommitSeq, OpenedAppliedLSN: result.AppliedLSN, ReopenAttempted: true, Generations: []powerlossoracle.Generation{{Sequence: baseSequence, Recoverable: true, Resources: completePowerLossClosure("old")}, {Sequence: baseSequence + 1, Recoverable: true, Resources: newResources}}}
+				if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
+					t.Fatalf("actual %s image %s seed=%d did not produce named diagnosis: %v", missing, variant.ID, variant.Seed, err)
+				}
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantIncompleteRecoverableRoot}, bound)
 				return
 			}
-			validated[missing] = true
-			dependencyPaths := make([]string, 0)
-			for _, path := range variant.Model.VolatilePaths() {
-				slashed := filepath.ToSlash(path)
-				if strings.Contains(slashed, "value_vlog/") || strings.Contains(slashed, "leaf_vlog/") {
-					dependencyPaths = append(dependencyPaths, filepath.Join(dir, filepath.FromSlash(path)))
+			stable, getErr := reopened.Get([]byte("stable/old"))
+			if getErr != nil || !bytes.Equal(stable, []byte("old-value")) {
+				t.Fatalf("stable/old=%q err=%v", stable, getErr)
+			}
+			if variant.Expected == powerlossoracle.ExpectedNewRoot {
+				if result.CommitSeq != baseSequence+1 || result.AppliedLSN != 0 {
+					t.Fatalf("new-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence+1)
 				}
+				if _, err := reopened.Get([]byte("new/pointer/000")); err != nil {
+					t.Fatalf("new-root key missing: %v", err)
+				}
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedNewRoot}, bound)
+				return
 			}
-			newResources, err := observedPowerLossClosure(variant.Model, dir, meta.Path, dependencyPaths, true, 0, false)
-			if err != nil {
-				t.Fatalf("derive actual %s closure: %v", missing, err)
+			if result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
+				t.Fatalf("old-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence)
 			}
-			scenario := powerlossoracle.Scenario{
-				Name:                 "actual-new-meta-missing-" + string(missing),
-				Cut:                  powerlossoracle.AfterMetaWrite,
-				LatestSealedSequence: baseSequence + 1,
-				SelectedSequence:     result.CommitSeq,
-				OpenedSequence:       result.CommitSeq,
-				OpenedAppliedLSN:     result.AppliedLSN,
-				ReopenAttempted:      true,
-				ReopenRejected:       result.Rejected,
-				Generations: []powerlossoracle.Generation{
-					{Sequence: baseSequence, Recoverable: true, Resources: completePowerLossClosure("old")},
-					{Sequence: baseSequence + 1, Recoverable: true, Resources: newResources},
-				},
+			if got, err := reopened.Get([]byte("new/pointer/000")); err != nil || len(got) != 0 {
+				t.Fatalf("old-root exposed new key: value=%q err=%v", got, err)
 			}
-			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
-				t.Fatalf("actual %s image %s seed=%d did not produce named diagnosis: %v (open=%v)", missing, variant.ID, variant.Seed, err, result.Err)
-			}
+			requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 		})
 	}
 	if selector == (powerlossoracle.ReplaySelector{}) {
@@ -524,7 +601,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 
 func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 	model, opts := seedPowerLossImage(t)
-	const path = "maindb/adversarial-namespace/new-dependency.bin"
+	const path = "adversarial-namespace/new-dependency.bin"
 	if err := model.Create(path, []byte("new dependency bytes")); err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +615,7 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 			ID:            "new-asset-generation-2",
 			Path:          path,
 			NewName:       true,
-			NamespaceDirs: []string{".", "maindb", "maindb/adversarial-namespace"},
+			NamespaceDirs: []string{".", "adversarial-namespace"},
 		}},
 		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData, powerlossoracle.VariantFullWriteback},
 		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
@@ -551,6 +628,7 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleAdversarialNewFileNamespaceMismatch", variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -562,7 +640,13 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 	for _, variant := range variants {
 		variant := variant
 		t.Run(variant.ID, func(t *testing.T) {
-			requirePublicReopen(t, variant.Model, opts, true)
+			result := requirePublicReopen(t, variant.Model, opts, true)
+			if result.Rejected {
+				t.Fatalf("public Open rejected old-root namespace image: %v", result.Err)
+			}
+			if result.CommitSeq != 1 || result.AppliedLSN != 0 {
+				t.Fatalf("namespace old-root state=(commit=%d applied=%d) want=(1,0)", result.CommitSeq, result.AppliedLSN)
+			}
 			stablePaths := variant.Model.StablePaths()
 			position := sort.SearchStrings(stablePaths, path)
 			present := position < len(stablePaths) && stablePaths[position] == path
@@ -576,6 +660,11 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 					t.Fatal("namespace-without-data omitted the new name")
 				}
 			}
+			observation := powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}
+			if variant.Family == powerlossoracle.VariantDataWithoutNamespace {
+				observation.NamedInvariant = powerlossoracle.InvariantRequiredNamespaceEntryMissing
+			}
+			requirePowerLossObservation(t, variant, observation, bound)
 		})
 	}
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
@@ -663,7 +752,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 				powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
-				powerlossoracle.VariantTornFormat:           powerlossoracle.ExpectedTypedError,
+				powerlossoracle.VariantTornFormat:           powerlossoracle.ExpectedOldRoot,
 			},
 		},
 		{
@@ -809,6 +898,7 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID", variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -828,17 +918,41 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 				t.Fatal(err)
 			}
 			defer func() { _ = closeFn() }()
-			if variant.Family != powerlossoracle.VariantFullWriteback {
+			if variant.Family == powerlossoracle.VariantSyncedOnly {
+				if result.Rejected || reopened == nil {
+					t.Fatalf("public Open rejected synced image: %v", result.Err)
+				}
+				if got, getErr := reopened.Get([]byte("rid/missing")); getErr != nil || len(got) != 0 {
+					t.Fatalf("synced old root exposed missing-RID write: value=%q err=%v", got, getErr)
+				}
+				if result.CommitSeq != 0 || result.AppliedLSN != 0 {
+					t.Fatalf("synced old-root state=(commit=%d applied=%d) want=(0,0)", result.CommitSeq, result.AppliedLSN)
+				}
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 				return
+			}
+			if variant.Family != powerlossoracle.VariantFullWriteback {
+				t.Fatalf("unclassified generated family %s", variant.Family)
 			}
 			if result.Rejected {
-				t.Logf("public Open rejected checksum-valid frame with missing RID: %v", result.Err)
+				if !errors.Is(result.Err, backenddb.ErrCommandWALMissingValueLogRID) {
+					t.Fatalf("public Open returned untyped/unexpected rejection: %v", result.Err)
+				}
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Result: powerlossoracle.ExpectedTypedError, TypedSentinel: "db.ErrCommandWALMissingValueLogRID"}, bound)
 				return
 			}
-			got, getErr := reopened.Get([]byte("rid/missing"))
-			if getErr == nil && bytes.Equal(got, bytes.Repeat([]byte("r"), 4096)) {
-				t.Fatalf("public recovery resolved command frame whose actual RID bytes were not stable")
+			if reopened == nil {
+				t.Fatal("successful public Open returned no DB")
 			}
+			got, getErr := reopened.Get([]byte("rid/missing"))
+			if getErr == nil && len(got) == 0 && result.CommitSeq == 0 && result.AppliedLSN < appendedLSN {
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedSuffixDiscard}, bound)
+				return
+			}
+			if getErr != nil {
+				t.Fatalf("public recovery returned unclassified key read error: %v", getErr)
+			}
+			exposed := len(got) != 0
 			scenario := powerlossoracle.Scenario{
 				Name:            "actual-relaxed-frame-missing-rid",
 				Cut:             powerlossoracle.AfterUserspaceFlush,
@@ -852,12 +966,13 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 						Stable: false,
 						Live:   true,
 					}},
-					Applied: result.AppliedLSN >= appendedLSN,
+					Applied: result.AppliedLSN >= appendedLSN || exposed,
 				}},
 			}
 			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantCommandReplayHole); err != nil {
 				t.Fatalf("successful public Open did not produce missing-RID replay diagnosis: %v (commit=%d applied=%d get=%v)", err, result.CommitSeq, result.AppliedLSN, getErr)
 			}
+			requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantCommandReplayHole}, bound)
 		})
 	}
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
@@ -933,6 +1048,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot", variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -949,12 +1065,25 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 				t.Fatal(err)
 			}
 			defer func() { _ = closeFn() }()
-			if variant.Family != powerlossoracle.VariantTargetMetaOnly {
+			if result.Rejected || reopened == nil {
+				t.Fatalf("public Open rejected %s image without an allowed typed sentinel: %v", variant.Family, result.Err)
+			}
+			if variant.Family == powerlossoracle.VariantSyncedOnly {
+				stable, stableErr := reopened.Get([]byte("stable/old"))
+				if stableErr != nil || !bytes.Equal(stable, []byte("old-value")) {
+					t.Fatalf("synced old root stable/old=%q err=%v", stable, stableErr)
+				}
+				if got, getErr := reopened.Get([]byte("chunk/000")); getErr != nil || len(got) != 0 {
+					t.Fatalf("synced old root exposed chunk key: value=%q err=%v", got, getErr)
+				}
+				if result.CommitSeq != 1 || result.AppliedLSN != 0 {
+					t.Fatalf("synced old-root state=(commit=%d applied=%d) want=(1,0)", result.CommitSeq, result.AppliedLSN)
+				}
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 				return
 			}
-			if result.Rejected {
-				t.Logf("public Open rejected actual intermediate chunk image: %v", result.Err)
-				return
+			if variant.Family != powerlossoracle.VariantTargetMetaOnly && variant.Family != powerlossoracle.VariantFullWriteback {
+				t.Fatalf("unclassified generated family %s", variant.Family)
 			}
 			first, firstErr := reopened.Get([]byte("chunk/000"))
 			if firstErr != nil || !bytes.Equal(first, []byte("value-000")) {
@@ -985,6 +1114,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantKeyStateMismatch); err != nil {
 				t.Fatalf("successful public Open did not produce intermediate-root diagnosis: %v", err)
 			}
+			requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantKeyStateMismatch}, bound)
 		})
 	}
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)

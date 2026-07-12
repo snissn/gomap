@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "max_variants_per_cut": 256,
   "known_counterexamples": [
     "new-meta-before-index-closure",
@@ -22,9 +22,11 @@
       "seed": 13074376135532583911,
       "variant_families": ["synced-only", "target-meta-only", "full-writeback"],
       "expected_result": "corruption",
+      "observed_result": "corruption",
       "owner": "#3679",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/checkpoint-generation-2/after-meta-write/001 TREEDB_POWERLOSS_VARIANT_ID=cut/checkpoint-generation-2/after-meta-write/001/variant/target-meta-only/index%2Ftarget-meta-generation-2 TREEDB_POWERLOSS_SEED=13074376135532583911 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleCounterexampleNewMetaMissingClosure$' -count=1"
+      "known_violation": {"kind": "named-invariant", "invariant": "incomplete-recoverable-root"},
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/target-meta-only/index%2Ftarget-meta-generation-2", "seed": 13074376135532583911}
     },
     {
       "id": "new-meta-before-value-log-closure",
@@ -36,9 +38,11 @@
       "seed": 18061462608882800384,
       "variant_families": ["one-missing-dependency"],
       "expected_result": "corruption",
+      "observed_result": "corruption",
       "owner": "#3679",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/checkpoint-generation-2/after-meta-write/001 TREEDB_POWERLOSS_VARIANT_ID=cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001 TREEDB_POWERLOSS_SEED=18061462608882800384 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleCounterexampleNewMetaMissingClosure$' -count=1"
+      "known_violation": {"kind": "named-invariant", "invariant": "incomplete-recoverable-root"},
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001", "seed": 18061462608882800384}
     },
     {
       "id": "new-meta-before-outer-leaf-closure",
@@ -50,9 +54,11 @@
       "seed": 15963091334896744730,
       "variant_families": ["one-missing-dependency"],
       "expected_result": "corruption",
+      "observed_result": "corruption",
       "owner": "#3679",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/checkpoint-generation-2/after-meta-write/001 TREEDB_POWERLOSS_VARIANT_ID=cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001 TREEDB_POWERLOSS_SEED=15963091334896744730 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleCounterexampleNewMetaMissingClosure$' -count=1"
+      "known_violation": {"kind": "named-invariant", "invariant": "incomplete-recoverable-root"},
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001", "seed": 15963091334896744730}
     },
     {
       "id": "new-file-bytes-before-namespace",
@@ -64,23 +70,26 @@
       "seed": 5106789785088843078,
       "variant_families": ["data-without-namespace", "namespace-without-data"],
       "expected_result": "old-root",
+      "observed_result": "old-root",
       "owner": "#3677",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/new-auxiliary-namespace/after-new-file-directory-sync/001 TREEDB_POWERLOSS_VARIANT_ID=cut/new-auxiliary-namespace/after-new-file-directory-sync/001/variant/data-without-namespace/auxiliary%2Fnew-asset-generation-2 TREEDB_POWERLOSS_SEED=5106789785088843078 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleAdversarialNewFileNamespaceMismatch$' -count=1"
+      "known_violation": {"kind": "named-invariant", "invariant": "required-namespace-entry-missing"},
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleAdversarialNewFileNamespaceMismatch", "cut_id": "cut/new-auxiliary-namespace/after-new-file-directory-sync/001", "variant_id": "cut/new-auxiliary-namespace/after-new-file-directory-sync/001/variant/data-without-namespace/auxiliary%2Fnew-asset-generation-2", "seed": 5106789785088843078}
     },
     {
       "id": "torn-target-meta",
       "invariant": "selected-root-invalid",
-      "producer_operation": "DB.Checkpoint target meta page write",
+      "producer_operation": "DB.Checkpoint target meta checksum write without matching page body",
       "cut_id": "cut/checkpoint-generation-2/after-meta-write/001",
       "cut_point": "after-meta-write",
       "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body",
       "seed": 8773376974644040706,
       "variant_families": ["torn-format"],
-      "expected_result": "typed-error",
+      "expected_result": "old-root",
+      "observed_result": "old-root",
       "owner": "#3679",
-      "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/checkpoint-generation-2/after-meta-write/001 TREEDB_POWERLOSS_VARIANT_ID=cut/checkpoint-generation-2/after-meta-write/001/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body TREEDB_POWERLOSS_SEED=8773376974644040706 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleCounterexampleNewMetaMissingClosure$' -count=1"
+      "disposition": "resolved",
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/torn-format/index%2Ftarget-meta-generation-2%2Fmeta%2Fmeta-body", "seed": 8773376974644040706}
     },
     {
       "id": "relaxed-command-frame-before-rid",
@@ -92,9 +101,11 @@
       "seed": 18057848185145254985,
       "variant_families": ["full-writeback"],
       "expected_result": "suffix-discard",
+      "observed_result": "typed-error",
       "owner": "#3718",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/relaxed-command-frame-external-rid/after-userspace-flush/001 TREEDB_POWERLOSS_VARIANT_ID=cut/relaxed-command-frame-external-rid/after-userspace-flush/001/variant/full-writeback TREEDB_POWERLOSS_SEED=18057848185145254985 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID$' -count=1"
+      "known_violation": {"kind": "typed-sentinel", "sentinel": "db.ErrCommandWALMissingValueLogRID"},
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID", "cut_id": "cut/relaxed-command-frame-external-rid/after-userspace-flush/001", "variant_id": "cut/relaxed-command-frame-external-rid/after-userspace-flush/001/variant/full-writeback", "seed": 18057848185145254985}
     },
     {
       "id": "chunked-sync-intermediate-root",
@@ -106,9 +117,11 @@
       "seed": 5391730289620176643,
       "variant_families": ["target-meta-only"],
       "expected_result": "corruption",
+      "observed_result": "corruption",
       "owner": "#3680",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/chunked-checkpoint-intermediate-root/after-meta-write/001 TREEDB_POWERLOSS_VARIANT_ID=cut/chunked-checkpoint-intermediate-root/after-meta-write/001/variant/target-meta-only/index%2Fchunked-intermediate-root TREEDB_POWERLOSS_SEED=5391730289620176643 GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot$' -count=1"
+      "known_violation": {"kind": "named-invariant", "invariant": "key-state-mismatch"},
+      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot", "cut_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/001", "variant_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/001/variant/target-meta-only/index%2Fchunked-intermediate-root", "seed": 5391730289620176643}
     },
     {
       "id": "older-meta-live-page-reused",
@@ -120,9 +133,11 @@
       "seed": 2709795578759783962,
       "variant_families": ["old-page-reuse"],
       "expected_result": "corruption",
+      "observed_result": "corruption",
       "owner": "#3678",
       "disposition": "known-counterexample",
-      "replay_command": "TREEDB_POWERLOSS_CUT_ID=cut/older-meta-live-page-reuse/after-meta-write/001 TREEDB_POWERLOSS_VARIANT_ID=cut/older-meta-live-page-reuse/after-meta-write/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page TREEDB_POWERLOSS_SEED=2709795578759783962 GOWORK=off go test ./TreeDB/db -run '^TestPowerLossOracleCounterexampleRecoverablePageReuse$' -count=1"
+      "known_violation": {"kind": "named-invariant", "invariant": "recoverable-page-reused"},
+      "replay": {"package": "./TreeDB/db", "test_name": "TestPowerLossOracleCounterexampleRecoverablePageReuse", "cut_id": "cut/older-meta-live-page-reuse/after-meta-write/001", "variant_id": "cut/older-meta-live-page-reuse/after-meta-write/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page", "seed": 2709795578759783962}
     }
   ]
 }

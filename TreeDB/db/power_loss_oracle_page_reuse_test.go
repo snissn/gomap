@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -169,6 +170,18 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ledgerData, err := os.ReadFile(filepath.Join("..", "testdata", "power_loss_counterexamples.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := powerlossoracle.ParseCounterexampleLedger(ledgerData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := powerlossoracle.BindCounterexampleWitnesses(ledger, "TestPowerLossOracleCounterexampleRecoverablePageReuse", variants)
+	if err != nil {
+		t.Fatal(err)
+	}
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -189,14 +202,35 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 			reopenOpts.ReadOnly = true
 			reopened, openErr := Open(reopenOpts)
 			if openErr != nil {
-				if variant.Family == powerlossoracle.VariantOldPageReuse {
-					t.Logf("public db.Open rejected old root with reused page %d: %v", reusedPage, openErr)
+				t.Fatalf("public db.Open rejected %s image without an allowed typed sentinel: %v", variant.Family, openErr)
+			}
+			defer func() {
+				if err := reopened.Close(); err != nil {
+					t.Errorf("close reopened DB: %v", err)
 				}
+			}()
+			entry, known := bound[variant.ID]
+			validate := func(observation powerlossoracle.VariantObservation) {
+				if known {
+					if err := powerlossoracle.ValidateVariantObservation(variant, observation, &entry); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				if err := powerlossoracle.ValidateVariantObservation(variant, observation, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if variant.Family == powerlossoracle.VariantSyncedOnly {
+				opened := reopened.State()
+				if opened == nil || opened.CommitSeq != oldState.CommitSeq || opened.AppliedCommandLSN != oldState.AppliedCommandLSN || opened.RootPageID != oldState.RootPageID {
+					t.Fatalf("synced old root state=%+v want commit=%d applied=%d root=%d", opened, oldState.CommitSeq, oldState.AppliedCommandLSN, oldState.RootPageID)
+				}
+				validate(powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot})
 				return
 			}
-			defer reopened.Close()
 			if variant.Family != powerlossoracle.VariantOldPageReuse {
-				return
+				t.Fatalf("unclassified generated family %s", variant.Family)
 			}
 			opened := reopened.State()
 			if opened == nil {
@@ -218,6 +252,7 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantRecoverablePageReused); err != nil {
 				t.Fatalf("successful public Open did not produce recoverable-page-reused diagnosis: %v", err)
 			}
+			validate(powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantRecoverablePageReused})
 		})
 	}
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
