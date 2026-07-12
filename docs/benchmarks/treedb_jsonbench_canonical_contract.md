@@ -65,6 +65,7 @@ PROFILE=durable \
   GOMAP_REPLACE=/path/to/pinned/gomap \
   OUT_DIR="$OUT/validation" \
   RUN_CLICKHOUSE=0 \
+  CLICKHOUSE_RESULT="$OUT/timing/clickhouse/result.json" \
   TREEDB_QUERY_MODE=one_shot_end_to_end \
   TREEDB_METADATA_MODE=no_aggregate_metadata \
   TREEDB_VALIDATE_RECONSTRUCTION=1 \
