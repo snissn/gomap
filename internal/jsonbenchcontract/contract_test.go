@@ -32,6 +32,17 @@ func TestCanonicalJSONBenchResultRecordsActualTreeDBProfile(t *testing.T) {
 	assertErrorContains(t, err, `requested profile "durable" does not match recorded profile "fast"`)
 }
 
+func TestCanonicalJSONBenchRequiresTreeDBReportSchemaVersion(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.TreeDB.ResultPaths[0] = writeResultAt(t, manifest.ArtifactRoot, map[string]any{
+		"schema_version": "jsonbench-treedb-report/v0",
+		"rows":           validTreeDBRows(),
+	})
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, `treedb result[0].schema_version must be "jsonbench-treedb-report/v1"`)
+}
+
 func TestCanonicalJSONBenchRequiresDurableTreeDBProfile(t *testing.T) {
 	manifest := validManifest(t)
 	manifest.TreeDB.RequestedProfile = "fast"

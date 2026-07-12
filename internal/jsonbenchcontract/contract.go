@@ -16,7 +16,10 @@ import (
 	"strings"
 )
 
-const SchemaVersion = "gomap-jsonbench-canonical/v1"
+const (
+	SchemaVersion             = "gomap-jsonbench-canonical/v1"
+	TreeDBResultSchemaVersion = "jsonbench-treedb-report/v1"
+)
 
 const (
 	CanonicalQueryMaxRatio        = 1.5
@@ -579,6 +582,7 @@ func validateResources(resources []ResourceEvidence, add func(string, ...any)) {
 }
 
 type recordedResult struct {
+	SchemaVersion        string           `json:"schema_version"`
 	Query                string           `json:"query"`
 	Profile              string           `json:"profile"`
 	DatasetSize          int64            `json:"dataset_size"`
@@ -603,6 +607,9 @@ func validateResult(path string, attemptIndex int, manifest Manifest, add func(s
 	var result recordedResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	if result.SchemaVersion != TreeDBResultSchemaVersion {
+		add("treedb result[%d].schema_version must be %q", attemptIndex, TreeDBResultSchemaVersion)
 	}
 	rows := result.Rows
 	if len(rows) == 0 {
