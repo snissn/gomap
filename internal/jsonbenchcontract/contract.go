@@ -203,7 +203,7 @@ func Validate(manifest Manifest, baseDir string) error {
 	validateIndependentResultPaths("clickhouse.result_paths", manifest.ClickHouse.ResultPaths, baseDir, manifest.Comparison.Attempts, add)
 	validateComparison(manifest.Comparison, add)
 	validateValidation(manifest.Validation, add)
-	validateCounters(manifest.Counters, add)
+	validateCounters(manifest.Counters, manifest.Comparison.FallbackPolicy, add)
 	validateResources(manifest.Resources, add)
 
 	artifactRoot := manifest.ArtifactRoot
@@ -414,7 +414,7 @@ func validateValidation(validation ValidationEvidence, add func(string, ...any))
 	}
 }
 
-func validateCounters(counters map[string]CounterEvidence, add func(string, ...any)) {
+func validateCounters(counters map[string]CounterEvidence, fallbackPolicy string, add func(string, ...any)) {
 	for _, name := range requiredCounters {
 		counter, ok := counters[name]
 		if !ok {
@@ -430,6 +430,13 @@ func validateCounters(counters map[string]CounterEvidence, add func(string, ...a
 	}
 	if counter, ok := counters["result_hash_validated"]; ok && counter.Value != 1 {
 		add("counters.result_hash_validated.value must be 1")
+	}
+	if fallbackPolicy == "forbid" {
+		for _, name := range []string{"document_fallbacks", "row_fallbacks"} {
+			if counter, ok := counters[name]; ok && counter.Value != 0 {
+				add("counters.%s.value must be 0 when comparison.fallback_policy is %q", name, "forbid")
+			}
+		}
 	}
 }
 

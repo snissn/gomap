@@ -183,6 +183,34 @@ func TestQueryReadyEvidenceRejectsMissingFallbackAndGenerationCounters(t *testin
 	assertErrorContains(t, err, "counters.document_fallbacks is required")
 }
 
+func TestQueryReadyEvidenceRejectsPositiveFallbackCountersWhenForbidden(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.Counters["document_fallbacks"] = CounterEvidence{Value: 1, Source: "smoke"}
+	manifest.Counters["row_fallbacks"] = CounterEvidence{Value: 2, Source: "smoke"}
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, `counters.document_fallbacks.value must be 0 when comparison.fallback_policy is "forbid"`)
+	assertErrorContains(t, err, `counters.row_fallbacks.value must be 0 when comparison.fallback_policy is "forbid"`)
+}
+
+func TestCanonicalJSONBenchPerformanceTargetsAreCloseoutGatesNotSchemaValidity(t *testing.T) {
+	manifest := validManifest(t)
+	for _, resultPath := range manifest.TreeDB.ResultPaths {
+		rows := validTreeDBRows()
+		for _, row := range rows {
+			row["attempts_seconds"] = []float64{1.0}
+		}
+		writeJSONFile(t, resultPath, map[string]any{
+			"schema_version": "jsonbench-treedb-report/v1",
+			"rows":           rows,
+		})
+	}
+
+	if err := Validate(manifest, manifest.ArtifactRoot); err != nil {
+		t.Fatalf("structurally complete over-target baseline should remain valid: %v", err)
+	}
+}
+
 func TestCanonicalValidationIsSeparateFromMeasuredIntervals(t *testing.T) {
 	manifest := validManifest(t)
 	manifest.Validation.TimingBoundary = "inside_query_timer"

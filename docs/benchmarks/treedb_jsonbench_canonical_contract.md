@@ -109,6 +109,13 @@ has a `1.05` same-host regression ratio guardrail. A target may change only with
 linked same-host evidence and an explicit tracker decision; a PR cannot revise
 it silently.
 
+`valid: true` means that the evidence is structurally complete, pinned, and
+comparable; it does not claim that these performance targets passed. M0 must be
+able to record an honest over-target baseline. M6 evaluates the frozen query,
+load, and q4 ratios and either passes them or records an explicitly approved
+owner/residual. Keep that target evaluation beside the validated manifest; do
+not hide a miss by relabeling structurally valid evidence as invalid.
+
 The TreeDB result is a report containing `rows[]`. Select the canonical headline
 lane explicitly with `treedb.row_selector`; the current lane is
 `storage_layout=column-store-full-prepared` and `projection=full`. This avoids
