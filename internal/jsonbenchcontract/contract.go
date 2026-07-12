@@ -576,10 +576,16 @@ func validateResult(path string, attemptIndex int, manifest Manifest, add func(s
 		return nil
 	}
 	seenQueries := make(map[string]bool, len(selected))
+	allowedQueries := map[string]bool{"q4a": true, "q4b": true}
+	for _, query := range manifest.Comparison.QueryOrder {
+		allowedQueries[query] = true
+	}
 	for index, row := range selected {
 		prefix := fmt.Sprintf("treedb result[%d] row[%d]", attemptIndex, index)
 		if row.Query == "" {
 			add("%s.query is required", prefix)
+		} else if !allowedQueries[row.Query] {
+			add("%s.query %q is not allowed in the selected canonical lane", prefix, row.Query)
 		} else if seenQueries[row.Query] {
 			add("treedb result[%d] query %q is duplicated within the selected canonical lane", attemptIndex, row.Query)
 		} else {

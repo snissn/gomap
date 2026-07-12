@@ -130,6 +130,29 @@ func TestCanonicalJSONBenchReportRequiresUniqueQueryCoverage(t *testing.T) {
 	assertErrorContains(t, err, `treedb result[0] is missing required query "qexpr" from the selected canonical lane`)
 }
 
+func TestCanonicalJSONBenchReportRejectsUnknownSelectedQuery(t *testing.T) {
+	manifest := validManifest(t)
+	rows := append(validTreeDBRows(), map[string]any{
+		"query":                  "q6",
+		"profile":                "durable",
+		"dataset_size":           1_000_000,
+		"query_mode":             "one_shot_end_to_end",
+		"metadata_mode":          "no_aggregate_metadata",
+		"document_scan_fallback": false,
+		"reconstruction_status":  "validated",
+		"storage_layout":         "column-store-full-prepared",
+		"projection":             "full",
+		"attempts_seconds":       []float64{0.001},
+	})
+	manifest.TreeDB.ResultPaths[0] = writeResultAt(t, manifest.ArtifactRoot, map[string]any{
+		"schema_version": "jsonbench-treedb-report/v1",
+		"rows":           rows,
+	})
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, `treedb result[0] row[6].query "q6" is not allowed in the selected canonical lane`)
+}
+
 func TestCanonicalJSONBenchReportRequiresOnePositiveTimingPerIndependentAttempt(t *testing.T) {
 	manifest := validManifest(t)
 	rows := validTreeDBRows()
