@@ -22,6 +22,14 @@ const (
 	CanonicalQueryMaxRatio        = 1.5
 	CanonicalLoadMaxRatio         = 1.5
 	CanonicalQ4RegressionMaxRatio = 1.05
+	CanonicalStorageLayout        = "column-store-full-prepared"
+	CanonicalProjection           = "full"
+	CanonicalQueryMode            = "one_shot_end_to_end"
+	CanonicalMetadataMode         = "no_aggregate_metadata"
+	CanonicalCachePolicy          = "drop-os-page-cache-not-required"
+	CanonicalWarmthPolicy         = "cold-open-one-shot"
+	CanonicalTargetRevisionPolicy = "revise only with linked same-host evidence and tracker approval"
+	CanonicalValidationPolicy     = "canonical-result-hash-and-reconstruction"
 )
 
 const (
@@ -197,9 +205,13 @@ func Validate(manifest Manifest, baseDir string) error {
 	validateIndependentResultPaths("treedb.result_paths", manifest.TreeDB.ResultPaths, baseDir, manifest.Comparison.Attempts, add)
 	if strings.TrimSpace(manifest.TreeDB.RowSelector.StorageLayout) == "" {
 		add("treedb.row_selector.storage_layout is required")
+	} else if manifest.TreeDB.RowSelector.StorageLayout != CanonicalStorageLayout {
+		add("treedb.row_selector.storage_layout must be %q", CanonicalStorageLayout)
 	}
 	if strings.TrimSpace(manifest.TreeDB.RowSelector.Projection) == "" {
 		add("treedb.row_selector.projection is required")
+	} else if manifest.TreeDB.RowSelector.Projection != CanonicalProjection {
+		add("treedb.row_selector.projection must be %q", CanonicalProjection)
 	}
 	validateIndependentResultPaths("clickhouse.result_paths", manifest.ClickHouse.ResultPaths, baseDir, manifest.Comparison.Attempts, add)
 	validateComparison(manifest.Comparison, add)
@@ -426,6 +438,21 @@ func validateComparison(comparison Comparison, add func(string, ...any)) {
 	}
 	if comparison.FallbackPolicy != "forbid" {
 		add("comparison.fallback_policy must be %q", "forbid")
+	}
+	for field, value := range map[string]struct {
+		got  string
+		want string
+	}{
+		"query_mode":              {comparison.QueryMode, CanonicalQueryMode},
+		"aggregate_metadata_mode": {comparison.AggregateMetadataMode, CanonicalMetadataMode},
+		"cache_policy":            {comparison.CachePolicy, CanonicalCachePolicy},
+		"warmth_policy":           {comparison.WarmthPolicy, CanonicalWarmthPolicy},
+		"target_revision_policy":  {comparison.TargetRevisionPolicy, CanonicalTargetRevisionPolicy},
+		"validation_policy":       {comparison.ValidationPolicy, CanonicalValidationPolicy},
+	} {
+		if value.got != "" && value.got != value.want {
+			add("comparison.%s must be %q", field, value.want)
+		}
 	}
 	if comparison.Statistic != "median" {
 		add("comparison.statistic must be %q", "median")

@@ -40,6 +40,57 @@ func TestCanonicalJSONBenchRequiresDurableTreeDBProfile(t *testing.T) {
 	assertErrorContains(t, err, `treedb.requested_profile must be "durable" for canonical evidence`)
 }
 
+func TestCanonicalJSONBenchRequiresCanonicalFullRowSelector(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.TreeDB.RowSelector = ResultRowSelector{StorageLayout: "query-shaped", Projection: "q2-only"}
+	for index, resultPath := range manifest.TreeDB.ResultPaths {
+		rows := validTreeDBRows()
+		for _, row := range rows {
+			row["storage_layout"] = manifest.TreeDB.RowSelector.StorageLayout
+			row["projection"] = manifest.TreeDB.RowSelector.Projection
+			row["attempts_seconds"] = []float64{0.001 + float64(index)*0.0001}
+		}
+		writeJSONFile(t, resultPath, map[string]any{"schema_version": "jsonbench-treedb-report/v1", "rows": rows})
+	}
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, `treedb.row_selector.storage_layout must be "column-store-full-prepared"`)
+	assertErrorContains(t, err, `treedb.row_selector.projection must be "full"`)
+}
+
+func TestCanonicalJSONBenchRequiresCanonicalOneShotModes(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.Comparison.QueryMode = "hot_prepared_run"
+	manifest.Comparison.AggregateMetadataMode = "aggregate_metadata_enabled"
+	for index, resultPath := range manifest.TreeDB.ResultPaths {
+		rows := validTreeDBRows()
+		for _, row := range rows {
+			row["query_mode"] = manifest.Comparison.QueryMode
+			row["metadata_mode"] = manifest.Comparison.AggregateMetadataMode
+			row["attempts_seconds"] = []float64{0.001 + float64(index)*0.0001}
+		}
+		writeJSONFile(t, resultPath, map[string]any{"schema_version": "jsonbench-treedb-report/v1", "rows": rows})
+	}
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, `comparison.query_mode must be "one_shot_end_to_end"`)
+	assertErrorContains(t, err, `comparison.aggregate_metadata_mode must be "no_aggregate_metadata"`)
+}
+
+func TestCanonicalJSONBenchRequiresFrozenCollectionPolicies(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.Comparison.CachePolicy = "warm-cache"
+	manifest.Comparison.WarmthPolicy = "prepared"
+	manifest.Comparison.TargetRevisionPolicy = "silent"
+	manifest.Comparison.ValidationPolicy = "none"
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, `comparison.cache_policy must be "drop-os-page-cache-not-required"`)
+	assertErrorContains(t, err, `comparison.warmth_policy must be "cold-open-one-shot"`)
+	assertErrorContains(t, err, `comparison.target_revision_policy must be "revise only with linked same-host evidence and tracker approval"`)
+	assertErrorContains(t, err, `comparison.validation_policy must be "canonical-result-hash-and-reconstruction"`)
+}
+
 func TestCanonicalJSONBenchRejectsSingleOneShotReportForFiveAttempts(t *testing.T) {
 	manifest := validManifest(t)
 	manifest.TreeDB.ResultPaths = manifest.TreeDB.ResultPaths[:1]
