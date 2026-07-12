@@ -4,6 +4,7 @@
 package jsonbenchcontract
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -257,6 +258,7 @@ func validateIndependentResultPaths(field string, paths []string, baseDir string
 		add("%s has %d independent artifacts, want %d", field, len(paths), attempts)
 	}
 	seen := make(map[string]bool, len(paths))
+	seenContents := make(map[[sha256.Size]byte]bool, len(paths))
 	var seenFiles []os.FileInfo
 	for index, path := range paths {
 		if strings.TrimSpace(path) == "" {
@@ -288,6 +290,20 @@ func validateIndependentResultPaths(field string, paths []string, baseDir string
 		}
 		if duplicate {
 			add("%s[%d] duplicates %q; attempts must be independent artifacts", field, index, path)
+		}
+		if data, err := os.ReadFile(cleaned); err == nil {
+			canonicalContent := data
+			var decoded any
+			if err := json.Unmarshal(data, &decoded); err == nil {
+				if normalized, err := json.Marshal(decoded); err == nil {
+					canonicalContent = normalized
+				}
+			}
+			digest := sha256.Sum256(canonicalContent)
+			if seenContents[digest] {
+				add("%s[%d] duplicates the content of an earlier attempt; attempts must come from independent runs", field, index)
+			}
+			seenContents[digest] = true
 		}
 		seen[cleaned] = true
 	}

@@ -78,6 +78,20 @@ func TestCanonicalJSONBenchRejectsAliasedIndependentAttemptPaths(t *testing.T) {
 	assertErrorContains(t, err, "treedb.result_paths[4] duplicates")
 }
 
+func TestCanonicalJSONBenchRejectsCopiedIndependentAttemptArtifacts(t *testing.T) {
+	manifest := validManifest(t)
+	copied, err := os.ReadFile(manifest.TreeDB.ResultPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest.TreeDB.ResultPaths[4], copied, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "treedb.result_paths[4] duplicates the content of an earlier attempt")
+}
+
 func TestCanonicalJSONBenchReportValidatesEveryRow(t *testing.T) {
 	manifest := validManifest(t)
 	rows := []map[string]any{
@@ -247,10 +261,10 @@ func TestQueryReadyEvidenceRejectsPositiveFallbackCountersWhenForbidden(t *testi
 
 func TestCanonicalJSONBenchPerformanceTargetsAreCloseoutGatesNotSchemaValidity(t *testing.T) {
 	manifest := validManifest(t)
-	for _, resultPath := range manifest.TreeDB.ResultPaths {
+	for index, resultPath := range manifest.TreeDB.ResultPaths {
 		rows := validTreeDBRows()
 		for _, row := range rows {
-			row["attempts_seconds"] = []float64{1.0}
+			row["attempts_seconds"] = []float64{1.0 + float64(index)*0.01}
 		}
 		writeJSONFile(t, resultPath, map[string]any{
 			"schema_version": "jsonbench-treedb-report/v1",
@@ -329,11 +343,19 @@ func validManifest(t *testing.T) Manifest {
 		attemptRoot := filepath.Join(root, "attempts", fmt.Sprintf("%d", index+1))
 		resultPaths[index] = filepath.Join(attemptRoot, "treedb", "report.json")
 		clickHousePaths[index] = filepath.Join(attemptRoot, "clickhouse", "result.json")
+		treeRows := validTreeDBRows()
+		for _, row := range treeRows {
+			row["attempts_seconds"] = []float64{0.001 + float64(index)*0.0001}
+		}
 		writeJSONFile(t, resultPaths[index], map[string]any{
 			"schema_version": "jsonbench-treedb-report/v1",
-			"rows":           validTreeDBRows(),
+			"rows":           treeRows,
 		})
-		writeJSONFile(t, clickHousePaths[index], validClickHouseResult(1_000_000))
+		clickHouseResult := validClickHouseResult(1_000_000)
+		for _, timings := range clickHouseResult["result"].([][]float64) {
+			timings[0] += float64(index) * 0.0001
+		}
+		writeJSONFile(t, clickHousePaths[index], clickHouseResult)
 	}
 	return Manifest{
 		SchemaVersion: SchemaVersion,

@@ -124,7 +124,10 @@ the same report. `treedb.result_paths` must contain five different one-shot
 reports, paired by index with the five `clickhouse.result_paths`. Within every
 TreeDB report, selected query IDs must be unique and must cover q1, q2, q3, q4,
 q5, and qexpr in `comparison.query_order`. Additional uniquely named q4a and q4b
-rows are allowed. Every selected row in every report must consistently record:
+rows are allowed. Paths that alias the same file or reports with identical
+canonical JSON content are rejected on both sides; copying one attempt cannot
+satisfy the five-run requirement. Every selected row in every report must
+consistently record:
 
 - the requested TreeDB profile;
 - the pinned dataset row count;
