@@ -1479,6 +1479,34 @@ func TestWriterAppendRawKVBatchPayloadCommandDirect(t *testing.T) {
 	}
 }
 
+func TestWriterAppendRawKVSingleCommandDirectPreservesRevisions(t *testing.T) {
+	for _, op := range []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("inline"), Value: []byte("value"), Revision: 11},
+		{Op: RawKVOpDelete, Key: []byte("deleted"), Revision: 12},
+		{Op: RawKVOpSetRID, Key: []byte("external"), RID: 42, Revision: 13},
+	} {
+		t.Run(fmt.Sprintf("op-%d", op.Op), func(t *testing.T) {
+			payload, err := EncodeRawKVSingleOperationPayload(op)
+			if err != nil {
+				t.Fatalf("EncodeRawKVSingleOperationPayload: %v", err)
+			}
+			path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+			w, err := NewWriter(path)
+			if err != nil {
+				t.Fatalf("NewWriter: %v", err)
+			}
+			if err := w.AppendRawKVSingleCommandDirect(7, 3, op, CommandDurabilityRelaxed); err != nil {
+				_ = w.Close()
+				t.Fatalf("AppendRawKVSingleCommandDirect: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatalf("Close writer: %v", err)
+			}
+			assertRawKVCommandFramePayload(t, path, 7, 3, payload)
+		})
+	}
+}
+
 func TestWriterAppendRawKVBatchPayloadCommandDirectBufferedSetRID(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSetRID, Key: []byte("external"), RID: 42},

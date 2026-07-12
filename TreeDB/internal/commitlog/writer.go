@@ -973,16 +973,7 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 	if !validCommandDurabilityClass(class) {
 		return ErrCorrupt
 	}
-	valueLen := len(op.Value)
-	if op.Op == RawKVOpSetRID {
-		valueLen = 8
-	}
-	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
-	var fence ExternalRefFenceV1
-	if op.Op == RawKVOpSetRID {
-		fence = canonicalExternalRefFenceV1([]uint64{op.RID})
-	}
-	size, err := rawKVCommandFrameEncodedSize(payloadLen, fence)
+	size, err := rawKVSingleCommandFrameEncodedSize(&op)
 	if err != nil {
 		return err
 	}

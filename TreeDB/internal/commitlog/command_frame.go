@@ -1923,6 +1923,24 @@ func prepareCommandEnvelope(env *CommandEnvelope) error {
 	return nil
 }
 
+func rawKVSingleCommandFrameEncodedSize(op *RawKVOperation) (int, error) {
+	keyBytes, valueBytes, err := rawKVOperationPayloadLens(op)
+	if err != nil {
+		return 0, err
+	}
+	opHeaderSize := rawKVOperationHeaderSize(op.Revision != 0)
+	maxInt := int(^uint(0) >> 1)
+	if keyBytes > maxInt-rawKVBatchHeaderSize-opHeaderSize || valueBytes > maxInt-rawKVBatchHeaderSize-opHeaderSize-keyBytes {
+		return 0, ErrRecordTooLarge
+	}
+	payloadLen := rawKVBatchHeaderSize + opHeaderSize + keyBytes + valueBytes
+	var fence ExternalRefFenceV1
+	if op.Op == RawKVOpSetRID {
+		fence = canonicalExternalRefFenceV1([]uint64{op.RID})
+	}
+	return rawKVCommandFrameEncodedSize(payloadLen, fence)
+}
+
 func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOperation, class CommandDurabilityClass) ([]byte, error) {
 	if !validCommandDurabilityClass(class) {
 		return nil, ErrCorrupt
@@ -1933,22 +1951,7 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	if err := validateRawKVOperation(&op); err != nil {
 		return nil, err
 	}
-	if op.Op == RawKVOpDeleteRange {
-		payload, err := EncodeRawKVSingleOperationPayload(op)
-		if err != nil {
-			return nil, err
-		}
-		return encodeCommandFrameTo(dst, CommandEnvelope{
-			LSN:             lsn,
-			DurabilityClass: class,
-			Kind:            CommandKindRawKVBatch,
-			Scope:           CommandScopeRawKV,
-			BaseAppliedLSN:  baseAppliedLSN,
-			PayloadFormat:   PayloadFormatRawKVBatchV1,
-			Payload:         payload,
-		})
-	}
-	if op.Op == RawKVOpSetRID {
+	if op.Op == RawKVOpDeleteRange || op.Op == RawKVOpSetRID || op.Revision != 0 {
 		payload, err := EncodeRawKVSingleOperationPayload(op)
 		if err != nil {
 			return nil, err

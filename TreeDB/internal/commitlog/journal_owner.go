@@ -750,19 +750,7 @@ func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, o
 	if err := validateRawKVOperation(&op); err != nil {
 		return 0, err
 	}
-	valueLen := len(op.Value)
-	if op.Op == RawKVOpSetRID {
-		valueLen = 8
-	}
-	if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
-		return 0, ErrRecordTooLarge
-	}
-	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
-	var fence ExternalRefFenceV1
-	if op.Op == RawKVOpSetRID {
-		fence = canonicalExternalRefFenceV1([]uint64{op.RID})
-	}
-	size, err := rawKVCommandFrameEncodedSize(payloadLen, fence)
+	size, err := rawKVSingleCommandFrameEncodedSize(&op)
 	if err != nil {
 		return 0, err
 	}
