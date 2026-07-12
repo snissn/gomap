@@ -178,7 +178,7 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound, err := powerlossoracle.BindCounterexampleWitnesses(ledger, "TestPowerLossOracleCounterexampleRecoverablePageReuse", variants)
+	bound, err := powerlossoracle.BindCounterexampleWitnesses(ledger, t.Name(), variants)
 	if err != nil {
 		t.Fatal(err)
 	}

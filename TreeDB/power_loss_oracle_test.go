@@ -112,9 +112,9 @@ func loadPowerLossCounterexampleLedger(t *testing.T) powerlossoracle.Counterexam
 	return ledger
 }
 
-func bindPowerLossCounterexamples(t *testing.T, testName string, variants []powerlossoracle.Variant) map[string]powerlossoracle.CounterexampleLedgerEntry {
+func bindPowerLossCounterexamples(t *testing.T, variants []powerlossoracle.Variant) map[string]powerlossoracle.CounterexampleLedgerEntry {
 	t.Helper()
-	bound, err := powerlossoracle.BindCounterexampleWitnesses(loadPowerLossCounterexampleLedger(t), testName, variants)
+	bound, err := powerlossoracle.BindCounterexampleWitnesses(loadPowerLossCounterexampleLedger(t), t.Name(), variants)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +132,27 @@ func requirePowerLossObservation(t *testing.T, variant powerlossoracle.Variant, 
 	}
 	if err := powerlossoracle.ValidateVariantObservation(variant, observation, &entry); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func requirePowerLossPointerFixtureState(t *testing.T, db *treedb.DB, present bool) {
+	t.Helper()
+	for i := 0; i < 400; i++ {
+		key := []byte(fmt.Sprintf("new/pointer/%03d", i))
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if !present {
+			if len(got) != 0 {
+				t.Fatalf("old-root exposed %q: value length=%d", key, len(got))
+			}
+			continue
+		}
+		want := bytes.Repeat([]byte{byte(i + 1)}, 4096)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("new-root %q value mismatch: got length=%d want length=%d", key, len(got), len(want))
+		}
 	}
 }
 
@@ -509,7 +530,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleCounterexampleNewMetaMissingClosure", variants)
+	bound := bindPowerLossCounterexamples(t, variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -574,18 +595,14 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 				if result.CommitSeq != baseSequence+1 || result.AppliedLSN != 0 {
 					t.Fatalf("new-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence+1)
 				}
-				if _, err := reopened.Get([]byte("new/pointer/000")); err != nil {
-					t.Fatalf("new-root key missing: %v", err)
-				}
+				requirePowerLossPointerFixtureState(t, reopened, true)
 				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedNewRoot}, bound)
 				return
 			}
 			if result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
 				t.Fatalf("old-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence)
 			}
-			if got, err := reopened.Get([]byte("new/pointer/000")); err != nil || len(got) != 0 {
-				t.Fatalf("old-root exposed new key: value=%q err=%v", got, err)
-			}
+			requirePowerLossPointerFixtureState(t, reopened, false)
 			requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 		})
 	}
@@ -628,7 +645,7 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleAdversarialNewFileNamespaceMismatch", variants)
+	bound := bindPowerLossCounterexamples(t, variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -898,7 +915,7 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID", variants)
+	bound := bindPowerLossCounterexamples(t, variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -1048,7 +1065,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound := bindPowerLossCounterexamples(t, "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot", variants)
+	bound := bindPowerLossCounterexamples(t, variants)
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		t.Fatal(err)
