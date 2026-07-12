@@ -1,0 +1,1 @@
+{"system":"ClickHouse","version":"26.4.2.10","requested_rows":1000,"dataset_size":1000,"num_loaded_documents":1000,"result":[[0.0015],[0.002],[0.003],[0.004],[0.005],[0.006]]}

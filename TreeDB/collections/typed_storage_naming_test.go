@@ -507,6 +507,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/docs/spec/typed-storage-naming.md", classification: typedStorageLegacyCompatibility, matchingLines: 52, occurrences: 57},
 	{path: "TreeDB/docs/spec/user-command-wal.md", classification: typedStorageLegacyDeferred, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/docs/spec/verification.md", classification: typedStorageLegacyDeferred, matchingLines: 2, occurrences: 2},
+	{path: "docs/benchmarks/treedb_jsonbench_canonical_contract.md", classification: typedStorageLegacyTrueColumn, matchingLines: 1, occurrences: 1},
 	{path: "experiments/colgranule/DEFERRED_ISSUES.md", classification: typedStorageLegacyTrueColumn, matchingLines: 1, occurrences: 1},
 	{path: "experiments/colgranule/README.md", classification: typedStorageLegacyTrueColumn, matchingLines: 4, occurrences: 4},
 	{path: "experiments/colgranule/cmd/jsonbench_compare/main.go", classification: typedStorageLegacyTrueColumn, matchingLines: 1, occurrences: 1},
