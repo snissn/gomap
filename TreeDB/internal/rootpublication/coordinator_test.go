@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,6 +45,68 @@ func waitForCall(t testing.TB, calls <-chan *PreparedRootCandidate) *PreparedRoo
 	case <-time.After(time.Second):
 		t.Fatal("publisher was not called")
 		return nil
+	}
+}
+
+func waitFor(t testing.TB, predicate func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for !predicate() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition did not become true")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestPreparedCandidateCopiesAndNormalizesObligations(t *testing.T) {
+	input := []ObligationID{{3}, {1}, {3}}
+	prepared, err := NewPreparedRootCandidate(CandidateSpec{
+		Frontier: NewFrontier(1, 2, 3, 4, 5), Obligations: input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input[0][0] = 9
+	got := prepared.Obligations()
+	got[0][0] = 8
+	if want := []ObligationID{{1}, {3}}; len(prepared.Obligations()) != 2 || prepared.Obligations()[0] != want[0] || prepared.Obligations()[1] != want[1] {
+		t.Fatalf("candidate obligations mutated: %v", prepared.Obligations())
+	}
+}
+
+type testExtension uint64
+
+func (e testExtension) union(other immutableExtension) immutableExtension {
+	return e | other.(testExtension)
+}
+
+func TestCoalescingUnionsEveryReservedExtensionSlot(t *testing.T) {
+	one, err := newPreparedRootCandidateWithExtensions(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, extensionSlots{
+		resourceSet: testExtension(1), cowFreelist: testExtension(2), durableRootRecord: testExtension(4),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := newPreparedRootCandidateWithExtensions(CandidateSpec{Frontier: NewFrontier(2, 2, 2, 2, 2)}, extensionSlots{
+		resourceSet: testExtension(8), cowFreelist: testExtension(16), durableRootRecord: testExtension(32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := coalesceCandidates([]*PreparedRootCandidate{one, two}).extensions
+	if got.resourceSet != testExtension(9) || got.cowFreelist != testExtension(18) || got.durableRootRecord != testExtension(36) {
+		t.Fatalf("extension union=%+v", got)
+	}
+}
+
+func TestNewRejectsRecoverableFrontierNewerThanDurable(t *testing.T) {
+	_, err := New(Options{
+		Publisher:              PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult { return PublishResult{} }),
+		InitialDurableFrontier: NewFrontier(4, 0, 0, 0, 0), OldestRecoverableCommitSeq: 5,
+	})
+	if err == nil {
+		t.Fatal("accepted oldest recoverable frontier newer than durable")
 	}
 }
 
@@ -202,9 +265,7 @@ func TestTimerAnchorsFirstCandidateAndAdaptiveDelay(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("anchored timer did not fire")
 	}
-	for c.Stats().DurableCommitSeq != 2 {
-		time.Sleep(time.Millisecond)
-	}
+	waitFor(t, func() bool { return c.Stats().DurableCommitSeq == 2 })
 	if delay := c.Stats().PublishDelay; delay != 60*time.Millisecond {
 		t.Fatalf("adaptive delay=%s", delay)
 	}
@@ -265,6 +326,47 @@ func TestHardAdmissionBlocksBeforeAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestExactHardByteBoundaryAcknowledgesWithoutWaiting(t *testing.T) {
+	if HardPendingCommits != 65_536 || HardPendingBytes != 256<<20 || SoftPendingBytes != 64<<20 {
+		t.Fatalf("scheduler constants soft=%d hard-bytes=%d hard-commits=%d", SoftPendingBytes, HardPendingBytes, HardPendingCommits)
+	}
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(250, 0)), Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return PublishResult{Outcome: PublishSucceeded}
+		case <-ctx.Done():
+			return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, HardPendingBytes)); err != nil {
+		t.Fatalf("exact hard boundary waited/failed: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("soft trigger did not start publisher")
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.Supersede(context.Background(), candidate(t, 2, 1)) }()
+	waitFor(t, func() bool { return c.Stats().AdmissionWaits == 1 })
+	select {
+	case err := <-done:
+		t.Fatalf("hard crossing acknowledged before progress: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHardAdmissionReturnsPublisherErrorOrContext(t *testing.T) {
 	want := errors.New("pre-meta")
 	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
@@ -321,6 +423,127 @@ func TestRetryableFailureRetainsDebtAndFailsOnlyCapturedWaiters(t *testing.T) {
 	}
 	if stats := c.Stats(); stats.PendingCommits != 0 || stats.Retries != 1 {
 		t.Fatalf("retry stats=%+v", stats)
+	}
+}
+
+func TestRetryableFailureDoesNotFailWaiterAddedInFlight(t *testing.T) {
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondEntered := make(chan struct{})
+	secondRelease := make(chan struct{})
+	want := errors.New("first pre-meta failure")
+	var calls atomic.Uint64
+	c, err := New(Options{Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {
+		switch calls.Add(1) {
+		case 1:
+			close(firstEntered)
+			select {
+			case <-firstRelease:
+				return PublishResult{Outcome: PublishRetryableFailure, Err: want}
+			case <-ctx.Done():
+				return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+			}
+		default:
+			close(secondEntered)
+			select {
+			case <-secondRelease:
+				return PublishResult{Outcome: PublishSucceeded}
+			case <-ctx.Done():
+				return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+			}
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- c.WaitThrough(context.Background(), 1) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first attempt did not start")
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- c.WaitThrough(context.Background(), 1) }()
+	waitFor(t, func() bool { return c.Stats().WaiterCount == 2 })
+	close(firstRelease)
+	if err := <-firstDone; !errors.Is(err, want) {
+		t.Fatalf("captured waiter error=%v", err)
+	}
+	select {
+	case err := <-secondDone:
+		t.Fatalf("in-flight waiter received prior failure: %v", err)
+	default:
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight waiter did not trigger retry")
+	}
+	close(secondRelease)
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHardAdmissionAddedInFlightIgnoresPriorGroupFailure(t *testing.T) {
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondEntered := make(chan struct{})
+	secondRelease := make(chan struct{})
+	priorFailure := errors.New("prior group failed")
+	var calls atomic.Uint64
+	c, err := New(Options{Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {
+		if calls.Add(1) == 1 {
+			close(firstEntered)
+			select {
+			case <-firstRelease:
+				return PublishResult{Outcome: PublishRetryableFailure, Err: priorFailure}
+			case <-ctx.Done():
+				return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+			}
+		}
+		close(secondEntered)
+		select {
+		case <-secondRelease:
+			return PublishResult{Outcome: PublishSucceeded}
+		case <-ctx.Done():
+			return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, SoftPendingBytes)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first group did not start")
+	}
+	hardDone := make(chan error, 1)
+	go func() { hardDone <- c.Supersede(context.Background(), candidate(t, 2, HardPendingBytes)) }()
+	waitFor(t, func() bool { return c.Stats().AdmissionWaits == 1 })
+	close(firstRelease)
+	select {
+	case err := <-hardDone:
+		t.Fatalf("later hard admission received prior failure: %v", err)
+	default:
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("later hard group did not publish")
+	}
+	close(secondRelease)
+	if err := <-hardDone; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -456,9 +679,7 @@ func TestWaitCancellationRaceRechecksDurableFrontier(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- c.WaitThrough(ctx, 1) }()
 	close(release)
-	for c.Stats().DurableCommitSeq != 1 {
-		time.Sleep(time.Millisecond)
-	}
+	waitFor(t, func() bool { return c.Stats().DurableCommitSeq == 1 })
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("durable frontier lost cancellation race: %v", err)
@@ -469,11 +690,12 @@ func TestWaitCancellationRaceRechecksDurableFrontier(t *testing.T) {
 }
 
 func TestCanceledDrainDoesNotLeavePermanentDrainMode(t *testing.T) {
+	clock := NewFakeClock(time.Unix(200, 0))
 	firstEntered := make(chan struct{})
 	firstRelease := make(chan struct{})
 	calls := make(chan uint64, 4)
 	var count atomic.Uint64
-	c, err := New(Options{Publisher: PublisherFunc(func(ctx context.Context, candidate *PreparedRootCandidate) PublishResult {
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(ctx context.Context, candidate *PreparedRootCandidate) PublishResult {
 		calls <- candidate.Frontier().CommitSeq()
 		if count.Add(1) == 1 {
 			close(firstEntered)
@@ -526,12 +748,18 @@ func TestCanceledDrainDoesNotLeavePermanentDrainMode(t *testing.T) {
 }
 
 func TestReportPublishResultRejectsStaleMismatchedAndDuplicateAttempts(t *testing.T) {
-	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+	var saved PublishAttempt
+	var c *Coordinator
+	created, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		c.mu.Lock()
+		saved = c.activeAttempt
+		c.mu.Unlock()
 		return PublishResult{Outcome: PublishSucceeded}
 	})})
 	if err != nil {
 		t.Fatal(err)
 	}
+	c = created
 	defer stopClean(t, c)
 	bogus := PublishAttempt{id: 1, candidate: candidate(t, 1, 1), groupSize: 1}
 	if err := c.ReportPublishResult(bogus, PublishResult{Outcome: PublishSucceeded}); !errors.Is(err, ErrPublisherProtocol) {
@@ -539,6 +767,23 @@ func TestReportPublishResultRejectsStaleMismatchedAndDuplicateAttempts(t *testin
 	}
 	if stats := c.Stats(); stats.DurableCommitSeq != 0 || stats.PendingCommits != 0 {
 		t.Fatalf("bogus report mutated state: %+v", stats)
+	}
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitThrough(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReportPublishResult(saved, PublishResult{Outcome: PublishSucceeded}); !errors.Is(err, ErrPublisherProtocol) {
+		t.Fatalf("duplicate report=%v", err)
+	}
+	mismatched := saved
+	mismatched.groupSize++
+	if err := c.ReportPublishResult(mismatched, PublishResult{Outcome: PublishSucceeded}); !errors.Is(err, ErrPublisherProtocol) {
+		t.Fatalf("mismatched report=%v", err)
+	}
+	if stats := c.Stats(); stats.DurableCommitSeq != 1 || stats.PendingCommits != 0 {
+		t.Fatalf("stale reports mutated state: %+v", stats)
 	}
 }
 
@@ -561,11 +806,60 @@ func TestSuccessCannotClaimDifferentDurableSequence(t *testing.T) {
 	}
 }
 
+func TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		oldest uint64
+	}{{"regression", 2}, {"beyond-durable", 7}} {
+		t.Run(test.name, func(t *testing.T) {
+			c, err := New(Options{
+				InitialDurableFrontier: NewFrontier(5, 5, 5, 5, 5), OldestRecoverableCommitSeq: 3,
+				Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+					return PublishResult{Outcome: PublishSucceeded, OldestRecoverableCommitSeq: test.oldest}
+				}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stopClean(t, c)
+			if err := c.Enqueue(context.Background(), candidate(t, 6, 1)); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.WaitThrough(context.Background(), 6); !errors.Is(err, ErrPublisherProtocol) {
+				t.Fatalf("oldest=%d error=%v", test.oldest, err)
+			}
+			if stats := c.Stats(); stats.DurableCommitSeq != 5 || stats.OldestRecoverableCommitSeq != 3 || stats.PendingCommits != 1 {
+				t.Fatalf("invalid oldest mutated state: %+v", stats)
+			}
+		})
+	}
+	c, err := New(Options{
+		InitialDurableFrontier: NewFrontier(5, 5, 5, 5, 5), OldestRecoverableCommitSeq: 3,
+		Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishSucceeded, OldestRecoverableCommitSeq: 4}
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 6, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitThrough(context.Background(), 6); err != nil {
+		t.Fatal(err)
+	}
+	if stats := c.Stats(); stats.DurableCommitSeq != 6 || stats.OldestRecoverableCommitSeq != 4 {
+		t.Fatalf("valid oldest stats=%+v", stats)
+	}
+}
+
 func TestRandomizedCoordinatorModel(t *testing.T) {
 	rng := rand.New(rand.NewSource(3675))
+	clock := NewFakeClock(time.Unix(300, 0))
 	var mu sync.Mutex
 	next := PublishResult{Outcome: PublishSucceeded}
-	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
 		mu.Lock()
 		result := next
 		mu.Unlock()
@@ -579,6 +873,13 @@ func TestRandomizedCoordinatorModel(t *testing.T) {
 	for step := 0; step < 400; step++ {
 		seq++
 		bytes := uint64(rng.Intn(1024) + 1)
+		hardAdmission := rng.Intn(25) == 0
+		if hardAdmission {
+			bytes = HardPendingBytes + 1
+			mu.Lock()
+			next = PublishResult{Outcome: PublishSucceeded}
+			mu.Unlock()
+		}
 		prepared := candidate(t, seq, bytes, byte(rng.Intn(16)))
 		var enqueueErr error
 		if pendingCommits == 0 || rng.Intn(2) == 0 {
@@ -591,7 +892,11 @@ func TestRandomizedCoordinatorModel(t *testing.T) {
 		}
 		pendingBytes += bytes
 		pendingCommits++
-		if rng.Intn(4) == 0 {
+		if hardAdmission {
+			durable = seq
+			pendingBytes, pendingCommits = 0, 0
+		}
+		if !hardAdmission && rng.Intn(4) == 0 {
 			failure := rng.Intn(5) == 0
 			mu.Lock()
 			if failure {
@@ -650,4 +955,102 @@ func TestRandomizedCoordinatorModel(t *testing.T) {
 	if stats := c.Stats(); stats.DurableCommitSeq != seq || stats.PendingCommits != 0 {
 		t.Fatalf("final stats=%+v", stats)
 	}
+}
+
+func TestRandomizedPoisonAdmissionAndShutdownModel(t *testing.T) {
+	rng := rand.New(rand.NewSource(1595_3675))
+	for cycle := 0; cycle < 80; cycle++ {
+		clock := NewFakeClock(time.Unix(int64(500+cycle), 0))
+		poison := rng.Intn(7) == 0
+		var publishCalls atomic.Uint64
+		c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			publishCalls.Add(1)
+			if poison {
+				return PublishResult{Outcome: PublishAmbiguous, Err: errors.New("model ambiguous meta")}
+			}
+			return PublishResult{Outcome: PublishSucceeded}
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seq := uint64(1)
+		outer, err := c.AcquireBuilder(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		nested, err := outer.Nested()
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared := candidate(t, seq, HardPendingBytes+1, byte(cycle))
+		done := make(chan error, 1)
+		go func() { done <- c.Enqueue(context.Background(), prepared) }()
+		select {
+		case err := <-done:
+			t.Fatalf("cycle %d hard admission passed active builder: %v", cycle, err)
+		default:
+		}
+		if rng.Intn(2) == 0 {
+			outer.Release()
+			nested.Release()
+		} else {
+			nested.Release()
+			outer.Release()
+		}
+		err = <-done
+		if poison {
+			if !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("cycle %d poison=%v", cycle, err)
+			}
+			if err := c.WaitThrough(context.Background(), seq); !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("cycle %d poison wait=%v", cycle, err)
+			}
+		} else if err != nil {
+			t.Fatalf("cycle %d hard admission=%v", cycle, err)
+		}
+		if rng.Intn(2) == 0 && !poison {
+			if err := c.Drain(context.Background()); err != nil {
+				t.Fatalf("cycle %d drain=%v", cycle, err)
+			}
+			if err := c.Stop(context.Background()); err != nil {
+				t.Fatalf("cycle %d drained stop=%v", cycle, err)
+			}
+		} else {
+			err := c.Stop(context.Background())
+			if poison && !errors.Is(err, ErrPublicationStopped) {
+				t.Fatalf("cycle %d poison stop=%v", cycle, err)
+			}
+		}
+		if _, err := c.AcquireBuilder(context.Background()); !errors.Is(err, ErrClosed) && !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("cycle %d admission after shutdown=%v", cycle, err)
+		}
+		if stats := c.Stats(); stats.ActiveBuilders != 0 || stats.WaiterCount != 0 || publishCalls.Load() == 0 {
+			t.Fatalf("cycle %d shutdown stats=%+v calls=%d", cycle, stats, publishCalls.Load())
+		}
+	}
+}
+
+func TestOrdinaryEnqueueHasZeroStableIOAndNoPerEnqueueGoroutine(t *testing.T) {
+	clock := NewFakeClock(time.Unix(400, 0))
+	var calls atomic.Uint64
+	before := runtime.NumGoroutine()
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		calls.Add(1)
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(1); seq <= 10_000; seq++ {
+		if err := c.Enqueue(context.Background(), candidate(t, seq, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("ordinary enqueue made %d stable-I/O calls", calls.Load())
+	}
+	if delta := runtime.NumGoroutine() - before; delta > 2 {
+		t.Fatalf("enqueue goroutine growth=%d", delta)
+	}
+	stopClean(t, c)
 }

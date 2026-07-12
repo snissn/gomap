@@ -1,0 +1,616 @@
+package rootpublication
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+)
+
+type Options struct {
+	Clock                      Clock
+	Publisher                  Publisher
+	InitialDurableFrontier     Frontier
+	OldestRecoverableCommitSeq uint64
+}
+
+type pendingEntry struct {
+	candidate *PreparedRootCandidate
+	bytes     uint64
+}
+
+type durabilityWaiter struct {
+	seq uint64
+	ch  chan error
+}
+
+// Coordinator owns only in-memory scheduling state. It is intentionally not
+// reachable from any production TreeDB handle in this ticket.
+type Coordinator struct {
+	mu sync.Mutex
+
+	clock     Clock
+	publisher Publisher
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wake      chan struct{}
+	changed   chan struct{}
+	done      chan struct{}
+
+	pending        []pendingEntry
+	pendingBytes   uint64
+	firstPendingAt time.Time
+	timer          Timer
+	wakeReason     WakeReason
+	publishNow     bool
+	publishing     bool
+	drainRequests  uint64
+	stopping       bool
+	stopped        bool
+	poison         error
+
+	visible           Frontier
+	durable           Frontier
+	oldestRecoverable uint64
+	waiters           []*durabilityWaiter
+	activeBuilders    uint64
+
+	ewmaService        time.Duration
+	lastService        time.Duration
+	lastGroupSize      uint64
+	admissionWaits     uint64
+	preMetaFailures    uint64
+	retries            uint64
+	publishCalls       uint64
+	failureGeneration  uint64
+	lastRetryableError error
+	lastFailureSeq     uint64
+	nextAttemptID      uint64
+	activeAttempt      PublishAttempt
+	reportingAttempt   bool
+}
+
+// PublishAttempt is an opaque identity for exactly one captured callback.
+// ReportPublishResult rejects zero, stale, duplicate, and mismatched attempts.
+type PublishAttempt struct {
+	id        uint64
+	candidate *PreparedRootCandidate
+	groupSize uint64
+	started   time.Time
+	waiters   []*durabilityWaiter
+}
+
+func New(options Options) (*Coordinator, error) {
+	if options.Publisher == nil {
+		return nil, errors.New("root publication: nil publisher")
+	}
+	if options.OldestRecoverableCommitSeq > options.InitialDurableFrontier.commitSeq {
+		return nil, fmt.Errorf("root publication: oldest recoverable sequence %d exceeds durable sequence %d",
+			options.OldestRecoverableCommitSeq, options.InitialDurableFrontier.commitSeq)
+	}
+	clock := options.Clock
+	if clock == nil {
+		clock = realClock{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Coordinator{
+		clock: clock, publisher: options.Publisher, ctx: ctx, cancel: cancel,
+		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
+		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
+		oldestRecoverable: options.OldestRecoverableCommitSeq,
+	}
+	if c.oldestRecoverable == 0 {
+		c.oldestRecoverable = c.durable.commitSeq
+	}
+	go c.run()
+	return c, nil
+}
+
+// Enqueue transfers one immutable candidate into the pending frontier. Below
+// hard admission this never waits for Publish. If accepting it crosses either
+// hard limit, acknowledgement waits for durable progress or a publisher error.
+func (c *Coordinator) Enqueue(ctx context.Context, candidate *PreparedRootCandidate) error {
+	return c.enqueue(ctx, candidate, false)
+}
+
+// Supersede has the same admission contract as Enqueue and names the semantic
+// replacement explicitly for callers and tests.
+func (c *Coordinator) Supersede(ctx context.Context, candidate *PreparedRootCandidate) error {
+	return c.enqueue(ctx, candidate, true)
+}
+
+func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandidate, supersede bool) error {
+	if candidate == nil {
+		return fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
+	}
+	c.mu.Lock()
+	if err := c.terminalErrorLocked(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if candidate.frontier.commitSeq <= c.visible.commitSeq ||
+		(c.visible.commitSeq != 0 && !candidate.frontier.Dominates(c.visible)) {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: frontier %d does not dominate visible %d", ErrInvalidCandidate, candidate.frontier.commitSeq, c.visible.commitSeq)
+	}
+	if supersede && len(c.pending) == 0 {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
+	}
+	wasEmpty := len(c.pending) == 0
+	entryBytes := candidate.OwnedBytes()
+	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
+	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
+	c.visible = candidate.frontier
+	if wasEmpty {
+		c.firstPendingAt = c.clock.Now()
+		c.installTimerLocked()
+	}
+	hard := c.pendingBytes > HardPendingBytes || uint64(len(c.pending)) > HardPendingCommits
+	if c.pendingBytes >= SoftPendingBytes {
+		c.requestPublishLocked(WakeSoftBytes)
+	}
+	if hard {
+		c.admissionWaits++
+		c.requestPublishLocked(WakeHardAdmission)
+	}
+	failureGeneration := c.failureGeneration
+	seq := candidate.frontier.commitSeq
+	c.mu.Unlock()
+	c.signal()
+	if !hard {
+		return nil
+	}
+	return c.waitForAdmission(ctx, seq, failureGeneration)
+}
+
+func (c *Coordinator) waitForAdmission(ctx context.Context, seq, failureGeneration uint64) error {
+	for {
+		c.mu.Lock()
+		if err := c.terminalErrorLocked(); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		if c.durable.commitSeq >= seq ||
+			(c.pendingBytes <= HardPendingBytes && uint64(len(c.pending)) <= HardPendingCommits) {
+			c.mu.Unlock()
+			return nil
+		}
+		if c.failureGeneration > failureGeneration {
+			if seq <= c.lastFailureSeq {
+				err := c.lastRetryableError
+				c.mu.Unlock()
+				return err
+			}
+			failureGeneration = c.failureGeneration
+		}
+		changed := c.changed
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+// WaitThrough returns only when a durable frontier reaches seq. Installing a
+// waiter is an immediate scheduler trigger. Retryable failure is returned to
+// every waiter captured by that attempt; a later call explicitly retries.
+func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
+	c.mu.Lock()
+	if c.durable.commitSeq >= seq {
+		c.mu.Unlock()
+		return nil
+	}
+	if err := c.terminalErrorLocked(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if seq > c.visible.commitSeq {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: wait sequence %d exceeds visible %d", ErrInvalidCandidate, seq, c.visible.commitSeq)
+	}
+	waiter := &durabilityWaiter{seq: seq, ch: make(chan error, 1)}
+	c.waiters = append(c.waiters, waiter)
+	c.requestPublishLocked(WakeWaiter)
+	c.mu.Unlock()
+	c.signal()
+	select {
+	case err := <-waiter.ch:
+		return err
+	case <-ctx.Done():
+		c.mu.Lock()
+		if c.durable.commitSeq >= seq {
+			c.removeWaiterLocked(waiter)
+			c.mu.Unlock()
+			return nil
+		}
+		select {
+		case err := <-waiter.ch:
+			c.mu.Unlock()
+			return err
+		default:
+		}
+		c.removeWaiterLocked(waiter)
+		c.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (c *Coordinator) removeWaiterLocked(target *durabilityWaiter) {
+	for i, waiter := range c.waiters {
+		if waiter == target {
+			c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
+			break
+		}
+	}
+}
+
+// ReportPublishResult applies the result for the exact active attempt. The
+// synchronous scheduler is the attempt owner and opens the reporting window
+// only after Publish returns. Tests may use this method to prove stale and
+// duplicate reports are rejected, but cannot manufacture state transitions.
+func (c *Coordinator) ReportPublishResult(attempt PublishAttempt, result PublishResult) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.reportingAttempt || attempt.id == 0 || attempt.id != c.activeAttempt.id ||
+		attempt.candidate != c.activeAttempt.candidate || attempt.groupSize != c.activeAttempt.groupSize {
+		return fmt.Errorf("%w: stale or mismatched attempt", ErrPublisherProtocol)
+	}
+	c.reportingAttempt = false
+	c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started))
+	c.activeAttempt = PublishAttempt{}
+	return nil
+}
+
+func (c *Coordinator) Drain(ctx context.Context) error {
+	c.mu.Lock()
+	if err := c.terminalErrorLocked(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if len(c.pending) == 0 && !c.publishing {
+		c.mu.Unlock()
+		return nil
+	}
+	c.drainRequests++
+	c.requestPublishLocked(WakeDrain)
+	failureGeneration := c.failureGeneration
+	c.mu.Unlock()
+	c.signal()
+	defer c.endDrain()
+	for {
+		c.mu.Lock()
+		if c.poison != nil {
+			err := c.poison
+			c.mu.Unlock()
+			return err
+		}
+		if c.failureGeneration > failureGeneration {
+			err := c.lastRetryableError
+			c.mu.Unlock()
+			return err
+		}
+		if len(c.pending) == 0 && !c.publishing {
+			c.mu.Unlock()
+			return nil
+		}
+		changed := c.changed
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (c *Coordinator) endDrain() {
+	c.mu.Lock()
+	if c.drainRequests > 0 {
+		c.drainRequests--
+	}
+	c.mu.Unlock()
+}
+
+// Stop cancels a stalled Publisher through its context, fails all waiters, and
+// waits for the single scheduler goroutine. It does not silently claim pending
+// debt was durable.
+func (c *Coordinator) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return nil
+	}
+	c.stopping = true
+	c.cancel()
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+	c.failWaitersLocked(ErrPublicationStopped, true)
+	c.notifyLocked()
+	c.mu.Unlock()
+	c.signal()
+	select {
+	case <-c.done:
+		c.mu.Lock()
+		debt := len(c.pending) != 0
+		c.pending = nil
+		c.pendingBytes = 0
+		c.stopped = true
+		c.mu.Unlock()
+		if debt {
+			return ErrPublicationStopped
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *Coordinator) Stats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	age := time.Duration(0)
+	if len(c.pending) != 0 {
+		age = c.clock.Now().Sub(c.firstPendingAt)
+	}
+	return Stats{
+		VisibleCommitSeq: c.visible.commitSeq, DurableCommitSeq: c.durable.commitSeq,
+		OldestRecoverableCommitSeq: c.oldestRecoverable, PendingCommits: uint64(len(c.pending)),
+		PendingBytes: c.pendingBytes, PendingAge: age, LastGroupSize: c.lastGroupSize,
+		LastServiceDuration: c.lastService, EWMAServiceDuration: c.ewmaService,
+		PublishDelay: c.publishDelayLocked(), AdmissionWaits: c.admissionWaits,
+		ActiveBuilders: c.activeBuilders, WaiterCount: uint64(len(c.waiters)),
+		PreMetaFailures: c.preMetaFailures, Retries: c.retries, Poisoned: c.poison != nil,
+		WakeReason: c.wakeReason, PublishCalls: c.publishCalls,
+	}
+}
+
+func (c *Coordinator) run() {
+	defer close(c.done)
+	for {
+		c.mu.Lock()
+		if c.stopping {
+			c.mu.Unlock()
+			return
+		}
+		var timerC <-chan time.Time
+		if c.timer != nil {
+			timerC = c.timer.C()
+		}
+		ready := c.publishNow && !c.publishing && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
+		if ready {
+			groupSize := len(c.pending)
+			group := make([]*PreparedRootCandidate, groupSize)
+			for i := range group {
+				group[i] = c.pending[i].candidate
+			}
+			candidate := coalesceCandidates(group)
+			c.publishNow = false
+			c.publishing = true
+			c.publishCalls++
+			if c.lastRetryableError != nil {
+				c.retries++
+			}
+			c.nextAttemptID++
+			attempt := PublishAttempt{
+				id: c.nextAttemptID, candidate: candidate, groupSize: uint64(groupSize),
+				started: c.clock.Now(), waiters: append([]*durabilityWaiter(nil), c.waiters...),
+			}
+			c.activeAttempt = attempt
+			c.mu.Unlock()
+			result := c.publisher.Publish(c.ctx, candidate)
+			c.mu.Lock()
+			c.reportingAttempt = true
+			c.mu.Unlock()
+			_ = c.ReportPublishResult(attempt, result)
+			continue
+		}
+		c.mu.Unlock()
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-c.wake:
+		case <-timerC:
+			c.mu.Lock()
+			c.timer = nil
+			c.requestPublishLocked(WakeTimer)
+			c.mu.Unlock()
+		}
+	}
+}
+
+func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration) {
+	c.publishing = false
+	if c.stopping {
+		return
+	}
+	switch result.Outcome {
+	case PublishSucceeded:
+		durableSeq := result.DurableCommitSeq
+		if durableSeq == 0 {
+			durableSeq = candidate.frontier.commitSeq
+		}
+		if result.Err != nil || durableSeq != candidate.frontier.commitSeq {
+			err := result.Err
+			if err == nil {
+				err = fmt.Errorf("durable sequence %d differs from candidate %d", durableSeq, candidate.frontier.commitSeq)
+			}
+			c.recordRetryableLocked(errors.Join(ErrPublisherProtocol, err), c.activeAttempt)
+			return
+		}
+		oldest := result.OldestRecoverableCommitSeq
+		if oldest == 0 {
+			oldest = c.oldestRecoverable
+		}
+		if oldest < c.oldestRecoverable || oldest > durableSeq {
+			c.recordRetryableLocked(errors.Join(ErrPublisherProtocol,
+				fmt.Errorf("oldest recoverable sequence %d outside monotonic range [%d,%d]", oldest, c.oldestRecoverable, durableSeq)), c.activeAttempt)
+			return
+		}
+		remove := int(groupSize)
+		if remove > len(c.pending) {
+			remove = len(c.pending)
+		}
+		var removedBytes uint64
+		for _, entry := range c.pending[:remove] {
+			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+		}
+		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
+		if removedBytes <= c.pendingBytes {
+			c.pendingBytes -= removedBytes
+		} else {
+			c.pendingBytes = 0
+		}
+		c.durable = candidate.frontier
+		c.durable.commitSeq = durableSeq
+		c.oldestRecoverable = oldest
+		c.lastGroupSize = groupSize
+		c.lastService = service
+		if c.ewmaService == 0 {
+			c.ewmaService = service
+		} else {
+			c.ewmaService = (7*c.ewmaService + service) / 8
+		}
+		c.lastRetryableError = nil
+		c.satisfyWaitersLocked()
+		if c.timer != nil {
+			c.timer.Stop()
+			c.timer = nil
+		}
+		if len(c.pending) != 0 {
+			c.firstPendingAt = c.clock.Now()
+			if c.drainRequests != 0 || len(c.waiters) != 0 || c.pendingBytes >= SoftPendingBytes {
+				reason := WakeDrain
+				if len(c.waiters) != 0 {
+					reason = WakeWaiter
+				} else if c.pendingBytes >= SoftPendingBytes {
+					reason = WakeSoftBytes
+				}
+				c.requestPublishLocked(reason)
+			} else {
+				c.installTimerLocked()
+			}
+		}
+	case PublishRetryableFailure:
+		c.recordRetryableLocked(result.Err, c.activeAttempt)
+	case PublishAmbiguous:
+		err := result.Err
+		if err == nil {
+			err = errors.New("ambiguous target-meta mutation")
+		}
+		c.poison = errors.Join(ErrRecoveryRequired, err)
+		c.failWaitersLocked(c.poison, true)
+	default:
+		c.recordRetryableLocked(fmt.Errorf("%w: unknown outcome %d", ErrPublisherProtocol, result.Outcome), c.activeAttempt)
+	}
+	c.notifyLocked()
+	c.signal()
+}
+
+func (c *Coordinator) recordRetryableLocked(err error, attempt PublishAttempt) {
+	if err == nil {
+		err = errors.New("retryable publication failure")
+	}
+	c.preMetaFailures++
+	c.failureGeneration++
+	c.lastRetryableError = err
+	c.lastFailureSeq = attempt.candidate.frontier.commitSeq
+	c.failCapturedWaitersLocked(err, attempt.waiters)
+	c.notifyLocked()
+}
+
+func (c *Coordinator) failCapturedWaitersLocked(err error, captured []*durabilityWaiter) {
+	if len(captured) == 0 {
+		return
+	}
+	set := make(map[*durabilityWaiter]struct{}, len(captured))
+	for _, waiter := range captured {
+		set[waiter] = struct{}{}
+	}
+	remaining := c.waiters[:0]
+	for _, waiter := range c.waiters {
+		if _, ok := set[waiter]; ok {
+			waiter.ch <- err
+		} else {
+			remaining = append(remaining, waiter)
+		}
+	}
+	c.waiters = remaining
+}
+
+func (c *Coordinator) satisfyWaitersLocked() {
+	remaining := c.waiters[:0]
+	for _, waiter := range c.waiters {
+		if waiter.seq <= c.durable.commitSeq {
+			waiter.ch <- nil
+		} else {
+			remaining = append(remaining, waiter)
+		}
+	}
+	c.waiters = remaining
+}
+
+func (c *Coordinator) failWaitersLocked(err error, all bool) {
+	remaining := c.waiters[:0]
+	for _, waiter := range c.waiters {
+		if all || waiter.seq <= c.visible.commitSeq {
+			waiter.ch <- err
+		} else {
+			remaining = append(remaining, waiter)
+		}
+	}
+	c.waiters = remaining
+}
+
+func (c *Coordinator) terminalErrorLocked() error {
+	if c.poison != nil {
+		return c.poison
+	}
+	if c.stopping || c.stopped {
+		return ErrClosed
+	}
+	return nil
+}
+
+func (c *Coordinator) publishDelayLocked() time.Duration {
+	delay := 20 * c.ewmaService
+	if delay < minPublishDelay {
+		return minPublishDelay
+	}
+	if delay > maxPublishDelay {
+		return maxPublishDelay
+	}
+	return delay
+}
+
+func (c *Coordinator) installTimerLocked() {
+	if c.timer == nil {
+		c.timer = c.clock.NewTimer(c.publishDelayLocked())
+	}
+}
+
+func (c *Coordinator) requestPublishLocked(reason WakeReason) {
+	c.publishNow = true
+	c.wakeReason = reason
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+}
+
+func (c *Coordinator) signal() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Coordinator) notifyLocked() {
+	close(c.changed)
+	c.changed = make(chan struct{})
+}
