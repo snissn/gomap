@@ -1,0 +1,663 @@
+// Package jsonbenchcontract validates the repository-owned sidecar that makes
+// external JSONBench evidence canonical. It does not collect timings and must
+// stay outside measured benchmark intervals.
+package jsonbenchcontract
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+const SchemaVersion = "gomap-jsonbench-canonical/v1"
+
+const (
+	CanonicalQueryMaxRatio        = 1.5
+	CanonicalLoadMaxRatio         = 1.5
+	CanonicalQ4RegressionMaxRatio = 1.05
+)
+
+const (
+	ResourceGoBenchmem             = "go_benchmem"
+	ResourceProcessPeak            = "process_peak"
+	ResourceCumulativeAllocProfile = "cumulative_alloc_profile"
+)
+
+var requiredCounters = []string{
+	"visible_base_generations",
+	"visible_delta_generations",
+	"tombstones_applied",
+	"parts_decoded",
+	"query_time_dictionaries_built",
+	"query_time_ranks_built",
+	"query_time_offsets_built",
+	"document_fallbacks",
+	"row_fallbacks",
+	"result_hash_validated",
+}
+
+type Manifest struct {
+	SchemaVersion string                     `json:"schema_version"`
+	Canonical     bool                       `json:"canonical"`
+	Pins          Pins                       `json:"pins"`
+	Host          Host                       `json:"host"`
+	ArtifactRoot  string                     `json:"artifact_root"`
+	TreeDB        TreeDBRun                  `json:"treedb"`
+	ClickHouse    ClickHouseRun              `json:"clickhouse"`
+	Comparison    Comparison                 `json:"comparison"`
+	Validation    ValidationEvidence         `json:"validation"`
+	Counters      map[string]CounterEvidence `json:"counters"`
+	Resources     []ResourceEvidence         `json:"resources"`
+}
+
+type Pins struct {
+	GomapCommit       string     `json:"gomap_commit"`
+	JSONBenchCommit   string     `json:"jsonbench_commit"`
+	ClickHouseVersion string     `json:"clickhouse_version"`
+	Dataset           DatasetPin `json:"dataset"`
+}
+
+type DatasetPin struct {
+	Identity string `json:"identity"`
+	Rows     int64  `json:"rows"`
+	SHA256   string `json:"sha256"`
+}
+
+type Host struct {
+	Identity string `json:"identity"`
+}
+
+type TreeDBRun struct {
+	RequestedProfile string            `json:"requested_profile"`
+	ResultPath       string            `json:"result_path"`
+	RowSelector      ResultRowSelector `json:"row_selector"`
+}
+
+type ResultRowSelector struct {
+	StorageLayout string `json:"storage_layout"`
+	Projection    string `json:"projection"`
+}
+
+type ClickHouseRun struct {
+	ResultPath string `json:"result_path"`
+}
+
+type Comparison struct {
+	QueryMode             string   `json:"query_mode"`
+	AggregateMetadataMode string   `json:"aggregate_metadata_mode"`
+	FallbackPolicy        string   `json:"fallback_policy"`
+	CachePolicy           string   `json:"cache_policy"`
+	WarmthPolicy          string   `json:"warmth_policy"`
+	Attempts              int      `json:"attempts"`
+	QueryOrder            []string `json:"query_order"`
+	Statistic             string   `json:"statistic"`
+	QueryMaxRatio         float64  `json:"query_max_ratio"`
+	LoadMaxRatio          float64  `json:"load_max_ratio"`
+	Q4RegressionMaxRatio  float64  `json:"q4_regression_max_ratio"`
+	TargetRevisionPolicy  string   `json:"target_revision_policy"`
+	ValidationPolicy      string   `json:"validation_policy"`
+}
+
+type ValidationEvidence struct {
+	Status                  string `json:"status"`
+	Artifact                string `json:"artifact"`
+	TimingBoundary          string `json:"timing_boundary"`
+	ResultHashesValidated   bool   `json:"result_hashes_validated"`
+	ReconstructionValidated bool   `json:"reconstruction_validated"`
+}
+
+type CounterEvidence struct {
+	Value  int64  `json:"value"`
+	Source string `json:"source"`
+}
+
+type ResourceEvidence struct {
+	Scope          string          `json:"scope"`
+	SourceKind     string          `json:"source_kind"`
+	Artifact       string          `json:"artifact"`
+	SampleCount    int             `json:"sample_count,omitempty"`
+	ContextualOnly bool            `json:"contextual_only,omitempty"`
+	Metrics        ResourceMetrics `json:"metrics"`
+}
+
+type ResourceMetrics struct {
+	NanosPerOp    *float64 `json:"ns_per_op,omitempty"`
+	BytesPerOp    *uint64  `json:"bytes_per_op,omitempty"`
+	AllocsPerOp   *uint64  `json:"allocs_per_op,omitempty"`
+	PeakRSSBytes  *uint64  `json:"peak_rss_bytes,omitempty"`
+	LiveHeapBytes *uint64  `json:"live_heap_bytes,omitempty"`
+}
+
+// LoadManifest strictly decodes a manifest so schema drift cannot silently
+// turn a canonical field into an ignored typo.
+func LoadManifest(path string) (Manifest, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer f.Close()
+
+	decoder := json.NewDecoder(f)
+	decoder.DisallowUnknownFields()
+	var manifest Manifest
+	if err := decoder.Decode(&manifest); err != nil {
+		return Manifest{}, fmt.Errorf("decode manifest: %w", err)
+	}
+	if err := ensureEOF(decoder); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
+}
+
+func ensureEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); errors.Is(err, io.EOF) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("decode trailing manifest data: %w", err)
+	}
+	return errors.New("manifest contains multiple JSON values")
+}
+
+// Validate checks manifest completeness, resource-evidence semantics, and the
+// fields that can be cross-checked against a gomap/JSONBench TreeDB result.
+// baseDir resolves a relative result_path and is normally the manifest's
+// directory.
+func Validate(manifest Manifest, baseDir string) error {
+	var problems []string
+	add := func(format string, args ...any) {
+		problems = append(problems, fmt.Sprintf(format, args...))
+	}
+
+	if manifest.SchemaVersion != SchemaVersion {
+		add("schema_version must be %q", SchemaVersion)
+	}
+	if !manifest.Canonical {
+		add("canonical must be true")
+	}
+	validatePins(manifest.Pins, add)
+	if strings.TrimSpace(manifest.Host.Identity) == "" {
+		add("host.identity is required")
+	}
+	if strings.TrimSpace(manifest.ArtifactRoot) == "" {
+		add("artifact_root is required")
+	}
+	if strings.TrimSpace(manifest.TreeDB.RequestedProfile) == "" {
+		add("treedb.requested_profile is required")
+	} else if manifest.TreeDB.RequestedProfile != "durable" {
+		add("treedb.requested_profile must be %q for canonical evidence", "durable")
+	}
+	if strings.TrimSpace(manifest.TreeDB.ResultPath) == "" {
+		add("treedb.result_path is required")
+	}
+	if strings.TrimSpace(manifest.TreeDB.RowSelector.StorageLayout) == "" {
+		add("treedb.row_selector.storage_layout is required")
+	}
+	if strings.TrimSpace(manifest.TreeDB.RowSelector.Projection) == "" {
+		add("treedb.row_selector.projection is required")
+	}
+	if strings.TrimSpace(manifest.ClickHouse.ResultPath) == "" {
+		add("clickhouse.result_path is required")
+	}
+	validateComparison(manifest.Comparison, add)
+	validateValidation(manifest.Validation, add)
+	validateCounters(manifest.Counters, add)
+	validateResources(manifest.Resources, add)
+
+	artifactRoot := manifest.ArtifactRoot
+	if artifactRoot != "" && !filepath.IsAbs(artifactRoot) {
+		artifactRoot = filepath.Join(baseDir, artifactRoot)
+	}
+	if artifactRoot != "" {
+		info, err := os.Stat(artifactRoot)
+		if err != nil {
+			add("artifact_root: %v", err)
+		} else if !info.IsDir() {
+			add("artifact_root must be a directory")
+		}
+		validateEvidenceArtifacts(artifactRoot, manifest, add)
+	}
+
+	if manifest.TreeDB.ResultPath != "" {
+		resultPath := manifest.TreeDB.ResultPath
+		if !filepath.IsAbs(resultPath) {
+			resultPath = filepath.Join(baseDir, resultPath)
+		}
+		if artifactRoot != "" && !pathWithin(artifactRoot, resultPath) {
+			add("treedb.result_path must be inside artifact_root")
+		}
+		if err := validateResult(resultPath, manifest, add); err != nil {
+			add("treedb result: %v", err)
+		}
+	}
+	if manifest.ClickHouse.ResultPath != "" {
+		resultPath := manifest.ClickHouse.ResultPath
+		if !filepath.IsAbs(resultPath) {
+			resultPath = filepath.Join(baseDir, resultPath)
+		}
+		if artifactRoot != "" && !pathWithin(artifactRoot, resultPath) {
+			add("clickhouse.result_path must be inside artifact_root")
+		}
+		if err := validateClickHouseResult(resultPath, manifest, add); err != nil {
+			add("clickhouse result: %v", err)
+		}
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	sort.Strings(problems)
+	return fmt.Errorf("canonical JSONBench contract rejected:\n- %s", strings.Join(problems, "\n- "))
+}
+
+func validateEvidenceArtifacts(artifactRoot string, manifest Manifest, add func(string, ...any)) {
+	check := func(field, path string) {
+		if path == "" {
+			return
+		}
+		resolved := path
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(artifactRoot, resolved)
+		}
+		if !pathWithin(artifactRoot, resolved) {
+			add("%s must be inside artifact_root", field)
+			return
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			add("%s: %v", field, err)
+		} else if !info.Mode().IsRegular() {
+			add("%s must reference a regular file", field)
+		}
+	}
+	check("validation.artifact", manifest.Validation.Artifact)
+	for index, resource := range manifest.Resources {
+		check(fmt.Sprintf("resources[%d].artifact", index), resource.Artifact)
+	}
+}
+
+func pathWithin(root, path string) bool {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func validatePins(pins Pins, add func(string, ...any)) {
+	if !validCommit(pins.GomapCommit) {
+		add("pins.gomap_commit must be a 40-character hexadecimal commit")
+	}
+	if pins.JSONBenchCommit == "" {
+		add("pins.jsonbench_commit is required")
+	} else if !validCommit(pins.JSONBenchCommit) {
+		add("pins.jsonbench_commit must be a 40-character hexadecimal commit")
+	}
+	if strings.TrimSpace(pins.ClickHouseVersion) == "" {
+		add("pins.clickhouse_version is required")
+	}
+	if strings.TrimSpace(pins.Dataset.Identity) == "" {
+		add("pins.dataset.identity is required")
+	}
+	if pins.Dataset.Rows <= 0 {
+		add("pins.dataset.rows must be positive")
+	}
+	if len(pins.Dataset.SHA256) != 64 || !validHex(pins.Dataset.SHA256) {
+		add("pins.dataset.sha256 must be a 64-character hexadecimal digest")
+	}
+}
+
+func validCommit(value string) bool {
+	return len(value) == 40 && validHex(value)
+}
+
+func validHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validateComparison(comparison Comparison, add func(string, ...any)) {
+	for name, value := range map[string]string{
+		"query_mode":              comparison.QueryMode,
+		"aggregate_metadata_mode": comparison.AggregateMetadataMode,
+		"fallback_policy":         comparison.FallbackPolicy,
+		"cache_policy":            comparison.CachePolicy,
+		"warmth_policy":           comparison.WarmthPolicy,
+		"statistic":               comparison.Statistic,
+		"target_revision_policy":  comparison.TargetRevisionPolicy,
+		"validation_policy":       comparison.ValidationPolicy,
+	} {
+		if strings.TrimSpace(value) == "" {
+			add("comparison.%s is required", name)
+		}
+	}
+	if comparison.Attempts < 5 {
+		add("comparison.attempts must be at least 5 for canonical evidence")
+	}
+	wantQueries := []string{"q1", "q2", "q3", "q4", "q5", "qexpr"}
+	if len(comparison.QueryOrder) != len(wantQueries) {
+		add("comparison.query_order must be q1,q2,q3,q4,q5,qexpr")
+	} else {
+		for index := range wantQueries {
+			if comparison.QueryOrder[index] != wantQueries[index] {
+				add("comparison.query_order must be q1,q2,q3,q4,q5,qexpr")
+				break
+			}
+		}
+	}
+	if comparison.FallbackPolicy != "forbid" {
+		add("comparison.fallback_policy must be %q", "forbid")
+	}
+	if comparison.Statistic != "median" {
+		add("comparison.statistic must be %q", "median")
+	}
+	if comparison.QueryMaxRatio != CanonicalQueryMaxRatio {
+		add("comparison.query_max_ratio must be %.2f for schema %s", CanonicalQueryMaxRatio, SchemaVersion)
+	}
+	if comparison.LoadMaxRatio != CanonicalLoadMaxRatio {
+		add("comparison.load_max_ratio must be %.2f for schema %s", CanonicalLoadMaxRatio, SchemaVersion)
+	}
+	if comparison.Q4RegressionMaxRatio != CanonicalQ4RegressionMaxRatio {
+		add("comparison.q4_regression_max_ratio must be %.2f for schema %s", CanonicalQ4RegressionMaxRatio, SchemaVersion)
+	}
+}
+
+func validateValidation(validation ValidationEvidence, add func(string, ...any)) {
+	if validation.Status != "passed" {
+		add("validation.status must be %q", "passed")
+	}
+	if strings.TrimSpace(validation.Artifact) == "" {
+		add("validation.artifact is required")
+	}
+	if validation.TimingBoundary != "outside_measured_intervals" {
+		add("validation.timing_boundary must be %q", "outside_measured_intervals")
+	}
+	if !validation.ResultHashesValidated {
+		add("validation.result_hashes_validated must be true")
+	}
+	if !validation.ReconstructionValidated {
+		add("validation.reconstruction_validated must be true")
+	}
+}
+
+func validateCounters(counters map[string]CounterEvidence, add func(string, ...any)) {
+	for _, name := range requiredCounters {
+		counter, ok := counters[name]
+		if !ok {
+			add("counters.%s is required", name)
+			continue
+		}
+		if counter.Value < 0 {
+			add("counters.%s.value cannot be negative", name)
+		}
+		if strings.TrimSpace(counter.Source) == "" {
+			add("counters.%s.source is required", name)
+		}
+	}
+	if counter, ok := counters["result_hash_validated"]; ok && counter.Value != 1 {
+		add("counters.result_hash_validated.value must be 1")
+	}
+}
+
+func validateResources(resources []ResourceEvidence, add func(string, ...any)) {
+	benchmemScopes := make(map[string]bool)
+	resourceScopes := make(map[string]bool)
+	processPeakScopes := make(map[string]bool)
+	for index, evidence := range resources {
+		prefix := fmt.Sprintf("resources[%d]", index)
+		if strings.TrimSpace(evidence.Scope) == "" {
+			add("%s.scope is required", prefix)
+		} else {
+			resourceScopes[evidence.Scope] = true
+		}
+		if strings.TrimSpace(evidence.Artifact) == "" {
+			add("%s.artifact is required", prefix)
+		}
+		switch evidence.SourceKind {
+		case ResourceGoBenchmem:
+			if evidence.Scope != "" {
+				benchmemScopes[evidence.Scope] = true
+			}
+			if evidence.SampleCount < 5 {
+				add("%s go_benchmem sample_count must be at least 5", prefix)
+			}
+			if evidence.Metrics.NanosPerOp == nil || evidence.Metrics.BytesPerOp == nil || evidence.Metrics.AllocsPerOp == nil {
+				add("%s go_benchmem requires ns_per_op, bytes_per_op, and allocs_per_op", prefix)
+			} else if *evidence.Metrics.NanosPerOp <= 0 {
+				add("%s go_benchmem ns_per_op must be positive", prefix)
+			}
+			if evidence.ContextualOnly {
+				add("%s go_benchmem cannot be contextual_only", prefix)
+			}
+		case ResourceProcessPeak:
+			if evidence.Scope != "" {
+				processPeakScopes[evidence.Scope] = true
+			}
+			if evidence.Metrics.PeakRSSBytes == nil && evidence.Metrics.LiveHeapBytes == nil {
+				add("%s %s process_peak requires peak_rss_bytes or live_heap_bytes", prefix, evidence.Scope)
+			} else if (evidence.Metrics.PeakRSSBytes == nil || *evidence.Metrics.PeakRSSBytes == 0) &&
+				(evidence.Metrics.LiveHeapBytes == nil || *evidence.Metrics.LiveHeapBytes == 0) {
+				add("%s %s process_peak memory value must be positive", prefix, evidence.Scope)
+			}
+		case ResourceCumulativeAllocProfile:
+			if !evidence.ContextualOnly {
+				add("%s cumulative_alloc_profile must be contextual_only", prefix)
+			}
+			if evidence.Metrics.BytesPerOp != nil || evidence.Metrics.AllocsPerOp != nil {
+				add("%s cumulative_alloc_profile cannot report bytes_per_op or allocs_per_op", prefix)
+			}
+		default:
+			add("%s.source_kind must be one of %q, %q, or %q", prefix, ResourceGoBenchmem, ResourceProcessPeak, ResourceCumulativeAllocProfile)
+		}
+	}
+	for scope := range resourceScopes {
+		if strings.HasPrefix(scope, "query/") && !benchmemScopes[scope] {
+			add("%s requires direct go_benchmem evidence", scope)
+		}
+	}
+	for _, scope := range []string{"query/q2", "query/q3", "query/q5"} {
+		if !resourceScopes[scope] {
+			add("%s requires direct go_benchmem evidence", scope)
+		}
+	}
+	if !processPeakScopes["load"] && !processPeakScopes["open"] {
+		add("resources require process_peak evidence for load or open")
+	}
+}
+
+type recordedResult struct {
+	Query                string           `json:"query"`
+	Profile              string           `json:"profile"`
+	DatasetSize          int64            `json:"dataset_size"`
+	QueryMode            string           `json:"query_mode"`
+	MetadataMode         string           `json:"metadata_mode"`
+	DocumentScanFallback *bool            `json:"document_scan_fallback"`
+	ReconstructionStatus string           `json:"reconstruction_status"`
+	StorageLayout        string           `json:"storage_layout"`
+	Projection           string           `json:"projection"`
+	AttemptsSeconds      []float64        `json:"attempts_seconds"`
+	Rows                 []recordedResult `json:"rows"`
+}
+
+func validateResult(path string, manifest Manifest, add func(string, ...any)) error {
+	if err := requireRegularFile(path); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var result recordedResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	rows := result.Rows
+	if len(rows) == 0 {
+		rows = []recordedResult{result}
+	}
+	selected := make([]recordedResult, 0, len(rows))
+	for _, row := range rows {
+		if row.StorageLayout == manifest.TreeDB.RowSelector.StorageLayout && row.Projection == manifest.TreeDB.RowSelector.Projection {
+			selected = append(selected, row)
+		}
+	}
+	if len(selected) == 0 {
+		add("treedb result has no rows matching row_selector storage_layout=%q projection=%q", manifest.TreeDB.RowSelector.StorageLayout, manifest.TreeDB.RowSelector.Projection)
+		return nil
+	}
+	seenQueries := make(map[string]bool, len(selected))
+	for index, row := range selected {
+		prefix := fmt.Sprintf("treedb result row[%d]", index)
+		if row.Query == "" {
+			add("%s.query is required", prefix)
+		} else if seenQueries[row.Query] {
+			add("treedb result query %q is duplicated within the selected canonical lane", row.Query)
+		} else {
+			seenQueries[row.Query] = true
+		}
+		if len(row.AttemptsSeconds) < manifest.Comparison.Attempts {
+			add("%s.attempts_seconds has %d attempts, want at least %d", prefix, len(row.AttemptsSeconds), manifest.Comparison.Attempts)
+		}
+		for _, seconds := range row.AttemptsSeconds {
+			if seconds <= 0 {
+				add("%s.attempts_seconds timings must be positive", prefix)
+				break
+			}
+		}
+		if row.Profile == "" {
+			add("%s.profile is required", prefix)
+		} else if row.Profile != manifest.TreeDB.RequestedProfile {
+			add("requested profile %q does not match recorded profile %q", manifest.TreeDB.RequestedProfile, row.Profile)
+		}
+		if row.DatasetSize == 0 {
+			add("%s.dataset_size is required", prefix)
+		} else if row.DatasetSize != manifest.Pins.Dataset.Rows {
+			add("%s.dataset_size %d does not match pinned rows %d", prefix, row.DatasetSize, manifest.Pins.Dataset.Rows)
+		}
+		if row.QueryMode == "" {
+			add("%s.query_mode is required", prefix)
+		} else if row.QueryMode != manifest.Comparison.QueryMode {
+			add("%s.query_mode %q does not match comparison.query_mode %q", prefix, row.QueryMode, manifest.Comparison.QueryMode)
+		}
+		if row.MetadataMode == "" {
+			add("%s.metadata_mode is required", prefix)
+		} else if row.MetadataMode != manifest.Comparison.AggregateMetadataMode {
+			add("%s.metadata_mode %q does not match comparison.aggregate_metadata_mode %q", prefix, row.MetadataMode, manifest.Comparison.AggregateMetadataMode)
+		}
+		if row.DocumentScanFallback == nil {
+			add("%s.document_scan_fallback is required", prefix)
+		} else if manifest.Comparison.FallbackPolicy == "forbid" && *row.DocumentScanFallback {
+			add("%s.document_scan_fallback must be false when fallback_policy is forbid", prefix)
+		}
+		if row.ReconstructionStatus == "" {
+			add("%s.reconstruction_status is required", prefix)
+		} else if !validationStatusKnown(row.ReconstructionStatus) {
+			add("%s.reconstruction_status %q is unknown", prefix, row.ReconstructionStatus)
+		} else if validationFailed(row.ReconstructionStatus) {
+			add("%s.reconstruction_status %q records a validation failure", prefix, row.ReconstructionStatus)
+		}
+	}
+	for _, query := range manifest.Comparison.QueryOrder {
+		if !seenQueries[query] {
+			add("treedb result is missing required query %q from the selected canonical lane", query)
+		}
+	}
+	return nil
+}
+
+type clickHouseResult struct {
+	System             string      `json:"system"`
+	Version            string      `json:"version"`
+	RequestedRows      int64       `json:"requested_rows"`
+	DatasetSize        int64       `json:"dataset_size"`
+	NumLoadedDocuments int64       `json:"num_loaded_documents"`
+	Result             [][]float64 `json:"result"`
+}
+
+func validateClickHouseResult(path string, manifest Manifest, add func(string, ...any)) error {
+	if err := requireRegularFile(path); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var result clickHouseResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	if result.System != "ClickHouse" {
+		add("clickhouse result.system must be %q", "ClickHouse")
+	}
+	if result.Version != manifest.Pins.ClickHouseVersion {
+		add("clickhouse result.version %q does not match pins.clickhouse_version %q", result.Version, manifest.Pins.ClickHouseVersion)
+	}
+	if result.RequestedRows != manifest.Pins.Dataset.Rows {
+		add("clickhouse result.requested_rows %d does not match pinned rows %d", result.RequestedRows, manifest.Pins.Dataset.Rows)
+	}
+	if result.DatasetSize != manifest.Pins.Dataset.Rows {
+		add("clickhouse result.dataset_size %d does not match pinned rows %d", result.DatasetSize, manifest.Pins.Dataset.Rows)
+	}
+	if result.NumLoadedDocuments != manifest.Pins.Dataset.Rows {
+		add("clickhouse result.num_loaded_documents %d does not match pinned rows %d", result.NumLoadedDocuments, manifest.Pins.Dataset.Rows)
+	}
+	if len(result.Result) != len(manifest.Comparison.QueryOrder) {
+		add("clickhouse result has %d query lanes, want %d", len(result.Result), len(manifest.Comparison.QueryOrder))
+	}
+	for index, attempts := range result.Result {
+		if len(attempts) < manifest.Comparison.Attempts {
+			query := fmt.Sprintf("lane[%d]", index)
+			if index < len(manifest.Comparison.QueryOrder) {
+				query = manifest.Comparison.QueryOrder[index]
+			}
+			add("clickhouse result %s has %d attempts, want at least %d", query, len(attempts), manifest.Comparison.Attempts)
+		}
+		for _, seconds := range attempts {
+			if seconds <= 0 {
+				add("clickhouse result lane[%d] timings must be positive", index)
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func requireRegularFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	return nil
+}
+
+func validationStatusKnown(status string) bool {
+	switch status {
+	case "validated", "passed", "complete", "not_validated", "failed", "mismatch", "invalid":
+		return true
+	default:
+		return false
+	}
+}
+
+func validationFailed(status string) bool {
+	switch status {
+	case "failed", "mismatch", "invalid":
+		return true
+	default:
+		return false
+	}
+}
