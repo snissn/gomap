@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -33,6 +34,7 @@ type FakeClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	timers map[*fakeTimer]struct{}
+	nextID uint64
 }
 
 func NewFakeClock(now time.Time) *FakeClock {
@@ -48,7 +50,8 @@ func (c *FakeClock) Now() time.Time {
 func (c *FakeClock) NewTimer(d time.Duration) Timer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	t := &fakeTimer{clock: c, when: c.now.Add(d), ch: make(chan time.Time, 1), active: true}
+	c.nextID++
+	t := &fakeTimer{clock: c, when: c.now.Add(d), ch: make(chan time.Time, 1), active: true, id: c.nextID}
 	c.timers[t] = struct{}{}
 	return t
 }
@@ -57,6 +60,14 @@ func (c *FakeClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	c.now = c.now.Add(d)
 	now := c.now
+	due := c.takeDueTimersLocked(now)
+	c.mu.Unlock()
+	for _, timer := range due {
+		timer.ch <- timer.when
+	}
+}
+
+func (c *FakeClock) takeDueTimersLocked(now time.Time) []*fakeTimer {
 	var due []*fakeTimer
 	for timer := range c.timers {
 		if timer.active && !timer.when.After(now) {
@@ -65,10 +76,13 @@ func (c *FakeClock) Advance(d time.Duration) {
 			due = append(due, timer)
 		}
 	}
-	c.mu.Unlock()
-	for _, timer := range due {
-		timer.ch <- timer.when
-	}
+	sort.Slice(due, func(i, j int) bool {
+		if !due[i].when.Equal(due[j].when) {
+			return due[i].when.Before(due[j].when)
+		}
+		return due[i].id < due[j].id
+	})
+	return due
 }
 
 type fakeTimer struct {
@@ -76,6 +90,7 @@ type fakeTimer struct {
 	when   time.Time
 	ch     chan time.Time
 	active bool
+	id     uint64
 }
 
 func (t *fakeTimer) C() <-chan time.Time { return t.ch }
