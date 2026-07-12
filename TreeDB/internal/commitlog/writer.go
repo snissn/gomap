@@ -1122,11 +1122,7 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 		newLen := off + total
 		buf := w.commandBuf[off:newLen]
 		frameHeader := buf[segmentHeaderSize : segmentHeaderSize+commandFrameHeaderSize]
-		copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
-		binary.LittleEndian.PutUint16(frameHeader[54:56], uint16(class))
-		binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
-		binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
-		binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
+		fillRawKVCommandFrameHeaderWithDurability(frameHeader, lsn, baseAppliedLSN, len(payload), class, fence)
 		copy(buf[segmentHeaderSize+commandFrameHeaderSize:], payload)
 		frame := buf[segmentHeaderSize : segmentHeaderSize+commandFrameHeaderSize+len(payload)]
 		frame = appendExternalRefFenceV1Section(frame, fence)

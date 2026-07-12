@@ -1364,6 +1364,32 @@ func TestWriterAppendRawKVBatchPayloadCommandDirect(t *testing.T) {
 	}
 }
 
+func TestWriterAppendRawKVBatchPayloadCommandDirectBufferedSetRID(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSetRID, Key: []byte("external"), RID: 42},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(7, 3, payload, CommandDurabilityRelaxed); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got == 0 {
+		_ = w.Close()
+		t.Fatal("trusted SetRID command frame was not buffered")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	assertRawKVCommandFramePayload(t, path, 7, 3, payload)
+}
+
 func TestWriterAppendRawKVBatchPayloadScanCommandDirectBuffered(t *testing.T) {
 	ops := []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
