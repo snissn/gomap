@@ -133,6 +133,78 @@ version iterators cannot surface it as a logical record. The zero marker plus
 `M` identifies metadata and leaves nonzero codec version markers available for
 future versioned-key formats.
 
+## 1.2 Query-Ready Typed-Column Base Generation V1
+
+A query-ready base generation (`QRBG` V1) is a rebuildable, non-authoritative
+container for a snapshot-visible set of immutable typed-column part images. It
+is a local derived format: it is not an index root, WAL record, recovery
+selector, primary document store, or GC/rewrite owner. Until the authoritative
+asset-root lifecycle publishes this format, the embedded typed-column images
+remain the recoverable source state and a missing QRBG may be rebuilt.
+
+All integer fields are little-endian. The 80-byte header is:
+
+```text
+offset  size  field
+0       4     magic = "QRBG" (bytes 51 52 42 47)
+4       2     version = 1
+6       2     reserved = 0
+8       8     exact base generation (nonzero)
+16      32    exact collection schema SHA-256 (nonzero)
+48      4     part count
+52      4     header CRC-32C
+56      4     part-table CRC-32C
+60      4     reserved = 0
+64      8     payload offset
+72      8     total container bytes
+```
+
+The header checksum is CRC-32C (Castagnoli) over all 80 header bytes with
+bytes `[52,56)` zeroed. The table checksum is CRC-32C over exactly
+`part_count * 80` bytes beginning at offset 80.
+
+Each 80-byte part-table entry is:
+
+```text
+offset  size  field
+0       8     source generation
+8       8     typed-column part ID
+16      8     embedded image offset
+24      8     embedded image byte length
+32      8     row count
+40      8     typed-column manifest byte length
+48      32    SHA-256 of the complete embedded image
+```
+
+Entries are strictly ordered by `(source generation, part ID)`. Source
+generations are nonzero and cannot exceed the header's base generation;
+duplicate identities are invalid. Entry row count, part ID, and manifest length
+must exactly match the embedded typed-column image metadata.
+
+The payload begins at `payload_offset`, aligned to 4096 bytes. Every embedded
+image begins at the typed-column image section alignment. Bytes between the
+part table and payload, and between embedded images, must be zero. Images may
+not overlap or extend beyond `total_container_bytes`; that field must equal the
+exact file length, so unaccounted trailing bytes are invalid. The final image
+ends at the end of the container. An empty base is represented by a zero-entry
+table, 4096-byte payload offset, zero padding, and total length equal to that
+payload offset.
+
+Open requires the caller's expected generation and schema hash and fails closed
+on either mismatch, an unsupported version, nonzero reserved bytes or padding,
+checksum failure, malformed bounds/order, or an invalid embedded typed-column
+manifest/layout. Successful file open uses a read-only mapping where supported.
+Encoded payloads and dictionaries remain direct slices of that mapping; format
+validation must not require whole-part payload attachment, re-encoding, or a
+query-shaped dictionary/rank/offset reconstruction. File-backed views must be
+closed before their files are replaced or deleted.
+
+The implementation and format tests are in
+`TreeDB/internal/typedcolumn/query_ready_base.go` and
+`TreeDB/internal/typedcolumn/query_ready_base_test.go`. The collection-level
+ownership, lifecycle boundary, and performance contract are described in
+`docs/architecture/query-ready-base-generation.md`.
+
 ## 2. Index Page Basics
 
 ### 2.1 Fixed page size
