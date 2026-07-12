@@ -6,10 +6,13 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 func TestQueryReadyBaseGenerationReopenParity(t *testing.T) {
@@ -192,6 +195,86 @@ func TestQueryReadyBaseGenerationOpenAvoidsWholePartDecode(t *testing.T) {
 	}
 }
 
+func TestQueryReadyBaseGenerationVariableWidthOpenIsPayloadAllocationIndependent(t *testing.T) {
+	const (
+		rows        = 4096
+		bytesPerRow = 1024
+		listPerRow  = 16
+		openRuns    = 3
+	)
+	identity := queryReadyBaseTestIdentity(49)
+	image, payloadBytes := queryReadyBaseVariableWidthImage(t, 709, rows, bytesPerRow, listPerRow)
+	result, err := BuildQueryReadyBaseGeneration(identity, []QueryReadyBasePartInput{{SourceGeneration: 26, Image: image}})
+	if err != nil {
+		t.Fatalf("BuildQueryReadyBaseGeneration: %v", err)
+	}
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range openRuns {
+		base, err := OpenQueryReadyBaseGeneration(result.Bytes, identity)
+		if err != nil {
+			t.Fatalf("OpenQueryReadyBaseGeneration: %v", err)
+		}
+		wantDecoded := int64(queryReadyBaseHeaderBytes + queryReadyBasePartEntryBytes + image.ManifestBytes + queryReadyBaseStructuralBytes(image))
+		if base.Stats.BytesDecoded != wantDecoded || base.Stats.BytesCopied != 0 || base.Stats.WholePartDecodes != 0 || base.Stats.DictionaryConstructions != 0 {
+			t.Fatalf("open stats=%+v want decoded=%d with no payload copies/decodes/dictionaries", base.Stats, wantDecoded)
+		}
+		if base.Stats.BytesRead != int64(len(result.Bytes)) || base.Stats.BytesValidated != int64(len(result.Bytes)) {
+			t.Fatalf("read/validated bytes=%d/%d want %d", base.Stats.BytesRead, base.Stats.BytesValidated, len(result.Bytes))
+		}
+		queryReadyBaseGenerationSink = base
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	allocatedPerOpen := int64(after.TotalAlloc-before.TotalAlloc) / openRuns
+	if max := int64(payloadBytes / 4); allocatedPerOpen > max {
+		t.Fatalf("variable-width open allocated %d bytes/op for %d payload bytes; want <= %d (bounded metadata only)", allocatedPerOpen, payloadBytes, max)
+	}
+}
+
+func TestQueryReadyBaseGenerationVariableWidthValidationFailsClosed(t *testing.T) {
+	image, _ := queryReadyBaseVariableWidthImage(t, 710, 16, 8, 4)
+	for _, tc := range []struct {
+		name   string
+		column string
+		offset int
+		value  uint64
+		want   string
+	}{
+		{name: "bytes non-monotonic", column: "opaque", offset: 2, value: 0, want: "before previous"},
+		{name: "list final mismatch", column: "neighbors", offset: 16, value: 63, want: "final offset=63 values=64"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := cloneColumnPartImageBytes(image)
+			offsetsSection, _, ok := corrupt.columnOffsetsListSections(tc.column)
+			if !ok {
+				t.Fatalf("missing variable-width sections for %s", tc.column)
+			}
+			binary.LittleEndian.PutUint64(corrupt.Bytes[offsetsSection.Offset+tc.offset*8:], tc.value)
+			queryReadyBaseRewriteLayoutContractChecksum(t, &corrupt, tc.column, crc.Checksum(corrupt.sectionBytes(offsetsSection)))
+			if err := validateQueryReadyBasePartStructures(corrupt); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateQueryReadyBasePartStructures err=%v want containing %q", err, tc.want)
+			}
+		})
+	}
+
+	t.Run("bytes block boundary mismatch", func(t *testing.T) {
+		boundaryImage, _ := queryReadyBaseVariableWidthImage(t, 711, 1024, 8, 1)
+		corrupt := cloneColumnPartImageBytes(boundaryImage)
+		offsetsSection, _, ok := corrupt.columnOffsetsListSections("opaque")
+		if !ok {
+			t.Fatal("missing bytes sections")
+		}
+		binary.LittleEndian.PutUint64(corrupt.Bytes[offsetsSection.Offset+512*8:], 512*8-1)
+		queryReadyBaseRewriteLayoutContractChecksum(t, &corrupt, "opaque", crc.Checksum(corrupt.sectionBytes(offsetsSection)))
+		if err := validateQueryReadyBasePartStructures(corrupt); err == nil || !strings.Contains(err.Error(), "block 0 stored bytes") {
+			t.Fatalf("validateQueryReadyBasePartStructures err=%v want block-boundary rejection", err)
+		}
+	})
+}
+
 func TestQueryReadyBaseGenerationPreservesNullableAndDictionaryDomains(t *testing.T) {
 	opts := transplantTestOptions(nil)
 	opts.Columns[2].Encoding = EncodingNullableInt64
@@ -279,6 +362,37 @@ func BenchmarkQueryReadyBaseGenerationOpen(b *testing.B) {
 	b.ReportMetric(float64(sample.Stats.BytesValidated), "validated-bytes")
 }
 
+func BenchmarkQueryReadyBaseGenerationVariableWidthOpen(b *testing.B) {
+	const (
+		bytesPerRow = 64
+		listPerRow  = 4
+	)
+	identity := queryReadyBaseTestIdentity(103)
+	image, payloadBytes := queryReadyBaseVariableWidthImage(b, 1005, queryReadyBaseBenchmarkRows(b), bytesPerRow, listPerRow)
+	result, err := BuildQueryReadyBaseGeneration(identity, []QueryReadyBasePartInput{{SourceGeneration: 102, Image: image}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	sample, err := OpenQueryReadyBaseGeneration(result.Bytes, identity)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(result.Bytes)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		base, err := OpenQueryReadyBaseGeneration(result.Bytes, identity)
+		if err != nil {
+			b.Fatal(err)
+		}
+		queryReadyBaseGenerationSink = base
+	}
+	b.ReportMetric(float64(payloadBytes), "payload-bytes")
+	b.ReportMetric(float64(sample.Stats.BytesDecoded), "decoded-bytes")
+	b.ReportMetric(float64(sample.Stats.BytesCopied), "copied-bytes")
+	b.ReportMetric(float64(sample.Stats.BytesValidated), "validated-bytes")
+}
+
 // BenchmarkQueryReadyBaseGenerationLegacyPartOpen is the pre-QRBG comparison:
 // parse and reconstruct the complete typed-column part state that callers
 // historically prepared before executing a query.
@@ -352,6 +466,102 @@ func queryReadyBaseBenchmarkImage(tb testing.TB, partID uint64, rows int) Column
 	return image
 }
 
+func queryReadyBaseVariableWidthImage(tb testing.TB, partID uint64, rows, bytesPerRow, listPerRow int) (ColumnPartImage, int) {
+	tb.Helper()
+	ids := make([]int64, rows)
+	byteOffsets := make([]uint64, rows+1)
+	byteValues := make([]byte, rows*bytesPerRow)
+	listOffsets := make([]uint64, rows+1)
+	listValues := make([]uint32, rows*listPerRow)
+	for row := 0; row < rows; row++ {
+		ids[row] = int64(row)
+		byteOffsets[row+1] = uint64((row + 1) * bytesPerRow)
+		listOffsets[row+1] = uint64((row + 1) * listPerRow)
+		for i := row * bytesPerRow; i < (row+1)*bytesPerRow; i++ {
+			byteValues[i] = byte(row + i)
+		}
+		for i := row * listPerRow; i < (row+1)*listPerRow; i++ {
+			listValues[i] = uint32(row + i)
+		}
+	}
+	part, err := BuildColumnPart(partID, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: "opaque", Type: ColumnTypeBytes, Encoding: EncodingRawBytesOffsets, Compression: CompressionNone, CompressionSet: true},
+			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Encoding: EncodingRawUint32OffsetsList, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 512, DefaultCodecBlockRows: 512},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:    rows,
+		Columns: map[string][]int64{"id": ids},
+		BytesColumns: map[string]RawBytesOffsets{
+			"opaque": {Rows: rows, Offsets: byteOffsets, Values: byteValues},
+		},
+		Uint32OffsetsLists: map[string]RawUint32OffsetsList{
+			"neighbors": {Rows: rows, Offsets: listOffsets, Values: listValues},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{
+		"id": "int64", "opaque": "bytes", "neighbors": "adjacency_list",
+	}})
+	if err != nil {
+		tb.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	payloadBytes := len(byteOffsets)*8 + len(byteValues) + len(listOffsets)*8 + len(listValues)*4
+	return image, payloadBytes
+}
+
+func queryReadyBaseRewriteLayoutContractChecksum(tb testing.TB, image *ColumnPartImage, column string, checksum uint32) {
+	tb.Helper()
+	section, err := image.LayoutContractSection()
+	if err != nil {
+		tb.Fatalf("LayoutContractSection: %v", err)
+	}
+	contract, err := DecodeColumnPartLayoutContract(image.sectionBytes(section))
+	if err != nil {
+		tb.Fatalf("DecodeColumnPartLayoutContract: %v", err)
+	}
+	found := false
+	for i := range contract.Columns {
+		if contract.Columns[i].Name == column {
+			contract.Columns[i].OffsetsSection.Checksum = checksum
+			found = true
+			break
+		}
+	}
+	if !found {
+		tb.Fatalf("layout contract missing column %s", column)
+	}
+	var enc columnPartImageEncoder
+	enc.u16(contract.Version)
+	enc.u16(0)
+	enc.u64(contract.PartID)
+	enc.i64(int64(contract.Rows))
+	enc.u16(contract.ImageVersion)
+	enc.u16(0)
+	enc.i64(int64(contract.ManifestBytes))
+	encodeColumnPartLayoutContractSection(&enc, contract.Descriptor)
+	enc.u32(uint32(len(contract.Columns)))
+	for _, contractColumn := range contract.Columns {
+		if err := encodeColumnPartLayoutContractColumn(&enc, contractColumn); err != nil {
+			tb.Fatalf("encode layout contract column %s: %v", contractColumn.Name, err)
+		}
+	}
+	raw := enc.bytes()
+	if len(raw) != section.Length {
+		tb.Fatalf("rewritten layout contract bytes=%d want %d", len(raw), section.Length)
+	}
+	copy(image.Bytes[section.Offset:section.Offset+section.Length], raw)
+}
+
 func queryReadyBaseBenchmarkRows(tb testing.TB) int {
 	tb.Helper()
 	const defaultRows = 1 << 15
@@ -408,3 +618,5 @@ func queryReadyBaseReplaceFinalPartWithShorterImage(tb testing.TB, data []byte, 
 	binary.LittleEndian.PutUint32(out[52:56], queryReadyBaseHeaderChecksum(out[:queryReadyBaseHeaderBytes]))
 	return out
 }
+
+var queryReadyBaseGenerationSink *QueryReadyBaseGeneration

@@ -392,11 +392,8 @@ func openQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity, 
 		}
 		// Decode only bounded structural metadata. Encoded column payloads and
 		// dictionaries remain mmap-backed and are not decoded or copied.
-		if _, err := ColumnPartFromImageWithOptions(image, ColumnPartImageReadOptions{}); err != nil {
+		if err := validateQueryReadyBasePartStructures(image); err != nil {
 			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] validate structures: %w", i, err)
-		}
-		if _, err := CertifyColumnPartLayoutContractFromImage(image); err != nil {
-			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] certify layout: %w", i, err)
 		}
 		dependency := QueryReadyBaseDependency{SourceGeneration: sourceGeneration, PartID: partID, Rows: image.Rows, ImageBytes: len(partBytes), ImageChecksum: wantChecksum}
 		dependencies = append(dependencies, dependency)
@@ -413,6 +410,117 @@ func openQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity, 
 	stats.ValidationTime = time.Since(started)
 	stats.OpenTime = stats.ValidationTime
 	return &QueryReadyBaseGeneration{Identity: identity, Dependencies: dependencies, Parts: parts, Stats: stats, data: data, release: release}, nil
+}
+
+// validateQueryReadyBasePartStructures validates the metadata and physical
+// layout needed to publish a query-ready direct view. It deliberately does not
+// attach block payloads: variable-width attachment decodes global offsets and
+// re-encodes every block, turning open into an O(payload) allocation path.
+func validateQueryReadyBasePartStructures(image ColumnPartImage) error {
+	if image.TotalBytes() == 0 {
+		return errors.New("typedcolumn: empty part image")
+	}
+	if err := image.validateForRead(); err != nil {
+		return err
+	}
+	descriptorSection, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		return err
+	}
+	descriptorRaw := image.sectionBytes(descriptorSection)
+	desc, columns, err := decodeColumnPartDescriptorSection(descriptorRaw)
+	if err != nil {
+		return err
+	}
+	if desc.PartID != image.PartID {
+		return fmt.Errorf("typedcolumn: descriptor part id=%d manifest part id=%d", desc.PartID, image.PartID)
+	}
+	if desc.RowCount != image.Rows {
+		return fmt.Errorf("typedcolumn: descriptor rows=%d manifest rows=%d", desc.RowCount, image.Rows)
+	}
+	sortKey, err := decodeSortKeyMetadataSection(image)
+	if err != nil {
+		return err
+	}
+	desc.SortKey = sortKey
+	marks, err := decodeSortKeyMarksSection(image)
+	if err != nil {
+		return err
+	}
+	if err := validateDecodedSortKeyMarks(desc, marks); err != nil {
+		return err
+	}
+	if err := validateColumnDataSectionsForColumns(image, columns); err != nil {
+		return err
+	}
+	if err := restoreColumnDefinitionCompressionFromImageSections(image, columns); err != nil {
+		return err
+	}
+	contractSection, err := image.LayoutContractSection()
+	if err != nil {
+		return err
+	}
+	if _, err := CertifyColumnPartLayoutContract(image, desc, columns, descriptorRaw, image.sectionBytes(contractSection)); err != nil {
+		return fmt.Errorf("certify layout: %w", err)
+	}
+	for _, columnDesc := range desc.Columns {
+		column, ok := columns[columnDesc.Name]
+		if !ok {
+			return fmt.Errorf("typedcolumn: descriptor column %s missing decoded column", columnDesc.Name)
+		}
+		switch column.Definition.Encoding {
+		case EncodingRawBytesOffsets:
+			offsetsSection, valuesSection, ok := image.columnOffsetsListSections(columnDesc.Name)
+			if !ok {
+				return fmt.Errorf("typedcolumn: image missing bytes sections %s", columnDesc.Name)
+			}
+			offsetsRaw := image.sectionBytes(offsetsSection)
+			if err := ValidateRawBytesOffsetsSections(offsetsSection, valuesSection, offsetsRaw, image.sectionBytes(valuesSection), image.Rows); err != nil {
+				return err
+			}
+			if err := validateQueryReadyBaseVariableWidthBlocks(columnDesc.Name, column, offsetsRaw, 1); err != nil {
+				return err
+			}
+		case EncodingRawUint32OffsetsList:
+			offsetsSection, valuesSection, ok := image.columnOffsetsListSections(columnDesc.Name)
+			if !ok {
+				return fmt.Errorf("typedcolumn: image missing offsets-list sections %s", columnDesc.Name)
+			}
+			offsetsRaw := image.sectionBytes(offsetsSection)
+			if err := ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, image.sectionBytes(valuesSection), image.Rows); err != nil {
+				return err
+			}
+			if err := validateQueryReadyBaseVariableWidthBlocks(columnDesc.Name, column, offsetsRaw, 4); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateQueryReadyBaseVariableWidthBlocks(name string, column ColumnPartColumn, offsetsRaw []byte, valueWidth int) error {
+	for i, block := range column.Blocks {
+		first := block.Descriptor.FirstRow
+		last := first + block.Descriptor.RowCount
+		begin := binary.LittleEndian.Uint64(offsetsRaw[first*8 : first*8+8])
+		end := binary.LittleEndian.Uint64(offsetsRaw[last*8 : last*8+8])
+		values := end - begin // Global offset validation already proved end >= begin.
+		if values > uint64(math.MaxInt/valueWidth) {
+			return fmt.Errorf("typedcolumn: image column %s block %d values=%d exceed host bounds", name, i, values)
+		}
+		offsetsBytes, err := checkedMulInt(block.Descriptor.RowCount+1, 8, "query-ready base block offsets bytes")
+		if err != nil {
+			return err
+		}
+		wantStored, err := checkedAddInt(offsetsBytes, int(values)*valueWidth, "query-ready base variable-width block bytes")
+		if err != nil {
+			return err
+		}
+		if block.Descriptor.StoredBytes != wantStored {
+			return fmt.Errorf("typedcolumn: image column %s block %d stored bytes=%d want %d from global offsets", name, i, block.Descriptor.StoredBytes, wantStored)
+		}
+	}
+	return nil
 }
 
 func queryReadyBaseStructuralBytes(image ColumnPartImage) int {
