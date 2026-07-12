@@ -22,7 +22,7 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	if err != nil {
 		t.Fatalf("NewTreeDBBackendCommandWAL: %v", err)
 	}
-	if got := db.Name(); got != "TreeDB (backend command_wal_v1)" {
+	if got := db.Name(); got != "TreeDB (backend command_wal_v2)" {
 		t.Fatalf("Name=%q, want explicit command WAL variant name", got)
 	}
 	if err := db.Set([]byte("k"), []byte("v")); err != nil {
@@ -49,7 +49,7 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 		t.Fatalf("CommandWALRequiredFeatureEnabled: %v", err)
 	}
 	if !required {
-		t.Fatal("command WAL variant did not persist command_wal_v1 required feature")
+		t.Fatal("command WAL variant did not persist command_wal_v2 required feature")
 	}
 	cfg, ok, err := treedbdb.LoadFormatConfig(dir)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTreeDBPublicCommandWAL: %v", err)
 	}
-	if got := db.Name(); got != "TreeDB (public cached command_wal_v1)" {
+	if got := db.Name(); got != "TreeDB (public cached command_wal_v2)" {
 		_ = db.Close()
 		t.Fatalf("Name=%q, want explicit public cached command WAL variant name", got)
 	}

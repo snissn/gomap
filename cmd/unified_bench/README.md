@@ -70,10 +70,10 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,pebble,badger,leveldb`
   - Hidden TreeDB variants can be selected explicitly, including
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the
-    public cached `command_wal_v1` path,
+    public cached `command_wal_v2` path,
     `treedb_backend` for the direct backend path and
     `treedb_backend_command_wal` (alias `treedb_command_wal`) for the direct
-    backend `command_wal_v1` path. The command-WAL variants report
+    backend `command_wal_v2` path. The command-WAL variants report
     `treedb.command_wal.live_accepted_*`,
     `treedb.command_wal.live_covered_*`, and `treedb.applied_command_lsn`
     stats without scanning WAL segments, so benchmark artifacts can prove that

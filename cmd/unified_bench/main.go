@@ -7261,7 +7261,7 @@ func renderGethHotKVSummary(run BenchRun) string {
 }
 
 func gethHotKVSummaryEngineName(name string) string {
-	if name == "TreeDB (public cached command_wal_v1)" {
+	if name == "TreeDB (public cached command_wal_v2)" {
 		return "TreeDB"
 	}
 	return name

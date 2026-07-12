@@ -560,7 +560,7 @@ func dbDirContainsOutDir(dbDir, outDir string) (bool, error) {
 func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
 	start := time.Now()
 	if cfg.includeVector {
-		if err := backenddb.SaveFormatConfig(cfg.dbDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		if err := backenddb.SaveFormatConfig(cfg.dbDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 			return scaleFixture{}, loadReport{}, fmt.Errorf("enable command WAL for vector fixture: %w", err)
 		}
 	}

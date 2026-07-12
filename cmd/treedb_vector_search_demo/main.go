@@ -713,7 +713,7 @@ func demoBackendOptions(cfg config, dir string) treedb.Options {
 
 func demoCommandWALFormatConfig(opts treedb.Options) backenddb.FormatConfig {
 	return backenddb.FormatConfig{
-		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2},
 
 		IndexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
 

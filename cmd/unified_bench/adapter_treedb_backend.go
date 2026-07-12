@@ -25,7 +25,7 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 }
 
 func NewTreeDBBackendCommandWAL(dir string) (kvstore.DB, error) {
-	return newTreeDBBackend(dir, true, "TreeDB (backend command_wal_v1)")
+	return newTreeDBBackend(dir, true, "TreeDB (backend command_wal_v2)")
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

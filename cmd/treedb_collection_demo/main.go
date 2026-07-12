@@ -563,7 +563,7 @@ func openDemoBackend(dir string) (*backenddb.DB, func() error, error) {
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		return nil, nil, err
 	}
-	if err := backenddb.SaveFormatConfig(mainDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(mainDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		return nil, nil, err
 	}
 	return treedb.OpenBackendWithCachedLeafLog(treedb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})

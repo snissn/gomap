@@ -108,7 +108,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{
-		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2},
 	}); err != nil {
 		return err
 	}

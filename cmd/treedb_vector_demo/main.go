@@ -292,7 +292,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	setupStart := time.Now()
 	rows := generateRows(cfg.Rows, cfg.Dims, cfg.Seed)
 	queries := generateQueries(rows, cfg.Queries, cfg.Seed+7919)
-	if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(cfg.Dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		return result{}, err
 	}
 	db, err := backenddb.Open(backenddb.Options{Dir: cfg.Dir, DisableBackgroundPrune: true})

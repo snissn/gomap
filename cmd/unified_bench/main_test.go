@@ -1123,7 +1123,7 @@ func TestBatchDeleteRangeReportingVisibleInMarkdownAndJSON(t *testing.T) {
 }
 
 func TestRenderGethHotKVSummary(t *testing.T) {
-	const treeName = "TreeDB (public cached command_wal_v1)"
+	const treeName = "TreeDB (public cached command_wal_v2)"
 	run := BenchRun{
 		Instances: []*DBInstance{
 			{Wrapper: &fixedNameDB{name: treeName}},

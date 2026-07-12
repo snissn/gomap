@@ -737,7 +737,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		// This is not an error, but it can be confusing. Document precedence.
 		notes = append(notes, "disable_wal takes precedence over relaxed_sync (durability=wal_off_relaxed)")
 	} else if cfg.forceWALOn && *treedbDisableWAL {
-		notes = append(notes, "command_wal_v1 forces WAL on; ignoring -treedb-disable-wal for this variant")
+		notes = append(notes, "command_wal_v2 forces WAL on; ignoring -treedb-disable-wal for this variant")
 	}
 	if packedValuePtrEffective {
 		notes = append(notes, "index_packed_valueptr uses a packed 12B leaf ValuePtr encoding (u32 offset cap; cached mode rotates value-log segments automatically)")
@@ -1044,7 +1044,7 @@ func NewTreeDBPublicCommandWAL(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return wrapTreeDBAdapter(db, "TreeDB (public cached command_wal_v1)"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (public cached command_wal_v2)"), nil
 }
 
 func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {

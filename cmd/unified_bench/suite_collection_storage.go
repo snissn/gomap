@@ -957,7 +957,7 @@ func prepareCollectionStorageMode(baseCfg BenchConfig, mode string, rows, batchS
 	if err != nil {
 		return nil, nil, fmt.Errorf("collection_storage: create temp dir: %w", err)
 	}
-	if err := backenddb.SaveFormatConfig(dataDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dataDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		_ = os.RemoveAll(dataDir)
 		return nil, nil, fmt.Errorf("collection_storage: save format config: %w", err)
 	}
