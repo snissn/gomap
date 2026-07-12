@@ -148,6 +148,42 @@ func (r *PartSetReader) ValueAtLatest(primaryID int64, columnName string) (int64
 	return value, true, nil
 }
 
+// NullableInt64AtLatest returns the physical nullable/default state from the
+// latest-visible row without constructing a cross-part value domain.
+func (r *PartSetReader) NullableInt64AtLatest(primaryID int64, columnName string) (value int64, null, defaulted, ok bool, err error) {
+	if r == nil {
+		return 0, false, false, false, nil
+	}
+	ref, ok := r.latest[primaryID]
+	if !ok {
+		return 0, false, false, false, nil
+	}
+	if ref.PartIndex < 0 || ref.PartIndex >= len(r.parts) {
+		return 0, false, false, false, fmt.Errorf("typedcolumn: row ref part index %d outside %d parts", ref.PartIndex, len(r.parts))
+	}
+	part := r.parts[ref.PartIndex].Part
+	column, exists := part.Columns[columnName]
+	if !exists {
+		return 0, false, false, false, fmt.Errorf("typedcolumn: missing column %s", columnName)
+	}
+	if column.Definition.Encoding != EncodingNullableInt64 {
+		return 0, false, false, false, fmt.Errorf("typedcolumn: column %s encoding=%s want %s", columnName, column.Definition.Encoding, EncodingNullableInt64)
+	}
+	var reader GranuleReader
+	for _, block := range column.Blocks {
+		if ref.PartRow < block.Descriptor.FirstRow || ref.PartRow >= block.Descriptor.FirstRow+block.Descriptor.RowCount {
+			continue
+		}
+		values, nulls, defaults, decodeErr := reader.DecodeNullableInt64(block.Granule)
+		if decodeErr != nil {
+			return 0, false, false, false, decodeErr
+		}
+		row := ref.PartRow - block.Descriptor.FirstRow
+		return values[row], nulls[row], defaults[row], true, nil
+	}
+	return 0, false, false, false, fmt.Errorf("typedcolumn: locator row %d outside column %s", ref.PartRow, columnName)
+}
+
 func (r *PartSetReader) VisibleRowsForPart(partIndex int) ([]int, bool) {
 	visible := r.visibleRowsForPart(partIndex)
 	return append([]int(nil), visible.Rows...), visible.All

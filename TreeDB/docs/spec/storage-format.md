@@ -205,6 +205,67 @@ The implementation and format tests are in
 ownership, lifecycle boundary, and performance contract are described in
 `docs/architecture/query-ready-base-generation.md`.
 
+## 1.3 Query-Ready Delta / Consolidated Base Envelope V1
+
+A query-ready delta generation (`QRDG` V1) is a rebuildable, non-authoritative
+envelope containing one QRBG V1 image and a sorted tombstone table. Kind `1`
+represents one ordinary delta generation. Kind `2` represents a standalone,
+bounded multipart replacement base produced by deterministic consolidation.
+It is not an authoritative publication, recovery, or reclamation format.
+
+All integer fields are little-endian. The 96-byte header is:
+
+```text
+offset  size  field
+0       4     magic = "QRDG" (bytes 51 52 44 47)
+4       2     version = 1
+6       2     kind (1=delta, 2=consolidated base)
+8       8     exact envelope generation (nonzero)
+16      32    exact collection schema SHA-256 (nonzero)
+48      4     tombstone count
+52      4     header CRC-32C
+56      4     tombstone-table CRC-32C
+60      4     reserved = 0
+64      8     embedded QRBG payload offset
+72      8     total envelope bytes
+80      8     embedded QRBG byte length
+88      4     original-base part count
+92      4     accumulated delta-derived part count
+```
+
+The header checksum is CRC-32C (Castagnoli) over all 96 header bytes with bytes
+`[52,56)` zeroed. The tombstone checksum covers exactly
+`tombstone_count * 16` bytes after the header. Each entry is `i64 primary_id`
+followed by `u64 tombstone_generation`. Entries are strictly increasing by
+primary ID and contain only the highest tombstone generation retained for that
+ID; generations are nonzero and cannot exceed the envelope generation.
+
+The embedded QRBG begins at a 4096-byte-aligned payload offset. Padding between
+the tombstone table and payload is zero. The declared total and inner lengths
+must account for the exact file length; corruption, truncation, trailing bytes,
+or a malformed inner QRBG fail closed. Schema and generation identity must
+match both the caller's expectation and the embedded QRBG.
+
+Ordinary delta kind requires both lineage counts to be zero and every embedded
+part source generation to equal the envelope generation. Consolidated-base
+kind requires:
+
+```text
+original_base_part_count + accumulated_delta_part_count == embedded_part_count
+```
+
+Consolidation may preserve mixed historical source generations. Its output
+generation is exactly the highest selected delta-prefix generation, or the
+unchanged prior base generation if the prefix is empty. Repeated consolidation
+carries forward tombstones and accumulated lineage; it cannot reset the
+delta-derived count. A later physical base rewrite may define a new origin.
+
+The implementation, fail-closed tests, and format mutations are in
+`TreeDB/internal/typedcolumn/query_ready_delta.go` and
+`TreeDB/internal/typedcolumn/query_ready_delta_test.go`. The visibility, bound,
+dictionary-domain, performance, and lifecycle contract is in
+`docs/architecture/query-ready-delta-generation.md`.
+
 ## 2. Index Page Basics
 
 ### 2.1 Fixed page size
