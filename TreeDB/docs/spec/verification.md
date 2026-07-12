@@ -43,18 +43,71 @@ there is no on-disk publication seal yet. DUR-09
 [#3679](https://github.com/snissn/gomap/issues/3679) will retarget those hooks
 to the real seal write.
 
-### 0.2 Counterexample-to-conformance map
+### 0.2 Bounded adversarial crash-image generation
 
-Counterexamples use real production calls and bytes, then pass only when normal
-public open/read rejects or diagnoses the selectively persisted image. They do
-not keep the branch red while the production graph is in progress. Later
-children update these stable test names rather than duplicating them.
+`powerlossoracle.GenerateVariants` expands a registered cut into a bounded,
+deterministic set of legal partial writebacks. The committed limit is 256
+images per cut. Generation fails closed when a requested family is unknown,
+inapplicable, silently omitted, or would exceed that limit. Logical resource
+IDs, cut occurrence, family, and format boundary determine stable variant IDs
+and seeds; host paths and input/map iteration order do not. Stable ID ordering
+also gives balanced deterministic sharding through `ShardVariants`. Every
+generated variant carries one of the ledger result categories, and generation
+fails when an applicable family has no declared expected result.
+
+The registered families cover the synced baseline, target-meta-only and
+one-missing-dependency ordering controls, file-data/directory-namespace
+mismatches for newly created names, complete writeback, old-live-page reuse,
+and torn format-aware ranges. The generator recognizes meta, root-record,
+freelist, and index-page labels, rejects unknown labels, duplicate selectors,
+and ranges outside actual declared changes. The current public-Open integration
+witness exercises a real changed meta checksum boundary. Root-record,
+freelist, and index-page labels have generator coverage only; they do not claim
+production crash-image coverage until a real publication cut registers the
+corresponding changed bytes. The root-record boundary becomes such a production
+boundary when DUR-09 #3679 adds the sealed root record.
+
+Every generated image used by the integration witnesses is materialized and
+passed to normal public `Open`. A single image can be replayed without a host
+path by copying its exact `TREEDB_POWERLOSS_CUT_ID`,
+`TREEDB_POWERLOSS_VARIANT_ID`, and `TREEDB_POWERLOSS_SEED` values into the
+recorded test command. `TreeDB/testdata/power_loss_counterexamples.json` is the
+machine-readable invariant ledger. Schema v2 separately records the declared
+contract result, the observed public-Open result, and any allowed exact named
+invariant or typed `errors.Is`/`errors.As` sentinel. Replay package, test, cut,
+variant, and seed are structured fields from which the shell command is
+generated. A code-owned real-witness registry is checked bidirectionally, so an
+entry cannot disappear or be added only in JSON. Validation also fails when
+requested family coverage or the maximum changes. A resolved entry remains in
+the retained inventory with observed equal to expected and no known violation.
+
+The focused generator and ledger command is:
+
+```sh
+GOWORK=off go test ./TreeDB/internal/powerlossoracle ./TreeDB -run 'GenerateVariants|ReplaySelector|CounterexampleLedger|AdversarialNewFileNamespaceMismatch|CounterexampleNewMetaMissingClosure' -v -count=1
+```
+
+Verbose output reports generated image count, generation runtime, peak
+materialized temporary-image bytes, family coverage, and committed-fixture
+shard balance. These measurements bound test-harness cost; they are not
+production throughput evidence.
+
+### 0.3 Counterexample-to-conformance map
+
+Counterexamples use real production calls and bytes. Every generated image is
+classified through normal public open/read as an exact old root, new root,
+suffix discard, typed sentinel, or successful-open named corruption. A model
+invariant such as missing namespace durability may coexist with an old-root
+public outcome; the ledger keeps those facts orthogonal. Known deviations pass
+only when the exact registered witness reproduces its structured violation, so
+they do not keep the branch red while the production graph is in progress.
+Later children update these stable test names rather than duplicating them.
 
 | Stable scenario | Current counterexample | Positive-conformance owner |
 |---|---|---|
 | `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | `db.finalizeCommitLockedWithOptions` / `db.flushFinalizeCommitDurability`: newer meta lacks stable index/value-log/outer-leaf closure | DUR-02 #3675, then sealed fallback in DUR-09 #3679 |
 | `TestPowerLossOracleCounterexampleRecoverablePageReuse` | graveyard/freelist reuse touches a page reachable from an older recoverable meta | DUR-04 #3678 and maintenance horizon DUR-08 #3681 |
-| `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3676 |
+| `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3718 |
 | `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | `caching.DB.publishCommandWALCheckpointApplied` or cleanup removes command WAL/assets before sealed coverage | DUR-07 #3682 and DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | `caching.DB.Checkpoint`, `caching.DB.flushSyncRequested`, or chunked cached flush apply exposes an incomplete intermediate root | DUR-06 #3680 |
 
