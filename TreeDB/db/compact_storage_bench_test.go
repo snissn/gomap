@@ -12,6 +12,10 @@ func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 	var liveScans, packPasses atomic.Uint64
 	var packPhaseNanos, packApplyNanos, packCopyNanos int64
 	var packPublishWaitNanos, packPublishHoldNanos int64
+	var packSetupNanos, packTreeRewriteNanos, packLeafSyncNanos, packCopyCloseNanos int64
+	var packRevalidateNanos, packPromotionNanos, packRelocationNanos, packPageSyncNanos int64
+	var packDirectorySyncNanos, packDirectorySyncWaitNanos, packRegistrationNanos int64
+	var packCollectionPublishNanos, packFinalizeNanos, packPostWorkNanos, packCleanupNanos int64
 	unregister := registerLeafGenerationLiveScanHook(func() { liveScans.Add(1) })
 	defer unregister()
 
@@ -56,6 +60,22 @@ func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 			packCopyNanos += pack.Pack.CopyTimeNanos
 			packPublishWaitNanos += pack.Pack.PublishWaitNanos
 			packPublishHoldNanos += pack.Pack.PublishHoldNanos
+			stages := pack.Pack.ApplyStages
+			packSetupNanos += stages.SetupTimeNanos
+			packTreeRewriteNanos += stages.TreeRewriteTimeNanos
+			packLeafSyncNanos += stages.LeafSyncTimeNanos
+			packCopyCloseNanos += stages.CopyCloseTimeNanos
+			packRevalidateNanos += stages.RevalidateTimeNanos
+			packPromotionNanos += stages.PromotionTimeNanos
+			packRelocationNanos += stages.RelocationTimeNanos
+			packPageSyncNanos += stages.PageSyncTimeNanos
+			packDirectorySyncNanos += stages.DirectorySyncTimeNanos
+			packDirectorySyncWaitNanos += stages.DirectorySyncWaitTimeNanos
+			packRegistrationNanos += stages.RegistrationTimeNanos
+			packCollectionPublishNanos += stages.CollectionPublishTimeNanos
+			packFinalizeNanos += stages.FinalizeTimeNanos
+			packPostWorkNanos += stages.PostWorkTimeNanos
+			packCleanupNanos += stages.CleanupTimeNanos
 		}
 		db.compactStorageAfterPhase = nil
 		if err := db.Close(); err != nil {
@@ -71,6 +91,21 @@ func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 		b.ReportMetric(float64(packCopyNanos)/float64(b.N), "pack_copy_ns/op")
 		b.ReportMetric(float64(packPublishWaitNanos)/float64(b.N), "pack_publish_wait_ns/op")
 		b.ReportMetric(float64(packPublishHoldNanos)/float64(b.N), "pack_publish_hold_ns/op")
+		b.ReportMetric(float64(packSetupNanos)/float64(b.N), "pack_setup_ns/op")
+		b.ReportMetric(float64(packTreeRewriteNanos)/float64(b.N), "pack_tree_rewrite_ns/op")
+		b.ReportMetric(float64(packLeafSyncNanos)/float64(b.N), "pack_leaf_sync_ns/op")
+		b.ReportMetric(float64(packCopyCloseNanos)/float64(b.N), "pack_copy_close_ns/op")
+		b.ReportMetric(float64(packRevalidateNanos)/float64(b.N), "pack_revalidate_ns/op")
+		b.ReportMetric(float64(packPromotionNanos)/float64(b.N), "pack_promotion_ns/op")
+		b.ReportMetric(float64(packRelocationNanos)/float64(b.N), "pack_relocation_ns/op")
+		b.ReportMetric(float64(packPageSyncNanos)/float64(b.N), "pack_page_sync_ns/op")
+		b.ReportMetric(float64(packDirectorySyncNanos)/float64(b.N), "pack_directory_sync_ns/op")
+		b.ReportMetric(float64(packDirectorySyncWaitNanos)/float64(b.N), "pack_directory_sync_wait_ns/op")
+		b.ReportMetric(float64(packRegistrationNanos)/float64(b.N), "pack_registration_ns/op")
+		b.ReportMetric(float64(packCollectionPublishNanos)/float64(b.N), "pack_collection_publish_ns/op")
+		b.ReportMetric(float64(packFinalizeNanos)/float64(b.N), "pack_finalize_ns/op")
+		b.ReportMetric(float64(packPostWorkNanos)/float64(b.N), "pack_post_work_ns/op")
+		b.ReportMetric(float64(packCleanupNanos)/float64(b.N), "pack_cleanup_ns/op")
 	}
 }
 
