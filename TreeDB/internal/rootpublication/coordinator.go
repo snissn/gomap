@@ -376,7 +376,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 		c.stopping = true
 		c.cancel()
 		c.clearPublishRequestLocked()
-		c.failWaitersLocked(ErrPublicationStopped, true)
+		c.failWaitersLocked(ErrPublicationStopped)
 		c.notifyLocked()
 	}
 	c.mu.Unlock()
@@ -540,7 +540,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		}
 		c.poison = errors.Join(ErrRecoveryRequired, err)
 		c.retryAttempt = PublishAttempt{}
-		c.failWaitersLocked(c.poison, true)
+		c.failWaitersLocked(c.poison)
 		c.clearPublishRequestLocked()
 	default:
 		c.recordRetryableLocked(fmt.Errorf("%w: unknown outcome %d", ErrPublisherProtocol, result.Outcome), c.activeAttempt)
@@ -694,22 +694,12 @@ func (c *Coordinator) satisfyWaitersLocked() {
 	c.waiters = remaining
 }
 
-func (c *Coordinator) failWaitersLocked(err error, all bool) {
-	waiters := c.waiters
-	remaining := waiters[:0]
-	for _, waiter := range waiters {
-		if all || waiter.seq <= c.visible.commitSeq {
-			waiter.ch <- err
-		} else {
-			remaining = append(remaining, waiter)
-		}
+func (c *Coordinator) failWaitersLocked(err error) {
+	for _, waiter := range c.waiters {
+		waiter.ch <- err
 	}
-	clear(waiters[len(remaining):])
-	if all {
-		c.waiters = nil
-		return
-	}
-	c.waiters = remaining
+	clear(c.waiters)
+	c.waiters = nil
 }
 
 func (c *Coordinator) terminalErrorLocked() error {

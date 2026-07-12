@@ -179,14 +179,9 @@ func TestWaiterRemovalClearsDiscardedBackingSlots(t *testing.T) {
 		c.satisfyWaitersLocked()
 		assertClearedTail(t, c.waiters)
 	})
-	t.Run("visible failure", func(t *testing.T) {
-		c := &Coordinator{waiters: newWaiters(), visible: NewFrontier(2, 0, 0, 0, 0)}
-		c.failWaitersLocked(errors.New("visible"), false)
-		assertClearedTail(t, c.waiters)
-	})
 	t.Run("terminal failure", func(t *testing.T) {
 		c := &Coordinator{waiters: newWaiters()}
-		c.failWaitersLocked(ErrPublicationStopped, true)
+		c.failWaitersLocked(ErrPublicationStopped)
 		if c.waiters != nil {
 			t.Fatalf("terminal waiter storage retained: len=%d cap=%d", len(c.waiters), cap(c.waiters))
 		}
