@@ -99,13 +99,6 @@
       "source_kind": "process_peak",
       "artifact": "load.time-v.txt",
       "metrics": {"peak_rss_bytes": 4096}
-    },
-    {
-      "scope": "query/q2",
-      "source_kind": "cumulative_alloc_profile",
-      "artifact": "allocs_q2.pprof",
-      "contextual_only": true,
-      "metrics": {}
     }
   ]
 }
