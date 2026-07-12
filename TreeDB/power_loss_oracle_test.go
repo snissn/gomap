@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -22,6 +23,17 @@ import (
 )
 
 const powerLossOracleSeed = uint64(3674)
+
+var retainedPowerLossCounterexamples = []string{
+	"new-meta-before-index-closure",
+	"new-meta-before-value-log-closure",
+	"new-meta-before-outer-leaf-closure",
+	"new-file-bytes-before-namespace",
+	"torn-target-meta",
+	"relaxed-command-frame-before-rid",
+	"chunked-sync-intermediate-root",
+	"older-meta-live-page-reused",
+}
 
 type observedPowerLossCommandFrame struct {
 	LSN  uint64
@@ -356,60 +368,128 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		t.Fatal("actual relaxed finalize changed no index bytes")
 	}
 
-	images := map[powerlossoracle.ResourceKind]*powerlossoracle.Model{}
-	missingIndex := snapshot.Clone()
-	if err := missingIndex.PromoteRange(relIndex, meta.Offset, meta.Length); err != nil {
-		t.Fatal(err)
+	stablePaths := make(map[string]bool)
+	for _, path := range snapshot.StablePaths() {
+		stablePaths[path] = true
 	}
-	images[powerlossoracle.ResourceIndex] = missingIndex
-	missingVlog := snapshot.Clone()
-	for _, r := range changed {
-		if err := missingVlog.PromoteRange(relIndex, r.Offset, r.Length); err != nil {
+	dependencies := []powerlossoracle.DirtyResource{{
+		Kind:   powerlossoracle.ResourceIndex,
+		ID:     "index-generation-2",
+		Path:   filepath.ToSlash(relIndex),
+		Ranges: changed,
+	}}
+	dependencyOrdinal := map[powerlossoracle.ResourceKind]int{}
+	leafChanged := false
+	for _, path := range snapshot.VolatilePaths() {
+		slashed := filepath.ToSlash(path)
+		kind := powerlossoracle.ResourceKind("")
+		switch {
+		case strings.Contains(slashed, "value_vlog/"):
+			kind = powerlossoracle.ResourceValueLog
+		case strings.Contains(slashed, "leaf_vlog/"):
+			kind = powerlossoracle.ResourceOuterLeaf
+		default:
+			continue
+		}
+		ranges, err := snapshot.ChangedRanges(path)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	images[powerlossoracle.ResourceValueLog] = missingVlog
-	missingOuter := missingVlog.Clone()
-	leafChanged := false
-	for _, path := range missingOuter.VolatilePaths() {
-		if strings.HasPrefix(filepath.ToSlash(path), "leaf_vlog/") {
-			ranges, err := missingOuter.ChangedRanges(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			leafChanged = leafChanged || len(ranges) > 0
+		if len(ranges) == 0 {
+			continue
 		}
-		if strings.Contains(path, "value_vlog") {
-			if err := missingOuter.SyncFile(path); err != nil {
-				t.Fatal(err)
-			}
+		dependencyOrdinal[kind]++
+		resource := powerlossoracle.DirtyResource{
+			Kind:   kind,
+			ID:     fmt.Sprintf("%s-generation-2-%03d", kind, dependencyOrdinal[kind]),
+			Path:   slashed,
+			Ranges: ranges,
 		}
+		if !stablePaths[slashed] {
+			resource.NewName = true
+			resource.NamespaceDirs = []string{filepath.ToSlash(filepath.Dir(path))}
+		}
+		dependencies = append(dependencies, resource)
+		leafChanged = leafChanged || kind == powerlossoracle.ResourceOuterLeaf
 	}
 	if !leafChanged {
 		t.Fatal("actual fixture generated no changed outer-leaf record")
 	}
-	images[powerlossoracle.ResourceOuterLeaf] = missingOuter
-
-	for _, missing := range []powerlossoracle.ResourceKind{
-		powerlossoracle.ResourceIndex,
-		powerlossoracle.ResourceValueLog,
-		powerlossoracle.ResourceOuterLeaf,
-	} {
-		missing := missing
-		t.Run(string(missing), func(t *testing.T) {
-			result, _, closeFn, err := powerlossreopen.Stable(images[missing], opts, false)
+	target := powerlossoracle.DirtyResource{
+		Kind:   powerlossoracle.ResourceIndex,
+		ID:     "target-meta-generation-2",
+		Path:   filepath.ToSlash(relIndex),
+		Ranges: []powerlossoracle.ByteRange{{Offset: meta.Offset, Length: meta.Length}},
+	}
+	if meta.Length > 1 {
+		target.Torn = []powerlossoracle.TornBoundary{{ID: "meta-body", Format: powerlossoracle.FormatMeta, Offset: meta.Offset, Length: meta.Length, Persisted: meta.Length / 2}}
+	}
+	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+		ID:               "checkpoint-generation-2",
+		Point:            powerlossoracle.AfterMetaWrite,
+		Occurrence:       1,
+		Model:            snapshot,
+		TargetMeta:       &target,
+		Dependencies:     dependencies,
+		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantOneMissingDependency, powerlossoracle.VariantFullWriteback, powerlossoracle.VariantTornFormat},
+		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+			powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedCorruption,
+			powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedCorruption,
+			powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
+			powerlossoracle.VariantTornFormat:           powerlossoracle.ExpectedTypedError,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := powerlossoracle.ReplaySelectorFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants, err = powerlossoracle.SelectReplayVariant(variants, selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	var peakBytes int64
+	validated := map[powerlossoracle.ResourceKind]bool{}
+	for _, variant := range variants {
+		variant := variant
+		t.Run(variant.ID, func(t *testing.T) {
+			result, _, closeFn, err := powerlossreopen.Stable(variant.Model, opts, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = closeFn() }()
+			if size := variant.Model.StableSizeBytes(); size > peakBytes {
+				peakBytes = size
+			}
+			missing := powerlossoracle.ResourceKind("")
+			switch variant.Family {
+			case powerlossoracle.VariantTargetMetaOnly:
+				missing = powerlossoracle.ResourceIndex
+			case powerlossoracle.VariantOneMissingDependency:
+				for _, kind := range []powerlossoracle.ResourceKind{powerlossoracle.ResourceValueLog, powerlossoracle.ResourceOuterLeaf} {
+					if strings.HasPrefix(variant.Qualifier, string(kind)+"/") && !validated[kind] {
+						missing = kind
+					}
+				}
+			}
+			if missing == "" {
+				return
+			}
+			validated[missing] = true
 			dependencyPaths := make([]string, 0)
-			for _, path := range images[missing].VolatilePaths() {
+			for _, path := range variant.Model.VolatilePaths() {
 				slashed := filepath.ToSlash(path)
 				if strings.Contains(slashed, "value_vlog/") || strings.Contains(slashed, "leaf_vlog/") {
 					dependencyPaths = append(dependencyPaths, filepath.Join(dir, filepath.FromSlash(path)))
 				}
 			}
-			newResources, err := observedPowerLossClosure(images[missing], dir, meta.Path, dependencyPaths, true, 0, false)
+			newResources, err := observedPowerLossClosure(variant.Model, dir, meta.Path, dependencyPaths, true, 0, false)
 			if err != nil {
 				t.Fatalf("derive actual %s closure: %v", missing, err)
 			}
@@ -428,10 +508,225 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 				},
 			}
 			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
-				t.Fatalf("actual %s image did not produce named diagnosis: %v (open=%v)", missing, err, result.Err)
+				t.Fatalf("actual %s image %s seed=%d did not produce named diagnosis: %v (open=%v)", missing, variant.ID, variant.Seed, err, result.Err)
 			}
 		})
 	}
+	if selector == (powerlossoracle.ReplaySelector{}) {
+		for _, missing := range []powerlossoracle.ResourceKind{powerlossoracle.ResourceIndex, powerlossoracle.ResourceValueLog, powerlossoracle.ResourceOuterLeaf} {
+			if !validated[missing] {
+				t.Fatalf("generator did not retain named %s witness", missing)
+			}
+		}
+	}
+	t.Logf("adversarial crash images: cut=%s count=%d runtime=%s peak_temp_storage_bytes=%d family_coverage=%v", coverage.CutID, len(variants), time.Since(started), peakBytes, coverage.ByFamily)
+}
+
+func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
+	model, opts := seedPowerLossImage(t)
+	const path = "maindb/adversarial-namespace/new-dependency.bin"
+	if err := model.Create(path, []byte("new dependency bytes")); err != nil {
+		t.Fatal(err)
+	}
+	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+		ID:         "new-auxiliary-namespace",
+		Point:      powerlossoracle.AfterNewFileDirectorySync,
+		Occurrence: 1,
+		Model:      model,
+		Dependencies: []powerlossoracle.DirtyResource{{
+			Kind:          powerlossoracle.ResourceAuxiliary,
+			ID:            "new-asset-generation-2",
+			Path:          path,
+			NewName:       true,
+			NamespaceDirs: []string{".", "maindb", "maindb/adversarial-namespace"},
+		}},
+		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData, powerlossoracle.VariantFullWriteback},
+		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+			powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedOldRoot,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := powerlossoracle.ReplaySelectorFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants, err = powerlossoracle.SelectReplayVariant(variants, selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range variants {
+		variant := variant
+		t.Run(variant.ID, func(t *testing.T) {
+			requirePublicReopen(t, variant.Model, opts, true)
+			stablePaths := variant.Model.StablePaths()
+			position := sort.SearchStrings(stablePaths, path)
+			present := position < len(stablePaths) && stablePaths[position] == path
+			switch variant.Family {
+			case powerlossoracle.VariantDataWithoutNamespace:
+				if present {
+					t.Fatal("data-without-namespace persisted the new name")
+				}
+			case powerlossoracle.VariantNamespaceWithoutData:
+				if !present {
+					t.Fatal("namespace-without-data omitted the new name")
+				}
+			}
+		})
+	}
+	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
+}
+
+func TestPowerLossOracleCounterexampleLedger(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "power_loss_counterexamples.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := powerlossoracle.ParseCounterexampleLedger(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := powerLossLedgerGeneratedVariants(t)
+	if err := powerlossoracle.ValidateCounterexampleLedger(ledger, generated); err != nil {
+		t.Fatal(err)
+	}
+	if err := powerlossoracle.RequireRetainedCounterexamples(ledger, retainedPowerLossCounterexamples); err != nil {
+		t.Fatal(err)
+	}
+	covered := make(map[powerlossoracle.VariantFamily]bool)
+	for _, entry := range ledger.Entries {
+		for _, family := range entry.VariantFamilies {
+			covered[family] = true
+		}
+	}
+	for _, family := range powerlossoracle.VariantFamilies {
+		if !covered[family] {
+			t.Fatalf("machine-readable ledger does not cover required family %s", family)
+		}
+	}
+}
+
+func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle.Variant {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "maindb", "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"maindb/index.db", "maindb/outer.leaf", "maindb/command.wal", "maindb/chunk.db", "maindb/reuse.db"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(path)), bytes.Repeat([]byte("0"), 64), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model, err := powerlossoracle.Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"maindb/index.db", "maindb/outer.leaf", "maindb/command.wal", "maindb/chunk.db", "maindb/reuse.db"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(path)), bytes.Repeat([]byte("1"), 64), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "maindb", "assets", "value-0002.vlog"), bytes.Repeat([]byte("v"), 64), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Overlay(root); err != nil {
+		t.Fatal(err)
+	}
+	target := powerlossoracle.DirtyResource{
+		Kind:   powerlossoracle.ResourceIndex,
+		ID:     "target-meta-generation-2",
+		Path:   "maindb/index.db",
+		Ranges: []powerlossoracle.ByteRange{{Offset: 0, Length: 8}},
+		Torn:   []powerlossoracle.TornBoundary{{ID: "meta-body", Format: powerlossoracle.FormatMeta, Offset: 0, Length: 8, Persisted: 4}},
+	}
+	specs := []powerlossoracle.CutSpec{
+		{
+			ID:         "checkpoint-generation-2",
+			Point:      powerlossoracle.AfterMetaWrite,
+			Occurrence: 1,
+			Model:      model,
+			TargetMeta: &target,
+			Dependencies: []powerlossoracle.DirtyResource{
+				{Kind: powerlossoracle.ResourceIndex, ID: "index-generation-2", Path: "maindb/index.db", Ranges: []powerlossoracle.ByteRange{{Offset: 8, Length: 56}}},
+				{Kind: powerlossoracle.ResourceOuterLeaf, ID: "outer-leaf-generation-2-001", Path: "maindb/outer.leaf"},
+				{Kind: powerlossoracle.ResourceValueLog, ID: "value-log-generation-2-001", Path: "maindb/assets/value-0002.vlog", NewName: true, NamespaceDirs: []string{"maindb/assets"}},
+			},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantOneMissingDependency, powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData, powerlossoracle.VariantFullWriteback, powerlossoracle.VariantTornFormat},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedCorruption,
+				powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedCorruption,
+				powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
+				powerlossoracle.VariantTornFormat:           powerlossoracle.ExpectedTypedError,
+			},
+		},
+		{
+			ID:               "new-auxiliary-namespace",
+			Point:            powerlossoracle.AfterNewFileDirectorySync,
+			Occurrence:       1,
+			Model:            model,
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceAuxiliary, ID: "new-asset-generation-2", Path: "maindb/assets/value-0002.vlog", NewName: true, NamespaceDirs: []string{"maindb/assets"}}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedOldRoot,
+			},
+		},
+		{
+			ID:               "relaxed-command-frame-external-rid",
+			Point:            powerlossoracle.AfterUserspaceFlush,
+			Occurrence:       1,
+			Model:            model,
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceCommandWAL, ID: "relaxed-frame-1", Path: "maindb/command.wal"}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedSuffixDiscard,
+			},
+		},
+		{
+			ID:               "chunked-checkpoint-intermediate-root",
+			Point:            powerlossoracle.AfterMetaWrite,
+			Occurrence:       1,
+			Model:            model,
+			TargetMeta:       &powerlossoracle.DirtyResource{Kind: powerlossoracle.ResourceIndex, ID: "chunked-intermediate-root", Path: "maindb/chunk.db"},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantTargetMetaOnly},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:     powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantTargetMetaOnly: powerlossoracle.ExpectedCorruption,
+				powerlossoracle.VariantFullWriteback:  powerlossoracle.ExpectedCorruption,
+			},
+		},
+		{
+			ID:               "older-meta-live-page-reuse",
+			Point:            powerlossoracle.AfterMetaWrite,
+			Occurrence:       1,
+			Model:            model,
+			OldPageWrites:    []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "first-reused-old-live-page", Path: "maindb/reuse.db"}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantOldPageReuse},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:   powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedCorruption,
+			},
+		},
+	}
+	generated := make(map[string][]powerlossoracle.Variant, len(specs))
+	for _, spec := range specs {
+		variants, coverage, err := powerlossoracle.GenerateVariants(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		generated[coverage.CutID] = variants
+	}
+	return generated
 }
 
 // This family is the stable witness for relaxed command-WAL external-RID replay
@@ -494,46 +789,78 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	if len(ranges) == 0 {
 		t.Fatal("actual relaxed command frame changed no command-WAL bytes")
 	}
-	for _, r := range ranges {
-		if err := snapshot.PromoteRange(walPath, r.Offset, r.Length); err != nil {
-			t.Fatal(err)
-		}
-	}
-	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
+	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+		ID:         "relaxed-command-frame-external-rid",
+		Point:      powerlossoracle.AfterUserspaceFlush,
+		Occurrence: 1,
+		Model:      snapshot,
+		Dependencies: []powerlossoracle.DirtyResource{{
+			Kind:   powerlossoracle.ResourceCommandWAL,
+			ID:     "relaxed-frame-1",
+			Path:   filepath.ToSlash(walPath),
+			Ranges: ranges,
+		}},
+		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantFullWriteback},
+		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+			powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedSuffixDiscard,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = closeFn() }()
-	if result.Rejected {
-		t.Logf("public Open rejected checksum-valid frame with missing RID: %v", result.Err)
-		return
+	selector, err := powerlossoracle.ReplaySelectorFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants, err = powerlossoracle.SelectReplayVariant(variants, selector)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if appendedLSN == 0 {
 		t.Fatal("actual command-WAL append emitted no logical sequence")
 	}
-	got, getErr := reopened.Get([]byte("rid/missing"))
-	if getErr == nil && bytes.Equal(got, bytes.Repeat([]byte("r"), 4096)) {
-		t.Fatalf("public recovery resolved command frame whose actual RID bytes were not stable")
+	for _, variant := range variants {
+		variant := variant
+		t.Run(variant.ID, func(t *testing.T) {
+			result, reopened, closeFn, err := powerlossreopen.Stable(variant.Model, opts, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = closeFn() }()
+			if variant.Family != powerlossoracle.VariantFullWriteback {
+				return
+			}
+			if result.Rejected {
+				t.Logf("public Open rejected checksum-valid frame with missing RID: %v", result.Err)
+				return
+			}
+			got, getErr := reopened.Get([]byte("rid/missing"))
+			if getErr == nil && bytes.Equal(got, bytes.Repeat([]byte("r"), 4096)) {
+				t.Fatalf("public recovery resolved command frame whose actual RID bytes were not stable")
+			}
+			scenario := powerlossoracle.Scenario{
+				Name:            "actual-relaxed-frame-missing-rid",
+				Cut:             powerlossoracle.AfterUserspaceFlush,
+				ReopenAttempted: true,
+				CommandFrames: []powerlossoracle.CommandFrame{{
+					LSN:           appendedLSN,
+					ChecksumValid: true,
+					Dependencies: []powerlossoracle.Resource{{
+						Kind:   powerlossoracle.ResourceValueLog,
+						ID:     fmt.Sprintf("rid/%d", appendedLSN),
+						Stable: false,
+						Live:   true,
+					}},
+					Applied: result.AppliedLSN >= appendedLSN,
+				}},
+			}
+			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantCommandReplayHole); err != nil {
+				t.Fatalf("successful public Open did not produce missing-RID replay diagnosis: %v (commit=%d applied=%d get=%v)", err, result.CommitSeq, result.AppliedLSN, getErr)
+			}
+		})
 	}
-	scenario := powerlossoracle.Scenario{
-		Name:            "actual-relaxed-frame-missing-rid",
-		Cut:             powerlossoracle.AfterUserspaceFlush,
-		ReopenAttempted: true,
-		CommandFrames: []powerlossoracle.CommandFrame{{
-			LSN:           appendedLSN,
-			ChecksumValid: true,
-			Dependencies: []powerlossoracle.Resource{{
-				Kind:   powerlossoracle.ResourceValueLog,
-				ID:     fmt.Sprintf("rid/%d", appendedLSN),
-				Stable: false,
-				Live:   true,
-			}},
-			Applied: result.AppliedLSN >= appendedLSN,
-		}},
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantCommandReplayHole); err != nil {
-		t.Fatalf("successful public Open did not produce missing-RID replay diagnosis: %v (commit=%d applied=%d get=%v)", err, result.CommitSeq, result.AppliedLSN, getErr)
-	}
+	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
 }
 
 // This family is the stable witness for Checkpoint, flushSyncRequested, and
@@ -589,49 +916,78 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range ranges {
-		if err := snapshot.PromoteRange(rel, r.Offset, r.Length); err != nil {
-			t.Fatal(err)
-		}
-	}
-	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
+	target := powerlossoracle.DirtyResource{Kind: powerlossoracle.ResourceIndex, ID: "chunked-intermediate-root", Path: filepath.ToSlash(rel), Ranges: ranges}
+	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+		ID:               "chunked-checkpoint-intermediate-root",
+		Point:            powerlossoracle.AfterMetaWrite,
+		Occurrence:       1,
+		Model:            snapshot,
+		TargetMeta:       &target,
+		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantFullWriteback},
+		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+			powerlossoracle.VariantSyncedOnly:     powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantTargetMetaOnly: powerlossoracle.ExpectedCorruption,
+			powerlossoracle.VariantFullWriteback:  powerlossoracle.ExpectedCorruption,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = closeFn() }()
-	if result.Rejected {
-		t.Logf("public Open rejected actual intermediate chunk image: %v", result.Err)
-		return
+	selector, err := powerlossoracle.ReplaySelectorFromEnv()
+	if err != nil {
+		t.Fatal(err)
 	}
-	first, firstErr := reopened.Get([]byte("chunk/000"))
-	if firstErr != nil || !bytes.Equal(first, []byte("value-000")) {
-		t.Fatalf("actual cut selected the wholly old root instead of an intermediate chunk: first=%q err=%v commit=%d", first, firstErr, result.CommitSeq)
+	variants, err = powerlossoracle.SelectReplayVariant(variants, selector)
+	if err != nil {
+		t.Fatal(err)
 	}
-	expected := map[string]map[string]string{"chunk/": {}}
-	observed := map[string]map[string]string{"chunk/": {}}
-	for i := 0; i < 64; i++ {
-		key := fmt.Sprintf("chunk/%03d", i)
-		value := fmt.Sprintf("value-%03d", i)
-		expected["chunk/"][key] = value
-		if got, err := reopened.Get([]byte(key)); err == nil {
-			observed["chunk/"][key] = string(got)
-		}
+	for _, variant := range variants {
+		variant := variant
+		t.Run(variant.ID, func(t *testing.T) {
+			result, reopened, closeFn, err := powerlossreopen.Stable(variant.Model, opts, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = closeFn() }()
+			if variant.Family != powerlossoracle.VariantTargetMetaOnly {
+				return
+			}
+			if result.Rejected {
+				t.Logf("public Open rejected actual intermediate chunk image: %v", result.Err)
+				return
+			}
+			first, firstErr := reopened.Get([]byte("chunk/000"))
+			if firstErr != nil || !bytes.Equal(first, []byte("value-000")) {
+				t.Fatalf("actual cut selected the wholly old root instead of an intermediate chunk: first=%q err=%v commit=%d", first, firstErr, result.CommitSeq)
+			}
+			expected := map[string]map[string]string{"chunk/": {}}
+			observed := map[string]map[string]string{"chunk/": {}}
+			for i := 0; i < 64; i++ {
+				key := fmt.Sprintf("chunk/%03d", i)
+				value := fmt.Sprintf("value-%03d", i)
+				expected["chunk/"][key] = value
+				if got, err := reopened.Get([]byte(key)); err == nil {
+					observed["chunk/"][key] = string(got)
+				}
+			}
+			scenario := powerlossoracle.Scenario{
+				Name:                      "actual-chunked-sync-intermediate-root",
+				Cut:                       powerlossoracle.AfterMetaWrite,
+				Generations:               []powerlossoracle.Generation{{Sequence: result.CommitSeq, Recoverable: true, Resources: completePowerLossClosure("chunk"), AppliedLSN: result.AppliedLSN}},
+				LatestSealedSequence:      result.CommitSeq,
+				SelectedSequence:          result.CommitSeq,
+				OpenedSequence:            result.CommitSeq,
+				OpenedAppliedLSN:          result.AppliedLSN,
+				ExpectedKeyValuesByPrefix: expected,
+				ObservedKeyValuesByPrefix: observed,
+				ReopenAttempted:           true,
+			}
+			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantKeyStateMismatch); err != nil {
+				t.Fatalf("successful public Open did not produce intermediate-root diagnosis: %v", err)
+			}
+		})
 	}
-	scenario := powerlossoracle.Scenario{
-		Name:                      "actual-chunked-sync-intermediate-root",
-		Cut:                       powerlossoracle.AfterMetaWrite,
-		Generations:               []powerlossoracle.Generation{{Sequence: result.CommitSeq, Recoverable: true, Resources: completePowerLossClosure("chunk"), AppliedLSN: result.AppliedLSN}},
-		LatestSealedSequence:      result.CommitSeq,
-		SelectedSequence:          result.CommitSeq,
-		OpenedSequence:            result.CommitSeq,
-		OpenedAppliedLSN:          result.AppliedLSN,
-		ExpectedKeyValuesByPrefix: expected,
-		ObservedKeyValuesByPrefix: observed,
-		ReopenAttempted:           true,
-	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantKeyStateMismatch); err != nil {
-		t.Fatalf("successful public Open did not produce intermediate-root diagnosis: %v", err)
-	}
+	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
 }
 
 func TestPowerLossOracleFixtureInventoryReopensStableOnly(t *testing.T) {

@@ -43,7 +43,47 @@ there is no on-disk publication seal yet. DUR-09
 [#3679](https://github.com/snissn/gomap/issues/3679) will retarget those hooks
 to the real seal write.
 
-### 0.2 Counterexample-to-conformance map
+### 0.2 Bounded adversarial crash-image generation
+
+`powerlossoracle.GenerateVariants` expands a registered cut into a bounded,
+deterministic set of legal partial writebacks. The committed limit is 256
+images per cut. Generation fails closed when a requested family is unknown,
+inapplicable, silently omitted, or would exceed that limit. Logical resource
+IDs, cut occurrence, family, and format boundary determine stable variant IDs
+and seeds; host paths and input/map iteration order do not. Stable ID ordering
+also gives balanced deterministic sharding through `ShardVariants`. Every
+generated variant carries one of the ledger result categories, and generation
+fails when an applicable family has no declared expected result.
+
+The registered families cover the synced baseline, target-meta-only and
+one-missing-dependency ordering controls, file-data/directory-namespace
+mismatches for newly created names, complete writeback, old-live-page reuse,
+and torn format-aware ranges. Torn-range registration currently covers meta,
+root-record, freelist, and index-page boundaries. A real cut requests only its
+applicable formats; the root-record boundary becomes a production publication
+boundary when DUR-09 #3679 adds the sealed root record.
+
+Every generated image used by the integration witnesses is materialized and
+passed to normal public `Open`. A single image can be replayed without a host
+path by copying its exact `TREEDB_POWERLOSS_CUT_ID`,
+`TREEDB_POWERLOSS_VARIANT_ID`, and `TREEDB_POWERLOSS_SEED` values into the
+recorded test command. `TreeDB/testdata/power_loss_counterexamples.json` is the
+machine-readable invariant ledger. Validation fails when its schema, requested
+family coverage, replay identity, or maximum changes, and when a named known
+counterexample disappears without an explicit resolved disposition.
+
+The focused generator and ledger command is:
+
+```sh
+GOWORK=off go test ./TreeDB/internal/powerlossoracle ./TreeDB -run 'GenerateVariants|ReplaySelector|CounterexampleLedger|AdversarialNewFileNamespaceMismatch|CounterexampleNewMetaMissingClosure' -v -count=1
+```
+
+Verbose output reports generated image count, generation runtime, peak
+materialized temporary-image bytes, family coverage, and committed-fixture
+shard balance. These measurements bound test-harness cost; they are not
+production throughput evidence.
+
+### 0.3 Counterexample-to-conformance map
 
 Counterexamples use real production calls and bytes, then pass only when normal
 public open/read rejects or diagnoses the selectively persisted image. They do
