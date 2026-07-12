@@ -367,6 +367,50 @@ func TestExactHardByteBoundaryAcknowledgesWithoutWaiting(t *testing.T) {
 	}
 }
 
+func TestExactHardCommitBoundaryAcknowledgesThenNextCommitWaits(t *testing.T) {
+	clock := NewFakeClock(time.Unix(275, 0))
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return PublishResult{Outcome: PublishSucceeded}
+		case <-ctx.Done():
+			return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	for seq := uint64(1); seq <= HardPendingCommits; seq++ {
+		if err := c.Enqueue(context.Background(), candidate(t, seq, 0)); err != nil {
+			t.Fatalf("exact-boundary seq=%d: %v", seq, err)
+		}
+	}
+	if stats := c.Stats(); stats.PendingCommits != HardPendingCommits || stats.AdmissionWaits != 0 {
+		t.Fatalf("exact commit boundary stats=%+v", stats)
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.Supersede(context.Background(), candidate(t, HardPendingCommits+1, 0)) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("commit hard crossing did not publish")
+	}
+	waitFor(t, func() bool { return c.Stats().AdmissionWaits == 1 })
+	select {
+	case err := <-done:
+		t.Fatalf("65,537th commit acknowledged before progress: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHardAdmissionReturnsPublisherErrorOrContext(t *testing.T) {
 	want := errors.New("pre-meta")
 	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
@@ -603,6 +647,24 @@ func TestStopCancelsStalledPublisherWithoutLeaks(t *testing.T) {
 	}
 	if stats := c.Stats(); stats.WaiterCount != 0 || stats.ActiveBuilders != 0 {
 		t.Fatalf("leaked ownership stats=%+v", stats)
+	}
+}
+
+func TestStopReturnsSameDebtResultToEveryCaller(t *testing.T) {
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(280, 0)), Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("first stop=%v", err)
+	}
+	if err := c.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("second stop=%v", err)
 	}
 }
 

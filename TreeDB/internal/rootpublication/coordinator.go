@@ -48,6 +48,7 @@ type Coordinator struct {
 	drainRequests  uint64
 	stopping       bool
 	stopped        bool
+	stopErr        error
 	poison         error
 
 	visible           Frontier
@@ -321,31 +322,36 @@ func (c *Coordinator) endDrain() {
 func (c *Coordinator) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	if c.stopped {
+		err := c.stopErr
 		c.mu.Unlock()
-		return nil
+		return err
 	}
-	c.stopping = true
-	c.cancel()
-	if c.timer != nil {
-		c.timer.Stop()
-		c.timer = nil
+	if !c.stopping {
+		c.stopping = true
+		c.cancel()
+		if c.timer != nil {
+			c.timer.Stop()
+			c.timer = nil
+		}
+		c.failWaitersLocked(ErrPublicationStopped, true)
+		c.notifyLocked()
 	}
-	c.failWaitersLocked(ErrPublicationStopped, true)
-	c.notifyLocked()
 	c.mu.Unlock()
 	c.signal()
 	select {
 	case <-c.done:
 		c.mu.Lock()
-		debt := len(c.pending) != 0
-		c.pending = nil
-		c.pendingBytes = 0
-		c.stopped = true
-		c.mu.Unlock()
-		if debt {
-			return ErrPublicationStopped
+		if !c.stopped {
+			if len(c.pending) != 0 {
+				c.stopErr = ErrPublicationStopped
+			}
+			c.pending = nil
+			c.pendingBytes = 0
+			c.stopped = true
 		}
-		return nil
+		err := c.stopErr
+		c.mu.Unlock()
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
