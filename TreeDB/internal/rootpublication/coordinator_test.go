@@ -617,6 +617,37 @@ func TestAmbiguousResultPoisonsFutureOperations(t *testing.T) {
 	}
 }
 
+func TestPoisonedWaitThroughFailsClosedBeforeDurableFastPath(t *testing.T) {
+	want := errors.New("later meta sync unknown")
+	c, err := New(Options{
+		InitialDurableFrontier: NewFrontier(5, 50, 100, 5, 5),
+		Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishAmbiguous, Err: want}
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 6, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitThrough(context.Background(), 6); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("poisoning wait=%v", err)
+	}
+	if err := c.WaitThrough(context.Background(), 5); !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, want) {
+		t.Fatalf("already-durable wait bypassed poison: %v", err)
+	}
+	if err := c.Enqueue(context.Background(), nil); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("invalid enqueue bypassed poison: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.AcquireBuilder(canceled); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("canceled admission bypassed poison: %v", err)
+	}
+}
+
 func TestStopCancelsStalledPublisherWithoutLeaks(t *testing.T) {
 	entered := make(chan struct{})
 	c, err := New(Options{Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {

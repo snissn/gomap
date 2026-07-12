@@ -122,13 +122,14 @@ func (c *Coordinator) Supersede(ctx context.Context, candidate *PreparedRootCand
 }
 
 func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandidate, supersede bool) error {
-	if candidate == nil {
-		return fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
-	}
 	c.mu.Lock()
 	if err := c.terminalErrorLocked(); err != nil {
 		c.mu.Unlock()
 		return err
+	}
+	if candidate == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
 	}
 	if candidate.frontier.commitSeq <= c.visible.commitSeq ||
 		(c.visible.commitSeq != 0 && !candidate.frontier.Dominates(c.visible)) {
@@ -201,13 +202,13 @@ func (c *Coordinator) waitForAdmission(ctx context.Context, seq, failureGenerati
 // every waiter captured by that attempt; a later call explicitly retries.
 func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
 	c.mu.Lock()
-	if c.durable.commitSeq >= seq {
-		c.mu.Unlock()
-		return nil
-	}
 	if err := c.terminalErrorLocked(); err != nil {
 		c.mu.Unlock()
 		return err
+	}
+	if c.durable.commitSeq >= seq {
+		c.mu.Unlock()
+		return nil
 	}
 	if seq > c.visible.commitSeq {
 		c.mu.Unlock()
@@ -223,6 +224,11 @@ func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
 		return err
 	case <-ctx.Done():
 		c.mu.Lock()
+		if err := c.terminalErrorLocked(); err != nil {
+			c.removeWaiterLocked(waiter)
+			c.mu.Unlock()
+			return err
+		}
 		if c.durable.commitSeq >= seq {
 			c.removeWaiterLocked(waiter)
 			c.mu.Unlock()
@@ -284,8 +290,7 @@ func (c *Coordinator) Drain(ctx context.Context) error {
 	defer c.endDrain()
 	for {
 		c.mu.Lock()
-		if c.poison != nil {
-			err := c.poison
+		if err := c.terminalErrorLocked(); err != nil {
 			c.mu.Unlock()
 			return err
 		}

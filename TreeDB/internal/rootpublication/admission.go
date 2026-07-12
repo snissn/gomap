@@ -21,12 +21,12 @@ type builderLease struct {
 }
 
 func (c *Coordinator) AcquireBuilder(ctx context.Context) (*BuilderToken, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.terminalErrorLocked(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	c.activeBuilders++
