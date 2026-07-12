@@ -508,14 +508,8 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 }
 
 func classifyCommandWALReplayFrames(frames []commandWALReplayFrame, segments []logSegment, applied uint64, dictLookup valuelog.DictLookup) (complete, tail []commandWALReplayFrame, diagnostic CommandWALRecoveryDiagnostic, ridMap map[uint64]page.ValuePtr, err error) {
-	expected := applied + 1
 	needsRIDMap := false
 	for _, frame := range frames {
-		if frame.env.LSN != expected {
-			err = fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, expected-1, frame.env.LSN)
-			return
-		}
-		expected++
 		fence, present, fenceErr := commitlog.RawKVExternalRefFence(&frame.env)
 		if fenceErr != nil {
 			err = fenceErr
@@ -533,7 +527,16 @@ func classifyCommandWALReplayFrames(frames []commandWALReplayFrame, segments []l
 	}
 	firstRelaxedMissing := -1
 	var firstRelaxedMissingRIDs map[uint64]struct{}
+	expected := applied + 1
 	for i, frame := range frames {
+		// A gap before the repair boundary is a real replay hole. Once a
+		// relaxed frame with a missing dependency starts the discarded suffix,
+		// later gaps are part of that same suffix and must not prevent repair.
+		if firstRelaxedMissing < 0 && frame.env.LSN != expected {
+			err = fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, expected-1, frame.env.LSN)
+			return
+		}
+		expected = frame.env.LSN + 1
 		missing := make(map[uint64]struct{})
 		if frame.env.Kind == commitlog.CommandKindRawKVBatch {
 			err = commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, _ []byte, value []byte) error {

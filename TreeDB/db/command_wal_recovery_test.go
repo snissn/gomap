@@ -1756,6 +1756,35 @@ func TestCommandWALRelaxedMissingRIDReadOnlyRequiresRecoveryWithoutMutation(t *t
 	}
 }
 
+func TestCommandWALRelaxedMissingRIDAllowsGapInsideDiscardedSuffix(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 1, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("prefix"), Value: []byte("kept")}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 2, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+	// Simulate another lane persisting LSN 4 after LSN 3 was lost. The gap is
+	// inside the suffix already made incomplete by the relaxed LSN 2 frame.
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 4, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix"), Value: []byte("discarded")}})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "prefix", "kept")
+	for _, key := range []string{"missing", "suffix"} {
+		if got, err := reopen.Get([]byte(key)); err != nil || got != nil {
+			t.Fatalf("Get(%q)=%q err=%v, want discarded", key, got, err)
+		}
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after repair=%d, want 1", got)
+	}
+	if got := commandWALTestStatUint64(t, reopen.Stats(), "treedb.command_wal.recovery.first_discarded_lsn"); got != 2 {
+		t.Fatalf("first discarded lsn=%d, want 2", got)
+	}
+}
+
 func TestRepairIncompleteCommandWALTailIsCrashIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	walDir := WALDirPath(dir)
