@@ -141,6 +141,23 @@ func TestCanonicalJSONBenchRequiresClickHouseComparisonArtifact(t *testing.T) {
 	assertErrorContains(t, err, "clickhouse result[0]:")
 }
 
+func TestCanonicalJSONBenchRejectsArtifactSymlinkEscapingRoot(t *testing.T) {
+	manifest := validManifest(t)
+	outsideRoot := t.TempDir()
+	outsidePath := filepath.Join(outsideRoot, "q2.bench.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(manifest.ArtifactRoot, "profiles", "escaped-q2.bench.txt")
+	if err := os.Symlink(outsidePath, symlinkPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	manifest.Resources[0].Artifact = filepath.ToSlash("profiles/escaped-q2.bench.txt")
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "resources[0].artifact must resolve inside artifact_root")
+}
+
 func TestCanonicalJSONBenchCrossChecksClickHouseIdentity(t *testing.T) {
 	manifest := validManifest(t)
 	result := validClickHouseResult(1_000_000)

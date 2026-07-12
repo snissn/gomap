@@ -225,8 +225,8 @@ func Validate(manifest Manifest, baseDir string) error {
 		if !filepath.IsAbs(resultPath) {
 			resultPath = filepath.Join(baseDir, resultPath)
 		}
-		if artifactRoot != "" && !pathWithin(artifactRoot, resultPath) {
-			add("treedb.result_paths[%d] must be inside artifact_root", index)
+		if artifactRoot != "" && !pathResolvesWithin(artifactRoot, resultPath) {
+			add("treedb.result_paths[%d] must resolve inside artifact_root", index)
 		}
 		if err := validateResult(resultPath, index, manifest, add); err != nil {
 			add("treedb result[%d]: %v", index, err)
@@ -237,8 +237,8 @@ func Validate(manifest Manifest, baseDir string) error {
 		if !filepath.IsAbs(resultPath) {
 			resultPath = filepath.Join(baseDir, resultPath)
 		}
-		if artifactRoot != "" && !pathWithin(artifactRoot, resultPath) {
-			add("clickhouse.result_paths[%d] must be inside artifact_root", index)
+		if artifactRoot != "" && !pathResolvesWithin(artifactRoot, resultPath) {
+			add("clickhouse.result_paths[%d] must resolve inside artifact_root", index)
 		}
 		if err := validateClickHouseResult(resultPath, index, manifest, add); err != nil {
 			add("clickhouse result[%d]: %v", index, err)
@@ -288,8 +288,8 @@ func validateEvidenceArtifacts(artifactRoot string, manifest Manifest, add func(
 		if !filepath.IsAbs(resolved) {
 			resolved = filepath.Join(artifactRoot, resolved)
 		}
-		if !pathWithin(artifactRoot, resolved) {
-			add("%s must be inside artifact_root", field)
+		if !pathResolvesWithin(artifactRoot, resolved) {
+			add("%s must resolve inside artifact_root", field)
 			return
 		}
 		info, err := os.Stat(resolved)
@@ -316,6 +316,21 @@ func pathWithin(root, path string) bool {
 	}
 	relative, err := filepath.Rel(root, path)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func pathResolvesWithin(root, path string) bool {
+	if !pathWithin(root, path) {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	return pathWithin(resolvedRoot, resolvedPath)
 }
 
 func validatePins(pins Pins, add func(string, ...any)) {
