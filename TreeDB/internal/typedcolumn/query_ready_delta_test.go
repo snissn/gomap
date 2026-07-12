@@ -779,10 +779,8 @@ func BenchmarkQueryReadyDeltaGenerationBuild(b *testing.B) {
 
 func queryReadyDeltaBenchmarkFixture(tb testing.TB, generations int, shape string) (*QueryReadyBaseGeneration, []*QueryReadyDeltaGeneration) {
 	tb.Helper()
-	const (
-		baseRows  = 512
-		deltaRows = 64
-	)
+	baseRows := queryReadyDeltaBenchmarkRows(tb, "QUERY_READY_BENCH_BASE_ROWS", 512)
+	deltaRows := queryReadyDeltaBenchmarkRows(tb, "QUERY_READY_BENCH_DELTA_ROWS", 64)
 	cardinality := 4
 	if shape == "high_cardinality" {
 		cardinality = baseRows
@@ -827,6 +825,19 @@ func queryReadyDeltaBenchmarkFixture(tb testing.TB, generations int, shape strin
 		deltas = append(deltas, delta)
 	}
 	return base, deltas
+}
+
+func queryReadyDeltaBenchmarkRows(tb testing.TB, name string, fallback int) int {
+	tb.Helper()
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	rows, err := strconv.Atoi(raw)
+	if err != nil || rows <= 0 {
+		tb.Fatalf("%s=%q must be a positive integer", name, raw)
+	}
+	return rows
 }
 
 func queryReadyDeltaBenchmarkNullableImage(tb testing.TB, partID uint64, rows, generationOffset int) ColumnPartImage {

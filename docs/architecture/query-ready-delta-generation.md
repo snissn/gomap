@@ -79,3 +79,9 @@ QRBG copied into QRDG, and tombstone-table bytes. Peak working bytes account for
 the simultaneously live inner and outer buffers. Process peak RSS remains a
 separate same-host measurement rather than being inferred from Go allocation
 profiles.
+
+The benchmark fixture defaults remain CI-sized. Same-host production-shape
+captures may set `QUERY_READY_BENCH_BASE_ROWS` and
+`QUERY_READY_BENCH_DELTA_ROWS`; both must be positive integers. For example,
+the M2 evidence used 1,000,000 base rows and 10,000 rows per delta while
+selecting the low-cardinality `N=0`, `N=4`, and `N=8` sub-benchmarks.
