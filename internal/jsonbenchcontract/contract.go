@@ -257,6 +257,7 @@ func validateIndependentResultPaths(field string, paths []string, baseDir string
 		add("%s has %d independent artifacts, want %d", field, len(paths), attempts)
 	}
 	seen := make(map[string]bool, len(paths))
+	var seenFiles []os.FileInfo
 	for index, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			add("%s[%d] is required", field, index)
@@ -272,7 +273,20 @@ func validateIndependentResultPaths(field string, paths []string, baseDir string
 			continue
 		}
 		cleaned = filepath.Clean(cleaned)
-		if seen[cleaned] {
+		if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+			cleaned = resolved
+		}
+		duplicate := seen[cleaned]
+		if info, err := os.Stat(cleaned); err == nil {
+			for _, previous := range seenFiles {
+				if os.SameFile(previous, info) {
+					duplicate = true
+					break
+				}
+			}
+			seenFiles = append(seenFiles, info)
+		}
+		if duplicate {
 			add("%s[%d] duplicates %q; attempts must be independent artifacts", field, index, path)
 		}
 		seen[cleaned] = true

@@ -66,6 +66,18 @@ func TestCanonicalJSONBenchRejectsDuplicateIndependentAttemptPaths(t *testing.T)
 	assertErrorContains(t, err, "treedb.result_paths[4] duplicates")
 }
 
+func TestCanonicalJSONBenchRejectsAliasedIndependentAttemptPaths(t *testing.T) {
+	manifest := validManifest(t)
+	aliasPath := filepath.Join(manifest.ArtifactRoot, "attempts", "5", "treedb", "alias.json")
+	if err := os.Symlink(manifest.TreeDB.ResultPaths[0], aliasPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	manifest.TreeDB.ResultPaths[4] = aliasPath
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "treedb.result_paths[4] duplicates")
+}
+
 func TestCanonicalJSONBenchReportValidatesEveryRow(t *testing.T) {
 	manifest := validManifest(t)
 	rows := []map[string]any{
