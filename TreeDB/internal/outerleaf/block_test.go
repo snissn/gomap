@@ -3,6 +3,7 @@ package outerleaf
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/golang/snappy"
@@ -1374,12 +1375,23 @@ func TestOuterLeafPoolCapsBounded(t *testing.T) {
 	}
 }
 
-func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
-	for outerLeafLeaseKeysPool.Get() != nil {
-	}
-	t.Cleanup(func() {
-		for outerLeafLeaseKeysPool.Get() != nil {
+// drainOuterLeafTestPool is deliberately bounded. A sync.Pool is not an
+// enumerable container, and another goroutine may return an object while a
+// test is cleaning up. An unbounded Get loop can therefore keep a package test
+// alive indefinitely even after the test body has passed.
+func drainOuterLeafTestPool(pool *sync.Pool) {
+	const maxGets = 1024
+	for i := 0; i < maxGets; i++ {
+		if pool.Get() == nil {
+			return
 		}
+	}
+}
+
+func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
+	drainOuterLeafTestPool(&outerLeafLeaseKeysPool)
+	t.Cleanup(func() {
+		drainOuterLeafTestPool(&outerLeafLeaseKeysPool)
 	})
 
 	undersized := make([][]byte, 0, 2)
@@ -1392,11 +1404,9 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 }
 
 func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
-	for outerLeafLeaseArenaPool.Get() != nil {
-	}
+	drainOuterLeafTestPool(&outerLeafLeaseArenaPool)
 	t.Cleanup(func() {
-		for outerLeafLeaseArenaPool.Get() != nil {
-		}
+		drainOuterLeafTestPool(&outerLeafLeaseArenaPool)
 	})
 
 	undersized := make([]byte, 0, 8)
@@ -1409,11 +1419,9 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 }
 
 func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
-	for outerLeafLeaseKeysPool.Get() != nil {
-	}
+	drainOuterLeafTestPool(&outerLeafLeaseKeysPool)
 	t.Cleanup(func() {
-		for outerLeafLeaseKeysPool.Get() != nil {
-		}
+		drainOuterLeafTestPool(&outerLeafLeaseKeysPool)
 	})
 
 	const warmCap = 32
@@ -1464,11 +1472,9 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 }
 
 func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
-	for outerLeafLeaseArenaPool.Get() != nil {
-	}
+	drainOuterLeafTestPool(&outerLeafLeaseArenaPool)
 	t.Cleanup(func() {
-		for outerLeafLeaseArenaPool.Get() != nil {
-		}
+		drainOuterLeafTestPool(&outerLeafLeaseArenaPool)
 	})
 
 	const warmCap = 64
