@@ -147,6 +147,80 @@ func TestVisibleFrontierDoesNotSatisfyDurabilityWaiter(t *testing.T) {
 	}
 }
 
+func TestWaiterRemovalClearsDiscardedBackingSlots(t *testing.T) {
+	newWaiters := func() []*durabilityWaiter {
+		return []*durabilityWaiter{
+			{seq: 1, ch: make(chan error, 1)},
+			{seq: 2, ch: make(chan error, 1)},
+			{seq: 3, ch: make(chan error, 1)},
+		}
+	}
+	assertClearedTail := func(t *testing.T, waiters []*durabilityWaiter) {
+		t.Helper()
+		backing := waiters[:cap(waiters)]
+		for i := len(waiters); i < len(backing); i++ {
+			if backing[i] != nil {
+				t.Fatalf("discarded waiter retained at backing slot %d", i)
+			}
+		}
+	}
+	t.Run("remove", func(t *testing.T) {
+		c := &Coordinator{waiters: newWaiters()}
+		c.removeWaiterLocked(c.waiters[1])
+		assertClearedTail(t, c.waiters)
+	})
+	t.Run("captured failure", func(t *testing.T) {
+		c := &Coordinator{waiters: newWaiters()}
+		c.failCapturedWaitersLocked(errors.New("captured"), []*durabilityWaiter{c.waiters[0], c.waiters[2]})
+		assertClearedTail(t, c.waiters)
+	})
+	t.Run("durable satisfaction", func(t *testing.T) {
+		c := &Coordinator{waiters: newWaiters(), durable: NewFrontier(2, 0, 0, 0, 0)}
+		c.satisfyWaitersLocked()
+		assertClearedTail(t, c.waiters)
+	})
+	t.Run("visible failure", func(t *testing.T) {
+		c := &Coordinator{waiters: newWaiters(), visible: NewFrontier(2, 0, 0, 0, 0)}
+		c.failWaitersLocked(errors.New("visible"), false)
+		assertClearedTail(t, c.waiters)
+	})
+	t.Run("terminal failure", func(t *testing.T) {
+		c := &Coordinator{waiters: newWaiters()}
+		c.failWaitersLocked(ErrPublicationStopped, true)
+		if c.waiters != nil {
+			t.Fatalf("terminal waiter storage retained: len=%d cap=%d", len(c.waiters), cap(c.waiters))
+		}
+	})
+}
+
+func TestStopDropsWaiterBackingStorage(t *testing.T) {
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(150, 0)), Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {
+		<-ctx.Done()
+		return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- c.WaitThrough(context.Background(), 1) }()
+	waitFor(t, func() bool { return c.Stats().WaiterCount == 1 && c.Stats().PublishCalls == 1 })
+	if err := c.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("stop=%v", err)
+	}
+	if err := <-waitDone; !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("wait after stop=%v", err)
+	}
+	c.mu.Lock()
+	waiters := c.waiters
+	c.mu.Unlock()
+	if waiters != nil {
+		t.Fatalf("stop retained waiter storage: len=%d cap=%d", len(waiters), cap(waiters))
+	}
+}
+
 func TestSupersedeRetainsDebtWaitersAndDeterministicObligationUnion(t *testing.T) {
 	calls := make(chan *PreparedRootCandidate, 1)
 	release := make(chan struct{})
@@ -286,6 +360,181 @@ func TestTimerAnchorsFirstCandidateAndAdaptiveDelay(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("adaptive timer did not fire")
+	}
+}
+
+func TestSatisfiedInFlightWaiterDoesNotLeakImmediateWake(t *testing.T) {
+	clock := NewFakeClock(time.Unix(200, 0))
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	calls := make(chan uint64, 2)
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(ctx context.Context, candidate *PreparedRootCandidate) PublishResult {
+		seq := candidate.Frontier().CommitSeq()
+		calls <- seq
+		if seq == 1 {
+			close(firstEntered)
+			select {
+			case <-firstRelease:
+			case <-ctx.Done():
+				return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+			}
+		}
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- c.WaitThrough(context.Background(), 1) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first publication did not start")
+	}
+	if seq := <-calls; seq != 1 {
+		t.Fatalf("first publication seq=%d", seq)
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- c.WaitThrough(context.Background(), 1) }()
+	waitFor(t, func() bool { return c.Stats().WaiterCount == 2 })
+	close(firstRelease)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		stats := c.Stats()
+		return stats.DurableCommitSeq == 1 && stats.PendingCommits == 0
+	})
+	c.mu.Lock()
+	publishNow, wakeReason := c.publishNow, c.wakeReason
+	c.mu.Unlock()
+	if publishNow || wakeReason != WakeNone {
+		t.Fatalf("satisfied waiter leaked wake: publishNow=%t reason=%q", publishNow, wakeReason)
+	}
+
+	if err := c.Enqueue(context.Background(), candidate(t, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	publishNow, timerInstalled := c.publishNow, c.timer != nil
+	c.mu.Unlock()
+	if publishNow || !timerInstalled {
+		t.Fatalf("below-soft enqueue skipped timer: publishNow=%t timerInstalled=%t", publishNow, timerInstalled)
+	}
+	clock.Advance(minPublishDelay - time.Millisecond)
+	select {
+	case seq := <-calls:
+		t.Fatalf("seq %d published before timer window", seq)
+	default:
+	}
+	clock.Advance(time.Millisecond)
+	select {
+	case seq := <-calls:
+		if seq != 2 {
+			t.Fatalf("timer publication seq=%d", seq)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timer publication did not start")
+	}
+}
+
+func TestSuccessfulPublishPreservesRealRemainingImmediateTriggers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bytes uint64
+		wake  func(*Coordinator) <-chan error
+	}{
+		{name: "waiter", bytes: 1, wake: func(c *Coordinator) <-chan error {
+			done := make(chan error, 1)
+			go func() { done <- c.WaitThrough(context.Background(), 2) }()
+			waitFor(t, func() bool { return c.Stats().WaiterCount == 2 })
+			return done
+		}},
+		{name: "drain", bytes: 1, wake: func(c *Coordinator) <-chan error {
+			done := make(chan error, 1)
+			go func() { done <- c.Drain(context.Background()) }()
+			waitFor(t, func() bool {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				return c.drainRequests == 1 && c.publishNow
+			})
+			return done
+		}},
+		{name: "soft debt", bytes: SoftPendingBytes, wake: func(c *Coordinator) <-chan error {
+			waitFor(t, func() bool {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				return c.publishNow && c.wakeReason == WakeSoftBytes
+			})
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := NewFakeClock(time.Unix(300, 0))
+			firstEntered := make(chan struct{})
+			firstRelease := make(chan struct{})
+			calls := make(chan uint64, 2)
+			c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(ctx context.Context, candidate *PreparedRootCandidate) PublishResult {
+				seq := candidate.Frontier().CommitSeq()
+				calls <- seq
+				if seq == 1 {
+					close(firstEntered)
+					select {
+					case <-firstRelease:
+					case <-ctx.Done():
+						return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+					}
+				}
+				return PublishResult{Outcome: PublishSucceeded}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stopClean(t, c)
+			if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+				t.Fatal(err)
+			}
+			firstDone := make(chan error, 1)
+			go func() { firstDone <- c.WaitThrough(context.Background(), 1) }()
+			select {
+			case <-firstEntered:
+			case <-time.After(time.Second):
+				t.Fatal("first publication did not start")
+			}
+			if seq := <-calls; seq != 1 {
+				t.Fatalf("first publication seq=%d", seq)
+			}
+			if err := c.Supersede(context.Background(), candidate(t, 2, tc.bytes)); err != nil {
+				t.Fatal(err)
+			}
+			triggerDone := tc.wake(c)
+			close(firstRelease)
+			select {
+			case seq := <-calls:
+				if seq != 2 {
+					t.Fatalf("remaining immediate publication seq=%d", seq)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remaining immediate trigger was lost")
+			}
+			if err := <-firstDone; err != nil {
+				t.Fatal(err)
+			}
+			if triggerDone != nil {
+				if err := <-triggerDone; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				waitFor(t, func() bool { return c.Stats().DurableCommitSeq == 2 })
+			}
+		})
 	}
 }
 
@@ -752,6 +1001,51 @@ func TestNestedAdmissionUsesOneTokenAndCallbackRunsUnlocked(t *testing.T) {
 	case <-callback:
 	case <-time.After(time.Second):
 		t.Fatal("publisher deadlocked after nested release")
+	}
+}
+
+func TestCopiedAndReleasedBuilderHandleCannotResurrectOrDoubleReleaseLease(t *testing.T) {
+	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	outer, err := c.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := outer.Nested()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := *outer
+	outer.Release()
+	clone.Release()
+	if stats := c.Stats(); stats.ActiveBuilders != 1 {
+		t.Fatalf("copied handle double-released shared lease: %+v", stats)
+	}
+	if _, err := outer.Nested(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("released outer nested again: %v", err)
+	}
+	if _, err := clone.Nested(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("released clone nested again: %v", err)
+	}
+	grandchild, err := child.Nested()
+	if err != nil {
+		t.Fatalf("live child could not nest: %v", err)
+	}
+	child.Release()
+	if stats := c.Stats(); stats.ActiveBuilders != 1 {
+		t.Fatalf("shared lease released before final live handle: %+v", stats)
+	}
+	grandchild.Release()
+	if stats := c.Stats(); stats.ActiveBuilders != 0 {
+		t.Fatalf("shared lease not released exactly once: %+v", stats)
+	}
+	if _, err := child.Nested(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("released child nested again: %v", err)
 	}
 }
 

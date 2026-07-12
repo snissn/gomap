@@ -249,7 +249,10 @@ func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
 func (c *Coordinator) removeWaiterLocked(target *durabilityWaiter) {
 	for i, waiter := range c.waiters {
 		if waiter == target {
-			c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
+			copy(c.waiters[i:], c.waiters[i+1:])
+			last := len(c.waiters) - 1
+			c.waiters[last] = nil
+			c.waiters = c.waiters[:last]
 			break
 		}
 	}
@@ -334,10 +337,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 	if !c.stopping {
 		c.stopping = true
 		c.cancel()
-		if c.timer != nil {
-			c.timer.Stop()
-			c.timer = nil
-		}
+		c.clearPublishRequestLocked()
 		c.failWaitersLocked(ErrPublicationStopped, true)
 		c.notifyLocked()
 	}
@@ -402,6 +402,7 @@ func (c *Coordinator) run() {
 			}
 			candidate := coalesceCandidates(group)
 			c.publishNow = false
+			c.wakeReason = WakeNone
 			c.publishing = true
 			c.publishCalls++
 			if c.lastRetryableError != nil {
@@ -489,24 +490,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		}
 		c.lastRetryableError = nil
 		c.satisfyWaitersLocked()
-		if c.timer != nil {
-			c.timer.Stop()
-			c.timer = nil
-		}
-		if len(c.pending) != 0 {
-			c.firstPendingAt = c.clock.Now()
-			if c.drainRequests != 0 || len(c.waiters) != 0 || c.pendingBytes >= SoftPendingBytes {
-				reason := WakeDrain
-				if len(c.waiters) != 0 {
-					reason = WakeWaiter
-				} else if c.pendingBytes >= SoftPendingBytes {
-					reason = WakeSoftBytes
-				}
-				c.requestPublishLocked(reason)
-			} else {
-				c.installTimerLocked()
-			}
-		}
+		c.recomputePublishRequestLocked()
 	case PublishRetryableFailure:
 		c.recordRetryableLocked(result.Err, c.activeAttempt)
 	case PublishAmbiguous:
@@ -516,6 +500,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		}
 		c.poison = errors.Join(ErrRecoveryRequired, err)
 		c.failWaitersLocked(c.poison, true)
+		c.clearPublishRequestLocked()
 	default:
 		c.recordRetryableLocked(fmt.Errorf("%w: unknown outcome %d", ErrPublisherProtocol, result.Outcome), c.activeAttempt)
 	}
@@ -532,7 +517,39 @@ func (c *Coordinator) recordRetryableLocked(err error, attempt PublishAttempt) {
 	c.lastRetryableError = err
 	c.lastFailureSeq = attempt.candidate.frontier.commitSeq
 	c.failCapturedWaitersLocked(err, attempt.waiters)
+	if !c.publishNow {
+		c.wakeReason = WakeNone
+	}
 	c.notifyLocked()
+}
+
+func (c *Coordinator) clearPublishRequestLocked() {
+	c.publishNow = false
+	c.wakeReason = WakeNone
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+}
+
+func (c *Coordinator) recomputePublishRequestLocked() {
+	c.clearPublishRequestLocked()
+	if len(c.pending) == 0 {
+		return
+	}
+	c.firstPendingAt = c.clock.Now()
+	switch {
+	case c.pendingBytes > HardPendingBytes || uint64(len(c.pending)) > HardPendingCommits:
+		c.requestPublishLocked(WakeHardAdmission)
+	case len(c.waiters) != 0:
+		c.requestPublishLocked(WakeWaiter)
+	case c.pendingBytes >= SoftPendingBytes:
+		c.requestPublishLocked(WakeSoftBytes)
+	case c.drainRequests != 0:
+		c.requestPublishLocked(WakeDrain)
+	default:
+		c.installTimerLocked()
+	}
 }
 
 func (c *Coordinator) failCapturedWaitersLocked(err error, captured []*durabilityWaiter) {
@@ -543,37 +560,47 @@ func (c *Coordinator) failCapturedWaitersLocked(err error, captured []*durabilit
 	for _, waiter := range captured {
 		set[waiter] = struct{}{}
 	}
-	remaining := c.waiters[:0]
-	for _, waiter := range c.waiters {
+	waiters := c.waiters
+	remaining := waiters[:0]
+	for _, waiter := range waiters {
 		if _, ok := set[waiter]; ok {
 			waiter.ch <- err
 		} else {
 			remaining = append(remaining, waiter)
 		}
 	}
+	clear(waiters[len(remaining):])
 	c.waiters = remaining
 }
 
 func (c *Coordinator) satisfyWaitersLocked() {
-	remaining := c.waiters[:0]
-	for _, waiter := range c.waiters {
+	waiters := c.waiters
+	remaining := waiters[:0]
+	for _, waiter := range waiters {
 		if waiter.seq <= c.durable.commitSeq {
 			waiter.ch <- nil
 		} else {
 			remaining = append(remaining, waiter)
 		}
 	}
+	clear(waiters[len(remaining):])
 	c.waiters = remaining
 }
 
 func (c *Coordinator) failWaitersLocked(err error, all bool) {
-	remaining := c.waiters[:0]
-	for _, waiter := range c.waiters {
+	waiters := c.waiters
+	remaining := waiters[:0]
+	for _, waiter := range waiters {
 		if all || waiter.seq <= c.visible.commitSeq {
 			waiter.ch <- err
 		} else {
 			remaining = append(remaining, waiter)
 		}
+	}
+	clear(waiters[len(remaining):])
+	if all {
+		c.waiters = nil
+		return
 	}
 	c.waiters = remaining
 }
