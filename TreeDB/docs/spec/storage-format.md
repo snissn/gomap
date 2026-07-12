@@ -7,7 +7,7 @@ The native client/server wire protocol is owned by
 TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
 That disclaimer does not permit fail-open handling of acknowledged durable
 writes. Once a directory advertises a required storage feature such as
-`command_wal_v1`, unsupported binaries must fail closed instead of serving,
+`command_wal_v2`, unsupported binaries must fail closed instead of serving,
 cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
@@ -202,7 +202,7 @@ body offset 84 / page offset 100:
 u64 MaxEntryRevision
 ```
 
-The `command_wal_v1` meta body size is 76 bytes. The revision-extension meta
+The `command_wal_v2` meta body size is 76 bytes. The revision-extension meta
 body size is 92 bytes. Bytes after offset 76 are reserved unless the
 `RevisionV1Marker` is present.
 `AppliedCommandLSN` is the physical on-disk field for the logical `AppliedLSN`
@@ -219,16 +219,16 @@ whether a meta page's `AppliedCommandLSN` bytes are authoritative.
 
 Rules:
 
-- New `command_wal_v1` directories start with `AppliedCommandLSN=0`.
+- New `command_wal_v2` directories start with `AppliedCommandLSN=0`.
 - Updating `AppliedCommandLSN` without selecting the roots that contain those
   command effects is invalid.
 - Selecting roots that contain command effects without the matching
   `AppliedCommandLSN` is invalid for durable root publish/checkpoint state.
-- Required feature validation must fail closed before full `command_wal_v1`
+- Required feature validation must fail closed before full `command_wal_v2`
   execution is enabled if a command-WAL directory is opened by code that decodes
   only the 60-byte pre-command-WAL meta body.
 - `format.json` must use version 3 or newer when `required_features` contains
-  `command_wal_v1`; putting required features in version 2 is invalid because
+  `command_wal_v2`; putting required features in version 2 is invalid because
   older binaries would ignore unknown JSON fields and fail open.
 - PR2 must add meta-page tests covering `AppliedCommandLSN` encode/decode,
   in-page marker gating for legacy/reserved bytes, alternating meta pages,
@@ -1536,7 +1536,7 @@ Compression is only kept when it is a strict size win.
 ### 8.1 Legacy Pre-Command-WAL Raw Commit Batch Payload Format
 
 This is the current pre-command-WAL raw payload format. It is not a compatibility
-target for `command_wal_v1`. When command WAL lands, raw key/value writes are
+target for `command_wal_v2`. When command WAL lands, raw key/value writes are
 encoded as `RawKVBatch` command frames and this payload may be removed from
 normal open/recovery code.
 
@@ -1570,7 +1570,7 @@ The active target for collection and catalog durability is the user-command WAL
 defined in `user-command-wal.md`. It extends the existing commit-log segment
 family instead of defining a new collection WAL file class. Typed command WAL
 frames must live in `wal/commit-l<lane>-<seq>.log` as the only WAL payload
-format once `command_wal_v1` is enabled.
+format once `command_wal_v2` is enabled.
 
 The current raw commit-log record schema is superseded, not retained as a
 compatibility payload. Raw KV writes become `RawKVBatch` command frames. New
@@ -1958,7 +1958,7 @@ Current canonical names:
 - split leaf log: `leaf_vlog/value-l<lane>-<seq>.log`
 
 Recovery parser may accept historical value-log and commit-log file names before
-`command_wal_v1` activation. Once command WAL is enabled, command frames use the
+`command_wal_v2` activation. Once command WAL is enabled, command frames use the
 shared `commit-l<lane>-<seq>.log` segment family and old raw batch payloads are
 unsupported.
 

@@ -19,7 +19,7 @@ Recommendation for #2943 tracking: do **not** treat `collection_storage document
 
 Relevant source anchors:
 
-- `cmd/unified_bench/suite_collection_storage.go`: `prepareCollectionStorageMode` saves only `RequiredFeatureCommandWALV1`, then calls `openCollectionStorageDB`.
+- `cmd/unified_bench/suite_collection_storage.go`: `prepareCollectionStorageMode` saves only `RequiredFeatureCommandWALV2`, then calls `openCollectionStorageDB`.
 - `cmd/unified_bench/suite_collection_storage.go`: `openCollectionStorageDB` calls `backenddb.Open(...)` directly.
 - `TreeDB/collections/bench_test.go`: `benchmarkCollectionStoragePolicy` defaults `data_outer=true,index_outer=false`.
 - `TreeDB/collections/bench_test.go`: `openBenchmarkBackend` calls `treedb.OptionsFor(...)` and selects `treedb.OpenBackendWithCachedLeafLog` when `IndexOuterLeavesInValueLog` is true.
@@ -59,7 +59,7 @@ Observed storage format:
 
 ```json
 {
-  "required_features": ["command_wal_v1"],
+  "required_features": ["command_wal_v2"],
   "index_outer_leaves_in_vlog": false,
   "vlog_compression": "auto",
   "vlog_block_codec": "snappy",

@@ -340,7 +340,7 @@ func TestTypedColumnInt64ScanManifestSetupMismatchFailsClosed(t *testing.T) {
 
 func TestTypedColumnInt64ScanReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -372,7 +372,7 @@ func TestTypedColumnInt64ScanReopen(t *testing.T) {
 
 func TestTypedColumnInt64ScanMultipartLatestVisibleUpdatesDeletes(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -754,7 +754,7 @@ func TestTypedColumnInt64PreparedAllPredicateSkipsPruningMetadata(t *testing.T) 
 
 func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -996,7 +996,7 @@ func appendUnalignedTypedColumnAssetCopyForTest(t *testing.T, rootDir string, re
 
 func TestTypedColumnInt64PreparedStatsRoundTripReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1433,7 +1433,7 @@ func TestTypedColumnInt64RawSchemaRejectsLegacyDeltaAsset(t *testing.T) {
 
 func TestTypedColumnInt64AggregateReopenDurable(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -3642,7 +3642,7 @@ func setupTypedColumnInt64RawScanCollection(tb testing.TB) (*backenddb.DB, *Coll
 func openTypedColumnInt64ScanDB(tb testing.TB) *backenddb.DB {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	return openCollectionCommandWALDB(tb, dir)

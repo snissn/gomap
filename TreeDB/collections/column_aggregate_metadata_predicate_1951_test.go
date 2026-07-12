@@ -536,7 +536,7 @@ func openPredicateAggregateMetadataFixture1951(tb testing.TB, batches [][]column
 func openPredicateAggregateMetadataFixtureWithConfig1951(tb testing.TB, cfg *ColumnStoreConfig, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

@@ -84,7 +84,7 @@ Commit-log segments are discovered from `<maindb>/wal` by filename parsing.
 Value-log segments are discovered from `<maindb>/value_vlog`; split leaf-log
 segments are discovered from `<maindb>/leaf_vlog`.
 
-Before `command_wal_v1`, accepted patterns include:
+Before `command_wal_v2`, accepted patterns include:
 
 - canonical commit log: `commit-l<lane>-<seq>.log`
 - legacy accepted commit-log aliases: `commit-<seq>.log`, `wal-<seq>.log`
@@ -92,13 +92,32 @@ Before `command_wal_v1`, accepted patterns include:
   `value-<seq>.log`, `vlog-<seq>.log`, and legacy mixed `wal/value-l*.log`
   names
 
-After `command_wal_v1` activation, command WAL segments use only the shared
+After `command_wal_v2` activation, command WAL segments use only the shared
 `commit-l<lane>-<seq>.log` family for required command replay. Old raw batch
 payloads are unsupported in command WAL directories; activation must start from
 a clean WAL state or an explicit rebuild.
 
 Discovered command segments are sorted by `(lane, seq)` and replayed by command
 LSN.
+
+Command-frame V2 recovery first plans the entire unapplied contiguous prefix
+without invoking command handlers. It validates every canonical RID fence and
+resolves all referenced RIDs. A missing RID in a durable frame is corruption.
+A missing RID in a relaxed frame makes that frame and every later LSN an
+incomplete suffix. Writable recovery durably applies the complete prefix, then
+deletes suffix-only segments, truncates mixed prefix/suffix segments at their
+first discarded frame, syncs every truncation and the WAL directory, and seeds
+the next append from the resulting contiguous `AppliedCommandLSN`. Read-only
+open reports `ErrRecoveryRequired` and the first discarded LSN without changing
+storage. Repair failures also return `ErrRecoveryRequired`.
+
+The writable handle that performs a relaxed-tail repair reports a structured
+`treedb.command_wal.recovery.*` diagnostic through `Stats()`: first discarded
+LSN, decoded frame count and bytes, missing RID count,
+source segment, durability class, and truncation/directory-sync completion.
+This diagnostic is scoped to that recovering handle; the repaired WAL is the
+persisted evidence, and a later clean reopen does not reconstruct historical
+recovery counters.
 
 Typed command WAL frames use the same commit-log segment family as raw WAL. A
 missing commit-log segment is acceptable only when covered by durable cleanup
@@ -123,15 +142,15 @@ Otherwise:
 
 ### 4.2 Read commit-log segments
 
-- Before `command_wal_v1`, read raw batches from commit-log segments.
-- After `command_wal_v1`, read typed command frames from commit-log segments.
+- Before `command_wal_v2`, read raw batches from commit-log segments.
+- After `command_wal_v2`, read typed command frames from commit-log segments.
 - Command frame ordering uses `LSN`; duplicate LSN is corruption.
 - Old raw `commitlog.Record` batches in a command WAL directory fail closed.
 - Truncated tail in commit log stops replay at partial tail safely.
 
 ### 4.3 Apply batches or command frames to backend
 
-Before `command_wal_v1`, each commit record maps to backend batch op:
+Before `command_wal_v2`, each commit record maps to backend batch op:
 
 - `OpDelete` -> `Delete(key)`
 - `OpSetInline` -> `Set(key, value)`
@@ -146,7 +165,7 @@ WAL fence mode implications:
 
 Each replayed batch is committed with `WriteSync`.
 
-After `command_wal_v1`, raw writes replay as `RawKVBatch` command frames through
+After `command_wal_v2`, raw writes replay as `RawKVBatch` command frames through
 the deterministic command executor. Recovery must publish command effects and
 advance `AppliedLSN` in the same backend durability boundary. A restart during
 replay must observe either the old root plus old `AppliedLSN`, or the new root

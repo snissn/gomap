@@ -296,7 +296,7 @@ func reportColumnStoreCommandWALBenchMetrics(b *testing.B, totals columnStoreCom
 func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int, uint64) {
 	b.Helper()
 	dir := b.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		b.Fatalf("SaveFormatConfig setup: %v", err)
 	}
 	backend, err := backenddb.Open(backenddb.Options{
@@ -373,7 +373,7 @@ func writeColumnStoreCommandWALReplayFramesM10C(path string, baseAppliedLSN uint
 		if err != nil {
 			return 0, 0, fmt.Errorf("encode collection insert batch by ID payload: %w", err)
 		}
-		if err := w.AppendCommand(commitlog.CommandEnvelope{
+		if err := w.AppendCommand(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 			LSN:           baseAppliedLSN + uint64(i) + 1,
 			Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 			Scope:         commitlog.CommandScopeCollection,

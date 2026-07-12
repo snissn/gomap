@@ -802,6 +802,17 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 func (db *DB) Stats() map[string]string {
 	stats := make(map[string]string)
 	stats["cosmos.db.type"] = "treedb"
+	db.commandWALRecoveryDiagnosticMu.RLock()
+	recoveryDiagnostic := db.commandWALRecoveryDiagnostic
+	db.commandWALRecoveryDiagnosticMu.RUnlock()
+	stats["treedb.command_wal.recovery.first_discarded_lsn"] = fmt.Sprintf("%d", recoveryDiagnostic.FirstDiscardedLSN)
+	stats["treedb.command_wal.recovery.discarded_frames"] = fmt.Sprintf("%d", recoveryDiagnostic.DiscardedFrameCount)
+	stats["treedb.command_wal.recovery.discarded_bytes"] = fmt.Sprintf("%d", recoveryDiagnostic.DiscardedBytes)
+	stats["treedb.command_wal.recovery.missing_rids"] = fmt.Sprintf("%d", recoveryDiagnostic.MissingRIDCount)
+	stats["treedb.command_wal.recovery.source_segment"] = recoveryDiagnostic.SourceSegment
+	stats["treedb.command_wal.recovery.durability_class"] = fmt.Sprintf("%d", recoveryDiagnostic.DurabilityClass)
+	stats["treedb.command_wal.recovery.truncation_completed"] = fmt.Sprintf("%t", recoveryDiagnostic.TruncationCompleted)
+	stats["treedb.command_wal.recovery.directory_sync_completed"] = fmt.Sprintf("%t", recoveryDiagnostic.DirectorySyncCompleted)
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {

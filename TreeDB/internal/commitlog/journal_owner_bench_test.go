@@ -15,7 +15,7 @@ func BenchmarkCommandJournalAllocateAndAppendRawKVBatch(b *testing.B) {
 	}
 	b.Cleanup(func() { _ = j.Close() })
 
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -75,7 +75,7 @@ func BenchmarkCommandJournalAppendCollectionInsertPayload(b *testing.B) {
 	if err != nil {
 		b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindCollectionInsertBatchByID,
 		Scope:         CommandScopeCollection,
 		PayloadFormat: PayloadFormatCollectionInsertBatchByIDV1,
@@ -106,7 +106,7 @@ func BenchmarkCommandJournalAppendCollectionInsertPayload(b *testing.B) {
 		b.SetBytes(int64(len(payload)))
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, err := j.AppendCommandPayloadTrusted(CommandKindCollectionInsertBatchByID, CommandScopeCollection, PayloadFormatCollectionInsertBatchByIDV1, 0, payload); err != nil {
+			if _, err := j.AppendCommandPayloadTrusted(CommandKindCollectionInsertBatchByID, CommandScopeCollection, PayloadFormatCollectionInsertBatchByIDV1, 0, payload, CommandDurabilityRelaxed); err != nil {
 				b.Fatalf("AppendCommandPayloadTrusted: %v", err)
 			}
 		}

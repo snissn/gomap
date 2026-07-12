@@ -217,7 +217,7 @@ func columnPhysicalJSONBenchParityEventsP0() []columnPhysicalJSONBenchParityEven
 func openColumnPhysicalJSONBenchParityFixtureP0(tb testing.TB, events []columnPhysicalJSONBenchParityEventP0) (*Collection, func()) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

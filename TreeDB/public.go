@@ -715,7 +715,7 @@ func Open(opts Options) (*DB, error) {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
 		} else if ok {
-			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV2()
 			cfg.ApplyIndexFormatToOptions(&opts)
 			persistedFormat = &cfg
 		}
@@ -2435,7 +2435,7 @@ func VacuumIndexOffline(opts Options) error {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
-			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV2()
 			cfg.ApplyToOptions(&opts)
 		}
 	}

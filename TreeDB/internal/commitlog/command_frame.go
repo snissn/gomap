@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	CommandFrameVersion uint16 = 1
+	CommandFrameVersion uint16 = 2
 
 	CommandWALNonCriticalFlagStart uint64 = 1 << 32
 
@@ -41,6 +41,8 @@ const (
 
 	externalRefEncodedFixedSize      = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 	commandExtensionEncodedFixedSize = 2 + 2 + 4
+	externalRefFenceV1PayloadSize    = 4 + sha256.Size
+	externalRefFenceV1EncodedSize    = 4 + commandExtensionEncodedFixedSize + externalRefFenceV1PayloadSize
 )
 
 var commandFrameMagic = [4]byte{'T', 'C', 'W', '1'}
@@ -54,6 +56,7 @@ var rawKVCommandFrameHeaderTemplate = func() [commandFrameHeaderSize]byte {
 	binary.LittleEndian.PutUint16(h[8:10], uint16(CommandKindRawKVBatch))
 	binary.LittleEndian.PutUint16(h[10:12], uint16(CommandScopeRawKV))
 	binary.LittleEndian.PutUint16(h[52:54], uint16(PayloadFormatRawKVBatchV1))
+	binary.LittleEndian.PutUint16(h[54:56], uint16(CommandDurabilityRelaxed))
 	return h
 }()
 
@@ -142,10 +145,35 @@ type RawKVBatchOperationScanner func(func(RawKVOperation) error) error
 // RawKVBatchPayloadPlan is the exact RawKVBatchV1 payload shape for a replayable
 // operation source.
 type RawKVBatchPayloadPlan struct {
-	Count          int
-	PayloadLen     int
-	EntryRevisions bool
+	Count            int
+	PayloadLen       int
+	EntryRevisions   bool
+	ExternalRefFence ExternalRefFenceV1
+	externalRefRIDs  []uint64
 }
+
+// CommandDurabilityClass records the acknowledgement contract of a V2 frame.
+// It is persisted in header bytes 54..56 and is part of recovery semantics.
+type CommandDurabilityClass uint16
+
+const (
+	CommandDurabilityDurable CommandDurabilityClass = iota + 1
+	CommandDurabilityRelaxed
+)
+
+// CommandExtensionExternalRefFenceV1 identifies the canonical RawKV RID-set
+// fence stored in the command preconditions section.
+const CommandExtensionExternalRefFenceV1 uint16 = 1
+
+// ExternalRefFenceV1 commits to the sorted unique RID set referenced by a
+// RawKV payload. Digest is SHA-256 over the concatenated little-endian uint64
+// encodings of those RIDs.
+type ExternalRefFenceV1 struct {
+	Count  uint32
+	Digest [sha256.Size]byte
+}
+
+func (f ExternalRefFenceV1) Present() bool { return f.Count != 0 }
 
 // RawKVBatchPayloadBuilder incrementally constructs a canonical RawKVBatch
 // payload while returning stable key/value views into the owned payload bytes.
@@ -1718,6 +1746,7 @@ type CommandExtension struct {
 
 type CommandEnvelope struct {
 	Version          uint16
+	DurabilityClass  CommandDurabilityClass
 	LSN              uint64
 	Kind             CommandKind
 	Scope            CommandScope
@@ -1736,7 +1765,165 @@ func EncodeCommandFrame(env CommandEnvelope) ([]byte, error) {
 	return encodeCommandFrameTo(nil, env)
 }
 
-func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOperation) ([]byte, error) {
+func validCommandDurabilityClass(class CommandDurabilityClass) bool {
+	return class == CommandDurabilityDurable || class == CommandDurabilityRelaxed
+}
+
+func encodeExternalRefFenceV1(fence ExternalRefFenceV1) CommandExtension {
+	payload := make([]byte, externalRefFenceV1PayloadSize)
+	binary.LittleEndian.PutUint32(payload[:4], fence.Count)
+	copy(payload[4:], fence.Digest[:])
+	return CommandExtension{Type: CommandExtensionExternalRefFenceV1, Payload: payload}
+}
+
+func appendExternalRefFenceV1Section(dst []byte, fence ExternalRefFenceV1) []byte {
+	if !fence.Present() {
+		return dst
+	}
+	start := len(dst)
+	dst = append(dst, make([]byte, externalRefFenceV1EncodedSize)...)
+	binary.LittleEndian.PutUint32(dst[start:start+4], 1)
+	binary.LittleEndian.PutUint16(dst[start+4:start+6], CommandExtensionExternalRefFenceV1)
+	binary.LittleEndian.PutUint32(dst[start+8:start+12], externalRefFenceV1PayloadSize)
+	binary.LittleEndian.PutUint32(dst[start+12:start+16], fence.Count)
+	copy(dst[start+16:start+externalRefFenceV1EncodedSize], fence.Digest[:])
+	return dst
+}
+
+func rawKVCommandFrameEncodedSize(payloadLen int, fence ExternalRefFenceV1) (int, error) {
+	preconditionsLen := 0
+	if fence.Present() {
+		preconditionsLen = externalRefFenceV1EncodedSize
+	}
+	return commandFrameEncodedSizeFromLengths(payloadLen, 0, preconditionsLen, 0)
+}
+
+func decodeExternalRefFenceV1(ext CommandExtension) (ExternalRefFenceV1, error) {
+	var fence ExternalRefFenceV1
+	if ext.Type != CommandExtensionExternalRefFenceV1 || len(ext.Payload) != externalRefFenceV1PayloadSize {
+		return fence, ErrCorrupt
+	}
+	fence.Count = binary.LittleEndian.Uint32(ext.Payload[:4])
+	copy(fence.Digest[:], ext.Payload[4:])
+	if fence.Count == 0 {
+		return ExternalRefFenceV1{}, ErrCorrupt
+	}
+	return fence, nil
+}
+
+func canonicalExternalRefFenceV1(rids []uint64) ExternalRefFenceV1 {
+	_, fence := canonicalizeExternalRefRIDsV1(rids)
+	return fence
+}
+
+func canonicalizeExternalRefRIDsV1(rids []uint64) ([]uint64, ExternalRefFenceV1) {
+	if len(rids) == 0 {
+		return nil, ExternalRefFenceV1{}
+	}
+	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
+	unique := rids[:0]
+	for _, rid := range rids {
+		if len(unique) == 0 || unique[len(unique)-1] != rid {
+			unique = append(unique, rid)
+		}
+	}
+	h := sha256.New()
+	var buf [8]byte
+	for _, rid := range unique {
+		binary.LittleEndian.PutUint64(buf[:], rid)
+		_, _ = h.Write(buf[:])
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], h.Sum(nil))
+	return unique, ExternalRefFenceV1{Count: uint32(len(unique)), Digest: digest}
+}
+
+// ExternalRefFenceV1FromRawKVPayload validates payload and computes its
+// canonical sorted-unique RID fence.
+func ExternalRefFenceV1FromRawKVPayload(payload []byte) (ExternalRefFenceV1, error) {
+	var fence ExternalRefFenceV1
+	err := validateAndFenceRawKVBatchPayloadTo(payload, &fence)
+	return fence, err
+}
+
+// RawKVExternalRefFence returns the decoded canonical fence, when present.
+func RawKVExternalRefFence(env *CommandEnvelope) (ExternalRefFenceV1, bool, error) {
+	if env == nil {
+		return ExternalRefFenceV1{}, false, ErrCorrupt
+	}
+	var found *CommandExtension
+	for i := range env.Preconditions {
+		if env.Preconditions[i].Type != CommandExtensionExternalRefFenceV1 {
+			continue
+		}
+		if found != nil {
+			return ExternalRefFenceV1{}, false, ErrCorrupt
+		}
+		found = &env.Preconditions[i]
+	}
+	if found == nil {
+		return ExternalRefFenceV1{}, false, nil
+	}
+	fence, err := decodeExternalRefFenceV1(*found)
+	return fence, err == nil, err
+}
+
+func prepareCommandEnvelope(env *CommandEnvelope) error {
+	if env.Version == 0 {
+		env.Version = CommandFrameVersion
+	}
+	if env.Version != CommandFrameVersion {
+		return ErrCommandWALUnsupportedVersion
+	}
+	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+		return ErrCommandWALUnsupportedCriticalFlag
+	}
+	if err := validateCommandEnvelopeIdentity(*env); err != nil {
+		return err
+	}
+	if !validCommandDurabilityClass(env.DurabilityClass) {
+		return ErrCorrupt
+	}
+	if env.Kind != CommandKindRawKVBatch {
+		return validateCommandEnvelopePayload(*env)
+	}
+	if env.Payload == nil {
+		payload, err := EncodeRawKVBatchPayload(nil)
+		if err != nil {
+			return err
+		}
+		env.Payload = payload
+	}
+	var fence ExternalRefFenceV1
+	if err := validateAndFenceRawKVBatchPayloadTo(env.Payload, &fence); err != nil {
+		return err
+	}
+	if len(env.Preconditions) == 0 {
+		if fence.Present() {
+			env.Preconditions = append(env.Preconditions, encodeExternalRefFenceV1(fence))
+		}
+		return nil
+	}
+	fenceCount := 0
+	for _, ext := range env.Preconditions {
+		if ext.Type == CommandExtensionExternalRefFenceV1 {
+			fenceCount++
+			provided, decodeErr := decodeExternalRefFenceV1(ext)
+			if decodeErr != nil || provided != fence {
+				return ErrCorrupt
+			}
+		}
+	}
+	if fenceCount > 1 || (!fence.Present() && fenceCount != 0) {
+		return ErrCorrupt
+	}
+	if fence.Present() && fenceCount == 0 {
+		env.Preconditions = append(env.Preconditions, encodeExternalRefFenceV1(fence))
+	}
+	return nil
+}
+
+func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOperation, class CommandDurabilityClass) ([]byte, error) {
 	if lsn == 0 {
 		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
@@ -1749,12 +1936,28 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 			return nil, err
 		}
 		return encodeCommandFrameTo(dst, CommandEnvelope{
-			LSN:            lsn,
-			Kind:           CommandKindRawKVBatch,
-			Scope:          CommandScopeRawKV,
-			BaseAppliedLSN: baseAppliedLSN,
-			PayloadFormat:  PayloadFormatRawKVBatchV1,
-			Payload:        payload,
+			LSN:             lsn,
+			DurabilityClass: class,
+			Kind:            CommandKindRawKVBatch,
+			Scope:           CommandScopeRawKV,
+			BaseAppliedLSN:  baseAppliedLSN,
+			PayloadFormat:   PayloadFormatRawKVBatchV1,
+			Payload:         payload,
+		})
+	}
+	if op.Op == RawKVOpSetRID {
+		payload, err := EncodeRawKVSingleOperationPayload(op)
+		if err != nil {
+			return nil, err
+		}
+		return encodeCommandFrameTo(dst, CommandEnvelope{
+			LSN:             lsn,
+			DurabilityClass: class,
+			Kind:            CommandKindRawKVBatch,
+			Scope:           CommandScopeRawKV,
+			BaseAppliedLSN:  baseAppliedLSN,
+			PayloadFormat:   PayloadFormatRawKVBatchV1,
+			Payload:         payload,
 		})
 	}
 	valueLen := len(op.Value)
@@ -1776,6 +1979,7 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	}
 	frame := dst
 	copy(frame[:commandFrameHeaderSize], rawKVCommandFrameHeaderTemplate[:])
+	binary.LittleEndian.PutUint16(frame[54:56], uint16(class))
 	binary.LittleEndian.PutUint64(frame[20:28], lsn)
 	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
 	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
@@ -1800,11 +2004,11 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	return frame, nil
 }
 
-func encodeTrustedRawKVPointCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte) ([]byte, error) {
-	return encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, 0)
+func encodeTrustedRawKVPointCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, class CommandDurabilityClass) ([]byte, error) {
+	return encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, 0, class)
 }
 
-func encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64) ([]byte, error) {
+func encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, class CommandDurabilityClass) ([]byte, error) {
 	if lsn == 0 {
 		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
@@ -1812,7 +2016,7 @@ func encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst []byte, lsn, baseAppl
 	if err != nil {
 		return nil, err
 	}
-	return encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, total)
+	return encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, total, class)
 }
 
 func trustedRawKVPointCommandFrameLens(op RawKVOp, key, value []byte, revision uint64) (valueLen, payloadLen, total int, err error) {
@@ -1838,19 +2042,19 @@ func trustedRawKVPointCommandFrameLens(op RawKVOp, key, value []byte, revision u
 	return valueLen, payloadLen, total, nil
 }
 
-func encodeTrustedRawKVPointCommandFrameSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) ([]byte, error) {
-	return encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst, lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, total)
+func encodeTrustedRawKVPointCommandFrameSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int, class CommandDurabilityClass) ([]byte, error) {
+	return encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst, lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, total, class)
 }
 
-func encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int) ([]byte, error) {
-	return encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, total), nil
+func encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int, class CommandDurabilityClass) ([]byte, error) {
+	return encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, total, class), nil
 }
 
-func encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) []byte {
-	return encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, total)
+func encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int, class CommandDurabilityClass) []byte {
+	return encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, total, class)
 }
 
-func encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int) []byte {
+func encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int, class CommandDurabilityClass) []byte {
 	if cap(dst) < total {
 		dst = make([]byte, total)
 	} else {
@@ -1858,6 +2062,7 @@ func encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst []byte, l
 	}
 	frame := dst
 	copy(frame[:commandFrameHeaderSize], rawKVCommandFrameHeaderTemplate[:])
+	binary.LittleEndian.PutUint16(frame[54:56], uint16(class))
 	binary.LittleEndian.PutUint64(frame[20:28], lsn)
 	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
 	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
@@ -1889,6 +2094,9 @@ func encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst []byte, l
 }
 
 func commandFrameEncodedSize(env CommandEnvelope) (int, error) {
+	if err := prepareCommandEnvelope(&env); err != nil {
+		return 0, err
+	}
 	payloadLen := len(env.Payload)
 	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
 		payloadLen = rawKVBatchHeaderSize
@@ -1937,20 +2145,7 @@ func addCommandFrameEncodedSectionLen(total, n int) (int, error) {
 }
 
 func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
-	if env.Version == 0 {
-		env.Version = CommandFrameVersion
-	}
-	if env.Version != CommandFrameVersion {
-		return nil, ErrCommandWALUnsupportedVersion
-	}
-	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
-		payload, err := EncodeRawKVBatchPayload(nil)
-		if err != nil {
-			return nil, err
-		}
-		env.Payload = payload
-	}
-	if err := validateCommandEnvelopeForEncode(env); err != nil {
+	if err := prepareCommandEnvelope(&env); err != nil {
 		return nil, err
 	}
 	extRefs, err := encodeExternalRefs(env.ExternalRefs)
@@ -1986,7 +2181,7 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 	binary.LittleEndian.PutUint64(frame[36:44], env.SchemaEpoch)
 	binary.LittleEndian.PutUint64(frame[44:52], env.BaseAppliedLSN)
 	binary.LittleEndian.PutUint16(frame[52:54], uint16(env.PayloadFormat))
-	binary.LittleEndian.PutUint16(frame[54:56], 0)
+	binary.LittleEndian.PutUint16(frame[54:56], uint16(env.DurabilityClass))
 	binary.LittleEndian.PutUint32(frame[56:60], uint32(len(env.Payload)))
 	binary.LittleEndian.PutUint32(frame[60:64], uint32(len(extRefs)))
 	binary.LittleEndian.PutUint32(frame[64:68], uint32(len(preconditions)))
@@ -2033,7 +2228,8 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 	env.SchemaEpoch = binary.LittleEndian.Uint64(frame[36:44])
 	env.BaseAppliedLSN = binary.LittleEndian.Uint64(frame[44:52])
 	env.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(frame[52:54]))
-	if binary.LittleEndian.Uint16(frame[54:56]) != 0 {
+	env.DurabilityClass = CommandDurabilityClass(binary.LittleEndian.Uint16(frame[54:56]))
+	if !validCommandDurabilityClass(env.DurabilityClass) {
 		return env, ErrCorrupt
 	}
 	payloadLen := binary.LittleEndian.Uint32(frame[56:60])
@@ -2046,6 +2242,18 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 	total := uint64(commandFrameHeaderSize) + uint64(payloadLen) + uint64(extRefsLen) + uint64(preconditionsLen) + uint64(assertionsLen)
 	if total > uint64(len(frame)) || total > uint64(^uint(0)>>1) || int(total) != len(frame) {
 		return env, ErrCorrupt
+	}
+	if env.Kind == CommandKindRawKVBatch && extRefsLen == 0 && preconditionsLen == 0 && assertionsLen == 0 {
+		payload := frame[commandFrameHeaderSize : commandFrameHeaderSize+int(payloadLen)]
+		var fence ExternalRefFenceV1
+		if err := validateAndFenceRawKVBatchPayloadTo(payload, &fence); err != nil {
+			return env, err
+		}
+		if fence.Present() {
+			return env, ErrCorrupt
+		}
+		env.Payload = append([]byte(nil), payload...)
+		return env, nil
 	}
 	off := commandFrameHeaderSize
 	env.Payload = append([]byte(nil), frame[off:off+int(payloadLen)]...)
@@ -2067,10 +2275,41 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 		return env, err
 	}
 	env.ResultAssertions = assertions
-	if err := validateCommandEnvelopePayload(env); err != nil {
+	if env.Kind == CommandKindRawKVBatch {
+		if err := validateRawKVExternalRefFence(&env); err != nil {
+			return env, err
+		}
+	} else if err := validateCommandEnvelopePayload(env); err != nil {
 		return env, err
 	}
 	return env, nil
+}
+
+func validateRawKVExternalRefFence(env *CommandEnvelope) error {
+	if env == nil {
+		return ErrCorrupt
+	}
+	if env.Kind != CommandKindRawKVBatch {
+		return nil
+	}
+	var want ExternalRefFenceV1
+	if err := validateAndFenceRawKVBatchPayloadTo(env.Payload, &want); err != nil {
+		return err
+	}
+	if len(env.Preconditions) == 0 {
+		if want.Present() {
+			return ErrCorrupt
+		}
+		return nil
+	}
+	got, present, err := RawKVExternalRefFence(env)
+	if err != nil {
+		return err
+	}
+	if want.Present() != present || (present && got != want) {
+		return ErrCorrupt
+	}
+	return nil
 }
 
 func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
@@ -2082,6 +2321,9 @@ func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
 	}
 	if err := validateCommandEnvelopeIdentity(env); err != nil {
 		return err
+	}
+	if !validCommandDurabilityClass(env.DurabilityClass) {
+		return ErrCorrupt
 	}
 	return validateCommandEnvelopePayload(env)
 }
@@ -2164,7 +2406,14 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 // PlanRawKVBatchPayloadScan validates a replayable operation source and returns
 // the exact RawKVBatch payload length needed to encode it.
 func PlanRawKVBatchPayloadScan(scan RawKVBatchOperationScanner) (RawKVBatchPayloadPlan, error) {
+	return PlanRawKVBatchPayloadScanWithHint(scan, 0)
+}
+
+// PlanRawKVBatchPayloadScanWithHint is PlanRawKVBatchPayloadScan with an
+// optional operation-count hint used to size external-reference bookkeeping.
+func PlanRawKVBatchPayloadScanWithHint(scan RawKVBatchOperationScanner, opHint int) (RawKVBatchPayloadPlan, error) {
 	plan := RawKVBatchPayloadPlan{PayloadLen: rawKVBatchHeaderSize}
+	var rids []uint64
 	if scan == nil {
 		return plan, nil
 	}
@@ -2193,6 +2442,12 @@ func PlanRawKVBatchPayloadScan(scan RawKVBatchOperationScanner) (RawKVBatchPaylo
 		}
 		plan.Count++
 		plan.PayloadLen += needed
+		if op.Op == RawKVOpSetRID {
+			if rids == nil && opHint > 0 {
+				rids = make([]uint64, 0, opHint)
+			}
+			rids = append(rids, op.RID)
+		}
 		if commandFrameIntExceedsUint32(plan.PayloadLen) {
 			return ErrRecordTooLarge
 		}
@@ -2200,6 +2455,7 @@ func PlanRawKVBatchPayloadScan(scan RawKVBatchOperationScanner) (RawKVBatchPaylo
 	}); err != nil {
 		return RawKVBatchPayloadPlan{}, err
 	}
+	plan.externalRefRIDs, plan.ExternalRefFence = canonicalizeExternalRefRIDsV1(rids)
 	return plan, nil
 }
 
@@ -2249,7 +2505,64 @@ func (plan RawKVBatchPayloadPlan) validate() error {
 	if plan.Count > 0 && plan.PayloadLen == rawKVBatchHeaderSize {
 		return ErrCorrupt
 	}
+	if int(plan.ExternalRefFence.Count) != len(plan.externalRefRIDs) {
+		return ErrCorrupt
+	}
 	return nil
+}
+
+type rawKVExternalRefFenceValidator struct {
+	rids       []uint64
+	seenInline [4]uint64
+	seenLarge  []uint64
+	seenCount  int
+}
+
+func newRawKVExternalRefFenceValidator(rids []uint64) rawKVExternalRefFenceValidator {
+	v := rawKVExternalRefFenceValidator{rids: rids}
+	words := (len(rids) + 63) / 64
+	if words > len(v.seenInline) {
+		v.seenLarge = make([]uint64, words)
+	}
+	return v
+}
+
+func (v *rawKVExternalRefFenceValidator) observe(rid uint64) error {
+	i := sort.Search(len(v.rids), func(i int) bool { return v.rids[i] >= rid })
+	if i == len(v.rids) || v.rids[i] != rid {
+		return fmt.Errorf("%w: raw kv scanner external-ref fence changed", ErrCorrupt)
+	}
+	word, bit := i/64, uint(i%64)
+	mask := uint64(1) << bit
+	seen := v.seenInline[:]
+	if v.seenLarge != nil {
+		seen = v.seenLarge
+	}
+	if seen[word]&mask == 0 {
+		seen[word] |= mask
+		v.seenCount++
+	}
+	return nil
+}
+
+func (v *rawKVExternalRefFenceValidator) validate() error {
+	if v.seenCount != len(v.rids) {
+		return fmt.Errorf("%w: raw kv scanner external-ref fence changed", ErrCorrupt)
+	}
+	return nil
+}
+
+type rawKVPayloadWriteState struct {
+	count          int
+	written        int
+	fenceValidator rawKVExternalRefFenceValidator
+}
+
+func newRawKVPayloadWriteState(plan RawKVBatchPayloadPlan) rawKVPayloadWriteState {
+	return rawKVPayloadWriteState{
+		written:        rawKVBatchHeaderSize,
+		fenceValidator: newRawKVExternalRefFenceValidator(plan.externalRefRIDs),
+	}
 }
 
 func encodeRawKVBatchPayloadPlannedTo(dst []byte, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) ([]byte, error) {
@@ -2299,23 +2612,27 @@ func writeRawKVBatchPayloadPieces(plan RawKVBatchPayloadPlan, scan RawKVBatchOpe
 		}
 		return nil
 	}
-	count := 0
-	written := rawKVBatchHeaderSize
+	state := newRawKVPayloadWriteState(plan)
 	if err := scan(func(op RawKVOperation) error {
 		n, err := writeRawKVOperationPayloadPiecesWithRevisionFlag(op, plan.EntryRevisions, write)
 		if err != nil {
 			return err
 		}
-		count++
-		written += n
+		state.count++
+		state.written += n
+		if op.Op == RawKVOpSetRID {
+			if err := state.fenceValidator.observe(op.RID); err != nil {
+				return err
+			}
+		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	if count != plan.Count || written != plan.PayloadLen {
+	if state.count != plan.Count || state.written != plan.PayloadLen {
 		return ErrCorrupt
 	}
-	return nil
+	return state.fenceValidator.validate()
 }
 
 func writeRawKVBatchPayloadTo(dst []byte, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (int, error) {
@@ -2337,23 +2654,30 @@ func writeRawKVBatchPayloadTo(dst []byte, plan RawKVBatchPayloadPlan, scan RawKV
 		}
 		return rawKVBatchHeaderSize, nil
 	}
-	count := 0
-	written := rawKVBatchHeaderSize
+	state := newRawKVPayloadWriteState(plan)
 	if err := scan(func(op RawKVOperation) error {
-		n, err := writeRawKVOperationPayloadTo(dst[written:], op, plan.EntryRevisions)
+		n, err := writeRawKVOperationPayloadTo(dst[state.written:], op, plan.EntryRevisions)
 		if err != nil {
 			return err
 		}
-		count++
-		written += n
+		state.count++
+		state.written += n
+		if op.Op == RawKVOpSetRID {
+			if err := state.fenceValidator.observe(op.RID); err != nil {
+				return err
+			}
+		}
 		return nil
 	}); err != nil {
 		return 0, err
 	}
-	if count != plan.Count || written != plan.PayloadLen {
+	if state.count != plan.Count || state.written != plan.PayloadLen {
 		return 0, ErrCorrupt
 	}
-	return written, nil
+	if err := state.fenceValidator.validate(); err != nil {
+		return 0, err
+	}
+	return state.written, nil
 }
 
 func writeRawKVOperationPayloadPieces(op RawKVOperation, write func([]byte) error) (int, error) {
@@ -2679,6 +3003,112 @@ func ScanRawKVBatchPayloadWithRevision(payload []byte, visit func(op RawKVOp, ke
 	if off != len(payload) {
 		return ErrCorrupt
 	}
+	return nil
+}
+
+// validateAndFenceRawKVBatchPayload validates one RawKV payload while deriving
+// its canonical external-reference fence. Keeping RID collection local avoids
+// penalizing the generic validation scanner's common no-callback path.
+func validateAndFenceRawKVBatchPayloadTo(payload []byte, fence *ExternalRefFenceV1) error {
+	if fence == nil {
+		return ErrCorrupt
+	}
+	*fence = ExternalRefFenceV1{}
+	if len(payload) < rawKVBatchHeaderSize {
+		return ErrCorrupt
+	}
+	version := binary.LittleEndian.Uint16(payload[0:2])
+	if version == rawKVZeroBatchPayloadV2 || version == rawKVZeroBatchPayloadV3 {
+		if err := scanRawKVZeroBatchPayload(payload, nil); err != nil {
+			return err
+		}
+		return nil
+	}
+	entryRevisions := false
+	switch version {
+	case rawKVBatchPayloadVersion:
+	case rawKVBatchPayloadVersionWithRevisions:
+		entryRevisions = true
+	default:
+		return ErrCommandWALUnsupportedVersion
+	}
+	count := binary.LittleEndian.Uint32(payload[2:6])
+	opHeaderSize := rawKVOperationHeaderSize(entryRevisions)
+	if count > uint32((len(payload)-rawKVBatchHeaderSize)/opHeaderSize) {
+		return ErrCorrupt
+	}
+	off := rawKVBatchHeaderSize
+	var rids []uint64
+	for i := uint32(0); i < count; i++ {
+		if off+opHeaderSize > len(payload) {
+			return ErrCorrupt
+		}
+		op := RawKVOp(payload[off])
+		keyLen := binary.LittleEndian.Uint32(payload[off+1 : off+5])
+		valueLen := binary.LittleEndian.Uint32(payload[off+5 : off+9])
+		revision := uint64(0)
+		if entryRevisions {
+			revision = binary.LittleEndian.Uint64(payload[off+9 : off+17])
+		}
+		off += opHeaderSize
+		keyBytes := keyLen
+		valueBytes := valueLen
+		keyNil := false
+		valueNil := false
+		if op == RawKVOpDeleteRange {
+			if keyLen == rawKVNilRangeBoundLenUint32 {
+				keyBytes = 0
+				keyNil = true
+			}
+			if valueLen == rawKVNilRangeBoundLenUint32 {
+				valueBytes = 0
+				valueNil = true
+			}
+		}
+		need := uint64(keyBytes) + uint64(valueBytes)
+		if need > uint64(len(payload)-off) || need > uint64(^uint(0)>>1) {
+			return ErrCorrupt
+		}
+		var key []byte
+		if !keyNil {
+			key = payload[off : off+int(keyBytes)]
+		}
+		off += int(keyBytes)
+		valueLenForShape := int(valueBytes)
+		if valueNil {
+			valueLenForShape = -1
+		}
+		if err := validateRawKVOperationShape(op, key, valueLenForShape); err != nil {
+			return err
+		}
+		var value []byte
+		if !valueNil {
+			value = payload[off : off+int(valueBytes)]
+		}
+		if op == RawKVOpSetRID {
+			rid := binary.LittleEndian.Uint64(value)
+			if rid == 0 {
+				return ErrCorrupt
+			}
+			rids = append(rids, rid)
+		}
+		if op == RawKVOpDeleteRange {
+			if err := validateRawKVDeleteRangeBounds(key, value); err != nil {
+				return err
+			}
+			if revision != 0 {
+				return ErrCorrupt
+			}
+		}
+		off += int(valueBytes)
+	}
+	if off != len(payload) {
+		return ErrCorrupt
+	}
+	if len(rids) == 0 {
+		return nil
+	}
+	*fence = canonicalExternalRefFenceV1(rids)
 	return nil
 }
 

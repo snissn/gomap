@@ -2494,7 +2494,7 @@ func openColumnGraphBRQQuantizedBenchCollection2481(tb testing.TB, shape columnG
 		tb.Fatalf("invalid benchmark shape rows=%d dims=%d", shape.rows, shape.dims)
 	}
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)
@@ -2534,7 +2534,7 @@ func openColumnGraphScalarU8AlphaQuantizedBenchCollection2844(tb testing.TB, sha
 		tb.Fatalf("invalid benchmark shape rows=%d dims=%d", shape.rows, shape.dims)
 	}
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)
@@ -2588,7 +2588,7 @@ func openColumnGraphScalarU8QuantizedBenchCollectionWithDefinitions2845(tb testi
 		tb.Fatalf("invalid benchmark shape rows=%d dims=%d", shape.rows, shape.dims)
 	}
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)

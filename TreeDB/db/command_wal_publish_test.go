@@ -1280,7 +1280,7 @@ func writeCommandWALSegmentFrames(t *testing.T, dir string, segmentSeq uint64, l
 		t.Fatalf("NewWriter: %v", err)
 	}
 	for _, lsn := range lsns {
-		if err := w.AppendCommand(commitlog.CommandEnvelope{
+		if err := w.AppendCommand(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 			LSN:           lsn,
 			Kind:          commitlog.CommandKindRawKVBatch,
 			Scope:         commitlog.CommandScopeRawKV,

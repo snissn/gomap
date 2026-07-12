@@ -139,6 +139,69 @@ func TestValidateAllowsLossOfAppendedUnstableCommandSuffix(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsRepairedRelaxedIncompleteSuffix(t *testing.T) {
+	scenario := Scenario{
+		Name:                 "repaired-relaxed-incomplete-suffix",
+		Cut:                  AfterUserspaceFlush,
+		Generations:          []Generation{completeGeneration(1, 1)},
+		LatestSealedSequence: 1,
+		SelectedSequence:     1,
+		OpenedSequence:       1,
+		OpenedAppliedLSN:     1,
+		ReopenAttempted:      true,
+		CommandFrames: []CommandFrame{
+			{LSN: 2, ChecksumValid: true, DurabilityClass: 2, Discarded: true, Dependencies: []Resource{{Kind: ResourceValueLog, ID: "rid/2", Live: true}}},
+			{LSN: 3, ChecksumValid: true, DurabilityClass: 1, Discarded: true},
+		},
+	}
+	if err := scenario.Validate(); err != nil {
+		t.Fatalf("repaired relaxed incomplete suffix should validate: %v", err)
+	}
+}
+
+func TestValidateRejectsDiscardedDurableMissingRID(t *testing.T) {
+	scenario := Scenario{
+		Cut:                  AfterDependencyFileSync,
+		Generations:          []Generation{completeGeneration(1, 1)},
+		LatestSealedSequence: 1,
+		SelectedSequence:     1,
+		OpenedSequence:       1,
+		OpenedAppliedLSN:     1,
+		ReopenAttempted:      true,
+		CommandFrames: []CommandFrame{{
+			LSN:             2,
+			ChecksumValid:   true,
+			DurabilityClass: 1,
+			Discarded:       true,
+			Dependencies:    []Resource{{Kind: ResourceValueLog, ID: "rid/2", Live: true}},
+		}},
+	}
+	if err := RequireViolation(scenario.Validate(), InvariantCommandReplayHole); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateRejectsDiscardedChecksumInvalidFrame(t *testing.T) {
+	scenario := Scenario{
+		Cut:                  AfterUserspaceFlush,
+		Generations:          []Generation{completeGeneration(1, 1)},
+		LatestSealedSequence: 1,
+		SelectedSequence:     1,
+		OpenedSequence:       1,
+		OpenedAppliedLSN:     1,
+		ReopenAttempted:      true,
+		CommandFrames: []CommandFrame{{
+			LSN:             2,
+			DurabilityClass: 2,
+			Discarded:       true,
+			Dependencies:    []Resource{{Kind: ResourceValueLog, ID: "rid/2", Live: true}},
+		}},
+	}
+	if err := RequireViolation(scenario.Validate(), InvariantCommandReplayHole); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRejectsUnexplainedPublicReplayAdvance(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

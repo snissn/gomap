@@ -199,7 +199,7 @@ func openColumnPhysicalQueryQ1BenchmarkFixture1890(rows int) (*Collection, strin
 	if err != nil {
 		return nil, "", err
 	}
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		return nil, dir, err
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

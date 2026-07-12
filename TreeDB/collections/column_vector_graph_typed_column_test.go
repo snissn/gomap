@@ -795,7 +795,7 @@ func TestSearchVectorIndexColumnGraphL2RemainsFailClosed1782(t *testing.T) {
 func openColumnGraphTypedColumnVectorTestCollection1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)

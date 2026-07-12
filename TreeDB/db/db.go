@@ -561,6 +561,8 @@ type DB struct {
 	conditionalOraclePrunedPoints    atomic.Uint64
 	conditionalOraclePrunedRanges    atomic.Uint64
 	commandWALRawPublishMu           sync.RWMutex
+	commandWALRecoveryDiagnosticMu   sync.RWMutex
+	commandWALRecoveryDiagnostic     CommandWALRecoveryDiagnostic
 	commandWALRawBarrierMu           sync.Mutex
 	commandWALRawBarrierNextID       uint64
 	commandWALRawBarriers            []*commandWALRawBarrier
@@ -963,10 +965,10 @@ type Options struct {
 	IgnoreFormatConfig bool
 	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
 	// backend raw KV writes. It is also enabled automatically when format.json
-	// advertises the command_wal_v1 required feature.
+	// advertises the command_wal_v2 required feature.
 	//
 	// Public treedb.Open write handles route raw KV writes through the direct
-	// backend command-WAL path while command_wal_v1 is active, avoiding the
+	// backend command-WAL path while command_wal_v2 is active, avoiding the
 	// legacy cached redo journal until cached writes are converted to typed
 	// command frames.
 	CommandWAL bool
@@ -1625,7 +1627,7 @@ func Open(opts Options) (*DB, error) {
 		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
 			return nil, err
 		} else if ok {
-			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV2()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
 	}

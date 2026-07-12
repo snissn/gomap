@@ -123,7 +123,7 @@ publish locks.
 
 Operators must use `treemap command-wal health --json` before manual cleanup,
 backup triage, compaction triage, or restart triage for a directory that has
-`command_wal_v1` enabled.
+`command_wal_v2` enabled.
 
 Health states:
 

@@ -1220,7 +1220,7 @@ func TestColumnRetainedPayloadSemanticStreamV1DefaultUpdateBatchWritesReplacemen
 
 func enableColumnRetainedPlacementCommandWAL(t testing.TB, dir string) {
 	t.Helper()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 }

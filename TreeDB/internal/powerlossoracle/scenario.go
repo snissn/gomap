@@ -54,6 +54,12 @@ type CommandFrame struct {
 	ChecksumValid bool
 	Dependencies  []Resource
 	Applied       bool
+	// DurabilityClass is the persisted V2 class (1 durable, 2 relaxed).
+	DurabilityClass uint16
+	// Discarded marks a frame in the incomplete suffix repaired by writable
+	// recovery. The first discarded frame must be relaxed and dependency-
+	// incomplete; every later observed frame must be discarded with it.
+	Discarded bool
 }
 
 // Scenario is the small durability DSL shared by later graph children.
@@ -148,6 +154,29 @@ func (s Scenario) Validate() error {
 	}
 	frames := append([]CommandFrame(nil), s.CommandFrames...)
 	sort.Slice(frames, func(i, j int) bool { return frames[i].LSN < frames[j].LSN })
+	for i, frame := range frames {
+		if !frame.Discarded {
+			continue
+		}
+		missing := missingResources(frame.Dependencies)
+		missingValueLog := false
+		for _, dependency := range frame.Dependencies {
+			if dependency.Kind == ResourceValueLog && (!dependency.Stable || !dependency.Live) {
+				missingValueLog = true
+				break
+			}
+		}
+		if frame.Applied || frame.DurabilityClass != 2 || !frame.ChecksumValid || len(missing) == 0 || !missingValueLog {
+			return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("invalid-discarded-suffix-start lsn=%d class=%d checksum=%t missing=%d missing-value-log=%t applied=%t cut=%s", frame.LSN, frame.DurabilityClass, frame.ChecksumValid, len(missing), missingValueLog, frame.Applied, s.Cut)}
+		}
+		for _, suffix := range frames[i:] {
+			if !suffix.Discarded || suffix.Applied {
+				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("non-suffix-discard lsn=%d cut=%s", suffix.LSN, s.Cut)}
+			}
+		}
+		frames = frames[:i]
+		break
+	}
 	baseAppliedLSN := uint64(0)
 	if selected := s.selectedGeneration(); selected != nil {
 		baseAppliedLSN = selected.AppliedLSN

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestCommandWALFormatGoldenV1EmptySegment(t *testing.T) {
+func TestCommandWALFormatGoldenV2EmptySegment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty segment: %v", err)
@@ -31,7 +31,7 @@ func TestCommandWALFormatGoldenV1EmptySegment(t *testing.T) {
 	}
 }
 
-func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
+func TestCommandWALFormatGoldenV2RawKVBatch(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
 		{Op: RawKVOpDelete, Key: []byte("beta")},
@@ -39,7 +39,7 @@ func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           7,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -50,7 +50,7 @@ func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_raw_kv_batch.hex", frame)
+	assertGoldenHex(t, "command_wal_v2_raw_kv_batch.hex", frame)
 
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
@@ -65,6 +65,100 @@ func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
 	}
 	if len(ops) != 2 || ops[0].Op != RawKVOpSet || string(ops[0].Key) != "alpha" || string(ops[0].Value) != "one" || ops[1].Op != RawKVOpDelete || string(ops[1].Key) != "beta" {
 		t.Fatalf("decoded ops mismatch: %+v", ops)
+	}
+}
+
+func TestCommandWALV1RequiresRebuild(t *testing.T) {
+	frame := mustCommandFrame(t, CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	binary.LittleEndian.PutUint16(frame[4:6], 1)
+	binary.LittleEndian.PutUint16(frame[6:8], 1)
+	if _, err := DecodeCommandFrame(frame); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("DecodeCommandFrame V1 error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+}
+
+func TestCommandWALV2RejectsZeroDurabilityClass(t *testing.T) {
+	_, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeCommandFrame zero durability error=%v, want ErrCorrupt", err)
+	}
+	frame := mustCommandFrame(t, CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	binary.LittleEndian.PutUint16(frame[54:56], 0)
+	if _, err := DecodeCommandFrame(frame); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCommandFrame zero durability error=%v, want ErrCorrupt", err)
+	}
+}
+
+func TestCommandWALV2SetRIDCanonicalFence(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSetRID, Key: []byte("a"), RID: 9},
+		{Op: RawKVOpSetRID, Key: []byte("b"), RID: 3},
+		{Op: RawKVOpSetRID, Key: []byte("c"), RID: 9},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := mustCommandFrame(t, CommandEnvelope{
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             4,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	env, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence, present, err := RawKVExternalRefFence(&env)
+	if err != nil || !present || fence.Count != 2 {
+		t.Fatalf("fence=%+v present=%v err=%v", fence, present, err)
+	}
+	env.Preconditions = append(env.Preconditions, env.Preconditions[0])
+	if _, err := EncodeCommandFrame(env); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("duplicate fence error=%v, want ErrCorrupt", err)
+	}
+	bad := mustCommandFrame(t, CommandEnvelope{
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             4,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	bad[len(bad)-1] ^= 1
+	if _, err := DecodeCommandFrame(bad); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("tampered fence error=%v, want ErrCorrupt", err)
+	}
+	missing := mustCommandFrame(t, CommandEnvelope{
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             4,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	missing = append([]byte(nil), missing[:commandFrameHeaderSize+len(payload)]...)
+	binary.LittleEndian.PutUint32(missing[64:68], 0)
+	if _, err := DecodeCommandFrame(missing); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("missing fence error=%v, want ErrCorrupt", err)
 	}
 }
 
@@ -485,7 +579,7 @@ func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing
 	}
 }
 
-func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
+func TestCommandWALFormatGoldenV2CollectionInsertBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
 		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
 		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
@@ -493,7 +587,7 @@ func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           11,
 		Kind:          CommandKindCollectionInsertBatchByID,
 		Scope:         CommandScopeCollection,
@@ -504,7 +598,7 @@ func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_collection_insert_by_id.hex", frame)
+	assertGoldenHex(t, "command_wal_v2_collection_insert_by_id.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -543,12 +637,12 @@ func TestEncodeCollectionInsertBatchByIDPayloadSortedAndUnsortedMatch(t *testing
 	}
 }
 
-func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
+func TestCommandWALFormatGoldenV2CollectionDeleteBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u2"), []byte("u1")})
 	if err != nil {
 		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           12,
 		Kind:          CommandKindCollectionDeleteBatchByID,
 		Scope:         CommandScopeCollection,
@@ -559,7 +653,7 @@ func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_collection_delete_by_id.hex", frame)
+	assertGoldenHex(t, "command_wal_v2_collection_delete_by_id.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -576,7 +670,7 @@ func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
 	}
 }
 
-func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
+func TestCommandWALFormatGoldenV2CollectionUpdateBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionUpdateBatchByIDPayload("users", []CollectionDocument{
 		{ID: []byte("u2"), Document: []byte(`{"name":"Grace","active":true}`)},
 		{ID: []byte("u1"), Document: []byte(`{"name":"Ada","active":true}`)},
@@ -584,7 +678,7 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           14,
 		Kind:          CommandKindCollectionUpdateBatchByID,
 		Scope:         CommandScopeCollection,
@@ -595,7 +689,7 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_collection_update_by_id.hex", frame)
+	assertGoldenHex(t, "command_wal_v2_collection_update_by_id.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -614,12 +708,12 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 	}
 }
 
-func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
+func TestCommandWALFormatV2CollectionRebuildVectorIndex(t *testing.T) {
 	payload, err := EncodeCollectionRebuildVectorIndexPayload("users", "embedding_graph")
 	if err != nil {
 		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           15,
 		Kind:          CommandKindCollectionRebuildVectorIndex,
 		Scope:         CommandScopeCollection,
@@ -630,7 +724,7 @@ func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_collection_rebuild_vector_index.hex", frame)
+	assertGoldenHex(t, "command_wal_v2_collection_rebuild_vector_index.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -655,12 +749,12 @@ func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
 	}
 }
 
-func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
+func TestCommandWALFormatGoldenV2CatalogCreateCollection(t *testing.T) {
 	payload, err := EncodeCatalogCreateCollectionPayload("users", []byte(`{"version":1,"name":"users"}`))
 	if err != nil {
 		t.Fatalf("EncodeCatalogCreateCollectionPayload: %v", err)
 	}
-	env := CommandEnvelope{
+	env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           13,
 		Kind:          CommandKindCatalogCreateCollection,
 		Scope:         CommandScopeCatalog,
@@ -671,7 +765,7 @@ func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_catalog_create_collection.hex", frame)
+	assertGoldenHex(t, "command_wal_v2_catalog_create_collection.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -689,7 +783,7 @@ func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
 }
 
 func TestCommandWALFormatRejectsUnsupportedRequiredVersion(t *testing.T) {
-	frame := mustCommandFrame(t, CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
 	frame[4] = 0xff
 	frame[5] = 0xff
 	_, err := DecodeCommandFrame(frame)
@@ -699,21 +793,21 @@ func TestCommandWALFormatRejectsUnsupportedRequiredVersion(t *testing.T) {
 }
 
 func TestCommandWALFormatRejectsUnsupportedEncodeVersion(t *testing.T) {
-	_, err := EncodeCommandFrame(CommandEnvelope{Version: CommandFrameVersion + 1, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
+	_, err := EncodeCommandFrame(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, Version: CommandFrameVersion + 1, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
 	if !errors.Is(err, ErrCommandWALUnsupportedVersion) {
 		t.Fatalf("EncodeCommandFrame error=%v, want ErrCommandWALUnsupportedVersion", err)
 	}
 }
 
 func TestCommandWALFormatRejectsUnknownCriticalFlag(t *testing.T) {
-	_, err := EncodeCommandFrame(CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, FeatureFlags: 1})
+	_, err := EncodeCommandFrame(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, FeatureFlags: 1})
 	if !errors.Is(err, ErrCommandWALUnsupportedCriticalFlag) {
 		t.Fatalf("EncodeCommandFrame error=%v, want ErrCommandWALUnsupportedCriticalFlag", err)
 	}
 }
 
 func TestCommandWALFormatRejectsUnknownRequiredKind(t *testing.T) {
-	frame := mustCommandFrame(t, CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
 	frame[8] = 0xff
 	frame[9] = 0xff
 	_, err := DecodeCommandFrame(frame)
@@ -723,7 +817,7 @@ func TestCommandWALFormatRejectsUnknownRequiredKind(t *testing.T) {
 }
 
 func TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed(t *testing.T) {
-	frame := mustCommandFrame(t, CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, FeatureFlags: CommandWALNonCriticalFlagStart})
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, FeatureFlags: CommandWALNonCriticalFlagStart})
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -734,7 +828,7 @@ func TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed(t *test
 }
 
 func TestCommandWALFormatRejectsMalformedLengthBeforeAllocation(t *testing.T) {
-	frame := mustCommandFrame(t, CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
 	// Payload length sits in the fixed command-frame header and must be checked
 	// against the already-buffered frame before allocating payload-owned objects.
 	putCommandFramePayloadLenForTest(frame, ^uint32(0))
@@ -752,7 +846,7 @@ func TestCommandWALAppendCommandRejectsMaxSegmentBeforeEncode(t *testing.T) {
 	}
 	defer w.Close()
 
-	err = w.AppendCommand(CommandEnvelope{
+	err = w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -806,7 +900,7 @@ func TestCommandWALFormatRejectsFrameCRCMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if err := w.AppendCommand(CommandEnvelope{LSN: 2, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload}); err != nil {
+	if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 2, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload}); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendCommand: %v", err)
 	}
@@ -837,7 +931,7 @@ func TestCommandWALFormatRejectsFrameCRCMismatch(t *testing.T) {
 
 func TestCommandWALFormatRoundTripExternalRefs(t *testing.T) {
 	digest := [32]byte{0xaa, 0xbb, 0xcc}
-	frame := mustCommandFrame(t, CommandEnvelope{
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           4,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -1246,7 +1340,7 @@ func TestWriterAppendRawKVBatchPayloadCommandDirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirect(7, 3, payload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirect(7, 3, payload, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirect: %v", err)
 	}
@@ -1291,7 +1385,7 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectBuffered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, scan); err != nil {
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, scan, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendRawKVBatchPayloadScanCommandDirectTrusted: %v", err)
 	}
@@ -1324,7 +1418,7 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectBufferedRollsBackOnScanMi
 	if err != nil {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, mismatchedScan); !errors.Is(err, ErrCorrupt) {
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, mismatchedScan, CommandDurabilityRelaxed); !errors.Is(err, ErrCorrupt) {
 		_ = w.Close()
 		t.Fatalf("mismatched scan append error=%v, want ErrCorrupt", err)
 	}
@@ -1338,7 +1432,7 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectBufferedRollsBackOnScanMi
 		_ = w.Close()
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(8, 4, plan, plannedScan); err != nil {
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(8, 4, plan, plannedScan, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("valid append after rollback: %v", err)
 	}
@@ -1346,6 +1440,32 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectBufferedRollsBackOnScanMi
 		t.Fatalf("Close writer: %v", err)
 	}
 	assertRawKVCommandFramePayload(t, path, 8, 4, payload)
+}
+
+func TestWriterAppendRawKVBatchPayloadScanCommandDirectBufferedRejectsChangedRIDFence(t *testing.T) {
+	plannedScan := rawKVOperationSliceScanner([]RawKVOperation{{
+		Op: RawKVOpSetRID, Key: []byte("external"), RID: 42,
+	}})
+	plan, err := PlanRawKVBatchPayloadScan(plannedScan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
+	}
+	changedRIDScan := rawKVOperationSliceScanner([]RawKVOperation{{
+		Op: RawKVOpSetRID, Key: []byte("external"), RID: 43,
+	}})
+
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, changedRIDScan, CommandDurabilityRelaxed); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("changed RID scan append error=%v, want ErrCorrupt", err)
+	}
+	if got := len(w.commandBuf); got != 0 {
+		t.Fatalf("command buffer len after changed RID=%d want 0", got)
+	}
 }
 
 func TestWriterAppendRawKVBatchPayloadScanCommandDirectLarge(t *testing.T) {
@@ -1367,7 +1487,7 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectLarge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(9, 4, plan, scan); err != nil {
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(9, 4, plan, scan, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendRawKVBatchPayloadScanCommandDirectTrusted: %v", err)
 	}
@@ -1444,7 +1564,7 @@ func TestWriterAppendCommandPayloadDirectTrustedCollectionInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
-	if err := w.AppendCommandPayloadDirectTrusted(7, 3, CommandKindCollectionInsertBatchByID, CommandScopeCollection, PayloadFormatCollectionInsertBatchByIDV1, payload); err != nil {
+	if err := w.AppendCommandPayloadDirectTrusted(7, 3, CommandKindCollectionInsertBatchByID, CommandScopeCollection, PayloadFormatCollectionInsertBatchByIDV1, payload, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendCommandPayloadDirectTrusted: %v", err)
 	}
@@ -1491,7 +1611,7 @@ func TestWriterBufferedCommandFlushFailurePoisonsWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, CommandDurabilityRelaxed); err != nil {
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
 	}
 	if err := w.f.Close(); err != nil {
@@ -1500,7 +1620,7 @@ func TestWriterBufferedCommandFlushFailurePoisonsWriter(t *testing.T) {
 	if err := w.Flush(); err == nil {
 		t.Fatal("Flush succeeded after underlying file was closed")
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, payload); err == nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, payload, CommandDurabilityRelaxed); err == nil {
 		t.Fatal("Append after poisoned command buffer succeeded")
 	}
 }
@@ -1518,7 +1638,7 @@ func TestWriterBufferedCommandSizeAdvancesOnFlush(t *testing.T) {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
 	defer w.Close()
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, CommandDurabilityRelaxed); err != nil {
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
 	}
 	if got := w.Size(); got != 0 {
@@ -1545,7 +1665,7 @@ func TestWriterDeferredCommandBufferHonorsConfiguredLimit(t *testing.T) {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
 	defer w.Close()
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, CommandDurabilityRelaxed); err != nil {
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
 	}
 	if got := len(w.commandBuf); got != 0 {
@@ -1575,7 +1695,7 @@ func TestWriterDeferredCommandBufferAllocatesLazily(t *testing.T) {
 	if got := cap(w.commandBuf); got != 0 {
 		t.Fatalf("deferred command buffer cap after open=%d, want 0", got)
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, CommandDurabilityRelaxed); err != nil {
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
 	}
 	if got := len(w.commandBuf); got == 0 {
@@ -1600,7 +1720,7 @@ func TestWriterDeferredCommandBufferTrimsRetainedCapacityAfterFlush(t *testing.T
 	}
 	defer w.Close()
 	for i := uint64(1); i <= 8; i++ {
-		if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(i, 0, payload); err != nil {
+		if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(i, 0, payload, CommandDurabilityRelaxed); err != nil {
 			t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted %d: %v", i, err)
 		}
 	}
@@ -1659,7 +1779,7 @@ func TestWriterLargeBatchPayloadBypassesDeferredCommandBufferAndPreservesOrder(t
 	if err != nil {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, smallPayload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, smallPayload, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted small: %v", err)
 	}
@@ -1667,7 +1787,7 @@ func TestWriterLargeBatchPayloadBypassesDeferredCommandBufferAndPreservesOrder(t
 		_ = w.Close()
 		t.Fatal("small command frame was not buffered")
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, largePayload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, largePayload, CommandDurabilityRelaxed); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted large: %v", err)
 	}
@@ -1719,11 +1839,11 @@ func TestWriterDirectCommandWriteFailurePoisonsWriter(t *testing.T) {
 	if err := w.f.Close(); err != nil {
 		t.Fatalf("close underlying file: %v", err)
 	}
-	err = w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload)
+	err = w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, CommandDurabilityRelaxed)
 	if err == nil {
 		t.Fatal("direct command append unexpectedly succeeded after underlying file close")
 	}
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, payload); err == nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, payload, CommandDurabilityRelaxed); err == nil {
 		t.Fatal("append after direct command write failure succeeded; writer was not poisoned")
 	}
 }
@@ -1741,7 +1861,7 @@ func TestWriterPoisonCommandBufferTruncatesUnaccountedTail(t *testing.T) {
 		t.Fatalf("NewWriterWithOptions: %v", err)
 	}
 	defer w.Close()
-	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, CommandDurabilityRelaxed); err != nil {
 		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
 	}
 	if err := w.Flush(); err != nil {
@@ -1804,7 +1924,7 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EncodeRawKVSingleOperationPayload(%v): %v", op.Op, err)
 		}
-		want, err := EncodeCommandFrame(CommandEnvelope{
+		want, err := EncodeCommandFrame(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			LSN:            7,
 			Kind:           CommandKindRawKVBatch,
 			Scope:          CommandScopeRawKV,
@@ -1815,7 +1935,7 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EncodeCommandFrame(%v): %v", op.Op, err)
 		}
-		got, err := encodeRawKVSingleCommandFrameTo(nil, 7, 3, op)
+		got, err := encodeRawKVSingleCommandFrameTo(nil, 7, 3, op, CommandDurabilityRelaxed)
 		if err != nil {
 			t.Fatalf("encodeRawKVSingleCommandFrameTo(%v): %v", op.Op, err)
 		}
@@ -1823,7 +1943,7 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 			t.Fatalf("single-op frame mismatch for op %v\ngot  %x\nwant %x", op.Op, got, want)
 		}
 		if op.Op == RawKVOpSet || op.Op == RawKVOpDelete {
-			trusted, err := encodeTrustedRawKVPointCommandFrameTo(nil, 7, 3, op.Op, op.Key, op.Value)
+			trusted, err := encodeTrustedRawKVPointCommandFrameTo(nil, 7, 3, op.Op, op.Key, op.Value, CommandDurabilityRelaxed)
 			if err != nil {
 				t.Fatalf("encodeTrustedRawKVPointCommandFrameTo(%v): %v", op.Op, err)
 			}
@@ -1843,7 +1963,7 @@ func TestEncodeTrustedRawKVPointCommandFrameWithRevisionMatchesEnvelopeEncoder(t
 		if err != nil {
 			t.Fatalf("EncodeRawKVBatchPayload(%v): %v", op.Op, err)
 		}
-		want, err := EncodeCommandFrame(CommandEnvelope{
+		want, err := EncodeCommandFrame(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			LSN:            7,
 			Kind:           CommandKindRawKVBatch,
 			Scope:          CommandScopeRawKV,
@@ -1854,7 +1974,7 @@ func TestEncodeTrustedRawKVPointCommandFrameWithRevisionMatchesEnvelopeEncoder(t
 		if err != nil {
 			t.Fatalf("EncodeCommandFrame(%v): %v", op.Op, err)
 		}
-		got, err := encodeTrustedRawKVPointCommandFrameWithRevisionTo(nil, 7, 3, op.Op, op.Key, op.Value, op.Revision)
+		got, err := encodeTrustedRawKVPointCommandFrameWithRevisionTo(nil, 7, 3, op.Op, op.Key, op.Value, op.Revision, CommandDurabilityRelaxed)
 		if err != nil {
 			t.Fatalf("encodeTrustedRawKVPointCommandFrameWithRevisionTo(%v): %v", op.Op, err)
 		}
@@ -1873,7 +1993,7 @@ func TestCommandWALRawKVBatchOneLSNAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
-	frame := mustCommandFrame(t, CommandEnvelope{LSN: 22, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload})
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 22, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload})
 	env, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
@@ -2036,7 +2156,7 @@ func TestCommandWALNoCollectionSegmentFamilyCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if err := w.AppendCommand(CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+	if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendCommand: %v", err)
 	}
@@ -2077,7 +2197,7 @@ func TestCommandWALDuplicateLSNFailsClosed(t *testing.T) {
 		t.Fatalf("NewWriter: %v", err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := w.AppendCommand(CommandEnvelope{LSN: 9, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+		if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 9, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
 			_ = w.Close()
 			t.Fatalf("AppendCommand(%d): %v", i, err)
 		}
@@ -2100,7 +2220,7 @@ func TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriter %s: %v", name, err)
 		}
-		if err := w.AppendCommand(CommandEnvelope{LSN: 9, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+		if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: 9, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
 			_ = w.Close()
 			t.Fatalf("AppendCommand %s: %v", name, err)
 		}
@@ -2126,7 +2246,7 @@ func TestCommandWALScanSegmentsReturnsGlobalLSNOrder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriter %s: %v", paths[i], err)
 		}
-		if err := w.AppendCommand(CommandEnvelope{LSN: lsn, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+		if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed, LSN: lsn, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
 			_ = w.Close()
 			t.Fatalf("AppendCommand %s: %v", paths[i], err)
 		}
@@ -2156,7 +2276,7 @@ func TestCommandWALNonFinalSegmentTailFailsClosed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriter %s: %v", path, err)
 		}
-		if err := w.AppendCommand(CommandEnvelope{
+		if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			LSN:           uint64(i + 1),
 			Kind:          CommandKindRawKVBatch,
 			Scope:         CommandScopeRawKV,
@@ -2198,7 +2318,7 @@ func TestCommandWALActiveSegmentTailAllowedPerLane(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriter %s: %v", path, err)
 		}
-		if err := w.AppendCommand(CommandEnvelope{
+		if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			LSN:           uint64(i + 1),
 			Kind:          CommandKindRawKVBatch,
 			Scope:         CommandScopeRawKV,
@@ -2242,7 +2362,7 @@ func mustCommandFrame(t *testing.T, env CommandEnvelope) []byte {
 
 func mustCommandFrameWithSections(t *testing.T, payload, extRefs, preconditions, assertions []byte) []byte {
 	t.Helper()
-	frame := mustCommandFrame(t, CommandEnvelope{
+	frame := mustCommandFrame(t, CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,

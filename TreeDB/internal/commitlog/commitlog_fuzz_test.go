@@ -72,7 +72,7 @@ func FuzzCommandWALDecodeFrame(f *testing.F) {
 		{Op: RawKVOpSet, Key: []byte("k1"), Value: []byte("v1")},
 		{Op: RawKVOpDelete, Key: []byte("k2")},
 	}); err == nil {
-		if frame, err := EncodeCommandFrame(CommandEnvelope{
+		if frame, err := EncodeCommandFrame(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			LSN:           1,
 			Kind:          CommandKindRawKVBatch,
 			Scope:         CommandScopeRawKV,

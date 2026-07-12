@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -302,7 +303,81 @@ func requireNoLegacyCachedRedoJournalReplay(dir string, db *DB, maxSegmentBytes 
 }
 
 type commandWALReplayFrame struct {
-	env commitlog.CommandEnvelope
+	env         commitlog.CommandEnvelope
+	segment     logSegment
+	startOffset int64
+	endOffset   int64
+}
+
+// CommandWALRecoveryDiagnostic describes a relaxed incomplete suffix that was
+// discarded during writable recovery.
+type CommandWALRecoveryDiagnostic struct {
+	FirstDiscardedLSN   uint64
+	DiscardedFrameCount uint64
+	DiscardedBytes      uint64
+	MissingRIDCount     uint64
+	SourceSegment       string
+	// DurabilityClass is the persisted command-frame class: 1 is durable and
+	// 2 is relaxed. Keep the diagnostic representation public and independent
+	// of the internal frame codec type.
+	DurabilityClass        uint16
+	TruncationCompleted    bool
+	DirectorySyncCompleted bool
+}
+
+// CommandWALRecoveryRequiredError reports the first unapplied/discardable LSN
+// without mutating storage. Read-only opens return this error.
+type CommandWALRecoveryRequiredError struct {
+	Diagnostic CommandWALRecoveryDiagnostic
+}
+
+func (e *CommandWALRecoveryRequiredError) Error() string {
+	if e == nil {
+		return ErrRecoveryRequired.Error()
+	}
+	return fmt.Sprintf("%v: first discarded lsn=%d segment=%s missing_rids=%d durability_class=%d", ErrRecoveryRequired, e.Diagnostic.FirstDiscardedLSN, e.Diagnostic.SourceSegment, e.Diagnostic.MissingRIDCount, e.Diagnostic.DurabilityClass)
+}
+
+func (e *CommandWALRecoveryRequiredError) Unwrap() error { return ErrRecoveryRequired }
+
+func requireNoCommandWALRecoveryReadOnly(dir string, appliedLSN uint64, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	commandSegments, err := listWALSegments(dir)
+	if err != nil {
+		return err
+	}
+	frames, err := readCommandWALReplayFrames(commandSegments, appliedLSN, maxSegmentBytes)
+	if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) {
+		// Preserve the legacy cached-redo diagnostic path below this check. V1
+		// command frames are otherwise rejected by the V2 decoder.
+		return nil
+	}
+	if err != nil || len(frames) == 0 {
+		return err
+	}
+	valueSegments, err := listValueLogSegments(dir)
+	if err != nil {
+		return err
+	}
+	segments := append(commandSegments, valueSegments...)
+	complete, tail, diagnostic, _, err := classifyCommandWALReplayFrames(frames, segments, appliedLSN, dictLookup)
+	if err != nil {
+		return err
+	}
+	if len(tail) == 0 {
+		first := complete[0]
+		diagnostic = CommandWALRecoveryDiagnostic{
+			FirstDiscardedLSN:   first.env.LSN,
+			DiscardedFrameCount: uint64(len(complete)),
+			SourceSegment:       filepath.Base(first.segment.path),
+			DurabilityClass:     uint16(first.env.DurabilityClass),
+		}
+		for _, frame := range complete {
+			if frame.endOffset > frame.startOffset {
+				diagnostic.DiscardedBytes += uint64(frame.endOffset - frame.startOffset)
+			}
+		}
+	}
+	return &CommandWALRecoveryRequiredError{Diagnostic: diagnostic}
 }
 
 type commandWALReplayRIDMapFunc func() (map[uint64]page.ValuePtr, error)
@@ -323,7 +398,11 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 		return err
 	}
-	var ridMap map[uint64]page.ValuePtr
+	completeFrames, tailFrames, diagnostic, ridMap, err := classifyCommandWALReplayFrames(frames, segments, applied, dictLookup)
+	if err != nil {
+		return err
+	}
+	frames = completeFrames
 	var inlineAppender *replayInlineAppender
 	previousLeafPageLog := db.leafPageLog
 	previousValueLogAppender := db.currentValueLogAppender()
@@ -414,13 +493,193 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		restoreValueLogAppender()
 		restoreLeafPageLog()
 	}
+	if len(tailFrames) != 0 {
+		allFrames := append(append(make([]commandWALReplayFrame, 0, len(completeFrames)+len(tailFrames)), completeFrames...), tailFrames...)
+		repaired, repairErr := repairIncompleteCommandWALTail(db.dir, segments, allFrames, diagnostic.FirstDiscardedLSN, diagnostic)
+		if repairErr != nil {
+			return errors.Join(repairErr, ErrRecoveryRequired)
+		}
+		db.commandWALRecoveryDiagnosticMu.Lock()
+		db.commandWALRecoveryDiagnostic = repaired
+		db.commandWALRecoveryDiagnosticMu.Unlock()
+	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 	return err
 }
 
+func classifyCommandWALReplayFrames(frames []commandWALReplayFrame, segments []logSegment, applied uint64, dictLookup valuelog.DictLookup) (complete, tail []commandWALReplayFrame, diagnostic CommandWALRecoveryDiagnostic, ridMap map[uint64]page.ValuePtr, err error) {
+	expected := applied + 1
+	needsRIDMap := false
+	for _, frame := range frames {
+		if frame.env.LSN != expected {
+			err = fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, expected-1, frame.env.LSN)
+			return
+		}
+		expected++
+		fence, present, fenceErr := commitlog.RawKVExternalRefFence(&frame.env)
+		if fenceErr != nil {
+			err = fenceErr
+			return
+		}
+		if present && fence.Count != 0 {
+			needsRIDMap = true
+		}
+	}
+	if needsRIDMap {
+		ridMap, err = scanValueLogSegments(segments, dictLookup)
+		if err != nil {
+			return
+		}
+	}
+	for i, frame := range frames {
+		missing := make(map[uint64]struct{})
+		if frame.env.Kind == commitlog.CommandKindRawKVBatch {
+			err = commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, _ []byte, value []byte) error {
+				if op == commitlog.RawKVOpSetRID {
+					rid := binary.LittleEndian.Uint64(value)
+					if _, ok := ridMap[rid]; !ok {
+						missing[rid] = struct{}{}
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, nil, diagnostic, ridMap, err
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		if frame.env.DurabilityClass == commitlog.CommandDurabilityDurable {
+			for rid := range missing {
+				err = fmt.Errorf("%w: lsn=%d rid=%d", ErrCommandWALMissingValueLogRID, frame.env.LSN, rid)
+				return
+			}
+		}
+		complete = frames[:i]
+		tail = frames[i:]
+		diagnostic = CommandWALRecoveryDiagnostic{
+			FirstDiscardedLSN:   frame.env.LSN,
+			MissingRIDCount:     uint64(len(missing)),
+			SourceSegment:       filepath.Base(frame.segment.path),
+			DurabilityClass:     uint16(frame.env.DurabilityClass),
+			DiscardedFrameCount: uint64(len(tail)),
+		}
+		for _, discarded := range tail {
+			if discarded.endOffset > discarded.startOffset {
+				diagnostic.DiscardedBytes += uint64(discarded.endOffset - discarded.startOffset)
+			}
+		}
+		return
+	}
+	complete = frames
+	return
+}
+
+func repairIncompleteCommandWALTail(dir string, segments []logSegment, frames []commandWALReplayFrame, firstDiscardedLSN uint64, diagnostic CommandWALRecoveryDiagnostic) (CommandWALRecoveryDiagnostic, error) {
+	if len(frames) == 0 || firstDiscardedLSN == 0 {
+		return diagnostic, nil
+	}
+	type segmentRepair struct {
+		path           string
+		truncateOffset int64
+		hasPrefix      bool
+		anchor         bool
+		unframed       bool
+	}
+	plans := make(map[string]*segmentRepair)
+	for _, segment := range segments {
+		if segment.valueLog || !isCommandWALLaneSegment(segment) {
+			continue
+		}
+		plans[segment.path] = &segmentRepair{path: segment.path, truncateOffset: -1, unframed: true}
+	}
+	for _, frame := range frames {
+		plan := plans[frame.segment.path]
+		if plan == nil {
+			plan = &segmentRepair{path: frame.segment.path, truncateOffset: -1}
+			plans[frame.segment.path] = plan
+		}
+		plan.unframed = false
+		if frame.env.LSN < firstDiscardedLSN {
+			plan.hasPrefix = true
+			continue
+		}
+		if plan.truncateOffset < 0 || frame.startOffset < plan.truncateOffset {
+			plan.truncateOffset = frame.startOffset
+		}
+		if frame.env.LSN == firstDiscardedLSN {
+			plan.anchor = true
+		}
+	}
+	walDir := WALDirPath(dir)
+	removed := false
+	for _, plan := range plans {
+		if plan.anchor || plan.hasPrefix || (!plan.unframed && plan.truncateOffset < 0) {
+			continue
+		}
+		if _, err := removePersistentFile(walDir, plan.path, durabilitycut.ResourceCommandWAL); err != nil {
+			return diagnostic, err
+		}
+		removed = true
+	}
+	if removed {
+		if err := syncDeletionNamespaceDirectory(walDir, durabilitycut.ResourceCommandWAL); err != nil {
+			return diagnostic, err
+		}
+	}
+	truncatePlans := make([]*segmentRepair, 0, len(plans))
+	var anchorPlan *segmentRepair
+	for _, plan := range plans {
+		if plan.truncateOffset < 0 || (!plan.hasPrefix && !plan.anchor) {
+			continue
+		}
+		if plan.anchor {
+			anchorPlan = plan
+			continue
+		}
+		truncatePlans = append(truncatePlans, plan)
+	}
+	sort.Slice(truncatePlans, func(i, j int) bool { return truncatePlans[i].path < truncatePlans[j].path })
+	if anchorPlan != nil {
+		truncatePlans = append(truncatePlans, anchorPlan)
+	}
+	for _, plan := range truncatePlans {
+		f, err := os.OpenFile(plan.path, os.O_RDWR, 0)
+		if err != nil {
+			return diagnostic, err
+		}
+		if err = f.Truncate(plan.truncateOffset); err == nil {
+			err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, plan.path)
+		}
+		if err == nil {
+			err = f.Sync()
+		}
+		if err == nil {
+			err = durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, plan.path)
+		}
+		closeErr := f.Close()
+		if err != nil {
+			return diagnostic, err
+		}
+		if closeErr != nil {
+			return diagnostic, closeErr
+		}
+	}
+	diagnostic.TruncationCompleted = true
+	if err := syncDeletionNamespaceDirectory(walDir, durabilitycut.ResourceCommandWAL); err != nil {
+		return diagnostic, err
+	}
+	diagnostic.DirectorySyncCompleted = true
+	return diagnostic, nil
+}
+
 func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALReplayFrame, error) {
 	activeByLane := commandWALActiveSeqByLane(segments)
-	var frames []commandWALReplayFrame
+	// Recovery commonly reads dozens of frames. A modest initial capacity
+	// avoids repeatedly copying the per-frame physical repair coordinates while
+	// keeping the allocation bounded for tiny journals.
+	frames := make([]commandWALReplayFrame, 0, 64)
 	seen := make(map[uint64]struct{})
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
@@ -436,8 +695,18 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		}
 		var lastLSN uint64
 		for {
+			startOffset, offsetErr := reader.Offset()
+			if offsetErr != nil {
+				_ = reader.Close()
+				return nil, offsetErr
+			}
 			env, err := reader.ReadCommandFrame()
 			if err == nil {
+				endOffset, offsetErr := reader.Offset()
+				if offsetErr != nil {
+					_ = reader.Close()
+					return nil, offsetErr
+				}
 				if lastLSN != 0 && env.LSN <= lastLSN {
 					_ = reader.Close()
 					return nil, commitlog.ErrCommandWALDuplicateLSN
@@ -449,12 +718,16 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 						return nil, commitlog.ErrCommandWALDuplicateLSN
 					}
 					seen[env.LSN] = struct{}{}
-					frames = append(frames, commandWALReplayFrame{env: env})
+					frames = append(frames, commandWALReplayFrame{env: env, segment: seg, startOffset: startOffset, endOffset: endOffset})
 				}
 				continue
 			}
 			if errors.Is(err, io.EOF) {
 				break
+			}
+			if errors.Is(err, commitlog.ErrCommandWALUnsupportedVersion) {
+				_ = reader.Close()
+				return nil, fmt.Errorf("%w: %w", ErrCommandWALRebuildRequired, err)
 			}
 			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) && active {
 				break

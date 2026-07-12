@@ -1458,7 +1458,7 @@ func openColumnGraphRabitQQuantizedBenchCollection2450(tb testing.TB, shape colu
 		tb.Fatalf("invalid benchmark shape rows=%d dims=%d", shape.rows, shape.dims)
 	}
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)

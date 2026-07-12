@@ -345,7 +345,7 @@ func openIndexInsertSearchEmptyFixtureWithTextDefinition2564(tb testing.TB, dir 
 	}
 	var db *backenddb.DB
 	if commandWAL {
-		if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 			tb.Fatalf("SaveFormatConfig: %v", err)
 		}
 		db = openCollectionCommandWALDB(tb, dir)

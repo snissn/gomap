@@ -2434,7 +2434,15 @@ func (w *Writer) Sync() error {
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
+	path := w.f.Name()
+	root := filepath.Dir(path)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceValueLog, root, path); err != nil {
+		return err
+	}
 	if err := w.syncFile(); err != nil {
+		return err
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceValueLog, root, path); err != nil {
 		return err
 	}
 	w.trimTransientScratchBuffers()

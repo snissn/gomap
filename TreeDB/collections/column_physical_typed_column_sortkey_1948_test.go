@@ -66,7 +66,7 @@ func TestTypedColumnPartSortKeyTimeUSPersistsAscendingReopen1948(t *testing.T) {
 
 func TestTypedColumnPartSortKeyBoolPersistsAscendingReopen1948(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
@@ -561,7 +561,7 @@ func BenchmarkTypedColumnPartSortKeyPublication1948(b *testing.B) {
 func openTypedColumnSortKeyFixture1948(tb testing.TB, sortKey []ColumnSortKey, events []columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

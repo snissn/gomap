@@ -1304,7 +1304,7 @@ func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentSampled2382(t *testing
 
 func TestAuditCollectionRetainedPayloadDeclaredPathsAbsentValueReadErrorFailsClosed2384(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{
@@ -1444,7 +1444,7 @@ func jsonbenchRetainedPayloadAuditConfig2382(includeOperation bool) *ColumnStore
 func openRetainedPayloadAuditCollection2382(t *testing.T, cfg *ColumnStoreConfig, docs [][]byte) (*Collection, func()) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

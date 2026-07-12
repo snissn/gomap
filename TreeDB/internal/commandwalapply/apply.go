@@ -175,7 +175,7 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 		return Handle{}, Result{}, backenddb.ErrClosed
 	}
 	if !db.CommandWALEnabled() {
-		return Handle{}, Result{}, fmt.Errorf("%w: command wal apply requires command_wal_v1", backenddb.ErrCommandWALUnsupported)
+		return Handle{}, Result{}, fmt.Errorf("%w: command wal apply requires command_wal_v2", backenddb.ErrCommandWALUnsupported)
 	}
 	if err := validateLoweredFrame(frame); err != nil {
 		return Handle{}, Result{}, err

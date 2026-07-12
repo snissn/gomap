@@ -2135,6 +2135,73 @@ func publicCommandWALSegmentNames(t *testing.T, dir string) []string {
 	return names
 }
 
+func TestPublicCommandWALReadOnlyRecoveryErrorExposesDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	bootstrap, err := Open(Options{
+		Dir:               dir,
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open bootstrap: %v", err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap: %v", err)
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:  commitlog.RawKVOpSetRID,
+		Key: []byte("missing"),
+		RID: 99,
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(backenddb.WALDirPath(dir), commitlog.CommandSegmentName(0, 999))
+	w, err := commitlog.NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.AppendCommand(commitlog.CommandEnvelope{
+		DurabilityClass: commitlog.CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	}); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendCommand: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	_, err = Open(Options{Dir: dir, ReadOnly: true, DisableSideStores: true})
+	var recoveryErr *CommandWALRecoveryRequiredError
+	if !errors.Is(err, ErrRecoveryRequired) || !errors.As(err, &recoveryErr) {
+		t.Fatalf("Open read-only error=%v, want public typed ErrRecoveryRequired", err)
+	}
+	if got := recoveryErr.Diagnostic; got.FirstDiscardedLSN != 1 || got.MissingRIDCount != 1 || got.DurabilityClass != 2 {
+		t.Fatalf("recovery diagnostic=%+v, want lsn=1 missing_rids=1 durability_class=2", got)
+	}
+}
+
+func TestPublicOpenCommandWALV1RequiredFeatureRequiresRebuild(t *testing.T) {
+	dir := t.TempDir()
+	format := []byte(`{"version":3,"required_features":["command_wal_v1"]}`)
+	if err := os.WriteFile(filepath.Join(dir, "format.json"), format, 0o600); err != nil {
+		t.Fatalf("write format.json: %v", err)
+	}
+	for _, ignore := range []bool{false, true} {
+		_, err := Open(Options{Dir: dir, DisableSideStores: true, IgnoreFormatConfig: ignore})
+		if !errors.Is(err, ErrCommandWALRebuildRequired) {
+			t.Fatalf("Open IgnoreFormatConfig=%t error=%v, want ErrCommandWALRebuildRequired", ignore, err)
+		}
+	}
+}
+
 func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {
 	tests := []struct {
 		name       string

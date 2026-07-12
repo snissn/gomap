@@ -6,6 +6,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// CommandWALRecoveryDiagnostic describes an incomplete relaxed command-WAL
+// suffix that requires writable recovery or was discarded during it.
+type CommandWALRecoveryDiagnostic = db.CommandWALRecoveryDiagnostic
+
+// CommandWALRecoveryRequiredError is returned by read-only opens when command-
+// WAL recovery would need to mutate storage. Use errors.As to inspect it.
+type CommandWALRecoveryRequiredError = db.CommandWALRecoveryRequiredError
+
 var (
 	// ErrLocked indicates the database directory is already opened by another process.
 	ErrLocked = db.ErrLocked
@@ -20,12 +28,15 @@ var (
 	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
 	// before the requested read-only or offline-maintenance operation can run.
 	ErrRecoveryRequired = db.ErrRecoveryRequired
-	// ErrCommandWALUnsupported indicates a directory advertises command_wal_v1
+	// ErrCommandWALUnsupported indicates a directory advertises command_wal_v2
 	// before this binary has enabled command WAL execution/recovery.
 	ErrCommandWALUnsupported = db.ErrCommandWALUnsupported
 	// ErrCommandWALRejected indicates a command is intentionally rejected while
-	// command_wal_v1 is active.
+	// command_wal_v2 is active.
 	ErrCommandWALRejected = db.ErrCommandWALRejected
+	// ErrCommandWALRebuildRequired indicates an older command-WAL physical
+	// format must be discarded by rebuilding the pre-alpha database directory.
+	ErrCommandWALRebuildRequired = db.ErrCommandWALRebuildRequired
 	// ErrCommandWALSegmentSeqExhausted indicates no new command-WAL segment
 	// sequence is available during open.
 	ErrCommandWALSegmentSeqExhausted = db.ErrCommandWALSegmentSeqExhausted

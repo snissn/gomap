@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -319,7 +321,7 @@ func TestCommandWALSetRIDReplayDoesNotNeedInlineAppenderWithoutOuterLeafLog(t *t
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
 	frames := []commandWALReplayFrame{{
-		env: commitlog.CommandEnvelope{
+		env: commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 			LSN:           1,
 			Kind:          commitlog.CommandKindRawKVBatch,
 			Scope:         commitlog.CommandScopeRawKV,
@@ -455,7 +457,7 @@ func TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts(t *testing
 		}
 	}()
 
-	err = applyRawKVCommandWALFrame(db, commitlog.CommandEnvelope{
+	err = applyRawKVCommandWALFrame(db, commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          commitlog.CommandKindRawKVBatch,
 		Scope:         commitlog.CommandScopeRawKV,
@@ -525,7 +527,7 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 		}
 	}()
 
-	err = applyCommandWALFrame(db, commitlog.CommandEnvelope{
+	err = applyCommandWALFrame(db, commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          kind,
 		Scope:         commitlog.CommandScopeCollection,
@@ -627,7 +629,7 @@ func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing
 		ensured.Store(true)
 		return nil, nil, nil
 	}
-	if err := applyCommandWALFrame(db, commitlog.CommandEnvelope{
+	if err := applyCommandWALFrame(db, commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          kind,
 		Scope:         commitlog.CommandScopeCollection,
@@ -652,7 +654,7 @@ func TestCommandWALRegisteredReplayFrameRestoresStateOnSuccessM10C(t *testing.T)
 	db.commandWALReplayLSN.Store(41)
 	db.commandWALReplayToken.Store(42)
 
-	env := commitlog.CommandEnvelope{LSN: 77}
+	env := commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed, LSN: 77}
 	err = db.applyRegisteredCommandWALFrame(env, commandWALReplayHandlerRegistration{
 		handler: func(db *DB, env commitlog.CommandEnvelope) error {
 			if got := db.commandWALReplayLSN.Load(); got != env.LSN {
@@ -695,7 +697,7 @@ func TestCommandWALRegisteredReplayFrameRestoresStateOnPanicM10C(t *testing.T) {
 			t.Fatalf("restored replay token after panic=%d, want 42", got)
 		}
 	}()
-	_ = db.applyRegisteredCommandWALFrame(commitlog.CommandEnvelope{LSN: 77}, commandWALReplayHandlerRegistration{
+	_ = db.applyRegisteredCommandWALFrame(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed, LSN: 77}, commandWALReplayHandlerRegistration{
 		handler: func(db *DB, env commitlog.CommandEnvelope) error {
 			panic("replay handler panic")
 		},
@@ -708,7 +710,7 @@ func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          commitlog.CommandKindRawKVBatch,
 		Scope:         commitlog.CommandScopeRawKV,
@@ -740,7 +742,7 @@ func TestCommandWALRejectsUnloggedCommit(t *testing.T) {
 }
 
 func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
-	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          commitlog.CommandKindRawKVBatch,
 		Scope:         commitlog.CommandScopeRawKV,
@@ -1589,6 +1591,238 @@ func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 	}
 }
 
+func TestCommandWALV1OpenReturnsPublicRebuildRequired(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("k"), Value: []byte("v")}})
+	path := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) < 16 {
+		t.Fatalf("command WAL segment len=%d, want physical header", len(raw))
+	}
+	binary.LittleEndian.PutUint16(raw[12:14], 1)
+	binary.LittleEndian.PutUint16(raw[14:16], 1)
+	binary.LittleEndian.PutUint32(raw[4:8], crc.Checksum(raw[8:]))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, ErrCommandWALRebuildRequired) || !errors.Is(err, commitlog.ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("Open V1 error=%v, want public rebuild-required and internal unsupported-version causes", err)
+	}
+}
+
+func TestCommandWALRelaxedMissingRIDAppliesPrefixRepairsSuffixAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 1, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("prefix"), Value: []byte("kept")}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 2, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 2, 3, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix"), Value: []byte("discarded")}})
+	// A torn active segment in another lane has no decodable LSN. The repair
+	// planner must still remove it as part of the suffix.
+	tornPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(1, 1))
+	if err := os.WriteFile(tornPath, []byte{1, 2, 3}, 0o600); err != nil {
+		t.Fatalf("write torn later segment: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "prefix", "kept")
+	for _, key := range []string{"missing", "suffix"} {
+		if got, err := reopen.Get([]byte(key)); err != nil || got != nil {
+			t.Fatalf("Get(%q)=%q err=%v, want discarded", key, got, err)
+		}
+	}
+	stats := reopen.Stats()
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.recovery.first_discarded_lsn"); got != 2 {
+		t.Fatalf("first discarded lsn=%d, want 2", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.recovery.discarded_frames"); got != 2 {
+		t.Fatalf("discarded frames=%d, want 2", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.recovery.missing_rids"); got != 1 {
+		t.Fatalf("missing rids=%d, want 1", got)
+	}
+	reopenedSegmentPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))
+	if info, err := os.Stat(reopenedSegmentPath); err != nil || info.Size() != 0 {
+		t.Fatalf("replacement active segment stat=(%v,%v), want empty replacement", info, err)
+	}
+	if _, err := os.Stat(tornPath); !os.IsNotExist(err) {
+		t.Fatalf("torn later suffix segment stat error=%v, want removed", err)
+	}
+	b := reopen.NewBatch()
+	if err := b.Set([]byte("next"), []byte("value")); err != nil {
+		t.Fatalf("Set next: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync next: %v", err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after next append=%d, want 2", got)
+	}
+}
+
+func TestCommandWALRelaxedMissingRIDReadOnlyRequiresRecoveryWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+	path := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile before read-only open: %v", err)
+	}
+
+	_, err = openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
+	var recoveryErr *CommandWALRecoveryRequiredError
+	if !errors.Is(err, ErrRecoveryRequired) || !errors.As(err, &recoveryErr) {
+		t.Fatalf("read-only open error=%v, want typed ErrRecoveryRequired", err)
+	}
+	if recoveryErr.Diagnostic.FirstDiscardedLSN != 1 {
+		t.Fatalf("read-only first discarded lsn=%d, want 1", recoveryErr.Diagnostic.FirstDiscardedLSN)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile after read-only open: %v", readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("read-only recovery planner mutated command WAL")
+	}
+}
+
+func TestRepairIncompleteCommandWALTailIsCrashIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	walDir := WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	anchorPath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	laterPath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 2))
+	if err := os.WriteFile(anchorPath, bytes.Repeat([]byte{1}, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(laterPath, bytes.Repeat([]byte{2}, 16), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	anchor := logSegment{lane: 0, seq: 1, path: anchorPath, size: 32}
+	later := logSegment{lane: 0, seq: 2, path: laterPath, size: 16}
+	frames := []commandWALReplayFrame{{
+		env:         commitlog.CommandEnvelope{LSN: 1, DurabilityClass: commitlog.CommandDurabilityRelaxed},
+		segment:     anchor,
+		startOffset: 8,
+		endOffset:   32,
+	}}
+	diagnostic := CommandWALRecoveryDiagnostic{FirstDiscardedLSN: 1}
+	originalSyncDir := syncDirFn
+	failOnce := true
+	syncDirFn = func(path string) error {
+		if failOnce {
+			failOnce = false
+			return errors.New("injected directory sync failure")
+		}
+		return originalSyncDir(path)
+	}
+	_, err := repairIncompleteCommandWALTail(dir, []logSegment{anchor, later}, frames, 1, diagnostic)
+	syncDirFn = originalSyncDir
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("first repair error=%v, want ErrRecoveryRequired", err)
+	}
+	if _, err := os.Stat(anchorPath); err != nil {
+		t.Fatalf("anchor removed after interrupted repair: %v", err)
+	}
+	if _, err := os.Stat(laterPath); !os.IsNotExist(err) {
+		t.Fatalf("later segment stat after interrupted repair=%v, want removed", err)
+	}
+	repaired, err := repairIncompleteCommandWALTail(dir, []logSegment{anchor, later}, frames, 1, diagnostic)
+	if err != nil {
+		t.Fatalf("second idempotent repair: %v", err)
+	}
+	if !repaired.TruncationCompleted || !repaired.DirectorySyncCompleted {
+		t.Fatalf("repair diagnostic=%+v, want completed", repaired)
+	}
+	info, err := os.Stat(anchorPath)
+	if err != nil {
+		t.Fatalf("Stat anchor: %v", err)
+	}
+	if info.Size() != 8 {
+		t.Fatalf("anchor size=%d, want truncation offset 8", info.Size())
+	}
+}
+
+func TestCommandWALRepairTruncatesCrossLaneMixedSegmentBeforeAnchor(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 1, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("prefix"), Value: []byte("kept")}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 2, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 3, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix"), Value: []byte("discarded")}})
+	segments, err := listRecoverySegments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := readCommandWALReplayFrames(segments, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 3 {
+		t.Fatalf("replay frames=%d, want 3", len(frames))
+	}
+	anchorPath := frames[1].segment.path
+	mixedPath := frames[0].segment.path
+	anchorBefore, err := os.Stat(anchorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected after non-anchor truncation sync")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.AfterDependencyFileSync && event.Resource == durabilitycut.ResourceCommandWAL && event.Path == mixedPath {
+			return injected
+		}
+		return nil
+	})
+	_, err = Open(Options{Dir: dir})
+	restore()
+	if !errors.Is(err, injected) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("first Open error=%v, want injected ErrRecoveryRequired", err)
+	}
+	anchorAfter, err := os.Stat(anchorPath)
+	if err != nil {
+		t.Fatalf("Stat anchor after cut: %v", err)
+	}
+	if anchorAfter.Size() != anchorBefore.Size() {
+		t.Fatalf("anchor size after non-anchor cut=%d, want unchanged %d", anchorAfter.Size(), anchorBefore.Size())
+	}
+	mixedAfter, err := os.Stat(mixedPath)
+	if err != nil {
+		t.Fatalf("Stat mixed segment after cut: %v", err)
+	}
+	if mixedAfter.Size() != frames[0].endOffset {
+		t.Fatalf("mixed segment size after cut=%d, want prefix end %d", mixedAfter.Size(), frames[0].endOffset)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "prefix", "kept")
+	for _, key := range []string{"missing", "suffix"} {
+		if got, err := reopen.Get([]byte(key)); err != nil || got != nil {
+			t.Fatalf("Get(%q)=%q err=%v, want discarded", key, got, err)
+		}
+	}
+}
+
 func TestCommandWALExternalRefFlushRequiresAppender(t *testing.T) {
 	db := &DB{}
 	if err := db.flushCommandWALExternalRefs(true, nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
@@ -1763,7 +1997,7 @@ func enableCommandWALFormat(t *testing.T, dir string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 }
@@ -1808,6 +2042,11 @@ func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn 
 
 func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
 	t.Helper()
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, lane, segmentSeq, lsn, commitlog.CommandDurabilityDurable, ops)
+}
+
+func writeCommandWALRawKVFrameForLaneAndDurability(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
+	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll wal: %v", err)
@@ -1821,7 +2060,7 @@ func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmen
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if err := w.AppendCommand(commitlog.CommandEnvelope{
+	if err := w.AppendCommand(commitlog.CommandEnvelope{DurabilityClass: durability,
 		LSN:           lsn,
 		Kind:          commitlog.CommandKindRawKVBatch,
 		Scope:         commitlog.CommandScopeRawKV,

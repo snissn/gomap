@@ -663,7 +663,7 @@ func BenchmarkColumnPhysicalDenseLatestVisible1953(b *testing.B) {
 func openTypedColumnLatestVisibleFixture1953(tb testing.TB, sortKey []ColumnSortKey, batches [][]columnPhysicalJSONBenchParityEventP0) (string, *backenddb.DB, *Collection, func()) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

@@ -139,7 +139,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 	db.seedEntryRevisionFloor()
-	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	if err := requireNoCommandWALRecoveryReadOnly(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		return nil, err
 	}
 	db.seedEntryRevisionFloor()
-	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	if err := requireNoCommandWALRecoveryReadOnly(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

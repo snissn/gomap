@@ -77,7 +77,7 @@ func TestWireSideStoreLookups_DoesNotPropagateCommandWAL(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected dictdb format.json to exist at %s", filepath.Join(dictDir, "format.json"))
 	}
-	if cfg.RequiresCommandWALV1() {
-		t.Fatal("dictdb inherited command_wal_v1 required feature from main DB options")
+	if cfg.RequiresCommandWALV2() {
+		t.Fatal("dictdb inherited command_wal_v2 required feature from main DB options")
 	}
 }

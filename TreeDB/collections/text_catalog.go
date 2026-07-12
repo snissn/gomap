@@ -22,7 +22,7 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 		return nil, emptyStats, errCollectionDBNil
 	}
 	if c.db.CommandWALEnabled() {
-		return nil, emptyStats, fmt.Errorf("%w: collection catalog text index mutation is rejected under command_wal_v1 until catalog text index commands are supported", backenddb.ErrCommandWALRejected)
+		return nil, emptyStats, fmt.Errorf("%w: collection catalog text index mutation is rejected under command_wal_v2 until catalog text index commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, emptyStats, err
@@ -121,7 +121,7 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 		return nil, errCollectionDBNil
 	}
 	if c.db.CommandWALEnabled() {
-		return nil, fmt.Errorf("%w: collection catalog text index mutation is rejected under command_wal_v1 until catalog text index commands are supported", backenddb.ErrCommandWALRejected)
+		return nil, fmt.Errorf("%w: collection catalog text index mutation is rejected under command_wal_v2 until catalog text index commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err

@@ -53,7 +53,7 @@ func TestOfflineMaintenanceCommandWALGateBeforeSideStoreOpen(t *testing.T) {
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		t.Fatalf("mkdir maindb: %v", err)
 	}
-	if err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	// If public offline maintenance reaches side-store wiring, this malformed

@@ -281,7 +281,7 @@ func openRetainedPayloadPolicyFixture1876(tb testing.TB, shape retainedPayloadPo
 		tb.Fatalf("invalid fixture shape: %+v", shape)
 	}
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openRetainedPayloadPolicyDB1876(tb, dir, forceValueLogPointers)

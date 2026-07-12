@@ -28,7 +28,7 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return nil, nil, err
 		} else if ok {
-			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV2()
 			cfg.ApplyToOptions(&opts)
 		}
 	}

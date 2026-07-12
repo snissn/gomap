@@ -494,11 +494,16 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	if err != nil {
 		return nil, err
 	}
+	externalRefs, err := commandWALPayloadHasExternalRefs(kind, scope, payloadFormat, payload)
+	if err != nil {
+		return nil, err
+	}
 	return &CommandWALIntent{inner: commandWALBatchIntent{
 		kind:             kind,
 		scope:            scope,
 		payloadFormat:    payloadFormat,
 		payload:          payload,
+		externalRefs:     externalRefs,
 		maxEntryRevision: maxEntryRevision,
 	}}, nil
 }
@@ -761,7 +766,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 			return emit(entry)
 		})
 	}, &ridCache, &externalRefs, &externalRefFileIDs, opHint)
-	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
+	plan, err := commitlog.PlanRawKVBatchPayloadScanWithHint(planScan, opHint)
 	if err != nil {
 		return nil, err
 	}
@@ -787,7 +792,7 @@ func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entr
 	externalRefs := false
 	var ridCache *rawKVCommandWALRIDCache
 	scan := db.rawKVCommandWALOperationScannerWithHint(entries, &ridCache, &externalRefs, len(entries))
-	plan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
+	plan, err := commitlog.PlanRawKVBatchPayloadScanWithHint(scan, len(entries))
 	if err != nil {
 		return nil, err
 	}
@@ -851,6 +856,17 @@ func maxEntryRevisionFromCommandWALPayload(kind commitlog.CommandKind, scope com
 		return page.LegacyEntryRevision, err
 	}
 	return maxRevision, nil
+}
+
+func commandWALPayloadHasExternalRefs(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (bool, error) {
+	if kind != commitlog.CommandKindRawKVBatch || scope != commitlog.CommandScopeRawKV || payloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+		return false, nil
+	}
+	fence, err := commitlog.ExternalRefFenceV1FromRawKVPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	return fence.Present(), nil
 }
 
 func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache **rawKVCommandWALRIDCache, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
@@ -992,13 +1008,11 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 	}
 	var activeFileID uint32
 	if appender != nil {
-		if len(fileIDs) > 0 {
-			if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
-				if err := flusher.FlushValueLogExternalRefs(fileIDs, sync); err != nil {
-					return err
-				}
-				return nil
+		if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
+			if err := flusher.FlushValueLogExternalRefs(fileIDs, sync); err != nil {
+				return err
 			}
+			return nil
 		}
 		if _, fileID, ok := appender.CurrentValueLogSegment(); ok {
 			activeFileID = fileID
@@ -1023,6 +1037,17 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 		}
 	}
 	return nil
+}
+
+// flushCommandWALDurablePrefixExternalRefs closes the value-log dependency
+// prefix before a durable command-WAL append. Fsyncing the new command frame
+// also makes every earlier relaxed frame durable, so syncing only the current
+// frame's references is insufficient.
+func (db *DB) flushCommandWALDurablePrefixExternalRefs(actualSync bool) error {
+	if !actualSync || db.currentValueLogAppender() == nil {
+		return nil
+	}
+	return db.flushCommandWALExternalRefs(true, nil)
 }
 
 func (db *DB) syncCommandWALExternalRefSegment(fileID uint32) error {
@@ -1118,11 +1143,16 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
+	externalRefs, err := commandWALPayloadHasExternalRefs(kind, scope, payloadFormat, payload)
+	if err != nil {
+		return 0, err
+	}
 	intent := commandWALBatchIntent{
 		kind:          kind,
 		scope:         scope,
 		payloadFormat: payloadFormat,
 		payload:       payload,
+		externalRefs:  externalRefs,
 	}
 	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
@@ -1167,6 +1197,9 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	if err := db.flushCommandWALDurablePrefixExternalRefs(actualSync); err != nil {
+		return 0, err
+	}
 	lsn, timing, err := db.commandJournal.AppendRawKVSingleCommandAndFlushMeasured(baseAppliedLSN, op, actualSync)
 	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPoint, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
@@ -1218,6 +1251,9 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	if err := db.flushCommandWALDurablePrefixExternalRefs(actualSync); err != nil {
+		return 0, err
+	}
 	lsn, timing, err := db.commandJournal.AppendRawKVPointCommandTrustedWithRevisionAndFlushMeasured(baseAppliedLSN, op, key, value, revision, actualSync)
 	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPoint, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
@@ -1299,6 +1335,18 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	var err error
 	var timing commitlog.CommandJournalAppendFlushTiming
 	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	fence, err := commitlog.ExternalRefFenceV1FromRawKVPayload(payload)
+	if err != nil {
+		return 0, requestTiming, err
+	}
+	if actualSync {
+		err = db.flushCommandWALDurablePrefixExternalRefs(true)
+	} else if fence.Present() {
+		err = db.flushCommandWALExternalRefs(false, nil)
+	}
+	if err != nil {
+		return 0, requestTiming, err
+	}
 	journalStart := time.Time{}
 	if measured {
 		journalStart = time.Now()
@@ -1439,6 +1487,11 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	durabilityClass := commitlog.CommandDurabilityRelaxed
+	if actualSync {
+		durabilityClass = commitlog.CommandDurabilityDurable
+	}
 	planningStart := time.Time{}
 	if requestTiming != nil {
 		planningStart = time.Now()
@@ -1447,7 +1500,11 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if intent.rawKVDirect && intent.rawKVRIDCache != nil {
 		defer intent.rawKVRIDCache.release()
 	}
-	if intent.externalRefs {
+	// A durable command-WAL fsync also makes every earlier relaxed frame in the
+	// file durable. Establish closure for all pending value-log dependencies,
+	// not just this intent's RIDs, before that prefix becomes durable.
+	needsExternalRefBarrier := intent.externalRefs || (actualSync && db.currentValueLogAppender() != nil)
+	if needsExternalRefBarrier {
 		// SetRID frames reference value-log positions by offset. The
 		// value-log data must be visible before the command frame is written.
 		// WriteSync also fsyncs referenced value-log segments for power-loss
@@ -1461,7 +1518,21 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if requestTiming != nil {
 			externalRefStart = time.Now()
 		}
-		externalRefErr := db.flushCommandWALExternalRefs(sync, intent.externalRefFileIDs)
+		var externalRefErr error
+		if actualSync {
+			// Sync exact current-frame IDs first because a referenced segment may
+			// have rotated out of the active pending-lane set. This also clears the
+			// current lane's pending state, avoiding a duplicate fsync when the
+			// global prefix barrier subsequently closes every other relaxed lane.
+			if intent.externalRefs && len(intent.externalRefFileIDs) != 0 {
+				externalRefErr = db.flushCommandWALExternalRefs(true, intent.externalRefFileIDs)
+			}
+			if externalRefErr == nil {
+				externalRefErr = db.flushCommandWALDurablePrefixExternalRefs(true)
+			}
+		} else if intent.externalRefs {
+			externalRefErr = db.flushCommandWALExternalRefs(false, intent.externalRefFileIDs)
+		}
 		if requestTiming != nil {
 			requestTiming.ExternalRefOrdering += time.Since(externalRefStart)
 			planningStart = time.Now()
@@ -1486,17 +1557,18 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if scan == nil {
 			scan = db.rawKVCommandWALOperationScanner(intent.rawKVEntries, &intent.rawKVRIDCache, nil)
 		}
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrustedObserved(baseAppliedLSN, intent.rawKVPlan, scan)
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrustedObserved(baseAppliedLSN, intent.rawKVPlan, scan, durabilityClass)
 	} else if intent.trustedPayload && !intent.externalRefs {
 		appendPath = commandWALAppendStatsPayload
-		lsn, err = db.commandJournal.AppendCommandPayloadTrustedObserved(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
+		lsn, err = db.commandJournal.AppendCommandPayloadTrustedObserved(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload, durabilityClass)
 	} else {
 		lsn, err = db.commandJournal.AppendCommandObserved(commitlog.CommandEnvelope{
-			Kind:           intent.kind,
-			Scope:          intent.scope,
-			BaseAppliedLSN: baseAppliedLSN,
-			PayloadFormat:  intent.payloadFormat,
-			Payload:        intent.payload,
+			DurabilityClass: durabilityClass,
+			Kind:            intent.kind,
+			Scope:           intent.scope,
+			BaseAppliedLSN:  baseAppliedLSN,
+			PayloadFormat:   intent.payloadFormat,
+			Payload:         intent.payload,
 		})
 	}
 	appendElapsed := time.Since(appendStart)
@@ -1526,7 +1598,6 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		}
 		return lsn, err
 	}
-	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	if requestTiming != nil {
 		requestTiming.PostAppendPendingLSNBookkeeping += time.Since(postAppendStart)
 	}

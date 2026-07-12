@@ -15,7 +15,8 @@ const formatConfigFileName = "format.json"
 const formatConfigVersion = 2
 const formatConfigRequiredFeaturesVersion = 3
 
-const RequiredFeatureCommandWALV1 = "command_wal_v1"
+const RequiredFeatureCommandWALV2 = "command_wal_v2"
+const requiredFeatureCommandWALV1 = "command_wal_v1"
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -42,9 +43,9 @@ type FormatConfig struct {
 	ValueLogAutoPolicy  string `json:"vlog_auto_policy"`
 }
 
-func (cfg FormatConfig) RequiresCommandWALV1() bool {
+func (cfg FormatConfig) RequiresCommandWALV2() bool {
 	for _, feature := range cfg.RequiredFeatures {
-		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV2 {
 			return true
 		}
 	}
@@ -86,7 +87,7 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	}
 	if opts.CommandWAL {
 		cfg.Version = formatConfigRequiredFeaturesVersion
-		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)
+		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV2)
 	}
 
 	return cfg
@@ -252,7 +253,7 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 	}
 	requiresCommandWAL := false
 	for _, feature := range gate.RequiredFeatures {
-		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV2 {
 			requiresCommandWAL = true
 		}
 	}
@@ -260,16 +261,16 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 }
 
 // SaveFormatConfig writes cfg to dir/format.json atomically. A transition into
-// command_wal_v1 validates that legacy WAL state is clean; re-saving a config
-// that already requires command_wal_v1 does not re-run activation validation
+// command_wal_v2 validates that legacy WAL state is clean; re-saving a config
+// that already requires command_wal_v2 does not re-run activation validation
 // because command-WAL segments are expected after activation.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
-	if cfg.RequiresCommandWALV1() {
+	if cfg.RequiresCommandWALV2() {
 		existing, ok, err := LoadFormatConfig(dir)
 		if err != nil {
 			return err
 		}
-		if !ok || !existing.RequiresCommandWALV1() {
+		if !ok || !existing.RequiresCommandWALV2() {
 			if err := ValidateCommandWALActivationClean(dir); err != nil {
 				return err
 			}
@@ -437,7 +438,7 @@ func applyFormatConfigForMaintenanceWithOptions(opts *Options, allowCommandWAL b
 	if !ok {
 		return nil
 	}
-	requiresCommandWAL := cfg.RequiresCommandWALV1()
+	requiresCommandWAL := cfg.RequiresCommandWALV2()
 	if requiresCommandWAL && !allowCommandWAL {
 		return ErrCommandWALUnsupported
 	}
@@ -458,9 +459,11 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 		seen[feature] = struct{}{}
 		switch feature {
-		case RequiredFeatureCommandWALV1:
+		case RequiredFeatureCommandWALV2:
 			// Known by this binary, but DB open still fails closed until the
 			// execution/recovery path is enabled by later command-WAL PRs.
+		case requiredFeatureCommandWALV1:
+			return fmt.Errorf("%w: required feature %s", ErrCommandWALRebuildRequired, raw)
 		default:
 			return fmt.Errorf("%w: %s", ErrUnsupportedRequiredFeature, raw)
 		}

@@ -1045,7 +1045,7 @@ func BenchmarkColumnAssetGCDryRunTenKCandidatesM15B(b *testing.B) {
 	const refs = 10_000
 	const refBytes = 64
 	dir := b.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		b.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
@@ -1191,7 +1191,7 @@ func BenchmarkColumnAssetGCDryRunTenKCandidatesOlderSnapshotM15C(b *testing.B) {
 func prepareColumnAssetGCBenchmarkCollectionM15B(b *testing.B) (*backenddb.DB, *Collection) {
 	b.Helper()
 	dir := b.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		b.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

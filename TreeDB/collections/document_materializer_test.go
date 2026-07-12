@@ -318,7 +318,7 @@ func TestColumnPhysicalScanReadCacheIntegrityMismatchFails(t *testing.T) {
 
 func TestCollectionReadViewFetchDocumentsByRowRefRequiresTypedStorage(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -544,7 +544,7 @@ func TestCollectionReadViewProjectionPlainJSONAndFormatValidation1875(t *testing
 
 func TestCollectionReadViewFetchFormatBSONNoProjection1875(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1211,7 +1211,7 @@ func reportDocumentMaterializerBenchMetrics(b *testing.B, stats DocumentMaterial
 func newDocumentProjectionTestCollection1875(t testing.TB) (*backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1241,7 +1241,7 @@ func newDocumentProjectionTestCollection1875(t testing.TB) (*backenddb.DB, *Coll
 func newDocumentProjectionPlainJSONCollection1875(t testing.TB) (*backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1266,7 +1266,7 @@ func newDocumentProjectionVectorTestCollection1875(t testing.TB, embeddingOwner 
 func newDocumentProjectionVectorTestCollectionWithDims1875(t testing.TB, embeddingOwner TypedStorageFieldOwner, dims int) (*backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1312,7 +1312,7 @@ func assertJSONMapEqual1875(t testing.TB, raw []byte, want map[string]any) {
 func newDocumentMaterializerTestCollection(t testing.TB) (*backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)

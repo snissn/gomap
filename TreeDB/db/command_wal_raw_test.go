@@ -104,6 +104,79 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 	}
 }
 
+func TestRawKVPayloadExternalRefsFlushBeforeRelaxedCommandWALAppend(t *testing.T) {
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:  commitlog.RawKVOpSetRID,
+		Key: []byte("key"),
+		RID: 99,
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		append func(*DB) (uint64, error)
+	}{
+		{
+			name: "materialized",
+			append: func(d *DB) (uint64, error) {
+				return d.AppendRawKVBatchPayloadCommandWAL(payload, false)
+			},
+		},
+		{
+			name: "materialized-trusted",
+			append: func(d *DB) (uint64, error) {
+				return d.AppendRawKVBatchPayloadCommandWALTrusted(payload, false)
+			},
+		},
+		{
+			name: "generic-payload",
+			append: func(d *DB) (uint64, error) {
+				return d.AppendCommandWALPayload(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload, false)
+			},
+		},
+		{
+			name: "generic-intent",
+			append: func(d *DB) (uint64, error) {
+				intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+				if err != nil {
+					return 0, err
+				}
+				return d.AppendCommandWALIntent(intent, false)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			externalErr := errors.New("external value-log flush failed")
+			appender := &commandWALBarrierTestAppender{externalErr: externalErr}
+			d.SetValueLogAppender(appender)
+			beforeBytes := d.CommandWALActiveBytes()
+			lsn, err := tc.append(d)
+			if !errors.Is(err, externalErr) {
+				t.Fatalf("append error=%v, want %v", err, externalErr)
+			}
+			if lsn != 0 {
+				t.Fatalf("append LSN=%d, want 0", lsn)
+			}
+			if appender.externalFlushes != 1 || appender.externalSync || len(appender.externalFileIDs) != 0 {
+				t.Fatalf("external barrier calls=%d sync=%t fileIDs=%v, want one all-ref relaxed flush", appender.externalFlushes, appender.externalSync, appender.externalFileIDs)
+			}
+			if got := d.CommandWALActiveBytes(); got != beforeBytes {
+				t.Fatalf("command WAL bytes=%d, want unchanged %d after external flush failure", got, beforeBytes)
+			}
+		})
+	}
+}
+
 func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
 	var nilIntent *CommandWALIntent
 	if got := nilIntent.AssignedLSN(); got != 0 {
@@ -631,7 +704,7 @@ func rawKVOpTypeForTest(op commitlog.RawKVOp) batchpkg.OpType {
 }
 
 func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
-	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
@@ -662,7 +735,7 @@ func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
 }
 
 func TestCommandWALReplayIntentRequiresActiveRecoveryFrameM10C(t *testing.T) {
-	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           7,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
@@ -693,7 +766,7 @@ func TestCommandWALReplayIntentConstructorRequiresActiveRecoveryFrameM10C(t *tes
 	}
 	defer func() { _ = d.Close() }()
 
-	if _, err := d.NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+	if _, err := d.NewCommandWALReplayIntent(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
@@ -703,7 +776,7 @@ func TestCommandWALReplayIntentConstructorRequiresActiveRecoveryFrameM10C(t *tes
 		t.Fatalf("NewCommandWALReplayIntent zero lsn error=%v, want missing assigned lsn", err)
 	}
 
-	if _, err := d.NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+	if _, err := d.NewCommandWALReplayIntent(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           7,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
@@ -716,7 +789,7 @@ func TestCommandWALReplayIntentConstructorRequiresActiveRecoveryFrameM10C(t *tes
 }
 
 func TestCommandWALReplayIntentRequiresActiveRecoveryTokenM10C(t *testing.T) {
-	env := commitlog.CommandEnvelope{
+	env := commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:           7,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,

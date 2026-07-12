@@ -41,7 +41,7 @@ func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	defer j.Close()
 
 	for i, want := range []uint64{41, 42, 43} {
-		got, err := j.AppendCommand(CommandEnvelope{
+		got, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			Kind:          CommandKindRawKVBatch,
 			Scope:         CommandScopeRawKV,
 			PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -96,7 +96,7 @@ func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
 	})
 	defer restore()
 
-	lsn, err := j.AppendCommandObserved(CommandEnvelope{
+	lsn, err := j.AppendCommandObserved(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -147,7 +147,7 @@ func TestCommandJournalSeedsLSNFromExistingFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal first: %v", err)
 	}
-	lsn, err := j.AppendCommand(CommandEnvelope{
+	lsn, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -167,7 +167,7 @@ func TestCommandJournalSeedsLSNFromExistingFrames(t *testing.T) {
 		t.Fatalf("OpenCommandJournal reopen: %v", err)
 	}
 	defer reopen.Close()
-	lsn, err = reopen.AppendCommand(CommandEnvelope{
+	lsn, err = reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -187,7 +187,7 @@ func TestCommandJournalSeedsLSNFromExistingSegmentFamily(t *testing.T) {
 		t.Fatalf("OpenCommandJournal first: %v", err)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := j.AppendCommand(CommandEnvelope{
+		if _, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			Kind:          CommandKindRawKVBatch,
 			Scope:         CommandScopeRawKV,
 			PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -204,7 +204,7 @@ func TestCommandJournalSeedsLSNFromExistingSegmentFamily(t *testing.T) {
 		t.Fatalf("OpenCommandJournal second segment: %v", err)
 	}
 	defer reopen.Close()
-	lsn, err := reopen.AppendCommand(CommandEnvelope{
+	lsn, err := reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -223,7 +223,7 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal first: %v", err)
 	}
-	if _, err := first.AppendCommand(CommandEnvelope{
+	if _, err := first.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -238,7 +238,7 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal second: %v", err)
 	}
-	if _, err := second.AppendCommand(CommandEnvelope{
+	if _, err := second.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -253,7 +253,7 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal default latest: %v", err)
 	}
-	lsn, err := reopen.AppendCommand(CommandEnvelope{
+	lsn, err := reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -290,7 +290,7 @@ func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
 
-	lsn1, err := j.AppendCommand(CommandEnvelope{
+	lsn1, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -299,7 +299,7 @@ func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 		_ = j.Close()
 		t.Fatalf("AppendCommand first: %v", err)
 	}
-	lsn2, err := j.AppendCommand(CommandEnvelope{
+	lsn2, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -641,7 +641,7 @@ func TestCommandJournalAppendsToPreexistingZeroByteSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
-	lsn, err := j.AppendCommand(CommandEnvelope{
+	lsn, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -673,7 +673,7 @@ func TestCommandJournalRejectsExplicitSegmentBehindLaneTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal first: %v", err)
 	}
-	if _, err := first.AppendCommand(CommandEnvelope{
+	if _, err := first.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -688,7 +688,7 @@ func TestCommandJournalRejectsExplicitSegmentBehindLaneTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal second: %v", err)
 	}
-	if _, err := second.AppendCommand(CommandEnvelope{
+	if _, err := second.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -711,7 +711,7 @@ func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal first lane: %v", err)
 	}
-	if _, err := j.AppendCommand(CommandEnvelope{
+	if _, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -727,7 +727,7 @@ func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
 		t.Fatalf("OpenCommandJournal second lane: %v", err)
 	}
 	defer reopen.Close()
-	lsn, err := reopen.AppendCommand(CommandEnvelope{
+	lsn, err := reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -747,7 +747,7 @@ func TestCommandJournalRejectsDuplicateLSNAcrossLanes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewWriter lane %d: %v", lane, err)
 		}
-		if err := w.AppendCommand(CommandEnvelope{
+		if err := w.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 			LSN:           1,
 			Kind:          CommandKindRawKVBatch,
 			Scope:         CommandScopeRawKV,
@@ -786,7 +786,7 @@ func TestCommandJournalInitialLSNIgnoresLegacyRawSegments(t *testing.T) {
 		t.Fatalf("OpenCommandJournal with legacy raw segment: %v", err)
 	}
 	defer j.Close()
-	lsn, err := j.AppendCommand(CommandEnvelope{
+	lsn, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -826,7 +826,7 @@ func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal first: %v", err)
 	}
-	if _, err := j.AppendCommand(CommandEnvelope{
+	if _, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -861,7 +861,7 @@ func TestCommandJournalTruncatesActiveTerminalTailPerLane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal lane 0: %v", err)
 	}
-	if _, err := j.AppendCommand(CommandEnvelope{
+	if _, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -889,7 +889,7 @@ func TestCommandJournalTruncatesActiveTerminalTailPerLane(t *testing.T) {
 		t.Fatalf("OpenCommandJournal lane 1 with lane 0 active tail: %v", err)
 	}
 	defer reopen.Close()
-	lsn, err := reopen.AppendCommand(CommandEnvelope{
+	lsn, err := reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -915,7 +915,7 @@ func TestCommandJournalTruncatesTerminalTailBeforeAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCommandJournal first: %v", err)
 	}
-	if _, err := j.AppendCommand(CommandEnvelope{
+	if _, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -943,7 +943,7 @@ func TestCommandJournalTruncatesTerminalTailBeforeAppend(t *testing.T) {
 		t.Fatalf("OpenCommandJournal reopen: %v", err)
 	}
 	defer reopen.Close()
-	lsn, err := reopen.AppendCommand(CommandEnvelope{
+	lsn, err := reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -979,7 +979,7 @@ func TestCommandJournalConcurrentAppendsSerializeFrameOrder(t *testing.T) {
 	for i := 0; i < count; i++ {
 		go func() {
 			<-start
-			_, err := j.AppendCommand(CommandEnvelope{
+			_, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 				Kind:          CommandKindRawKVBatch,
 				Scope:         CommandScopeRawKV,
 				PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1096,7 +1096,7 @@ func TestCommandJournalRejectsCallerAssignedLSN(t *testing.T) {
 	}
 	defer j.Close()
 
-	_, err = j.AppendCommand(CommandEnvelope{
+	_, err = j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           99,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -1114,10 +1114,10 @@ func TestCommandJournalValidationFailureDoesNotConsumeLSN(t *testing.T) {
 	}
 	defer j.Close()
 
-	if _, err := j.AppendCommand(CommandEnvelope{}); err == nil {
+	if _, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed}); err == nil {
 		t.Fatalf("invalid AppendCommand unexpectedly succeeded")
 	}
-	got, err := j.AppendCommand(CommandEnvelope{
+	got, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1137,7 +1137,7 @@ func TestCommandJournalUnsupportedVersionDoesNotConsumeLSN(t *testing.T) {
 	}
 	defer j.Close()
 
-	_, err = j.AppendCommand(CommandEnvelope{
+	_, err = j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Version:       CommandFrameVersion + 1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -1146,7 +1146,7 @@ func TestCommandJournalUnsupportedVersionDoesNotConsumeLSN(t *testing.T) {
 	if !errors.Is(err, ErrCommandWALUnsupportedVersion) {
 		t.Fatalf("unsupported version AppendCommand error=%v, want ErrCommandWALUnsupportedVersion", err)
 	}
-	got, err := j.AppendCommand(CommandEnvelope{
+	got, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1167,7 +1167,7 @@ func TestCommandJournalAppendFailureRollsBackLSN(t *testing.T) {
 	defer j.Close()
 
 	restoreWriter := j.installBufferedWriterForTest(commandJournalFailWriter{}, 1)
-	_, err = j.AppendCommand(CommandEnvelope{
+	_, err = j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1177,7 +1177,7 @@ func TestCommandJournalAppendFailureRollsBackLSN(t *testing.T) {
 	}
 
 	restoreWriter()
-	got, err := j.AppendCommand(CommandEnvelope{
+	got, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1195,7 +1195,7 @@ func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayload empty: %v", err)
 	}
-	emptyFrameSize, err := commandFrameEncodedSize(CommandEnvelope{
+	emptyFrameSize, err := commandFrameEncodedSize(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -1218,7 +1218,7 @@ func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	}
 	defer j.Close()
 
-	_, err = j.AppendCommand(CommandEnvelope{
+	_, err = j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1227,7 +1227,7 @@ func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	if !errors.Is(err, ErrRecordTooLarge) {
 		t.Fatalf("oversized AppendCommand error=%v, want ErrRecordTooLarge", err)
 	}
-	got, err := j.AppendCommand(CommandEnvelope{
+	got, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1253,7 +1253,7 @@ func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T
 			t.Fatalf("step %d OpenCommandJournal lane=%d seg=%d: %v", step, lane, seg, err)
 		}
 		for i := 0; i < appendCount; i++ {
-			got, err := j.AppendCommand(CommandEnvelope{
+			got, err := j.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 				Kind:          CommandKindRawKVBatch,
 				Scope:         CommandScopeRawKV,
 				PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1290,7 +1290,7 @@ func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T
 			if err != nil {
 				t.Fatalf("step %d reopen after active tail: %v", step, err)
 			}
-			got, err := reopen.AppendCommand(CommandEnvelope{
+			got, err := reopen.AppendCommand(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 				Kind:          CommandKindRawKVBatch,
 				Scope:         CommandScopeRawKV,
 				PayloadFormat: PayloadFormatRawKVBatchV1,

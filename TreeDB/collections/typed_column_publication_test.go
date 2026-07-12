@@ -19,7 +19,7 @@ import (
 
 func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -115,7 +115,7 @@ func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
 
 func TestTypedColumnNativeScalarFixedWidthPublicationCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -191,7 +191,7 @@ func TestTypedColumnNativeScalarFixedWidthPublicationCheckpointReopen(t *testing
 
 func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -238,7 +238,7 @@ func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
 
 func TestTypedColumnFixedAndPackedCodePublicationCheckpointReopen1931(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -310,7 +310,7 @@ func TestTypedColumnFixedAndPackedCodePublicationCheckpointReopen1931(t *testing
 
 func TestTypedColumnAdjacencyPublicationCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -357,7 +357,7 @@ func TestTypedColumnAdjacencyPublicationCheckpointReopen(t *testing.T) {
 
 func TestTypedColumnAdjacencyPublicationRejectsWrongDocumentLength(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -374,7 +374,7 @@ func TestTypedColumnAdjacencyPublicationRejectsWrongDocumentLength(t *testing.T)
 
 func TestTypedColumnPublicationCommandWALReopenWithoutCheckpoint(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -501,7 +501,7 @@ func TestTypedColumnPublicationScalarMatrixCheckpointReopen(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 				t.Fatalf("SaveFormatConfig: %v", err)
 			}
 			d := openCollectionCommandWALDB(t, dir)
@@ -548,7 +548,7 @@ func TestTypedColumnPublicationScalarMatrixCheckpointReopen(t *testing.T) {
 
 func TestTypedColumnPublicationCommandWALReplayWithoutCheckpoint(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -605,7 +605,7 @@ func TestTypedColumnPublicationCommandWALReplayWithoutCheckpoint(t *testing.T) {
 
 func TestTypedColumnPublicationMissingNullTypeMismatchAtomic(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -685,7 +685,7 @@ func TestTypedColumnPublicationRetainedPayloadPolicyMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 				t.Fatalf("SaveFormatConfig: %v", err)
 			}
 			d := openCollectionCommandWALDB(t, dir)
@@ -742,7 +742,7 @@ func TestTypedColumnPublicationRetainedPayloadPolicyMatrix(t *testing.T) {
 
 func TestTypedColumnPublicationMultiGenerationDictionaryRecode(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -804,7 +804,7 @@ func TestTypedColumnPublicationMultiGenerationDictionaryRecode(t *testing.T) {
 
 func TestTypedColumnPublicationBatchUpdateRowIndexMapping(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -871,7 +871,7 @@ func TestTypedColumnPublicationBatchUpdateRowIndexMapping(t *testing.T) {
 
 func TestTypedColumnPublicationDeleteDoesNotRequireTypedPart(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1125,7 +1125,7 @@ func TestTypedColumnPublicationReadCacheNoLeakDuringScan(t *testing.T) {
 
 func TestTypedColumnReconstructionHybridOwners(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1144,7 +1144,7 @@ func TestTypedColumnReconstructionHybridOwners(t *testing.T) {
 
 func TestTypedColumnReconstructionNullableScalarHybridOwnersCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1215,7 +1215,7 @@ func TestTypedColumnReconstructionNullableScalarHybridOwnersCheckpointReopen(t *
 
 func TestTypedColumnReconstructionScanHybridOwners(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1503,7 +1503,7 @@ func TestTypedColumnFailedExtractionLeavesDocumentAndManifestUnchanged(t *testin
 
 func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1949,7 +1949,7 @@ func runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t *testing.T) {
 
 func TestTypedColumnPublicationExistingTypedRowCompatibility(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -1981,7 +1981,7 @@ func TestTypedColumnPublicationExistingTypedRowCompatibility(t *testing.T) {
 
 func TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -2036,7 +2036,7 @@ func TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) 
 
 func TestTypedColumnPublicationAdjacencyMissingDegreeFailsClosed(t *testing.T) {
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -2060,7 +2060,7 @@ func TestTypedColumnPublicationAdjacencyMissingDegreeFailsClosed(t *testing.T) {
 func typedColumnReconstructionCacheFixture1781(t testing.TB, rows int) (*Collection, *backenddb.Snapshot, []columnPhysicalVisibleRow, ColumnStoreConfig, uint64) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
@@ -2327,7 +2327,7 @@ func assertColumnAssetRefsEqual1755(t testing.TB, want, got []ColumnAssetRef) {
 func setupSingleTypedColumnPart1755(t testing.TB) (*backenddb.DB, *Collection, ColumnAssetRef) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)

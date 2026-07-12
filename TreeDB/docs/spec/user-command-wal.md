@@ -182,6 +182,7 @@ The target envelope is:
 ```go
 type CommandEnvelope struct {
     Version          uint16
+    DurabilityClass  CommandDurabilityClass
     LSN              uint64
     Kind             CommandKind
     Scope            CommandScope
@@ -196,6 +197,17 @@ type CommandEnvelope struct {
     ResultAssertions []ResultAssertion
 }
 ```
+
+Command-frame V2 persists `DurabilityClass` in header bytes `54..56`. The only
+valid values are `durable=1` and `relaxed=2`; zero and unknown values are
+corruption. V1 command frames are intentionally unsupported and require a
+pre-alpha directory rebuild rather than an in-place migration or mixed append.
+
+Every V2 `RawKVBatch` payload containing `SetRID` has exactly one
+`ExternalRefFenceV1` precondition. Its count and SHA-256 digest commit to the
+sorted unique RID set, with each RID hashed as an eight-byte little-endian
+integer. Encode, decode, and recovery recompute the fence from the payload;
+duplicates, malformed extensions, and mismatches are corruption.
 
 `AckPolicy`, request timeout, tracing fields, and transport details are not part
 of deterministic command identity. They may influence when an API returns, but
@@ -278,9 +290,9 @@ collections are active in the same process, they must coordinate through the
 same journal owner rather than opening independent writers into the same WAL
 directory.
 
-## 6. V1 Command Support Matrix
+## 6. V2 Command Support Matrix
 
-V1 should support only commands that are already exposed and can be made
+V2 supports only commands that are already exposed and can be made
 replayable without adding query-wide mutation semantics.
 
 | Surface | Current user-facing shape | V1 WAL command | Status policy |
@@ -310,7 +322,7 @@ commands to have explicit `WAL-supported`, `WAL-rejected`, `WAL-off-only`, or
 
 Collection command replay handlers live in the `TreeDB/collections` package
 because replay must re-enter the normal collection executor. Binaries that may
-open `command_wal_v1` directories containing collection frames must import that
+open `command_wal_v2` directories containing collection frames must import that
 package before `db.Open` recovery runs, or call
 `collections.RegisterCommandWALReplayHandlers()` during startup. A backend-only
 binary without those handlers must fail closed on collection command kinds
@@ -803,7 +815,7 @@ read-only-open test may be deleted unless the implementation PR records one of:
 - a direct command-WAL equivalent test;
 - a renamed test that asserts the same invariant under typed command frames;
 - a documented reason the old test applied only to unsupported legacy raw
-  payload compatibility after `command_wal_v1` activation.
+  payload compatibility after `command_wal_v2` activation.
 
 PR 1 must include a test inventory that maps legacy WAL tests to command-WAL
 coverage buckets. PRs 2 and 3 must keep that inventory current as publish,
@@ -953,8 +965,8 @@ Acceptance:
 PR4 evidence:
 
 - canonical frame fixtures:
-  `command_wal_v1_collection_insert_by_id.hex` and
-  `command_wal_v1_collection_delete_by_id.hex`;
+  `command_wal_v2_collection_insert_by_id.hex` and
+  `command_wal_v2_collection_delete_by_id.hex`;
 - normal path: public `InsertBatch` appends one collection command frame and
   publishes roots with `AppliedCommandLSN`;
 - recovery path: unapplied insert/delete frames replay through collection
@@ -993,7 +1005,7 @@ Acceptance:
 PR5 evidence:
 
 - canonical frame fixture:
-  `command_wal_v1_collection_update_by_id.hex`;
+  `command_wal_v2_collection_update_by_id.hex`;
 - normal path: public `Update`, `UpdateBatch`, and BSON-set updates append one
   collection update command frame and publish roots with `AppliedCommandLSN`;
 - recovery path: unapplied update frames replay through the collection executor
@@ -1034,7 +1046,7 @@ Acceptance:
 PR6 evidence:
 
 - canonical frame fixture:
-  `command_wal_v1_catalog_create_collection.hex`;
+  `command_wal_v2_catalog_create_collection.hex`;
 - normal path: public `CreateCollection` appends a `CatalogCreateCollection`
   frame and advances `AppliedCommandLSN`;
 - recovery path: unapplied catalog create frames replay through the collection
@@ -1123,7 +1135,7 @@ Acceptance:
 Deliverables:
 
 - public `treedb.Open` read-write handles no longer fail closed solely because
-  `CommandWAL` or persisted `command_wal_v1` is active;
+  `CommandWAL` or persisted `command_wal_v2` is active;
 - public raw KV `Set`, `Delete`, and `Batch.Write` calls use `RawKVBatch`
   command frames through the cached public command-WAL path;
 - the public command-WAL write path uses cached visibility while disabling the
@@ -1157,7 +1169,7 @@ PR9 initial evidence:
 - `TestPublicCommandWALRawKVWritesUseTypedFrames` opens with public
   `treedb.Open`, writes `Set` plus batch set/delete operations, proves command
   frame/max-LSN stats are non-zero, closes, reopens from persisted
-  `command_wal_v1`, and verifies the final public state;
+  `command_wal_v2`, and verifies the final public state;
 - this PR intentionally routes public command-WAL writes through cached
   visibility plus typed command-WAL frames rather than re-enabling the cached
   legacy redo journal.

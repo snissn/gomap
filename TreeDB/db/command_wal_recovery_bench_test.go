@@ -172,7 +172,7 @@ func BenchmarkCommandWALReplayFrameClassification(b *testing.B) {
 	payload := commandWALBenchRawKVPayload(b, 16, 64)
 	frames := make([]commandWALReplayFrame, 256)
 	for i := range frames {
-		frames[i].env = commitlog.CommandEnvelope{
+		frames[i].env = commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 			LSN:           uint64(i + 1),
 			Kind:          commitlog.CommandKindRawKVBatch,
 			Scope:         commitlog.CommandScopeRawKV,

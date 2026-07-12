@@ -655,7 +655,7 @@ func BenchmarkColumnPhysicalJSONBenchTypedColumnPartDirectSmoke1947(b *testing.B
 func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events []columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func(), []ColumnAssetRef) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
@@ -727,7 +727,7 @@ func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events
 func openColumnPhysicalJSONBenchNullableFullDataFixture2165(tb testing.TB, docs []string) (*backenddb.DB, *Collection, func()) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})

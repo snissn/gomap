@@ -45,7 +45,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		if cfg, ok, err := treedbdb.LoadFormatConfig(layout.mainDir); err != nil {
 			return ValueLogRewriteStats{}, err
 		} else if ok {
-			if cfg.RequiresCommandWALV1() {
+			if cfg.RequiresCommandWALV2() {
 				return ValueLogRewriteStats{}, treedbdb.ErrCommandWALUnsupported
 			}
 			cfg.ApplyToOptions(&opts)

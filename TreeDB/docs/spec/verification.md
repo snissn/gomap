@@ -803,7 +803,7 @@ PR3 implementation evidence:
   after root plus `AppliedCommandLSN` publication but before cleanup converges
   on the next open even when no frames need replay.
 - Explicit `CommandWAL` activation first fails closed on dirty legacy WAL,
-  then persists `command_wal_v1` after replay preconditions are clear and
+  then persists `command_wal_v2` after replay preconditions are clear and
   before opening the command journal, so a process cannot acknowledge typed
   frames without a durable required-feature gate.
 - Raw KV `SetRID` command entries preserve the existing value-log RID fence by
@@ -823,7 +823,7 @@ PR3 implementation evidence:
 - Empty `RawKVBatch` frames are explicit no-op command frames: they publish the
   current roots with the frame LSN so command-stream contiguity remains exact.
 - Command WAL with benchmark/compatibility WAL-off durability fails closed,
-  including after `command_wal_v1` is persisted, because PR3 requires a
+  including after `command_wal_v2` is persisted, because PR3 requires a
   recoverable command frame before root visibility.
 - Command journal flush/sync failures and post-append root publication failures
   poison the open handle so no later write can create a durable LSN gap before
@@ -841,7 +841,7 @@ PR3 implementation evidence:
   retry.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
-  legacy raw records in `command_wal_v1` directories.
+  legacy raw records in `command_wal_v2` directories.
 - Strict split-state detection for non-idempotent command kinds remains a
   required gate before collection/catalog commands can be marked
   `WAL-supported`; raw KV `set`/`delete` replay uses absolute deterministic
@@ -1210,7 +1210,7 @@ throughput ratios above that bar. Historical or diagnostic results below that
 bar must be labeled as failing evidence.
 
 This test must prove public `treedb.Open` can open a read-write
-`command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
+`command_wal_v2` handle, route raw KV writes through typed `RawKVBatch` command
 frames, expose mode proof through stats, reopen without explicit backend-only
 APIs, and recover final set/delete state. Mode proof must include cheap live
 accepted/covered command-frame counters so benchmark artifacts do not require

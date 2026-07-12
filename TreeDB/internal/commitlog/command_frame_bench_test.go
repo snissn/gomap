@@ -76,7 +76,7 @@ func BenchmarkCommandWALFrameEncode(b *testing.B) {
 	for _, tc := range commandWALBenchCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			payload := mustCommandWALBenchPayload(b, tc.ops, tc.valueSize)
-			env := CommandEnvelope{
+			env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 				LSN:           1,
 				Kind:          CommandKindRawKVBatch,
 				Scope:         CommandScopeRawKV,
@@ -120,7 +120,7 @@ func BenchmarkWriterAppendCommandRawKVBatch(b *testing.B) {
 	for _, tc := range commandWALBenchCases() {
 		b.Run(tc.name, func(b *testing.B) {
 			payload := mustCommandWALBenchPayload(b, tc.ops, tc.valueSize)
-			env := CommandEnvelope{
+			env := CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 				LSN:           1,
 				Kind:          CommandKindRawKVBatch,
 				Scope:         CommandScopeRawKV,
@@ -167,7 +167,7 @@ func BenchmarkWriterAppendRawKVBatchPayloadScanCommandDirectTrusted(b *testing.B
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(uint64(i+1), 0, plan, scan); err != nil {
+				if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(uint64(i+1), 0, plan, scan, CommandDurabilityRelaxed); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -274,7 +274,7 @@ func mustCommandWALBenchPayload(b *testing.B, ops, valueSize int) []byte {
 func mustCommandWALBenchFrame(b *testing.B, ops, valueSize int) []byte {
 	b.Helper()
 	payload := mustCommandWALBenchPayload(b, ops, valueSize)
-	frame, err := EncodeCommandFrame(CommandEnvelope{
+	frame, err := EncodeCommandFrame(CommandEnvelope{DurabilityClass: CommandDurabilityRelaxed,
 		LSN:           1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,

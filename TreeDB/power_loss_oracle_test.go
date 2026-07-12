@@ -499,17 +499,36 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 			t.Fatal(err)
 		}
 	}
+	readOnlyResult, _, readOnlyClose, err := powerlossreopen.Stable(snapshot, opts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readOnlyResult.Rejected || !errors.Is(readOnlyResult.Err, treedb.ErrRecoveryRequired) {
+		_ = readOnlyClose()
+		t.Fatalf("read-only Open result=%+v, want recovery required", readOnlyResult)
+	}
+	var recoveryErr *treedb.CommandWALRecoveryRequiredError
+	if !errors.As(readOnlyResult.Err, &recoveryErr) || recoveryErr.Diagnostic.FirstDiscardedLSN != appendedLSN || recoveryErr.Diagnostic.MissingRIDCount == 0 || recoveryErr.Diagnostic.DurabilityClass != 2 {
+		_ = readOnlyClose()
+		t.Fatalf("read-only Open error=%v diagnostic=%+v, want typed relaxed missing-RID frontier at LSN %d", readOnlyResult.Err, readOnlyResult.RecoveryDiagnostic, appendedLSN)
+	}
+	if err := readOnlyClose(); err != nil {
+		t.Fatal(err)
+	}
+
 	result, reopened, closeFn, err := powerlossreopen.Stable(snapshot, opts, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = closeFn() }()
 	if result.Rejected {
-		t.Logf("public Open rejected checksum-valid frame with missing RID: %v", result.Err)
-		return
+		t.Fatalf("writable Open rejected repairable relaxed frame: %v", result.Err)
 	}
 	if appendedLSN == 0 {
 		t.Fatal("actual command-WAL append emitted no logical sequence")
+	}
+	if diagnostic := result.RecoveryDiagnostic; diagnostic.FirstDiscardedLSN != appendedLSN || diagnostic.MissingRIDCount == 0 || diagnostic.DurabilityClass != 2 || !diagnostic.TruncationCompleted || !diagnostic.DirectorySyncCompleted {
+		t.Fatalf("writable repair diagnostic=%+v, want completed relaxed repair at LSN %d", diagnostic, appendedLSN)
 	}
 	got, getErr := reopened.Get([]byte("rid/missing"))
 	if getErr == nil && bytes.Equal(got, bytes.Repeat([]byte("r"), 4096)) {
@@ -520,8 +539,10 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 		Cut:             powerlossoracle.AfterUserspaceFlush,
 		ReopenAttempted: true,
 		CommandFrames: []powerlossoracle.CommandFrame{{
-			LSN:           appendedLSN,
-			ChecksumValid: true,
+			LSN:             appendedLSN,
+			ChecksumValid:   true,
+			DurabilityClass: 2,
+			Discarded:       true,
 			Dependencies: []powerlossoracle.Resource{{
 				Kind:   powerlossoracle.ResourceValueLog,
 				ID:     fmt.Sprintf("rid/%d", appendedLSN),
@@ -531,8 +552,8 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 			Applied: result.AppliedLSN >= appendedLSN,
 		}},
 	}
-	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantCommandReplayHole); err != nil {
-		t.Fatalf("successful public Open did not produce missing-RID replay diagnosis: %v (commit=%d applied=%d get=%v)", err, result.CommitSeq, result.AppliedLSN, getErr)
+	if err := scenario.Validate(); err != nil {
+		t.Fatalf("successful writable repair did not validate as discarded relaxed suffix: %v (commit=%d applied=%d get=%v)", err, result.CommitSeq, result.AppliedLSN, getErr)
 	}
 }
 
@@ -872,9 +893,16 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 		stableFrameLSN := contiguousStablePowerLossCommandLSN(commandFrames, selectedAppliedLSN)
 		completeCommandLSN := contiguousCompletePowerLossCommandLSN(commandFrames, selectedAppliedLSN)
 		if readOnly && selectedAppliedOK && allRecoverableGenerationsComplete(generations, latestSealedSequence) && stableFrameLSN > selectedAppliedLSN && errors.Is(result.Err, treedb.ErrRecoveryRequired) {
+			var recoveryErr *treedb.CommandWALRecoveryRequiredError
+			if !errors.As(result.Err, &recoveryErr) {
+				t.Fatalf("seed=%d cut=%s occurrence=%d read-only recovery error=%v, want typed command-WAL diagnostic", powerLossOracleSeed, cut, occurrence, result.Err)
+			}
 			if completeCommandLSN > selectedAppliedLSN {
 				t.Logf("expected read-only recovery-required seed=%d cut=%s occurrence=%d: %v", powerLossOracleSeed, cut, occurrence, result.Err)
 			} else {
+				if recoveryErr.Diagnostic.FirstDiscardedLSN == 0 || recoveryErr.Diagnostic.DurabilityClass != 2 {
+					t.Fatalf("seed=%d cut=%s occurrence=%d read-only incomplete suffix diagnostic=%+v, want relaxed discarded frontier", powerLossOracleSeed, cut, occurrence, recoveryErr.Diagnostic)
+				}
 				t.Logf("known counterexample rejected by read-only Open seed=%d cut=%s occurrence=%d: checksum-valid command through LSN %d has incomplete RID closure", powerLossOracleSeed, cut, occurrence, stableFrameLSN)
 			}
 			return
@@ -928,6 +956,17 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 	commandFrames, err := buildPowerLossCommandFrames(model, opts.Dir, observedCommandFrames, result.AppliedLSN)
 	if err != nil {
 		t.Fatalf("seed=%d cut=%s occurrence=%d model command frames: %v", powerLossOracleSeed, cut, occurrence, err)
+	}
+	if diagnostic := result.RecoveryDiagnostic; diagnostic.FirstDiscardedLSN != 0 {
+		if readOnly || diagnostic.DurabilityClass != 2 || diagnostic.MissingRIDCount == 0 || !diagnostic.TruncationCompleted || !diagnostic.DirectorySyncCompleted {
+			t.Fatalf("seed=%d cut=%s occurrence=%d invalid writable repair diagnostic=%+v", powerLossOracleSeed, cut, occurrence, diagnostic)
+		}
+		for i := range commandFrames {
+			if commandFrames[i].LSN >= diagnostic.FirstDiscardedLSN {
+				commandFrames[i].Discarded = true
+				commandFrames[i].Applied = false
+			}
+		}
 	}
 	if durableAcknowledged {
 		acknowledgements = []powerlossoracle.Acknowledgement{{Sequence: durableSequence, Durable: true}}
@@ -1043,9 +1082,10 @@ func buildPowerLossCommandFrames(model *powerlossoracle.Model, root string, obse
 	for _, observedFrame := range observed {
 		envelope, checksumValid := stableEnvelopesByPath[observedFrame.Path][observedFrame.LSN]
 		frame := powerlossoracle.CommandFrame{
-			LSN:           observedFrame.LSN,
-			ChecksumValid: checksumValid,
-			Applied:       observedFrame.LSN <= openedAppliedLSN,
+			LSN:             observedFrame.LSN,
+			ChecksumValid:   checksumValid,
+			Applied:         observedFrame.LSN <= openedAppliedLSN,
+			DurabilityClass: uint16(envelope.DurabilityClass),
 		}
 		if checksumValid && envelope.Kind == commitlog.CommandKindRawKVBatch && envelope.Scope == commitlog.CommandScopeRawKV && envelope.PayloadFormat == commitlog.PayloadFormatRawKVBatchV1 {
 			operations, err := commitlog.DecodeRawKVBatchPayload(envelope.Payload)
@@ -1274,7 +1314,7 @@ func TestBuildPowerLossCommandFramesRequiresStableSegmentName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.AppendCommand(commitlog.CommandEnvelope{
+	if err := writer.AppendCommand(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:            2,
 		BaseAppliedLSN: 1,
 		Kind:           commitlog.CommandKindRawKVBatch,
@@ -1336,7 +1376,7 @@ func TestBuildPowerLossCommandFramesRequiresStableSegmentName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.AppendCommand(commitlog.CommandEnvelope{
+	if err := writer.AppendCommand(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		LSN:            3,
 		BaseAppliedLSN: 2,
 		Kind:           commitlog.CommandKindRawKVBatch,
@@ -1441,7 +1481,7 @@ func TestBuildPowerLossCommandFramesRequiresStableSegmentName(t *testing.T) {
 			_ = writer.Close()
 			t.Fatal(err)
 		}
-		if err := writer.AppendCommand(commitlog.CommandEnvelope{
+		if err := writer.AppendCommand(commitlog.CommandEnvelope{DurabilityClass: commitlog.CommandDurabilityRelaxed,
 			LSN:            command.lsn,
 			BaseAppliedLSN: command.lsn - 1,
 			Kind:           commitlog.CommandKindRawKVBatch,

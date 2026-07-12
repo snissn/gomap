@@ -174,7 +174,7 @@ func openCollectionCommandWALBenchmark(b *testing.B, indexed bool, commandWAL bo
 		if err := setup.Close(); err != nil {
 			b.Fatalf("close setup DB: %v", err)
 		}
-		if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 			b.Fatalf("save command WAL format: %v", err)
 		}
 	} else {

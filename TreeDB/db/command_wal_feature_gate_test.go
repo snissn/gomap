@@ -79,7 +79,7 @@ func TestSaveFormatConfigCommandWALRequiresCleanActivation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(walDir, "commit-l0-000001.log"), []byte("dirty commit wal"), 0o600); err != nil {
 		t.Fatalf("write commit wal: %v", err)
 	}
-	err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}})
+	err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}})
 	if !errors.Is(err, ErrCommandWALDirtyActivation) {
 		t.Fatalf("SaveFormatConfig error=%v, want clean legacy WAL failure", err)
 	}
@@ -90,11 +90,11 @@ func TestSaveFormatConfigCommandWALRequiresCleanActivation(t *testing.T) {
 
 func TestSaveFormatConfigCommandWALResaveExistingFeatureAllowsCommandSegments(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig initial: %v", err)
 	}
 	writeCommandWALSegmentFrames(t, dir, 1, 1)
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig resave existing command WAL feature: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestSaveOpenFormatConfigPreservesActiveCommandWALFeature(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{
@@ -120,7 +120,7 @@ func TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{
@@ -140,8 +140,8 @@ func TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFormatConfig: %v", err)
 	}
-	if !ok || !cfg.RequiresCommandWALV1() {
-		t.Fatalf("format config command_wal_v1 missing: ok=%v cfg=%+v", ok, cfg)
+	if !ok || !cfg.RequiresCommandWALV2() {
+		t.Fatalf("format config command_wal_v2 missing: ok=%v cfg=%+v", ok, cfg)
 	}
 	if !cfg.LeafPrefixCompression {
 		t.Fatalf("LeafPrefixCompression=false, want refreshed true")
@@ -162,7 +162,7 @@ func TestCommandWALRejectsWALOffDurability(t *testing.T) {
 	if err := os.MkdirAll(persistedDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll persistedDir: %v", err)
 	}
-	if err := SaveFormatConfig(persistedDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(persistedDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig persistedDir: %v", err)
 	}
 	_, err = Open(Options{Dir: persistedDir, Durability: DurabilityWALOffRelaxed})
@@ -188,7 +188,7 @@ func TestCommandWALOptionPersistsFeatureBeforeJournalActivation(t *testing.T) {
 		t.Fatalf("CommandWALRequiredFeatureEnabled: %v", err)
 	}
 	if !requiresCommandWAL {
-		t.Fatalf("command_wal_v1 required feature was not persisted before journal activation")
+		t.Fatalf("command_wal_v2 required feature was not persisted before journal activation")
 	}
 	b := db.NewBatch().(*Batch)
 	if err := b.Set([]byte("k"), []byte("v")); err != nil {
@@ -239,7 +239,7 @@ func TestCommandWALRequiredFeatureEnablesBackendCommandWAL(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	db, err := Open(Options{Dir: dir})
@@ -266,7 +266,7 @@ func TestCommandWALRequiredFeatureEnablesBackendCommandWAL(t *testing.T) {
 
 func TestCommandWALRequiredFeatureRejectsOfflineValueLogRewrite(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); !errors.Is(err, ErrCommandWALUnsupported) {
@@ -293,7 +293,7 @@ func TestLoadFormatConfigRejectsUnknownRequiredFeature(t *testing.T) {
 
 func TestSaveFormatConfigNormalizesRequiredFeaturesToVersion3(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveFormatConfig(dir, FormatConfig{Version: formatConfigVersion, RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+	if err := SaveFormatConfig(dir, FormatConfig{Version: formatConfigVersion, RequiredFeatures: []string{RequiredFeatureCommandWALV2}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	cfg, ok, err := LoadFormatConfig(dir)
@@ -337,7 +337,7 @@ func TestValidateFormatRequiredFeatureGateAllowsIgnoredOrdinaryFormatErrors(t *t
 
 func TestValidateFormatRequiredFeatureGateRejectsMalformedRequiredFeatureFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "format.json"), []byte(`{"version":3,"required_features":["command_wal_v1"`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "format.json"), []byte(`{"version":3,"required_features":["command_wal_v2"`), 0o600); err != nil {
 		t.Fatalf("write format.json: %v", err)
 	}
 	err := ValidateFormatRequiredFeatureGate(dir)
@@ -367,7 +367,7 @@ func TestValidateFormatRequiredFeatureGateRejectsRequiredFeatureWithIgnore(t *te
 
 func TestLoadFormatConfigRejectsRequiredFeatureInVersion2File(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "format.json"), []byte(`{"version":2,"required_features":["command_wal_v1"]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "format.json"), []byte(`{"version":2,"required_features":["command_wal_v2"]}`), 0o600); err != nil {
 		t.Fatalf("write format.json: %v", err)
 	}
 	_, _, err := LoadFormatConfig(dir)

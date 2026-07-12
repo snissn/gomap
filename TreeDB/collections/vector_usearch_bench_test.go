@@ -681,7 +681,7 @@ func vectorUSearchProductionDocID(doc int) string {
 func openVectorUSearchProductionTreeDBCollection(tb testing.TB, docs, dims int, params vectorUSearchProductionCompareParams) (*backenddb.DB, *Collection, VectorIndexDefinition, VectorIndexStatus) {
 	tb.Helper()
 	dir := tb.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(tb, dir)

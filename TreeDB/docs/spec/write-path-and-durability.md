@@ -223,7 +223,7 @@ This skip behavior is specific to the existing pre-command-WAL cached key/value
 commit log and its RID fence. The target user-command WAL replaces raw
 `commitlog.Record` batches with `RawKVBatch` command frames, uses command LSN
 ordering and applied-LSN checkpointing, and does not require compatibility
-replay for old raw record batches after `command_wal_v1` activation. Complete
+replay for old raw record batches after `command_wal_v2` activation. Complete
 command frames whose dependencies or external refs are missing fail recovery
 closed unless the command kind defines a formal idempotent skip rule.
 

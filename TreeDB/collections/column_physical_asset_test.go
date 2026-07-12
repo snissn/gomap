@@ -3626,7 +3626,7 @@ func BenchmarkColumnPhysicalAssetVectorScanV1(b *testing.B) {
 
 func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
 	dir := b.TempDir()
-	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}}); err != nil {
 		b.Fatal(err)
 	}
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
