@@ -1023,6 +1023,12 @@ func TestCopiedAndReleasedBuilderHandleCannotResurrectOrDoubleReleaseLease(t *te
 	clone := *outer
 	outer.Release()
 	clone.Release()
+	outer.handle.mu.Lock()
+	retainsLease := outer.handle.lease != nil
+	outer.handle.mu.Unlock()
+	if retainsLease {
+		t.Fatal("released copied handle retained shared lease")
+	}
 	if stats := c.Stats(); stats.ActiveBuilders != 1 {
 		t.Fatalf("copied handle double-released shared lease: %+v", stats)
 	}

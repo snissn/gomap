@@ -74,6 +74,7 @@ func (t *BuilderToken) Release() {
 	}
 	handle.released = true
 	lease := handle.lease
+	handle.lease = nil
 	handle.mu.Unlock()
 
 	lease.mu.Lock()
