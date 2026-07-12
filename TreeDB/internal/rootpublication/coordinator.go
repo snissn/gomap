@@ -25,6 +25,10 @@ type durabilityWaiter struct {
 	ch  chan error
 }
 
+type drainRequest struct {
+	err error
+}
+
 // Coordinator owns only in-memory scheduling state. It is intentionally not
 // reachable from any production TreeDB handle in this ticket.
 type Coordinator struct {
@@ -45,7 +49,7 @@ type Coordinator struct {
 	wakeReason     WakeReason
 	publishNow     bool
 	publishing     bool
-	drainRequests  uint64
+	drains         []*drainRequest
 	stopping       bool
 	stopped        bool
 	stopErr        error
@@ -69,6 +73,7 @@ type Coordinator struct {
 	lastFailureSeq     uint64
 	nextAttemptID      uint64
 	activeAttempt      PublishAttempt
+	retryAttempt       PublishAttempt
 	reportingAttempt   bool
 }
 
@@ -78,6 +83,7 @@ type PublishAttempt struct {
 	id        uint64
 	candidate *PreparedRootCandidate
 	groupSize uint64
+	drains    []*drainRequest
 	started   time.Time
 	waiters   []*durabilityWaiter
 }
@@ -247,13 +253,24 @@ func (c *Coordinator) WaitThrough(ctx context.Context, seq uint64) error {
 }
 
 func (c *Coordinator) removeWaiterLocked(target *durabilityWaiter) {
+	removed := false
 	for i, waiter := range c.waiters {
 		if waiter == target {
 			copy(c.waiters[i:], c.waiters[i+1:])
 			last := len(c.waiters) - 1
 			c.waiters[last] = nil
 			c.waiters = c.waiters[:last]
+			removed = true
 			break
+		}
+	}
+	if removed && c.wakeReason == WakeWaiter {
+		if c.publishing {
+			c.recomputeRetryPublishRequestLocked(c.activeAttempt)
+		} else if c.lastRetryableError != nil {
+			c.recomputeRetryPublishRequestLocked(c.retryAttempt)
+		} else {
+			c.recomputePublishRequestLocked(false)
 		}
 	}
 }
@@ -285,20 +302,20 @@ func (c *Coordinator) Drain(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
-	c.drainRequests++
+	request := &drainRequest{}
+	c.drains = append(c.drains, request)
 	c.requestPublishLocked(WakeDrain)
-	failureGeneration := c.failureGeneration
 	c.mu.Unlock()
 	c.signal()
-	defer c.endDrain()
+	defer c.endDrain(request)
 	for {
 		c.mu.Lock()
 		if err := c.terminalErrorLocked(); err != nil {
 			c.mu.Unlock()
 			return err
 		}
-		if c.failureGeneration > failureGeneration {
-			err := c.lastRetryableError
+		if request.err != nil {
+			err := request.err
 			c.mu.Unlock()
 			return err
 		}
@@ -316,12 +333,33 @@ func (c *Coordinator) Drain(ctx context.Context) error {
 	}
 }
 
-func (c *Coordinator) endDrain() {
+func (c *Coordinator) endDrain(target *drainRequest) {
 	c.mu.Lock()
-	if c.drainRequests > 0 {
-		c.drainRequests--
+	removed := false
+	for i, request := range c.drains {
+		if request == target {
+			copy(c.drains[i:], c.drains[i+1:])
+			last := len(c.drains) - 1
+			c.drains[last] = nil
+			c.drains = c.drains[:last]
+			removed = true
+			break
+		}
+	}
+	recomputed := removed && c.wakeReason == WakeDrain
+	if recomputed {
+		if c.publishing {
+			c.recomputeRetryPublishRequestLocked(c.activeAttempt)
+		} else if c.lastRetryableError != nil {
+			c.recomputeRetryPublishRequestLocked(c.retryAttempt)
+		} else {
+			c.recomputePublishRequestLocked(false)
+		}
 	}
 	c.mu.Unlock()
+	if recomputed {
+		c.signal()
+	}
 }
 
 // Stop cancels a stalled Publisher through its context, fails all waiters, and
@@ -411,7 +449,8 @@ func (c *Coordinator) run() {
 			c.nextAttemptID++
 			attempt := PublishAttempt{
 				id: c.nextAttemptID, candidate: candidate, groupSize: uint64(groupSize),
-				started: c.clock.Now(), waiters: append([]*durabilityWaiter(nil), c.waiters...),
+				drains: append([]*drainRequest(nil), c.drains...), started: c.clock.Now(),
+				waiters: append([]*durabilityWaiter(nil), c.waiters...),
 			}
 			c.activeAttempt = attempt
 			c.mu.Unlock()
@@ -489,8 +528,9 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			c.ewmaService = (7*c.ewmaService + service) / 8
 		}
 		c.lastRetryableError = nil
+		c.retryAttempt = PublishAttempt{}
 		c.satisfyWaitersLocked()
-		c.recomputePublishRequestLocked()
+		c.recomputePublishRequestLocked(true)
 	case PublishRetryableFailure:
 		c.recordRetryableLocked(result.Err, c.activeAttempt)
 	case PublishAmbiguous:
@@ -499,6 +539,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			err = errors.New("ambiguous target-meta mutation")
 		}
 		c.poison = errors.Join(ErrRecoveryRequired, err)
+		c.retryAttempt = PublishAttempt{}
 		c.failWaitersLocked(c.poison, true)
 		c.clearPublishRequestLocked()
 	default:
@@ -515,11 +556,11 @@ func (c *Coordinator) recordRetryableLocked(err error, attempt PublishAttempt) {
 	c.preMetaFailures++
 	c.failureGeneration++
 	c.lastRetryableError = err
+	c.retryAttempt = attempt
 	c.lastFailureSeq = attempt.candidate.frontier.commitSeq
 	c.failCapturedWaitersLocked(err, attempt.waiters)
-	if !c.publishNow {
-		c.wakeReason = WakeNone
-	}
+	c.failCapturedDrainsLocked(err, attempt.drains)
+	c.recomputeRetryPublishRequestLocked(attempt)
 	c.notifyLocked()
 }
 
@@ -532,12 +573,14 @@ func (c *Coordinator) clearPublishRequestLocked() {
 	}
 }
 
-func (c *Coordinator) recomputePublishRequestLocked() {
+func (c *Coordinator) recomputePublishRequestLocked(resetWindow bool) {
 	c.clearPublishRequestLocked()
 	if len(c.pending) == 0 {
 		return
 	}
-	c.firstPendingAt = c.clock.Now()
+	if resetWindow {
+		c.firstPendingAt = c.clock.Now()
+	}
 	switch {
 	case c.pendingBytes > HardPendingBytes || uint64(len(c.pending)) > HardPendingCommits:
 		c.requestPublishLocked(WakeHardAdmission)
@@ -545,10 +588,74 @@ func (c *Coordinator) recomputePublishRequestLocked() {
 		c.requestPublishLocked(WakeWaiter)
 	case c.pendingBytes >= SoftPendingBytes:
 		c.requestPublishLocked(WakeSoftBytes)
-	case c.drainRequests != 0:
+	case hasLiveDrain(c.drains):
 		c.requestPublishLocked(WakeDrain)
-	default:
+	case !c.publishing:
 		c.installTimerLocked()
+	}
+}
+
+func (c *Coordinator) recomputeRetryPublishRequestLocked(attempt PublishAttempt) {
+	c.clearPublishRequestLocked()
+	if len(c.pending) == 0 {
+		return
+	}
+	start := int(attempt.groupSize)
+	if start > len(c.pending) {
+		start = len(c.pending)
+	}
+	remaining := c.pending[start:]
+	switch {
+	case len(remaining) != 0 && (c.pendingBytes > HardPendingBytes || uint64(len(c.pending)) > HardPendingCommits):
+		c.requestPublishLocked(WakeHardAdmission)
+	case len(c.waiters) != 0:
+		c.requestPublishLocked(WakeWaiter)
+	case len(remaining) != 0 && c.pendingBytes >= SoftPendingBytes:
+		c.requestPublishLocked(WakeSoftBytes)
+	case hasUncapturedDrain(c.drains, attempt.drains):
+		c.requestPublishLocked(WakeDrain)
+	}
+}
+
+func hasUncapturedDrain(current, captured []*drainRequest) bool {
+	if len(current) == 0 {
+		return false
+	}
+	set := make(map[*drainRequest]struct{}, len(captured))
+	for _, request := range captured {
+		set[request] = struct{}{}
+	}
+	for _, request := range current {
+		if request.err == nil {
+			if _, ok := set[request]; !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasLiveDrain(current []*drainRequest) bool {
+	for _, request := range current {
+		if request.err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Coordinator) failCapturedDrainsLocked(err error, captured []*drainRequest) {
+	if len(captured) == 0 {
+		return
+	}
+	set := make(map[*drainRequest]struct{}, len(captured))
+	for _, request := range captured {
+		set[request] = struct{}{}
+	}
+	for _, request := range c.drains {
+		if _, ok := set[request]; ok {
+			request.err = err
+		}
 	}
 }
 
@@ -627,9 +734,15 @@ func (c *Coordinator) publishDelayLocked() time.Duration {
 }
 
 func (c *Coordinator) installTimerLocked() {
-	if c.timer == nil {
-		c.timer = c.clock.NewTimer(c.publishDelayLocked())
+	if c.timer != nil {
+		return
 	}
+	remaining := c.publishDelayLocked() - c.clock.Now().Sub(c.firstPendingAt)
+	if remaining <= 0 {
+		c.requestPublishLocked(WakeTimer)
+		return
+	}
+	c.timer = c.clock.NewTimer(remaining)
 }
 
 func (c *Coordinator) requestPublishLocked(reason WakeReason) {

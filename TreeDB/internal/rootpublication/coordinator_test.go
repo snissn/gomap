@@ -463,7 +463,7 @@ func TestSuccessfulPublishPreservesRealRemainingImmediateTriggers(t *testing.T) 
 			waitFor(t, func() bool {
 				c.mu.Lock()
 				defer c.mu.Unlock()
-				return c.drainRequests == 1 && c.publishNow
+				return len(c.drains) == 1 && c.publishNow
 			})
 			return done
 		}},
@@ -783,6 +783,202 @@ func TestRetryableFailureDoesNotFailWaiterAddedInFlight(t *testing.T) {
 	}
 }
 
+func TestCanceledInFlightWaiterDoesNotLeakRetryWake(t *testing.T) {
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	calls := make(chan uint64, 2)
+	want := errors.New("first pre-meta failure")
+	var attempts atomic.Uint64
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(400, 0)), Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+		calls <- candidate.Frontier().CommitSeq()
+		if attempts.Add(1) == 1 {
+			close(firstEntered)
+			<-firstRelease
+			return PublishResult{Outcome: PublishRetryableFailure, Err: want}
+		}
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- c.WaitThrough(context.Background(), 1) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first publication did not start")
+	}
+	if seq := <-calls; seq != 1 {
+		t.Fatalf("first publication seq=%d", seq)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- c.WaitThrough(ctx, 1) }()
+	waitFor(t, func() bool { return c.Stats().WaiterCount == 2 })
+	builder, err := c.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(firstRelease)
+	if err := <-firstDone; !errors.Is(err, want) {
+		t.Fatalf("first wait=%v", err)
+	}
+	waitFor(t, func() bool { return !c.Stats().Poisoned && c.Stats().PreMetaFailures == 1 })
+	cancel()
+	if err := <-secondDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("second wait=%v", err)
+	}
+	c.mu.Lock()
+	publishNow, wakeReason, timerInstalled := c.publishNow, c.wakeReason, c.timer != nil
+	c.mu.Unlock()
+	if publishNow || wakeReason != WakeNone || timerInstalled {
+		t.Fatalf("canceled in-flight waiter leaked retry: publishNow=%t reason=%q timerInstalled=%t", publishNow, wakeReason, timerInstalled)
+	}
+	builder.Release()
+	select {
+	case seq := <-calls:
+		t.Fatalf("canceled in-flight waiter retried seq %d", seq)
+	default:
+	}
+	if err := c.WaitThrough(context.Background(), 1); err != nil {
+		t.Fatalf("explicit retry=%v", err)
+	}
+	if seq := <-calls; seq != 1 {
+		t.Fatalf("explicit retry seq=%d", seq)
+	}
+}
+
+func TestInFlightEnqueueCrossingSoftBoundaryRetainsRetryWake(t *testing.T) {
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondEntered := make(chan struct{})
+	want := errors.New("first pre-meta failure")
+	var attempts atomic.Uint64
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(410, 0)), Publisher: PublisherFunc(func(_ context.Context, _ *PreparedRootCandidate) PublishResult {
+		if attempts.Add(1) == 1 {
+			close(firstEntered)
+			<-firstRelease
+			return PublishResult{Outcome: PublishRetryableFailure, Err: want}
+		}
+		close(secondEntered)
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, SoftPendingBytes-(1<<20))); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- c.WaitThrough(context.Background(), 1) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first publication did not start")
+	}
+	if err := c.Supersede(context.Background(), candidate(t, 2, 2<<20)); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	pendingBytes, publishNow, wakeReason := c.pendingBytes, c.publishNow, c.wakeReason
+	c.mu.Unlock()
+	if pendingBytes < SoftPendingBytes || !publishNow || wakeReason != WakeSoftBytes {
+		t.Fatalf("in-flight soft crossing not recorded: bytes=%d publishNow=%t reason=%q", pendingBytes, publishNow, wakeReason)
+	}
+	close(firstRelease)
+	if err := <-firstDone; !errors.Is(err, want) {
+		t.Fatalf("first wait=%v", err)
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("fresh soft crossing did not trigger retry")
+	}
+	waitFor(t, func() bool { return c.Stats().DurableCommitSeq == 2 })
+}
+
+func TestDrainIdentityTurnoverPreservesFreshInFlightDrain(t *testing.T) {
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondEntered := make(chan struct{})
+	want := errors.New("first pre-meta failure")
+	var attempts atomic.Uint64
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(420, 0)), Publisher: PublisherFunc(func(_ context.Context, _ *PreparedRootCandidate) PublishResult {
+		if attempts.Add(1) == 1 {
+			close(firstEntered)
+			<-firstRelease
+			return PublishResult{Outcome: PublishRetryableFailure, Err: want}
+		}
+		close(secondEntered)
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- c.Drain(firstCtx) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first drain did not start publication")
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- c.Drain(context.Background()) }()
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.drains) == 2 && c.publishNow && c.wakeReason == WakeDrain
+	})
+	cancelFirst()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("captured drain cancellation=%v", err)
+	}
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.drains) == 1 && c.publishNow && c.wakeReason == WakeDrain
+	})
+	close(firstRelease)
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("fresh drain was stranded by captured drain turnover")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("fresh drain=%v", err)
+	}
+}
+
+func TestErroredCapturedDrainDoesNotOwnRetryWakeAfterFreshDrainEnds(t *testing.T) {
+	want := errors.New("captured drain failed")
+	captured := &drainRequest{err: want}
+	fresh := &drainRequest{}
+	entry := pendingEntry{candidate: candidate(t, 1, 1), bytes: 1}
+	c := &Coordinator{
+		clock: NewFakeClock(time.Unix(430, 0)), pending: []pendingEntry{entry}, pendingBytes: 1,
+		firstPendingAt: time.Unix(430, 0), drains: []*drainRequest{captured, fresh},
+		publishNow: true, wakeReason: WakeDrain, lastRetryableError: want,
+		retryAttempt: PublishAttempt{groupSize: 1, drains: []*drainRequest{captured}},
+	}
+	c.endDrain(fresh)
+	if len(c.drains) != 1 || c.drains[0] != captured {
+		t.Fatalf("drain ownership after fresh removal=%v", c.drains)
+	}
+	if c.publishNow || c.wakeReason != WakeNone || c.timer != nil {
+		t.Fatalf("errored captured drain retained retry wake: publishNow=%t reason=%q timer=%v", c.publishNow, c.wakeReason, c.timer)
+	}
+}
+
 func TestHardAdmissionAddedInFlightIgnoresPriorGroupFailure(t *testing.T) {
 	firstEntered := make(chan struct{})
 	firstRelease := make(chan struct{})
@@ -945,6 +1141,44 @@ func TestStopReturnsSameDebtResultToEveryCaller(t *testing.T) {
 	}
 	if err := c.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
 		t.Fatalf("second stop=%v", err)
+	}
+}
+
+func TestConcurrentDrainAndStop(t *testing.T) {
+	c, err := New(Options{Clock: NewFakeClock(time.Unix(290, 0)), Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder, err := c.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan error, 1)
+	go func() { drained <- c.Drain(context.Background()) }()
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.drains) == 1 && c.publishNow && c.wakeReason == WakeDrain
+	})
+	stopped := make(chan error, 1)
+	go func() { stopped <- c.Stop(context.Background()) }()
+	if err := <-drained; !errors.Is(err, ErrClosed) {
+		t.Fatalf("drain during stop=%v", err)
+	}
+	if err := <-stopped; !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("stop with debt=%v", err)
+	}
+	builder.Release()
+	c.mu.Lock()
+	drains, publishNow, wakeReason := len(c.drains), c.publishNow, c.wakeReason
+	c.mu.Unlock()
+	if drains != 0 || publishNow || wakeReason != WakeNone {
+		t.Fatalf("terminal ownership leaked: drains=%d publishNow=%t reason=%q", drains, publishNow, wakeReason)
 	}
 }
 
@@ -1137,6 +1371,178 @@ func TestCanceledDrainDoesNotLeavePermanentDrainMode(t *testing.T) {
 	case seq := <-calls:
 		t.Fatalf("canceled drain auto-published remaining seq=%d", seq)
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestCanceledDrainRestoresAnchoredTimerInsteadOfLeakingImmediateWake(t *testing.T) {
+	clock := NewFakeClock(time.Unix(350, 0))
+	calls := make(chan uint64, 1)
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+		calls <- candidate.Frontier().CommitSeq()
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	builder, err := c.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(5 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	drained := make(chan error, 1)
+	go func() { drained <- c.Drain(ctx) }()
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.drains) == 1 && c.publishNow && c.wakeReason == WakeDrain
+	})
+	cancel()
+	if err := <-drained; !errors.Is(err, context.Canceled) {
+		t.Fatalf("drain=%v", err)
+	}
+	c.mu.Lock()
+	publishNow, wakeReason, timerInstalled := c.publishNow, c.wakeReason, c.timer != nil
+	c.mu.Unlock()
+	if publishNow || wakeReason != WakeNone || !timerInstalled {
+		t.Fatalf("canceled drain wake retained: publishNow=%t reason=%q timerInstalled=%t", publishNow, wakeReason, timerInstalled)
+	}
+	builder.Release()
+	select {
+	case seq := <-calls:
+		t.Fatalf("canceled drain published seq %d immediately", seq)
+	default:
+	}
+	clock.Advance(4 * time.Millisecond)
+	select {
+	case seq := <-calls:
+		t.Fatalf("canceled drain published seq %d before anchored timer", seq)
+	default:
+	}
+	clock.Advance(time.Millisecond)
+	select {
+	case seq := <-calls:
+		if seq != 1 {
+			t.Fatalf("timer publication seq=%d", seq)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restored anchored timer did not publish")
+	}
+}
+
+func TestCanceledWaiterRestoresAnchoredTimerInsteadOfLeakingImmediateWake(t *testing.T) {
+	clock := NewFakeClock(time.Unix(360, 0))
+	calls := make(chan uint64, 1)
+	c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+		calls <- candidate.Frontier().CommitSeq()
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	builder, err := c.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(5 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- c.WaitThrough(ctx, 1) }()
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.waiters) == 1 && c.publishNow && c.wakeReason == WakeWaiter
+	})
+	cancel()
+	if err := <-waitDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait=%v", err)
+	}
+	c.mu.Lock()
+	publishNow, wakeReason, timerInstalled := c.publishNow, c.wakeReason, c.timer != nil
+	c.mu.Unlock()
+	if publishNow || wakeReason != WakeNone || !timerInstalled {
+		t.Fatalf("canceled waiter wake retained: publishNow=%t reason=%q timerInstalled=%t", publishNow, wakeReason, timerInstalled)
+	}
+	builder.Release()
+	clock.Advance(4 * time.Millisecond)
+	select {
+	case seq := <-calls:
+		t.Fatalf("canceled waiter published seq %d before anchored timer", seq)
+	default:
+	}
+	clock.Advance(time.Millisecond)
+	select {
+	case seq := <-calls:
+		if seq != 1 {
+			t.Fatalf("timer publication seq=%d", seq)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restored anchored timer did not publish")
+	}
+}
+
+func TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed(t *testing.T) {
+	for _, kind := range []string{"waiter", "drain"} {
+		t.Run(kind, func(t *testing.T) {
+			clock := NewFakeClock(time.Unix(370, 0))
+			calls := make(chan uint64, 1)
+			c, err := New(Options{Clock: clock, Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+				calls <- candidate.Frontier().CommitSeq()
+				return PublishResult{Outcome: PublishSucceeded}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stopClean(t, c)
+			builder, err := c.AcquireBuilder(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			if kind == "waiter" {
+				go func() { done <- c.WaitThrough(ctx, 1) }()
+				waitFor(t, func() bool { return c.Stats().WaiterCount == 1 })
+			} else {
+				go func() { done <- c.Drain(ctx) }()
+				waitFor(t, func() bool {
+					c.mu.Lock()
+					defer c.mu.Unlock()
+					return len(c.drains) == 1
+				})
+			}
+			clock.Advance(minPublishDelay + time.Millisecond)
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled %s=%v", kind, err)
+			}
+			c.mu.Lock()
+			publishNow, wakeReason := c.publishNow, c.wakeReason
+			c.mu.Unlock()
+			if !publishNow || wakeReason != WakeTimer {
+				t.Fatalf("elapsed deadline not restored: publishNow=%t reason=%q", publishNow, wakeReason)
+			}
+			builder.Release()
+			select {
+			case seq := <-calls:
+				if seq != 1 {
+					t.Fatalf("timer publication seq=%d", seq)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("elapsed anchored deadline did not publish")
+			}
+		})
 	}
 }
 
