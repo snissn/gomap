@@ -42,18 +42,19 @@ type Coordinator struct {
 	changed   chan struct{}
 	done      chan struct{}
 
-	pending        []pendingEntry
-	pendingBytes   uint64
-	firstPendingAt time.Time
-	timer          Timer
-	wakeReason     WakeReason
-	publishNow     bool
-	publishing     bool
-	drains         []*drainRequest
-	stopping       bool
-	stopped        bool
-	stopErr        error
-	poison         error
+	pending         []pendingEntry
+	pendingBytes    uint64
+	firstPendingAt  time.Time
+	timer           Timer
+	timerGeneration uint64
+	wakeReason      WakeReason
+	publishNow      bool
+	publishing      bool
+	drains          []*drainRequest
+	stopping        bool
+	stopped         bool
+	stopErr         error
+	poison          error
 
 	visible           Frontier
 	durable           Frontier
@@ -428,8 +429,10 @@ func (c *Coordinator) run() {
 			return
 		}
 		var timerC <-chan time.Time
+		var timerGeneration uint64
 		if c.timer != nil {
 			timerC = c.timer.C()
+			timerGeneration = c.timerGeneration
 		}
 		ready := c.publishNow && !c.publishing && len(c.pending) != 0 && c.activeBuilders == 0 && c.poison == nil
 		if ready {
@@ -468,8 +471,7 @@ func (c *Coordinator) run() {
 		case <-c.wake:
 		case <-timerC:
 			c.mu.Lock()
-			c.timer = nil
-			c.requestPublishLocked(WakeTimer)
+			c.handleTimerFiredLocked(timerGeneration)
 			c.mu.Unlock()
 		}
 	}
@@ -732,7 +734,16 @@ func (c *Coordinator) installTimerLocked() {
 		c.requestPublishLocked(WakeTimer)
 		return
 	}
+	c.timerGeneration++
 	c.timer = c.clock.NewTimer(remaining)
+}
+
+func (c *Coordinator) handleTimerFiredLocked(generation uint64) {
+	if c.timer == nil || generation != c.timerGeneration {
+		return
+	}
+	c.timer = nil
+	c.requestPublishLocked(WakeTimer)
 }
 
 func (c *Coordinator) requestPublishLocked(reason WakeReason) {
