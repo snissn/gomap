@@ -2,6 +2,8 @@ package typedcolumn
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"slices"
@@ -78,6 +80,20 @@ func TestQueryReadyBaseGenerationRejectsCorruptionAndTruncation(t *testing.T) {
 				t.Fatalf("err=%v want containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestQueryReadyBaseGenerationRejectsUnaccountedTrailingBytes(t *testing.T) {
+	identity := queryReadyBaseTestIdentity(48)
+	image := mustTransplantImage(t, mustTransplantPart(t, 708, transplantTestOptions(nil), transplantTestBatch()))
+	result, err := BuildQueryReadyBaseGeneration(identity, []QueryReadyBasePartInput{{SourceGeneration: 25, Image: image}})
+	if err != nil {
+		t.Fatalf("BuildQueryReadyBaseGeneration: %v", err)
+	}
+	shorter := mustTransplantImage(t, mustTransplantPart(t, 708, transplantTestOptions(nil), transplantConstantBatch(1, 42)))
+	forged := queryReadyBaseReplaceFinalPartWithShorterImage(t, result.Bytes, shorter)
+	if _, err := OpenQueryReadyBaseGeneration(forged, identity); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("forged trailing bytes err=%v want trailing rejection", err)
 	}
 }
 
@@ -363,5 +379,32 @@ func queryReadyBaseCorruptLastByte(data []byte) []byte {
 func queryReadyBaseCorruptByte(data []byte, offset int) []byte {
 	out := slices.Clone(data)
 	out[offset] ^= 0xff
+	return out
+}
+
+func queryReadyBaseReplaceFinalPartWithShorterImage(tb testing.TB, data []byte, image ColumnPartImage) []byte {
+	tb.Helper()
+	out := slices.Clone(data)
+	partCount := int(binary.LittleEndian.Uint32(out[48:52]))
+	if partCount == 0 {
+		tb.Fatal("cannot shorten empty query-ready base")
+	}
+	entryOffset := queryReadyBaseHeaderBytes + (partCount-1)*queryReadyBasePartEntryBytes
+	entry := out[entryOffset : entryOffset+queryReadyBasePartEntryBytes]
+	partOffset := int(binary.LittleEndian.Uint64(entry[16:24]))
+	oldPartLength := int(binary.LittleEndian.Uint64(entry[24:32]))
+	if len(image.Bytes) >= oldPartLength {
+		tb.Fatalf("replacement image bytes=%d must be shorter than final part=%d", len(image.Bytes), oldPartLength)
+	}
+	copy(out[partOffset:], image.Bytes)
+	binary.LittleEndian.PutUint64(entry[24:32], uint64(len(image.Bytes)))
+	binary.LittleEndian.PutUint64(entry[32:40], uint64(image.Rows))
+	binary.LittleEndian.PutUint64(entry[40:48], uint64(image.ManifestBytes))
+	checksum := sha256.Sum256(out[partOffset : partOffset+len(image.Bytes)])
+	copy(entry[48:80], checksum[:])
+	tableEnd := queryReadyBaseHeaderBytes + partCount*queryReadyBasePartEntryBytes
+	tableChecksum := crc32.Checksum(out[queryReadyBaseHeaderBytes:tableEnd], queryReadyBaseCRCTable)
+	binary.LittleEndian.PutUint32(out[56:60], tableChecksum)
+	binary.LittleEndian.PutUint32(out[52:56], queryReadyBaseHeaderChecksum(out[:queryReadyBaseHeaderBytes]))
 	return out
 }

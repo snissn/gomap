@@ -407,6 +407,9 @@ func openQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity, 
 		previousSource, previousPart = sourceGeneration, partID
 		previousEnd = offset + length
 	}
+	if previousEnd != len(data) {
+		return nil, fmt.Errorf("typedcolumn: query-ready base has %d trailing bytes after final part", len(data)-previousEnd)
+	}
 	stats.ValidationTime = time.Since(started)
 	stats.OpenTime = stats.ValidationTime
 	return &QueryReadyBaseGeneration{Identity: identity, Dependencies: dependencies, Parts: parts, Stats: stats, data: data, release: release}, nil
