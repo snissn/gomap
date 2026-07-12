@@ -596,23 +596,23 @@ func repairIncompleteCommandWALTail(dir string, segments []logSegment, frames []
 		return diagnostic, nil
 	}
 	type segmentRepair struct {
-		path           string
-		truncateOffset int64
-		hasPrefix      bool
-		anchor         bool
-		unframed       bool
+		path      string
+		hasPrefix bool
+		anchor    bool
+		unframed  bool
 	}
 	plans := make(map[string]*segmentRepair)
 	for _, segment := range segments {
 		if segment.valueLog || !isCommandWALLaneSegment(segment) {
 			continue
 		}
-		plans[segment.path] = &segmentRepair{path: segment.path, truncateOffset: -1, unframed: true}
+		plans[segment.path] = &segmentRepair{path: segment.path, unframed: true}
 	}
+	tailFrames := make([]commandWALReplayFrame, 0, len(frames))
 	for _, frame := range frames {
 		plan := plans[frame.segment.path]
 		if plan == nil {
-			plan = &segmentRepair{path: frame.segment.path, truncateOffset: -1}
+			plan = &segmentRepair{path: frame.segment.path}
 			plans[frame.segment.path] = plan
 		}
 		plan.unframed = false
@@ -620,72 +620,121 @@ func repairIncompleteCommandWALTail(dir string, segments []logSegment, frames []
 			plan.hasPrefix = true
 			continue
 		}
-		if plan.truncateOffset < 0 || frame.startOffset < plan.truncateOffset {
-			plan.truncateOffset = frame.startOffset
-		}
 		if frame.env.LSN == firstDiscardedLSN {
 			plan.anchor = true
 		}
+		tailFrames = append(tailFrames, frame)
+	}
+	if len(tailFrames) == 0 || tailFrames[0].env.LSN != firstDiscardedLSN {
+		return diagnostic, fmt.Errorf("%w: command WAL repair anchor LSN %d not found", ErrRecoveryRequired, firstDiscardedLSN)
 	}
 	walDir := WALDirPath(dir)
-	removed := false
-	for _, plan := range plans {
-		if plan.anchor || plan.hasPrefix || (!plan.unframed && plan.truncateOffset < 0) {
-			continue
+	removeRepairFile := func(path string) (bool, error) {
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, walDir, path); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
 		}
-		if _, err := removePersistentFile(walDir, plan.path, durabilitycut.ResourceCommandWAL); err != nil {
+		removed, err := removePersistentFile(walDir, path, durabilitycut.ResourceCommandWAL)
+		if err != nil {
+			return removed, err
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.AfterWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, walDir, path); err != nil {
+			return removed, errors.Join(err, ErrRecoveryRequired)
+		}
+		return removed, nil
+	}
+	truncateAndSync := func(path string, offset int64) error {
+		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			return err
+		}
+		if err = f.Truncate(offset); err == nil {
+			err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)
+		}
+		if err == nil {
+			err = f.Sync()
+		}
+		if err == nil {
+			err = durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)
+		}
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
+	removed := false
+	unframedPlans := make([]*segmentRepair, 0, len(plans))
+	for _, plan := range plans {
+		if plan.unframed {
+			unframedPlans = append(unframedPlans, plan)
+		}
+	}
+	sort.Slice(unframedPlans, func(i, j int) bool {
+		return unframedPlans[i].path > unframedPlans[j].path
+	})
+	// Unframed terminal tails contain no LSN, so removing them cannot introduce
+	// a hole in the decoded global sequence.
+	for _, plan := range unframedPlans {
+		wasRemoved, err := removeRepairFile(plan.path)
+		if err != nil {
 			return diagnostic, err
 		}
-		removed = true
+		removed = removed || wasRemoved
 	}
 	if removed {
 		if err := syncDeletionNamespaceDirectory(walDir, durabilitycut.ResourceCommandWAL); err != nil {
 			return diagnostic, err
 		}
 	}
-	truncatePlans := make([]*segmentRepair, 0, len(plans))
-	var anchorPlan *segmentRepair
+
+	// Remove decoded frames after the anchor in reverse global-LSN order.
+	// Command-WAL lanes can
+	// interleave LSNs, so deleting or truncating one whole segment at a time can
+	// leave a gap after a post-mutation failure. Each completed step below leaves
+	// the physical WAL as an exact global prefix, which strict reopen validation
+	// can always classify and repair again. The anchor remains as a durable repair
+	// marker until later segment names and their directory entries are stable.
+	// Adjacent global-tail frames in the same physical segment are safe to
+	// truncate as one run.
+	for i := len(tailFrames) - 1; i > 0; {
+		path := tailFrames[i].segment.path
+		truncateOffset := tailFrames[i].startOffset
+		j := i - 1
+		for j > 0 && tailFrames[j].segment.path == path {
+			truncateOffset = tailFrames[j].startOffset
+			j--
+		}
+		if err := truncateAndSync(path, truncateOffset); err != nil {
+			return diagnostic, err
+		}
+		i = j
+	}
+
+	// Only empty, suffix-only segment names and the intact anchor remain. Their
+	// later frame bytes were already durably truncated above, so namespace
+	// mutation order can no longer create a logical LSN gap. Retaining the anchor
+	// until after the directory sync makes every unlink cut retryable.
+	removePlans := make([]*segmentRepair, 0, len(plans))
 	for _, plan := range plans {
-		if plan.truncateOffset < 0 || (!plan.hasPrefix && !plan.anchor) {
-			continue
+		if !plan.unframed && !plan.hasPrefix && !plan.anchor {
+			removePlans = append(removePlans, plan)
 		}
-		if plan.anchor {
-			anchorPlan = plan
-			continue
-		}
-		truncatePlans = append(truncatePlans, plan)
 	}
-	sort.Slice(truncatePlans, func(i, j int) bool { return truncatePlans[i].path < truncatePlans[j].path })
-	if anchorPlan != nil {
-		truncatePlans = append(truncatePlans, anchorPlan)
-	}
-	for _, plan := range truncatePlans {
-		f, err := os.OpenFile(plan.path, os.O_RDWR, 0)
-		if err != nil {
+	sort.Slice(removePlans, func(i, j int) bool { return removePlans[i].path > removePlans[j].path })
+	for _, plan := range removePlans {
+		if _, err := removeRepairFile(plan.path); err != nil {
 			return diagnostic, err
 		}
-		if err = f.Truncate(plan.truncateOffset); err == nil {
-			err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, plan.path)
-		}
-		if err == nil {
-			err = f.Sync()
-		}
-		if err == nil {
-			err = durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, plan.path)
-		}
-		closeErr := f.Close()
-		if err != nil {
-			return diagnostic, err
-		}
-		if closeErr != nil {
-			return diagnostic, closeErr
-		}
 	}
-	diagnostic.TruncationCompleted = true
 	if err := syncDeletionNamespaceDirectory(walDir, durabilitycut.ResourceCommandWAL); err != nil {
 		return diagnostic, err
 	}
 	diagnostic.DirectorySyncCompleted = true
+	anchor := tailFrames[0]
+	if err := truncateAndSync(anchor.segment.path, anchor.startOffset); err != nil {
+		return diagnostic, err
+	}
+	diagnostic.TruncationCompleted = true
 	return diagnostic, nil
 }
 

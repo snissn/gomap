@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1811,6 +1812,181 @@ func TestRepairIncompleteCommandWALTailIsCrashIdempotent(t *testing.T) {
 	}
 	if info.Size() != 8 {
 		t.Fatalf("anchor size=%d, want truncation offset 8", info.Size())
+	}
+}
+
+func TestCommandWALRepairTruncatesLogicalTailBeforeEarlierFrames(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 2, 2, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-2"), Value: []byte("discarded")}})
+	writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 3, 3, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-3"), Value: []byte("discarded")}})
+
+	walDir := WALDirPath(dir)
+	anchorPath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	middlePath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 2))
+	tailPath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 3))
+	cutErr := errors.New("injected post-tail-truncation cut")
+	var firstSynced string
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.AfterDependencyFileSync || event.Resource != durabilitycut.ResourceCommandWAL {
+			return nil
+		}
+		firstSynced = event.Path
+		return cutErr
+	})
+	_, err := Open(Options{Dir: dir})
+	restore()
+	if !errors.Is(err, cutErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("first Open error=%v, want injected ErrRecoveryRequired", err)
+	}
+	if firstSynced != tailPath {
+		t.Fatalf("first synced segment=%q, want logical tail %q", firstSynced, tailPath)
+	}
+	if info, err := os.Stat(tailPath); err != nil || info.Size() != 0 {
+		t.Fatalf("tail segment stat after cut=(%v,%v), want empty", info, err)
+	}
+	for _, path := range []string{anchorPath, middlePath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("surviving segment %s stat after cut: %v", filepath.Base(path), err)
+		}
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	for _, key := range []string{"missing", "suffix-2", "suffix-3"} {
+		if got, err := reopen.Get([]byte(key)); err != nil || got != nil {
+			t.Fatalf("Get(%q)=%q err=%v, want discarded after retry", key, got, err)
+		}
+	}
+	if got := commandWALTestStatUint64(t, reopen.Stats(), "treedb.command_wal.recovery.first_discarded_lsn"); got != 1 {
+		t.Fatalf("first discarded lsn after retry=%d, want 1", got)
+	}
+}
+
+func TestCommandWALRepairInterleavedLanesIsCrashIdempotent(t *testing.T) {
+	for cutAfter := 1; cutAfter <= 5; cutAfter++ {
+		t.Run(fmt.Sprintf("cut-after-sync-%d", cutAfter), func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			if err := db.Close(); err != nil {
+				t.Fatalf("Close bootstrap db: %v", err)
+			}
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 2, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-2"), Value: []byte("discarded")}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 2, 1, 3, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-3"), Value: []byte("discarded")}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 4, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-4"), Value: []byte("discarded")}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 2, 1, 5, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-5"), Value: []byte("discarded")}})
+			suffixPaths := []string{
+				filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(1, 1)),
+				filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(2, 1)),
+			}
+
+			cutErr := errors.New("injected interleaved-lane repair cut")
+			syncs := 0
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point != durabilitycut.AfterDependencyFileSync || event.Resource != durabilitycut.ResourceCommandWAL {
+					return nil
+				}
+				syncs++
+				if syncs == cutAfter {
+					return cutErr
+				}
+				return nil
+			})
+			_, err := Open(Options{Dir: dir})
+			restore()
+			if !errors.Is(err, cutErr) || !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("first Open error=%v, want injected ErrRecoveryRequired", err)
+			}
+
+			reopen := openCommandWALDB(t, dir)
+			defer reopen.Close()
+			for _, key := range []string{"missing", "suffix-2", "suffix-3", "suffix-4", "suffix-5"} {
+				if got, err := reopen.Get([]byte(key)); err != nil || got != nil {
+					t.Fatalf("Get(%q)=%q err=%v, want discarded after retry", key, got, err)
+				}
+			}
+			if got := reopen.State().AppliedCommandLSN; got != 0 {
+				t.Fatalf("AppliedCommandLSN after repair=%d, want 0", got)
+			}
+			for _, path := range suffixPaths {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("suffix segment %s stat after retry=%v, want removed", filepath.Base(path), err)
+				}
+			}
+		})
+	}
+}
+
+func TestCommandWALRepairNamespaceCutsRetainAnchorUntilDirectorySync(t *testing.T) {
+	tests := []struct {
+		name  string
+		point durabilitycut.Point
+	}{
+		{name: "before-suffix-unlink", point: durabilitycut.BeforeWALOrAssetUnlink},
+		{name: "after-suffix-unlink", point: durabilitycut.AfterWALOrAssetUnlink},
+		{name: "before-directory-sync", point: durabilitycut.BeforeDeletionDirectorySync},
+		{name: "after-directory-sync", point: durabilitycut.AfterDeletionDirectorySync},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			if err := db.Close(); err != nil {
+				t.Fatalf("Close bootstrap db: %v", err)
+			}
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("missing"), RID: 99}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 1, 1, 2, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-2"), Value: []byte("discarded")}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 2, 1, 3, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("suffix-3"), Value: []byte("discarded")}})
+			walDir := WALDirPath(dir)
+			anchorPath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+			suffixPaths := []string{
+				filepath.Join(walDir, commitlog.CommandSegmentName(1, 1)),
+				filepath.Join(walDir, commitlog.CommandSegmentName(2, 1)),
+			}
+
+			cutErr := errors.New("injected namespace repair cut")
+			triggered := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if !triggered && event.Point == test.point && event.Resource == durabilitycut.ResourceCommandWAL {
+					triggered = true
+					return cutErr
+				}
+				return nil
+			})
+			_, err := Open(Options{Dir: dir})
+			restore()
+			if !triggered {
+				t.Fatalf("repair did not reach cut point %s", test.point)
+			}
+			if !errors.Is(err, cutErr) || !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("first Open error=%v, want injected ErrRecoveryRequired", err)
+			}
+			if info, err := os.Stat(anchorPath); err != nil || info.Size() == 0 {
+				t.Fatalf("anchor stat after cut=(%v,%v), want intact repair marker", info, err)
+			}
+
+			reopen := openCommandWALDB(t, dir)
+			defer reopen.Close()
+			for _, path := range suffixPaths {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("suffix segment %s stat after retry=%v, want removed", filepath.Base(path), err)
+				}
+			}
+			if info, err := os.Stat(anchorPath); err != nil || info.Size() != 0 {
+				t.Fatalf("anchor stat after completed retry=(%v,%v), want empty retained segment", info, err)
+			}
+			if got := commandWALTestStatUint64(t, reopen.Stats(), "treedb.command_wal.recovery.first_discarded_lsn"); got != 1 {
+				t.Fatalf("first discarded lsn after retry=%d, want 1", got)
+			}
+		})
 	}
 }
 
