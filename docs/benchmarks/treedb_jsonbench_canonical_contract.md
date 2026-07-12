@@ -30,8 +30,12 @@ with `PROFILE=durable` set explicitly.
 
 Pin the gomap and JSONBench worktrees before collection. Store heavyweight
 outputs under `/mnt/fast4tb`, not `/tmp`. The canonical timing lane uses five
-attempts and records the median. Validation is a separate control from the same
-heads and dataset so reconstruction or hashing cannot warm the timing lane.
+independent fresh runs and records the median across those runs. In
+`one_shot_end_to_end` mode, each runner invocation must use `TRIES=1`; the
+JSONBench runner intentionally rejects a larger value because one report
+measures one submitted execution. Validation is a separate control from the
+same heads and dataset so reconstruction or hashing cannot warm the timing
+lane.
 
 The current JSONBench script accepts `PROFILE` through its environment even
 though the preferred wrapper does not list it in its help. Set it on the same
@@ -41,20 +45,24 @@ command invocation:
 OUT=/mnt/fast4tb/gomap_jsonbench_1m_$(date -u +%Y%m%d_%H%M%S)
 
 cd /path/to/JSONBench/treedb
-PROFILE=durable \
-  DATA_DIR=/home/mikers/data/bluesky \
-  ROWS=1000000 \
-  TRIES=5 \
-  GOMAP_REPLACE=/path/to/pinned/gomap \
-  OUT_DIR="$OUT/timing" \
-  TREEDB_QUERY_MODE=one_shot_end_to_end \
-  TREEDB_METADATA_MODE=no_aggregate_metadata \
-  TREEDB_VALIDATE_RECONSTRUCTION=0 \
-  ./run_preferred_columnstore_clickhouse_compare.sh
+for ATTEMPT in 1 2 3 4 5; do
+  PROFILE=durable \
+    DATA_DIR=/home/mikers/data/bluesky \
+    ROWS=1000000 \
+    TRIES=1 \
+    GOMAP_REPLACE=/path/to/pinned/gomap \
+    OUT_DIR="$OUT/timing/attempt-$ATTEMPT" \
+    TREEDB_QUERY_MODE=one_shot_end_to_end \
+    TREEDB_METADATA_MODE=no_aggregate_metadata \
+    TREEDB_VALIDATE_RECONSTRUCTION=0 \
+    ./run_preferred_columnstore_clickhouse_compare.sh
+done
 ```
 
 Run the reconstruction/hash control separately. It may perform validation work,
-but none of its timings may replace the timing lane:
+but none of its timings may replace the timing lane. Because this control does
+not produce comparison samples, it may reuse the ClickHouse result from timing
+attempt 1:
 
 ```sh
 cd /path/to/JSONBench/treedb
@@ -65,7 +73,7 @@ PROFILE=durable \
   GOMAP_REPLACE=/path/to/pinned/gomap \
   OUT_DIR="$OUT/validation" \
   RUN_CLICKHOUSE=0 \
-  CLICKHOUSE_RESULT="$OUT/timing/clickhouse/result.json" \
+  CLICKHOUSE_RESULT="$OUT/timing/attempt-1/clickhouse/result.json" \
   TREEDB_QUERY_MODE=one_shot_end_to_end \
   TREEDB_METADATA_MODE=no_aggregate_metadata \
   TREEDB_VALIDATE_RECONSTRUCTION=1 \
@@ -88,8 +96,8 @@ Required comparison identity:
 - ClickHouse version;
 - dataset path/identity, exact row count, and SHA-256;
 - stable host identity;
-- artifact root and TreeDB result path;
-- ClickHouse result path;
+- artifact root and five unique TreeDB result paths;
+- five unique ClickHouse result paths paired by array index with TreeDB;
 - requested TreeDB profile;
 - query, aggregate-metadata, fallback, cache, and warmth policies;
 - attempt count, statistic, targets, q4 regression guardrail, and target
@@ -105,16 +113,18 @@ The TreeDB result is a report containing `rows[]`. Select the canonical headline
 lane explicitly with `treedb.row_selector`; the current lane is
 `storage_layout=column-store-full-prepared` and `projection=full`. This avoids
 confusing the full retained-data headline with query-shaped attribution rows in
-the same report. Selected query IDs must be unique and must cover q1, q2, q3,
-q4, q5, and qexpr in `comparison.query_order`. Additional uniquely named q4a
-and q4b rows are allowed. Every selected row must consistently record:
+the same report. `treedb.result_paths` must contain five different one-shot
+reports, paired by index with the five `clickhouse.result_paths`. Within every
+TreeDB report, selected query IDs must be unique and must cover q1, q2, q3, q4,
+q5, and qexpr in `comparison.query_order`. Additional uniquely named q4a and q4b
+rows are allowed. Every selected row in every report must consistently record:
 
 - the requested TreeDB profile;
 - the pinned dataset row count;
 - query and metadata modes matching the sidecar;
 - an explicit document-scan fallback flag;
 - an explicit reconstruction status;
-- at least five positive `attempts_seconds` values.
+- exactly one positive `attempts_seconds` value.
 
 One mismatching or incomplete row rejects the entire report. A recorded
 validation failure always rejects the report. A timing row may say
@@ -122,10 +132,12 @@ validation failure always rejects the report. A timing row may say
 artifact with `timing_boundary: outside_measured_intervals`.
 
 The ClickHouse result is also mandatory and must live under the artifact root.
-The validator cross-checks its system, pinned version, requested/dataset/loaded
-row counts, six ordered q1-q5/qexpr result arrays, at least five attempts per
-query, and positive timings. A TreeDB-only sidecar cannot present itself as a
-canonical comparison.
+For each of the five independent artifacts, the validator cross-checks its
+system, pinned version, requested/dataset/loaded row counts, six ordered
+q1-q5/qexpr result arrays, exactly one positive timing per query, and its index
+pairing with the corresponding TreeDB artifact. The aggregate sample count is
+therefore five without reopening or resubmitting work inside one report. A
+TreeDB-only sidecar cannot present itself as a canonical comparison.
 
 ## Query-ready counters
 
@@ -203,11 +215,12 @@ GOWORK=off go run ./cmd/jsonbench_contract \
   -manifest "$OUT/canonical_manifest.json"
 ```
 
-Success emits a small machine-readable JSON record. Any missing pin, mode,
-counter, validation field, resource dimension, TreeDB query row, ClickHouse
-half, artifact file, or requested versus recorded mismatch returns nonzero and
-lists all deterministic validation errors. Result, validation, and resource
-paths must resolve to regular files beneath `artifact_root`.
+Success emits a small machine-readable JSON record including the five
+independent result paths. Any missing pin, mode, counter, validation field,
+resource dimension, TreeDB query row, ClickHouse half, artifact file, duplicate
+attempt path, or requested versus recorded mismatch returns nonzero and lists
+all deterministic validation errors. Result, validation, and resource paths
+must resolve to regular files beneath `artifact_root`.
 
 ## Interpretation and closeout
 

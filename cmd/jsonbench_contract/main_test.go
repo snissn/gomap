@@ -14,7 +14,7 @@ func TestRunValidatesCommittedSmokeManifest(t *testing.T) {
 	if err := run([]string{"-manifest", path}, &stdout, &stderr); err != nil {
 		t.Fatalf("run() error = %v, stderr = %s", err, stderr.String())
 	}
-	for _, want := range []string{`"valid":true`, `"requested_profile":"durable"`} {
+	for _, want := range []string{`"valid":true`, `"independent_attempts":5`, `"requested_profile":"durable"`} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("output %q does not contain %q", stdout.String(), want)
 		}

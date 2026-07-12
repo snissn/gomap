@@ -2,6 +2,7 @@ package jsonbenchcontract
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,7 @@ import (
 func TestCanonicalJSONBenchResultRecordsActualTreeDBProfile(t *testing.T) {
 	manifest := validManifest(t)
 	manifest.TreeDB.RequestedProfile = "durable"
-	manifest.TreeDB.ResultPath = writeResult(t, map[string]any{
+	manifest.TreeDB.ResultPaths[0] = writeResult(t, map[string]any{
 		"schema_version": "jsonbench-treedb-report/v1",
 		"rows": []map[string]any{{
 			"query":                  "q1",
@@ -23,11 +24,11 @@ func TestCanonicalJSONBenchResultRecordsActualTreeDBProfile(t *testing.T) {
 			"reconstruction_status":  "validated",
 			"storage_layout":         "column-store-full-prepared",
 			"projection":             "full",
-			"attempts_seconds":       []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001},
+			"attempts_seconds":       []float64{0.001},
 		}},
 	})
 
-	err := Validate(manifest, filepath.Dir(manifest.TreeDB.ResultPath))
+	err := Validate(manifest, filepath.Dir(manifest.TreeDB.ResultPaths[0]))
 	assertErrorContains(t, err, `requested profile "durable" does not match recorded profile "fast"`)
 }
 
@@ -37,6 +38,32 @@ func TestCanonicalJSONBenchRequiresDurableTreeDBProfile(t *testing.T) {
 
 	err := Validate(manifest, manifest.ArtifactRoot)
 	assertErrorContains(t, err, `treedb.requested_profile must be "durable" for canonical evidence`)
+}
+
+func TestCanonicalJSONBenchRejectsSingleOneShotReportForFiveAttempts(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.TreeDB.ResultPaths = manifest.TreeDB.ResultPaths[:1]
+	manifest.ClickHouse.ResultPaths = manifest.ClickHouse.ResultPaths[:1]
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "treedb.result_paths has 1 independent artifacts, want 5")
+	assertErrorContains(t, err, "clickhouse.result_paths has 1 independent artifacts, want 5")
+}
+
+func TestCanonicalJSONBenchRequiresExactlyFiveIndependentAttempts(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.Comparison.Attempts = 6
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "comparison.attempts must be exactly 5 independent runs for canonical evidence")
+}
+
+func TestCanonicalJSONBenchRejectsDuplicateIndependentAttemptPaths(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.TreeDB.ResultPaths[4] = manifest.TreeDB.ResultPaths[0]
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "treedb.result_paths[4] duplicates")
 }
 
 func TestCanonicalJSONBenchReportValidatesEveryRow(t *testing.T) {
@@ -52,7 +79,7 @@ func TestCanonicalJSONBenchReportValidatesEveryRow(t *testing.T) {
 			"reconstruction_status":  "not_validated",
 			"storage_layout":         "column-store-full-prepared",
 			"projection":             "full",
-			"attempts_seconds":       []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001},
+			"attempts_seconds":       []float64{0.001},
 		},
 		{
 			"query":                  "q2",
@@ -64,64 +91,76 @@ func TestCanonicalJSONBenchReportValidatesEveryRow(t *testing.T) {
 			"reconstruction_status":  "not_validated",
 			"storage_layout":         "column-store-full-prepared",
 			"projection":             "full",
-			"attempts_seconds":       []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001},
+			"attempts_seconds":       []float64{0.001},
 		},
 	}
-	manifest.TreeDB.ResultPath = writeResult(t, map[string]any{
+	manifest.TreeDB.ResultPaths[0] = writeResult(t, map[string]any{
 		"schema_version": "jsonbench-treedb-report/v1",
 		"rows":           rows,
 	})
 
-	err := Validate(manifest, filepath.Dir(manifest.TreeDB.ResultPath))
-	assertErrorContains(t, err, "treedb result row[1].dataset_size 999999 does not match pinned rows 1000000")
-	assertErrorContains(t, err, `treedb result row[1].query_mode "hot_prepared_run" does not match comparison.query_mode "one_shot_end_to_end"`)
+	err := Validate(manifest, filepath.Dir(manifest.TreeDB.ResultPaths[0]))
+	assertErrorContains(t, err, "treedb result[0] row[1].dataset_size 999999 does not match pinned rows 1000000")
+	assertErrorContains(t, err, `treedb result[0] row[1].query_mode "hot_prepared_run" does not match comparison.query_mode "one_shot_end_to_end"`)
 }
 
 func TestCanonicalJSONBenchReportRequiresUniqueQueryCoverage(t *testing.T) {
 	manifest := validManifest(t)
 	rows := validTreeDBRows()
 	rows[len(rows)-1]["query"] = "q5"
-	manifest.TreeDB.ResultPath = writeResultAt(t, manifest.ArtifactRoot, map[string]any{
+	manifest.TreeDB.ResultPaths[0] = writeResultAt(t, manifest.ArtifactRoot, map[string]any{
 		"schema_version": "jsonbench-treedb-report/v1",
 		"rows":           rows,
 	})
 
 	err := Validate(manifest, manifest.ArtifactRoot)
-	assertErrorContains(t, err, `treedb result query "q5" is duplicated within the selected canonical lane`)
-	assertErrorContains(t, err, `treedb result is missing required query "qexpr" from the selected canonical lane`)
+	assertErrorContains(t, err, `treedb result[0] query "q5" is duplicated within the selected canonical lane`)
+	assertErrorContains(t, err, `treedb result[0] is missing required query "qexpr" from the selected canonical lane`)
 }
 
-func TestCanonicalJSONBenchReportRequiresFivePositiveTreeDBAttempts(t *testing.T) {
+func TestCanonicalJSONBenchReportRequiresOnePositiveTimingPerIndependentAttempt(t *testing.T) {
 	manifest := validManifest(t)
 	rows := validTreeDBRows()
-	rows[1]["attempts_seconds"] = []float64{0.001}
-	rows[2]["attempts_seconds"] = []float64{0.001, 0.001, 0, 0.001, 0.001}
-	manifest.TreeDB.ResultPath = writeResultAt(t, manifest.ArtifactRoot, map[string]any{
+	rows[1]["attempts_seconds"] = []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001}
+	rows[2]["attempts_seconds"] = []float64{0}
+	manifest.TreeDB.ResultPaths[0] = writeResultAt(t, manifest.ArtifactRoot, map[string]any{
 		"schema_version": "jsonbench-treedb-report/v1",
 		"rows":           rows,
 	})
 
 	err := Validate(manifest, manifest.ArtifactRoot)
-	assertErrorContains(t, err, "treedb result row[1].attempts_seconds has 1 attempts, want at least 5")
-	assertErrorContains(t, err, "treedb result row[2].attempts_seconds timings must be positive")
+	assertErrorContains(t, err, "treedb result[0] row[1].attempts_seconds has 5 timings, want exactly 1 from an independent one-shot run")
+	assertErrorContains(t, err, "treedb result[0] row[2].attempts_seconds timings must be positive")
 }
 
 func TestCanonicalJSONBenchRequiresClickHouseComparisonArtifact(t *testing.T) {
 	manifest := validManifest(t)
-	manifest.ClickHouse.ResultPath = filepath.Join(manifest.ArtifactRoot, "missing_clickhouse.json")
+	manifest.ClickHouse.ResultPaths[0] = filepath.Join(manifest.ArtifactRoot, "missing_clickhouse.json")
 
 	err := Validate(manifest, manifest.ArtifactRoot)
-	assertErrorContains(t, err, "clickhouse result:")
+	assertErrorContains(t, err, "clickhouse result[0]:")
 }
 
 func TestCanonicalJSONBenchCrossChecksClickHouseIdentity(t *testing.T) {
 	manifest := validManifest(t)
 	result := validClickHouseResult(1_000_000)
 	result["version"] = "unexpected"
-	manifest.ClickHouse.ResultPath = writeResultAt(t, manifest.ArtifactRoot, result)
+	manifest.ClickHouse.ResultPaths[0] = writeResultAt(t, manifest.ArtifactRoot, result)
 
 	err := Validate(manifest, manifest.ArtifactRoot)
-	assertErrorContains(t, err, `clickhouse result.version "unexpected" does not match pins.clickhouse_version "26.4.2.10"`)
+	assertErrorContains(t, err, `clickhouse result[0].version "unexpected" does not match pins.clickhouse_version "26.4.2.10"`)
+}
+
+func TestCanonicalJSONBenchClickHouseReportRequiresOnePositiveTimingPerIndependentAttempt(t *testing.T) {
+	manifest := validManifest(t)
+	result := validClickHouseResult(1_000_000)
+	result["result"].([][]float64)[0] = []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001}
+	result["result"].([][]float64)[1] = []float64{0}
+	manifest.ClickHouse.ResultPaths[0] = writeResultAt(t, manifest.ArtifactRoot, result)
+
+	err := Validate(manifest, manifest.ArtifactRoot)
+	assertErrorContains(t, err, "clickhouse result[0] q1 has 5 timings, want exactly 1 from an independent one-shot run")
+	assertErrorContains(t, err, "clickhouse result[0] lane[1] timings must be positive")
 }
 
 func TestCanonicalJSONBenchResultIncludesPinnedComparisonDimensions(t *testing.T) {
@@ -204,12 +243,18 @@ func validManifest(t *testing.T) Manifest {
 			t.Fatal(err)
 		}
 	}
-	resultPath := writeResultAt(t, root, map[string]any{
-		"schema_version": "jsonbench-treedb-report/v1",
-		"rows":           validTreeDBRows(),
-	})
-	clickHousePath := filepath.Join(root, "clickhouse_result.json")
-	writeJSONFile(t, clickHousePath, validClickHouseResult(1_000_000))
+	resultPaths := make([]string, 5)
+	clickHousePaths := make([]string, 5)
+	for index := range resultPaths {
+		attemptRoot := filepath.Join(root, "attempts", fmt.Sprintf("%d", index+1))
+		resultPaths[index] = filepath.Join(attemptRoot, "treedb", "report.json")
+		clickHousePaths[index] = filepath.Join(attemptRoot, "clickhouse", "result.json")
+		writeJSONFile(t, resultPaths[index], map[string]any{
+			"schema_version": "jsonbench-treedb-report/v1",
+			"rows":           validTreeDBRows(),
+		})
+		writeJSONFile(t, clickHousePaths[index], validClickHouseResult(1_000_000))
+	}
 	return Manifest{
 		SchemaVersion: SchemaVersion,
 		Canonical:     true,
@@ -223,10 +268,10 @@ func validManifest(t *testing.T) Manifest {
 		ArtifactRoot: root,
 		TreeDB: TreeDBRun{
 			RequestedProfile: "durable",
-			ResultPath:       resultPath,
+			ResultPaths:      resultPaths,
 			RowSelector:      ResultRowSelector{StorageLayout: "column-store-full-prepared", Projection: "full"},
 		},
-		ClickHouse: ClickHouseRun{ResultPath: clickHousePath},
+		ClickHouse: ClickHouseRun{ResultPaths: clickHousePaths},
 		Comparison: Comparison{
 			QueryMode:             "one_shot_end_to_end",
 			AggregateMetadataMode: "no_aggregate_metadata",
@@ -312,7 +357,7 @@ func validTreeDBRows() []map[string]any {
 			"reconstruction_status":  "validated",
 			"storage_layout":         "column-store-full-prepared",
 			"projection":             "full",
-			"attempts_seconds":       []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001},
+			"attempts_seconds":       []float64{0.001},
 		})
 	}
 	return rows
@@ -321,7 +366,7 @@ func validTreeDBRows() []map[string]any {
 func validClickHouseResult(rows int64) map[string]any {
 	results := make([][]float64, 6)
 	for index := range results {
-		results[index] = []float64{0.001, 0.0011, 0.0009, 0.0012, 0.001}
+		results[index] = []float64{0.001}
 	}
 	return map[string]any{
 		"system":               "ClickHouse",
@@ -353,6 +398,9 @@ func writeJSONFile(t *testing.T, path string, value any) {
 	t.Helper()
 	data, err := json.Marshal(value)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {

@@ -14,11 +14,13 @@ import (
 )
 
 type validationSummary struct {
-	SchemaVersion    string `json:"schema_version"`
-	Valid            bool   `json:"valid"`
-	Manifest         string `json:"manifest"`
-	TreeDBResult     string `json:"treedb_result"`
-	RequestedProfile string `json:"requested_profile"`
+	SchemaVersion       string   `json:"schema_version"`
+	Valid               bool     `json:"valid"`
+	Manifest            string   `json:"manifest"`
+	IndependentAttempts int      `json:"independent_attempts"`
+	TreeDBResults       []string `json:"treedb_results"`
+	ClickHouseResults   []string `json:"clickhouse_results"`
+	RequestedProfile    string   `json:"requested_profile"`
 }
 
 func main() {
@@ -48,15 +50,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	resultPath := manifest.TreeDB.ResultPath
-	if !filepath.IsAbs(resultPath) {
-		resultPath = filepath.Join(manifestDir, resultPath)
-	}
+	treeDBResults := resolvePaths(manifestDir, manifest.TreeDB.ResultPaths)
+	clickHouseResults := resolvePaths(manifestDir, manifest.ClickHouse.ResultPaths)
 	return json.NewEncoder(stdout).Encode(validationSummary{
-		SchemaVersion:    manifest.SchemaVersion,
-		Valid:            true,
-		Manifest:         *manifestPath,
-		TreeDBResult:     resultPath,
-		RequestedProfile: manifest.TreeDB.RequestedProfile,
+		SchemaVersion:       manifest.SchemaVersion,
+		Valid:               true,
+		Manifest:            *manifestPath,
+		IndependentAttempts: manifest.Comparison.Attempts,
+		TreeDBResults:       treeDBResults,
+		ClickHouseResults:   clickHouseResults,
+		RequestedProfile:    manifest.TreeDB.RequestedProfile,
 	})
+}
+
+func resolvePaths(baseDir string, paths []string) []string {
+	resolved := make([]string, len(paths))
+	for index, path := range paths {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(baseDir, path)
+		}
+		resolved[index] = path
+	}
+	return resolved
 }

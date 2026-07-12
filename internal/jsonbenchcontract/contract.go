@@ -75,7 +75,7 @@ type Host struct {
 
 type TreeDBRun struct {
 	RequestedProfile string            `json:"requested_profile"`
-	ResultPath       string            `json:"result_path"`
+	ResultPaths      []string          `json:"result_paths"`
 	RowSelector      ResultRowSelector `json:"row_selector"`
 }
 
@@ -85,7 +85,7 @@ type ResultRowSelector struct {
 }
 
 type ClickHouseRun struct {
-	ResultPath string `json:"result_path"`
+	ResultPaths []string `json:"result_paths"`
 }
 
 type Comparison struct {
@@ -167,7 +167,7 @@ func ensureEOF(decoder *json.Decoder) error {
 
 // Validate checks manifest completeness, resource-evidence semantics, and the
 // fields that can be cross-checked against a gomap/JSONBench TreeDB result.
-// baseDir resolves a relative result_path and is normally the manifest's
+// baseDir resolves relative result_paths and is normally the manifest's
 // directory.
 func Validate(manifest Manifest, baseDir string) error {
 	var problems []string
@@ -193,18 +193,14 @@ func Validate(manifest Manifest, baseDir string) error {
 	} else if manifest.TreeDB.RequestedProfile != "durable" {
 		add("treedb.requested_profile must be %q for canonical evidence", "durable")
 	}
-	if strings.TrimSpace(manifest.TreeDB.ResultPath) == "" {
-		add("treedb.result_path is required")
-	}
+	validateIndependentResultPaths("treedb.result_paths", manifest.TreeDB.ResultPaths, baseDir, manifest.Comparison.Attempts, add)
 	if strings.TrimSpace(manifest.TreeDB.RowSelector.StorageLayout) == "" {
 		add("treedb.row_selector.storage_layout is required")
 	}
 	if strings.TrimSpace(manifest.TreeDB.RowSelector.Projection) == "" {
 		add("treedb.row_selector.projection is required")
 	}
-	if strings.TrimSpace(manifest.ClickHouse.ResultPath) == "" {
-		add("clickhouse.result_path is required")
-	}
+	validateIndependentResultPaths("clickhouse.result_paths", manifest.ClickHouse.ResultPaths, baseDir, manifest.Comparison.Attempts, add)
 	validateComparison(manifest.Comparison, add)
 	validateValidation(manifest.Validation, add)
 	validateCounters(manifest.Counters, add)
@@ -224,28 +220,28 @@ func Validate(manifest Manifest, baseDir string) error {
 		validateEvidenceArtifacts(artifactRoot, manifest, add)
 	}
 
-	if manifest.TreeDB.ResultPath != "" {
-		resultPath := manifest.TreeDB.ResultPath
+	for index, configuredPath := range manifest.TreeDB.ResultPaths {
+		resultPath := configuredPath
 		if !filepath.IsAbs(resultPath) {
 			resultPath = filepath.Join(baseDir, resultPath)
 		}
 		if artifactRoot != "" && !pathWithin(artifactRoot, resultPath) {
-			add("treedb.result_path must be inside artifact_root")
+			add("treedb.result_paths[%d] must be inside artifact_root", index)
 		}
-		if err := validateResult(resultPath, manifest, add); err != nil {
-			add("treedb result: %v", err)
+		if err := validateResult(resultPath, index, manifest, add); err != nil {
+			add("treedb result[%d]: %v", index, err)
 		}
 	}
-	if manifest.ClickHouse.ResultPath != "" {
-		resultPath := manifest.ClickHouse.ResultPath
+	for index, configuredPath := range manifest.ClickHouse.ResultPaths {
+		resultPath := configuredPath
 		if !filepath.IsAbs(resultPath) {
 			resultPath = filepath.Join(baseDir, resultPath)
 		}
 		if artifactRoot != "" && !pathWithin(artifactRoot, resultPath) {
-			add("clickhouse.result_path must be inside artifact_root")
+			add("clickhouse.result_paths[%d] must be inside artifact_root", index)
 		}
-		if err := validateClickHouseResult(resultPath, manifest, add); err != nil {
-			add("clickhouse result: %v", err)
+		if err := validateClickHouseResult(resultPath, index, manifest, add); err != nil {
+			add("clickhouse result[%d]: %v", index, err)
 		}
 	}
 
@@ -254,6 +250,33 @@ func Validate(manifest Manifest, baseDir string) error {
 	}
 	sort.Strings(problems)
 	return fmt.Errorf("canonical JSONBench contract rejected:\n- %s", strings.Join(problems, "\n- "))
+}
+
+func validateIndependentResultPaths(field string, paths []string, baseDir string, attempts int, add func(string, ...any)) {
+	if len(paths) != attempts {
+		add("%s has %d independent artifacts, want %d", field, len(paths), attempts)
+	}
+	seen := make(map[string]bool, len(paths))
+	for index, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			add("%s[%d] is required", field, index)
+			continue
+		}
+		cleaned := path
+		if !filepath.IsAbs(cleaned) {
+			cleaned = filepath.Join(baseDir, cleaned)
+		}
+		cleaned, err := filepath.Abs(cleaned)
+		if err != nil {
+			add("%s[%d] cannot be resolved: %v", field, index, err)
+			continue
+		}
+		cleaned = filepath.Clean(cleaned)
+		if seen[cleaned] {
+			add("%s[%d] duplicates %q; attempts must be independent artifacts", field, index, path)
+		}
+		seen[cleaned] = true
+	}
 }
 
 func validateEvidenceArtifacts(artifactRoot string, manifest Manifest, add func(string, ...any)) {
@@ -342,8 +365,8 @@ func validateComparison(comparison Comparison, add func(string, ...any)) {
 			add("comparison.%s is required", name)
 		}
 	}
-	if comparison.Attempts < 5 {
-		add("comparison.attempts must be at least 5 for canonical evidence")
+	if comparison.Attempts != 5 {
+		add("comparison.attempts must be exactly 5 independent runs for canonical evidence")
 	}
 	wantQueries := []string{"q1", "q2", "q3", "q4", "q5", "qexpr"}
 	if len(comparison.QueryOrder) != len(wantQueries) {
@@ -490,7 +513,7 @@ type recordedResult struct {
 	Rows                 []recordedResult `json:"rows"`
 }
 
-func validateResult(path string, manifest Manifest, add func(string, ...any)) error {
+func validateResult(path string, attemptIndex int, manifest Manifest, add func(string, ...any)) error {
 	if err := requireRegularFile(path); err != nil {
 		return err
 	}
@@ -513,21 +536,21 @@ func validateResult(path string, manifest Manifest, add func(string, ...any)) er
 		}
 	}
 	if len(selected) == 0 {
-		add("treedb result has no rows matching row_selector storage_layout=%q projection=%q", manifest.TreeDB.RowSelector.StorageLayout, manifest.TreeDB.RowSelector.Projection)
+		add("treedb result[%d] has no rows matching row_selector storage_layout=%q projection=%q", attemptIndex, manifest.TreeDB.RowSelector.StorageLayout, manifest.TreeDB.RowSelector.Projection)
 		return nil
 	}
 	seenQueries := make(map[string]bool, len(selected))
 	for index, row := range selected {
-		prefix := fmt.Sprintf("treedb result row[%d]", index)
+		prefix := fmt.Sprintf("treedb result[%d] row[%d]", attemptIndex, index)
 		if row.Query == "" {
 			add("%s.query is required", prefix)
 		} else if seenQueries[row.Query] {
-			add("treedb result query %q is duplicated within the selected canonical lane", row.Query)
+			add("treedb result[%d] query %q is duplicated within the selected canonical lane", attemptIndex, row.Query)
 		} else {
 			seenQueries[row.Query] = true
 		}
-		if len(row.AttemptsSeconds) < manifest.Comparison.Attempts {
-			add("%s.attempts_seconds has %d attempts, want at least %d", prefix, len(row.AttemptsSeconds), manifest.Comparison.Attempts)
+		if len(row.AttemptsSeconds) != 1 {
+			add("%s.attempts_seconds has %d timings, want exactly 1 from an independent one-shot run", prefix, len(row.AttemptsSeconds))
 		}
 		for _, seconds := range row.AttemptsSeconds {
 			if seconds <= 0 {
@@ -570,7 +593,7 @@ func validateResult(path string, manifest Manifest, add func(string, ...any)) er
 	}
 	for _, query := range manifest.Comparison.QueryOrder {
 		if !seenQueries[query] {
-			add("treedb result is missing required query %q from the selected canonical lane", query)
+			add("treedb result[%d] is missing required query %q from the selected canonical lane", attemptIndex, query)
 		}
 	}
 	return nil
@@ -585,7 +608,7 @@ type clickHouseResult struct {
 	Result             [][]float64 `json:"result"`
 }
 
-func validateClickHouseResult(path string, manifest Manifest, add func(string, ...any)) error {
+func validateClickHouseResult(path string, attemptIndex int, manifest Manifest, add func(string, ...any)) error {
 	if err := requireRegularFile(path); err != nil {
 		return err
 	}
@@ -598,34 +621,34 @@ func validateClickHouseResult(path string, manifest Manifest, add func(string, .
 		return fmt.Errorf("decode %s: %w", path, err)
 	}
 	if result.System != "ClickHouse" {
-		add("clickhouse result.system must be %q", "ClickHouse")
+		add("clickhouse result[%d].system must be %q", attemptIndex, "ClickHouse")
 	}
 	if result.Version != manifest.Pins.ClickHouseVersion {
-		add("clickhouse result.version %q does not match pins.clickhouse_version %q", result.Version, manifest.Pins.ClickHouseVersion)
+		add("clickhouse result[%d].version %q does not match pins.clickhouse_version %q", attemptIndex, result.Version, manifest.Pins.ClickHouseVersion)
 	}
 	if result.RequestedRows != manifest.Pins.Dataset.Rows {
-		add("clickhouse result.requested_rows %d does not match pinned rows %d", result.RequestedRows, manifest.Pins.Dataset.Rows)
+		add("clickhouse result[%d].requested_rows %d does not match pinned rows %d", attemptIndex, result.RequestedRows, manifest.Pins.Dataset.Rows)
 	}
 	if result.DatasetSize != manifest.Pins.Dataset.Rows {
-		add("clickhouse result.dataset_size %d does not match pinned rows %d", result.DatasetSize, manifest.Pins.Dataset.Rows)
+		add("clickhouse result[%d].dataset_size %d does not match pinned rows %d", attemptIndex, result.DatasetSize, manifest.Pins.Dataset.Rows)
 	}
 	if result.NumLoadedDocuments != manifest.Pins.Dataset.Rows {
-		add("clickhouse result.num_loaded_documents %d does not match pinned rows %d", result.NumLoadedDocuments, manifest.Pins.Dataset.Rows)
+		add("clickhouse result[%d].num_loaded_documents %d does not match pinned rows %d", attemptIndex, result.NumLoadedDocuments, manifest.Pins.Dataset.Rows)
 	}
 	if len(result.Result) != len(manifest.Comparison.QueryOrder) {
-		add("clickhouse result has %d query lanes, want %d", len(result.Result), len(manifest.Comparison.QueryOrder))
+		add("clickhouse result[%d] has %d query lanes, want %d", attemptIndex, len(result.Result), len(manifest.Comparison.QueryOrder))
 	}
 	for index, attempts := range result.Result {
-		if len(attempts) < manifest.Comparison.Attempts {
+		if len(attempts) != 1 {
 			query := fmt.Sprintf("lane[%d]", index)
 			if index < len(manifest.Comparison.QueryOrder) {
 				query = manifest.Comparison.QueryOrder[index]
 			}
-			add("clickhouse result %s has %d attempts, want at least %d", query, len(attempts), manifest.Comparison.Attempts)
+			add("clickhouse result[%d] %s has %d timings, want exactly 1 from an independent one-shot run", attemptIndex, query, len(attempts))
 		}
 		for _, seconds := range attempts {
 			if seconds <= 0 {
-				add("clickhouse result lane[%d] timings must be positive", index)
+				add("clickhouse result[%d] lane[%d] timings must be positive", attemptIndex, index)
 				break
 			}
 		}

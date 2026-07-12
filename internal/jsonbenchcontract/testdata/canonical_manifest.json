@@ -17,14 +17,26 @@
   "artifact_root": ".",
   "treedb": {
     "requested_profile": "durable",
-    "result_path": "smoke_result.json",
+    "result_paths": [
+      "smoke_result.json",
+      "smoke_result_2.json",
+      "smoke_result_3.json",
+      "smoke_result_4.json",
+      "smoke_result_5.json"
+    ],
     "row_selector": {
       "storage_layout": "column-store-full-prepared",
       "projection": "full"
     }
   },
   "clickhouse": {
-    "result_path": "clickhouse_result.json"
+    "result_paths": [
+      "clickhouse_result.json",
+      "clickhouse_result_2.json",
+      "clickhouse_result_3.json",
+      "clickhouse_result_4.json",
+      "clickhouse_result_5.json"
+    ]
   },
   "comparison": {
     "query_mode": "one_shot_end_to_end",
