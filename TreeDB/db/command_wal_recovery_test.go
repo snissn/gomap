@@ -1591,6 +1591,61 @@ func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 	}
 }
 
+func TestCommandWALLaterDurableMissingRIDWinsOverRelaxedRepairBoundary(t *testing.T) {
+	for _, readOnly := range []bool{false, true} {
+		name := "writable"
+		if readOnly {
+			name = "read-only"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			if got := db.State().AppliedCommandLSN; got != 0 {
+				t.Fatalf("bootstrap AppliedCommandLSN=%d, want 0", got)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("Close bootstrap db: %v", err)
+			}
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("relaxed"), RID: 99}})
+			writeCommandWALRawKVFrameForLaneAndDurability(t, dir, 0, 2, 2, commitlog.CommandDurabilityDurable, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("durable"), RID: 100}})
+			paths := []string{
+				filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1)),
+				filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2)),
+			}
+			before := make([][]byte, len(paths))
+			for i, path := range paths {
+				var err error
+				before[i], err = os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("ReadFile before open: %v", err)
+				}
+			}
+			var err error
+			if readOnly {
+				_, err = openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
+			} else {
+				_, err = Open(Options{Dir: dir})
+			}
+			if !errors.Is(err, ErrCommandWALMissingValueLogRID) {
+				t.Fatalf("Open error=%v, want ErrCommandWALMissingValueLogRID", err)
+			}
+			if !strings.Contains(err.Error(), "lsn=2 rid=100") {
+				t.Fatalf("Open error=%v, want deterministic later durable diagnostic", err)
+			}
+			for i, path := range paths {
+				after, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Fatalf("ReadFile after open: %v", readErr)
+				}
+				if !bytes.Equal(after, before[i]) {
+					t.Fatalf("Open mutated command WAL segment %s", filepath.Base(path))
+				}
+			}
+		})
+	}
+}
+
 func TestCommandWALV1OpenReturnsPublicRebuildRequired(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

@@ -154,11 +154,35 @@ func (s Scenario) Validate() error {
 	}
 	frames := append([]CommandFrame(nil), s.CommandFrames...)
 	sort.Slice(frames, func(i, j int) bool { return frames[i].LSN < frames[j].LSN })
+	baseAppliedLSN := uint64(0)
+	if selected := s.selectedGeneration(); selected != nil {
+		baseAppliedLSN = selected.AppliedLSN
+	} else if newest != nil {
+		baseAppliedLSN = newest.AppliedLSN
+	}
+	firstIncompleteLSN := uint64(0)
+	expectedLSN := baseAppliedLSN + 1
 	for i, frame := range frames {
+		if frame.LSN <= baseAppliedLSN {
+			if frame.Discarded {
+				return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("discarded-frame-at-or-below-base lsn=%d base=%d cut=%s", frame.LSN, baseAppliedLSN, s.Cut)}
+			}
+			continue
+		}
+		if firstIncompleteLSN == 0 && frame.LSN != expectedLSN {
+			firstIncompleteLSN = expectedLSN
+		}
+		missing := missingResources(frame.Dependencies)
+		if firstIncompleteLSN == 0 && (!frame.ChecksumValid || len(missing) != 0) {
+			firstIncompleteLSN = frame.LSN
+		}
+		expectedLSN = frame.LSN + 1
 		if !frame.Discarded {
 			continue
 		}
-		missing := missingResources(frame.Dependencies)
+		if firstIncompleteLSN != frame.LSN {
+			return Violation{Invariant: InvariantCommandReplayHole, Detail: fmt.Sprintf("discarded-suffix-start=%d first-incomplete=%d cut=%s", frame.LSN, firstIncompleteLSN, s.Cut)}
+		}
 		missingValueLog := false
 		for _, dependency := range frame.Dependencies {
 			if dependency.Kind == ResourceValueLog && (!dependency.Stable || !dependency.Live) {
@@ -177,13 +201,7 @@ func (s Scenario) Validate() error {
 		frames = frames[:i]
 		break
 	}
-	baseAppliedLSN := uint64(0)
-	if selected := s.selectedGeneration(); selected != nil {
-		baseAppliedLSN = selected.AppliedLSN
-	} else if newest != nil {
-		baseAppliedLSN = newest.AppliedLSN
-	}
-	expectedLSN := baseAppliedLSN + 1
+	expectedLSN = baseAppliedLSN + 1
 	contiguousAppliedLSN := baseAppliedLSN
 	holeSeen := false
 	for _, frame := range frames {

@@ -2183,8 +2183,8 @@ func TestPublicCommandWALReadOnlyRecoveryErrorExposesDiagnostic(t *testing.T) {
 	if !errors.Is(err, ErrRecoveryRequired) || !errors.As(err, &recoveryErr) {
 		t.Fatalf("Open read-only error=%v, want public typed ErrRecoveryRequired", err)
 	}
-	if got := recoveryErr.Diagnostic; got.FirstDiscardedLSN != 1 || got.MissingRIDCount != 1 || got.DurabilityClass != 2 {
-		t.Fatalf("recovery diagnostic=%+v, want lsn=1 missing_rids=1 durability_class=2", got)
+	if got := recoveryErr.Diagnostic; got.FirstDiscardedLSN != 1 || got.MissingRIDCount != 1 || got.DurabilityClass != uint16(commitlog.CommandDurabilityRelaxed) {
+		t.Fatalf("recovery diagnostic=%+v, want lsn=1 missing_rids=1 durability_class=%d", got, commitlog.CommandDurabilityRelaxed)
 	}
 }
 

@@ -295,7 +295,7 @@ directory.
 V2 supports only commands that are already exposed and can be made
 replayable without adding query-wide mutation semantics.
 
-| Surface | Current user-facing shape | V1 WAL command | Status policy |
+| Surface | Current user-facing shape | V2 command-WAL command | Status policy |
 |---|---|---|---|
 | Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
 | Raw KV conditional transaction | target optimistic point-read transaction API | `RawKVBatch` with preconditions or a future `RawKVConditionalBatch` if payload extension is required | `future`; must reject before LSN assignment until point-read preconditions, entry revisions, and replay result assertions are implemented together. |

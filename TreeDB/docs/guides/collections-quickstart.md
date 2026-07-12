@@ -307,7 +307,7 @@ go test -run '^$' \
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| `column-store writes require command WAL` | The DB format config did not require command-WAL v1. | For current typed-storage examples, call `backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}})` before opening a new DB directory. |
+| `column-store writes require command WAL` | The DB format config did not require command-WAL v2. | For current typed-storage examples, call `backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV2}})` before opening a new DB directory. |
 | Aggregate returns unsupported/fail-closed | Field is not a non-nullable int64 `typed_column_part`, metadata is stale/corrupt, or a currently unsupported nullable path was requested. | Check `ColumnStoreColumn.Owner`, `ValueType`, and `Nullable`; do not silently fall back to document reconstruction when a direct typed-column path must fail closed. |
 | Reopened DB misses recent collection writes | The example did not flush/checkpoint before close, or durability mode differs. | Use `CollectionManager.FlushAll()` and `DB.Checkpoint()` in examples where durability matters. |
 | Benchmark looks slower than expected | Setup/open/checksum/metadata work may be included, row counts may be tiny, or the shape may not prune. | Separate setup from timed query loops; use stable row counts/seeds; inspect `mapped_bytes/op`, `decoded_bytes/op`, `blocks_pruned/op`, and allocation counters. |

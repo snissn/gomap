@@ -531,6 +531,8 @@ func classifyCommandWALReplayFrames(frames []commandWALReplayFrame, segments []l
 			return
 		}
 	}
+	firstRelaxedMissing := -1
+	var firstRelaxedMissingRIDs map[uint64]struct{}
 	for i, frame := range frames {
 		missing := make(map[uint64]struct{})
 		if frame.env.Kind == commitlog.CommandKindRawKVBatch {
@@ -551,16 +553,29 @@ func classifyCommandWALReplayFrames(frames []commandWALReplayFrame, segments []l
 			continue
 		}
 		if frame.env.DurabilityClass == commitlog.CommandDurabilityDurable {
+			var firstMissingRID uint64
+			first := true
 			for rid := range missing {
-				err = fmt.Errorf("%w: lsn=%d rid=%d", ErrCommandWALMissingValueLogRID, frame.env.LSN, rid)
-				return
+				if first || rid < firstMissingRID {
+					firstMissingRID = rid
+					first = false
+				}
 			}
+			err = fmt.Errorf("%w: lsn=%d rid=%d", ErrCommandWALMissingValueLogRID, frame.env.LSN, firstMissingRID)
+			return
 		}
-		complete = frames[:i]
-		tail = frames[i:]
+		if firstRelaxedMissing < 0 {
+			firstRelaxedMissing = i
+			firstRelaxedMissingRIDs = missing
+		}
+	}
+	if firstRelaxedMissing >= 0 {
+		frame := frames[firstRelaxedMissing]
+		complete = frames[:firstRelaxedMissing]
+		tail = frames[firstRelaxedMissing:]
 		diagnostic = CommandWALRecoveryDiagnostic{
 			FirstDiscardedLSN:   frame.env.LSN,
-			MissingRIDCount:     uint64(len(missing)),
+			MissingRIDCount:     uint64(len(firstRelaxedMissingRIDs)),
 			SourceSegment:       filepath.Base(frame.segment.path),
 			DurabilityClass:     uint16(frame.env.DurabilityClass),
 			DiscardedFrameCount: uint64(len(tail)),

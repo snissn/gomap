@@ -106,6 +106,118 @@ func TestCommandWALV2RejectsZeroDurabilityClass(t *testing.T) {
 	}
 }
 
+func TestCommandWALFastEncodersRejectInvalidDurabilityClass(t *testing.T) {
+	for _, class := range []CommandDurabilityClass{0, 99} {
+		t.Run(fmt.Sprintf("class-%d", class), func(t *testing.T) {
+			if _, err := encodeRawKVSingleCommandFrameTo(nil, 1, 0, RawKVOperation{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}, class); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("single encoder error=%v, want ErrCorrupt", err)
+			}
+			if _, err := encodeTrustedRawKVPointCommandFrameWithRevisionTo(nil, 1, 0, RawKVOpSet, []byte("k"), []byte("v"), 7, class); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("point encoder error=%v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+func TestEncodeCommandFrameDoesNotAliasCallerPreconditions(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("k"), RID: 7}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	backing := make([]CommandExtension, 1)
+	preconditions := backing[:0]
+	if _, err := EncodeCommandFrame(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+		Preconditions:   preconditions,
+	}); err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+	if backing[0].Type != 0 || backing[0].Payload != nil {
+		t.Fatalf("caller precondition backing mutated: %+v", backing[0])
+	}
+
+	backing = make([]CommandExtension, 2)
+	backing[0] = CommandExtension{Type: 99, Payload: []byte("caller")}
+	preconditions = backing[:1]
+	if _, err := EncodeCommandFrame(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             2,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+		Preconditions:   preconditions,
+	}); err != nil {
+		t.Fatalf("EncodeCommandFrame with existing precondition: %v", err)
+	}
+	if backing[0].Type != 99 || !bytes.Equal(backing[0].Payload, []byte("caller")) || backing[1].Type != 0 || backing[1].Payload != nil {
+		t.Fatalf("caller precondition backing mutated: %+v", backing)
+	}
+}
+
+func TestWriterDirectCommandFamiliesRejectInvalidDurabilityBeforeMutation(t *testing.T) {
+	ops := []RawKVOperation{{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}}
+	payload, err := EncodeRawKVBatchPayload(ops)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	scan := rawKVOperationSliceScanner(ops)
+	plan, err := PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
+	}
+	tests := []struct {
+		name   string
+		append func(*Writer, CommandDurabilityClass) error
+	}{
+		{name: "single", append: func(w *Writer, class CommandDurabilityClass) error {
+			return w.AppendRawKVSingleCommandDirect(1, 0, ops[0], class)
+		}},
+		{name: "point", append: func(w *Writer, class CommandDurabilityClass) error {
+			return w.AppendRawKVPointCommandDirectTrusted(1, 0, RawKVOpSet, []byte("k"), []byte("v"), class)
+		}},
+		{name: "batch", append: func(w *Writer, class CommandDurabilityClass) error {
+			return w.AppendRawKVBatchPayloadCommandDirect(1, 0, payload, class)
+		}},
+		{name: "batch-trusted", append: func(w *Writer, class CommandDurabilityClass) error {
+			return w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload, class)
+		}},
+		{name: "batch-scan", append: func(w *Writer, class CommandDurabilityClass) error {
+			return w.AppendRawKVBatchPayloadScanCommandDirectTrusted(1, 0, plan, scan, class)
+		}},
+		{name: "generic", append: func(w *Writer, class CommandDurabilityClass) error {
+			return w.AppendCommandPayloadDirectTrusted(1, 0, CommandKindCatalogCreateCollection, CommandScopeCatalog, PayloadFormatCatalogCreateCollectionV1, nil, class)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+			w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+			if err != nil {
+				t.Fatalf("NewWriterWithOptions: %v", err)
+			}
+			defer w.Close()
+			for _, class := range []CommandDurabilityClass{0, 99} {
+				beforeSize, beforeBuffered := w.Size(), len(w.commandBuf)
+				if err := test.append(w, class); !errors.Is(err, ErrCorrupt) {
+					t.Fatalf("class %d error=%v, want ErrCorrupt", class, err)
+				}
+				if w.Size() != beforeSize || len(w.commandBuf) != beforeBuffered {
+					t.Fatalf("class %d mutated writer size/buffer: (%d,%d) -> (%d,%d)", class, beforeSize, beforeBuffered, w.Size(), len(w.commandBuf))
+				}
+			}
+			if err := test.append(w, CommandDurabilityRelaxed); err != nil {
+				t.Fatalf("valid append after invalid classes: %v", err)
+			}
+		})
+	}
+}
+
 func TestCommandWALV2SetRIDCanonicalFence(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSetRID, Key: []byte("a"), RID: 9},
@@ -772,6 +884,9 @@ func TestCommandWALFormatGoldenV2CatalogCreateCollection(t *testing.T) {
 	}
 	if got.Kind != CommandKindCatalogCreateCollection || got.Scope != CommandScopeCatalog || got.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
 		t.Fatalf("decoded catalog create mismatch: %+v", got)
+	}
+	if got.DurabilityClass != CommandDurabilityRelaxed || len(got.Preconditions) != 0 || len(got.ExternalRefs) != 0 || len(got.ResultAssertions) != 0 {
+		t.Fatalf("decoded catalog create V2 fields mismatch: %+v", got)
 	}
 	decoded, err := DecodeCatalogCreateCollectionPayload(got.Payload)
 	if err != nil {

@@ -1900,7 +1900,7 @@ func prepareCommandEnvelope(env *CommandEnvelope) error {
 	}
 	if len(env.Preconditions) == 0 {
 		if fence.Present() {
-			env.Preconditions = append(env.Preconditions, encodeExternalRefFenceV1(fence))
+			env.Preconditions = append([]CommandExtension(nil), encodeExternalRefFenceV1(fence))
 		}
 		return nil
 	}
@@ -1918,12 +1918,15 @@ func prepareCommandEnvelope(env *CommandEnvelope) error {
 		return ErrCorrupt
 	}
 	if fence.Present() && fenceCount == 0 {
-		env.Preconditions = append(env.Preconditions, encodeExternalRefFenceV1(fence))
+		env.Preconditions = append(append([]CommandExtension(nil), env.Preconditions...), encodeExternalRefFenceV1(fence))
 	}
 	return nil
 }
 
 func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOperation, class CommandDurabilityClass) ([]byte, error) {
+	if !validCommandDurabilityClass(class) {
+		return nil, ErrCorrupt
+	}
 	if lsn == 0 {
 		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
@@ -2009,6 +2012,9 @@ func encodeTrustedRawKVPointCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint6
 }
 
 func encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, class CommandDurabilityClass) ([]byte, error) {
+	if !validCommandDurabilityClass(class) {
+		return nil, ErrCorrupt
+	}
 	if lsn == 0 {
 		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}

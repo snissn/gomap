@@ -970,6 +970,9 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 }
 
 func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		valueLen = 8
@@ -1019,6 +1022,9 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 // AppendRawKVPointCommandDirectTrusted appends a public point Set/Delete command
 // whose key/value have already passed the public cached preflight.
 func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	if err := w.commandBufferError(); err != nil {
 		return err
 	}
@@ -1040,6 +1046,9 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 }
 
 func (w *Writer) appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, size int, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	if w.pendingBatchRecs != 0 {
 		if err := w.flushPendingBatch(); err != nil {
 			return err
@@ -1075,6 +1084,9 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, base
 }
 
 func (w *Writer) AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	if err := validateRawKVBatchPayload(payload); err != nil {
 		return err
 	}
@@ -1085,6 +1097,9 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 // payload that the caller has already validated or constructed through the
 // RawKVBatchPayloadBuilder.
 func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN uint64, payload []byte, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	if err := w.commandBufferError(); err != nil {
 		return err
 	}
@@ -1136,6 +1151,9 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 // from a replayable operation scanner without materializing the canonical
 // payload slice first.
 func (w *Writer) AppendRawKVBatchPayloadScanCommandDirectTrusted(lsn, baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	if err := w.commandBufferError(); err != nil {
 		return err
 	}
@@ -1192,6 +1210,9 @@ func (w *Writer) AppendRawKVBatchPayloadScanCommandDirectTrusted(lsn, baseApplie
 // AppendCommandPayloadDirectTrusted appends a canonical command payload whose
 // bytes were constructed by the matching payload encoder.
 func (w *Writer) AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, kind CommandKind, scope CommandScope, format PayloadFormat, payload []byte, class CommandDurabilityClass) error {
+	if !validCommandDurabilityClass(class) {
+		return ErrCorrupt
+	}
 	if err := w.commandBufferError(); err != nil {
 		return err
 	}

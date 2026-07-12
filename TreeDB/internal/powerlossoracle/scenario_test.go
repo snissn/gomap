@@ -159,6 +159,51 @@ func TestValidateAllowsRepairedRelaxedIncompleteSuffix(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsRepairBoundaryAfterEarlierIncompleteFrame(t *testing.T) {
+	missingRID := []Resource{{Kind: ResourceValueLog, ID: "rid/missing", Live: true}}
+	for _, test := range []struct {
+		name   string
+		frames []CommandFrame
+	}{
+		{
+			name: "missing-dependency",
+			frames: []CommandFrame{
+				{LSN: 2, ChecksumValid: true, DurabilityClass: 2, Dependencies: missingRID},
+				{LSN: 3, ChecksumValid: true, DurabilityClass: 2, Discarded: true, Dependencies: missingRID},
+			},
+		},
+		{
+			name: "lsn-gap",
+			frames: []CommandFrame{
+				{LSN: 3, ChecksumValid: true, DurabilityClass: 2, Discarded: true, Dependencies: missingRID},
+			},
+		},
+		{
+			name: "checksum-invalid",
+			frames: []CommandFrame{
+				{LSN: 2, DurabilityClass: 2},
+				{LSN: 3, ChecksumValid: true, DurabilityClass: 2, Discarded: true, Dependencies: missingRID},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			scenario := Scenario{
+				Cut:                  AfterUserspaceFlush,
+				Generations:          []Generation{completeGeneration(1, 1)},
+				LatestSealedSequence: 1,
+				SelectedSequence:     1,
+				OpenedSequence:       1,
+				OpenedAppliedLSN:     1,
+				ReopenAttempted:      true,
+				CommandFrames:        test.frames,
+			}
+			if err := RequireViolation(scenario.Validate(), InvariantCommandReplayHole); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsDiscardedDurableMissingRID(t *testing.T) {
 	scenario := Scenario{
 		Cut:                  AfterDependencyFileSync,
