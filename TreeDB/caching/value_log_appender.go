@@ -67,12 +67,7 @@ func (a *cachingValueLogAppender) appendValues(
 			Value: values[i],
 		}
 	}
-	var tokens []*rootpublication.StableResourceToken
-	releaseTokens := func() {
-		for _, token := range tokens {
-			_ = token.Release()
-		}
-	}
+	var collector stableResourceTokenCollector
 	var capture valueLogAppendCapture
 	if captureStable {
 		capture = func(segmentPtrs []page.ValuePtr) error {
@@ -84,23 +79,22 @@ func (a *cachingValueLogAppender) appendValues(
 			if captureErr != nil {
 				return captureErr
 			}
-			tokens = append(tokens, token)
-			return nil
+			return collector.add(token)
 		}
 	}
 	ptrs, err := a.db.appendValueLogForRecordsWithCapture(a.lane, records, journalDurabilityNone, capture)
 	if err != nil {
-		releaseTokens()
+		collector.release()
 		return nil, nil, err
 	}
 	if err := a.emitDependencyAppend(ptrs); err != nil {
 		putValueLogPtrs(ptrs)
-		releaseTokens()
+		collector.release()
 		return nil, nil, err
 	}
 	if len(ptrs) != len(values) {
 		putValueLogPtrs(ptrs)
-		releaseTokens()
+		collector.release()
 		return nil, nil, fmt.Errorf("cachingdb: value-log appender returned %d ptrs for %d values", len(ptrs), len(values))
 	}
 	out := append([]page.ValuePtr(nil), ptrs...)
@@ -108,9 +102,9 @@ func (a *cachingValueLogAppender) appendValues(
 	if !captureStable {
 		return out, nil, nil
 	}
-	set, err := rootpublication.NewStableResourceSet(tokens...)
+	set, err := rootpublication.NewStableResourceSet(collector.tokens...)
 	if err != nil {
-		releaseTokens()
+		collector.release()
 		return nil, nil, err
 	}
 	return out, set, nil

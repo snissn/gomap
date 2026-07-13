@@ -19,6 +19,53 @@ type stableResourceValueWriter interface {
 	Flush() error
 }
 
+type stableCapturedResourceKey struct {
+	kind       rootpublication.ResourceKind
+	identity   rootpublication.StableIdentity
+	generation uint64
+}
+
+// stableResourceTokenCollector keeps only the greatest captured frontier for
+// one mutable segment. A prefix token remains live until its replacement has
+// been captured, so a cooperative lane unlock never creates an unpinned gap.
+type stableResourceTokenCollector struct {
+	tokens []*rootpublication.StableResourceToken
+	byKey  map[stableCapturedResourceKey]int
+}
+
+func (c *stableResourceTokenCollector) add(token *rootpublication.StableResourceToken) error {
+	if token == nil {
+		return fmt.Errorf("%w: nil stable resource token", rootpublication.ErrInvalidStableResource)
+	}
+	key := stableCapturedResourceKey{
+		kind:       token.Kind(),
+		identity:   token.Identity(),
+		generation: token.Generation(),
+	}
+	if c.byKey == nil {
+		c.byKey = make(map[stableCapturedResourceKey]int)
+	}
+	if idx, ok := c.byKey[key]; ok {
+		previous := c.tokens[idx]
+		if previous.RequiredFrontier() >= token.RequiredFrontier() {
+			return token.Release()
+		}
+		c.tokens[idx] = token
+		return previous.Release()
+	}
+	c.byKey[key] = len(c.tokens)
+	c.tokens = append(c.tokens, token)
+	return nil
+}
+
+func (c *stableResourceTokenCollector) release() {
+	for _, token := range c.tokens {
+		_ = token.Release()
+	}
+	c.tokens = nil
+	c.byKey = nil
+}
+
 // RegisterStableValueLogSegment captures the exact writer descriptor and the
 // complete record end of ptrs while the lane rotation lock is held. It fails
 // closed if the producer has already rotated away from the referenced file.

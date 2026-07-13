@@ -344,6 +344,75 @@ func TestStableValueLogRegistrationRetainsExactWriterAcrossRotation(t *testing.T
 	}
 }
 
+func TestStableResourceTokenCollectorCoalescesGreatestFrontier(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(4, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, valueLogName(4, 1))
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	first, err := writer.Append(0, nil, 1, []byte("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := writer.Append(0, nil, 2, []byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	db := &DB{dir: dir, stableResourcePins: registry}
+	lane := &lane{id: 4, vlog: writer, vlogPath: path, vlogSeq: 1}
+	appender := &cachingValueLogAppender{db: db, lane: lane}
+	var collector stableResourceTokenCollector
+	firstToken, err := appender.RegisterStableValueLogSegment(
+		[]page.ValuePtr{first},
+		rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.value_ptr"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := firstToken.Identity()
+	if err := collector.add(firstToken); err != nil {
+		t.Fatal(err)
+	}
+	secondToken, err := appender.RegisterStableValueLogSegment(
+		[]page.ValuePtr{first, second},
+		rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.value_ptr"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.PinCount(identity); got != 2 {
+		t.Fatalf("pin count before coalescing = %d, want 2", got)
+	}
+	if err := collector.add(secondToken); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.PinCount(identity); got != 1 {
+		t.Fatalf("pin count after coalescing = %d, want 1", got)
+	}
+	set, err := rootpublication.NewStableResourceSet(collector.tokens...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := set.Tokens()
+	wantFrontier := second.Offset + uint64(page.ValuePtrRecordLength(second))
+	if len(tokens) != 1 || tokens[0].RequiredFrontier() != wantFrontier {
+		t.Fatalf("coalesced tokens = %+v, want frontier %d", tokens, wantFrontier)
+	}
+	if err := set.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.PinCount(identity); got != 0 {
+		t.Fatalf("pin count after release = %d, want 0", got)
+	}
+}
+
 func TestStableOuterLeafRegistrationUsesExactLogRecordFrontier(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID, 7)

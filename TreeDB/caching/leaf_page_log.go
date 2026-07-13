@@ -287,12 +287,7 @@ func (l *cachingLeafPageLog) appendLeafPages(
 	}
 	observeEncode()
 
-	var tokens []*rootpublication.StableResourceToken
-	releaseTokens := func() {
-		for _, token := range tokens {
-			_ = token.Release()
-		}
-	}
+	var collector stableResourceTokenCollector
 	var capture valueLogAppendCapture
 	if captureStable {
 		capture = func(segmentPtrs []page.ValuePtr) error {
@@ -304,26 +299,25 @@ func (l *cachingLeafPageLog) appendLeafPages(
 			if captureErr != nil {
 				return captureErr
 			}
-			tokens = append(tokens, token)
-			return nil
+			return collector.add(token)
 		}
 	}
 	valuePtrs, err := l.db.appendValueLogWithCapture(l.lane, 0, nil, records, journalDurabilityNone, capture)
 	if err != nil {
 		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
-		releaseTokens()
+		collector.release()
 		return nil, nil, err
 	}
 	defer putValueLogPtrs(valuePtrs)
 	if len(valuePtrs) != len(leafPages) {
-		releaseTokens()
+		collector.release()
 		return nil, nil, fmt.Errorf("cachingdb: leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
 	}
 	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
 	for i, ptr := range valuePtrs {
 		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 		if convErr != nil {
-			releaseTokens()
+			collector.release()
 			return nil, nil, convErr
 		}
 		leafPtrs[i] = leafPtr
@@ -332,9 +326,9 @@ func (l *cachingLeafPageLog) appendLeafPages(
 	if !captureStable {
 		return leafPtrs, nil, nil
 	}
-	set, err := rootpublication.NewStableResourceSet(tokens...)
+	set, err := rootpublication.NewStableResourceSet(collector.tokens...)
 	if err != nil {
-		releaseTokens()
+		collector.release()
 		return nil, nil, err
 	}
 	return leafPtrs, set, nil
