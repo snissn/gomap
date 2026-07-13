@@ -1,7 +1,9 @@
 package typedcolumn
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -19,9 +21,11 @@ const (
 // across base and delta parts. It deliberately excludes collection manifest,
 // WAL, recovery, and asset publication references.
 type PartRef struct {
-	Role         PartRole
-	GenerationID uint64
-	Part         *ColumnPart
+	Role          PartRole
+	GenerationID  uint64
+	Part          *ColumnPart
+	PrimaryIDMode QueryReadyPrimaryIDMode
+	PrimaryIDBase int64
 }
 
 // Tombstone removes a primary ID at or below the tombstone generation.
@@ -91,6 +95,9 @@ func NewPartSetReader(refs []PartRef, tombstones []Tombstone) (*PartSetReader, e
 		default:
 			return nil, fmt.Errorf("typedcolumn: unsupported part set role %q", ref.Role)
 		}
+		if err := validateQueryReadyPrimaryIDMetadata(ref.PrimaryIDMode, ref.PrimaryIDBase, int64(ref.Part.Descriptor.RowCount)); err != nil {
+			return nil, fmt.Errorf("typedcolumn: part set part[%d] primary IDs: %w", i, err)
+		}
 		reader.parts = append(reader.parts, partSetLoadedPart{
 			Ref:     ref,
 			Part:    ref.Part,
@@ -100,6 +107,57 @@ func NewPartSetReader(refs []PartRef, tombstones []Tombstone) (*PartSetReader, e
 	if err := reader.buildVisibility(tombstones); err != nil {
 		return nil, err
 	}
+	return reader, nil
+}
+
+// newDenseDisjointScanPartSetReader prepares the production insert-only scan
+// shape without decoding row locators or constructing an O(rows) latest-row
+// map. Every part must declare a non-overlapping dense part-local logical-ID
+// range, be a base part, and have no tombstones. The returned reader is for
+// whole-part encoded scans only; point lookup continues to use NewPartSetReader.
+func newDenseDisjointScanPartSetReader(refs []PartRef) (*PartSetReader, error) {
+	reader := &PartSetReader{
+		latest:         make(map[int64]partSetRowRef),
+		visibleRows:    make(map[int]map[int]struct{}),
+		tombstoneByID:  make(map[int64]uint64),
+		visibleRowList: make([]partSetVisibleRows, len(refs)),
+	}
+	type logicalRange struct {
+		base  int64
+		limit int64
+		part  int
+	}
+	ranges := make([]logicalRange, 0, len(refs))
+	stats := PartSetVisibilityStats{Parts: len(refs), BaseParts: len(refs)}
+	for i, ref := range refs {
+		if ref.Part == nil {
+			return nil, fmt.Errorf("typedcolumn: nil dense scan part at index %d", i)
+		}
+		if ref.Role != PartRoleBase || ref.PrimaryIDMode != QueryReadyPrimaryIDDensePartLocal {
+			return nil, fmt.Errorf("typedcolumn: dense scan part[%d] role/mode=%q/%d want base/dense-part-local", i, ref.Role, ref.PrimaryIDMode)
+		}
+		rows := ref.Part.Descriptor.RowCount
+		if err := validateQueryReadyPrimaryIDMetadata(ref.PrimaryIDMode, ref.PrimaryIDBase, int64(rows)); err != nil {
+			return nil, fmt.Errorf("typedcolumn: dense scan part[%d] primary IDs: %w", i, err)
+		}
+		reader.parts = append(reader.parts, partSetLoadedPart{Ref: ref, Part: ref.Part, Ordinal: i})
+		reader.visibleRowList[i] = partSetVisibleRows{All: true}
+		stats.InputRows += rows
+		stats.VisibleRows += rows
+		ranges = append(ranges, logicalRange{base: ref.PrimaryIDBase, limit: ref.PrimaryIDBase + int64(rows), part: i})
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].base != ranges[j].base {
+			return ranges[i].base < ranges[j].base
+		}
+		return ranges[i].part < ranges[j].part
+	})
+	for i := 1; i < len(ranges); i++ {
+		if ranges[i].base < ranges[i-1].limit {
+			return nil, fmt.Errorf("typedcolumn: dense scan logical ranges overlap for parts %d and %d", ranges[i-1].part, ranges[i].part)
+		}
+	}
+	reader.visibilityStat = stats
 	return reader, nil
 }
 
@@ -210,12 +268,16 @@ func (r *PartSetReader) buildVisibility(tombstones []Tombstone) error {
 		if err := validateDecodedRowLocators(loaded.Part.Descriptor, loaded.Part.Descriptor.PartID, loaded.Part.Locators); err != nil {
 			return fmt.Errorf("typedcolumn: part set part %d locators: %w", loaded.Part.Descriptor.PartID, err)
 		}
-		for primaryID, locator := range loaded.Part.Locators {
+		for encodedPrimaryID, locator := range loaded.Part.Locators {
 			if locator.PartID != loaded.Part.Descriptor.PartID {
 				return fmt.Errorf("typedcolumn: part set locator part=%d want %d", locator.PartID, loaded.Part.Descriptor.PartID)
 			}
 			if locator.PartRow < 0 || locator.PartRow >= loaded.Part.Descriptor.RowCount {
 				return fmt.Errorf("typedcolumn: part set locator row=%d outside part %d rows=%d", locator.PartRow, loaded.Part.Descriptor.PartID, loaded.Part.Descriptor.RowCount)
+			}
+			primaryID, err := loaded.logicalPrimaryID(encodedPrimaryID)
+			if err != nil {
+				return fmt.Errorf("typedcolumn: part set part %d primary ID %d: %w", loaded.Part.Descriptor.PartID, encodedPrimaryID, err)
 			}
 			row := partSetRowRef{
 				PrimaryID:    primaryID,
@@ -278,7 +340,11 @@ func (r *PartSetReader) scanLatestRowRef(primaryID int64) (partSetRowRef, bool) 
 	var found bool
 	tombstoneGeneration, tombstoned := r.tombstoneByID[primaryID]
 	for partIndex, loaded := range r.parts {
-		locator, ok := loaded.Part.LocatePrimaryID(primaryID)
+		encodedPrimaryID, ok := loaded.encodedPrimaryID(primaryID)
+		if !ok {
+			continue
+		}
+		locator, ok := loaded.Part.LocatePrimaryID(encodedPrimaryID)
 		if !ok {
 			continue
 		}
@@ -299,6 +365,38 @@ func (r *PartSetReader) scanLatestRowRef(primaryID int64) (partSetRowRef, bool) 
 		}
 	}
 	return best, found
+}
+
+func (p partSetLoadedPart) logicalPrimaryID(encoded int64) (int64, error) {
+	switch p.Ref.PrimaryIDMode {
+	case QueryReadyPrimaryIDPreserve:
+		return encoded, nil
+	case QueryReadyPrimaryIDDensePartLocal:
+		if encoded < 0 || encoded >= int64(p.Part.Descriptor.RowCount) {
+			return 0, fmt.Errorf("dense part-local ID outside [0,%d)", p.Part.Descriptor.RowCount)
+		}
+		if p.Ref.PrimaryIDBase > math.MaxInt64-encoded {
+			return 0, errors.New("dense part-local ID translation overflows int64")
+		}
+		return p.Ref.PrimaryIDBase + encoded, nil
+	default:
+		return 0, fmt.Errorf("unsupported primary ID mode %d", p.Ref.PrimaryIDMode)
+	}
+}
+
+func (p partSetLoadedPart) encodedPrimaryID(logical int64) (int64, bool) {
+	switch p.Ref.PrimaryIDMode {
+	case QueryReadyPrimaryIDPreserve:
+		return logical, true
+	case QueryReadyPrimaryIDDensePartLocal:
+		if logical < p.Ref.PrimaryIDBase {
+			return 0, false
+		}
+		encoded := logical - p.Ref.PrimaryIDBase
+		return encoded, encoded >= 0 && encoded < int64(p.Part.Descriptor.RowCount)
+	default:
+		return 0, false
+	}
 }
 
 func (r *PartSetReader) valueAtRowRef(ref partSetRowRef, columnName string) (int64, error) {

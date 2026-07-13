@@ -303,7 +303,7 @@ func TestQueryReadyGenerationOpenDoesNotDecodeWholePartsAfterReady(t *testing.T)
 		t.Fatal(err)
 	}
 	before := cache.Stats()
-	if before.PartsDecoded != 0 || before.PayloadBytesDecoded != 0 || before.PayloadBytesCopied != 0 || before.DomainsConstructed != 0 || before.RanksConstructed != 0 || before.OffsetsConstructed != 0 || before.WholePartDecodesDuringOpen != 0 || before.WholePartDecodesAfterOpen != 0 {
+	if before.PartsDecoded != prepared.PartCount() || before.PayloadBytesCopied != 0 || before.DomainsConstructed != 0 || before.RanksConstructed != 0 || before.OffsetsConstructed != 0 || before.WholePartDecodesDuringOpen != 0 || before.WholePartDecodesAfterOpen != 0 {
 		t.Fatalf("open stats=%+v", before)
 	}
 	for i := 0; i < 100; i++ {

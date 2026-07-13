@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"slices"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -75,9 +76,27 @@ type collectionQueryReadyGenerationCacheSnapshot struct {
 
 type collectionQueryReadyGenerationCacheEntry struct {
 	identity ColumnStoreCacheIdentity
+	files    typedcolumn.QueryReadyGenerationOpenFiles
 	cache    *typedcolumn.QueryReadyGenerationOpenCache
 	refs     int
 	stale    bool
+}
+
+// collectionQueryReadyGenerationFileSelectionEqual compares the immutable
+// physical snapshot selected by publication. Bound is deliberately excluded:
+// it is a caller-local admission policy that the underlying open cache checks
+// independently and must not change the mapped generation identity.
+func collectionQueryReadyGenerationFileSelectionEqual(left, right typedcolumn.QueryReadyGenerationOpenFiles) bool {
+	return left.Key == right.Key &&
+		left.Base == right.Base &&
+		left.SnapshotGeneration == right.SnapshotGeneration &&
+		slices.Equal(left.Deltas, right.Deltas)
+}
+
+func cloneCollectionQueryReadyGenerationOpenFiles(files typedcolumn.QueryReadyGenerationOpenFiles) typedcolumn.QueryReadyGenerationOpenFiles {
+	cloned := files
+	cloned.Deltas = slices.Clone(files.Deltas)
+	return cloned
 }
 
 // collectionQueryReadyGenerationLease pins one mapped prepared generation
@@ -140,7 +159,7 @@ func (c *Collection) openCollectionQueryReadyGenerationForIdentity(identity Colu
 	var closeOld *typedcolumn.QueryReadyGenerationOpenCache
 	c.queryReadyGenerationMu.Lock()
 	entry := c.queryReadyGenerationEntry
-	if entry != nil && entry.identity == identity {
+	if entry != nil && entry.identity == identity && collectionQueryReadyGenerationFileSelectionEqual(entry.files, files) {
 		c.queryReadyGenerationHits++
 	} else {
 		if entry != nil {
@@ -150,7 +169,7 @@ func (c *Collection) openCollectionQueryReadyGenerationForIdentity(identity Colu
 			}
 			c.queryReadyGenerationInvalidations++
 		}
-		entry = &collectionQueryReadyGenerationCacheEntry{identity: identity, cache: typedcolumn.NewQueryReadyGenerationOpenCache(key)}
+		entry = &collectionQueryReadyGenerationCacheEntry{identity: identity, files: cloneCollectionQueryReadyGenerationOpenFiles(files), cache: typedcolumn.NewQueryReadyGenerationOpenCache(key)}
 		c.queryReadyGenerationEntry = entry
 		c.queryReadyGenerationBuilds++
 	}
@@ -162,8 +181,7 @@ func (c *Collection) openCollectionQueryReadyGenerationForIdentity(identity Colu
 
 	prepared, err := entry.cache.Open(files)
 	if err != nil {
-		_ = c.releaseCollectionQueryReadyGenerationLease(entry)
-		return nil, err
+		return nil, errors.Join(err, c.releaseCollectionQueryReadyGenerationLease(entry))
 	}
 	if c.manager != nil && !c.manager.registerCollectionHandleIfOpen(c) {
 		c.queryReadyGenerationMu.Lock()
@@ -173,8 +191,7 @@ func (c *Collection) openCollectionQueryReadyGenerationForIdentity(identity Colu
 			c.queryReadyGenerationInvalidations++
 		}
 		c.queryReadyGenerationMu.Unlock()
-		_ = c.releaseCollectionQueryReadyGenerationLease(entry)
-		return nil, backenddb.ErrClosed
+		return nil, errors.Join(backenddb.ErrClosed, c.releaseCollectionQueryReadyGenerationLease(entry))
 	}
 	return &collectionQueryReadyGenerationLease{collection: c, entry: entry, prepared: prepared}, nil
 }
@@ -250,7 +267,36 @@ func (c *Collection) closeCollectionQueryReadyGenerationCache() error {
 	if cache != nil {
 		err = cache.Close()
 	}
-	if c.manager != nil && (entry == nil || cache != nil) && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() {
+	if c.manager != nil && (entry == nil || cache != nil) && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
+		c.manager.unregisterCollectionHandle(c)
+	}
+	return err
+}
+
+// retireCollectionQueryReadyGenerationCache closes the exact M3 cache that
+// may map a prepared QRBG before its asset-manager tail is reclaimed. It
+// refuses to detach a cache with live leases so cleanup cannot truncate under
+// an active mmap.
+func (c *Collection) retireCollectionQueryReadyGenerationCache(identity ColumnStoreCacheIdentity, files typedcolumn.QueryReadyGenerationOpenFiles) error {
+	if c == nil {
+		return nil
+	}
+	c.queryReadyGenerationMu.Lock()
+	entry := c.queryReadyGenerationEntry
+	if entry == nil || entry.identity != identity || !collectionQueryReadyGenerationFileSelectionEqual(entry.files, files) {
+		c.queryReadyGenerationMu.Unlock()
+		return nil
+	}
+	if entry.refs != 0 {
+		c.queryReadyGenerationMu.Unlock()
+		return ErrQueryReadyColumnGenerationBusy
+	}
+	c.queryReadyGenerationEntry = nil
+	entry.stale = true
+	c.queryReadyGenerationInvalidations++
+	c.queryReadyGenerationMu.Unlock()
+	err := entry.cache.Close()
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 	return err
