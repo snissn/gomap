@@ -200,8 +200,12 @@ func queryReadyColumnOpenFiles(identity ColumnStoreCacheIdentity, files QueryRea
 		}
 	}
 	bound := typedcolumn.QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: files.MaxVisibleGenerations, MaxAccumulatedDeltaParts: files.MaxAccumulatedDeltaParts, MaxRows: files.MaxRows, MaxBytes: files.MaxBytes}
-	if bound == (typedcolumn.QueryReadyDeltaBoundPolicy{}) {
-		bound = typedcolumn.DefaultQueryReadyDeltaBoundPolicy()
+	defaults := typedcolumn.DefaultQueryReadyDeltaBoundPolicy()
+	if bound.MaxVisibleGenerations == 0 {
+		bound.MaxVisibleGenerations = defaults.MaxVisibleGenerations
+	}
+	if bound.MaxAccumulatedDeltaParts == 0 {
+		bound.MaxAccumulatedDeltaParts = defaults.MaxAccumulatedDeltaParts
 	}
 	return typedcolumn.QueryReadyGenerationOpenFiles{Key: key, Base: base, Deltas: deltas, SnapshotGeneration: key.Identity.Generation, Bound: bound}, nil
 }

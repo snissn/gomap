@@ -50,6 +50,44 @@ func TestQueryReadyExecutionColdReopenParity(t *testing.T) {
 	}
 }
 
+func TestQueryReadyColumnOpenFilesPreservesDefaultGenerationAndPartBoundsOnPartialOverride(t *testing.T) {
+	identity := queryReadyCollectionTestIdentity()
+	defaults := typedcolumn.DefaultQueryReadyDeltaBoundPolicy()
+	tests := []struct {
+		name     string
+		maxRows  int64
+		maxBytes int64
+	}{
+		{name: "rows", maxRows: 123},
+		{name: "bytes", maxBytes: 456},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opened, err := queryReadyColumnOpenFiles(identity, QueryReadyColumnGenerationFiles{
+				Base: QueryReadyColumnGenerationFile{
+					Path:       "base.qrbg",
+					Generation: identity.ManifestGeneration,
+					Kind:       QueryReadyColumnGenerationBase,
+				},
+				MaxRows:  test.maxRows,
+				MaxBytes: test.maxBytes,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := opened.Bound.MaxVisibleGenerations; got != defaults.MaxVisibleGenerations {
+				t.Fatalf("MaxVisibleGenerations=%d want default %d", got, defaults.MaxVisibleGenerations)
+			}
+			if got := opened.Bound.MaxAccumulatedDeltaParts; got != defaults.MaxAccumulatedDeltaParts {
+				t.Fatalf("MaxAccumulatedDeltaParts=%d want default %d", got, defaults.MaxAccumulatedDeltaParts)
+			}
+			if opened.Bound.MaxRows != test.maxRows || opened.Bound.MaxBytes != test.maxBytes {
+				t.Fatalf("partial override bound=%+v want rows=%d bytes=%d", opened.Bound, test.maxRows, test.maxBytes)
+			}
+		})
+	}
+}
+
 func TestCollectionQueryReadyGenerationKeyIsQueryIndependentAndInvalidatesPhysicalIdentity(t *testing.T) {
 	identity := queryReadyCollectionTestIdentity()
 	want, ok := collectionQueryReadyGenerationOpenKey(identity)
