@@ -788,6 +788,16 @@ func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, a
 			delete(syncCounts, identity)
 		}
 	}
+	// Sync evidence for source-side parents has no reachable resource token of
+	// its own. Attach that batch evidence once to the first real namespace token
+	// so resource-set stats count physical parent syncs without inventing a
+	// resource or double-counting the destination parent.
+	if len(tokens) != 0 {
+		for identity, count := range syncCounts {
+			tokens[0].additionalSyncs.Add(count)
+			tokens[0].additionalSyncNanos.Add(syncNanos[identity])
+		}
+	}
 	return tokens, nil
 }
 
@@ -851,6 +861,8 @@ type StableNamespaceToken struct {
 	stabilizeErr           error
 	syncs                  atomic.Uint64
 	syncNanos              atomic.Uint64
+	additionalSyncs        atomic.Uint64
+	additionalSyncNanos    atomic.Uint64
 }
 
 // StableNamespaceCreationProof is an opaque, exact-handle witness that a
@@ -1056,10 +1068,12 @@ func RenameStableChildFile(parent *os.File, oldName, newName string) error {
 	return renameStableChildFile(parent, oldName, newName)
 }
 
-// MoveStableChildFileNoReplace atomically moves oldName between two exact
-// retained parent handles without replacing an existing destination. Expected
-// is the retained source child identity; a rebound source is rejected before
-// mutation. The boolean reports whether the atomic move committed.
+// MoveStableChildFileNoReplace installs Expected under destinationParent using
+// an exact retained-handle no-replace operation. oldName is validated under the
+// exact source parent before and after installation, but is deliberately left
+// linked for staging cleanup so this primitive never unlinks a rebound name.
+// The boolean reports whether the destination link was installed; true with an
+// error is namespace-ambiguous and requires recovery retention.
 func MoveStableChildFileNoReplace(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
 	if sourceParent == nil || expected == nil || destinationParent == nil || !stableChildBaseName(oldName) || !stableChildBaseName(newName) {
 		return false, fmt.Errorf("%w: stable cross-parent move requires base names and exact parent/child handles", ErrUnresolvedResource)
@@ -1121,6 +1135,14 @@ func validateStableChildIdentity(parent *os.File, resourceIdentity StableIdentit
 
 func (token *StableNamespaceToken) ParentIdentity() StableIdentity { return token.parentIdentity }
 func (token *StableNamespaceToken) Operation() NamespaceOperation  { return token.operation }
+
+func (token *StableNamespaceToken) physicalSyncStats() (uint64, time.Duration) {
+	if token == nil {
+		return 0, 0
+	}
+	return token.syncs.Load() + token.additionalSyncs.Load(),
+		time.Duration(token.syncNanos.Load() + token.additionalSyncNanos.Load())
+}
 
 func (token *StableNamespaceToken) Stabilize() error {
 	if token == nil || token.released.Load() {

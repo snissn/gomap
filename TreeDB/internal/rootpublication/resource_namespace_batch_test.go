@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 type countingStableNamespaceBatchAdapter struct {
@@ -119,6 +120,42 @@ func TestStableNamespaceBatchSyncsEachDistinctParentOnce(t *testing.T) {
 		if got := adapter.syncs[identity]; got != 1 {
 			t.Fatalf("parent %s syncs=%d want 1", parent.Name(), got)
 		}
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+	for i, child := range children {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceOuterLeafPack, LogicalLane: "packed", ResourceID: string(rune('a' + i)), Generation: uint64(i + 1),
+			DiagnosticPath: registrations[i].DiagnosticPath + "/" + registrations[i].NewName,
+			File:           child, Digest: [32]byte{byte(i + 1)}, Reachability: ReachabilityOuterLeafPackedPointer,
+			Namespace: tokens[i], ContentSynced: true,
+		})
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			builder.Abandon()
+			t.Fatal(err)
+		}
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatal(err)
+	}
+	defer set.Release()
+	stats := set.Stats(time.Now())
+	if len(stats) != 1 || stats[0].NamespaceSyncs != 2 {
+		t.Fatalf("resource-set namespace stats=%+v want two exact physical parent syncs", stats)
+	}
+	wantDuration := time.Duration(0)
+	for _, token := range tokens {
+		_, duration := token.physicalSyncStats()
+		wantDuration += duration
+	}
+	if stats[0].NamespaceSyncDuration != wantDuration {
+		t.Fatalf("namespace sync duration=%s want exact token evidence %s", stats[0].NamespaceSyncDuration, wantDuration)
 	}
 }
 

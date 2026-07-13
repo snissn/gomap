@@ -749,8 +749,9 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		stats.Syncs += token.metrics.syncs.Load()
 		stats.SyncDuration += time.Duration(token.metrics.syncNanos.Load())
 		if token.namespace != nil {
-			stats.NamespaceSyncs += token.namespace.syncs.Load()
-			stats.NamespaceSyncDuration += time.Duration(token.namespace.syncNanos.Load())
+			syncs, duration := token.namespace.physicalSyncStats()
+			stats.NamespaceSyncs += syncs
+			stats.NamespaceSyncDuration += duration
 		}
 		active := false
 		if len(entry.pins) == 0 {

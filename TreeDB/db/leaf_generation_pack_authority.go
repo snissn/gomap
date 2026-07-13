@@ -43,6 +43,7 @@ type leafGenerationPackPromotionAuthority struct {
 	namespaceSyncNanos    int64
 	retainedForRecovery   bool
 	released              bool
+	moveNoReplace         func(*os.File, *os.File, string, *os.File, string) (bool, error)
 }
 
 func leafGenerationPackPromotionPreflight() error {
@@ -78,6 +79,7 @@ func newLeafGenerationPackPromotionAuthority(db *DB, stagingDir, destinationDir 
 		db: db, stagingDir: filepath.Clean(stagingDir), destinationDir: filepath.Clean(destinationDir),
 		stagingParent: stagingParent, destinationParent: destinationParent,
 		destinationGeneration: destinationGeneration,
+		moveNoReplace:         rootpublication.MoveStableChildFileNoReplace,
 	}, nil
 }
 
@@ -226,13 +228,20 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		return nil, false, rootpublication.ErrResourceOwnership
 	}
 	promoted := make([]rewriteCreatedSegment, len(authority.segments))
+	for i := range authority.segments {
+		promoted[i] = authority.segments[i].created
+	}
 	mutated := false
 	for i := range authority.segments {
 		segment := &authority.segments[i]
 		name := filepath.Base(segment.created.path)
-		installed, err := rootpublication.MoveStableChildFileNoReplace(authority.stagingParent, segment.handle, name, authority.destinationParent, name)
+		installed, err := authority.moveNoReplace(authority.stagingParent, segment.handle, name, authority.destinationParent, name)
 		mutated = mutated || installed
 		if err != nil {
+			if installed {
+				err = errors.Join(err, ErrRecoveryRequired)
+				authority.retainForRecovery()
+			}
 			return promoted, mutated, err
 		}
 		destination := filepath.Join(authority.destinationDir, name)
@@ -241,7 +250,7 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		if err := rootpublication.ValidateStableChildLink(authority.destinationParent, segment.handle, name); err != nil {
 			return promoted, true, errors.Join(err, ErrRecoveryRequired)
 		}
-		if err := observeNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceOuterLeaf, authority.destinationDir, filepath.Join(authority.stagingDir, name), destination); err != nil {
+		if err := observeNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, authority.destinationDir, "", destination); err != nil {
 			return promoted, true, err
 		}
 	}
@@ -260,8 +269,8 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		}
 		registrations[i] = rootpublication.StableNamespaceSpec{
 			Parent: authority.destinationParent, LinkedResource: segment.handle,
-			ParentGeneration: authority.destinationGeneration, Operation: rootpublication.NamespaceRename,
-			OldName: name, NewName: name, DiagnosticPath: relativeDir,
+			ParentGeneration: authority.destinationGeneration, Operation: rootpublication.NamespaceCreate,
+			NewName: name, DiagnosticPath: relativeDir,
 		}
 	}
 	namespaceSyncStarted := time.Now()

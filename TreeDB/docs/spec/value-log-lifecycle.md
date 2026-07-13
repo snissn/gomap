@@ -242,14 +242,17 @@ Leaf-generation pack uses a two-phase copy/publish state machine:
    generation, and exact source-generation state/file lists. Any mismatch
    discards the whole attempt and performs one full retry; no copied root,
    retired-page list, or private allocation is reused.
-4. **Install:** while holding `writeMu` and the value-log visibility gate, move
-   staged files into `leaf_vlog` through exact retained staging/destination
-   parent handles with no replacement, validate that every destination link is
+4. **Install:** while holding `writeMu` and the value-log visibility gate, link
+   each retained staged-file handle into `leaf_vlog` with no replacement,
+   validate that every destination link is
    still the creation-handle identity, and fsync each distinct parent exactly
    once as one namespace batch. The batch freezes one
    `ResourceOuterLeafPack` token per reachable segment, bound to its immutable
    byte frontier, digest, physical identity, generation, and packed-pointer
-   reachability. Capture and resource-set pins deny deletion through
+   reachability. The original link remains in the private staging namespace
+   until successful publication cleanup; promotion never unlinks a source
+   pathname that may have been rebound. Capture and resource-set pins deny
+   deletion through
    `RegisterSegment`; manager registration must report the same physical
    identities before publication can continue.
    Registration is tentative and publish-owned: existing snapshots retain their

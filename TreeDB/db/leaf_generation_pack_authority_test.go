@@ -4,10 +4,13 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -112,8 +115,8 @@ func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRe
 	if promoted[0].path != destinationPath {
 		t.Fatalf("promoted path=%q want %q", promoted[0].path, destinationPath)
 	}
-	if _, err := os.Stat(fixture.path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("staging path remains: %v", err)
+	if err := rootpublication.ValidateStableChildLink(authority.stagingParent, authority.segments[0].handle, filepath.Base(fixture.path)); err != nil {
+		t.Fatalf("recovery-owned staging alias changed: %v", err)
 	}
 	if got := fixture.registry.ActivePins(); got != 2 {
 		t.Fatalf("capture+frozen-set pins=%d want 2", got)
@@ -123,10 +126,14 @@ func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRe
 		descriptors[0].Generation() != uint64(fixture.fileID) || descriptors[0].Frontier().Bytes < fixture.pointer.Offset+uint64(fixture.pointer.RecordLength()) {
 		t.Fatalf("packed descriptors=%+v", descriptors)
 	}
-	var renameEvents, beforeSync, afterSync int
+	resourceStats := authority.resources.Stats(time.Now())
+	if len(resourceStats) != 1 || resourceStats[0].NamespaceSyncs != 2 {
+		t.Fatalf("packed namespace sync stats=%+v want two exact parents", resourceStats)
+	}
+	var createEvents, beforeSync, afterSync int
 	for _, event := range events {
-		if event.Namespace == durabilitycut.NamespaceRename {
-			renameEvents++
+		if event.Namespace == durabilitycut.NamespaceCreate {
+			createEvents++
 		}
 		if event.Point == durabilitycut.BeforeNewFileDirectorySync {
 			beforeSync++
@@ -135,8 +142,8 @@ func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRe
 			afterSync++
 		}
 	}
-	if renameEvents != 1 || beforeSync != 2 || afterSync != 2 {
-		t.Fatalf("namespace evidence rename=%d before-sync=%d after-sync=%d", renameEvents, beforeSync, afterSync)
+	if createEvents != 1 || beforeSync != 2 || afterSync != 2 {
+		t.Fatalf("namespace evidence create=%d before-sync=%d after-sync=%d", createEvents, beforeSync, afterSync)
 	}
 
 	manager, err := valuelog.NewManagerWithStableResourcePinRegistry(fixture.destination, fixture.registry)
@@ -232,10 +239,13 @@ func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t 
 	if descriptors := authority.resources.Descriptors(); len(descriptors) != 2 {
 		t.Fatalf("packed descriptors=%d want 2", len(descriptors))
 	}
-	var renames, beforeSyncs, afterSyncs int
+	if stats := authority.resources.Stats(time.Now()); len(stats) != 1 || stats[0].NamespaceSyncs != 2 {
+		t.Fatalf("multi-segment namespace stats=%+v want two distinct parents", stats)
+	}
+	var creates, beforeSyncs, afterSyncs int
 	for _, event := range events {
-		if event.Namespace == durabilitycut.NamespaceRename {
-			renames++
+		if event.Namespace == durabilitycut.NamespaceCreate {
+			creates++
 		}
 		if event.Point == durabilitycut.BeforeNewFileDirectorySync {
 			beforeSyncs++
@@ -244,8 +254,8 @@ func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t 
 			afterSyncs++
 		}
 	}
-	if renames != 2 || beforeSyncs != 2 || afterSyncs != 2 {
-		t.Fatalf("two files share exact parents: renames=%d before-sync=%d after-sync=%d", renames, beforeSyncs, afterSyncs)
+	if creates != 2 || beforeSyncs != 2 || afterSyncs != 2 {
+		t.Fatalf("two files share exact parents: creates=%d before-sync=%d after-sync=%d", creates, beforeSyncs, afterSyncs)
 	}
 }
 
@@ -307,6 +317,9 @@ func TestLeafGenerationPackPromotionAuthorityRejectsReboundSourceBeforeMutation(
 	if mutated || !errors.Is(err, rootpublication.ErrResourceConflict) {
 		t.Fatalf("promote mutated=%v promoted=%v err=%v want pre-mutation conflict", mutated, promoted, err)
 	}
+	if len(promoted) != 1 || promoted[0] != fixture.created {
+		t.Fatalf("cleanup state=%+v want original %+v", promoted, fixture.created)
+	}
 	if originalAfter, readErr := os.ReadFile(originalPath); readErr != nil || !bytes.Equal(originalAfter, originalBefore) {
 		t.Fatalf("original changed after rebound rejection: bytes_equal=%v err=%v", bytes.Equal(originalAfter, originalBefore), readErr)
 	}
@@ -316,6 +329,83 @@ func TestLeafGenerationPackPromotionAuthorityRejectsReboundSourceBeforeMutation(
 	destination := filepath.Join(fixture.destination, filepath.Base(fixture.path))
 	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("destination appeared after rebound rejection: %v", statErr)
+	}
+}
+
+func TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+	const replacement = "end-to-end-staging-replacement"
+	var stagingPath, originalPath, destinationPath string
+	var originalBefore []byte
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackBeforePromotion {
+			return nil
+		}
+		matches, err := filepath.Glob(filepath.Join(LeafLogDirPath(dir), ".leaf-pack-copy-*", leafVLogDirName, "value-l*.log"))
+		if err != nil || len(matches) != 1 {
+			return fmt.Errorf("staging candidates=%v err=%v", matches, err)
+		}
+		stagingPath = matches[0]
+		originalPath = stagingPath + ".original"
+		destinationPath = filepath.Join(LeafLogDirPath(dir), filepath.Base(stagingPath))
+		if err := os.Rename(stagingPath, originalPath); err != nil {
+			return err
+		}
+		originalBefore, err = os.ReadFile(originalPath)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(stagingPath, []byte(replacement), 0o600)
+	})
+	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
+	})
+	unregister()
+	if !errors.Is(err, rootpublication.ErrResourceConflict) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack error=%v want conflict plus recovery-required cleanup ownership", err)
+	}
+	if stagingPath == "" {
+		t.Fatal("before-promotion interposition did not run")
+	}
+	if got, readErr := os.ReadFile(originalPath); readErr != nil || !bytes.Equal(got, originalBefore) {
+		t.Fatalf("original staging file changed: equal=%v err=%v", bytes.Equal(got, originalBefore), readErr)
+	}
+	if got, readErr := os.ReadFile(stagingPath); readErr != nil || string(got) != replacement {
+		t.Fatalf("replacement staging file changed: data=%q err=%v", got, readErr)
+	}
+	if _, statErr := os.Stat(destinationPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination appeared after pre-promotion rebound: %v", statErr)
+	}
+}
+
+func TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity(t *testing.T) {
+	fixture := newLeafPackAuthorityFixture(t)
+	defer fixture.close(t)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.release()
+	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.close(t)
+	testErr := errors.New("post-install source identity ambiguity")
+	authority.moveNoReplace = func(*os.File, *os.File, string, *os.File, string) (bool, error) {
+		return true, testErr
+	}
+	promoted, mutated, err := authority.promote()
+	if !mutated || !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("promote mutated=%v err=%v want ambiguous recovery", mutated, err)
+	}
+	if len(promoted) != 1 || promoted[0] != fixture.created {
+		t.Fatalf("ambiguous cleanup state=%+v want original %+v", promoted, fixture.created)
+	}
+	if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
+		t.Fatalf("ambiguous authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
 	}
 }
 

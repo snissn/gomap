@@ -222,7 +222,7 @@ func TestLeafGenerationPack_ClosesStagingReaderBeforePromotion(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testing.T) {
+func TestLeafGenerationPack_PostPromotionCreateCutStopsNamespaceCleanup(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer func() {
@@ -231,7 +231,7 @@ func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testi
 	}()
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 
-	cutErr := errors.New("injected post-promotion rename cut")
+	cutErr := errors.New("injected post-promotion create cut")
 	var (
 		namespaceEvents []durabilitycut.Event
 		promotedPath    string
@@ -241,9 +241,9 @@ func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testi
 			return nil
 		}
 		namespaceEvents = append(namespaceEvents, event)
-		if event.Namespace == durabilitycut.NamespaceRename &&
+		if event.Namespace == durabilitycut.NamespaceCreate &&
 			event.Resource == durabilitycut.ResourceOuterLeaf &&
-			strings.Contains(event.OldPath, ".leaf-pack-copy-") {
+			filepath.Clean(filepath.Dir(event.NewPath)) == filepath.Clean(LeafLogDirPath(dir)) {
 			promotedPath = event.NewPath
 			return cutErr
 		}
@@ -259,16 +259,16 @@ func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testi
 		t.Fatalf("LeafGenerationPack error=%v, want injected cut and ErrRecoveryRequired", err)
 	}
 	if !db.publicationPoisoned.Load() {
-		t.Fatal("post-promotion rename cut did not poison DB")
+		t.Fatal("post-promotion create cut did not poison DB")
 	}
 	if promotedPath == "" {
-		t.Fatalf("namespace events=%#v, want promoted rename", namespaceEvents)
+		t.Fatalf("namespace events=%#v, want promoted create", namespaceEvents)
 	}
 	if _, statErr := os.Stat(promotedPath); statErr != nil {
 		t.Fatalf("promoted path stat=%v, want retained candidate", statErr)
 	}
-	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceRename || got.NewPath != promotedPath {
-		t.Fatalf("last namespace event=%#v, want promotion rename as final mutation", got)
+	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceCreate || got.NewPath != promotedPath {
+		t.Fatalf("last namespace event=%#v, want promotion create as final mutation", got)
 	}
 	if err := db.SetSync([]byte("after-promotion-cut"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("SetSync after promotion cut error=%v, want ErrRecoveryRequired", err)
