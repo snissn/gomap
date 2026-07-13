@@ -148,8 +148,18 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		}
 	}
 	if lockMaintenance {
+		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
+			hook("value-log-gc")
+		}
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
+	}
+	if !opts.DryRun {
+		if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
+			if err := hook("value-log-gc"); err != nil {
+				return stats, err
+			}
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()

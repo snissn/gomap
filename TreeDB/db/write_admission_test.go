@@ -311,3 +311,86 @@ func TestConditionalReadOnlyCommitRejectsClosingAfterAdmissionPreflight(t *testi
 		t.Fatal("conditional commit remained blocked after writeMu became available")
 	}
 }
+
+func runAfterCloseWinsStorageMaintenanceAdmission(t *testing.T, db *DB, operation string, call func() error) {
+	t.Helper()
+
+	beforeLock := make(chan struct{})
+	db.testStorageMaintenanceBeforeLockHook = func(got string) {
+		if got == operation {
+			close(beforeLock)
+		}
+	}
+	afterCloseErr := errors.New("storage maintenance admitted after Close won")
+	db.testStorageMaintenanceAfterLockHook = func(got string) error {
+		if got == operation {
+			return afterCloseErr
+		}
+		return nil
+	}
+	db.maintenanceMu.Lock()
+	maintenanceLockHeld := true
+	db.closing.Store(false)
+	t.Cleanup(func() {
+		db.testStorageMaintenanceBeforeLockHook = nil
+		db.testStorageMaintenanceAfterLockHook = nil
+		db.closing.Store(false)
+		if maintenanceLockHeld {
+			db.maintenanceMu.Unlock()
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- call() }()
+	select {
+	case <-beforeLock:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s did not reach maintenance admission", operation)
+	}
+
+	db.closing.Store(true)
+	db.maintenanceMu.Unlock()
+	maintenanceLockHeld = false
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("%s error=%v, want %v", operation, err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s remained blocked after maintenanceMu became available", operation)
+	}
+	db.testStorageMaintenanceBeforeLockHook = nil
+	db.testStorageMaintenanceAfterLockHook = nil
+	db.closing.Store(false)
+}
+
+func TestStorageMaintenanceRejectsClosingAfterMaintenancePreflight(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "value-log-gc", call: func() error {
+			_, err := db.ValueLogGC(nil, ValueLogGCOptions{})
+			return err
+		}},
+		{name: "value-log-rewrite", call: func() error {
+			_, err := db.ValueLogRewriteOnline(nil, ValueLogRewriteOnlineOptions{})
+			return err
+		}},
+		{name: "compact-storage", call: func() error {
+			_, err := db.CompactStorage(nil, CompactStorageOptions{})
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runAfterCloseWinsStorageMaintenanceAdmission(t, db, test.name, test.call)
+		})
+	}
+}

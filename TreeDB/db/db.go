@@ -503,6 +503,8 @@ type DB struct {
 	testCheckpointAfterPoisonPreflightHook      func()
 	testConditionalReadOnlyAfterClosePreflight  func()
 	testOrderedRootBatchAfterClosePreflightHook func()
+	testStorageMaintenanceBeforeLockHook        func(string)
+	testStorageMaintenanceAfterLockHook         func(string) error
 	testCommandWALRecoveryFailAfterLSN          atomic.Uint64
 	commandWALReplayLSN                         atomic.Uint64
 	commandWALReplayToken                       atomic.Uint64

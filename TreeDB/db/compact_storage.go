@@ -381,9 +381,17 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 	maintenanceLocked := false
 	if !opts.DryRun {
+		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
+			hook("compact-storage")
+		}
 		db.maintenanceMu.Lock()
 		maintenanceLocked = true
 		defer db.maintenanceMu.Unlock()
+		if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
+			if err := hook("compact-storage"); err != nil {
+				return stats, err
+			}
+		}
 		restoreLeafPageReadCache := db.disableLeafPageReadCacheForMaintenance()
 		defer restoreLeafPageReadCache()
 	}
