@@ -801,6 +801,9 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 	if registration.NamespaceOperation == rootpublication.NamespaceCreate && registration.NamespaceParent == nil {
 		registration.NamespaceParent = w.stableParent
 	}
+	if registration.NamespaceOperation == rootpublication.NamespaceCreate && w.creationUnsupported {
+		return nil, fmt.Errorf("%w: current value-log segment creation cannot be certified on this platform", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	var namespace *rootpublication.StableNamespaceToken
 	var err error
 	if registration.NamespaceOperation == rootpublication.NamespaceCreate {
