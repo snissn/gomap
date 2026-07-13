@@ -623,6 +623,28 @@ func (s *SkipList) seekGE(key []byte) uint32 {
 	return s.getNext(x, 0)
 }
 
+// SeekGEEntryWithRevision returns the first physical entry whose key is greater
+// than or equal to key. Returned slices alias skiplist storage.
+func (s *SkipList) SeekGEEntryWithRevision(key []byte) (entryKey, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
+	curr := s.seekGE(key)
+	if curr == 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	entryKey = s.getKey(curr)
+	value = s.getValue(curr)
+	flags = s.getFlags(curr)
+	revision = s.getRevision(curr)
+	if flags&flagPointer != 0 {
+		if len(value) >= page.ValuePtrSize {
+			ptr = page.DecodeValuePtr(value[:page.ValuePtrSize])
+			value = value[page.ValuePtrSize:]
+		}
+	} else if flags&flagDeleted != 0 {
+		value = nil
+	}
+	return entryKey, value, ptr, flags, revision, true
+}
+
 func (s *SkipList) findLessThan(key []byte) uint32 {
 	if key == nil {
 		last := s.tail[0]

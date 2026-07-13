@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"strings"
 	"sync"
 
@@ -358,6 +359,30 @@ func (m *BTree) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, p
 		return canonicalizeBTreePointerValue(val.flags, val.value), val.ptr, val.flags, val.revision, true
 	}
 	return val.value, page.ValuePtr{}, val.flags, val.revision, true
+}
+
+func (m *BTree) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if end != nil && bytes.Compare(start, end) >= 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	it := m.tree.Iter()
+	if !it.Seek(bytesToStringNoCopy(start)) {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	key := stringToBytesNoCopy(it.Key())
+	if end != nil && bytes.Compare(key, end) >= 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	ent := it.Value()
+	if ent.flags&node.FlagTombstone != 0 {
+		return key, nil, page.ValuePtr{}, ent.flags, ent.revision, true
+	}
+	if ent.flags&node.FlagPointer != 0 {
+		return key, ent.value, ent.ptr, ent.flags, ent.revision, true
+	}
+	return key, ent.value, page.ValuePtr{}, ent.flags, ent.revision, true
 }
 
 func (m *BTree) Size() int64 {

@@ -16,6 +16,23 @@ func openBenchDB(b *testing.B) *treedb.DB {
 	return db
 }
 
+func openBenchDBWithMemtableMode(b *testing.B, mode string) *treedb.DB {
+	b.Helper()
+	db, err := treedb.Open(treedb.Options{
+		Dir:                          b.TempDir(),
+		Durability:                   treedb.DurabilityWALOffRelaxed,
+		CommandWAL:                   false,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		MemtableMode:                 mode,
+	})
+	if err != nil {
+		b.Fatalf("Open memtable mode %q: %v", mode, err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
 func BenchmarkCommitAt(b *testing.B) {
 	for _, batchSize := range []int{1, 32} {
 		b.Run(fmt.Sprintf("DirectTreeDB/%d", batchSize), func(b *testing.B) {
@@ -125,6 +142,37 @@ func BenchmarkCommitAtGetAtInterleaved(b *testing.B) {
 	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.sources_max", "iterator_sources_max")
 	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.queue_len_max", "iterator_queue_len_max")
 	reportMVCCBenchGauge(b, after, "treedb.cache.queue_len", "iterator_queue_len_end")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.calls_total", "point_successor_calls/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.sources_total", "point_successor_sources/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mutable_probes_total", "point_successor_mutable_probes/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.backend_probes_total", "point_successor_backend_probes/op")
+	reportMVCCBenchGauge(b, after, "treedb.cache.point_successor.sources_max", "point_successor_sources_max")
+	reportMVCCBenchGauge(b, after, "treedb.cache.point_successor.general_merge_iterators_total", "point_successor_general_merge_iterators")
+}
+
+// BenchmarkCommitAtGetAtInterleavedHashSorted guards the exact-successor hash
+// lookup used by write-then-read workloads. New physical MVCC versions
+// invalidate HashSorted's ordered index; exact GetAt must not rebuild it.
+func BenchmarkCommitAtGetAtInterleavedHashSorted(b *testing.B) {
+	db := openBenchDBWithMemtableMode(b, "hash_sorted")
+	store := New(db)
+	key := []byte("benchmark-key")
+	mutation := []Mutation{{Key: key, Value: []byte("value")}}
+	if err := store.CommitAt(1, mutation, CommitRelaxed); err != nil {
+		b.Fatalf("seed CommitAt: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		timestamp := uint64(i + 2)
+		if err := store.CommitAt(timestamp, mutation, CommitRelaxed); err != nil {
+			b.Fatalf("CommitAt(%d): %v", timestamp, err)
+		}
+		result, err := store.GetAt(key, timestamp)
+		if err != nil || result.State != Present {
+			b.Fatalf("GetAt(%d) result=%+v err=%v", timestamp, result, err)
+		}
+	}
 }
 
 func reportMVCCBenchCounter(b *testing.B, before, after map[string]string, key, name string) {
