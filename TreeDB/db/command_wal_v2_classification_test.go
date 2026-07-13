@@ -125,7 +125,7 @@ func TestClassifyCommandWALV2GapAndDuplicateAboveDurableFrontierStartDiscardSuff
 				v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
 				v2ClassificationFrame(3, commitlog.CommandDurabilityRelaxed, "commit-l1-000001.log", 0, 120, nil),
 			},
-			wantPrefix: 1, wantSuffix: 1, wantFirstDiscard: 2, wantDiscardedByte: 120,
+			wantPrefix: 1, wantSuffix: 1, wantFirstDiscard: 3, wantDiscardedByte: 120,
 		},
 		{
 			name: "duplicate",
@@ -134,7 +134,7 @@ func TestClassifyCommandWALV2GapAndDuplicateAboveDurableFrontierStartDiscardSuff
 				v2ClassificationFrame(2, commitlog.CommandDurabilityRelaxed, "commit-l0-000001.log", 100, 200, nil),
 				v2ClassificationFrame(2, commitlog.CommandDurabilityRelaxed, "commit-l1-000001.log", 0, 120, nil),
 			},
-			wantPrefix: 2, wantSuffix: 1, wantFirstDiscard: 3, wantDiscardedByte: 120,
+			wantPrefix: 2, wantSuffix: 1, wantFirstDiscard: 2, wantDiscardedByte: 120,
 		},
 	}
 	for _, tc := range tests {
@@ -151,6 +151,21 @@ func TestClassifyCommandWALV2GapAndDuplicateAboveDurableFrontierStartDiscardSuff
 				t.Fatalf("classification mutated input: got=%+v want=%+v", tc.frames, wantFrames)
 			}
 		})
+	}
+}
+
+func TestClassifyCommandWALV2DiscardDiagnosticCountsUniqueMissingRIDsAcrossSuffix(t *testing.T) {
+	frames := []commandWALV2PhysicalFrame{
+		v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
+		v2ClassificationFrame(3, commitlog.CommandDurabilityRelaxed, "commit-l1-000001.log", 0, 120, []uint64{41, 41}),
+		v2ClassificationFrame(4, commitlog.CommandDurabilityRelaxed, "commit-l0-000001.log", 100, 220, []uint64{41, 42}),
+	}
+	result, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Diagnostic; got.FirstDiscardedLSN != 3 || got.MissingRIDCount != 2 || got.SourceSegment != "commit-l1-000001.log" {
+		t.Fatalf("discard diagnostic=%+v, want actual first frame LSN/source and two unique missing RIDs", got)
 	}
 }
 

@@ -85,7 +85,6 @@ func TestReadCommandWALV2IncompleteRelaxedTailFailsBelowLaterBarrier(t *testing.
 }
 
 func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
-	variants := commandWALV2RepairVariants(t)
 	cuts := []struct {
 		point      durabilitycut.Point
 		occurrence int
@@ -95,9 +94,8 @@ func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 		{durabilitycut.AfterDeletionDirectorySync, 1},
 		{durabilitycut.AfterDependencyFileSync, 2},
 	}
-	for i, cut := range cuts {
-		variant := variants[i%len(variants)]
-		name := fmt.Sprintf("%s/%s/%d", variant.ID, cut.point, cut.occurrence)
+	for _, cut := range cuts {
+		name := fmt.Sprintf("%s/%d", cut.point, cut.occurrence)
 		t.Run(name, func(t *testing.T) {
 			walDir, classification, anchor, tail := commandWALV2RepairFixture(t)
 			anchorBefore := mustReadFile(t, anchor)
@@ -205,33 +203,43 @@ func TestRepairCommandWALV2SuffixDefersRetainedAnchorUntilAfterDirectorySync(t *
 	}
 }
 
-func commandWALV2RepairVariants(t *testing.T) []powerlossoracle.Variant {
-	t.Helper()
-	root := t.TempDir()
-	path := "commit-l1-000001.log"
-	fullPath := filepath.Join(root, path)
-	if err := os.WriteFile(fullPath, []byte("stable-command-prefix"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	model, err := powerlossoracle.Capture(root)
+func TestRepairCommandWALV2SuffixPowerLossVariantsDriveFreshRescanRetry(t *testing.T) {
+	walDir, classification, _, tail := commandWALV2PhysicalRepairFixture(t)
+	model, err := powerlossoracle.Capture(walDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(fullPath, []byte("stable-command-prefix-discardable-relaxed-suffix"), 0o600); err != nil {
-		t.Fatal(err)
+	injected := errors.New("injected before non-anchor sync")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceCommandWAL {
+			return nil
+		}
+		if err := model.Observe(walDir, event); err != nil {
+			return err
+		}
+		if event.Point == durabilitycut.BeforeDependencyFileSync {
+			if event.Path != tail {
+				return fmt.Errorf("first non-anchor sync path=%s, want %s", event.Path, tail)
+			}
+			return injected
+		}
+		return nil
+	})
+	if _, err := repairCommandWALV2Suffix(walDir, classification, false); !errors.Is(err, injected) {
+		restore()
+		t.Fatalf("repair cut error=%v, want injected cut", err)
 	}
-	if err := model.Overlay(root); err != nil {
-		t.Fatal(err)
-	}
+	restore()
+
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:         "command-wal-v2-physical-suffix-repair",
-		Point:      powerlossoracle.AfterDependencyFileSync,
+		Point:      powerlossoracle.BeforeDependencyFileSync,
 		Occurrence: 1,
 		Model:      model,
 		Dependencies: []powerlossoracle.DirtyResource{{
 			Kind: powerlossoracle.ResourceCommandWAL,
 			ID:   "relaxed-suffix-segment",
-			Path: path,
+			Path: filepath.Base(tail),
 		}},
 		RequiredFamilies: []powerlossoracle.VariantFamily{
 			powerlossoracle.VariantSyncedOnly,
@@ -239,16 +247,139 @@ func commandWALV2RepairVariants(t *testing.T) []powerlossoracle.Variant {
 		},
 		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 			powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
+			powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedSuffixDiscard,
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coverage.Generated != len(variants) || len(variants) < 2 {
+	if coverage.Generated != len(variants) || len(variants) != 2 {
 		t.Fatalf("repair variant coverage=%+v variants=%d", coverage, len(variants))
 	}
-	return variants
+
+	for _, variant := range variants {
+		t.Run(variant.ID, func(t *testing.T) {
+			crashDir := t.TempDir()
+			if err := variant.Model.MaterializeStable(crashDir); err != nil {
+				t.Fatal(err)
+			}
+			crashTail := filepath.Join(crashDir, filepath.Base(tail))
+			info, err := os.Stat(crashTail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if variant.Family == powerlossoracle.VariantSyncedOnly && info.Size() == 0 {
+				t.Fatal("synced-only variant did not retain the pre-truncation segment")
+			}
+			if variant.Family == powerlossoracle.VariantFullWriteback && info.Size() != 0 {
+				t.Fatalf("full-writeback tail size=%d, want truncated zero-byte image", info.Size())
+			}
+
+			fresh := classifyCommandWALV2Directory(t, crashDir)
+			if fresh.DurableFrontier != 1 || len(fresh.DiscardSuffix) == 0 || fresh.DiscardSuffix[0].Envelope.LSN != 2 {
+				t.Fatalf("fresh classification=%+v, want durable frontier 1 and suffix at 2", fresh)
+			}
+			if _, err := repairCommandWALV2Suffix(crashDir, fresh, false); err != nil {
+				t.Fatalf("fresh repair retry: %v", err)
+			}
+			if _, err := os.Stat(crashTail); !os.IsNotExist(err) {
+				t.Fatalf("tail stat after fresh retry=%v, want removed", err)
+			}
+			segments, err := listSegmentsInDir(crashDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(frames) != 1 || frames[0].Envelope.LSN != 1 {
+				t.Fatalf("frames after fresh retry=%+v, want only LSN 1", frames)
+			}
+		})
+	}
+}
+
+func TestRepairCommandWALV2SuffixOrdersCrossLaneRemovalByHighestDiscardedLSN(t *testing.T) {
+	walDir := t.TempDir()
+	anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	earlierLSNLexicallyLater := filepath.Join(walDir, commitlog.CommandSegmentName(9, 1))
+	laterLSNLexicallyEarlier := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	for path, data := range map[string]string{
+		anchor:                   "prefix-v2discard",
+		earlierLSNLexicallyLater: "lsn-3",
+		laterLSNLexicallyEarlier: "lsn-4",
+	} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	classification := commandWALV2Classification{
+		CompletePrefix: []commandWALV2PhysicalFrame{{Envelope: commitlog.CommandEnvelope{LSN: 1}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 0, EndOffset: 9}}},
+		DiscardSuffix: []commandWALV2PhysicalFrame{
+			{Envelope: commitlog.CommandEnvelope{LSN: 2}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 9, EndOffset: 16}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 3}, Coordinate: commandWALV2Coordinate{Lane: 9, SegmentSequence: 1, SourceSegment: earlierLSNLexicallyLater, StartOffset: 0, EndOffset: 5}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 4}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: laterLSNLexicallyEarlier, StartOffset: 0, EndOffset: 5}},
+		},
+	}
+	wantUnlinks := []string{laterLSNLexicallyEarlier, earlierLSNLexicallyLater}
+	var gotUnlinks []string
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeWALOrAssetUnlink {
+			gotUnlinks = append(gotUnlinks, event.Path)
+		}
+		return nil
+	})
+	diagnostic, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotUnlinks, wantUnlinks) {
+		t.Fatalf("unlink order=%v, want reverse global-LSN order %v", gotUnlinks, wantUnlinks)
+	}
+	wantStages := []string{
+		"truncate-sync:commit-l1-000001.log@0",
+		"truncate-sync:commit-l9-000001.log@0",
+		"unlink:commit-l1-000001.log",
+		"unlink:commit-l9-000001.log",
+		"directory-sync",
+		"anchor-truncate-sync:commit-l0-000001.log@9",
+	}
+	if !reflect.DeepEqual(diagnostic.RepairStages, wantStages) {
+		t.Fatalf("repair stages=%v, want execution-matching stages %v", diagnostic.RepairStages, wantStages)
+	}
+}
+
+func commandWALV2PhysicalRepairFixture(t *testing.T) (string, commandWALV2Classification, string, string) {
+	t.Helper()
+	walDir := t.TempDir()
+	anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	tail := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	writeCommandWALV2Segment(t, anchor,
+		mustCommandWALV2Frame(t, 1, commitlog.CommandDurabilityDurable, nil),
+		mustCommandWALV2Frame(t, 2, commitlog.CommandDurabilityRelaxed, []uint64{41}),
+		mustCommandWALV2Frame(t, 4, commitlog.CommandDurabilityRelaxed, nil),
+	)
+	writeCommandWALV2Segment(t, tail, mustCommandWALV2Frame(t, 3, commitlog.CommandDurabilityRelaxed, nil))
+	return walDir, classifyCommandWALV2Directory(t, walDir), anchor, tail
+}
+
+func classifyCommandWALV2Directory(t *testing.T, walDir string) commandWALV2Classification {
+	t.Helper()
+	segments, err := listSegmentsInDir(walDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classification, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return classification
 }
 
 func commandWALV2RepairFixture(t *testing.T) (string, commandWALV2Classification, string, string) {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 )
 
@@ -104,6 +105,27 @@ func TestCommandFrameV2RejectsInvalidClassBeforeDestinationMutation(t *testing.T
 		if string(dst) != string(want) {
 			t.Fatalf("class=%d mutated destination: got %q want %q", class, dst, want)
 		}
+	}
+}
+
+func TestCommandFrameV2RejectsCriticalFeatureFlagsBeforeDestinationMutation(t *testing.T) {
+	backing := make([]byte, 512)
+	for i := range backing {
+		backing[i] = byte(i)
+	}
+	want := append([]byte(nil), backing...)
+	if _, err := EncodeCommandFrameV2To(backing[:0], CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		FeatureFlags:    1,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	}); !errors.Is(err, ErrCommandWALUnsupportedCriticalFlag) {
+		t.Fatalf("critical feature flag error=%v, want ErrCommandWALUnsupportedCriticalFlag", err)
+	}
+	if !reflect.DeepEqual(backing, want) {
+		t.Fatal("critical feature flag mutated destination backing storage")
 	}
 }
 
