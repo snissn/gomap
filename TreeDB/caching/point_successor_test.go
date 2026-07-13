@@ -9,7 +9,28 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type pointSuccessorEntryErrorIterator struct {
+	iterator.UnsafeIterator
+	err       error
+	entryRead bool
+}
+
+func (it *pointSuccessorEntryErrorIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	value, ptr, flags := it.UnsafeIterator.UnsafeEntry()
+	it.entryRead = true
+	return value, ptr, flags
+}
+
+func (it *pointSuccessorEntryErrorIterator) Error() error {
+	if it.entryRead {
+		return it.err
+	}
+	return it.UnsafeIterator.Error()
+}
 
 func openPointSuccessorTestDB(t *testing.T, backend *MockBackend) *DB {
 	t.Helper()
@@ -68,6 +89,26 @@ func TestSeekGE_SourcePrecedenceTombstonesAndBounds(t *testing.T) {
 	requireSeekGE(t, db, []byte("d"), []byte("e"), []byte("d"), []byte("queued-d"))
 	if key, value, found, err := db.SeekGE([]byte("e"), []byte("f")); err != nil || found || key != nil || value != nil {
 		t.Fatalf("bounded miss = (%q,%q,%t,%v), want nil,nil,false,nil", key, value, found, err)
+	}
+}
+
+func TestSeekPointSuccessorIteratorReturnsLazyEntryError(t *testing.T) {
+	wantErr := errors.New("lazy entry decode")
+	backend := NewMockBackend()
+	backend.Set([]byte("k"), []byte("value"))
+	base, err := backend.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	it := &pointSuccessorEntryErrorIterator{UnsafeIterator: base, err: wantErr}
+
+	candidate, gotErr := seekPointSuccessorIterator(it, []byte("k"), nil, nil, 0)
+	if !errors.Is(gotErr, wantErr) {
+		t.Fatalf("seekPointSuccessorIterator error = %v, want %v", gotErr, wantErr)
+	}
+	if candidate.found {
+		t.Fatalf("candidate found after lazy entry error: %+v", candidate)
 	}
 }
 
