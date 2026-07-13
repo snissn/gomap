@@ -1,12 +1,15 @@
 package valuelog
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -21,6 +24,8 @@ type pendingValueLogSuccessor struct {
 	path            string
 	fileID          uint32
 	active          StableResourceRegistration
+	stableIdentity  rootpublication.StableIdentity
+	stableObserved  bool
 	observerEmitted bool
 	failStop        bool
 }
@@ -36,7 +41,8 @@ func sameStableResourceRegistration(left, right StableResourceRegistration) bool
 		left.Reachability == right.Reachability && left.Digest == right.Digest &&
 		left.ParentGeneration == right.ParentGeneration && left.NamespaceOperation == right.NamespaceOperation &&
 		left.OldName == right.OldName && left.NewName == right.NewName &&
-		left.NamespaceParent == right.NamespaceParent && slices.Equal(left.ExternalRIDs, right.ExternalRIDs)
+		left.NamespaceParent == right.NamespaceParent && left.PinRegistry == right.PinRegistry &&
+		slices.Equal(left.ExternalRIDs, right.ExternalRIDs)
 }
 
 func normalizeStableValueLogActiveRegistration(parent *os.File, path string, active StableResourceRegistration) (StableResourceRegistration, error) {
@@ -50,6 +56,570 @@ func normalizeStableValueLogActiveRegistration(parent *os.File, path string, act
 	}
 	active.NewName = name
 	return cloneStableResourceRegistration(active), nil
+}
+
+func observeStableWriterFile(file *os.File, registry *rootpublication.IdentityPinRegistry) (rootpublication.StableIdentity, error) {
+	if registry == nil {
+		return rootpublication.StableIdentity{}, nil
+	}
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	if err := registry.Observe(identity); err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	return identity, nil
+}
+
+func (w *Writer) observeStableResourceFile(file *os.File, registry *rootpublication.IdentityPinRegistry) error {
+	if w == nil || registry == nil {
+		return nil
+	}
+	identity, err := observeStableWriterFile(file, registry)
+	if err != nil {
+		return err
+	}
+	w.stableResourcePins = registry
+	w.stableResourceIdentity = identity
+	w.stableResourceObserved = true
+	return nil
+}
+
+func (w *Writer) releaseStableResourceObservation() error {
+	if w == nil || !w.stableResourceObserved || w.stableResourcePins == nil {
+		return nil
+	}
+	err := w.stableResourcePins.Unobserve(w.stableResourceIdentity)
+	w.stableResourceIdentity = rootpublication.StableIdentity{}
+	w.stableResourceObserved = false
+	return err
+}
+
+func (w *Writer) bindStableResourcePinRegistry(registration *StableResourceRegistration) error {
+	if w == nil || registration == nil {
+		return nil
+	}
+	if registration.PinRegistry != nil {
+		if w.stableResourcePins == nil || !w.stableResourceObserved {
+			return fmt.Errorf("%w: writer registry must be installed before the file becomes deletable", rootpublication.ErrUnresolvedResource)
+		}
+		if registration.PinRegistry != w.stableResourcePins {
+			return fmt.Errorf("%w: writer stable identity registry differs from registration", rootpublication.ErrResourceConflict)
+		}
+		return nil
+	}
+	if w.stableResourcePins != nil {
+		registration.PinRegistry = w.stableResourcePins
+	}
+	return nil
+}
+
+// SetStableResourcePinRegistry installs the DB-scoped physical identity gate
+// used by every manager that can delete these segment files.
+func (m *Manager) SetStableResourcePinRegistry(registry *rootpublication.IdentityPinRegistry) error {
+	if m == nil || registry == nil {
+		return errors.New("valuelog: nil stable resource pin registry")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stableResourcePins != nil && m.stableResourcePins != registry {
+		return errors.New("valuelog: stable resource pin registry already installed")
+	}
+	if m.stableResourcePins == registry {
+		return nil
+	}
+	observed := make([]*File, 0, len(m.files))
+	for _, file := range m.files {
+		if err := m.observeStableFileWithRegistryLocked(file, registry); err != nil {
+			for _, prior := range observed {
+				_ = registry.Unobserve(prior.stableIdentity)
+				prior.stableObserved = false
+			}
+			return err
+		}
+		observed = append(observed, file)
+	}
+	m.stableResourcePins = registry
+	return nil
+}
+
+// StableResourcePinRegistry returns the deletion gate installed before this
+// manager's files became eligible for removal.
+func (m *Manager) StableResourcePinRegistry() *rootpublication.IdentityPinRegistry {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.stableResourcePins
+}
+
+// StableSegmentIdentity returns the immutable physical identity captured when
+// the manager opened fileID. Callers can carry it across an intentional evict
+// and reject a pathname replacement before fallback cleanup.
+func (m *Manager) StableSegmentIdentity(fileID uint32) (rootpublication.StableIdentity, bool) {
+	if m == nil {
+		return rootpublication.StableIdentity{}, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[fileID]
+	if file == nil || file.stableIdentity == (rootpublication.StableIdentity{}) {
+		return rootpublication.StableIdentity{}, false
+	}
+	return file.stableIdentity, true
+}
+
+// StableResourceToken captures a checked token from a manager-owned exact
+// handle while holding the manager read lock. The registry is supplied by the
+// manager and cannot be omitted or substituted by the caller.
+func (m *Manager) StableResourceToken(fileID uint32, registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	if m == nil {
+		return nil, errors.New("valuelog: nil manager")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[fileID]
+	if file == nil {
+		return nil, &fileNotFoundError{id: fileID}
+	}
+	if m.stableResourcePins == nil {
+		return nil, fmt.Errorf("%w: manager has no stable identity registry", rootpublication.ErrUnresolvedResource)
+	}
+	registration.PinRegistry = m.stableResourcePins
+	namespace, err := stableValueLogNamespaceToken(file.File, registration)
+	if err != nil {
+		return nil, err
+	}
+	defer namespace.Release()
+	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
+}
+
+func (m *Manager) observeStableFileLocked(file *File) error {
+	if m == nil || m.stableResourcePins == nil {
+		return nil
+	}
+	return m.observeStableFileWithRegistryLocked(file, m.stableResourcePins)
+}
+
+func (m *Manager) observeStableFileWithRegistryLocked(file *File, registry *rootpublication.IdentityPinRegistry) error {
+	if file == nil || registry == nil || file.stableObserved {
+		return nil
+	}
+	identity, err := rootpublication.StableIdentityFromFile(file.File)
+	if err != nil {
+		return err
+	}
+	if err := registry.Observe(identity); err != nil {
+		return err
+	}
+	namespace, err := stableDeleteNamespace(file.Path)
+	if err != nil {
+		_ = registry.Unobserve(identity)
+		return err
+	}
+	file.stableIdentity = identity
+	file.stableNamespace = namespace
+	file.stableObserved = true
+	return nil
+}
+
+func (m *Manager) unobserveStableFileLocked(file *File) error {
+	if m == nil || m.stableResourcePins == nil || file == nil || !file.stableObserved {
+		return nil
+	}
+	file.stableObserved = false
+	return m.stableResourcePins.Unobserve(file.stableIdentity)
+}
+
+func (m *Manager) stableDeleteLease(file *File) (*rootpublication.IdentityDeleteLease, error) {
+	if m == nil || file == nil || m.stableResourcePins == nil {
+		return nil, nil
+	}
+	identity := file.stableIdentity
+	if identity == (rootpublication.StableIdentity{}) {
+		var err error
+		identity, err = rootpublication.StableIdentityFromFile(file.File)
+		if err != nil {
+			return nil, err
+		}
+	}
+	namespace := file.stableNamespace
+	if namespace == "" {
+		var err error
+		namespace, err = stableDeleteNamespace(file.Path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lease, err := m.stableResourcePins.BeginDeleteAt(identity, namespace)
+	if errors.Is(err, rootpublication.ErrResourcePinned) {
+		return nil, &filePinnedError{id: file.ID, op: "delete stable resource"}
+	}
+	return lease, err
+}
+
+func stableDeleteNamespace(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("%w: empty value-log path", rootpublication.ErrUnresolvedResource)
+	}
+	parent, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	defer parent.Close()
+	identity, err := rootpublication.StableIdentityFromFile(parent)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%x/%s", identity.Platform, identity.VolumeID, identity.ObjectID, filepath.Base(path)), nil
+}
+
+func validateStableDeletePath(file *File) error {
+	if file == nil || file.File == nil || file.Path == "" {
+		return fmt.Errorf("%w: invalid value-log delete target", rootpublication.ErrUnresolvedResource)
+	}
+	identity := file.stableIdentity
+	if identity == (rootpublication.StableIdentity{}) {
+		var err error
+		identity, err = rootpublication.StableIdentityFromFile(file.File)
+		if err != nil {
+			return err
+		}
+	}
+	return validateStableDeletePathIdentity(file.Path, identity)
+}
+
+func validateStableDeletePathIdentity(path string, identity rootpublication.StableIdentity) error {
+	linked, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer linked.Close()
+	linkedIdentity, err := rootpublication.StableIdentityFromFile(linked)
+	if err != nil {
+		return err
+	}
+	if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
+		return fmt.Errorf("%w: value-log path no longer names captured identity", rootpublication.ErrResourceConflict)
+	}
+	return nil
+}
+
+func abortStableDeleteLease(lease *rootpublication.IdentityDeleteLease) {
+	if lease != nil {
+		lease.Abort()
+	}
+}
+
+func commitStableDeleteLease(lease *rootpublication.IdentityDeleteLease) {
+	if lease != nil {
+		lease.Commit()
+	}
+}
+
+func finishStableDeleteLease(lease *rootpublication.IdentityDeleteLease, deleted bool) {
+	if deleted {
+		commitStableDeleteLease(lease)
+	} else {
+		abortStableDeleteLease(lease)
+	}
+}
+
+// closeAndRemoveStableSegmentFileResult closes the manager's own handle before
+// unlink (required on Windows), then revalidates that the path still names the
+// identity captured before close. The registry lease excludes process-local
+// pin and delete races across this boundary.
+func closeAndRemoveStableSegmentFileResult(file *File, validateIdentity bool) (bool, error) {
+	if file == nil {
+		return true, nil
+	}
+	identity := file.stableIdentity
+	if validateIdentity && identity == (rootpublication.StableIdentity{}) {
+		var err error
+		identity, err = rootpublication.StableIdentityFromFile(file.File)
+		if err != nil {
+			return false, err
+		}
+	}
+	closeErr := file.Close()
+	var removed bool
+	var removeErr error
+	if validateIdentity {
+		removed, removeErr = removeSegmentFileWithRetryStable(file.Path, identity)
+	} else {
+		removed, removeErr = removeSegmentFileWithRetry(file.Path)
+	}
+	return removed, errors.Join(closeErr, removeErr)
+}
+
+const stableDeleteQuarantineMarker = ".delete-"
+
+func stableDeleteQuarantinePaths(path string, identity rootpublication.StableIdentity) (string, string, error) {
+	base := filepath.Base(path)
+	if path == "" || base == "." || base == string(filepath.Separator) || identity.Platform == "" || identity.ObjectID == [16]byte{} {
+		return "", "", fmt.Errorf("%w: invalid stable delete quarantine intent", rootpublication.ErrUnresolvedResource)
+	}
+	name := fmt.Sprintf(".%s%s%016x-%032x", base, stableDeleteQuarantineMarker, identity.VolumeID, identity.ObjectID)
+	dir := filepath.Join(filepath.Dir(path), name)
+	return dir, filepath.Join(dir, base), nil
+}
+
+func parseStableDeleteQuarantineName(name string) (string, rootpublication.StableIdentity, bool) {
+	marker := strings.LastIndex(name, stableDeleteQuarantineMarker)
+	if !strings.HasPrefix(name, ".") || marker <= 1 {
+		return "", rootpublication.StableIdentity{}, false
+	}
+	base := name[1:marker]
+	encoded := name[marker+len(stableDeleteQuarantineMarker):]
+	if filepath.Base(base) != base || len(encoded) != 49 || encoded[16] != '-' {
+		return "", rootpublication.StableIdentity{}, false
+	}
+	volumeID, err := strconv.ParseUint(encoded[:16], 16, 64)
+	if err != nil {
+		return "", rootpublication.StableIdentity{}, false
+	}
+	objectBytes, err := hex.DecodeString(encoded[17:])
+	if err != nil || len(objectBytes) != 16 {
+		return "", rootpublication.StableIdentity{}, false
+	}
+	var objectID [16]byte
+	copy(objectID[:], objectBytes)
+	if objectID == [16]byte{} {
+		return "", rootpublication.StableIdentity{}, false
+	}
+	return base, rootpublication.StableIdentity{Platform: runtime.GOOS, VolumeID: volumeID, ObjectID: objectID}, true
+}
+
+func stableIdentityAtPath(path string) (rootpublication.StableIdentity, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	defer file.Close()
+	return rootpublication.StableIdentityFromFile(file)
+}
+
+// recoverStableDeleteQuarantines reconciles deterministic same-parent delete
+// intents before the manager exposes any segment from that directory. A
+// matching quarantined inode is the delete target and can be finished. An
+// unexpected inode is conservatively restored when the canonical name is
+// absent, while ambiguous two-inode states fail closed.
+func recoverStableDeleteQuarantines(parent string) error {
+	entries, err := os.ReadDir(parent)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		base, expected, ok := parseStableDeleteQuarantineName(entry.Name())
+		if !ok || !entry.IsDir() {
+			continue
+		}
+		if _, err := recoverStableDeleteQuarantine(parent, entry.Name(), base, expected); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireNoStableDeleteQuarantines(parent string) error {
+	entries, err := os.ReadDir(parent)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if _, _, ok := parseStableDeleteQuarantineName(entry.Name()); ok && entry.IsDir() {
+			return fmt.Errorf("%w: %w: pending quarantine %q", ErrStableDeleteRecoveryRequired, rootpublication.ErrRecoveryRequired, filepath.Join(parent, entry.Name()))
+		}
+	}
+	return nil
+}
+
+func recoverStableDeleteQuarantine(parent, quarantineName, base string, expected rootpublication.StableIdentity) (bool, error) {
+	quarantineDir := filepath.Join(parent, quarantineName)
+	entries, err := os.ReadDir(quarantineDir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if len(entries) == 0 {
+		return false, os.Remove(quarantineDir)
+	}
+	if len(entries) != 1 || entries[0].Name() != base || entries[0].IsDir() {
+		return false, fmt.Errorf("%w: stable delete quarantine %q contains unexpected entries", rootpublication.ErrResourceConflict, quarantineDir)
+	}
+	quarantinePath := filepath.Join(quarantineDir, base)
+	quarantinedIdentity, err := stableIdentityAtPath(quarantinePath)
+	if err != nil {
+		return false, err
+	}
+	originalPath := filepath.Join(parent, base)
+	originalIdentity, originalErr := stableIdentityAtPath(originalPath)
+	originalExists := originalErr == nil
+	if originalErr != nil && !os.IsNotExist(originalErr) {
+		return false, originalErr
+	}
+
+	if rootpublication.SamePhysicalIdentity(quarantinedIdentity, expected) {
+		if err := os.Remove(quarantinePath); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		if err := os.Remove(quarantineDir); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		// If originalExists names the same inode, this merely removes a partial
+		// rollback hard link. If it names a replacement, the replacement remains.
+		completed := !originalExists || !rootpublication.SamePhysicalIdentity(originalIdentity, quarantinedIdentity)
+		return completed, nil
+	}
+
+	if originalExists {
+		return false, fmt.Errorf("%w: stable delete quarantine %q and canonical path %q name different unexpected identities", rootpublication.ErrResourceConflict, quarantinePath, originalPath)
+	}
+	if err := os.Rename(quarantinePath, originalPath); err != nil {
+		return false, err
+	}
+	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(originalPath), parent, "", originalPath); err != nil {
+		return false, err
+	}
+	return false, os.Remove(quarantineDir)
+}
+
+// removeStableSegmentFileOnce first moves the linked name into a private
+// same-directory quarantine and records that completed canonical-name unlink.
+// It then validates and unlinks the renamed object. A replacement created at
+// the original name after the rename is never passed to the unlink syscall.
+func removeStableSegmentFileOnce(path string, identity rootpublication.StableIdentity) (bool, error) {
+	parent := filepath.Dir(path)
+	resource := segmentNamespaceResource(path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		return false, err
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		if !os.IsExist(err) {
+			return false, err
+		}
+		base, expected, ok := parseStableDeleteQuarantineName(filepath.Base(quarantineDir))
+		if !ok {
+			return false, fmt.Errorf("%w: invalid existing stable delete quarantine %q", rootpublication.ErrResourceConflict, quarantineDir)
+		}
+		completed, err := recoverStableDeleteQuarantine(parent, filepath.Base(quarantineDir), base, expected)
+		if err != nil {
+			return false, err
+		}
+		if completed {
+			return true, nil
+		}
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return true, nil
+		} else if err != nil {
+			return false, err
+		}
+		if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+			return false, err
+		}
+	}
+	if err := os.Rename(path, quarantinePath); err != nil {
+		_ = os.Remove(quarantineDir)
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, resource, parent, path, ""); err != nil {
+		// The canonical name is already gone. Commit the identity deletion even
+		// though the injected cut deliberately leaves the private inode behind.
+		return true, err
+	}
+	restore := func() error {
+		if err := os.Link(quarantinePath, path); err != nil {
+			return err
+		}
+		if err := os.Remove(quarantinePath); err != nil {
+			return err
+		}
+		return durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, resource, parent, "", path)
+	}
+	if err := validateStableDeletePathIdentity(quarantinePath, identity); err != nil {
+		restoreErr := restore()
+		if restoreErr == nil {
+			restoreErr = os.Remove(quarantineDir)
+		}
+		return false, errors.Join(err, restoreErr)
+	}
+	removeErr := removeSegmentPath(quarantinePath)
+	if removeErr != nil && !os.IsNotExist(removeErr) {
+		if restoreErr := restore(); restoreErr != nil {
+			return false, fmt.Errorf("%w: stable delete failed (%v) and quarantine restore failed: %v", rootpublication.ErrResourceConflict, removeErr, restoreErr)
+		}
+		_ = os.Remove(quarantineDir)
+		return false, removeErr
+	}
+	cleanupErr := os.Remove(quarantineDir)
+	return true, cleanupErr
+}
+
+func (m *Manager) deleteZombieFile(file *File) error {
+	if m == nil || file == nil {
+		return nil
+	}
+	m.mu.Lock()
+	current, exists := m.files[file.ID]
+	if !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() {
+		m.mu.Unlock()
+		return nil
+	}
+	lease, err := m.stableDeleteLease(file)
+	if errors.Is(err, ErrFilePinned) {
+		m.mu.Unlock()
+		if file.retryDeletePending.CompareAndSwap(false, true) {
+			go m.retryZombieDelete(file)
+		}
+		return nil
+	}
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if lease != nil {
+		if err := validateStableDeletePath(file); err != nil {
+			abortStableDeleteLease(lease)
+			m.mu.Unlock()
+			return err
+		}
+	}
+	m.mu.Unlock()
+
+	deleted, unlinkErr := closeAndRemoveStableSegmentFileResult(file, lease != nil)
+	if !deleted {
+		abortStableDeleteLease(lease)
+		if isWindowsSharingViolationError(unlinkErr) && file.retryDeletePending.CompareAndSwap(false, true) {
+			go m.retryZombieDelete(file)
+			return nil
+		}
+		return unlinkErr
+	}
+	commitStableDeleteLease(lease)
+	m.mu.Lock()
+	if current, exists := m.files[file.ID]; exists && current == file && file.RefCount.Load() == 0 && file.IsZombie.Load() {
+		delete(m.files, file.ID)
+		_ = m.unobserveStableFileLocked(file)
+	}
+	m.mu.Unlock()
+	return unlinkErr
 }
 
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
@@ -119,6 +689,7 @@ type StableResourceRegistration struct {
 	OldName            string
 	NewName            string
 	NamespaceParent    *os.File
+	PinRegistry        *rootpublication.IdentityPinRegistry
 }
 
 // StableResourceRotation retains exact handles for the segment closed by a
@@ -164,6 +735,9 @@ func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
+	if err := w.bindStableResourcePinRegistry(&registration); err != nil {
+		return nil, err
+	}
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
@@ -201,7 +775,7 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-		ContentSynced: contentSynced,
+		ContentSynced: contentSynced, PinRegistry: registration.PinRegistry,
 	}
 	switch domain {
 	case rootpublication.StableProducerValueLog:
@@ -289,11 +863,18 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		}
 		return nil, errors.New("valuelog: stable parent unavailable")
 	}
+	closed = cloneStableResourceRegistration(closed)
+	active = cloneStableResourceRegistration(active)
+	if err := w.bindStableResourcePinRegistry(&closed); err != nil {
+		return nil, err
+	}
+	if err := w.bindStableResourcePinRegistry(&active); err != nil {
+		return nil, err
+	}
 	normalizedActive, err := normalizeStableValueLogActiveRegistration(w.stableParent, path, active)
 	if err != nil {
 		return nil, err
 	}
-	closed = cloneStableResourceRegistration(closed)
 	if pending := w.pendingStableSuccessor; pending != nil {
 		if pending.parent != w.stableParent || pending.path != path || pending.fileID != fileID ||
 			!sameStableResourceRegistration(pending.active, normalizedActive) {
@@ -320,9 +901,22 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			closedToken.Release()
 			return nil, openErr
 		}
+		preparedIdentity, observeErr := observeStableWriterFile(prepared, w.stableResourcePins)
+		if observeErr != nil {
+			validateErr := rootpublication.ValidateStableChildLink(w.stableParent, prepared, filepath.Base(path))
+			closeErr := prepared.Close()
+			var removeErr, syncErr error
+			if validateErr == nil {
+				removeErr = rootpublication.RemoveStableChildFile(w.stableParent, filepath.Base(path))
+				syncErr = w.stableParent.Sync()
+			}
+			closedToken.Release()
+			return nil, errors.Join(observeErr, validateErr, closeErr, removeErr, syncErr)
+		}
 		pending = &pendingValueLogSuccessor{
 			parent: w.stableParent, file: prepared, path: path, fileID: fileID,
-			active: normalizedActive,
+			active: normalizedActive, stableIdentity: preparedIdentity,
+			stableObserved: w.stableResourcePins != nil,
 		}
 		w.pendingStableSuccessor = pending
 	}
@@ -351,13 +945,15 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		return nil, err
 	}
 	old := w.f
-	if err := w.closeRotatedResource(old); err != nil {
+	closeErr := w.closeRotatedResource(old)
+	observeErr := w.releaseStableResourceObservation()
+	if err := errors.Join(closeErr, observeErr); err != nil {
 		activeToken.Release()
 		closedToken.Release()
 		pending.failStop = true
 		w.f = nil
 		w.bw = nil
-		return nil, fmt.Errorf("valuelog: close old writer during stable rotation: %w", err)
+		return nil, fmt.Errorf("valuelog: retire old writer during stable rotation: %w", err)
 	}
 	pending.file = nil
 	w.f = prepared
@@ -367,6 +963,11 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	w.appendMax = defaultBufferSize
 	w.appendBuf = w.appendBuf[:0]
 	w.trimTransientScratchBuffers()
+	if pending.stableObserved {
+		w.stableResourceIdentity = pending.stableIdentity
+		w.stableResourceObserved = true
+		pending.stableObserved = false
+	}
 	w.pendingStableSuccessor = nil
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
 }

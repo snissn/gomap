@@ -8,11 +8,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
+
+func wrapReadOnlyValueLogRecoveryError(err error) error {
+	if errors.Is(err, rootpublication.ErrRecoveryRequired) {
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	return err
+}
 
 func openReadOnly(opts Options) (*DB, error) {
 	if err := applyReadOnlyDefaults(&opts); err != nil {
@@ -51,17 +59,18 @@ func openReadOnly(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	vm, err := valuelog.NewManager(layout.valueVLogDir)
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	vm, err := valuelog.NewReadOnlyManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
 		_ = lock.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		_ = p.Close()
 		_ = lock.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
@@ -81,6 +90,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		readOnly:                       true,
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
+		valueLogIdentityPins:           valueLogIdentityPins,
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,
 		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
@@ -202,15 +212,16 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	vm, err := valuelog.NewManager(layout.valueVLogDir)
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	vm, err := valuelog.NewReadOnlyManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		_ = p.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
@@ -230,6 +241,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		readOnly:                       true,
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
+		valueLogIdentityPins:           valueLogIdentityPins,
 		adaptive:                       adaptiveCtrl,
 		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
 		keepRecent:                     opts.KeepRecent,

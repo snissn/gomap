@@ -189,6 +189,10 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	testRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t)
 }
 
+func TestRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
+	testRotateToWithStableResourcesOwnsRegistryObservations(t)
+}
+
 func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
 	testStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t)
 }

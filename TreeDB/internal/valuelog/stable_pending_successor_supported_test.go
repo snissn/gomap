@@ -224,6 +224,72 @@ func TestStableValueLogTokenFailureRetriesExactPendingSuccessor(t *testing.T) {
 	}
 }
 
+func TestStableValueLogPendingSuccessorTransfersRegistryObservationOnRetry(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "000001.vlog")
+	secondPath := filepath.Join(dir, "000002.vlog")
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(firstPath, 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendStablePendingValue(t, writer, 1)
+	closed, active := stablePendingRegistrations(1, 2)
+
+	injected := errors.New("injected value-log namespace-token failure")
+	originalFactory := newValueLogStableNamespaceToken
+	factoryCalls := 0
+	newValueLogStableNamespaceToken = func(spec rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return nil, injected
+		}
+		return originalFactory(spec)
+	}
+	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+
+	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("failed rotation returned owned resources")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("first rotation error=%v want token failure", err)
+	}
+	if got := registry.ActiveIdentities(); got != 2 {
+		t.Fatalf("pending rotation identities=%d want old and exact successor", got)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("pending rotation pins=%d want 0 after failed token capture", got)
+	}
+
+	rotation, err = writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
+	if err != nil {
+		t.Fatalf("identical retry: %v", err)
+	}
+	if got := registry.ActiveIdentities(); got != 2 {
+		rotation.Release()
+		t.Fatalf("installed rotation identities=%d want active successor plus pinned closed segment", got)
+	}
+	if got := registry.ActivePins(); got != 2 {
+		rotation.Release()
+		t.Fatalf("installed rotation pins=%d want closed and active tokens", got)
+	}
+	rotation.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("released rotation pins=%d want 0", got)
+	}
+	if got := registry.ActiveIdentities(); got != 1 {
+		t.Fatalf("released rotation identities=%d want active successor only", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("closed writer identities=%d want 0", got)
+	}
+}
+
 func TestStableValueLogPendingSuccessorReplacementFailsClosedWithoutUnlink(t *testing.T) {
 	beforeFDs, checkFDs := valueLogOpenDescriptorCount(t)
 	dir := t.TempDir()

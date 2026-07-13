@@ -6,6 +6,15 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+// ValueLogIdentityPinRegistry exposes the DB-scoped physical deletion gate to
+// wrappers that manage the same value-log namespace.
+func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
+	if db == nil {
+		return nil
+	}
+	return db.valueLogIdentityPins
+}
+
 // NewStableDBResourceToken registers the exact already-open index handle.
 // Meta/root publication stays adjacent (#3679), while freelist/COW publication
 // stays adjacent (#3678); neither has an independent external identity here.
