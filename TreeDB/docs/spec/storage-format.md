@@ -2228,3 +2228,62 @@ value-log paths, reserve rewrite RIDs from the live cached allocator, and
 reconcile cached split value-log writers after backend maintenance so later
 writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
 reusing segment file names.
+
+# Freelist Generation V1 (standalone, not yet an active DB meta format)
+
+`TreeDB/freelist.FreelistGenerationV1` is the standalone immutable allocator
+view for the upcoming two-meta recovery path. It is encoded as 4096-byte pager
+pages using the normal page header and CRC32 convention. Page types `0x05`
+through `0x08` are reserved for the generation header, radix index, state
+chunk, and candidate reservation record. They are not referenced by production
+metas until the atomic activation owned by #3679.
+
+The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
+index page contains up to 16 ordered child summaries: page identity, child CRC,
+free and retired counts, and the minimum `lastReachableCommitSeq`. A chunk
+contains a 256-bit free bitmap and 256 retirement sequences. Free means bitmap
+bit 1 and sequence 0; retired means bit 0 and sequence non-zero; live or
+reserved means both zero. A one-chunk mutation therefore emits one chunk, one
+immutable index path, one or more reservation pages, and one generation header.
+Reservation pages form a contiguous, ordered chain so fragmented transactions
+are not bounded by one page. Unchanged paths retain their existing page
+identities and bytes.
+
+The generation header binds its exact root page identity and CRC; every index
+entry recursively binds its child page CRC. The header also binds the
+reservation chain digest, generation/parent identity, commit sequences, high-water
+boundary, and free/retired summaries with SHA-256. The reservation chain binds
+a 128-bit candidate identity and canonical extents for reused data pages,
+appended data pages, target metadata pages, and replaced metadata pending
+retirement. Its SHA-256 covers every ordered chain page, including page IDs and
+successor links. Every decoder validates the pager ID/type/CRC, magic/version,
+canonical zero tail, chain order and cardinality, sorted entries, acyclic page
+graph, bounds below high-water, summary counts, and semantic digest.
+
+Freelist metadata pages are allocated only from the candidate-owned high-water
+tail. Before any metadata page is written, the process reservation ledger
+atomically owns the candidate's complete contiguous metadata range as well as
+its data-page allocations. A competing candidate skips an owned tail range;
+its durable reservation record classifies the skipped prefix as abandoned
+append space instead of silently treating those page IDs as its own data or
+metadata. A candidate transaction is single-use once materialization begins:
+after any page-sink failure, retry starts from the immutable base rather than
+reusing a partially assigned COW tree. Once the first metadata write is
+attempted, ordinary abandonment cannot release that tail. Failure converts the
+complete reserved tail into process-owned burned space; a later candidate skips
+it, records the skipped range as abandoned append space, and releases the
+process reservation only after that replacement record is durably published.
+Replaced parent header,
+reservation-chain, chunk, and index pages are recorded with the parent's commit
+sequence and imported as retired state by the next candidate; they are not
+recursively inserted into the generation that replaces them. Physical
+file-length convergence is consequently a #3681 vacuum/rewrite property, not a
+claim of this high-water-only codec.
+
+Pages enter the free set only through an explicit recovery capability. Their
+`lastReachableCommitSeq` must be strictly before the oldest recoverable root,
+every snapshot pin, and the retained history floor. Visible, retryable,
+poisoned, and shutdown candidates retain ownership until confirmed durable
+publication. Reopen reconstructs surviving ownership from the selected
+generation and its durable reservation record; elapsed time, `KeepRecent`, and
+the visible commit sequence alone never grant reuse.

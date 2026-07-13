@@ -46,6 +46,12 @@ const (
 	PageTypeFreelist PageType = 0x02
 	PageTypeInternal PageType = 0x03
 	PageTypeLeaf     PageType = 0x04
+	// Page types 0x05-0x08 are reserved by the standalone COW freelist V1
+	// codec. Production metas do not reference them until the format cutover.
+	PageTypeFreelistGeneration  PageType = 0x05
+	PageTypeFreelistIndex       PageType = 0x06
+	PageTypeFreelistChunk       PageType = 0x07
+	PageTypeFreelistReservation PageType = 0x08
 )
 
 // PageHeader represents the 16-byte header of a page.
