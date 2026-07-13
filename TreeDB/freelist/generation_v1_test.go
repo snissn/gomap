@@ -595,6 +595,41 @@ func TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages(t *testing.T) {
 	}
 }
 
+func TestFreelistGenerationV1_AppendOnlyEmptySuccessorRewritesRoot(t *testing.T) {
+	store := NewMemoryPageStoreV1()
+	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, nil, nil), 2, store)
+	oldRootID := base.root.pageID
+	txn := NewFreelistTxn(base, NewReservationLedger())
+	allocated, err := txn.Allocate(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("append-only-empty-root"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Generation().root.pageID == oldRootID {
+		t.Fatalf("append-only generation reused parent root page %d", oldRootID)
+	}
+	loaded, err := LoadGenerationV1(store, candidate.GenerationRef())
+	if err != nil {
+		t.Fatalf("LoadGenerationV1 append-only empty successor: %v", err)
+	}
+	if loaded.Allocatable(allocated) {
+		t.Fatalf("reopen returned appended page %d to the freelist", allocated)
+	}
+	var retiredOldRoot bool
+	for _, pending := range loaded.ReservationRecord().pendingMetadata() {
+		if pending.id == oldRootID {
+			retiredOldRoot = true
+			break
+		}
+	}
+	if !retiredOldRoot {
+		t.Fatalf("append-only successor did not retain parent root %d for deferred retirement", oldRootID)
+	}
+}
+
 func TestFreelistGenerationV1_ReplacedMetadataWaitsForExplicitHorizon(t *testing.T) {
 	store := NewMemoryPageStoreV1()
 	first := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, []uint64{4}, nil), 2, store)

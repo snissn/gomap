@@ -498,6 +498,14 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	// base so a partial sink failure cannot retain unwritten page identities.
 	t.consumed = true
 	t.root = detachUnmaterialized(t.root, 0)
+	if t.root.freeCount+t.root.retiredCount == 0 {
+		if t.root.pageID != 0 {
+			t.replacedMetadata[t.root.pageID] = struct{}{}
+		}
+		// The selected generation's root is exact-generation authority. Even an
+		// otherwise unchanged empty tree must publish a root for this generation.
+		t.root = cloneStateNode(t.root)
+	}
 	var reused, appended []uint64
 	dataIDs := make([]uint64, 0, len(t.allocated))
 	for _, allocation := range t.allocated {
@@ -529,7 +537,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		return nil, err
 	}
 	statePageCount := countUnmaterializedStatePages(t.root, 0)
-	if t.root.freeCount+t.root.retiredCount == 0 && t.root.pageID == 0 {
+	if t.root.freeCount+t.root.retiredCount == 0 {
 		statePageCount = 1
 	}
 	metadataStart, reservedMetadataCount, err := t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, dataIDs, extents)
@@ -552,18 +560,16 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		},
 	}
 	if t.root.freeCount+t.root.retiredCount == 0 {
-		if t.root.pageID == 0 {
-			// An empty tree still has one immutable root index page.
-			t.root.pageID = next
-			next++
-			b, err := encodeIndexPage(t.root.pageID, generationID, t.root, 0)
-			if err != nil {
-				return nil, err
-			}
-			t.root.checksum = binary.LittleEndian.Uint32(b[8:12])
-			if err := recorded.write(t.root.pageID, b); err != nil {
-				return nil, err
-			}
+		// An empty tree still has one immutable exact-generation root page.
+		t.root.pageID = next
+		next++
+		b, err := encodeIndexPage(t.root.pageID, generationID, t.root, 0)
+		if err != nil {
+			return nil, err
+		}
+		t.root.checksum = binary.LittleEndian.Uint32(b[8:12])
+		if err := recorded.write(t.root.pageID, b); err != nil {
+			return nil, err
 		}
 	} else if err := emitStatePages(t.root, 0, generationID, &next, recorded); err != nil {
 		return nil, err

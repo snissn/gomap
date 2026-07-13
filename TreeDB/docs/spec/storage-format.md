@@ -2172,6 +2172,7 @@ value-log paths, reserve rewrite RIDs from the live cached allocator, and
 reconcile cached split value-log writers after backend maintenance so later
 writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
 reusing segment file names.
+
 # Freelist Generation V1 (standalone, not yet an active DB meta format)
 
 `TreeDB/freelist.FreelistGenerationV1` is the standalone immutable allocator
