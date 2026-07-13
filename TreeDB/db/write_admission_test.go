@@ -394,3 +394,32 @@ func TestStorageMaintenanceRejectsClosingAfterMaintenancePreflight(t *testing.T)
 		})
 	}
 }
+
+func TestValueLogRewriteAdmissionPrecedesManagerAccess(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	manager := db.valueLogManager
+	db.valueLogManager = nil
+	seamReached := false
+	db.testStorageMaintenanceBeforeLockHook = func(operation string) {
+		if operation == "value-log-rewrite" {
+			seamReached = true
+		}
+	}
+	defer func() {
+		db.testStorageMaintenanceBeforeLockHook = nil
+		db.valueLogManager = manager
+	}()
+
+	_, err = db.ValueLogRewriteOnline(nil, ValueLogRewriteOnlineOptions{})
+	if !seamReached {
+		t.Fatal("value-log rewrite accessed the manager before maintenance admission")
+	}
+	if err == nil || err.Error() != "value log manager unavailable" {
+		t.Fatalf("ValueLogRewriteOnline error=%v, want manager unavailable", err)
+	}
+}
