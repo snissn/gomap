@@ -347,6 +347,7 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 	for i := range classification.CompletePrefix {
 		completeByPath[classification.CompletePrefix[i].Coordinate.SourceSegment] = true
 	}
+	retainedFloorByPath := commandWALV2RetainedRepairFloors(classification, completeByPath)
 
 	completeStage := func() { diagnostic.CompletedRepairStages++ }
 	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
@@ -354,11 +355,21 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 		if frame.Coordinate.SourceSegment == anchor.Coordinate.SourceSegment {
 			continue
 		}
-		pathMode := commandWALV2TruncateDisposable
+		truncatePlan := commandWALV2TruncatePlan{pathMode: commandWALV2TruncateDisposable}
 		if completeByPath[frame.Coordinate.SourceSegment] {
-			pathMode = commandWALV2TruncateRetained
+			retainedFloor, hasRetainedFloor := retainedFloorByPath[frame.Coordinate.SourceSegment]
+			if !hasRetainedFloor {
+				return diagnostic, errors.Join(
+					fmt.Errorf("%w: retained repair path %s has no classified floor", commitlog.ErrCorrupt, filepath.Base(frame.Coordinate.SourceSegment)),
+					ErrRecoveryRequired,
+				)
+			}
+			truncatePlan = commandWALV2TruncatePlan{
+				pathMode:      commandWALV2TruncateRetained,
+				retainedFloor: retainedFloor,
+			}
 		}
-		if err := truncateAndSyncCommandWALV2(walDir, frame.Coordinate.SourceSegment, frame.Coordinate.StartOffset, pathMode); err != nil {
+		if err := truncateAndSyncCommandWALV2(walDir, frame.Coordinate.SourceSegment, frame.Coordinate.StartOffset, truncatePlan); err != nil {
 			return diagnostic, err
 		}
 		completeStage()
@@ -383,11 +394,35 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 	}
 	diagnostic.DirectorySyncCompleted = true
 	completeStage()
-	if err := truncateAndSyncCommandWALV2(walDir, anchor.Coordinate.SourceSegment, anchor.Coordinate.StartOffset, commandWALV2TruncateRetained); err != nil {
+	if err := truncateAndSyncCommandWALV2(walDir, anchor.Coordinate.SourceSegment, anchor.Coordinate.StartOffset, commandWALV2TruncatePlan{
+		pathMode:      commandWALV2TruncateRetained,
+		retainedFloor: anchor.Coordinate.StartOffset,
+	}); err != nil {
 		return diagnostic, err
 	}
 	completeStage()
 	return diagnostic, nil
+}
+
+// commandWALV2RetainedRepairFloors derives the lowest safe size for every
+// mixed retained path from the immutable classification. A retry may observe
+// a size below an earlier, larger planned cut only when it is still at or
+// above this floor; the floor stage itself remains in the plan and will sync
+// the final retained prefix. Sizes below the floor have lost prefix bytes and
+// must fail closed.
+func commandWALV2RetainedRepairFloors(classification commandWALV2Classification, completeByPath map[string]bool) map[string]int64 {
+	floors := make(map[string]int64)
+	for i := range classification.DiscardSuffix {
+		coordinate := classification.DiscardSuffix[i].Coordinate
+		if !completeByPath[coordinate.SourceSegment] {
+			continue
+		}
+		floor, exists := floors[coordinate.SourceSegment]
+		if !exists || coordinate.StartOffset < floor {
+			floors[coordinate.SourceSegment] = coordinate.StartOffset
+		}
+	}
+	return floors
 }
 
 func planCommandWALV2RepairStages(classification commandWALV2Classification) ([]string, []string) {
@@ -527,16 +562,27 @@ const (
 	commandWALV2TruncateDisposable
 )
 
-func truncateAndSyncCommandWALV2(walDir, path string, offset int64, pathMode commandWALV2TruncatePathMode) error {
-	if pathMode != commandWALV2TruncateRetained && pathMode != commandWALV2TruncateDisposable {
+type commandWALV2TruncatePlan struct {
+	pathMode      commandWALV2TruncatePathMode
+	retainedFloor int64
+}
+
+func truncateAndSyncCommandWALV2(walDir, path string, offset int64, plan commandWALV2TruncatePlan) error {
+	if plan.pathMode != commandWALV2TruncateRetained && plan.pathMode != commandWALV2TruncateDisposable {
 		return errors.Join(commitlog.ErrCorrupt, ErrRecoveryRequired)
+	}
+	if plan.pathMode == commandWALV2TruncateRetained && (plan.retainedFloor < 0 || plan.retainedFloor > offset) {
+		return errors.Join(
+			fmt.Errorf("%w: retained repair path %s has invalid floor=%d for offset=%d", commitlog.ErrCorrupt, filepath.Base(path), plan.retainedFloor, offset),
+			ErrRecoveryRequired,
+		)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
-		if pathMode == commandWALV2TruncateDisposable && os.IsNotExist(err) {
+		if plan.pathMode == commandWALV2TruncateDisposable && os.IsNotExist(err) {
 			return nil
 		}
-		if pathMode == commandWALV2TruncateRetained {
+		if plan.pathMode == commandWALV2TruncateRetained {
 			return errors.Join(
 				fmt.Errorf("%w: retained repair path %s is unavailable", commitlog.ErrCorrupt, filepath.Base(path)),
 				err,
@@ -550,15 +596,21 @@ func truncateAndSyncCommandWALV2(walDir, path string, offset int64, pathMode com
 		_ = f.Close()
 		return errors.Join(statErr, ErrRecoveryRequired)
 	}
-	if pathMode == commandWALV2TruncateRetained && info.Size() < offset {
+	if plan.pathMode == commandWALV2TruncateRetained && info.Size() < plan.retainedFloor {
 		closeErr := f.Close()
 		return errors.Join(
-			fmt.Errorf("%w: retained repair path %s size=%d is below offset=%d", commitlog.ErrCorrupt, filepath.Base(path), info.Size(), offset),
+			fmt.Errorf("%w: retained repair path %s size=%d is below floor=%d", commitlog.ErrCorrupt, filepath.Base(path), info.Size(), plan.retainedFloor),
 			closeErr,
 			ErrRecoveryRequired,
 		)
 	}
-	if pathMode == commandWALV2TruncateDisposable && info.Size() <= offset {
+	if plan.pathMode == commandWALV2TruncateRetained && info.Size() < offset {
+		if closeErr := f.Close(); closeErr != nil {
+			return errors.Join(closeErr, ErrRecoveryRequired)
+		}
+		return nil
+	}
+	if plan.pathMode == commandWALV2TruncateDisposable && info.Size() <= offset {
 		if closeErr := f.Close(); closeErr != nil {
 			return errors.Join(closeErr, ErrRecoveryRequired)
 		}
