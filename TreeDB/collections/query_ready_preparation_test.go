@@ -149,6 +149,56 @@ func TestPrepareQueryReadyColumnGenerationCancellationAndLifetime(t *testing.T) 
 	}
 }
 
+func TestPreparedGenerationOwnerCloseRetiresOnlyItsFileSelection(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, columnPhysicalJSONBenchParityEventsP0())
+	defer closeFn()
+	oldPrepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = oldPrepared.Close() }()
+	newPrepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = newPrepared.Close() }()
+	oldFiles, newFiles := oldPrepared.Files(), newPrepared.Files()
+	if oldFiles.Base == newFiles.Base {
+		t.Fatalf("preparations unexpectedly selected the same base descriptor: %+v", oldFiles.Base)
+	}
+	request := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
+	oldRunner, err := collection.PrepareQueryReadyColumnPhysicalQuery(oldFiles, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldRunner.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldRunner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	newRunner, err := collection.PrepareQueryReadyColumnPhysicalQuery(newFiles, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = newRunner.Close() }()
+	if err := oldPrepared.Close(); err != nil {
+		t.Fatalf("close old owner while replacement runner is active: %v", err)
+	}
+	if _, err := newRunner.Run(); err != nil {
+		t.Fatalf("replacement runner after old owner close: %v", err)
+	}
+	if err := newRunner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newPrepared.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrepareQueryReadyColumnGenerationExecutesCanonicalColumnStoreKinds(t *testing.T) {
 	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
 		t.Skip("query-ready generation file open requires read-only mmap support")

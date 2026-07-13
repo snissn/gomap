@@ -123,6 +123,7 @@ func (p *QueryReadyColumnPreparedGeneration) Close() error {
 type queryReadyColumnPreparedLifetime struct {
 	collection *Collection
 	identity   ColumnStoreCacheIdentity
+	files      typedcolumn.QueryReadyGenerationOpenFiles
 	prepared   *queryReadyPreparedGeneration
 
 	mu       sync.Mutex
@@ -161,7 +162,7 @@ func (l *queryReadyColumnPreparedLifetime) closeOwner() error {
 	}
 	l.closing = true
 	l.mu.Unlock()
-	if err := l.collection.retireCollectionQueryReadyGenerationCache(l.identity); err != nil {
+	if err := l.collection.retireCollectionQueryReadyGenerationCache(l.identity, l.files); err != nil {
 		l.mu.Lock()
 		l.closing = false
 		l.mu.Unlock()
@@ -314,6 +315,10 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 		Path: descriptor.Path, Offset: descriptor.Offset, Length: descriptor.Length,
 		Generation: descriptor.Identity.Generation, Kind: QueryReadyColumnGenerationBase,
 	}}
+	selectedFiles := typedcolumn.QueryReadyGenerationOpenFiles{
+		Key: key, Base: descriptor, SnapshotGeneration: key.Identity.Generation,
+		Bound: typedcolumn.DefaultQueryReadyDeltaBoundPolicy(),
+	}
 	build := prepared.Stats
 	stats.Rows, stats.InputBytes, stats.OutputBytes = build.Rows, build.InputBytes, build.OutputBytes
 	stats.BytesCopied, stats.BytesHashed, stats.BytesChecksummed = build.BytesCopied, build.BytesHashed, build.BytesChecksummed
@@ -323,7 +328,7 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 	stats.BuildTime, stats.AssetPreparationTime = build.BaseBuildTime, build.AssetPreparationTime
 	stats.ManagerRegistrationTime, stats.PublicationHandoffTime = build.ManagerRegistrationTime, build.HandoffTime
 	stats.TotalTime = time.Since(started)
-	lifetime := &queryReadyColumnPreparedLifetime{collection: c, identity: identity, prepared: prepared, refs: 1}
+	lifetime := &queryReadyColumnPreparedLifetime{collection: c, identity: identity, files: selectedFiles, prepared: prepared, refs: 1}
 	files.lifetime = lifetime
 	cleanup = false
 	return &QueryReadyColumnPreparedGeneration{files: files, stats: stats, identity: identity, lifetime: lifetime}, nil

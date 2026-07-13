@@ -277,13 +277,13 @@ func (c *Collection) closeCollectionQueryReadyGenerationCache() error {
 // may map a prepared QRBG before its asset-manager tail is reclaimed. It
 // refuses to detach a cache with live leases so cleanup cannot truncate under
 // an active mmap.
-func (c *Collection) retireCollectionQueryReadyGenerationCache(identity ColumnStoreCacheIdentity) error {
+func (c *Collection) retireCollectionQueryReadyGenerationCache(identity ColumnStoreCacheIdentity, files typedcolumn.QueryReadyGenerationOpenFiles) error {
 	if c == nil {
 		return nil
 	}
 	c.queryReadyGenerationMu.Lock()
 	entry := c.queryReadyGenerationEntry
-	if entry == nil || entry.identity != identity {
+	if entry == nil || entry.identity != identity || !collectionQueryReadyGenerationFileSelectionEqual(entry.files, files) {
 		c.queryReadyGenerationMu.Unlock()
 		return nil
 	}
