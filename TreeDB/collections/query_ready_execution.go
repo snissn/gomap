@@ -261,7 +261,10 @@ func applyQueryReadyExecutionDiagnostics(diag *ColumnPhysicalQueryDiagnostics, r
 			diag.PredicateLiterals++
 		}
 	}
-	diag.TopKLimit, diag.TopKOrder, diag.TopKCandidates = request.TopK, string(request.TopKOrder), stats.GroupsConsidered
+	diag.TopKLimit, diag.TopKOrder, diag.TopKCandidates = request.TopK, string(request.TopKOrder), 0
+	if request.TopK > 0 {
+		diag.TopKCandidates = stats.GroupsConsidered
+	}
 	diag.ScanNanos = stats.BaseScanNanos + stats.DeltaMergeNanos + stats.PredicateNanos
 	diag.ReduceNanos, diag.ResultShapeNanos = stats.ReductionNanos, stats.GroupingNanos+stats.OrderingTopKNanos
 	diag.QueryReadyEncodedExecutions, diag.QueryReadyPreparedParts = stats.EncodedBaseDeltaExecutions, stats.PreparedParts

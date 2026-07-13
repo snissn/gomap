@@ -84,6 +84,9 @@ func TestPrepareQueryReadyColumnGenerationRoutesJSONBenchAfterReopen(t *testing.
 				if diag.StorageSource != ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta || diag.QueryReadyEncodedExecutions != 1 || diag.DocumentMaterializations != 0 || diag.QueryReadyLegacyFallbacks != 0 || diag.QueryReadyPrecomputedAnswers != 0 {
 					t.Fatalf("routing diagnostics=%+v", diag)
 				}
+				if tc.req.TopK == 0 && diag.TopKCandidates != 0 {
+					t.Fatalf("non-TopK query reported %d TopK candidates", diag.TopKCandidates)
+				}
 			}
 		})
 	}
