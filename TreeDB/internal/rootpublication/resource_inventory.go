@@ -16,6 +16,54 @@ type StableResourceInventoryRow struct {
 	Classification     string
 }
 
+// canonicalReachabilityRequirements is the independent closure registry for
+// root, catalog, and command-frame policy. The prose inventory below is a
+// reviewed implementation mapping and must agree with this registry; deriving
+// either side from the other would make all-but-one coverage self-referential.
+var canonicalReachabilityRequirements = []struct {
+	Field          ReachabilityField
+	Kind           ResourceKind
+	Classification string
+}{
+	{ReachabilityIndexFile, ResourceIndex, "authoritative"},
+	{ReachabilityMetaPage, ResourceMeta, "authoritative"},
+	{ReachabilityUserRoot, ResourceIndex, "authoritative-root-backed"},
+	{ReachabilitySystemRoot, ResourceIndex, "authoritative-root-backed"},
+	{ReachabilityFreelist, ResourceIndex, "authoritative-root-backed"},
+	{ReachabilityValueLogPointer, ResourceValueLog, "authoritative"},
+	{ReachabilityOuterLeafRawPointer, ResourceOuterLeafLog, "authoritative"},
+	{ReachabilityOuterLeafPackedPointer, ResourceOuterLeafPack, "authoritative"},
+	{ReachabilityOuterLeafGeneration, ResourceOuterLeafManifest, "authoritative"},
+	{ReachabilityDictionaryGeneration, ResourceDictionary, "authoritative-transitive"},
+	{ReachabilityTemplateGeneration, ResourceTemplate, "authoritative-transitive"},
+	{ReachabilityCollectionSystemRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionPrimaryRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionTemplateRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionIndexStateRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionColumnRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionSecondaryRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionVectorRoot, ResourceCollectionRoot, "authoritative-root-backed"},
+	{ReachabilityCollectionTextDictionary, ResourceTextAsset, "authoritative-root-backed"},
+	{ReachabilityCollectionTextPosting, ResourceTextAsset, "authoritative-root-backed"},
+	{ReachabilityCollectionTextPosition, ResourceTextAsset, "authoritative-root-backed"},
+	{ReachabilityColumnManifest, ResourceColumnAsset, "authoritative"},
+	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "authoritative"},
+	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "authoritative"},
+	{ReachabilityTypedColumnCode, ResourceTypedColumnAsset, "authoritative"},
+	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "authoritative"},
+	{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "authoritative-transitive"},
+	{ReachabilityLegacyVectorSnapshot, ResourceLegacyVectorSnapshot, "authoritative-legacy"},
+	{ReachabilityCommandWALActive, ResourceCommandWAL, "authoritative"},
+	{ReachabilityCommandWALRotated, ResourceCommandWAL, "authoritative"},
+	{ReachabilityCommandWALExternalRIDFence, ResourceCommandWALExternalRID, "authoritative-transitive"},
+	{ReachabilityQueryReadyBase, ResourceQueryReadyAsset, "rebuildable-non-authoritative"},
+	{ReachabilityQueryReadyDelta, ResourceQueryReadyAsset, "rebuildable-non-authoritative"},
+	{ReachabilityQueryReadyConsolidatedBase, ResourceQueryReadyAsset, "rebuildable-non-authoritative"},
+	// These are explicit policy exclusions, not unowned durability resources.
+	{ReachabilityLegacyActiveSlab, ResourceLegacyTreeDBField, "explicit-legacy-exclusion"},
+	{ReachabilityRaftSnapshot, ResourceSeparateDurability, "explicit-separate-domain"},
+}
+
 var stableResourceInventory = []StableResourceInventoryRow{
 	{ReachabilityIndexFile, ResourceIndex, "TreeDB/db/system_root_publish.go; TreeDB/db/ordered_root_publish.go; TreeDB/db/index_swap.go", "pinned index.db handle + platform file ID + database generation", "required page/file byte frontier + format header", "create/rename parent directory token", "root candidate builder before installing target root IDs", "TreeDB/db/root_snapshot.go; TreeDB/pager", "TreeDB/db/index_swap.go; TreeDB/db/vacuum_online.go; TreeDB/db/vacuum_offline.go", "authoritative"},
 	{ReachabilityMetaPage, ResourceMeta, "TreeDB/pager; TreeDB/page/meta.go", "same pinned index identity as target meta page", "target meta page byte frontier", "none; covered by index namespace token", "root candidate builder", "TreeDB/db/root_snapshot.go; TreeDB/page/meta.go", "TreeDB/db/index_swap.go; downstream page owner #3681", "authoritative"},
@@ -59,10 +107,19 @@ func StableResourceInventory() []StableResourceInventoryRow {
 	return append([]StableResourceInventoryRow(nil), stableResourceInventory...)
 }
 
+func stableResourceInventoryRow(field ReachabilityField) (StableResourceInventoryRow, bool) {
+	for _, row := range stableResourceInventory {
+		if row.Field == field {
+			return row, true
+		}
+	}
+	return StableResourceInventoryRow{}, false
+}
+
 func RequiredReachabilityFields() []ReachabilityField {
-	fields := make([]ReachabilityField, len(stableResourceInventory))
-	for i, row := range stableResourceInventory {
-		fields[i] = row.Field
+	fields := make([]ReachabilityField, len(canonicalReachabilityRequirements))
+	for i, requirement := range canonicalReachabilityRequirements {
+		fields[i] = requirement.Field
 	}
 	return fields
 }

@@ -183,7 +183,10 @@ func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
 	}
 	entries := cloneStableResourceEntries(builder.entries)
 	sortStableResourceEntries(entries)
-	set := &StableResourceSet{entries: entries, createdAt: time.Now()}
+	set := &StableResourceSet{
+		entries: entries, createdAt: time.Now(),
+		pinHighWater: stableResourcePinCounts(entries),
+	}
 	set.owner.Store(uint32(ResourceOwnerBuilder))
 	builder.entries = nil
 	builder.closed = true
@@ -237,16 +240,27 @@ func sortStableResourceEntries(entries []stableResourceEntry) {
 }
 
 type StableResourceSet struct {
-	mu        sync.Mutex
-	entries   []stableResourceEntry
-	owner     atomic.Uint32
-	createdAt time.Time
+	mu           sync.Mutex
+	entries      []stableResourceEntry
+	pinHighWater map[ResourceKind]uint64
+	owner        atomic.Uint32
+	createdAt    time.Time
+}
+
+func stableResourcePinCounts(entries []stableResourceEntry) map[ResourceKind]uint64 {
+	counts := make(map[ResourceKind]uint64)
+	for _, entry := range entries {
+		counts[entry.token.kind]++
+	}
+	return counts
 }
 
 func (set *StableResourceSet) Len() int {
 	if set == nil {
 		return 0
 	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
 	return len(set.entries)
 }
 
@@ -254,6 +268,8 @@ func (set *StableResourceSet) Tokens() []*StableResourceToken {
 	if set == nil {
 		return nil
 	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
 	tokens := make([]*StableResourceToken, len(set.entries))
 	for i, entry := range set.entries {
 		tokens[i] = entry.token
@@ -265,6 +281,8 @@ func (set *StableResourceSet) FrontierFor(identity StableIdentity, generation ui
 	if set == nil {
 		return DurableFrontier{}
 	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
 	for _, entry := range set.entries {
 		if entry.token.identity == identity && entry.token.generation == generation {
 			return entry.frontier
@@ -312,8 +330,10 @@ func (set *StableResourceSet) releaseFrom(owner ResourceOwnerState) {
 		set.mu.Unlock()
 		return
 	}
-	entries := set.entries
-	set.entries = nil
+	// entries is immutable after Freeze. Retain the diagnostic evidence after
+	// release so concurrent readers never race a destructive slice update and
+	// PinHighWater remains observable after ActivePins falls to zero.
+	entries := append([]stableResourceEntry(nil), set.entries...)
 	set.mu.Unlock()
 	for _, entry := range entries {
 		entry.token.releaseFrom(owner)
@@ -349,6 +369,7 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 		set.mu.Unlock()
 	}
 	sortStableResourceEntries(view.entries)
+	view.pinHighWater = stableResourcePinCounts(view.entries)
 	return view, nil
 }
 
@@ -368,6 +389,8 @@ func (set *StableResourceSet) DeletionGuard() StableResourceDeletionGuard {
 	if set == nil {
 		return StableResourceDeletionGuard{}
 	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
 	return StableResourceDeletionGuard{entries: cloneStableResourceEntries(set.entries)}
 }
 
@@ -384,6 +407,8 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 	if set == nil {
 		return nil
 	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
 	byKind := make(map[ResourceKind]*ResourceKindStats)
 	for _, entry := range set.entries {
 		token := entry.token
@@ -409,8 +434,15 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		}
 		if !token.released.Load() {
 			stats.ActivePins++
-			stats.PinHighWater++
 		}
+	}
+	for kind, highWater := range set.pinHighWater {
+		stats := byKind[kind]
+		if stats == nil {
+			stats = &ResourceKindStats{Kind: kind}
+			byKind[kind] = stats
+		}
+		stats.PinHighWater = highWater
 	}
 	result := make([]ResourceKindStats, 0, len(byKind))
 	for _, stats := range byKind {
@@ -424,6 +456,8 @@ func (set *StableResourceSet) validateResolved() error {
 	if set == nil {
 		return nil
 	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
 	for _, entry := range set.entries {
 		if err := entry.token.namespace.validateStable(); err != nil {
 			return err

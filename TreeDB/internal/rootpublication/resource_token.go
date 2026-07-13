@@ -24,6 +24,7 @@ var (
 	ErrResourcePinned                  = errors.New("stable resource identity pinned")
 	ErrUnresolvedResource              = errors.New("stable resource dependency unresolved")
 	ErrResourceOwnership               = errors.New("stable resource ownership violation")
+	ErrRecoveryHandoffUnavailable      = errors.New("stable resource recovery handoff unavailable")
 )
 
 // ResourceKind identifies the physical durability domain of a token. The
@@ -507,14 +508,16 @@ func (token *StableNamespaceToken) Stabilize() error {
 	if token == nil || token.released.Load() {
 		return ErrResourceOwnership
 	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return ErrResourceOwnership
+	}
 	switch token.state.Load() {
 	case namespaceStable:
 		return nil
 	case namespaceFailed:
-		token.mu.Lock()
-		err := token.stabilizeErr
-		token.mu.Unlock()
-		return err
+		return token.stabilizeErr
 	}
 	started := time.Now()
 	err := token.adapter.Sync(token.parent)
@@ -524,9 +527,7 @@ func (token *StableNamespaceToken) Stabilize() error {
 		if errors.Is(err, ErrNamespacePersistenceUnsupported) {
 			err = errors.Join(ErrNamespacePersistenceUnsupported, err)
 		}
-		token.mu.Lock()
 		token.stabilizeErr = err
-		token.mu.Unlock()
 		token.state.Store(namespaceFailed)
 		return err
 	}
@@ -571,13 +572,20 @@ func (token *StableNamespaceToken) release() {
 	if token.refs.Add(-1) > 0 {
 		return
 	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
 	if !token.released.Swap(true) {
 		_ = token.parent.Close()
 	}
 }
 
 func (token *StableNamespaceToken) Release() {
-	if token == nil || token.refs.Load() != 0 || token.released.Swap(true) {
+	if token == nil {
+		return
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.refs.Load() != 0 || token.released.Swap(true) {
 		return
 	}
 	_ = token.parent.Close()

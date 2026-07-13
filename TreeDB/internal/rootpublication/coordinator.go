@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -77,10 +78,11 @@ type Coordinator struct {
 	retryAttempt       PublishAttempt
 	reportingAttempt   bool
 
-	resourceCoalesces  uint64
-	resourceConflicts  uint64
-	rejectedCandidates uint64
-	recoverySets       []*StableResourceSet
+	resourceCoalesces    uint64
+	resourceConflicts    uint64
+	rejectedCandidates   uint64
+	recoverySets         []*StableResourceSet
+	resourcePinHighWater map[ResourceKind]uint64
 }
 
 // PublishAttempt is an opaque identity for exactly one captured callback.
@@ -182,6 +184,7 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 	entryBytes := candidate.OwnedBytes()
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
 	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
+	c.observeResourcePinHighWaterLocked()
 	c.visible = candidate.frontier
 	if wasEmpty {
 		c.firstPendingAt = c.clock.Now()
@@ -823,7 +826,46 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 	if err != nil {
 		return nil
 	}
-	return union.Stats(c.clock.Now())
+	current := union.Stats(c.clock.Now())
+	byKind := make(map[ResourceKind]ResourceKindStats, len(current)+len(c.resourcePinHighWater))
+	for _, stats := range current {
+		if highWater := c.resourcePinHighWater[stats.Kind]; highWater > stats.PinHighWater {
+			stats.PinHighWater = highWater
+		}
+		byKind[stats.Kind] = stats
+	}
+	for kind, highWater := range c.resourcePinHighWater {
+		if _, ok := byKind[kind]; !ok {
+			byKind[kind] = ResourceKindStats{Kind: kind, PinHighWater: highWater}
+		}
+	}
+	result := make([]ResourceKindStats, 0, len(byKind))
+	for _, stats := range byKind {
+		result = append(result, stats)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Kind < result[j].Kind })
+	return result
+}
+
+func (c *Coordinator) observeResourcePinHighWaterLocked() {
+	sets := make([]*StableResourceSet, 0, len(c.pending))
+	for _, entry := range c.pending {
+		if set := entry.candidate.resourceSet(); set != nil {
+			sets = append(sets, set)
+		}
+	}
+	union, err := UnionStableResourceSets(sets...)
+	if err != nil {
+		return
+	}
+	if c.resourcePinHighWater == nil {
+		c.resourcePinHighWater = make(map[ResourceKind]uint64)
+	}
+	for _, stats := range union.Stats(c.clock.Now()) {
+		if stats.ActivePins > c.resourcePinHighWater[stats.Kind] {
+			c.resourcePinHighWater[stats.Kind] = stats.ActivePins
+		}
+	}
 }
 
 func (c *Coordinator) captureRecoveryResourcesLocked() {
@@ -880,21 +922,29 @@ func (handoff *RecoveryResourceHandoff) Release() {
 }
 
 // TakeRecoveryHandoff transfers all retained coordinator pins exactly once.
-// It is valid after poison and after Stop; an empty handoff is harmless.
-func (c *Coordinator) TakeRecoveryHandoff() *RecoveryResourceHandoff {
+// It is valid only after poison or completed Stop; an empty terminal handoff
+// is harmless. In particular it cannot steal handles from an active Publish.
+func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 	if c == nil {
-		return &RecoveryResourceHandoff{}
+		return &RecoveryResourceHandoff{}, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.stopped && c.poison == nil {
+		return nil, ErrRecoveryHandoffUnavailable
+	}
 	c.captureRecoveryResourcesLocked()
-	sets := c.recoverySets
-	c.recoverySets = nil
+	sets := append([]*StableResourceSet(nil), c.recoverySets...)
 	transferred := make([]*StableResourceSet, 0, len(sets))
 	for _, set := range sets {
-		if set.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery) == nil {
-			transferred = append(transferred, set)
+		if err := set.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
+			for i := len(transferred) - 1; i >= 0; i-- {
+				_ = transferred[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			}
+			return nil, fmt.Errorf("%w: recovery ownership transfer: %w", ErrResourceOwnership, err)
 		}
+		transferred = append(transferred, set)
 	}
-	return &RecoveryResourceHandoff{sets: transferred}
+	c.recoverySets = nil
+	return &RecoveryResourceHandoff{sets: transferred}, nil
 }
