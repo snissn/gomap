@@ -116,6 +116,59 @@ func TestCommandFrameV2RejectsV1AndFenceCorruption(t *testing.T) {
 	}
 }
 
+func TestCommandFrameV2RejectsUnknownVersionClassAndFenceCardinality(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("k"), RID: 11}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             2,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unknownVersion := append([]byte(nil), valid...)
+	binary.LittleEndian.PutUint16(unknownVersion[4:6], 99)
+	binary.LittleEndian.PutUint16(unknownVersion[6:8], 99)
+	if _, err := DecodeCommandFrameV2(unknownVersion); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("unknown version error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	for _, class := range []uint16{0, 99} {
+		unknownClass := append([]byte(nil), valid...)
+		binary.LittleEndian.PutUint16(unknownClass[54:56], class)
+		if _, err := DecodeCommandFrameV2(unknownClass); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("class=%d error=%v, want ErrCorrupt", class, err)
+		}
+	}
+
+	payloadEnd := commandFrameHeaderSize + int(binary.LittleEndian.Uint32(valid[56:60]))
+	missingFence := append([]byte(nil), valid[:payloadEnd]...)
+	binary.LittleEndian.PutUint32(missingFence[64:68], 0)
+	if _, err := DecodeCommandFrameV2(missingFence); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("missing fence error=%v, want ErrCorrupt", err)
+	}
+
+	section := valid[payloadEnd:]
+	if got := binary.LittleEndian.Uint32(section[:4]); got != 1 {
+		t.Fatalf("encoded fence extension count=%d, want 1", got)
+	}
+	duplicateFence := make([]byte, payloadEnd+4+2*(len(section)-4))
+	copy(duplicateFence, valid[:payloadEnd])
+	binary.LittleEndian.PutUint32(duplicateFence[payloadEnd:payloadEnd+4], 2)
+	copy(duplicateFence[payloadEnd+4:], section[4:])
+	copy(duplicateFence[payloadEnd+len(section):], section[4:])
+	binary.LittleEndian.PutUint32(duplicateFence[64:68], uint32(len(duplicateFence)-payloadEnd))
+	if _, err := DecodeCommandFrameV2(duplicateFence); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("duplicate fence error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
 	frame, err := EncodeCommandFrame(CommandEnvelope{
 		LSN:           1,
