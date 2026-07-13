@@ -48,7 +48,7 @@ var canonicalReachabilityRequirements = []struct {
 	Producer       StableProducerDomain
 }{
 	{ReachabilityIndexFile, ResourceIndex, "authoritative", StableProducerDB},
-	{ReachabilityMetaPage, ResourceMeta, "authoritative", StableProducerDB},
+	{ReachabilityMetaPage, ResourceIndex, "authoritative", StableProducerDB},
 	{ReachabilityUserRoot, ResourceIndex, "authoritative-root-backed", StableProducerDB},
 	{ReachabilitySystemRoot, ResourceIndex, "authoritative-root-backed", StableProducerDB},
 	{ReachabilityFreelist, ResourceIndex, "authoritative-root-backed", StableProducerDB},
@@ -58,16 +58,16 @@ var canonicalReachabilityRequirements = []struct {
 	{ReachabilityOuterLeafGeneration, ResourceOuterLeafManifest, "authoritative", StableProducerOuterLeaf},
 	{ReachabilityDictionaryGeneration, ResourceDictionary, "authoritative-transitive", StableProducerDictionary},
 	{ReachabilityTemplateGeneration, ResourceTemplate, "authoritative-transitive", StableProducerTemplate},
-	{ReachabilityCollectionSystemRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionPrimaryRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionTemplateRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionIndexStateRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionColumnRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionSecondaryRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionVectorRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionTextDictionary, ResourceTextAsset, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionTextPosting, ResourceTextAsset, "authoritative-root-backed", StableProducerCollection},
-	{ReachabilityCollectionTextPosition, ResourceTextAsset, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionSystemRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionPrimaryRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTemplateRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionIndexStateRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionColumnRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionSecondaryRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionVectorRoot, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTextDictionary, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTextPosting, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTextPosition, ResourceIndex, "authoritative-root-backed", StableProducerCollection},
 	{ReachabilityColumnManifest, ResourceColumnAsset, "authoritative", StableProducerColumnAsset},
 	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
 	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
@@ -88,26 +88,26 @@ var canonicalReachabilityRequirements = []struct {
 
 var stableResourceInventory = []StableResourceInventoryRow{
 	{ReachabilityIndexFile, ResourceIndex, "TreeDB/db/system_root_publish.go; TreeDB/db/ordered_root_publish.go; TreeDB/db/index_swap.go", "pinned index.db handle + platform file ID + database generation", "required page/file byte frontier + format header", "create/rename parent directory token", "root candidate builder before installing target root IDs", "TreeDB/db/root_snapshot.go; TreeDB/pager", "TreeDB/db/index_swap.go; TreeDB/db/vacuum_online.go; TreeDB/db/vacuum_offline.go", "authoritative"},
-	{ReachabilityMetaPage, ResourceMeta, "TreeDB/pager; TreeDB/page/meta.go", "same pinned index identity as target meta page", "target meta page byte frontier", "none; covered by index namespace token", "root candidate builder", "TreeDB/db/root_snapshot.go; TreeDB/page/meta.go", "TreeDB/db/index_swap.go; downstream page owner #3681", "authoritative"},
-	{ReachabilityUserRoot, ResourceIndex, "TreeDB/db/ordered_root_publish.go", "pinned index identity + root page generation", "user-root page frontier", "none", "ordered-root candidate builder", "TreeDB/db/root_snapshot.go", "downstream COW owner #3681", "authoritative-root-backed"},
-	{ReachabilitySystemRoot, ResourceIndex, "TreeDB/db/system_root_publish.go; TreeDB/db/ordered_root_publish.go", "pinned index identity + root page generation", "system-root page frontier", "none", "system-root candidate builder", "TreeDB/db/root_snapshot.go; collection catalog validators", "downstream COW owner #3681", "authoritative-root-backed"},
-	{ReachabilityFreelist, ResourceIndex, "TreeDB/pager freelist builder", "pinned index identity + freelist generation", "freelist page frontier", "none", "COW candidate extension", "TreeDB/pager freelist recovery", "downstream COW owner #3681", "authoritative-root-backed"},
+	{ReachabilityMetaPage, ResourceIndex, "TreeDB/pager; TreeDB/page/meta.go", "same pinned index identity + database generation", "target meta page byte frontier", "none; covered by index namespace token", "root candidate builder", "TreeDB/db/root_snapshot.go; TreeDB/page/meta.go", "TreeDB/db/index_swap.go; downstream page owner #3681", "authoritative"},
+	{ReachabilityUserRoot, ResourceIndex, "TreeDB/db/ordered_root_publish.go", "pinned index identity + database generation", "user-root page frontier", "none", "ordered-root candidate builder", "TreeDB/db/root_snapshot.go", "downstream COW owner #3681", "authoritative-root-backed"},
+	{ReachabilitySystemRoot, ResourceIndex, "TreeDB/db/system_root_publish.go; TreeDB/db/ordered_root_publish.go", "pinned index identity + database generation", "system-root page frontier", "none", "system-root candidate builder", "TreeDB/db/root_snapshot.go; collection catalog validators", "downstream COW owner #3681", "authoritative-root-backed"},
+	{ReachabilityFreelist, ResourceIndex, "TreeDB/pager freelist builder", "pinned index identity + database generation", "freelist page frontier", "none", "COW candidate extension", "TreeDB/pager freelist recovery", "downstream COW owner #3681", "authoritative-root-backed"},
 	{ReachabilityValueLogPointer, ResourceValueLog, "TreeDB/internal/valuelog/writer.go; TreeDB/db/value_log_appender.go; TreeDB/caching/value_log_appender.go", "pinned segment handle + platform file ID + lane/file generation", "greatest referenced byte frontier + immutable segment header", "create and rotation namespace tokens", "vlog append/rotation result before lane replacement", "TreeDB/internal/valuelog/manager.go; TreeDB/internal/valuelog/reader.go; TreeDB/db/wal_recovery.go", "TreeDB/db/vlog_gc.go; TreeDB/db/vlog_rewrite.go; TreeDB/internal/valuelog/manager.go", "authoritative"},
 	{ReachabilityOuterLeafRawPointer, ResourceOuterLeafLog, "TreeDB/db/leaf_page_log.go; TreeDB/db/leaf_page_log_lanes.go; TreeDB/caching/leaf_page_log_lanes.go", "pinned raw outer-leaf segment + generation", "greatest raw block byte frontier + header", "create/rotation namespace token", "outer-leaf append/rotation result before lane replacement", "TreeDB/db/leaf_page_read_cache.go; TreeDB/internal/outerleaf/block.go", "TreeDB/db/leaf_generation_gc.go; TreeDB/internal/valuelog/manager.go", "authoritative"},
 	{ReachabilityOuterLeafPackedPointer, ResourceOuterLeafPack, "TreeDB/db/leaf_generation_pack.go; TreeDB/db/leaf_generation_pack_rewrite.go", "pinned packed segment + generation", "pack byte frontier + immutable header digest", "staging-to-generation rename namespace token", "pack promotion builder before manifest installation", "TreeDB/db/leaf_page_read_cache.go; TreeDB/internal/outerleaf/block.go", "TreeDB/db/leaf_generation_gc.go; pack rewrite cleanup", "authoritative"},
 	{ReachabilityOuterLeafGeneration, ResourceOuterLeafManifest, "TreeDB/db/leaf_generation_manifest.go; TreeDB/db/leaf_generation_pack_rewrite.go", "pinned generation manifest + generation ID", "manifest content digest", "create/replace namespace token", "generation builder before system-root field", "TreeDB/db/leaf_generation_manifest.go reconciliation", "TreeDB/db/leaf_generation_gc.go", "authoritative"},
 	{ReachabilityDictionaryGeneration, ResourceDictionary, "TreeDB/internal/dictdb/store.go; TreeDB/public.go; TreeDB/side_store_lookups.go", "transitive pinned dictdb index/vlog identities + dictionary ID", "dictionary content digest and child frontiers", "child DB creation/rotation tokens", "dictdb child builder before frame dictionary ID", "TreeDB/internal/valuelog/reader.go; TreeDB/internal/valuelog/dict_codec_cache.go", "dictdb root/COW/vlog maintenance; downstream #3681", "authoritative-transitive"},
 	{ReachabilityTemplateGeneration, ResourceTemplate, "TreeDB/internal/templatedb/store.go; TreeDB/public.go; TreeDB/side_store_lookups.go", "transitive pinned templatedb index/vlog identities + template ID", "template/catalog digest and child frontiers", "child DB creation/rotation tokens", "templatedb child builder before frame template ID", "TreeDB/internal/valuelog/template_lookup.go; TreeDB/internal/valuelog/template_cache.go", "templatedb root/COW/vlog maintenance; downstream #3681", "authoritative-transitive"},
-	{ReachabilityCollectionSystemRoot, ResourceCollectionRoot, "TreeDB/collections/api.go; TreeDB/db/ordered_root_publish.go", "pinned main index identity + system-root generation", "root descriptor page frontier/catalog digest", "none", "collection catalog builder before system-root delta", "TreeDB/collections/api.go loadCollectionCatalog and descriptor validators", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionPrimaryRoot, ResourceCollectionRoot, "TreeDB/collections/api.go", "pinned index identity + primary root generation", "primary-root page frontier", "none", "collection root policy builder", "TreeDB/collections/api.go collectionRootNames and root validators", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionTemplateRoot, ResourceCollectionRoot, "TreeDB/collections/api.go; TreeDB/collections/template_v1.go", "pinned index identity + template-root generation", "template-root page frontier/catalog digest", "none", "collection root policy builder", "TreeDB/collections/api.go catalog validation", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionIndexStateRoot, ResourceCollectionRoot, "TreeDB/collections/api.go", "pinned index identity + index-state generation", "index-state root page frontier", "none", "collection root policy builder", "TreeDB/collections/api.go catalog validation", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionColumnRoot, ResourceCollectionRoot, "TreeDB/collections/api.go; TreeDB/collections/typed_column_publication.go", "pinned index identity + column-manifest root generation", "column-manifest root frontier", "none", "column publish builder before catalog root ID", "TreeDB/collections/column_physical_scan.go; TreeDB/collections/api.go", "column lifecycle plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionSecondaryRoot, ResourceCollectionRoot, "TreeDB/collections/api.go", "pinned index identity + secondary-root generation", "secondary-root page frontier", "none", "collection root policy builder", "TreeDB/collections/api.go secondary index readers", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionVectorRoot, ResourceCollectionRoot, "TreeDB/collections/api.go; TreeDB/collections/vector_index_persist.go", "pinned index identity + vector-root generation", "vector-root page frontier", "none", "vector child builder before vector root ID", "TreeDB/collections/vector_index_search.go", "vector maintenance plus downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionTextDictionary, ResourceTextAsset, "TreeDB/collections/text_storage.go; TreeDB/collections/text_v2_storage.go; TreeDB/collections/text_v2_write_path.go", "pinned index identity + text dictionary/terms root generation", "text root page frontier", "none", "text child builder before catalog root IDs", "TreeDB/collections/text_catalog.go; TreeDB/collections/text_search.go; TreeDB/collections/text_v2_search.go", "TreeDB/collections/text_maintenance.go; TreeDB/collections/text_v2_rewrite.go; downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionTextPosting, ResourceTextAsset, "TreeDB/collections/text_storage.go; TreeDB/collections/text_v2_storage.go; TreeDB/collections/text_v2_write_path.go", "pinned index identity + posting/norm root generation", "posting root page frontier", "none", "text child builder before catalog root IDs", "TreeDB/collections/text_search.go; TreeDB/collections/text_v2_search.go", "TreeDB/collections/text_maintenance.go; TreeDB/collections/text_v2_rewrite.go; downstream #3681", "authoritative-root-backed"},
-	{ReachabilityCollectionTextPosition, ResourceTextAsset, "TreeDB/collections/text_v2_storage.go; TreeDB/collections/text_v2_write_path.go", "pinned index identity + position/generation root generation", "position root page frontier", "none", "text child builder before catalog root IDs", "TreeDB/collections/text_v2_search.go; TreeDB/collections/text_index.go", "TreeDB/collections/text_v2_rewrite.go; downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionSystemRoot, ResourceIndex, "TreeDB/collections/api.go; TreeDB/db/ordered_root_publish.go", "pinned main index identity + database generation", "root descriptor page frontier/catalog digest", "none", "collection catalog builder before system-root delta", "TreeDB/collections/api.go loadCollectionCatalog and descriptor validators", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionPrimaryRoot, ResourceIndex, "TreeDB/collections/api.go", "pinned index identity + database generation", "primary-root page frontier", "none", "collection root policy builder", "TreeDB/collections/api.go collectionRootNames and root validators", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionTemplateRoot, ResourceIndex, "TreeDB/collections/api.go; TreeDB/collections/template_v1.go", "pinned index identity + database generation", "template-root page frontier/catalog digest", "none", "collection root policy builder", "TreeDB/collections/api.go catalog validation", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionIndexStateRoot, ResourceIndex, "TreeDB/collections/api.go", "pinned index identity + database generation", "index-state root page frontier", "none", "collection root policy builder", "TreeDB/collections/api.go catalog validation", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionColumnRoot, ResourceIndex, "TreeDB/collections/api.go; TreeDB/collections/typed_column_publication.go", "pinned index identity + database generation", "column-manifest root frontier", "none", "column publish builder before catalog root ID", "TreeDB/collections/column_physical_scan.go; TreeDB/collections/api.go", "column lifecycle plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionSecondaryRoot, ResourceIndex, "TreeDB/collections/api.go", "pinned index identity + database generation", "secondary-root page frontier", "none", "collection root policy builder", "TreeDB/collections/api.go secondary index readers", "collection clear/drop plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionVectorRoot, ResourceIndex, "TreeDB/collections/api.go; TreeDB/collections/vector_index_persist.go", "pinned index identity + database generation", "vector-root page frontier", "none", "vector child builder before vector root ID", "TreeDB/collections/vector_index_search.go", "vector maintenance plus downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionTextDictionary, ResourceIndex, "TreeDB/collections/text_storage.go; TreeDB/collections/text_v2_storage.go; TreeDB/collections/text_v2_write_path.go", "pinned index identity + database generation", "text root page frontier", "none", "text child builder before catalog root IDs", "TreeDB/collections/text_catalog.go; TreeDB/collections/text_search.go; TreeDB/collections/text_v2_search.go", "TreeDB/collections/text_maintenance.go; TreeDB/collections/text_v2_rewrite.go; downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionTextPosting, ResourceIndex, "TreeDB/collections/text_storage.go; TreeDB/collections/text_v2_storage.go; TreeDB/collections/text_v2_write_path.go", "pinned index identity + database generation", "posting root page frontier", "none", "text child builder before catalog root IDs", "TreeDB/collections/text_search.go; TreeDB/collections/text_v2_search.go", "TreeDB/collections/text_maintenance.go; TreeDB/collections/text_v2_rewrite.go; downstream #3681", "authoritative-root-backed"},
+	{ReachabilityCollectionTextPosition, ResourceIndex, "TreeDB/collections/text_v2_storage.go; TreeDB/collections/text_v2_write_path.go", "pinned index identity + database generation", "position root page frontier", "none", "text child builder before catalog root IDs", "TreeDB/collections/text_v2_search.go; TreeDB/collections/text_index.go", "TreeDB/collections/text_v2_rewrite.go; downstream #3681", "authoritative-root-backed"},
 	{ReachabilityColumnManifest, ResourceColumnAsset, "TreeDB/collections/column_publish_write.go; TreeDB/collections/column_asset_manager.go", "pinned segment handle + namespace/generation/file ID", "ColumnAssetRef offset/length/checksum + manifest digest", "segment create/rotation token", "column publish plan builder", "TreeDB/collections/column_physical_scan.go; TreeDB/collections/column_physical_asset.go", "TreeDB/collections/column_asset_gc.go; TreeDB/collections/column_asset_rewrite.go", "authoritative"},
 	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "TreeDB/collections/column_asset_manager.go; TreeDB/collections/typed_column_publication.go", "pinned tcs1_part_image/tcs1_typed_column_part identity", "asset offset/length/checksum", "segment create/rotation token", "typed-column child builder", "TreeDB/collections/column_physical_asset.go; TreeDB/internal/typedcolumn", "column asset GC/rewrite/reachability", "authoritative"},
 	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "TreeDB/collections/column_asset_manager.go", "pinned tcs1_int64_values/tcs1_aggregate_metadata identity", "asset offset/length/checksum", "segment create/rotation token", "typed-column child builder", "typed-column readers and physical checksum validator", "column asset GC/rewrite/reachability", "authoritative"},
@@ -133,6 +133,52 @@ type StableResourcePolicy struct {
 	Classification string
 	Registerable   bool
 	Producer       StableProducerDomain
+	Stability      ResourceStability
+}
+
+func stableResourceStabilityForField(field ReachabilityField) (ResourceStability, bool) {
+	switch field {
+	case ReachabilityIndexFile,
+		ReachabilityMetaPage,
+		ReachabilityUserRoot,
+		ReachabilitySystemRoot,
+		ReachabilityFreelist,
+		ReachabilityValueLogPointer,
+		ReachabilityOuterLeafRawPointer,
+		ReachabilityCollectionSystemRoot,
+		ReachabilityCollectionPrimaryRoot,
+		ReachabilityCollectionTemplateRoot,
+		ReachabilityCollectionIndexStateRoot,
+		ReachabilityCollectionColumnRoot,
+		ReachabilityCollectionSecondaryRoot,
+		ReachabilityCollectionVectorRoot,
+		ReachabilityCollectionTextDictionary,
+		ReachabilityCollectionTextPosting,
+		ReachabilityCollectionTextPosition,
+		ReachabilityColumnManifest,
+		ReachabilityTypedColumnMultipart,
+		ReachabilityTypedColumnValue,
+		ReachabilityTypedColumnCode,
+		ReachabilityHNSWSearchPack,
+		ReachabilityVectorGraphPack,
+		ReachabilityCommandWALActive,
+		ReachabilityCommandWALRotated,
+		ReachabilityCommandWALExternalRIDFence,
+		ReachabilityQueryReadyBase,
+		ReachabilityQueryReadyDelta,
+		ReachabilityQueryReadyConsolidatedBase:
+		return ResourceMutableAppend, true
+	case ReachabilityOuterLeafPackedPointer,
+		ReachabilityOuterLeafGeneration,
+		ReachabilityDictionaryGeneration,
+		ReachabilityTemplateGeneration,
+		ReachabilityLegacyVectorSnapshot,
+		ReachabilityLegacyActiveSlab,
+		ReachabilityRaftSnapshot:
+		return ResourceImmutable, true
+	default:
+		return 0, false
+	}
 }
 
 func StableResourcePolicyFor(field ReachabilityField) (StableResourcePolicy, bool) {
@@ -142,9 +188,13 @@ func StableResourcePolicyFor(field ReachabilityField) (StableResourcePolicy, boo
 		}
 		registerable := requirement.Classification != "explicit-legacy-exclusion" &&
 			requirement.Classification != "explicit-separate-domain"
+		stability, ok := stableResourceStabilityForField(field)
+		if !ok {
+			return StableResourcePolicy{}, false
+		}
 		return StableResourcePolicy{
 			Kind: requirement.Kind, Classification: requirement.Classification, Registerable: registerable,
-			Producer: requirement.Producer,
+			Producer: requirement.Producer, Stability: stability,
 		}, true
 	}
 	return StableResourcePolicy{}, false

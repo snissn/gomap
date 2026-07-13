@@ -278,7 +278,7 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 		{ReachabilityDictionaryGeneration, ResourceDictionary, "dictionary-7"},
 		{ReachabilityTemplateGeneration, ResourceTemplate, "template-9"},
 		{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "vector-11"},
-		{ReachabilityCollectionTextPosting, ResourceTextAsset, "text-13"},
+		{ReachabilityCollectionTextPosting, ResourceIndex, "text-13"},
 	}
 	required := make([]ReachabilityField, len(children))
 	for i := range children {
@@ -505,6 +505,35 @@ func TestImmutableIdentityRejectsConflictingDigest(t *testing.T) {
 		}
 	}
 	t.Fatal("conflicting immutable digest unexpectedly registered")
+}
+
+func TestLogicalResourceRejectsDifferentPhysicalIdentity(t *testing.T) {
+	dir := t.TempDir()
+	digest := sha256.Sum256([]byte("index-header"))
+	builder := NewStableResourceSetBuilder()
+	for _, name := range []string{"index-a.db", "index-b.db"} {
+		file := writeStableResourceFixture(t, dir, name, "index-page")
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceIndex, LogicalLane: "main", ResourceID: "index", Generation: 7,
+			DiagnosticPath: "maindb/index.db", File: file, Frontier: DurableFrontier{Bytes: 1},
+			Digest: digest, Reachability: ReachabilityIndexFile,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = builder.Add(token)
+		if name == "index-b.db" {
+			if !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("logical resource identity replacement error=%v want ErrResourceConflict", err)
+			}
+			builder.Abandon()
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("logical resource identity replacement unexpectedly registered")
 }
 
 func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {

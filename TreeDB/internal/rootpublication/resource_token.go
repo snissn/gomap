@@ -34,24 +34,29 @@ type ResourceKind string
 
 const (
 	ResourceIndex                 ResourceKind = "index"
-	ResourceMeta                  ResourceKind = "meta"
 	ResourceValueLog              ResourceKind = "value-log"
 	ResourceOuterLeafLog          ResourceKind = "outer-leaf-log"
 	ResourceOuterLeafManifest     ResourceKind = "outer-leaf-manifest"
 	ResourceOuterLeafPack         ResourceKind = "outer-leaf-pack"
 	ResourceDictionary            ResourceKind = "dictionary"
 	ResourceTemplate              ResourceKind = "template"
-	ResourceCollectionRoot        ResourceKind = "collection-root"
 	ResourceColumnAsset           ResourceKind = "column-asset"
 	ResourceTypedColumnAsset      ResourceKind = "typed-column-asset"
 	ResourceVectorGraphPack       ResourceKind = "vector-graph-pack"
 	ResourceLegacyVectorSnapshot  ResourceKind = "legacy-vector-snapshot"
-	ResourceTextAsset             ResourceKind = "text-asset"
 	ResourceCommandWAL            ResourceKind = "command-wal"
 	ResourceCommandWALExternalRID ResourceKind = "command-wal-external-rid"
 	ResourceQueryReadyAsset       ResourceKind = "query-ready-asset"
 	ResourceSeparateDurability    ResourceKind = "separate-durability-domain"
 	ResourceLegacyTreeDBField     ResourceKind = "legacy-treedb-field"
+)
+
+// ResourceStability selects the frozen deduplication rule for a resource.
+type ResourceStability uint8
+
+const (
+	ResourceMutableAppend ResourceStability = iota + 1
+	ResourceImmutable
 )
 
 // ReachabilityField names the root, catalog, or frame field that makes a
@@ -224,6 +229,7 @@ type StableResourceToken struct {
 	frontier       DurableFrontier
 	digest         [32]byte
 	reachability   ReachabilityField
+	stability      ResourceStability
 	namespace      *StableNamespaceToken
 	pinned         *os.File
 	flush          resourceOperation
@@ -240,6 +246,10 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	}
 	if err := validateDiagnosticPath(spec.DiagnosticPath); err != nil {
 		return nil, err
+	}
+	stability, ok := stableResourceStabilityForField(spec.Reachability)
+	if !ok {
+		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
 	}
 	pinned, err := duplicateStableFile(spec.File)
 	if err != nil {
@@ -281,7 +291,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
 		generation: spec.Generation, diagnosticPath: filepath.ToSlash(spec.DiagnosticPath),
 		identity: identity, frontier: spec.Frontier, digest: spec.Digest,
-		reachability: spec.Reachability, namespace: spec.Namespace, pinned: pinned,
+		reachability: spec.Reachability, stability: stability, namespace: spec.Namespace, pinned: pinned,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease,
 	}
 	token.owner.Store(uint32(ResourceOwnerToken))
@@ -400,6 +410,16 @@ func (token *StableResourceToken) logicalKey() string {
 }
 
 func (token *StableResourceToken) identityKey() string {
+	return fmt.Sprintf("%s\x00%s\x00%020d\x00%x\x00%020d", token.kind, token.identity.Platform,
+		token.identity.VolumeID, token.identity.ObjectID, token.generation)
+}
+
+func (token *StableResourceToken) samePhysicalIdentity(other *StableResourceToken) bool {
+	return token != nil && other != nil && token.identity.Platform == other.identity.Platform &&
+		token.identity.VolumeID == other.identity.VolumeID && token.identity.ObjectID == other.identity.ObjectID
+}
+
+func (token *StableResourceToken) mutablePhysicalKey() string {
 	return fmt.Sprintf("%s\x00%s\x00%020d\x00%x\x00%020d", token.kind, token.identity.Platform,
 		token.identity.VolumeID, token.identity.ObjectID, token.generation)
 }

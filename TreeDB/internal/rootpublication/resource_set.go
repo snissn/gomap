@@ -73,19 +73,21 @@ func (builder *StableResourceSetBuilder) Add(token *StableResourceToken) error {
 
 func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken) error {
 	logicalKey := token.logicalKey()
-	identityKey := token.identityKey()
 	for i := range *entries {
 		entry := &(*entries)[i]
 		existing := entry.token
-		if existing.logicalKey() == logicalKey && existing.identity != token.identity {
+		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(token) {
 			return fmt.Errorf("%w: logical resource %q changed stable identity", ErrResourceConflict, logicalKey)
 		}
-		if existing.identityKey() != identityKey {
+		coalesce, err := stableResourcesCoalesce(existing, token)
+		if err != nil {
+			return err
+		}
+		if !coalesce {
 			continue
 		}
-		if existing.logicalKey() != logicalKey || existing.digest != token.digest ||
-			!existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
-			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, identityKey)
+		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
+			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, existing.identityKey())
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability[token.reachability] = struct{}{}
@@ -106,21 +108,49 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 	return nil
 }
 
+func stableResourcesCoalesce(existing, incoming *StableResourceToken) (bool, error) {
+	if !existing.samePhysicalIdentity(incoming) {
+		return false, nil
+	}
+	if existing.stability != incoming.stability {
+		return false, fmt.Errorf("%w: physical identity has conflicting stability policy", ErrResourceConflict)
+	}
+	switch existing.stability {
+	case ResourceMutableAppend:
+		if existing.mutablePhysicalKey() != incoming.mutablePhysicalKey() {
+			return false, nil
+		}
+		if existing.digest != incoming.digest {
+			return false, fmt.Errorf("%w: mutable physical identity has conflicting immutable header digest", ErrResourceConflict)
+		}
+		return true, nil
+	case ResourceImmutable:
+		if existing.digest != incoming.digest {
+			return false, fmt.Errorf("%w: immutable physical identity has conflicting content digest", ErrResourceConflict)
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("%w: missing stability policy", ErrUnresolvedResource)
+	}
+}
+
 func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry) error {
 	logicalKey := incoming.token.logicalKey()
-	identityKey := incoming.token.identityKey()
 	for i := range *entries {
 		entry := &(*entries)[i]
 		existing := entry.token
-		if existing.logicalKey() == logicalKey && existing.identity != incoming.token.identity {
+		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(incoming.token) {
 			return fmt.Errorf("%w: logical resource %q changed stable identity", ErrResourceConflict, logicalKey)
 		}
-		if existing.identityKey() != identityKey {
+		coalesce, err := stableResourcesCoalesce(existing, incoming.token)
+		if err != nil {
+			return err
+		}
+		if !coalesce {
 			continue
 		}
-		if existing.logicalKey() != logicalKey || existing.digest != incoming.token.digest ||
-			!existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
-			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, identityKey)
+		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
+			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, existing.identityKey())
 		}
 		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
 		for field := range incoming.reachability {

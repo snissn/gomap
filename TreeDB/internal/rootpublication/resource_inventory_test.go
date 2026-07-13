@@ -103,6 +103,10 @@ func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 			t.Errorf("canonical field %q inventory kind/classification=(%q,%q) want (%q,%q)",
 				requirement.Field, row.Kind, row.Classification, requirement.Kind, requirement.Classification)
 		}
+		policy, ok := StableResourcePolicyFor(requirement.Field)
+		if !ok || (policy.Stability != ResourceMutableAppend && policy.Stability != ResourceImmutable) {
+			t.Errorf("canonical field %q has no mutable/immutable key policy: %+v", requirement.Field, policy)
+		}
 	}
 }
 
