@@ -18,6 +18,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
@@ -49,6 +50,9 @@ type File struct {
 	RefCount           atomic.Int64
 	IsZombie           atomic.Bool
 	retryDeletePending atomic.Bool
+	stableIdentity     rootpublication.StableIdentity
+	stableNamespace    string
+	stableObserved     bool
 	currentWritable    atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
@@ -1269,9 +1273,17 @@ type Manager struct {
 	groupedFrameCacheBudget    *groupedFrameCacheBudget
 	currentWritableMmap        atomic.Bool
 	currentWritableReadBarrier atomic.Value
+	stableResourcePins         *rootpublication.IdentityPinRegistry
 }
 
 func NewManager(dir string) (*Manager, error) {
+	return NewManagerWithStableResourcePinRegistry(dir, nil)
+}
+
+// NewManagerWithStableResourcePinRegistry installs the DB-scoped physical
+// identity gate before the initial directory scan, so every tracked handle is
+// observed from the moment it becomes deletable.
+func NewManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
 	m := &Manager{
 		dir:                       dir,
 		files:                     make(map[uint32]*File),
@@ -1279,6 +1291,7 @@ func NewManager(dir string) (*Manager, error) {
 		groupedFrameCacheEntries:  defaultGroupedFrameCacheEntries,
 		groupedFrameCacheMaxRaw:   defaultGroupedFrameCacheMaxRawBytes,
 		groupedFrameCacheMaxBytes: defaultGroupedFrameCacheMaxBytes,
+		stableResourcePins:        registry,
 	}
 	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
 	if err := m.Refresh(); err != nil {
@@ -1494,8 +1507,11 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 	var err error
 	for _, f := range m.files {
+		if e := m.unobserveStableFileLocked(f); e != nil {
+			err = errors.Join(err, e)
+		}
 		if e := f.Close(); e != nil {
-			err = e
+			err = errors.Join(err, e)
 		}
 	}
 	m.files = nil
@@ -1615,7 +1631,18 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	if m.files == nil {
 		m.files = make(map[uint32]*File, 16)
 	}
-	if _, ok := m.files[id]; ok {
+	if existing, ok := m.files[id]; ok {
+		if filepath.Clean(existing.Path) != filepath.Clean(path) {
+			return fmt.Errorf("%w: value-log file id %d already names %q, not %q", rootpublication.ErrResourceConflict, id, existing.Path, path)
+		}
+		openInfo, openErr := existing.File.Stat()
+		pathInfo, pathErr := os.Stat(path)
+		if openErr != nil || pathErr != nil {
+			return errors.Join(openErr, pathErr)
+		}
+		if !os.SameFile(openInfo, pathInfo) {
+			return fmt.Errorf("%w: value-log file id %d path was rebound", rootpublication.ErrResourceConflict, id)
+		}
 		return nil
 	}
 	f, err := currentOpenSegmentFile()(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
@@ -1627,6 +1654,10 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
+	if err := m.observeStableFileLocked(f); err != nil {
+		_ = f.Close()
+		return err
+	}
 	m.files[id] = f
 	return nil
 }
@@ -1942,33 +1973,8 @@ func (m *Manager) Release(set *Set) error {
 	for _, f := range set.Files {
 		newRef := f.RefCount.Add(-1)
 		if newRef == 0 && f.IsZombie.Load() {
-			shouldRemove := false
-			m.mu.Lock()
-			if f.RefCount.Load() == 0 {
-				if cur, exists := m.files[f.ID]; exists && cur == f {
-					shouldRemove = true
-				}
-			}
-			m.mu.Unlock()
-			if shouldRemove {
-				if e := f.Close(); e != nil {
-					err = e
-				}
-				if e := removeSegmentFileWithRetry(f.Path); e != nil {
-					if isWindowsSharingViolationError(e) {
-						if f.retryDeletePending.CompareAndSwap(false, true) {
-							go m.retryZombieDelete(f)
-						}
-						continue
-					}
-					err = e
-					continue
-				}
-				m.mu.Lock()
-				if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
-					delete(m.files, f.ID)
-				}
-				m.mu.Unlock()
+			if e := m.deleteZombieFile(f); e != nil {
+				err = errors.Join(err, e)
 			}
 		}
 	}
@@ -1990,18 +1996,48 @@ func (m *Manager) retryZombieDelete(f *File) {
 		if !keepRetrying {
 			return
 		}
+		lease, leaseErr := m.stableDeleteLease(f)
+		if errors.Is(leaseErr, ErrFilePinned) {
+			// The conflict can be either an identity pin or a different identity
+			// holding the pathname lease. Backoff handles both without spinning on
+			// an already-ready per-identity pin channel.
+			time.Sleep(backoff)
+			if backoff < 2*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		if leaseErr != nil {
+			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, leaseErr)
+			return
+		}
+		if lease != nil {
+			if err := validateStableDeletePathIdentity(f.Path, f.stableIdentity); err != nil {
+				abortStableDeleteLease(lease)
+				log.Printf("valuelog: retry zombie delete path validation failed for %s: %v", f.Path, err)
+				return
+			}
+		}
 
-		if err := removeSegmentFileOnce(f.Path); err == nil {
+		deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+		if deleted {
+			commitStableDeleteLease(lease)
 			m.mu.Lock()
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
 				delete(m.files, f.ID)
+				_ = m.unobserveStableFileLocked(f)
 			}
 			m.mu.Unlock()
+			if removeErr != nil {
+				log.Printf("valuelog: removed retired zombie %s after close error: %v", f.Path, removeErr)
+			}
 			return
-		} else if !isWindowsSharingViolationError(err) {
-			log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, err)
+		} else if !isWindowsSharingViolationError(removeErr) {
+			abortStableDeleteLease(lease)
+			log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, removeErr)
 			return
 		}
+		abortStableDeleteLease(lease)
 
 		time.Sleep(backoff)
 		if backoff < 2*time.Second {
@@ -2052,8 +2088,9 @@ func (m *Manager) EvictSegment(id uint32) error {
 		return &filePinnedError{id: id, op: "evict"}
 	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-	return f.Close()
+	return errors.Join(unobserveErr, f.Close())
 }
 
 // RemapStats reports aggregate remap executions and tracked dead mappings.
@@ -2407,10 +2444,25 @@ func (m *Manager) RemoveSegment(id uint32) error {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "remove"}
 	}
+	lease, err := m.stableDeleteLease(f)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if lease != nil {
+		if err := validateStableDeletePath(f); err != nil {
+			abortStableDeleteLease(lease)
+			m.mu.Unlock()
+			return err
+		}
+	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 
-	return closeAndRemoveSegmentFile(f)
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+	finishStableDeleteLease(lease, deleted)
+	return errors.Join(unobserveErr, removeErr)
 }
 
 // RemoveSegmentIfUnpinned removes a tracked segment only when no live snapshot
@@ -2430,10 +2482,32 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, nil
 	}
+	lease, err := m.stableDeleteLease(f)
+	if errors.Is(err, ErrFilePinned) {
+		m.mu.Unlock()
+		if f.IsZombie.Load() && f.retryDeletePending.CompareAndSwap(false, true) {
+			go m.retryZombieDelete(f)
+		}
+		return false, nil
+	}
+	if err != nil {
+		m.mu.Unlock()
+		return false, err
+	}
+	if lease != nil {
+		if err := validateStableDeletePath(f); err != nil {
+			abortStableDeleteLease(lease)
+			m.mu.Unlock()
+			return false, err
+		}
+	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 
-	return true, closeAndRemoveSegmentFile(f)
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+	finishStableDeleteLease(lease, deleted)
+	return true, errors.Join(unobserveErr, removeErr)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.
@@ -2445,20 +2519,28 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 		m.mu.Unlock()
 		return nil
 	}
+	lease, err := m.stableDeleteLease(f)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if lease != nil {
+		if err := validateStableDeletePath(f); err != nil {
+			abortStableDeleteLease(lease)
+			m.mu.Unlock()
+			return err
+		}
+	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 
-	return closeAndRemoveSegmentFile(f)
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+	finishStableDeleteLease(lease, deleted)
+	return errors.Join(unobserveErr, removeErr)
 }
 
 var removeSegmentPath = os.Remove
-
-func closeAndRemoveSegmentFile(f *File) error {
-	if f == nil {
-		return nil
-	}
-	return errors.Join(f.Close(), removeSegmentFileWithRetry(f.Path))
-}
 
 func removeSegmentFileOnce(path string) error {
 	err := removeSegmentPath(path)
@@ -2486,6 +2568,36 @@ func removeSegmentFileWithRetry(path string) error {
 			break
 		}
 		if !isWindowsSharingViolationError(err) {
+			break
+		}
+		time.Sleep(backoff)
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
+	}
+	return lastErr
+}
+
+func removeSegmentFileOnceStable(path string, identity rootpublication.StableIdentity, stable bool) error {
+	if stable {
+		if err := validateStableDeletePathIdentity(path, identity); err != nil {
+			return err
+		}
+	}
+	return removeSegmentFileOnce(path)
+}
+
+func removeSegmentFileWithRetryStable(path string, identity rootpublication.StableIdentity) error {
+	const attempts = 40
+	backoff := 25 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		err := removeSegmentFileOnceStable(path, identity, true)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if runtime.GOOS != "windows" || i >= attempts-1 || !isWindowsSharingViolationError(err) {
 			break
 		}
 		time.Sleep(backoff)

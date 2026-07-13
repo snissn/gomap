@@ -1609,6 +1609,12 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		if db.valueLogManager != nil {
 			if fileID, ok := compactStorageValueLogFileID(name); ok {
+				if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
+					return deleted, err
+				}
 				tracked, _, err := db.valueLogManager.MarkZombieIfTracked(fileID)
 				if err != nil {
 					return deleted, err

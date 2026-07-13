@@ -8,6 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -51,7 +52,8 @@ func openReadOnly(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	vm, err := valuelog.NewManager(layout.valueVLogDir)
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
 		_ = lock.Close()
@@ -81,6 +83,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		readOnly:                       true,
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
+		valueLogIdentityPins:           valueLogIdentityPins,
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,
 		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
@@ -202,7 +205,8 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	layout := resolveStorageLayout(opts.Dir)
-	vm, err := valuelog.NewManager(layout.valueVLogDir)
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
 		return nil, err
@@ -230,6 +234,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		readOnly:                       true,
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
+		valueLogIdentityPins:           valueLogIdentityPins,
 		adaptive:                       adaptiveCtrl,
 		flushAdmission:                 FlushAdmissionDecisionForOptions(opts),
 		keepRecent:                     opts.KeepRecent,

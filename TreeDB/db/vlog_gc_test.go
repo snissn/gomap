@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -309,6 +310,84 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 	if _, err := os.Stat(path2); err != nil {
 		t.Fatalf("expected segment2 to remain, err=%v", err)
+	}
+}
+
+func TestValueLogGC_StableIdentityPinDefersUnreferencedSegmentDelete(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("unreferenced stable value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		t.Fatal(err)
+	}
+	activeID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activePath := filepath.Join(ValueLogDirPath(dir), "value-l0-000002.log")
+	activeWriter, err := valuelog.NewWriter(activePath, activeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := activeWriter.Append(0, nil, 2, []byte("active value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := activeWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.valueLogManager.RegisterSegment(activePath, activeID); err != nil {
+		t.Fatal(err)
+	}
+	token, err := database.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
+		Kind: rootpublication.ResourceValueLog, LogicalLane: "0", Generation: 1,
+		DiagnosticPath: "value_vlog/" + filepath.Base(path), Digest: [32]byte{1},
+		Reachability: rootpublication.ReachabilityValueLogPointer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SegmentsEligible == 0 {
+		t.Fatalf("target segment was not eligible: %+v", stats)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("GC removed stable-pinned segment: %v", err)
+	}
+	token.Release()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("GC zombie was not removed after stable token release")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

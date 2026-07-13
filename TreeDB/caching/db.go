@@ -36,6 +36,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -5153,38 +5154,42 @@ func (db *DB) cleanupMissingRetainedValueLog(path string) bool {
 }
 
 func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
-	if path == "" {
+	return db.cleanupOrphanedRetainedValueLogExpected(path, rootpublication.StableIdentity{})
+}
+
+func (db *DB) cleanupOrphanedRetainedValueLogExpected(path string, expected rootpublication.StableIdentity) bool {
+	if path == "" || db.valueLogReader == nil {
 		return false
 	}
-	if db.valueLogReader != nil {
-		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
-		if ok && valueLog && laneID >= 0 {
-			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
-				var removeErr error
-				backoff := 25 * time.Millisecond
-				for i := 0; i < 40; i++ {
-					removeErr = db.valueLogReader.RemoveSegment(id)
-					if removeErr == nil || errors.Is(removeErr, valuelog.ErrFileNotFound) {
-						break
-					}
-					if runtime.GOOS != "windows" {
-						return false
-					}
-					if !isWindowsSharingViolationError(removeErr) {
-						return false
-					}
-					time.Sleep(backoff)
-					if backoff < 200*time.Millisecond {
-						backoff *= 2
-					}
-				}
-				if removeErr != nil && !errors.Is(removeErr, valuelog.ErrFileNotFound) {
-					return false
-				}
-			}
+	laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+	if !ok || !valueLog || laneID < 0 {
+		return false
+	}
+	id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+	if err != nil {
+		return false
+	}
+	if expected != (rootpublication.StableIdentity{}) {
+		file, err := os.Open(path)
+		if err != nil {
+			return os.IsNotExist(err) && db.cleanupMissingRetainedValueLog(path)
+		}
+		identity, identityErr := rootpublication.StableIdentityFromFile(file)
+		closeErr := file.Close()
+		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(expected, identity) {
+			return false
 		}
 	}
-	if err := db.removeFileRetry(path); err != nil {
+	if err := db.valueLogReader.RegisterSegment(path, id); err != nil {
+		if os.IsNotExist(err) {
+			return db.cleanupMissingRetainedValueLog(path)
+		}
+		return false
+	}
+	if err := db.valueLogReader.RemoveSegment(id); err != nil {
+		return false
+	}
+	if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
 		return false
 	}
 	db.mu.Lock()
@@ -6947,11 +6952,13 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 			}
 
 			if marker, ok := db.backend.(valueLogZombieMarker); ok {
+				var expectedIdentity rootpublication.StableIdentity
 				if db.valueLogReader != nil {
+					expectedIdentity, _ = db.valueLogReader.StableSegmentIdentity(id)
 					_ = db.valueLogReader.EvictSegment(id)
 				}
 				if err := marker.MarkValueLogZombie(id); err != nil {
-					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
+					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLogExpected(path, expectedIdentity) {
 						removed = true
 						out.RemovedSegments++
 						if size > 0 {
@@ -6986,9 +6993,7 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 					out.ObservedSourceZombieMarkedBytes += size
 				}
 				marked = true
-			} else {
-				db.dropValueLogSegment(path)
-				_ = db.removeFileRetry(path)
+			} else if db.cleanupOrphanedRetainedValueLog(path) {
 				db.mu.Lock()
 				db.untrackValueLogSegmentLocked(path)
 				db.mu.Unlock()
@@ -7001,6 +7006,8 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 				if size > 0 {
 					out.ObservedSourceRemovedBytes += size
 				}
+			} else {
+				continue
 			}
 			db.forgetValueLogRetain(path)
 		}
@@ -7088,11 +7095,13 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 		}
 
 		if marker, ok := db.backend.(valueLogZombieMarker); ok {
+			var expectedIdentity rootpublication.StableIdentity
 			if db.valueLogReader != nil {
+				expectedIdentity, _ = db.valueLogReader.StableSegmentIdentity(id)
 				_ = db.valueLogReader.EvictSegment(id)
 			}
 			if err := marker.MarkValueLogZombie(id); err != nil {
-				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
+				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLogExpected(path, expectedIdentity) {
 					removed = true
 					out.RemovedSegments++
 					if size > 0 {
@@ -7133,9 +7142,7 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 				}
 			}
 			marked = true
-		} else {
-			db.dropValueLogSegment(path)
-			_ = db.removeFileRetry(path)
+		} else if db.cleanupOrphanedRetainedValueLog(path) {
 			db.mu.Lock()
 			db.untrackValueLogSegmentLocked(path)
 			db.mu.Unlock()
@@ -7150,6 +7157,8 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 					out.ObservedSourceRemovedBytes += size
 				}
 			}
+		} else {
+			continue
 		}
 		db.forgetValueLogRetain(path)
 	}
@@ -8071,6 +8080,19 @@ type BackendDB interface {
 	Stats() map[string]string
 }
 
+type valueLogIdentityPinRegistryProvider interface {
+	ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry
+}
+
+// ValueLogIdentityPinRegistry lets nested wrappers share the same physical
+// deletion gate as the backend and cache value-log managers.
+func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
+	if db == nil {
+		return nil
+	}
+	return db.valueLogIdentityPins
+}
+
 type backendStateReader interface {
 	State() *backenddb.DBState
 }
@@ -8762,6 +8784,7 @@ type DB struct {
 	valueLogRewriteTriggerChurn    int64
 	valueLogRewriteMinSegmentAge   time.Duration
 	valueLogReader                 *valuelog.Manager
+	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
 	valueLogColdLanes              []int
@@ -12318,7 +12341,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	reader, err := valuelog.NewManager(valueLogDir)
+	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	if provider, ok := backend.(valueLogIdentityPinRegistryProvider); ok {
+		if shared := provider.ValueLogIdentityPinRegistry(); shared != nil {
+			valueLogIdentityPins = shared
+		}
+	}
+	reader, err := valuelog.NewManagerWithStableResourcePinRegistry(valueLogDir, valueLogIdentityPins)
 	if err != nil {
 		return nil, err
 	}
@@ -12610,6 +12639,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableValueLogPointers:                   true,
 		indexOuterLeavesInValueLog:                 opts.IndexOuterLeavesInValueLog,
 		valueLogReader:                             valueLogReader,
+		valueLogIdentityPins:                       valueLogIdentityPins,
 		valueLogRetain:                             retained,
 		debugFlushPointers:                         debugFlushPointers,
 		debugFlushTiming:                           debugFlushTiming,

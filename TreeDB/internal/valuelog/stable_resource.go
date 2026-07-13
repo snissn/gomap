@@ -14,6 +14,297 @@ import (
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 var openStableValueLogParent = os.Open
 
+// SetStableResourcePinRegistry installs the DB-scoped physical identity gate
+// used by every manager that can delete these segment files.
+func (m *Manager) SetStableResourcePinRegistry(registry *rootpublication.IdentityPinRegistry) error {
+	if m == nil || registry == nil {
+		return errors.New("valuelog: nil stable resource pin registry")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stableResourcePins != nil && m.stableResourcePins != registry {
+		return errors.New("valuelog: stable resource pin registry already installed")
+	}
+	if m.stableResourcePins == registry {
+		return nil
+	}
+	observed := make([]*File, 0, len(m.files))
+	for _, file := range m.files {
+		if err := m.observeStableFileWithRegistryLocked(file, registry); err != nil {
+			for _, prior := range observed {
+				_ = registry.Unobserve(prior.stableIdentity)
+				prior.stableObserved = false
+			}
+			return err
+		}
+		observed = append(observed, file)
+	}
+	m.stableResourcePins = registry
+	return nil
+}
+
+// StableResourcePinRegistry returns the deletion gate installed before this
+// manager's files became eligible for removal.
+func (m *Manager) StableResourcePinRegistry() *rootpublication.IdentityPinRegistry {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.stableResourcePins
+}
+
+// StableSegmentIdentity returns the immutable physical identity captured when
+// the manager opened fileID. Callers can carry it across an intentional evict
+// and reject a pathname replacement before fallback cleanup.
+func (m *Manager) StableSegmentIdentity(fileID uint32) (rootpublication.StableIdentity, bool) {
+	if m == nil {
+		return rootpublication.StableIdentity{}, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[fileID]
+	if file == nil || file.stableIdentity == (rootpublication.StableIdentity{}) {
+		return rootpublication.StableIdentity{}, false
+	}
+	return file.stableIdentity, true
+}
+
+// StableResourceToken captures a checked token from a manager-owned exact
+// handle while holding the manager read lock. The registry is supplied by the
+// manager and cannot be omitted or substituted by the caller.
+func (m *Manager) StableResourceToken(fileID uint32, registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	if m == nil {
+		return nil, errors.New("valuelog: nil manager")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[fileID]
+	if file == nil {
+		return nil, &fileNotFoundError{id: fileID}
+	}
+	if m.stableResourcePins == nil {
+		return nil, fmt.Errorf("%w: manager has no stable identity registry", rootpublication.ErrUnresolvedResource)
+	}
+	registration.PinRegistry = m.stableResourcePins
+	namespace, err := stableValueLogNamespaceToken(file.File, registration)
+	if err != nil {
+		return nil, err
+	}
+	defer namespace.Release()
+	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
+}
+
+func (m *Manager) observeStableFileLocked(file *File) error {
+	if m == nil || m.stableResourcePins == nil {
+		return nil
+	}
+	return m.observeStableFileWithRegistryLocked(file, m.stableResourcePins)
+}
+
+func (m *Manager) observeStableFileWithRegistryLocked(file *File, registry *rootpublication.IdentityPinRegistry) error {
+	if file == nil || registry == nil || file.stableObserved {
+		return nil
+	}
+	identity, err := rootpublication.StableIdentityFromFile(file.File)
+	if err != nil {
+		return err
+	}
+	if err := registry.Observe(identity); err != nil {
+		return err
+	}
+	namespace, err := stableDeleteNamespace(file.Path)
+	if err != nil {
+		_ = registry.Unobserve(identity)
+		return err
+	}
+	file.stableIdentity = identity
+	file.stableNamespace = namespace
+	file.stableObserved = true
+	return nil
+}
+
+func (m *Manager) unobserveStableFileLocked(file *File) error {
+	if m == nil || m.stableResourcePins == nil || file == nil || !file.stableObserved {
+		return nil
+	}
+	file.stableObserved = false
+	return m.stableResourcePins.Unobserve(file.stableIdentity)
+}
+
+func (m *Manager) stableDeleteLease(file *File) (*rootpublication.IdentityDeleteLease, error) {
+	if m == nil || file == nil || m.stableResourcePins == nil {
+		return nil, nil
+	}
+	identity := file.stableIdentity
+	if identity == (rootpublication.StableIdentity{}) {
+		var err error
+		identity, err = rootpublication.StableIdentityFromFile(file.File)
+		if err != nil {
+			return nil, err
+		}
+	}
+	namespace := file.stableNamespace
+	if namespace == "" {
+		var err error
+		namespace, err = stableDeleteNamespace(file.Path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lease, err := m.stableResourcePins.BeginDeleteAt(identity, namespace)
+	if errors.Is(err, rootpublication.ErrResourcePinned) {
+		return nil, &filePinnedError{id: file.ID, op: "delete stable resource"}
+	}
+	return lease, err
+}
+
+func stableDeleteNamespace(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("%w: empty value-log path", rootpublication.ErrUnresolvedResource)
+	}
+	parent, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	defer parent.Close()
+	identity, err := rootpublication.StableIdentityFromFile(parent)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%x/%s", identity.Platform, identity.VolumeID, identity.ObjectID, filepath.Base(path)), nil
+}
+
+func validateStableDeletePath(file *File) error {
+	if file == nil || file.File == nil || file.Path == "" {
+		return fmt.Errorf("%w: invalid value-log delete target", rootpublication.ErrUnresolvedResource)
+	}
+	identity := file.stableIdentity
+	if identity == (rootpublication.StableIdentity{}) {
+		var err error
+		identity, err = rootpublication.StableIdentityFromFile(file.File)
+		if err != nil {
+			return err
+		}
+	}
+	return validateStableDeletePathIdentity(file.Path, identity)
+}
+
+func validateStableDeletePathIdentity(path string, identity rootpublication.StableIdentity) error {
+	linked, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer linked.Close()
+	linkedIdentity, err := rootpublication.StableIdentityFromFile(linked)
+	if err != nil {
+		return err
+	}
+	if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
+		return fmt.Errorf("%w: value-log path no longer names captured identity", rootpublication.ErrResourceConflict)
+	}
+	return nil
+}
+
+func abortStableDeleteLease(lease *rootpublication.IdentityDeleteLease) {
+	if lease != nil {
+		lease.Abort()
+	}
+}
+
+func commitStableDeleteLease(lease *rootpublication.IdentityDeleteLease) {
+	if lease != nil {
+		lease.Commit()
+	}
+}
+
+func finishStableDeleteLease(lease *rootpublication.IdentityDeleteLease, deleted bool) {
+	if deleted {
+		commitStableDeleteLease(lease)
+	} else {
+		abortStableDeleteLease(lease)
+	}
+}
+
+// closeAndRemoveStableSegmentFileResult closes the manager's own handle before
+// unlink (required on Windows), then revalidates that the path still names the
+// identity captured before close. The registry lease excludes process-local
+// pin and delete races across this boundary.
+func closeAndRemoveStableSegmentFileResult(file *File, validateIdentity bool) (bool, error) {
+	if file == nil {
+		return true, nil
+	}
+	identity := file.stableIdentity
+	if validateIdentity && identity == (rootpublication.StableIdentity{}) {
+		var err error
+		identity, err = rootpublication.StableIdentityFromFile(file.File)
+		if err != nil {
+			return false, err
+		}
+	}
+	closeErr := file.Close()
+	var removeErr error
+	if validateIdentity {
+		removeErr = removeSegmentFileWithRetryStable(file.Path, identity)
+	} else {
+		removeErr = removeSegmentFileWithRetry(file.Path)
+	}
+	return removeErr == nil, errors.Join(closeErr, removeErr)
+}
+
+func (m *Manager) deleteZombieFile(file *File) error {
+	if m == nil || file == nil {
+		return nil
+	}
+	m.mu.Lock()
+	current, exists := m.files[file.ID]
+	if !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() {
+		m.mu.Unlock()
+		return nil
+	}
+	lease, err := m.stableDeleteLease(file)
+	if errors.Is(err, ErrFilePinned) {
+		m.mu.Unlock()
+		if file.retryDeletePending.CompareAndSwap(false, true) {
+			go m.retryZombieDelete(file)
+		}
+		return nil
+	}
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if lease != nil {
+		if err := validateStableDeletePath(file); err != nil {
+			abortStableDeleteLease(lease)
+			m.mu.Unlock()
+			return err
+		}
+	}
+	m.mu.Unlock()
+
+	deleted, unlinkErr := closeAndRemoveStableSegmentFileResult(file, lease != nil)
+	if !deleted {
+		abortStableDeleteLease(lease)
+		if isWindowsSharingViolationError(unlinkErr) && file.retryDeletePending.CompareAndSwap(false, true) {
+			go m.retryZombieDelete(file)
+			return nil
+		}
+		return unlinkErr
+	}
+	commitStableDeleteLease(lease)
+	m.mu.Lock()
+	if current, exists := m.files[file.ID]; exists && current == file && file.RefCount.Load() == 0 && file.IsZombie.Load() {
+		delete(m.files, file.ID)
+		_ = m.unobserveStableFileLocked(file)
+	}
+	m.mu.Unlock()
+	return unlinkErr
+}
+
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
 	parent, err := openStableValueLogParent(filepath.Dir(path))
 	if err != nil {
@@ -65,6 +356,7 @@ type StableResourceRegistration struct {
 	OldName            string
 	NewName            string
 	NamespaceParent    *os.File
+	PinRegistry        *rootpublication.IdentityPinRegistry
 }
 
 // StableResourceRotation retains exact handles for the segment closed by a
@@ -147,7 +439,7 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-		ContentSynced: contentSynced,
+		ContentSynced: contentSynced, PinRegistry: registration.PinRegistry,
 	}
 	switch domain {
 	case rootpublication.StableProducerValueLog:

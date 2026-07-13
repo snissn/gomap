@@ -313,6 +313,9 @@ type StableResourceSpec struct {
 	// must still execute SyncThrough on the pinned identity.
 	ContentSynced bool
 	OnRelease     func()
+	// PinRegistry is the DB-scoped physical deletion gate. When set, token
+	// construction acquires a pin for the exact handle identity before return.
+	PinRegistry *IdentityPinRegistry
 
 	// StableIdentityOverride exists for deterministic platform-adapter and
 	// conflict tests. Production producers leave it zero and use handle identity.
@@ -346,6 +349,7 @@ type StableResourceToken struct {
 	syncedFrontier     DurableFrontier
 	hasSyncedFrontier  bool
 	onRelease          func()
+	identityPin        *IdentityPin
 	owner              atomic.Uint32
 	released           atomic.Bool
 	metrics            resourceTokenMetrics
@@ -397,6 +401,18 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		return nil, fmt.Errorf("%w: identity generation %d differs from resource generation %d", ErrResourceConflict, identity.Generation, spec.Generation)
 	}
 	identity.Generation = spec.Generation
+	var identityPin *IdentityPin
+	if spec.PinRegistry != nil {
+		identityPin, err = spec.PinRegistry.Pin(identity)
+		if err != nil {
+			return nil, fmt.Errorf("pin stable resource identity: %w", err)
+		}
+		defer func() {
+			if closeOnError {
+				identityPin.Release()
+			}
+		}()
+	}
 	if err := spec.Namespace.validateLinkedResource(identity); err != nil {
 		return nil, err
 	}
@@ -417,7 +433,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
 		stability: stability, namespace: spec.Namespace, pinned: pinned,
-		flush: flush, sync: syncThrough, onRelease: spec.OnRelease,
+		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
 	}
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
@@ -558,6 +574,7 @@ func (token *StableResourceToken) releasePinned() {
 	if token.namespace != nil {
 		token.namespace.release()
 	}
+	token.identityPin.Release()
 	if token.onRelease != nil {
 		token.onRelease()
 	}
