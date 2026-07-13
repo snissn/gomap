@@ -272,7 +272,7 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 	}
 	available := info.Size() - segmentStart - segmentHeaderSize
 	if available < 56 {
-		return env, info.Size(), ErrCorrupt
+		return env, info.Size(), errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
 	}
 	readLen := int64(commandFrameHeaderSize)
 	if available < readLen {

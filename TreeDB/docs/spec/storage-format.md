@@ -1770,6 +1770,10 @@ field at bytes `[54,56)` to a little-endian durability class:
 
 Zero and unknown classes are corruption. Encoders validate the class and all
 semantic fields before mutating caller-owned destination storage.
+An uncompressed active terminal tail is classifiable only when frame bytes
+`[0,56)` persist the complete V2 identity, LSN, and durability class. A shorter
+tail fails closed with `ErrCommandWALV2TailIdentityUnavailable` joined with
+`ErrCorrupt`; recovery must not infer a missing class or LSN from write intent.
 
 Every V2 `RawKVBatch` frame containing at least one `SetRID` operation has
 exactly one `ExternalRefFenceV1` precondition. Frames without `SetRID` have no
