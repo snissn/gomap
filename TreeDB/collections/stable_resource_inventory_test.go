@@ -172,6 +172,30 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	if string(got) != existing+"stable-append" {
 		t.Fatalf("captured-parent segment contents=%q", got)
 	}
+	if columnAssetSegmentDirSyncKnown(segmentPath) {
+		t.Fatal("handle-relative namespace sync certified the replaced pathname cache")
+	}
+
+	openStableColumnAssetParent = originalOpenParent
+	if err := os.Mkdir(namespace.SegmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(segmentPath, []byte("replacement-prefix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, replacementToken, err := writeColumnAssetToManagerWithStableResource(
+		dir, cfg, []byte("replacement-append"), ColumnAssetKindQueryReadyBase, 8, 12,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacementToken.Release()
+	if replacementToken.Namespace() == nil {
+		t.Fatal("replacement-path existing segment inherited stale namespace stability")
+	}
+	if columnAssetSegmentDirSyncKnown(segmentPath) {
+		t.Fatal("stable replacement capture populated pathname-only directory cache")
+	}
 
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
 	if err := builder.Add(token); err != nil {
@@ -320,10 +344,10 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 				first.Release()
 				t.Fatal(err)
 			}
-			if first.Namespace() == nil || second.Namespace() != nil {
+			if first.Namespace() == nil || second.Namespace() == nil {
 				first.Release()
 				second.Release()
-				t.Fatalf("namespace obligations first=%v second=%v", first.Namespace() != nil, second.Namespace() != nil)
+				t.Fatalf("stable captures must retain exact namespace obligations: first=%v second=%v", first.Namespace() != nil, second.Namespace() != nil)
 			}
 			ordered := []*rootpublication.StableResourceToken{first, second}
 			if reverse {

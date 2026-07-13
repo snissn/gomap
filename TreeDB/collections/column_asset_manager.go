@@ -540,7 +540,13 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 			}
 			closeStats.DirSync += time.Since(start)
 		}
-		markColumnAssetSegmentDirSynced(assetPath)
+		if capture != nil {
+			// A retained parent may no longer be reachable through assetPath. Do
+			// not let handle-relative stabilization certify a pathname cache entry.
+			clearColumnAssetSegmentDirSyncKnown(assetPath)
+		} else {
+			markColumnAssetSegmentDirSynced(assetPath)
+		}
 	}
 	closeStats.SyncEpochCount = 1
 	return ref, closeStats, nil
@@ -985,7 +991,9 @@ func openColumnAssetSegmentAppendFileAt(parent *os.File, assetPath string) (*os.
 	if err != nil {
 		return nil, false, false, err
 	}
-	return file, !columnAssetSegmentDirSyncKnown(assetPath), false, nil
+	// A pathname-only cache cannot prove that the entry opened through this
+	// retained parent has a durable namespace.
+	return file, true, false, nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {

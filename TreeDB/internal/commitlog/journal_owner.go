@@ -531,6 +531,9 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 		return nil
 	}
 	if j.captureStableResources {
+		if len(j.pendingStableRotations) != 0 {
+			return fmt.Errorf("%w: drain pending stable command-WAL rotation before rotating again", rootpublication.ErrResourceOwnership)
+		}
 		rotation, err := j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent)
 		if err != nil {
 			return err
@@ -779,17 +782,42 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	return &CommandJournalStableRotation{Closed: closedToken, Active: activeToken}, nil
 }
 
-// TakePendingStableRotations transfers the exact resources captured by
-// automatic size rotations. The caller must consume or Release every result.
-func (j *CommandJournal) TakePendingStableRotations() []*CommandJournalStableRotation {
+// TakePendingStableRotations flushes and refreshes the current active segment
+// frontier, then transfers the exact resources captured by automatic size
+// rotations. The caller must consume or Release every result.
+func (j *CommandJournal) TakePendingStableRotations() ([]*CommandJournalStableRotation, error) {
 	if j == nil {
-		return nil
+		return nil, nil
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if len(j.pendingStableRotations) == 0 {
+		return nil, nil
+	}
+	if j.writer == nil || j.writer.f == nil {
+		return nil, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.writer.Flush(); err != nil {
+		return nil, err
+	}
+	info, err := j.writer.f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	last := j.pendingStableRotations[len(j.pendingStableRotations)-1]
+	if last == nil || last.Active == nil {
+		return nil, fmt.Errorf("%w: pending command-WAL rotation has no active resource", rootpublication.ErrResourceOwnership)
+	}
+	active, err := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive,
+		rootpublication.DurableFrontier{Bytes: uint64(info.Size()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
+	if err != nil {
+		return nil, err
+	}
+	last.Active.Release()
+	last.Active = active
 	rotations := j.pendingStableRotations
 	j.pendingStableRotations = nil
-	return rotations
+	return rotations, nil
 }
 
 func (j *CommandJournal) ActiveBytes() int64 {

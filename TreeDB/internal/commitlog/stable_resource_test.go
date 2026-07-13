@@ -159,14 +159,24 @@ func TestCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer journal.Close()
+	var lastLSN uint64
 	for i := 0; i < 2; i++ {
-		if _, err := journal.AppendCommand(CommandEnvelope{
+		lastLSN, err = journal.AppendCommand(CommandEnvelope{
 			Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	rotations := journal.TakePendingStableRotations()
+	if _, err := journal.AppendCommand(CommandEnvelope{
+		Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("second automatic rotation before drain error=%v want ErrResourceOwnership", err)
+	}
+	rotations, err := journal.TakePendingStableRotations()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(rotations) == 0 {
 		t.Fatal("automatic size rotation returned no stable resources")
 	}
@@ -180,9 +190,19 @@ func TestCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
 		if rotation.Active.Namespace() == nil {
 			t.Fatal("automatic successor has no stable namespace token")
 		}
+	}
+	last := rotations[len(rotations)-1]
+	if got := last.Active.Frontier(); got.MaxLSN != lastLSN || got.Bytes <= segmentHeaderSize {
+		t.Fatalf("active automatic rotation frontier=%+v want triggering LSN %d and appended bytes", got, lastLSN)
+	}
+	for _, rotation := range rotations {
 		rotation.Release()
 	}
-	if again := journal.TakePendingStableRotations(); len(again) != 0 {
+	again, err := journal.TakePendingStableRotations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
 		t.Fatalf("stable rotations transferred twice: %d", len(again))
 	}
 }
