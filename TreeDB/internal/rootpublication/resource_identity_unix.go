@@ -37,6 +37,21 @@ func removeStableChildFile(parent *os.File, name string) error {
 	}
 }
 
+func renameStableChildFile(parent *os.File, oldName, newName string) error {
+	if parent == nil {
+		return os.ErrInvalid
+	}
+	for {
+		err := unix.Renameat(int(parent.Fd()), oldName, int(parent.Fd()), newName)
+		if err == nil {
+			return nil
+		}
+		if err != unix.EINTR {
+			return err
+		}
+	}
+}
+
 func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid

@@ -31,6 +31,17 @@ func TestOpenStableChildFileFailsTypedWhenRelativePrimitiveUnavailable(t *testin
 	}
 }
 
+func TestRenameStableChildFileFailsTypedWhenRelativePrimitiveUnavailable(t *testing.T) {
+	parent, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	if err := RenameStableChildFile(parent, "old", "new"); !errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("RenameStableChildFile error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+}
+
 func TestStableNamespaceRegistrationFailsTypedBeforeCertification(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)

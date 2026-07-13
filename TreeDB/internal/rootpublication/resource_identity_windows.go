@@ -19,6 +19,10 @@ func removeStableChildFile(*os.File, string) error {
 	return fmt.Errorf("%w: relative directory-handle unlink is unavailable", ErrNamespacePersistenceUnsupported)
 }
 
+func renameStableChildFile(*os.File, string, string) error {
+	return fmt.Errorf("%w: relative directory-handle rename is unavailable", ErrNamespacePersistenceUnsupported)
+}
+
 type stableWindowsFileIDInfo struct {
 	VolumeSerialNumber uint64
 	FileID             [16]byte

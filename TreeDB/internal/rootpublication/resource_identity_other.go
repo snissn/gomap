@@ -12,6 +12,10 @@ func removeStableChildFile(*os.File, string) error {
 	return ErrNamespacePersistenceUnsupported
 }
 
+func renameStableChildFile(*os.File, string, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }

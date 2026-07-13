@@ -778,6 +778,30 @@ func RemoveStableChildFile(parent *os.File, name string) error {
 	return removeStableChildFile(parent, name)
 }
 
+// RenameStableChildFile atomically renames one child to another through the
+// exact already-open parent directory. It never resolves Parent.Name().
+func RenameStableChildFile(parent *os.File, oldName, newName string) error {
+	if parent == nil || oldName == "" || newName == "" ||
+		filepath.Base(oldName) != oldName || filepath.Base(newName) != newName ||
+		oldName == "." || oldName == ".." || newName == "." || newName == ".." {
+		return fmt.Errorf("%w: stable child rename requires base names and an exact parent handle", ErrUnresolvedResource)
+	}
+	return renameStableChildFile(parent, oldName, newName)
+}
+
+// StableChildNamespace returns the physical parent/name key used to serialize
+// deletion and replacement of one directory entry.
+func StableChildNamespace(parent *os.File, name string) (string, error) {
+	if parent == nil || name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return "", fmt.Errorf("%w: stable child namespace requires a base name and exact parent handle", ErrUnresolvedResource)
+	}
+	identity, err := StableIdentityFromFile(parent)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%x/%s", identity.Platform, identity.VolumeID, identity.ObjectID, name), nil
+}
+
 func validateStableChildLink(parent, resource *os.File, name string) error {
 	resourceIdentity, err := stableIdentityFromFile(resource)
 	if err != nil {

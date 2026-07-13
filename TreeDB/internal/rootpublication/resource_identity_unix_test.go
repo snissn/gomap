@@ -93,6 +93,45 @@ func TestRemoveStableChildFileUsesCapturedParentAfterPathReplacement(t *testing.
 	}
 }
 
+func TestRenameStableChildFileUsesCapturedParentAfterPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	originalDir := filepath.Join(root, "segments")
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := os.Open(originalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := OpenStableChildFile(parent, "manifest.tmp", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Close(); err != nil {
+		t.Fatal(err)
+	}
+	movedDir := filepath.Join(root, "segments-moved")
+	if err := os.Rename(originalDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(originalDir, "manifest.tmp"), []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenameStableChildFile(parent, "manifest.tmp", "manifest.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(movedDir, "manifest.json")); err != nil {
+		t.Fatalf("captured-parent target: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(originalDir, "manifest.tmp")); err != nil || string(got) != "replacement" {
+		t.Fatalf("replacement child changed: data=%q err=%v", got, err)
+	}
+}
+
 func TestStableNamespaceRejectsChildReplacementBeforeStabilize(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)

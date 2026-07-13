@@ -34,7 +34,7 @@ TreeDB creates/manages two sub-databases under the root directory:
 - `Dir/maindb/index.db`: memory-mapped pager file containing B+Tree pages + metadata.
 - `Dir/maindb/wal/`: redo journal segments named `commit-l<lane>-<seq>.log`.
 - `Dir/maindb/value_vlog/`: persistent large-value segments named `value-l<lane>-<seq>.log`.
-- `Dir/maindb/leaf_vlog/`: optional persistent outer-leaf generation segments named `value-l<lane>-<seq>.log`.
+- `Dir/maindb/leaf_vlog/`: optional persistent outer-leaf generation segments named `value-l<lane>-<seq>.log`. Its version-2 `manifest.json` carries a monotonic revision; live replacement syncs the exact temporary inode and retained parent-directory namespace before the revision is usable.
 - `Dir/maindb/column_assets/`: compatibility directory name for the isolated typed asset manager root used by typed-storage physical assets.
 - `Dir/maindb/LOCK`: cross-process exclusive-open lock for the main DB.
 

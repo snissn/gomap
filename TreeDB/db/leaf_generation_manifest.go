@@ -16,7 +16,7 @@ import (
 
 const (
 	leafGenerationManifestFileName = "manifest.json"
-	leafGenerationManifestVersion  = 1
+	leafGenerationManifestVersion  = 2
 
 	leafGenerationStateWritable = "writable"
 	leafGenerationStateSealed   = "sealed"
@@ -26,6 +26,7 @@ const (
 
 type leafGenerationManifest struct {
 	Version             int                    `json:"version"`
+	Revision            uint64                 `json:"revision"`
 	CurrentGenerationID uint64                 `json:"current_generation_id"`
 	NextGenerationID    uint64                 `json:"next_generation_id"`
 	Generations         []leafGenerationRecord `json:"generations"`
@@ -52,6 +53,7 @@ func leafGenerationManifestPath(leafDir string) string {
 func newLeafGenerationManifest(commitSeq uint64) *leafGenerationManifest {
 	return &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
+		Revision:            1,
 		CurrentGenerationID: 1,
 		NextGenerationID:    2,
 		Generations: []leafGenerationRecord{{
@@ -284,6 +286,7 @@ func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 	}
 	out := &leafGenerationManifest{
 		Version:             m.Version,
+		Revision:            m.Revision,
 		CurrentGenerationID: m.CurrentGenerationID,
 		NextGenerationID:    m.NextGenerationID,
 		Generations:         make([]leafGenerationRecord, len(m.Generations)),
@@ -666,7 +669,7 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 	if !changedAny {
 		return nil
 	}
-	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), nextManifest); err != nil {
+	if err := db.saveLeafGenerationManifestDurable(nextManifest); err != nil {
 		return err
 	}
 	db.mu.Lock()
@@ -715,6 +718,9 @@ func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, 
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
+	if manifest.Revision == 0 {
+		return nil, false, fmt.Errorf("treedb: %s revision must be non-zero", filepath.Base(path))
+	}
 	if err := validateLeafGenerationManifest(&manifest); err != nil {
 		return nil, false, err
 	}
@@ -729,11 +735,37 @@ func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest
 	if err := validateLeafGenerationManifest(manifest); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	persisted := manifest.clone()
+	currentData, readErr := os.ReadFile(path)
+	switch {
+	case readErr == nil:
+		var current leafGenerationManifest
+		if err := json.Unmarshal(currentData, &current); err != nil {
+			return fmt.Errorf("treedb: decode current %s revision: %w", filepath.Base(path), err)
+		}
+		if current.Revision > persisted.Revision {
+			persisted.Revision = current.Revision
+		}
+		if persisted.Revision == ^uint64(0) {
+			return fmt.Errorf("treedb: %s revision exhausted", filepath.Base(path))
+		}
+		persisted.Revision++
+	case os.IsNotExist(readErr):
+		if persisted.Revision == 0 {
+			persisted.Revision = 1
+		}
+	default:
+		return readErr
+	}
+	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, data, 0o600)
+	if err := writeFileAtomic(path, data, 0o600); err != nil {
+		return err
+	}
+	manifest.Revision = persisted.Revision
+	return nil
 }
 
 type leafGenerationBootstrapFile struct {
@@ -1059,7 +1091,7 @@ func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bo
 	if err != nil || !changed {
 		return false, err
 	}
-	if err := saveLeafGenerationManifest(leafDir, reconciled); err != nil {
+	if err := db.saveLeafGenerationManifestDurable(reconciled); err != nil {
 		return false, err
 	}
 	db.mu.Lock()
