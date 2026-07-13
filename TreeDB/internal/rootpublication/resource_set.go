@@ -12,6 +12,7 @@ import (
 
 type stableResourceEntry struct {
 	token              *StableResourceToken
+	pins               []*StableResourceToken
 	frontier           DurableFrontier
 	reachability       map[ReachabilityField]struct{}
 	logicalObligations map[string]StableLogicalObligation
@@ -26,10 +27,44 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 	for key, obligation := range entry.logicalObligations {
 		logicalObligations[key] = obligation
 	}
-	return stableResourceEntry{
+	clone := stableResourceEntry{
 		token: entry.token, frontier: cloneDurableFrontier(entry.frontier),
 		reachability: reachability, logicalObligations: logicalObligations,
 	}
+	if len(entry.pins) != 0 {
+		clone.pins = append([]*StableResourceToken(nil), entry.pins...)
+	}
+	return clone
+}
+
+func appendUniquePins(dst []*StableResourceToken, incoming ...*StableResourceToken) []*StableResourceToken {
+	seen := make(map[*StableResourceToken]struct{}, len(dst)+len(incoming))
+	for _, token := range dst {
+		seen[token] = struct{}{}
+	}
+	for _, token := range incoming {
+		if token == nil {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		dst = append(dst, token)
+	}
+	return dst
+}
+
+func activeEntryToken(entry stableResourceEntry) *StableResourceToken {
+	if entry.token != nil && !entry.token.released.Load() {
+		return entry.token
+	}
+	for _, token := range entry.pins {
+		if token != nil && !token.released.Load() {
+			return token
+		}
+	}
+	return entry.token
 }
 
 func mergeStableLogicalObligations(target map[string]StableLogicalObligation, incoming []StableLogicalObligation) error {
@@ -128,6 +163,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 			// Preserve the one namespace-creation obligation independently of
 			// insertion order by making its exact-handle token representative.
 			entry.token = token
+			entry.pins = nil
 			existing.releaseFrom(ResourceOwnerBuilder)
 		} else {
 			token.releaseFrom(ResourceOwnerBuilder)
@@ -175,7 +211,7 @@ func stableResourcesCoalesce(existing, incoming *StableResourceToken) (bool, err
 	}
 }
 
-func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry) error {
+func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry, retainSourcePins bool) error {
 	logicalKey := incoming.token.logicalKey()
 	for i := range *entries {
 		entry := &(*entries)[i]
@@ -204,8 +240,21 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 		for field := range incoming.reachability {
 			entry.reachability[field] = struct{}{}
 		}
+		if retainSourcePins {
+			if len(entry.pins) == 0 {
+				entry.pins = []*StableResourceToken{entry.token}
+			}
+			if len(incoming.pins) == 0 {
+				entry.pins = appendUniquePins(entry.pins, incoming.token)
+			} else {
+				entry.pins = appendUniquePins(entry.pins, incoming.pins...)
+			}
+		}
 		if existing.namespace == nil && incoming.token.namespace != nil {
 			entry.token = incoming.token
+			if !retainSourcePins {
+				entry.pins = nil
+			}
 		}
 		return nil
 	}
@@ -233,7 +282,7 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	}
 	merged := cloneStableResourceEntries(builder.entries)
 	for _, entry := range child.entries {
-		if err := mergeViewEntry(&merged, entry); err != nil {
+		if err := mergeViewEntry(&merged, entry, false); err != nil {
 			child.mu.Unlock()
 			builder.mu.Unlock()
 			return err
@@ -428,7 +477,7 @@ func (set *StableResourceSet) Tokens() []*StableResourceToken {
 	defer set.mu.Unlock()
 	tokens := make([]*StableResourceToken, len(set.entries))
 	for i, entry := range set.entries {
-		tokens[i] = entry.token
+		tokens[i] = activeEntryToken(entry)
 	}
 	return tokens
 }
@@ -511,8 +560,13 @@ func (set *StableResourceSet) FlushThrough() error {
 	}
 	var errs []error
 	for _, entry := range set.entries {
-		if err := entry.token.flushThrough(entry.frontier); err != nil {
-			errs = append(errs, fmt.Errorf("flush stable resource %q: %w", entry.token.logicalKey(), err))
+		token := activeEntryToken(entry)
+		if token == nil {
+			errs = append(errs, ErrResourceOwnership)
+			continue
+		}
+		if err := token.flushThrough(entry.frontier); err != nil {
+			errs = append(errs, fmt.Errorf("flush stable resource %q: %w", token.logicalKey(), err))
 		}
 	}
 	return errors.Join(errs...)
@@ -531,8 +585,13 @@ func (set *StableResourceSet) SyncThrough() error {
 	}
 	var errs []error
 	for _, entry := range set.entries {
-		if err := entry.token.syncThrough(entry.frontier); err != nil {
-			errs = append(errs, fmt.Errorf("sync stable resource %q: %w", entry.token.logicalKey(), err))
+		token := activeEntryToken(entry)
+		if token == nil {
+			errs = append(errs, ErrResourceOwnership)
+			continue
+		}
+		if err := token.syncThrough(entry.frontier); err != nil {
+			errs = append(errs, fmt.Errorf("sync stable resource %q: %w", token.logicalKey(), err))
 		}
 	}
 	return errors.Join(errs...)
@@ -608,7 +667,7 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 		}
 		set.mu.Lock()
 		for _, entry := range set.entries {
-			if err := mergeViewEntry(&view.entries, entry); err != nil {
+			if err := mergeViewEntry(&view.entries, entry, true); err != nil {
 				set.mu.Unlock()
 				return nil, err
 			}
@@ -643,8 +702,14 @@ func (set *StableResourceSet) DeletionGuard() StableResourceDeletionGuard {
 
 func (guard StableResourceDeletionGuard) Check(identity StableIdentity, generation uint64) error {
 	for _, entry := range guard.entries {
-		if sameStableObject(entry.token.identity, identity) && entry.token.generation == generation && !entry.token.released.Load() {
-			return ErrResourcePinned
+		pins := entry.pins
+		if len(pins) == 0 {
+			pins = []*StableResourceToken{entry.token}
+		}
+		for _, token := range pins {
+			if sameStableObject(token.identity, identity) && token.generation == generation && !token.released.Load() {
+				return ErrResourcePinned
+			}
 		}
 	}
 	return nil
@@ -658,7 +723,10 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 	defer set.mu.Unlock()
 	byKind := make(map[ResourceKind]*ResourceKindStats)
 	for _, entry := range set.entries {
-		token := entry.token
+		token := activeEntryToken(entry)
+		if token == nil {
+			continue
+		}
 		stats := byKind[token.kind]
 		if stats == nil {
 			stats = &ResourceKindStats{Kind: token.kind}
@@ -680,7 +748,18 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 			stats.NamespaceSyncs += token.namespace.syncs.Load()
 			stats.NamespaceSyncDuration += time.Duration(token.namespace.syncNanos.Load())
 		}
-		if !token.released.Load() {
+		active := false
+		if len(entry.pins) == 0 {
+			active = entry.token != nil && !entry.token.released.Load()
+		} else {
+			for _, pin := range entry.pins {
+				if pin != nil && !pin.released.Load() {
+					active = true
+					break
+				}
+			}
+		}
+		if active {
 			stats.ActivePins++
 		}
 	}

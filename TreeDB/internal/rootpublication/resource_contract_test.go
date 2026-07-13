@@ -1065,6 +1065,51 @@ func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 	}
 }
 
+func TestUnionDeletionGuardRetainsEveryCoalescedSourcePin(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "shared.pack", "immutable-pack")
+	digest := sha256.Sum256([]byte("immutable-pack"))
+	newSet := func(lane string) (*StableResourceSet, *StableResourceToken) {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceOuterLeafPack, LogicalLane: lane, ResourceID: "shared", Generation: 7,
+			DiagnosticPath: "maindb/outer_leaf/shared.pack", File: file,
+			Frontier: DurableFrontier{Bytes: 14}, Digest: digest,
+			Reachability: ReachabilityOuterLeafPackedPointer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set, token
+	}
+	first, firstToken := newSet("first")
+	second, _ := newSet("second")
+	view, err := UnionStableResourceSets(first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.Len(); got != 1 {
+		t.Fatalf("union obligations=%d want 1", got)
+	}
+	guard := view.DeletionGuard()
+	first.Release()
+	if err := guard.Check(firstToken.Identity(), firstToken.Generation()); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("Check after representative release=%v want ErrResourcePinned from coalesced alias", err)
+	}
+	second.Release()
+	if err := guard.Check(firstToken.Identity(), firstToken.Generation()); err != nil {
+		t.Fatalf("Check after all source releases=%v", err)
+	}
+}
+
 type unsupportedNamespaceAdapter struct{}
 
 func (unsupportedNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
