@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -44,11 +46,7 @@ func TestStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable_resource",
 		},
 	}
-	ref, err := writeColumnAssetToManager(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := stableColumnAssetResourceToken(dir, ref)
+	ref, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,5 +59,28 @@ func TestStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 	}
 	if token.Digest() == [32]byte{} {
 		t.Fatal("column asset token missing immutable ref digest")
+	}
+	if token.Namespace() == nil {
+		t.Fatal("new column segment token missing stable namespace operation")
+	}
+
+	segmentPath, err := columnAssetSegmentPath(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedPath := filepath.Join(filepath.Dir(segmentPath), "rotated-original.seg")
+	if err := os.Rename(segmentPath, rotatedPath); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte("replacement-path-bytes")
+	if err := os.WriteFile(segmentPath, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, ref.Length)
+	if _, err := token.ReadAt(got, ref.Offset); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "stable-column-payload" {
+		t.Fatalf("pinned token read %q after path replacement", got)
 	}
 }
