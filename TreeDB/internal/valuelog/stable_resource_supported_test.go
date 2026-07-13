@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -166,6 +167,152 @@ func TestOrdinaryRotationRetainedParentPlateau(t *testing.T) {
 		if _, err := oldParent.Stat(); !errors.Is(err, os.ErrClosed) {
 			t.Fatalf("rotation %d retained superseded parent: %v", id, err)
 		}
+	}
+}
+
+func TestStableWriterCreationProofBindsRepeatedlyWithoutResync(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if pending, err := writer.StableCreationNamespacePending(); err != nil || !pending {
+		t.Fatalf("new writer creation pending=%v err=%v want true, nil", pending, err)
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("proof")); err != nil {
+		t.Fatal(err)
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != 1 {
+		t.Fatalf("initial exact-parent syncs=%d want 1", got)
+	}
+	for generation := uint64(1); generation <= 4; generation++ {
+		token, err := writer.StableResourceToken(StableResourceRegistration{
+			LogicalLane: "main", Generation: generation, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: generation,
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats := set.Stats(time.Now())
+		set.Release()
+		if len(stats) != 1 || stats[0].NamespaceSyncs != 1 {
+			t.Fatalf("capture %d namespace stats=%+v want one creation sync", generation, stats)
+		}
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != 1 {
+		t.Fatalf("repeated capture resynced exact parent: calls=%d", got)
+	}
+}
+
+func TestStableWriterExistingOpenCannotClaimCreateProof(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "000001.vlog")
+	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewWriterWithStableResourcePinRegistry(path, 1, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if pending, err := writer.StableCreationNamespacePending(); err != nil || pending {
+		t.Fatalf("existing writer creation pending=%v err=%v want false, nil", pending, err)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+		Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+		NamespaceOperation: rootpublication.NamespaceCreate,
+	})
+	if token != nil {
+		token.Release()
+		t.Fatal("existing open returned create evidence")
+	}
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("existing create capture error=%v want ErrUnresolvedResource", err)
+	}
+}
+
+func TestStableRegistrySyncedOrdinaryRotationTransfersCreationProof(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	before := writer.DurabilityStats().DirectorySyncCalls
+	if err := writer.RotateToWithSync(filepath.Join(dir, "000002.vlog"), 2, true); err != nil {
+		t.Fatal(err)
+	}
+	if writer.creationProof == nil || writer.creationUncertified {
+		t.Fatalf("synced ordinary rotation proof=%v uncertified=%t", writer.creationProof, writer.creationUncertified)
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != before+1 {
+		t.Fatalf("synced ordinary rotation namespace syncs=%d want %d", got, before+1)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+		Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 2,
+		NamespaceOperation: rootpublication.NamespaceCreate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token.Release()
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != before+1 {
+		t.Fatalf("capture after synced ordinary rotation resynced namespace: calls=%d", got)
+	}
+}
+
+func TestStableRotationTransfersCreationProofAcrossFourSegments(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	baselineFDs, checkFDs := valueLogOpenDescriptorCount(t)
+	for activeID := uint32(2); activeID <= 5; activeID++ {
+		if _, err := writer.Append(0, nil, uint64(activeID), []byte("rotate")); err != nil {
+			t.Fatal(err)
+		}
+		closedID := activeID - 1
+		rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, fmt.Sprintf("%06d.vlog", activeID)), activeID, false,
+			StableResourceRegistration{LogicalLane: "main", Generation: uint64(closedID), DiagnosticPath: fmt.Sprintf("maindb/value_vlog/%06d.vlog", closedID), Reachability: rootpublication.ReachabilityValueLogPointer},
+			StableResourceRegistration{LogicalLane: "main", Generation: uint64(activeID), DiagnosticPath: fmt.Sprintf("maindb/value_vlog/%06d.vlog", activeID), Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: uint64(activeID), NamespaceOperation: rootpublication.NamespaceCreate})
+		if err != nil {
+			t.Fatalf("rotation %d: %v", activeID, err)
+		}
+		if writer.creationProof == nil || writer.creationUncertified {
+			rotation.Release()
+			t.Fatalf("rotation %d did not transfer active creation proof", activeID)
+		}
+		rotation.Release()
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != 5 {
+		t.Fatalf("initial plus four rotation namespace syncs=%d want 5", got)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("released rotations retain %d pins", got)
+	}
+	if got := registry.ActiveIdentities(); got != 1 {
+		t.Fatalf("four rotations retain %d observed identities want 1", got)
+	}
+	if got, ok := valueLogOpenDescriptorCount(t); checkFDs && ok && got > baselineFDs+1 {
+		t.Fatalf("four rotations grew retained descriptors: baseline=%d current=%d", baselineFDs, got)
 	}
 }
 

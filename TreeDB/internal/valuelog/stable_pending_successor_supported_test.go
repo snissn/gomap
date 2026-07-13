@@ -142,12 +142,12 @@ func TestStableValueLogPendingSuccessorRejectsOrdinaryAndMismatchedRotation(t *t
 			oldFile := writer.f
 
 			injected := errors.New("injected value-log namespace-token failure")
-			originalFactory := newValueLogStableNamespaceToken
-			newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+			originalFactory := bindValueLogStableNamespaceCreationProof
+			bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 				return nil, injected
 			}
 			rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
-			newValueLogStableNamespaceToken = originalFactory
+			bindValueLogStableNamespaceCreationProof = originalFactory
 			if rotation != nil {
 				rotation.Release()
 				t.Fatal("failed rotation returned owned resources")
@@ -180,24 +180,33 @@ func TestStableValueLogTokenFailureRetriesExactPendingSuccessor(t *testing.T) {
 	active.ExternalRIDs = []uint64{101, 202}
 
 	createCalls := 0
+	beforeDirectoryCuts := 0
+	afterDirectoryCuts := 0
+	beforeDirectorySyncs := writer.DurabilityStats().DirectorySyncCalls
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Resource == durabilitycut.ResourceValueLog && event.Namespace == durabilitycut.NamespaceCreate {
 			createCalls++
+		}
+		if event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.BeforeNewFileDirectorySync {
+			beforeDirectoryCuts++
+		}
+		if event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.AfterNewFileDirectorySync {
+			afterDirectoryCuts++
 		}
 		return nil
 	})
 	defer restore()
 	injected := errors.New("injected value-log namespace-token failure")
-	originalFactory := newValueLogStableNamespaceToken
+	originalFactory := bindValueLogStableNamespaceCreationProof
 	factoryCalls := 0
-	newValueLogStableNamespaceToken = func(spec rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, generation uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
 		factoryCalls++
 		if factoryCalls == 1 {
 			return nil, injected
 		}
-		return originalFactory(spec)
+		return originalFactory(proof, parent, generation, name, diagnosticPath)
 	}
-	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	defer func() { bindValueLogStableNamespaceCreationProof = originalFactory }()
 
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
 	if rotation != nil {
@@ -206,6 +215,9 @@ func TestStableValueLogTokenFailureRetriesExactPendingSuccessor(t *testing.T) {
 	}
 	if !errors.Is(err, injected) {
 		t.Fatalf("first rotation error=%v want token failure", err)
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != beforeDirectorySyncs+1 || beforeDirectoryCuts != 1 || afterDirectoryCuts != 1 {
+		t.Fatalf("failed bind proof sync evidence calls=%d before/after=%d/%d want %d and 1/1", got, beforeDirectoryCuts, afterDirectoryCuts, beforeDirectorySyncs+1)
 	}
 	pending := writer.pendingStableSuccessor
 	if pending == nil || !pending.stableObserved || pending.active.PinRegistry != registry {
@@ -240,6 +252,9 @@ func TestStableValueLogTokenFailureRetriesExactPendingSuccessor(t *testing.T) {
 		t.Fatalf("retry createCalls=%d factoryCalls=%d sameFile=%t, want 1/2/true",
 			createCalls, factoryCalls, os.SameFile(createdInfo, installedInfo))
 	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != beforeDirectorySyncs+1 || beforeDirectoryCuts != 1 || afterDirectoryCuts != 1 {
+		t.Fatalf("identical retry resynced proof: calls=%d before/after=%d/%d", got, beforeDirectoryCuts, afterDirectoryCuts)
+	}
 	if writer.pendingStableSuccessor != nil || !writer.stableResourceObserved ||
 		!rootpublication.SamePhysicalIdentity(writer.stableResourceIdentity, pendingIdentity) {
 		t.Fatal("successful retry did not transfer the pending observation into the active writer")
@@ -262,6 +277,58 @@ func TestStableValueLogTokenFailureRetriesExactPendingSuccessor(t *testing.T) {
 	}
 }
 
+func TestStableValueLogAfterDirectoryCutRetryKeepsSyncedProof(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewWriter(filepath.Join(dir, "000001.vlog"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	appendStablePendingValue(t, writer, 1)
+	closed, active := stablePendingRegistrations(1, 2)
+	secondPath := filepath.Join(dir, "000002.vlog")
+	beforeSyncs := writer.DurabilityStats().DirectorySyncCalls
+	injected := errors.New("injected after-directory-sync cut")
+	beforeCuts := 0
+	afterCuts := 0
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceValueLog {
+			return nil
+		}
+		switch event.Point {
+		case durabilitycut.BeforeNewFileDirectorySync:
+			beforeCuts++
+		case durabilitycut.AfterNewFileDirectorySync:
+			afterCuts++
+			return injected
+		}
+		return nil
+	})
+	defer restore()
+	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("failed after-cut rotation returned resources")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("after-cut error=%v want injected", err)
+	}
+	if writer.pendingStableSuccessor == nil || writer.pendingStableSuccessor.creationProof == nil {
+		t.Fatal("after-cut failure did not retain the already-synced exact proof")
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != beforeSyncs+1 || beforeCuts != 1 || afterCuts != 1 {
+		t.Fatalf("first attempt sync evidence calls=%d cuts=%d/%d", got, beforeCuts, afterCuts)
+	}
+	rotation, err = writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
+	if err != nil {
+		t.Fatalf("retry after completed directory sync: %v", err)
+	}
+	rotation.Release()
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != beforeSyncs+1 || beforeCuts != 1 || afterCuts != 1 {
+		t.Fatalf("retry repeated completed directory sync: calls=%d cuts=%d/%d", got, beforeCuts, afterCuts)
+	}
+}
+
 func TestStableValueLogPendingSuccessorRejectsRegistryMismatch(t *testing.T) {
 	dir := t.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()
@@ -275,12 +342,12 @@ func TestStableValueLogPendingSuccessorRejectsRegistryMismatch(t *testing.T) {
 	secondPath := filepath.Join(dir, "000002.vlog")
 
 	injected := errors.New("injected namespace-token failure before registry mismatch")
-	originalFactory := newValueLogStableNamespaceToken
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindValueLogStableNamespaceCreationProof
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		return nil, injected
 	}
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
-	newValueLogStableNamespaceToken = originalFactory
+	bindValueLogStableNamespaceCreationProof = originalFactory
 	if rotation != nil {
 		rotation.Release()
 		t.Fatal("failed rotation returned owned resources")
@@ -332,13 +399,13 @@ func TestStableValueLogPendingSuccessorCloseReleasesExactOwnership(t *testing.T)
 	}
 	appendStablePendingValue(t, writer, 1)
 	closed, active := stablePendingRegistrations(1, 2)
-	originalFactory := newValueLogStableNamespaceToken
+	originalFactory := bindValueLogStableNamespaceCreationProof
 	injected := errors.New("injected token failure before close")
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		return nil, injected
 	}
 	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false, closed, active)
-	newValueLogStableNamespaceToken = originalFactory
+	bindValueLogStableNamespaceCreationProof = originalFactory
 	if rotation != nil {
 		rotation.Release()
 		t.Fatal("failed rotation returned owned resources")
@@ -384,16 +451,16 @@ func TestStableValueLogPendingSuccessorTransfersRegistryObservationOnRetry(t *te
 	closed, active := stablePendingRegistrations(1, 2)
 
 	injected := errors.New("injected value-log namespace-token failure")
-	originalFactory := newValueLogStableNamespaceToken
+	originalFactory := bindValueLogStableNamespaceCreationProof
 	factoryCalls := 0
-	newValueLogStableNamespaceToken = func(spec rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, generation uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
 		factoryCalls++
 		if factoryCalls == 1 {
 			return nil, injected
 		}
-		return originalFactory(spec)
+		return originalFactory(proof, parent, generation, name, diagnosticPath)
 	}
-	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	defer func() { bindValueLogStableNamespaceCreationProof = originalFactory }()
 
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
 	if rotation != nil {
@@ -450,12 +517,12 @@ func TestStableValueLogPendingSuccessorReleasesRegistryObservationOnClose(t *tes
 	closed, active := stablePendingRegistrations(1, 2)
 
 	injected := errors.New("injected value-log namespace-token failure")
-	originalFactory := newValueLogStableNamespaceToken
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindValueLogStableNamespaceCreationProof
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		return nil, injected
 	}
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
-	newValueLogStableNamespaceToken = originalFactory
+	bindValueLogStableNamespaceCreationProof = originalFactory
 	if rotation != nil {
 		rotation.Release()
 		t.Fatal("failed rotation returned owned resources")

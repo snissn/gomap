@@ -202,6 +202,57 @@ func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
 	}
 }
 
+func TestStableRegistryRelaxedOrdinaryRotationDoesNotSyncOrClaimCreate(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	before := writer.DurabilityStats().DirectorySyncCalls
+	if err := writer.RotateToWithSync(filepath.Join(dir, "000002.vlog"), 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("relaxed ordinary rotation namespace syncs: before=%d after=%d", before, after)
+	}
+	if writer.creationProof != nil || !writer.creationUncertified {
+		t.Fatalf("relaxed successor proof=%v uncertified=%t, want nil/true", writer.creationProof, writer.creationUncertified)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+		Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 2,
+		NamespaceOperation: rootpublication.NamespaceCreate,
+	})
+	if token != nil {
+		token.Release()
+		t.Fatal("uncertified relaxed successor returned a create token")
+	}
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("uncertified relaxed successor error=%v want ErrUnresolvedResource", err)
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("failed late certification added namespace syncs: before=%d after=%d", before, after)
+	}
+	rotation, rotateErr := writer.RotateToWithStableResources(filepath.Join(dir, "000003.vlog"), 3, false,
+		StableResourceRegistration{LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog", Reachability: rootpublication.ReachabilityValueLogPointer},
+		StableResourceRegistration{LogicalLane: "main", Generation: 3, DiagnosticPath: "maindb/value_vlog/000003.vlog", Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 3, NamespaceOperation: rootpublication.NamespaceCreate})
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("uncertified relaxed successor entered a stable rotation")
+	}
+	if !errors.Is(rotateErr, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("uncertified stable rotation error=%v want ErrUnresolvedResource", rotateErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "000003.vlog")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("uncertified stable rotation exposed successor: %v", statErr)
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("failed stable rotation added namespace syncs: before=%d after=%d", before, after)
+	}
+}
+
 func testRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.T) {
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
@@ -334,11 +385,11 @@ func testStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T
 		t.Fatal(err)
 	}
 	injected := errors.New("injected namespace failure")
-	originalFactory := newValueLogStableNamespaceToken
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindValueLogStableNamespaceCreationProof
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		return nil, injected
 	}
-	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	defer func() { bindValueLogStableNamespaceCreationProof = originalFactory }()
 	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, true,
 		StableResourceRegistration{
 			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
@@ -375,8 +426,8 @@ func testStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
 	}
 	defer writer.Close()
 	injected := errors.New("injected namespace failure after replacement")
-	originalFactory := newValueLogStableNamespaceToken
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindValueLogStableNamespaceCreationProof
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		if err := os.Rename(failedPath, displacedPath); err != nil {
 			t.Fatal(err)
 		}
@@ -385,7 +436,7 @@ func testStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
 		}
 		return nil, injected
 	}
-	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	defer func() { bindValueLogStableNamespaceCreationProof = originalFactory }()
 
 	rotation, err := writer.RotateToWithStableResources(failedPath, 2, false,
 		StableResourceRegistration{

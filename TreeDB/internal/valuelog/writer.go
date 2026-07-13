@@ -44,7 +44,7 @@ const (
 var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
-func openLogFile(path string) (*os.File, error) {
+func openLogFile(path string) (*os.File, bool, error) {
 	// Stable-resource publication retains this exact descriptor for both
 	// durability operations and recovery validation. Keep writer descriptors
 	// read-capable so a duplicated pin can serve ReadAt without reopening by
@@ -52,16 +52,17 @@ func openLogFile(path string) (*os.File, error) {
 	const flags = os.O_RDWR | os.O_APPEND
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
-		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(path), filepath.Dir(path), "", path); observeErr != nil {
 			_ = created.Close()
-			return nil, observeErr
+			return nil, false, observeErr
 		}
-		return created, nil
+		return created, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return nil, err
+		return nil, false, err
 	}
-	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	return f, false, err
 }
 
 func syncNewFileDirectory(w *Writer, path string) error {
@@ -87,6 +88,9 @@ type Writer struct {
 	f                      *os.File
 	stableParent           *os.File
 	stableParentErr        error
+	creationProof          *rootpublication.StableNamespaceCreationProof
+	creationUnsupported    bool
+	creationUncertified    bool
 	pendingStableSuccessor *pendingValueLogSuccessor
 	stableResourcePins     *rootpublication.IdentityPinRegistry
 	stableResourceIdentity rootpublication.StableIdentity
@@ -656,7 +660,7 @@ func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
 }
 
 func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry) (*Writer, error) {
-	f, err := openLogFile(path)
+	f, created, err := openLogFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -665,22 +669,39 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		syncFn: syncFn,
 	}
 	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
-	if syncDirectory {
-		if err := syncNewFileDirectory(w, path); err != nil {
-			_ = f.Close()
-			if w.stableParent != nil {
-				_ = w.stableParent.Close()
-			}
-			return nil, err
+	if err := w.observeStableResourceFile(f, registry); err != nil {
+		_ = f.Close()
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+			w.stableParent = nil
 		}
+		return nil, err
 	}
+	proof, unsupported, uncertified, proofErr := w.prepareStableCreationProof(w.stableParent, f, path, created, syncDirectory, registry != nil)
+	if proofErr != nil {
+		if proof != nil {
+			proof.Release()
+		}
+		_ = f.Close()
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+		}
+		return nil, errors.Join(proofErr, w.releaseStableResourceObservation())
+	}
+	w.creationProof = proof
+	w.creationUnsupported = unsupported
+	w.creationUncertified = uncertified
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
 		if w.stableParent != nil {
 			_ = w.stableParent.Close()
 		}
-		return nil, err
+		if w.creationProof != nil {
+			w.creationProof.Release()
+			w.creationProof = nil
+		}
+		return nil, errors.Join(err, w.releaseStableResourceObservation())
 	}
 	w.f = f
 	// File-backed writers use direct writes and append buffers; bufio is only
@@ -696,14 +717,6 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 	w.blockCodec = BlockCodecSnappy
 	w.clock = RealClock{}
 	w.keepSafetyMargin = DefaultKeepSafetyMargin
-	if err := w.observeStableResourceFile(f, registry); err != nil {
-		_ = f.Close()
-		if w.stableParent != nil {
-			_ = w.stableParent.Close()
-			w.stableParent = nil
-		}
-		return nil, err
-	}
 	return w, nil
 }
 
@@ -996,33 +1009,57 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 				return err
 			}
 		}
-		f, err := openLogFile(path)
+		f, created, err := openLogFile(path)
 		if err != nil {
 			return err
 		}
-		if syncCurrent {
-			if err := syncNewFileDirectory(w, path); err != nil {
-				_ = f.Close()
-				return err
-			}
-		}
-		info, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return err
-		}
+		stableParent, stableParentErr := captureStableValueLogParent(path, f)
 		newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
 		if err != nil {
 			_ = f.Close()
+			if stableParent != nil {
+				_ = stableParent.Close()
+			}
 			return err
 		}
 		newObserved := w.stableResourcePins != nil
-		stableParent, stableParentErr := captureStableValueLogParent(path, f)
+		newCreationProof, newCreationUnsupported, newCreationUncertified, err := w.prepareStableCreationProof(stableParent, f, path, created, syncCurrent, w.stableResourcePins != nil)
+		if err != nil {
+			if newObserved {
+				_ = w.stableResourcePins.Unobserve(newIdentity)
+			}
+			if newCreationProof != nil {
+				newCreationProof.Release()
+			}
+			_ = f.Close()
+			if stableParent != nil {
+				_ = stableParent.Close()
+			}
+			return err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			if newObserved {
+				_ = w.stableResourcePins.Unobserve(newIdentity)
+			}
+			if newCreationProof != nil {
+				newCreationProof.Release()
+			}
+			_ = f.Close()
+			if stableParent != nil {
+				_ = stableParent.Close()
+			}
+			return err
+		}
 		oldStableParent := w.stableParent
+		oldCreationProof := w.creationProof
 		oldObserveErr := w.releaseStableResourceObservation()
 		w.f = f
 		w.stableParent = stableParent
 		w.stableParentErr = stableParentErr
+		w.creationProof = newCreationProof
+		w.creationUnsupported = newCreationUnsupported
+		w.creationUncertified = newCreationUncertified
 		// File-backed writers do not use bufio; drop any sink buffer.
 		w.bw = nil
 		w.size = info.Size()
@@ -1033,6 +1070,9 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		if newObserved {
 			w.stableResourceIdentity = newIdentity
 			w.stableResourceObserved = true
+		}
+		if oldCreationProof != nil {
+			oldCreationProof.Release()
 		}
 		if oldStableParent != nil {
 			if err := w.closeRotatedResource(oldStableParent); err != nil {
@@ -1054,39 +1094,72 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		}
 	}
 
-	f, err := openLogFile(path)
+	f, created, err := openLogFile(path)
 	if err != nil {
+		return err
+	}
+	stableParent, stableParentErr := captureStableValueLogParent(path, f)
+	newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
+	if err != nil {
+		_ = f.Close()
+		if stableParent != nil {
+			_ = stableParent.Close()
+		}
+		return err
+	}
+	newObserved := w.stableResourcePins != nil
+	newCreationProof, newCreationUnsupported, newCreationUncertified, err := w.prepareStableCreationProof(stableParent, f, path, created, syncCurrent, w.stableResourcePins != nil)
+	if err != nil {
+		if newObserved {
+			_ = w.stableResourcePins.Unobserve(newIdentity)
+		}
+		if newCreationProof != nil {
+			newCreationProof.Release()
+		}
+		_ = f.Close()
+		if stableParent != nil {
+			_ = stableParent.Close()
+		}
 		return err
 	}
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return err
-	}
-	if syncCurrent {
-		if err := syncNewFileDirectory(w, path); err != nil {
-			_ = f.Close()
-			return err
+		if newObserved {
+			_ = w.stableResourcePins.Unobserve(newIdentity)
 		}
-	}
-	newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
-	if err != nil {
+		if newCreationProof != nil {
+			newCreationProof.Release()
+		}
 		_ = f.Close()
+		if stableParent != nil {
+			_ = stableParent.Close()
+		}
 		return err
 	}
-	newObserved := w.stableResourcePins != nil
 	old := w.f
 	oldStableParent := w.stableParent
+	oldCreationProof := w.creationProof
 	if w.bw != nil {
 		if err := w.bw.Flush(); err != nil {
+			if newObserved {
+				_ = w.stableResourcePins.Unobserve(newIdentity)
+			}
+			if newCreationProof != nil {
+				newCreationProof.Release()
+			}
 			_ = f.Close()
+			if stableParent != nil {
+				_ = stableParent.Close()
+			}
 			return err
 		}
 	}
-	stableParent, stableParentErr := captureStableValueLogParent(path, f)
 	w.f = f
 	w.stableParent = stableParent
 	w.stableParentErr = stableParentErr
+	w.creationProof = newCreationProof
+	w.creationUnsupported = newCreationUnsupported
+	w.creationUncertified = newCreationUncertified
 	// File-backed writers do not use bufio. Drop any leftover sink buffer
 	// rather than retargeting it across rotations.
 	w.bw = nil
@@ -1102,6 +1175,9 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	var closeParentErr error
 	if oldStableParent != nil {
 		closeParentErr = w.closeRotatedResource(oldStableParent)
+	}
+	if oldCreationProof != nil {
+		oldCreationProof.Release()
 	}
 	w.trimTransientScratchBuffers()
 	if err := errors.Join(closeErr, closeParentErr, observeErr); err != nil {
@@ -2604,6 +2680,10 @@ func (w *Writer) Close() (retErr error) {
 		closeErrs = append(closeErrs, err)
 	}
 	if pending := w.pendingStableSuccessor; pending != nil {
+		if pending.creationProof != nil {
+			pending.creationProof.Release()
+			pending.creationProof = nil
+		}
 		if pending.file != nil {
 			closeErrs = append(closeErrs, pending.file.Close())
 			pending.file = nil
@@ -2621,6 +2701,10 @@ func (w *Writer) Close() (retErr error) {
 	if w.stableParent != nil {
 		closeErrs = append(closeErrs, w.stableParent.Close())
 		w.stableParent = nil
+	}
+	if w.creationProof != nil {
+		w.creationProof.Release()
+		w.creationProof = nil
 	}
 	return errors.Join(closeErrs...)
 }

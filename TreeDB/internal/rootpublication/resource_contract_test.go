@@ -1428,6 +1428,52 @@ func TestStableNamespaceStabilizeIsSingleFlight(t *testing.T) {
 	}
 }
 
+func TestStableNamespaceCreationProofSyncsOnceAcrossRepeatedBind(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child := writeStableResourceFixture(t, dir, "proof.vlog", "proof")
+	defer child.Close()
+	adapter := &countingNamespaceAdapter{}
+	proof, err := newStableNamespaceCreationProof(parent, child, "proof.vlog", adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proof.Release()
+	if got := adapter.syncs.Load(); got != 1 {
+		t.Fatalf("creation proof syncs=%d want 1", got)
+	}
+	for generation := uint64(1); generation <= 4; generation++ {
+		token, err := proof.Bind(parent, generation, "proof.vlog", "display-only")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := token.syncs.Load(); got != 1 {
+			t.Fatalf("bound token generation=%d namespace syncs=%d want 1", generation, got)
+		}
+		if got := token.syncNanos.Load(); got == 0 {
+			t.Fatalf("bound token generation=%d lost namespace sync duration", generation)
+		}
+		if err := token.Stabilize(); err != nil {
+			t.Fatal(err)
+		}
+		token.Release()
+	}
+	if got := adapter.syncs.Load(); got != 1 {
+		t.Fatalf("repeated binds resynced namespace: syncs=%d", got)
+	}
+	proof.Release()
+	if token, err := proof.Bind(parent, 5, "proof.vlog", "display-only"); !errors.Is(err, ErrResourceOwnership) || token != nil {
+		if token != nil {
+			token.Release()
+		}
+		t.Fatalf("Bind after release token=%v err=%v want ErrResourceOwnership", token, err)
+	}
+}
+
 func TestStableNamespaceRegistrationAndReleaseAreSerialized(t *testing.T) {
 	for iteration := range 100 {
 		dir := t.TempDir()

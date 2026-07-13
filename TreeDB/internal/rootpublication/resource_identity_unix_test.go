@@ -125,3 +125,79 @@ func TestStableNamespaceRejectsChildReplacementBeforeStabilize(t *testing.T) {
 		t.Fatalf("Stabilize after child replacement error=%v want ErrResourceConflict", err)
 	}
 }
+
+func TestStableNamespaceCreationProofRejectsReplacementBeforeBind(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	original, err := OpenStableChildFile(parent, "000001.vlog", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	proof, err := NewStableNamespaceCreationProof(parent, original, "000001.vlog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proof.Release()
+	if err := os.Rename(filepath.Join(dir, "000001.vlog"), filepath.Join(dir, "original.vlog")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "000001.vlog"), []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token, err := proof.Bind(parent, 1, "000001.vlog", "display-only")
+	if token != nil {
+		token.Release()
+		t.Fatal("replacement child received a bound namespace token")
+	}
+	if !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("Bind after child replacement error=%v want ErrResourceConflict", err)
+	}
+}
+
+func TestStableNamespaceCreationProofRejectsWrongParentAndName(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := OpenStableChildFile(parent, "000001.vlog", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	proof, err := NewStableNamespaceCreationProof(parent, child, "000001.vlog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proof.Release()
+	wrongParent, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wrongParent.Close()
+	for _, tc := range []struct {
+		name   string
+		parent *os.File
+		child  string
+	}{
+		{name: "parent", parent: wrongParent, child: "000001.vlog"},
+		{name: "name", parent: parent, child: "000002.vlog"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token, err := proof.Bind(tc.parent, 1, tc.child, "display-only")
+			if token != nil {
+				token.Release()
+				t.Fatal("mismatched proof binding returned a token")
+			}
+			if !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("Bind error=%v want ErrResourceConflict", err)
+			}
+		})
+	}
+}
