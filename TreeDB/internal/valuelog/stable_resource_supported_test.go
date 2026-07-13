@@ -440,6 +440,65 @@ func TestStableRotationExistingClosedSegmentHasNoCreationWitness(t *testing.T) {
 	}
 }
 
+func TestStableRotationRejectsRenameBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "000001.vlog")
+	secondPath := filepath.Join(dir, "000002.vlog")
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(firstPath, 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Append(0, nil, 1, []byte("before rejected rename")); err != nil {
+		t.Fatal(err)
+	}
+	beforeStats := writer.DurabilityStats()
+	beforePins := registry.ActivePins()
+	beforeIdentities := registry.ActiveIdentities()
+
+	rotation, err := writer.RotateToWithStableResources(secondPath, 2, true,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+			NamespaceOperation: rootpublication.NamespaceRename,
+			OldName:            filepath.Base(firstPath),
+			NewName:            filepath.Base(secondPath),
+		})
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("rejected rename returned owned resources")
+	}
+	if !errors.Is(err, rootpublication.ErrNamespaceUnstable) {
+		t.Fatalf("stable rename rotation error=%v want ErrNamespaceUnstable", err)
+	}
+	if _, err := os.Stat(secondPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected rename exposed successor: %v", err)
+	}
+	if writer.FileID() != 1 || writer.f == nil || writer.f.Name() != firstPath {
+		t.Fatalf("rejected rename changed active writer: id=%d file=%v", writer.FileID(), writer.f)
+	}
+	if got := writer.DurabilityStats(); got != beforeStats {
+		t.Fatalf("rejected rename performed durability work: before=%+v after=%+v", beforeStats, got)
+	}
+	if got := registry.ActivePins(); got != beforePins {
+		t.Fatalf("rejected rename changed active pins: before=%d after=%d", beforePins, got)
+	}
+	if got := registry.ActiveIdentities(); got != beforeIdentities {
+		t.Fatalf("rejected rename changed observed identities: before=%d after=%d", beforeIdentities, got)
+	}
+	if _, err := writer.Append(0, nil, 2, []byte("old writer remains usable")); err != nil {
+		t.Fatalf("append after rejected rename: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush after rejected rename: %v", err)
+	}
+}
+
 func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
 	testStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t)
 }

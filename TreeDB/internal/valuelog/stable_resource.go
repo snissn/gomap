@@ -990,8 +990,9 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if w.creationUncertified {
 		return nil, fmt.Errorf("%w: asynchronously created current segment cannot enter a stable rotation", rootpublication.ErrUnresolvedResource)
 	}
-	if active.NamespaceOperation == rootpublication.NamespaceNone {
-		return nil, errors.New("valuelog: stable rotation requires active namespace operation")
+	if active.NamespaceOperation != rootpublication.NamespaceCreate {
+		return nil, fmt.Errorf("%w: stable rotation creates its successor and requires active namespace operation %q, got %q",
+			rootpublication.ErrNamespaceUnstable, rootpublication.NamespaceCreate, active.NamespaceOperation)
 	}
 	if w.stableParentErr != nil || w.stableParent == nil {
 		if w.stableParentErr != nil {
