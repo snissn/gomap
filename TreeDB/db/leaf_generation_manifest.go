@@ -316,7 +316,7 @@ func validatePersistedLeafGenerationManifest(m *leafGenerationManifest) error {
 		return fmt.Errorf("%w: manifest_revision must be non-zero", ErrLeafGenerationManifestIncompatible)
 	}
 	if err := validateLeafGenerationManifest(m); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrLeafGenerationManifestIncompatible, err)
 	}
 	return nil
 }
@@ -740,14 +740,14 @@ func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, 
 
 func decodeLeafGenerationManifest(data []byte, diagnosticName string) (*leafGenerationManifest, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("treedb: decode %s: empty file", diagnosticName)
+		return nil, fmt.Errorf("%w: decode %s: empty file", ErrLeafGenerationManifestIncompatible, diagnosticName)
 	}
 	var manifest leafGenerationManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("treedb: decode %s: %w", diagnosticName, err)
+		return nil, fmt.Errorf("%w: decode %s: %w", ErrLeafGenerationManifestIncompatible, diagnosticName, err)
 	}
 	if err := validatePersistedLeafGenerationManifest(&manifest); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: decode %s: %w", ErrLeafGenerationManifestIncompatible, diagnosticName, err)
 	}
 	return manifest.clone(), nil
 }
