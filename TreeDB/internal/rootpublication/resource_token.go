@@ -764,8 +764,11 @@ func newStableNamespaceCreationProof(parent, child *os.File, name string, adapte
 // Bind returns an already-stable normal namespace token after proving the
 // retained parent still links the original child. It never syncs again.
 func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*StableNamespaceToken, error) {
-	if proof == nil || parentGeneration == 0 || proof.released.Load() {
+	if proof == nil || proof.released.Load() {
 		return nil, ErrResourceOwnership
+	}
+	if parentGeneration == 0 {
+		return nil, fmt.Errorf("%w: namespace creation proof binding requires a parent generation", ErrUnresolvedResource)
 	}
 	if parent == nil || name != proof.name || !stableChildBaseName(name) {
 		return nil, fmt.Errorf("%w: namespace creation proof binding differs from the exact parent or child name", ErrResourceConflict)
@@ -806,15 +809,18 @@ func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneratio
 }
 
 func (proof *StableNamespaceCreationProof) Release() {
-	if proof == nil || proof.released.Swap(true) {
+	if proof == nil {
 		return
 	}
 	proof.mu.Lock()
+	defer proof.mu.Unlock()
+	if proof.released.Swap(true) {
+		return
+	}
 	if proof.parent != nil {
 		_ = proof.parent.Close()
 		proof.parent = nil
 	}
-	proof.mu.Unlock()
 }
 
 const (

@@ -794,6 +794,10 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
+	creationPending := w.creationProof != nil || w.creationUnsupported || w.creationUncertified
+	if creationPending && registration.NamespaceOperation != rootpublication.NamespaceCreate {
+		return nil, fmt.Errorf("%w: current value-log segment requires NamespaceCreate evidence", rootpublication.ErrNamespaceUnstable)
+	}
 	var namespace *rootpublication.StableNamespaceToken
 	var err error
 	if registration.NamespaceOperation == rootpublication.NamespaceCreate {

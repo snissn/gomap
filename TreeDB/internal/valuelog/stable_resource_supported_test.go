@@ -216,6 +216,26 @@ func TestStableWriterCreationProofBindsRepeatedlyWithoutResync(t *testing.T) {
 	}
 }
 
+func TestStableWriterCreationProofCannotBeOmitted(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+		Reachability: rootpublication.ReachabilityValueLogPointer,
+	})
+	if token != nil {
+		token.Release()
+		t.Fatal("newly-created stable writer returned a token without namespace evidence")
+	}
+	if !errors.Is(err, rootpublication.ErrNamespaceUnstable) {
+		t.Fatalf("omitted create evidence error=%v want ErrNamespaceUnstable", err)
+	}
+}
+
 func TestStableWriterExistingOpenCannotClaimCreateProof(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "000001.vlog")

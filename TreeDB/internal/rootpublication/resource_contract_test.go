@@ -1465,6 +1465,12 @@ func TestStableNamespaceCreationProofSyncsOnceAcrossRepeatedBind(t *testing.T) {
 	if got := adapter.syncs.Load(); got != 1 {
 		t.Fatalf("repeated binds resynced namespace: syncs=%d", got)
 	}
+	if token, err := proof.Bind(parent, 0, "proof.vlog", "display-only"); !errors.Is(err, ErrUnresolvedResource) || token != nil {
+		if token != nil {
+			token.Release()
+		}
+		t.Fatalf("Bind with zero generation token=%v err=%v want ErrUnresolvedResource", token, err)
+	}
 	proof.Release()
 	if token, err := proof.Bind(parent, 5, "proof.vlog", "display-only"); !errors.Is(err, ErrResourceOwnership) || token != nil {
 		if token != nil {
