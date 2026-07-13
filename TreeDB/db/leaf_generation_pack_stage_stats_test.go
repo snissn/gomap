@@ -34,12 +34,12 @@ func TestLeafGenerationPack_ApplyStageAccounting(t *testing.T) {
 	if publishAttributed > stats.PublishHoldNanos {
 		t.Fatalf("exclusive publish stages=%d exceed publish hold=%d: %+v", publishAttributed, stats.PublishHoldNanos, stages)
 	}
-	// Windows can quantize a sub-tick directory-sync operation wall to zero
-	// while the overlapping channel wait crosses a clock tick. Preserve the
-	// subset invariant whenever the operation wall is observable.
-	if stages.DirectorySyncTimeNanos > 0 && stages.DirectorySyncWaitTimeNanos > stages.DirectorySyncTimeNanos {
-		t.Fatalf("directory sync wait=%d exceeds operation wall=%d", stages.DirectorySyncWaitTimeNanos, stages.DirectorySyncTimeNanos)
-	}
+	// DirectorySyncTimeNanos is measured inside the async worker, while the
+	// wait includes channel delivery and timer quantization. In particular,
+	// Windows can report a zero operation duration for a sub-millisecond sync,
+	// and scheduler delay can make the measured receive wait exceed a small
+	// non-zero operation duration. The publish-hold assertion above is the
+	// meaningful additive bound for the non-overlapping wait.
 	if stats.RetryApplyStages != (LeafGenerationPackApplyStageStats{}) {
 		t.Fatalf("successful first attempt reported retry stages: %+v", stats.RetryApplyStages)
 	}
