@@ -71,6 +71,113 @@ func TestSeekGE_SourcePrecedenceTombstonesAndBounds(t *testing.T) {
 	}
 }
 
+func TestSeekGE_SourceCountersSpanTombstoneRounds(t *testing.T) {
+	backend := NewMockBackend()
+	backend.Set([]byte("z"), []byte("disjoint"))
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:     1 << 30,
+		MemtableShards:     1,
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := db.Delete([]byte("b")); err != nil {
+		t.Fatalf("Delete b: %v", err)
+	}
+	if err := db.Set([]byte("c"), []byte("visible")); err != nil {
+		t.Fatalf("Set c: %v", err)
+	}
+
+	before := db.Stats()
+	requireSeekGE(t, db, []byte("b"), []byte("d"), []byte("c"), []byte("visible"))
+	after := db.Stats()
+	parse := func(name string, stats map[string]string) uint64 {
+		t.Helper()
+		value, err := strconv.ParseUint(stats[name], 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", name, stats[name], err)
+		}
+		return value
+	}
+
+	const sourcesTotal = "treedb.cache.point_successor.sources_total"
+	if got := parse(sourcesTotal, after) - parse(sourcesTotal, before); got != 4 {
+		t.Fatalf("sources inspected = %d, want 4 across two sources and two rounds", got)
+	}
+	const sourcesMax = "treedb.cache.point_successor.sources_max"
+	if got := parse(sourcesMax, after); got != 4 {
+		t.Fatalf("sources max = %d, want 4 for the whole SeekGE call", got)
+	}
+	const backendProbes = "treedb.cache.point_successor.backend_probes_total"
+	if got := parse(backendProbes, after) - parse(backendProbes, before); got != 2 {
+		t.Fatalf("backend probes = %d, want 2 across both rounds", got)
+	}
+}
+
+func TestSeekGE_SourceCountersSkipDisjointNilBackend(t *testing.T) {
+	backend := NewMockBackend()
+	backend.Set([]byte("z"), []byte("disjoint"))
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:     1 << 30,
+		MemtableShards:     1,
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := db.Delete([]byte("b")); err != nil {
+		t.Fatalf("Delete b: %v", err)
+	}
+	if err := db.Set([]byte("c"), []byte("visible")); err != nil {
+		t.Fatalf("Set c: %v", err)
+	}
+
+	// Remove the published-root shortcut from this isolated view so SeekGE uses
+	// the known backend range and returns a nil disk cursor for [b,d).
+	db.writeMu.Lock()
+	view := db.memtables.Load()
+	view.rootIterator.published = nil
+	view.rootIterator.publishedRootID = 0
+	db.writeMu.Unlock()
+	db.mu.Lock()
+	db.backendRangeKnown = true
+	db.backendRange = keyRange{valid: true, min: []byte("z"), max: []byte("z")}
+	db.mu.Unlock()
+	db.backendRangeInit.Do(func() {})
+
+	before := db.Stats()
+	requireSeekGE(t, db, []byte("b"), []byte("d"), []byte("c"), []byte("visible"))
+	after := db.Stats()
+	parse := func(name string, stats map[string]string) uint64 {
+		t.Helper()
+		value, err := strconv.ParseUint(stats[name], 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", name, stats[name], err)
+		}
+		return value
+	}
+
+	const sourcesTotal = "treedb.cache.point_successor.sources_total"
+	if got := parse(sourcesTotal, after) - parse(sourcesTotal, before); got != 2 {
+		t.Fatalf("sources inspected = %d, want 2 mutable probes across both rounds", got)
+	}
+	const sourcesMax = "treedb.cache.point_successor.sources_max"
+	if got := parse(sourcesMax, after); got != 2 {
+		t.Fatalf("sources max = %d, want 2 for the whole SeekGE call", got)
+	}
+	const backendProbes = "treedb.cache.point_successor.backend_probes_total"
+	if got := parse(backendProbes, after) - parse(backendProbes, before); got != 0 {
+		t.Fatalf("backend probes = %d, want 0 for disjoint nil cursor", got)
+	}
+}
+
 func TestSeekGE_NewerRangeSpanMasksOlderCandidate(t *testing.T) {
 	backend := NewMockBackend()
 	backend.Set([]byte("b"), []byte("masked"))
