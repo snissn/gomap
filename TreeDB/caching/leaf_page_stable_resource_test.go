@@ -315,3 +315,96 @@ func TestCachingLeafPageLogStableCaptureExcludesFollowingConcurrentRotation(t *t
 		t.Fatalf("stable descriptors=%v want only file_id=%d", descriptors, stable.ptr.ValueLogFileID())
 	}
 }
+
+func TestCachingLeafPageLogStableSteadyAppendHasNoPinOrNamespaceGrowth(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	cached, err := Open(dir, backend, Options{IndexOuterLeavesInValueLog: true, RelaxedSync: true, AllowUnsafe: true})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	defer func() { _ = cached.Close() }()
+
+	stable := newCachingLeafPageLog(cached, &cached.leafLog).(backenddb.LeafPageStableBatchLog)
+	pages := [][]byte{
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'g'),
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'h'),
+	}
+	_, warmResources, err := stable.AppendLeafPagesWithStableResources(pages)
+	if err != nil {
+		t.Fatalf("warm stable append: %v", err)
+	}
+	warmResources.Release()
+	writer, ok := cached.leafLog.vlog.(interface {
+		DurabilityStats() valuelog.DurabilityStats
+	})
+	if !ok {
+		t.Fatal("leaf writer does not expose durability counters")
+	}
+	baselineSyncs := writer.DurabilityStats().DirectorySyncCalls
+	baselineIdentities := cached.valueLogIdentityPins.ActiveIdentities()
+	for iteration := 0; iteration < 100; iteration++ {
+		_, resources, appendErr := stable.AppendLeafPagesWithStableResources(pages)
+		if appendErr != nil {
+			t.Fatalf("stable append %d: %v", iteration, appendErr)
+		}
+		resources.Release()
+		if pins := cached.valueLogIdentityPins.ActivePins(); pins != 0 {
+			t.Fatalf("stable append %d left %d active pins", iteration, pins)
+		}
+		if identities := cached.valueLogIdentityPins.ActiveIdentities(); identities != baselineIdentities {
+			t.Fatalf("stable append %d identities=%d want baseline %d", iteration, identities, baselineIdentities)
+		}
+	}
+	if syncs := writer.DurabilityStats().DirectorySyncCalls; syncs != baselineSyncs {
+		t.Fatalf("steady stable appends added directory syncs: before=%d after=%d", baselineSyncs, syncs)
+	}
+}
+
+func BenchmarkCachingLeafPageLogStableBatch(b *testing.B) {
+	for _, stable := range []bool{false, true} {
+		name := "ordinary"
+		if stable {
+			name = "stable"
+		}
+		b.Run(name, func(b *testing.B) {
+			dir := b.TempDir()
+			backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+			if err != nil {
+				b.Fatal(err)
+			}
+			cached, err := Open(dir, backend, Options{IndexOuterLeavesInValueLog: true, RelaxedSync: true, AllowUnsafe: true})
+			if err != nil {
+				_ = backend.Close()
+				b.Fatal(err)
+			}
+			defer func() { _ = cached.Close() }()
+			pages := [][]byte{
+				buildSparseLeafPageForLeafLogTestWithTag(b, 'i'),
+				buildSparseLeafPageForLeafLogTestWithTag(b, 'j'),
+				buildSparseLeafPageForLeafLogTestWithTag(b, 'k'),
+				buildSparseLeafPageForLeafLogTestWithTag(b, 'l'),
+			}
+			log := newCachingLeafPageLog(cached, &cached.leafLog)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if stable {
+					_, resources, appendErr := log.(backenddb.LeafPageStableBatchLog).AppendLeafPagesWithStableResources(pages)
+					if appendErr != nil {
+						b.Fatal(appendErr)
+					}
+					resources.Release()
+					continue
+				}
+				if _, appendErr := log.(backenddb.LeafPageBatchLog).AppendLeafPages(pages); appendErr != nil {
+					b.Fatal(appendErr)
+				}
+			}
+		})
+	}
+}
