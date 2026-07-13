@@ -619,7 +619,6 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefsWithSt
 			return nil, nil, fmt.Errorf("leaf page prepared stable child-ref batch returned non-leaf-log ref at %d", i)
 		}
 		ptrs[i] = ref.Log
-		l.noteLeafPagePointer(leafPages[i], ref.Log)
 	}
 	if err := validateLeafPageStableResources(ptrs, resources); err != nil {
 		if resources != nil {
@@ -630,6 +629,9 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefsWithSt
 	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
 		resources.Release()
 		return nil, nil, err
+	}
+	for i, ptr := range ptrs {
+		l.noteLeafPagePointer(leafPages[i], ptr)
 	}
 	return out, resources, nil
 }

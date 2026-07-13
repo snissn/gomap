@@ -403,6 +403,43 @@ func TestRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
 	testRotateToWithStableResourcesOwnsRegistryObservations(t)
 }
 
+func TestStableRotationExistingClosedSegmentHasNoCreationWitness(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "000001.vlog")
+	if err := os.WriteFile(firstPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(firstPath, 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if pending, pendingErr := writer.StableCreationNamespacePending(); pendingErr != nil || pending {
+		t.Fatalf("existing writer creation pending=%t err=%v want false, nil", pending, pendingErr)
+	}
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	if rotation.Closed.Namespace() != nil {
+		t.Fatal("existing closed segment fabricated a creation witness")
+	}
+	if rotation.Active.Namespace() == nil || rotation.Active.Namespace().Operation() != rootpublication.NamespaceCreate {
+		t.Fatal("new active segment is missing its creation witness")
+	}
+}
+
 func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
 	testStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t)
 }

@@ -302,15 +302,15 @@ func TestStableValueLogClosedCreationProofBindFailurePreservesCurrentAuthority(t
 	}
 
 	injected := errors.New("injected closed creation-proof bind failure")
-	originalFactory := bindValueLogStableNamespaceCreationProof
-	bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, generation uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindRetainedValueLogStableNamespaceCreationProof
+	bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, generation uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
 		if name == filepath.Base(firstPath) {
 			return nil, injected
 		}
 		return originalFactory(proof, parent, generation, name, diagnosticPath)
 	}
 	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
-	bindValueLogStableNamespaceCreationProof = originalFactory
+	bindRetainedValueLogStableNamespaceCreationProof = originalFactory
 	if rotation != nil {
 		rotation.Release()
 		t.Fatal("closed-proof bind failure returned owned resources")

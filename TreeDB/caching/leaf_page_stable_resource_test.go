@@ -77,9 +77,13 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 		t.Fatalf("stable resource stats=%+v want one creation namespace sync", stats)
 	}
 
-	segmentPath, _, ok := newCachingLeafPageLog(cached, &cached.leafLog).(interface {
+	segmentLog, ok := newCachingLeafPageLog(cached, &cached.leafLog).(interface {
 		CurrentValueLogSegment() (string, uint32, bool)
-	}).CurrentValueLogSegment()
+	})
+	if !ok {
+		t.Fatal("cached leaf-page log does not expose current segment lookup")
+	}
+	segmentPath, _, ok := segmentLog.CurrentValueLogSegment()
 	if !ok {
 		t.Fatal("missing current leaf segment")
 	}
@@ -263,10 +267,14 @@ func TestCachingLeafPageLogStableCaptureExcludesFollowingConcurrentRotation(t *t
 		err       error
 	}, 1)
 	log := newCachingLeafPageLog(cached, &cached.leafLog)
+	stableLog, ok := log.(backenddb.LeafPageStableLog)
+	if !ok {
+		t.Fatal("cached leaf-page log does not implement stable append")
+	}
 	stablePage := buildSparseLeafPageForLeafLogTestWithTag(t, 'q')
 	ordinaryPage := buildSparseLeafPageForLeafLogTestWithTag(t, 'r')
 	go func() {
-		ptr, resources, appendErr := log.(backenddb.LeafPageStableLog).AppendLeafPageWithStableResources(stablePage)
+		ptr, resources, appendErr := stableLog.AppendLeafPageWithStableResources(stablePage)
 		stableResult <- struct {
 			ptr       page.LeafLogPtr
 			resources *rootpublication.StableResourceSet
@@ -471,18 +479,26 @@ func BenchmarkCachingLeafPageLogStableBatch(b *testing.B) {
 				buildSparseLeafPageForLeafLogTestWithTag(b, 'l'),
 			}
 			log := newCachingLeafPageLog(cached, &cached.leafLog)
+			stableLog, stableOK := log.(backenddb.LeafPageStableBatchLog)
+			batchLog, batchOK := log.(backenddb.LeafPageBatchLog)
+			if stable && !stableOK {
+				b.Fatal("cached leaf-page log does not implement stable batch append")
+			}
+			if !stable && !batchOK {
+				b.Fatal("cached leaf-page log does not implement batch append")
+			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if stable {
-					_, resources, appendErr := log.(backenddb.LeafPageStableBatchLog).AppendLeafPagesWithStableResources(pages)
+					_, resources, appendErr := stableLog.AppendLeafPagesWithStableResources(pages)
 					if appendErr != nil {
 						b.Fatal(appendErr)
 					}
 					resources.Release()
 					continue
 				}
-				if _, appendErr := log.(backenddb.LeafPageBatchLog).AppendLeafPages(pages); appendErr != nil {
+				if _, appendErr := batchLog.AppendLeafPages(pages); appendErr != nil {
 					b.Fatal(appendErr)
 				}
 			}

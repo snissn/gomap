@@ -327,6 +327,7 @@ func testRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
 	if _, err := writer.Append(0, nil, 1, []byte("first")); err != nil {
 		t.Fatal(err)
 	}
+	beforeDirectorySyncs := writer.DurabilityStats().DirectorySyncCalls
 	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, true,
 		StableResourceRegistration{
 			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
@@ -343,6 +344,15 @@ func testRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
 	}
 	if got := registry.ActivePins(); got != 2 {
 		t.Fatalf("rotation active pins=%d want 2", got)
+	}
+	if rotation.Closed.Namespace() == nil || rotation.Closed.Namespace().Operation() != rootpublication.NamespaceCreate {
+		t.Fatal("freshly-created closed segment lost its retained creation proof")
+	}
+	if rotation.Active.Namespace() == nil || rotation.Active.Namespace().Operation() != rootpublication.NamespaceCreate {
+		t.Fatal("freshly-created active segment lost its creation proof")
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != beforeDirectorySyncs+1 {
+		t.Fatalf("stable rotation directory syncs=%d want %d; binding the closed proof must not resync", got, beforeDirectorySyncs+1)
 	}
 	rotation.Release()
 	if got := registry.ActivePins(); got != 0 {
@@ -600,7 +610,11 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 						}
 						rotation.Release()
 						stats := set.Stats(time.Now())
-						if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != 1 {
+						wantNamespaceSyncs := uint64(1)
+						if withRegistry {
+							wantNamespaceSyncs = 2
+						}
+						if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != wantNamespaceSyncs {
 							set.Release()
 							b.Fatalf("stable rotation operation counts=%+v", stats)
 						}
@@ -613,8 +627,12 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 					if syncCurrent {
 						wantContentSyncs = uint64(b.N)
 					}
-					if namespaceSyncs != uint64(b.N) || contentSyncs != wantContentSyncs {
-						b.Fatalf("rotation counters namespace=%d content=%d want namespace=%d content=%d", namespaceSyncs, contentSyncs, b.N, wantContentSyncs)
+					wantNamespaceSyncs := uint64(b.N)
+					if withRegistry {
+						wantNamespaceSyncs *= 2
+					}
+					if namespaceSyncs != wantNamespaceSyncs || contentSyncs != wantContentSyncs {
+						b.Fatalf("rotation counters namespace=%d content=%d want namespace=%d content=%d", namespaceSyncs, contentSyncs, wantNamespaceSyncs, wantContentSyncs)
 					}
 					if registry != nil && (registry.ActivePins() != 0 || registry.ActiveIdentities() != 1) {
 						b.Fatalf("rotation registry pins=%d identities=%d, want 0 pins and one active writer", registry.ActivePins(), registry.ActiveIdentities())
