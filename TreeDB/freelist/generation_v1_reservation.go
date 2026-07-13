@@ -274,17 +274,25 @@ const (
 )
 
 type reservation struct {
-	state        CandidateState
-	ids          []uint64
-	tailReserved bool
-	tailStart    uint64
-	tailCount    uint64
+	state              CandidateState
+	ids                []uint64
+	tailReserved       bool
+	tailWriteAttempted bool
+	tailStart          uint64
+	tailCount          uint64
+	abandonedCoverage  []reservationInterval
+}
+
+type reservationInterval struct {
+	start uint64
+	count uint64
 }
 
 type ReservationLedger struct {
-	mu         sync.Mutex
-	owners     map[uint64]CandidateIDV1
-	candidates map[CandidateIDV1]*reservation
+	mu          sync.Mutex
+	owners      map[uint64]CandidateIDV1
+	candidates  map[CandidateIDV1]*reservation
+	burnedTails []reservationInterval
 }
 
 func NewReservationLedger() *ReservationLedger {
@@ -301,6 +309,11 @@ func (l *ReservationLedger) reservedLocked(id uint64) bool {
 	if _, ok := l.owners[id]; ok {
 		return true
 	}
+	for _, burned := range l.burnedTails {
+		if id >= burned.start && id-burned.start < burned.count {
+			return true
+		}
+	}
 	for _, candidate := range l.candidates {
 		if candidate.tailReserved && id >= candidate.tailStart && id-candidate.tailStart < candidate.tailCount {
 			return true
@@ -312,6 +325,11 @@ func (l *ReservationLedger) reservedLocked(id uint64) bool {
 func (l *ReservationLedger) reservedByOtherLocked(candidate CandidateIDV1, id uint64) bool {
 	if owner, ok := l.owners[id]; ok && owner != candidate {
 		return true
+	}
+	for _, burned := range l.burnedTails {
+		if id >= burned.start && id-burned.start < burned.count {
+			return true
+		}
 	}
 	for idCandidate, reservation := range l.candidates {
 		if idCandidate != candidate && reservation.tailReserved && id >= reservation.tailStart && id-reservation.tailStart < reservation.tailCount {
@@ -367,7 +385,7 @@ func reservationPagesForEntries(entries uint64) uint64 {
 // reserveTail atomically chooses and owns a contiguous metadata range. The
 // range may move above another candidate's reservation; callers persist the
 // skipped prefix as abandoned append space in their reservation record.
-func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount, baseExtentCount uint64, dataIDs []uint64) (uint64, uint64, error) {
+func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1) (uint64, uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if candidate == (CandidateIDV1{}) || minimumStart < 2 {
@@ -386,6 +404,7 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		}
 	}
 	start := minimumStart
+	baseExtentCount := uint64(len(baseExtents))
 	var count uint64
 	for {
 		skippedExtentCount := uint64(0)
@@ -430,7 +449,26 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 	r.tailReserved = true
 	r.tailStart = start
 	r.tailCount = count
+	for _, extent := range baseExtents {
+		if extent.Kind == ReservationAbandonedAppend {
+			r.abandonedCoverage = append(r.abandonedCoverage, reservationInterval{start: extent.StartPageID, count: uint64(extent.Count)})
+		}
+	}
+	if start > minimumStart {
+		r.abandonedCoverage = append(r.abandonedCoverage, reservationInterval{start: minimumStart, count: start - minimumStart})
+	}
 	return start, count, nil
+}
+
+func (l *ReservationLedger) markTailWriteAttempted(candidate CandidateIDV1) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.candidates[candidate]
+	if r == nil || r.state != CandidatePreVisible || !r.tailReserved {
+		return fmt.Errorf("candidate %x has no pre-visible metadata tail", candidate)
+	}
+	r.tailWriteAttempted = true
+	return nil
 }
 
 func (l *ReservationLedger) firstUnreservedAtOrAfter(start uint64) (uint64, bool) {
@@ -506,6 +544,9 @@ func (l *ReservationLedger) release(candidate CandidateIDV1, preVisibleOnly bool
 	if preVisibleOnly && r.state != CandidatePreVisible {
 		return fmt.Errorf("candidate %x is visible", candidate)
 	}
+	if preVisibleOnly && r.tailWriteAttempted {
+		return fmt.Errorf("candidate %x attempted metadata writes; use Fail", candidate)
+	}
 	for _, id := range r.ids {
 		delete(l.owners, id)
 	}
@@ -514,13 +555,67 @@ func (l *ReservationLedger) release(candidate CandidateIDV1, preVisibleOnly bool
 }
 
 func (l *ReservationLedger) Abandon(c CandidateIDV1) error { return l.release(c, true) }
-func (l *ReservationLedger) Fail(c CandidateIDV1) error    { return l.Abandon(c) }
-func (l *ReservationLedger) Publish(c CandidateIDV1) error { return l.release(c, false) }
+func (l *ReservationLedger) Fail(c CandidateIDV1) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.candidates[c]
+	if r == nil {
+		return fmt.Errorf("unknown candidate %x", c)
+	}
+	if r.state != CandidatePreVisible {
+		return fmt.Errorf("candidate %x is visible", c)
+	}
+	for _, id := range r.ids {
+		delete(l.owners, id)
+	}
+	if r.tailReserved && r.tailWriteAttempted {
+		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
+	}
+	delete(l.candidates, c)
+	return nil
+}
+
+func (l *ReservationLedger) Publish(c CandidateIDV1) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.candidates[c]
+	if r == nil {
+		return fmt.Errorf("unknown candidate %x", c)
+	}
+	for _, id := range r.ids {
+		delete(l.owners, id)
+	}
+	if len(r.abandonedCoverage) != 0 {
+		kept := l.burnedTails[:0]
+		for _, burned := range l.burnedTails {
+			covered := false
+			for _, abandoned := range r.abandonedCoverage {
+				if burned.start >= abandoned.start && burned.start-abandoned.start < abandoned.count && burned.count <= abandoned.count-(burned.start-abandoned.start) {
+					covered = true
+					break
+				}
+			}
+			if covered {
+				continue
+			}
+			kept = append(kept, burned)
+		}
+		l.burnedTails = kept
+	}
+	delete(l.candidates, c)
+	return nil
+}
 
 func (l *ReservationLedger) Reservations() uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	count := uint64(len(l.owners))
+	for _, burned := range l.burnedTails {
+		if ^uint64(0)-count < burned.count {
+			return ^uint64(0)
+		}
+		count += burned.count
+	}
 	for _, candidate := range l.candidates {
 		if ^uint64(0)-count < candidate.tailCount {
 			return ^uint64(0)

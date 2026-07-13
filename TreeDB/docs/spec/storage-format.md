@@ -2210,7 +2210,12 @@ its durable reservation record classifies the skipped prefix as abandoned
 append space instead of silently treating those page IDs as its own data or
 metadata. A candidate transaction is single-use once materialization begins:
 after any page-sink failure, retry starts from the immutable base rather than
-reusing a partially assigned COW tree. Replaced parent header,
+reusing a partially assigned COW tree. Once the first metadata write is
+attempted, ordinary abandonment cannot release that tail. Failure converts the
+complete reserved tail into process-owned burned space; a later candidate skips
+it, records the skipped range as abandoned append space, and releases the
+process reservation only after that replacement record is durably published.
+Replaced parent header,
 reservation-chain, chunk, and index pages are recorded with the parent's commit
 sequence and imported as retired state by the next candidate; they are not
 recursively inserted into the generation that replaces them. Physical

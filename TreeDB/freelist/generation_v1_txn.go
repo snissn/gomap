@@ -392,11 +392,21 @@ func (c *FreelistCandidateV1) Pages() []PageImageV1 {
 }
 
 type recordingSink struct {
-	sink  AppendPageSink
-	pages []PageImageV1
+	sink             AppendPageSink
+	pages            []PageImageV1
+	beforeFirstWrite func() error
+	writeStarted     bool
 }
 
 func (s *recordingSink) write(id uint64, data []byte) error {
+	if !s.writeStarted {
+		if s.beforeFirstWrite != nil {
+			if err := s.beforeFirstWrite(); err != nil {
+				return err
+			}
+		}
+		s.writeStarted = true
+	}
 	if err := s.sink.WritePage(id, data); err != nil {
 		return err
 	}
@@ -522,7 +532,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if t.root.freeCount+t.root.retiredCount == 0 && t.root.pageID == 0 {
 		statePageCount = 1
 	}
-	metadataStart, reservedMetadataCount, err := t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, uint64(len(extents)), dataIDs)
+	metadataStart, reservedMetadataCount, err := t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, dataIDs, extents)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +545,12 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		return nil, ErrGenerationFormat
 	}
 	next := metadataStart
-	recorded := &recordingSink{sink: sink}
+	recorded := &recordingSink{
+		sink: sink,
+		beforeFirstWrite: func() error {
+			return t.ledger.markTailWriteAttempted(candidateID)
+		},
+	}
 	if t.root.freeCount+t.root.retiredCount == 0 {
 		if t.root.pageID == 0 {
 			// An empty tree still has one immutable root index page.

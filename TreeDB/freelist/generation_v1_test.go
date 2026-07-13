@@ -213,6 +213,19 @@ func (failingPageSinkV1) WritePage(uint64, []byte) error {
 	return errors.New("injected page write failure")
 }
 
+type failAfterPageSinkV1 struct {
+	store     *MemoryPageStoreV1
+	remaining int
+}
+
+func (s *failAfterPageSinkV1) WritePage(id uint64, data []byte) error {
+	if s.remaining == 0 {
+		return errors.New("injected page write failure after partial success")
+	}
+	s.remaining--
+	return s.store.WritePage(id, data)
+}
+
 func TestFreelistTxn_SinkFailureConsumesTransaction(t *testing.T) {
 	ledger := NewReservationLedger()
 	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 8, []uint64{2}, nil), ledger)
@@ -228,6 +241,63 @@ func TestFreelistTxn_SinkFailureConsumesTransaction(t *testing.T) {
 	}
 	if _, err := txn.Allocate(0); !errors.Is(err, ErrCandidateConsumed) {
 		t.Fatalf("post-failure allocation error=%v, want consumed transaction", err)
+	}
+}
+
+func TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment(t *testing.T) {
+	ledger := NewReservationLedger()
+	base := MustNewFreelistGenerationV1(1, 8, nil, nil)
+	store := NewMemoryPageStoreV1()
+	failedID := candidateIDFromString("partially-written-materialization")
+	failed := NewFreelistTxn(base, ledger)
+	if _, err := failed.MaterializeCandidate(2, 2, failedID, &failAfterPageSinkV1{store: store, remaining: 1}); err == nil {
+		t.Fatal("materialization unexpectedly succeeded")
+	}
+	if _, ok := store.Pages[base.HighWater()]; !ok {
+		t.Fatalf("expected first metadata page %d to be written", base.HighWater())
+	}
+	burnedCount := ledger.Reservations()
+	if burnedCount == 0 {
+		t.Fatal("partial materialization did not reserve its metadata tail")
+	}
+	if err := ledger.Abandon(failedID); err == nil {
+		t.Fatal("ordinary abandonment released a metadata tail after a write attempt")
+	}
+	if err := ledger.Fail(failedID); err != nil {
+		t.Fatal(err)
+	}
+	if !ledger.Reserved(base.HighWater()) {
+		t.Fatalf("failed candidate released written metadata page %d", base.HighWater())
+	}
+
+	retryID := candidateIDFromString("retry-after-partial-write")
+	retryTxn := NewFreelistTxn(base, ledger)
+	if id, err := retryTxn.Allocate(0); err != nil || id != base.HighWater()+burnedCount {
+		t.Fatalf("retry append=(%d,%v), want first page after burned tail %d", id, err, base.HighWater()+burnedCount)
+	}
+	retry, err := retryTxn.MaterializeCandidate(3, 3, retryID, store)
+	if err != nil {
+		t.Fatalf("retry reused a burned metadata page: %v", err)
+	}
+	foundAbandoned := false
+	for _, extent := range retry.ReservationRecord().Entries() {
+		if extent.Kind == ReservationAbandonedAppend && extent.StartPageID == base.HighWater() && uint64(extent.Count) == burnedCount {
+			foundAbandoned = true
+		}
+	}
+	if !foundAbandoned {
+		t.Fatalf("retry did not persist burned tail [%d,%d): %+v", base.HighWater(), base.HighWater()+burnedCount, retry.ReservationRecord().Entries())
+	}
+	for _, id := range retry.DirtyPageIDs() {
+		if id < base.HighWater()+burnedCount {
+			t.Fatalf("retry page %d overlaps burned tail [%d,%d)", id, base.HighWater(), base.HighWater()+burnedCount)
+		}
+	}
+	if err := ledger.Publish(retryID); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Reserved(base.HighWater()) {
+		t.Fatalf("published abandonment retained burned page %d in the process ledger", base.HighWater())
 	}
 }
 
