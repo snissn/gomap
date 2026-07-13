@@ -104,6 +104,9 @@ func seekPointSuccessorIterator(it iterator.UnsafeIterator, start, end []byte, s
 			continue
 		}
 		value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it)
+		if err := it.Error(); err != nil {
+			return pointSuccessorCandidate{}, err
+		}
 		return pointSuccessorCandidate{key: key, value: value, ptr: ptr, flags: flags, revision: revision, priority: priority, found: true}, nil
 	}
 	return pointSuccessorCandidate{}, it.Error()
