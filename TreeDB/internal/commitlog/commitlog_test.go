@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
+
+func fileHandleClosedForTest(file *os.File) bool {
+	return errors.Is(file.Close(), os.ErrClosed)
+}
 
 func TestCommitLogWriteReadBatch(t *testing.T) {
 	dir := t.TempDir()
@@ -730,6 +735,79 @@ func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
 	}
 	if got := writer.DurabilityStats(); got.FileSyncCalls != 1 || got.DirectorySyncCalls != 2 || got.FileSyncErrors != 0 || got.DirectorySyncErrors != 0 {
 		t.Fatalf("durability stats after strict rotate=%+v, want file=1 directory=2 and no errors", got)
+	}
+}
+
+func TestWriterRotateToWithSyncCloseErrorKeepsInstalledSuccessor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rotate func(*Writer, string) error
+	}{
+		{name: "RotateToWithSync", rotate: func(writer *Writer, path string) error {
+			return writer.RotateToWithSync(path, false)
+		}},
+		{name: "RotateTo", rotate: func(writer *Writer, path string) error {
+			return writer.RotateTo(path)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path0 := filepath.Join(dir, "commit-0.log")
+			path1 := filepath.Join(dir, "commit-1.log")
+			writer, err := NewWriter(path0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			closed := false
+			t.Cleanup(func() {
+				if !closed {
+					_ = writer.Close()
+				}
+			})
+			oldFile := writer.f
+			injected := errors.New("injected public writer rotation close error")
+			hookInstalled := true
+			writer.closeRotateFn = func(file *os.File) error {
+				return errors.Join(file.Close(), injected)
+			}
+			t.Cleanup(func() {
+				if hookInstalled {
+					writer.closeRotateFn = nil
+				}
+			})
+
+			err = tc.rotate(writer, path1)
+			writer.closeRotateFn = nil
+			hookInstalled = false
+			if !errors.Is(err, injected) {
+				t.Fatalf("%s error=%v, want injected close error", tc.name, err)
+			}
+			if !RotationInstalled(err) {
+				t.Fatalf("RotationInstalled(%v)=false, want installed successor marker", err)
+			}
+			if !RotationInstalled(fmt.Errorf("outer rotation context: %w", err)) {
+				t.Fatal("RotationInstalled lost marker through errors.As wrapping")
+			}
+			if RotationInstalled(injected) {
+				t.Fatal("unmarked predecessor cleanup error reported an installed rotation")
+			}
+			if writer.f == nil {
+				t.Fatal("successor not installed after close error: current file is nil")
+			}
+			if writer.f == oldFile || writer.f.Name() != path1 {
+				t.Fatalf("successor not installed after close error: current=%p name=%q old=%p", writer.f, writer.f.Name(), oldFile)
+			}
+			if !fileHandleClosedForTest(oldFile) {
+				t.Fatal("old file remains open after injected close error")
+			}
+			if err := writer.AppendBatch([]Record{{Op: OpSetInline, Key: []byte("key"), Value: []byte("value"), Seq: 1}}); err != nil {
+				t.Fatalf("append through installed successor: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			closed = true
+		})
 	}
 }
 

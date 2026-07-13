@@ -1624,7 +1624,7 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	}
 }
 
-func TestPrepareColumnPhysicalAssetRowsRemovesDirectViewAfterSharedCloseFailure3151(t *testing.T) {
+func TestPrepareColumnPhysicalAssetRowsDoesNotAllocateDirectViewAfterSharedCloseFailure3151(t *testing.T) {
 	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
@@ -1701,7 +1701,7 @@ func TestPrepareColumnPhysicalAssetRowsRemovesDirectViewAfterSharedCloseFailure3
 		t.Fatalf("shared path after failed prepare stat=%v want preserved existing segment", err)
 	}
 	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("direct path after failed prepare stat=%v want removed new segment", err)
+		t.Fatalf("direct path after shared close failure stat=%v want never allocated", err)
 	}
 }
 

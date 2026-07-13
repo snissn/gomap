@@ -16,13 +16,6 @@ import (
 	"time"
 )
 
-func requireNativeStableNamespace(t testing.TB) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("stable relative directory-handle operations are unsupported on windows")
-	}
-}
-
 func writeStableResourceFixture(t testing.TB, dir, name, contents string) *os.File {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -61,8 +54,7 @@ func stableTokenFixture(t testing.TB, dir, name string, generation, frontier uin
 	return token
 }
 
-func TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "000001.vlog")
 	file := writeStableResourceFixture(t, dir, "000001.vlog", "old-identity")
@@ -101,8 +93,7 @@ func TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing
 	}
 }
 
-func TestStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -1222,8 +1213,7 @@ func (adapter *exactParentNamespaceAdapter) Sync(parent *os.File) error {
 	return err
 }
 
-func TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableNamespacePinsExactLinkedParentAcrossRenameRecreate(t *testing.T) {
 	root := t.TempDir()
 	originalDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(originalDir, 0o700); err != nil {
@@ -1277,8 +1267,7 @@ func TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate(t *testing.T) 
 	}
 }
 
-func TestStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
 	root := t.TempDir()
 	leftDir, rightDir := filepath.Join(root, "left"), filepath.Join(root, "right")
 	if err := os.Mkdir(leftDir, 0o700); err != nil {
@@ -1302,8 +1291,7 @@ func TestStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
 	}
 }
 
-func TestStableResourceNamespaceRequiresExactLinkedChild(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableResourceNamespaceRequiresExactLinkedChild(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -1352,8 +1340,7 @@ func TestStableResourceNamespaceRequiresExactLinkedChild(t *testing.T) {
 	}
 }
 
-func TestStableResourceNamespaceAcceptsExactLinkedChild(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableResourceNamespaceAcceptsExactLinkedChild(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -1872,8 +1859,7 @@ func TestConflictingCandidateRejectedBeforeVisibleFrontier(t *testing.T) {
 	handoff.Release()
 }
 
-func TestStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
-	requireNativeStableNamespace(t)
+func testStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
 	dir := t.TempDir()
 	resource := writeStableResourceFixture(t, dir, "metrics.vlog", "original-resource-bytes")
 	parent, err := os.Open(dir)

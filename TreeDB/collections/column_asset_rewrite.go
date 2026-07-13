@@ -453,8 +453,8 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 	if appender == nil {
 		return nil
 	}
-	// Abandoned partial copies are removed immediately; syncing the file before
-	// deletion would add write amplification without strengthening recovery.
+	// Abandoned partial copies remain unreachable persistent orphans. Abort
+	// closes only the exact file handle; later reachability GC may reclaim them.
 	return appender.abort()
 }
 

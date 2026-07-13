@@ -1882,7 +1882,7 @@ func TestColumnAssetManagerAllocatesDistinctNewSegmentsConcurrentlyM15C(t *testi
 	}
 }
 
-func TestColumnAssetSegmentAppenderAbortRemovesSegmentM15C(t *testing.T) {
+func TestColumnAssetSegmentAppenderAbortRetainsUnreachableOrphanM15C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
 	if err != nil {
@@ -1894,14 +1894,46 @@ func TestColumnAssetSegmentAppenderAbortRemovesSegmentM15C(t *testing.T) {
 		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
 	}
 	assetPath := appender.assetPath
+	file := appender.file
+	failedPayload := []byte("abandoned-prefix")
+	if _, err := appender.append(failedPayload, 7, 1); err != nil {
+		t.Fatalf("append abandoned prefix: %v", err)
+	}
 	if _, err := os.Stat(assetPath); err != nil {
 		t.Fatalf("segment before abort stat: %v", err)
 	}
 	if err := appender.abort(); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
-	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("segment after abort stat=%v want not exist", err)
+	if !fileHandleClosedForTest(file) {
+		t.Fatal("abort leaked exact file handle")
+	}
+	if got, err := os.ReadFile(assetPath); err != nil || !bytes.Equal(got, failedPayload) {
+		t.Fatalf("segment after abort payload=%q err=%v want retained orphan %q", got, err, failedPayload)
+	}
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatal("abort marked orphan pathname directory-sync cache known")
+	}
+	retry, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("retry newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	if retry.fileID <= appender.fileID {
+		_ = retry.abort()
+		t.Fatalf("retry file_id=%d want later than orphan file_id=%d", retry.fileID, appender.fileID)
+	}
+	retryPayload := []byte("published-retry")
+	retryRef, err := retry.append(retryPayload, 8, 1)
+	if err != nil {
+		_ = retry.abort()
+		t.Fatalf("retry append: %v", err)
+	}
+	if err := retry.close(); err != nil {
+		t.Fatalf("retry close: %v", err)
+	}
+	got, err := readColumnPhysicalAssetFromManager(root, retryRef)
+	if err != nil || !bytes.Equal(got, retryPayload) {
+		t.Fatalf("retry ref payload=%q err=%v want %q", got, err, retryPayload)
 	}
 }
 
@@ -2276,7 +2308,7 @@ func TestColumnPhysicalAssetAppendSessionBatchesMixedTargets3151(t *testing.T) {
 	}
 }
 
-func TestColumnPhysicalAssetAppendSessionAbortRemovesOnlyNewTargets3151(t *testing.T) {
+func TestColumnPhysicalAssetAppendSessionAbortRetainsNewUnreachableTargets3151(t *testing.T) {
 	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
 	const generation = uint64(32)
@@ -2315,8 +2347,11 @@ func TestColumnPhysicalAssetAppendSessionAbortRemovesOnlyNewTargets3151(t *testi
 	if _, err := os.Stat(sharedPath); err != nil {
 		t.Fatalf("shared path after abort stat=%v want existing shared segment preserved", err)
 	}
-	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("direct path after abort stat=%v want removed new segment", err)
+	if _, err := os.Stat(directPath); err != nil {
+		t.Fatalf("direct path after abort stat=%v want retained unreachable segment", err)
+	}
+	if columnAssetSegmentDirSyncKnown(directPath) {
+		t.Fatal("session abort marked new direct segment directory-sync cache known")
 	}
 }
 
@@ -2523,8 +2558,11 @@ func TestColumnAssetSegmentAppenderCloseRequiresFileSyncBeforeRef3151(t *testing
 	if calls != 1 {
 		t.Fatalf("sync calls=%d want 1", calls)
 	}
-	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("asset path after failed close err=%v want not exist", err)
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("asset path after failed close err=%v want retained unreachable orphan", err)
+	}
+	if closeStats.Remove != 0 || closeStats.RemoveDirSync != 0 || closeStats.CleanupDuration() != 0 {
+		t.Fatalf("failed close removal accounting=%+v want zero", closeStats)
 	}
 	if columnAssetSegmentDirSyncKnown(assetPath) {
 		t.Fatalf("failed appender close should not mark segment dir-sync known")
@@ -2867,7 +2905,7 @@ func assertZeroBytesForTest(t *testing.T, raw []byte, label string) {
 	}
 }
 
-func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
+func TestColumnAssetSegmentAppenderFailedCloseRetainsUnreachableSegmentM15C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
 	if err != nil {
@@ -2883,8 +2921,14 @@ func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
 	if err := appender.close(); err == nil || !strings.Contains(err.Error(), "appender is failed") {
 		t.Fatalf("failed close err=%v want appender failed", err)
 	}
-	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("segment after failed close stat=%v want not exist", err)
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("segment after failed close stat=%v want retained orphan", err)
+	}
+	if appender.closeStats.Remove != 0 || appender.closeStats.RemoveDirSync != 0 || appender.closeStats.CleanupDuration() != 0 {
+		t.Fatalf("failed close removal accounting=%+v want zero", appender.closeStats)
+	}
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatal("failed close marked orphan pathname directory-sync cache known")
 	}
 }
 
@@ -2935,33 +2979,7 @@ func TestColumnAssetSegmentAppenderRejectsUnsupportedConfigBeforeNamespaceM15C(t
 	}
 }
 
-func TestColumnAssetSegmentAppenderRemoveOnCloseErrorsM15C(t *testing.T) {
-	ioErr := errors.New("close-time io")
-	tests := []struct {
-		name         string
-		failed       bool
-		fileSyncErr  error
-		fileCloseErr error
-		dirSyncErr   error
-		want         bool
-	}{
-		{name: "clean", want: false},
-		{name: "failed", failed: true, want: true},
-		{name: "sync_error", fileSyncErr: ioErr, want: true},
-		{name: "close_error", fileCloseErr: ioErr, want: true},
-		{name: "dir_sync_error", dirSyncErr: ioErr, want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := columnPhysicalAssetSegmentAppenderRemoveOnClose(tt.failed, tt.fileSyncErr, tt.fileCloseErr, tt.dirSyncErr)
-			if got != tt.want {
-				t.Fatalf("columnPhysicalAssetSegmentAppenderRemoveOnClose=%v want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestColumnAssetSegmentAppenderDirSyncErrorRemovesSegmentM15C(t *testing.T) {
+func TestColumnAssetSegmentAppenderDirSyncErrorRetainsSegmentM15C(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory fsync is intentionally a no-op on windows")
 	}
@@ -2976,13 +2994,19 @@ func TestColumnAssetSegmentAppenderDirSyncErrorRemovesSegmentM15C(t *testing.T) 
 		},
 		assetPath:      assetPath,
 		syncDirOnClose: true,
-		removeOnClose:  true,
+		created:        true,
 	}
 	if err := appender.close(); err == nil {
 		t.Fatalf("close err=nil want dir sync error")
 	}
-	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("segment after dir sync failed close stat=%v want not exist", err)
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("segment after dir sync failed close stat=%v want retained orphan", err)
+	}
+	if appender.closeStats.Remove != 0 || appender.closeStats.RemoveDirSync != 0 || appender.closeStats.CleanupDuration() != 0 {
+		t.Fatalf("dir-sync failed close removal accounting=%+v want zero", appender.closeStats)
+	}
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatal("dir-sync failed close marked pathname directory-sync cache known")
 	}
 }
 

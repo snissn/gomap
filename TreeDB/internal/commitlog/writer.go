@@ -500,8 +500,33 @@ func (w *Writer) RotateTo(path string) error {
 // the provided path and reuses the writer's buffers for future appends. When
 // syncCurrent is false, the current file is flushed to the OS but not fsynced.
 func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
-	_, err := w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+	outcome, err := w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+	if outcome.Installed && err != nil {
+		return rotationInstalledError{err: err}
+	}
 	return err
+}
+
+type rotationInstalledMarker interface {
+	RotationInstalled() bool
+}
+
+type rotationInstalledError struct {
+	err error
+}
+
+func (err rotationInstalledError) Error() string { return err.err.Error() }
+func (err rotationInstalledError) Unwrap() error { return err.err }
+func (rotationInstalledError) RotationInstalled() bool {
+	return true
+}
+
+// RotationInstalled reports whether a rotation error happened only after the
+// successor became the writer's authoritative file. Callers must finish their
+// corresponding metadata transition before propagating such an error.
+func RotationInstalled(err error) bool {
+	var marker rotationInstalledMarker
+	return errors.As(err, &marker) && marker.RotationInstalled()
 }
 
 type writerRotationOutcome struct {
@@ -590,11 +615,17 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	w.bw.Reset(&w.fileSink)
 	w.size = info.Size()
 	w.scratch = w.scratch[:0]
-	closeOld := old.Close
-	if w.closeRotateFn != nil {
-		closeOld = func() error { return w.closeRotateFn(old) }
+	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)
+}
+
+func (w *Writer) closeRotatedResource(file *os.File) error {
+	if file == nil {
+		return nil
 	}
-	return writerRotationOutcome{Installed: true}, closeOld()
+	if w.closeRotateFn != nil {
+		return w.closeRotateFn(file)
+	}
+	return file.Close()
 }
 
 func syncDir(path string) (err error) {

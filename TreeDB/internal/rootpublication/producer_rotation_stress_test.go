@@ -15,10 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
-func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stable relative directory-handle operations are unsupported on windows")
-	}
+func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 	const iterations = 320
 	root := t.TempDir()
 	valueDir := filepath.Join(root, "value_vlog")
