@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -13,6 +14,43 @@ import (
 
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 var openStableValueLogParent = os.Open
+
+type pendingValueLogSuccessor struct {
+	parent          *os.File
+	file            *os.File
+	path            string
+	fileID          uint32
+	active          StableResourceRegistration
+	observerEmitted bool
+	failStop        bool
+}
+
+func cloneStableResourceRegistration(registration StableResourceRegistration) StableResourceRegistration {
+	registration.ExternalRIDs = append([]uint64(nil), registration.ExternalRIDs...)
+	return registration
+}
+
+func sameStableResourceRegistration(left, right StableResourceRegistration) bool {
+	return left.Kind == right.Kind && left.LogicalLane == right.LogicalLane &&
+		left.Generation == right.Generation && left.DiagnosticPath == right.DiagnosticPath &&
+		left.Reachability == right.Reachability && left.Digest == right.Digest &&
+		left.ParentGeneration == right.ParentGeneration && left.NamespaceOperation == right.NamespaceOperation &&
+		left.OldName == right.OldName && left.NewName == right.NewName &&
+		left.NamespaceParent == right.NamespaceParent && slices.Equal(left.ExternalRIDs, right.ExternalRIDs)
+}
+
+func normalizeStableValueLogActiveRegistration(parent *os.File, path string, active StableResourceRegistration) (StableResourceRegistration, error) {
+	if active.NamespaceParent != nil && active.NamespaceParent != parent {
+		return StableResourceRegistration{}, fmt.Errorf("%w: valuelog active parent differs from retained writer parent", rootpublication.ErrResourceConflict)
+	}
+	active.NamespaceParent = parent
+	name := filepath.Base(path)
+	if active.NewName != "" && active.NewName != name {
+		return StableResourceRegistration{}, fmt.Errorf("%w: valuelog active namespace name %q differs from %q", rootpublication.ErrResourceConflict, active.NewName, name)
+	}
+	active.NewName = name
+	return cloneStableResourceRegistration(active), nil
+}
 
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
 	parent, err := openStableValueLogParent(filepath.Dir(path))
@@ -225,26 +263,43 @@ func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegi
 }
 
 func openStableValueLogFile(parent *os.File, path string) (*os.File, error) {
-	created, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
-		_ = created.Close()
-		return nil, observeErr
-	}
-	return created, nil
+	return rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
+func pendingValueLogFailure(parent, file *os.File, path string, err error) error {
+	return errors.Join(err, rootpublication.ValidateStableChildLink(parent, file, filepath.Base(path)))
 }
 
 // RotateToWithStableResources pins the flushed old segment before writer state
 // switches and then pins the newly-created active segment after its namespace
 // operation has been made persistent.
-func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (_ *StableResourceRotation, retErr error) {
+func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {
+	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
+		return nil, fmt.Errorf("%w: value-log stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
+	}
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable rotation requires file-backed writer")
 	}
 	if active.NamespaceOperation == rootpublication.NamespaceNone {
 		return nil, errors.New("valuelog: stable rotation requires active namespace operation")
+	}
+	if w.stableParentErr != nil || w.stableParent == nil {
+		if w.stableParentErr != nil {
+			return nil, fmt.Errorf("valuelog: stable parent unavailable: %w", w.stableParentErr)
+		}
+		return nil, errors.New("valuelog: stable parent unavailable")
+	}
+	normalizedActive, err := normalizeStableValueLogActiveRegistration(w.stableParent, path, active)
+	if err != nil {
+		return nil, err
+	}
+	closed = cloneStableResourceRegistration(closed)
+	if pending := w.pendingStableSuccessor; pending != nil {
+		if pending.parent != w.stableParent || pending.path != path || pending.fileID != fileID ||
+			!sameStableResourceRegistration(pending.active, normalizedActive) {
+			return nil, errors.Join(rootpublication.ErrResourceOwnership,
+				fmt.Errorf("%w: stable value-log retry does not match the pending exact successor", rootpublication.ErrResourceConflict))
+		}
 	}
 	if err := w.Flush(); err != nil {
 		return nil, err
@@ -258,66 +313,53 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if err != nil {
 		return nil, err
 	}
-	if w.stableParentErr != nil || w.stableParent == nil {
-		closedToken.Release()
-		if w.stableParentErr != nil {
-			return nil, fmt.Errorf("valuelog: stable parent unavailable: %w", w.stableParentErr)
+	pending := w.pendingStableSuccessor
+	if pending == nil {
+		prepared, openErr := openStableValueLogFile(w.stableParent, path)
+		if openErr != nil {
+			closedToken.Release()
+			return nil, openErr
 		}
-		return nil, errors.New("valuelog: stable parent unavailable")
+		pending = &pendingValueLogSuccessor{
+			parent: w.stableParent, file: prepared, path: path, fileID: fileID,
+			active: normalizedActive,
+		}
+		w.pendingStableSuccessor = pending
 	}
-	prepared, err := openStableValueLogFile(w.stableParent, path)
-	if err != nil {
-		closedToken.Release()
-		return nil, err
+	prepared := pending.file
+	if !pending.observerEmitted {
+		pending.observerEmitted = true
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+			closedToken.Release()
+			return nil, pendingValueLogFailure(w.stableParent, prepared, path, observeErr)
+		}
 	}
-	installed := false
-	defer func() {
-		if installed {
-			return
-		}
-		validateErr := rootpublication.ValidateStableChildLink(w.stableParent, prepared, filepath.Base(path))
-		closeErr := prepared.Close()
-		var removeErr, syncErr error
-		if validateErr == nil {
-			removeErr = rootpublication.RemoveStableChildFile(w.stableParent, filepath.Base(path))
-			syncErr = w.stableParent.Sync()
-		}
-		retErr = errors.Join(retErr, validateErr, closeErr, removeErr, syncErr)
-	}()
 	preparedInfo, err := prepared.Stat()
 	if err != nil {
 		closedToken.Release()
-		return nil, err
+		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
-	if active.NamespaceParent != nil && active.NamespaceParent != w.stableParent {
-		closedToken.Release()
-		return nil, fmt.Errorf("%w: valuelog active parent differs from retained writer parent", rootpublication.ErrResourceConflict)
-	}
-	active.NamespaceParent = w.stableParent
-	if active.NewName != "" && active.NewName != filepath.Base(path) {
-		closedToken.Release()
-		return nil, fmt.Errorf("%w: valuelog active namespace name %q differs from %q", rootpublication.ErrResourceConflict, active.NewName, filepath.Base(path))
-	}
-	active.NewName = filepath.Base(path)
-	namespace, err := stableValueLogNamespaceToken(prepared, active)
+	namespace, err := stableValueLogNamespaceToken(prepared, normalizedActive)
 	if err != nil {
 		closedToken.Release()
-		return nil, err
+		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
-	activeToken, err := stableValueLogResourceToken(prepared, fileID, active, namespace, false)
+	activeToken, err := stableValueLogResourceToken(prepared, fileID, normalizedActive, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
 		return nil, err
 	}
 	old := w.f
-	if err := old.Close(); err != nil {
+	if err := w.closeRotatedResource(old); err != nil {
 		activeToken.Release()
 		closedToken.Release()
+		pending.failStop = true
 		w.f = nil
 		w.bw = nil
 		return nil, fmt.Errorf("valuelog: close old writer during stable rotation: %w", err)
 	}
+	pending.file = nil
 	w.f = prepared
 	w.bw = nil
 	w.size = preparedInfo.Size()
@@ -325,6 +367,6 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	w.appendMax = defaultBufferSize
 	w.appendBuf = w.appendBuf[:0]
 	w.trimTransientScratchBuffers()
-	installed = true
+	w.pendingStableSuccessor = nil
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
 }

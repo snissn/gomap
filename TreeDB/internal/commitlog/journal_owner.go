@@ -222,6 +222,16 @@ type CommandJournal struct {
 	stableParentErr        error
 	captureStableResources bool
 	pendingStableRotations []*CommandJournalStableRotation
+	pendingStableSuccessor *pendingCommandWALSuccessor
+}
+
+type pendingCommandWALSuccessor struct {
+	parent          *os.File
+	file            *os.File
+	path            string
+	seq             uint64
+	observerEmitted bool
+	failStop        bool
 }
 
 type CommandJournalAppendFlushTiming struct {
@@ -511,6 +521,9 @@ func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 	if j == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
+	if j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
+		return 0, fmt.Errorf("%w: command-WAL journal stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
+	}
 	j.owner.mu.Lock()
 	defer j.owner.mu.Unlock()
 	first, _, err := j.owner.reserveLSNRangeLocked(1)
@@ -530,6 +543,9 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 	if activeBytes <= 0 || activeBytes+total <= j.segmentTargetBytes {
 		return nil
 	}
+	if err := j.requireNoPendingStableRotationLocked(); err != nil {
+		return err
+	}
 	if j.captureStableResources {
 		rotation, err := j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent)
 		if err != nil {
@@ -544,6 +560,9 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
 	if len(j.pendingStableRotations) != 0 {
 		return fmt.Errorf("%w: drain pending stable command-WAL rotation before rotating again", rootpublication.ErrResourceOwnership)
+	}
+	if j.pendingStableSuccessor != nil {
+		return fmt.Errorf("%w: resolve pending stable command-WAL successor before rotating again", rootpublication.ErrResourceOwnership)
 	}
 	return nil
 }
@@ -687,15 +706,11 @@ func (j *CommandJournal) recordAppendedLSNLocked(lsn uint64) {
 }
 
 func openStableCommandWALFile(parent *os.File, path string) (*os.File, error) {
-	created, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
-		_ = created.Close()
-		return nil, observeErr
-	}
-	return created, nil
+	return rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
+func pendingCommandWALFailure(parent, file *os.File, path string, err error) error {
+	return errors.Join(err, rootpublication.ValidateStableChildLink(parent, file, filepath.Base(path)))
 }
 
 // RotateActiveSegmentWithStableResources flushes and optionally syncs the old
@@ -710,15 +725,28 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 	return j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent)
 }
 
-func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent bool) (_ *CommandJournalStableRotation, retErr error) {
+func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent bool) (*CommandJournalStableRotation, error) {
+	if j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
+		return nil, fmt.Errorf("%w: command-WAL stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
+	}
 	if j.writer == nil || j.writer.f == nil {
 		return nil, errors.New("commitlog: command journal is closed")
 	}
-	if err := j.requireNoPendingStableRotationLocked(); err != nil {
-		return nil, err
+	if len(j.pendingStableRotations) != 0 {
+		return nil, fmt.Errorf("%w: drain pending stable command-WAL rotation before rotating again", rootpublication.ErrResourceOwnership)
 	}
 	if j.segmentSeq == ^uint64(0) {
 		return nil, ErrCommandWALSegmentSeqExhausted
+	}
+	closedPath, closedSeq := j.path, j.segmentSeq
+	nextSeq := closedSeq + 1
+	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
+	parent := j.stableParent
+	if pending := j.pendingStableSuccessor; pending != nil {
+		if pending.parent != parent || pending.path != nextPath || pending.seq != nextSeq {
+			return nil, errors.Join(rootpublication.ErrResourceOwnership,
+				fmt.Errorf("%w: stable command-WAL retry does not match the pending exact successor", rootpublication.ErrResourceConflict))
+		}
 	}
 	if syncCurrent {
 		if err := j.writer.Sync(); err != nil {
@@ -731,15 +759,11 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if err != nil {
 		return nil, err
 	}
-	closedPath, closedSeq := j.path, j.segmentSeq
 	closedToken, err := j.stableSegmentToken(j.writer.f, closedPath, closedSeq, rootpublication.ReachabilityCommandWALRotated,
 		rootpublication.DurableFrontier{Bytes: uint64(closedInfo.Size()), MaxLSN: j.activeSegmentMaxLSN}, nil, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
-	nextSeq := closedSeq + 1
-	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
-	parent := j.stableParent
 	if parent == nil {
 		closedToken.Release()
 		if j.stableParentErr != nil {
@@ -747,25 +771,24 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		}
 		return nil, errors.New("commitlog: stable command-WAL parent unavailable")
 	}
-	prepared, err := openStableCommandWALFile(parent, nextPath)
-	if err != nil {
-		closedToken.Release()
-		return nil, err
+	pending := j.pendingStableSuccessor
+	if pending == nil {
+		prepared, openErr := openStableCommandWALFile(parent, nextPath)
+		if openErr != nil {
+			closedToken.Release()
+			return nil, openErr
+		}
+		pending = &pendingCommandWALSuccessor{parent: parent, file: prepared, path: nextPath, seq: nextSeq}
+		j.pendingStableSuccessor = pending
 	}
-	installed := false
-	defer func() {
-		if installed {
-			return
+	prepared := pending.file
+	if !pending.observerEmitted {
+		pending.observerEmitted = true
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(nextPath), "", nextPath); observeErr != nil {
+			closedToken.Release()
+			return nil, pendingCommandWALFailure(parent, prepared, nextPath, observeErr)
 		}
-		validateErr := rootpublication.ValidateStableChildLink(parent, prepared, filepath.Base(nextPath))
-		closeErr := prepared.Close()
-		var removeErr, syncErr error
-		if validateErr == nil {
-			removeErr = rootpublication.RemoveStableChildFile(parent, filepath.Base(nextPath))
-			syncErr = parent.Sync()
-		}
-		retErr = errors.Join(retErr, validateErr, closeErr, removeErr, syncErr)
-	}()
+	}
 	activeInfo, err := prepared.Stat()
 	if err != nil {
 		closedToken.Release()
@@ -777,29 +800,31 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	})
 	if err != nil {
 		closedToken.Release()
-		return nil, err
+		return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 	}
 	if err := namespace.Stabilize(); err != nil {
 		namespace.Release()
 		closedToken.Release()
-		return nil, err
+		return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 	}
 	activeToken, err := j.stableSegmentToken(prepared, nextPath, nextSeq, rootpublication.ReachabilityCommandWALActive,
 		rootpublication.DurableFrontier{Bytes: uint64(activeInfo.Size())}, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
-		return nil, err
+		return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 	}
 	closedBytes := j.writer.ActiveBytes()
 	old := j.writer.f
-	if err := old.Close(); err != nil {
+	if err := j.writer.closeRotatedResource(old); err != nil {
 		activeToken.Release()
 		closedToken.Release()
+		pending.failStop = true
 		j.writer.f = nil
 		j.writer.fileSink.file = nil
 		return nil, fmt.Errorf("commitlog: close old writer during stable rotation: %w", err)
 	}
+	pending.file = nil
 	j.writer.f = prepared
 	j.writer.fileSink.file = prepared
 	j.writer.bw.Reset(&j.writer.fileSink)
@@ -811,7 +836,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if closedBytes > 0 && j.onSegmentRotated != nil {
 		j.onSegmentRotated(closedBytes)
 	}
-	installed = true
+	j.pendingStableSuccessor = nil
 	return &CommandJournalStableRotation{Closed: closedToken, Active: activeToken}, nil
 }
 
@@ -1627,28 +1652,31 @@ func (j *CommandJournal) Close() error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	var first error
+	var closeErrs []error
 	for _, rotation := range j.pendingStableRotations {
 		rotation.Release()
 	}
 	j.pendingStableRotations = nil
+	if pending := j.pendingStableSuccessor; pending != nil {
+		if pending.file != nil {
+			closeErrs = append(closeErrs, pending.file.Close())
+			pending.file = nil
+		}
+		j.pendingStableSuccessor = nil
+	}
 	if j.writer != nil {
 		if err := j.writer.Close(); err != nil {
-			first = err
+			closeErrs = append(closeErrs, err)
 		}
 		j.writer = nil
 	}
 	if j.owner != nil {
-		if err := j.owner.Close(); err != nil && first == nil {
-			first = err
-		}
+		closeErrs = append(closeErrs, j.owner.Close())
 		j.owner = nil
 	}
 	if j.stableParent != nil {
-		if err := j.stableParent.Close(); err != nil && first == nil {
-			first = err
-		}
+		closeErrs = append(closeErrs, j.stableParent.Close())
 		j.stableParent = nil
 	}
-	return first
+	return errors.Join(closeErrs...)
 }

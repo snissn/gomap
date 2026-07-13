@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math/bits"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -85,6 +87,7 @@ type Writer struct {
 	f                      *os.File
 	stableParent           *os.File
 	stableParentErr        error
+	pendingStableSuccessor *pendingValueLogSuccessor
 	bw                     *bufio.Writer
 	size                   int64
 	fileID                 uint32
@@ -135,6 +138,13 @@ type Writer struct {
 	keepIoNsPerStoredByte  float64
 	keepEncodeNsPerRawByte float64
 	keepSafetyMargin       float64
+}
+
+func (w *Writer) stableRotationFailStopError() error {
+	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
+		return fmt.Errorf("%w: value-log writer stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
+	}
+	return nil
 }
 
 type rotationInstalledMarker interface {
@@ -931,6 +941,9 @@ func (w *Writer) PendingBytes() int {
 }
 
 func (w *Writer) Flush() error {
+	if err := w.stableRotationFailStopError(); err != nil {
+		return err
+	}
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
@@ -950,6 +963,9 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
 	if w == nil {
 		return errors.New("valuelog: nil writer")
+	}
+	if w.pendingStableSuccessor != nil {
+		return fmt.Errorf("%w: resolve pending stable value-log successor before ordinary rotation", rootpublication.ErrResourceOwnership)
 	}
 
 	if w.f == nil {
@@ -1074,6 +1090,9 @@ func syncDir(path string) (err error) {
 func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
+	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return page.ValuePtr{}, err
 	}
 	if rid == 0 {
 		return page.ValuePtr{}, errors.New("valuelog: missing rid")
@@ -1226,6 +1245,9 @@ func (w *Writer) AppendOneFrameWithStats(dictID uint64, dict []byte, rid uint64,
 	if w == nil {
 		return page.ValuePtr{}, FrameStats{}, errors.New("valuelog: nil writer")
 	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return page.ValuePtr{}, FrameStats{}, err
+	}
 	if rid == 0 {
 		return page.ValuePtr{}, FrameStats{}, errors.New("valuelog: missing rid")
 	}
@@ -1249,6 +1271,9 @@ func (w *Writer) AppendOneFrameWithStats(dictID uint64, dict []byte, rid uint64,
 func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, error) {
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
+	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return page.ValuePtr{}, err
 	}
 	if len(raw) < 4 {
 		return page.ValuePtr{}, errors.New("valuelog: empty record")
@@ -1289,6 +1314,9 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
+	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return page.ValuePtr{}, err
 	}
 	if len(body) < FrameHeaderSize {
 		return page.ValuePtr{}, ErrCorrupt
@@ -1348,6 +1376,9 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr) ([]page.ValuePtr, error) {
 	if w == nil {
 		return nil, errors.New("valuelog: nil writer")
+	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return nil, err
 	}
 	if k <= 0 {
 		return dst[:0], nil
@@ -1420,6 +1451,9 @@ func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr)
 func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []Record, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
+	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return nil, FrameStats{}, err
 	}
 	if len(records) == 0 {
 		return dst[:0], FrameStats{}, nil
@@ -2491,7 +2525,13 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 }
 
 func (w *Writer) Sync() error {
-	if w == nil || w.f == nil {
+	if w == nil {
+		return nil
+	}
+	if err := w.stableRotationFailStopError(); err != nil {
+		return err
+	}
+	if w.f == nil {
 		return nil
 	}
 	if err := w.flushNoTrim(); err != nil {
@@ -2512,32 +2552,24 @@ func (w *Writer) Close() error {
 	defer w.releaseDictEncoder()
 	defer w.releaseAppendBuf()
 	defer w.releaseTransientScratchBuffers()
+	var closeErrs []error
 	if err := w.flushNoTrim(); err != nil {
-		if w.f != nil {
-			_ = w.f.Close()
-		}
-		if w.stableParent != nil {
-			_ = w.stableParent.Close()
-			w.stableParent = nil
-		}
-		return err
+		closeErrs = append(closeErrs, err)
 	}
-	if w.f == nil {
-		if w.stableParent != nil {
-			_ = w.stableParent.Close()
-			w.stableParent = nil
+	if pending := w.pendingStableSuccessor; pending != nil {
+		if pending.file != nil {
+			closeErrs = append(closeErrs, pending.file.Close())
+			pending.file = nil
 		}
-		return nil
+		w.pendingStableSuccessor = nil
 	}
-	var first error
-	if err := w.f.Close(); err != nil {
-		first = err
+	if w.f != nil {
+		closeErrs = append(closeErrs, w.f.Close())
+		w.f = nil
 	}
 	if w.stableParent != nil {
-		if err := w.stableParent.Close(); err != nil && first == nil {
-			first = err
-		}
+		closeErrs = append(closeErrs, w.stableParent.Close())
 		w.stableParent = nil
 	}
-	return first
+	return errors.Join(closeErrs...)
 }

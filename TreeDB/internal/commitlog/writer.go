@@ -615,11 +615,17 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	w.bw.Reset(&w.fileSink)
 	w.size = info.Size()
 	w.scratch = w.scratch[:0]
-	closeOld := old.Close
-	if w.closeRotateFn != nil {
-		closeOld = func() error { return w.closeRotateFn(old) }
+	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)
+}
+
+func (w *Writer) closeRotatedResource(file *os.File) error {
+	if file == nil {
+		return nil
 	}
-	return writerRotationOutcome{Installed: true}, closeOld()
+	if w.closeRotateFn != nil {
+		return w.closeRotateFn(file)
+	}
+	return file.Close()
 }
 
 func syncDir(path string) (err error) {
