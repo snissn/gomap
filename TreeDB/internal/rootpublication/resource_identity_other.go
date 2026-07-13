@@ -8,6 +8,10 @@ func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }
 
+func removeStableChildFile(*os.File, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }

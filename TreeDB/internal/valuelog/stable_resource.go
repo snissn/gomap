@@ -223,7 +223,7 @@ func openStableValueLogFile(parent *os.File, path string) (*os.File, error) {
 // RotateToWithStableResources pins the flushed old segment before writer state
 // switches and then pins the newly-created active segment after its namespace
 // operation has been made persistent.
-func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {
+func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (_ *StableResourceRotation, retErr error) {
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable rotation requires file-backed writer")
 	}
@@ -254,11 +254,19 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		closedToken.Release()
 		return nil, err
 	}
-	closePrepared := true
+	installed := false
 	defer func() {
-		if closePrepared {
-			_ = prepared.Close()
+		if installed {
+			return
 		}
+		validateErr := rootpublication.ValidateStableChildLink(w.stableParent, prepared, filepath.Base(path))
+		closeErr := prepared.Close()
+		var removeErr, syncErr error
+		if validateErr == nil {
+			removeErr = rootpublication.RemoveStableChildFile(w.stableParent, filepath.Base(path))
+			syncErr = w.stableParent.Sync()
+		}
+		retErr = errors.Join(retErr, validateErr, closeErr, removeErr, syncErr)
 	}()
 	preparedInfo, err := prepared.Stat()
 	if err != nil {
@@ -301,6 +309,6 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	w.appendMax = defaultBufferSize
 	w.appendBuf = w.appendBuf[:0]
 	w.trimTransientScratchBuffers()
-	closePrepared = false
+	installed = true
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
 }

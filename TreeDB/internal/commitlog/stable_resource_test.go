@@ -259,6 +259,16 @@ func TestCommandJournalStableRotationNamespaceFailureKeepsOldWriterActive(t *tes
 	}); err != nil {
 		t.Fatalf("old journal append after failed rotation: %v", err)
 	}
+	failedPath := filepath.Join(dir, CommandSegmentName(4, oldSeq+1))
+	if _, err := os.Stat(failedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed rotation left successor entry: %v", err)
+	}
+	newCommandWALStableNamespaceToken = originalFactory
+	retry, err := journal.RotateActiveSegmentWithStableResources(true)
+	if err != nil {
+		t.Fatalf("retry after namespace failure: %v", err)
+	}
+	retry.Release()
 }
 
 func TestCommandJournalRecordAppendDoesNotAddNamespaceSync(t *testing.T) {

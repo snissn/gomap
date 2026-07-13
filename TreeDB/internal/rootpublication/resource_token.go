@@ -752,6 +752,15 @@ func OpenStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return openStableChildFile(parent, name, flags, perm)
 }
 
+// RemoveStableChildFile unlinks name relative to the exact already-open parent
+// directory. Callers remain responsible for syncing parent after the unlink.
+func RemoveStableChildFile(parent *os.File, name string) error {
+	if parent == nil || name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return fmt.Errorf("%w: stable child removal requires a base name and exact parent handle", ErrUnresolvedResource)
+	}
+	return removeStableChildFile(parent, name)
+}
+
 func validateStableChildLink(parent, resource *os.File, name string) error {
 	resourceIdentity, err := stableIdentityFromFile(resource)
 	if err != nil {

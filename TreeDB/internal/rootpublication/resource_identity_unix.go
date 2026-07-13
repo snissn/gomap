@@ -22,6 +22,21 @@ func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return os.NewFile(uintptr(fd), parent.Name()+string(os.PathSeparator)+name), nil
 }
 
+func removeStableChildFile(parent *os.File, name string) error {
+	if parent == nil {
+		return os.ErrInvalid
+	}
+	for {
+		err := unix.Unlinkat(int(parent.Fd()), name, 0)
+		if err == nil || err == unix.ENOENT {
+			return nil
+		}
+		if err != unix.EINTR {
+			return err
+		}
+	}
+}
+
 func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid

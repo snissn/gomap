@@ -247,6 +247,77 @@ func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T
 	if _, err := writer.Append(0, nil, 2, []byte("after-failure")); err != nil {
 		t.Fatalf("old writer append after failed rotation: %v", err)
 	}
+	failedPath := filepath.Join(dir, "000002.vlog")
+	if _, err := os.Stat(failedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed rotation left successor entry: %v", err)
+	}
+	newValueLogStableNamespaceToken = originalFactory
+	retry, err := writer.RotateToWithStableResources(failedPath, 2, true,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+	if err != nil {
+		t.Fatalf("retry after namespace failure: %v", err)
+	}
+	retry.Release()
+}
+
+func TestStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
+	requireStableValueLogNamespace(t)
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "000001.vlog")
+	failedPath := filepath.Join(dir, "000002.vlog")
+	displacedPath := filepath.Join(dir, "000002-displaced.vlog")
+	writer, err := NewWriter(firstPath, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	injected := errors.New("injected namespace failure after replacement")
+	originalFactory := newValueLogStableNamespaceToken
+	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+		if err := os.Rename(failedPath, displacedPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(failedPath, []byte("replacement"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return nil, injected
+	}
+	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+
+	rotation, err := writer.RotateToWithStableResources(failedPath, 2, false,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("failed rotation returned owned resources")
+	}
+	if !errors.Is(err, injected) || !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("rotation error=%v want injected failure and resource conflict", err)
+	}
+	if got, err := os.ReadFile(failedPath); err != nil || string(got) != "replacement" {
+		t.Fatalf("replacement changed during rollback: data=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(displacedPath); err != nil {
+		t.Fatalf("prepared successor was not retained for diagnosis: %v", err)
+	}
+	if writer.FileID() != 1 || writer.f == nil || writer.f.Name() != firstPath {
+		t.Fatalf("failed rotation changed active writer: id=%d file=%v", writer.FileID(), writer.f)
+	}
 }
 
 func TestStableValueLogTokenCarriesCanonicalExternalRIDFence(t *testing.T) {

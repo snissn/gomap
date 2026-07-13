@@ -695,7 +695,7 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 	return j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent)
 }
 
-func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent bool) (*CommandJournalStableRotation, error) {
+func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent bool) (_ *CommandJournalStableRotation, retErr error) {
 	if j.writer == nil || j.writer.f == nil {
 		return nil, errors.New("commitlog: command journal is closed")
 	}
@@ -737,11 +737,19 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		closedToken.Release()
 		return nil, err
 	}
-	closePrepared := true
+	installed := false
 	defer func() {
-		if closePrepared {
-			_ = prepared.Close()
+		if installed {
+			return
 		}
+		validateErr := rootpublication.ValidateStableChildLink(parent, prepared, filepath.Base(nextPath))
+		closeErr := prepared.Close()
+		var removeErr, syncErr error
+		if validateErr == nil {
+			removeErr = rootpublication.RemoveStableChildFile(parent, filepath.Base(nextPath))
+			syncErr = parent.Sync()
+		}
+		retErr = errors.Join(retErr, validateErr, closeErr, removeErr, syncErr)
 	}()
 	activeInfo, err := prepared.Stat()
 	if err != nil {
@@ -788,7 +796,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if closedBytes > 0 && j.onSegmentRotated != nil {
 		j.onSegmentRotated(closedBytes)
 	}
-	closePrepared = false
+	installed = true
 	return &CommandJournalStableRotation{Closed: closedToken, Active: activeToken}, nil
 }
 

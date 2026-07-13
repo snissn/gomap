@@ -463,11 +463,11 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 		defer stableParent.Close()
 	}
 	var file *os.File
-	var needsDirSync bool
+	var needsDirSync, created bool
 	if stableParent != nil {
-		file, needsDirSync, _, err = openColumnAssetSegmentAppendFileAt(stableParent, assetPath)
+		file, needsDirSync, created, err = openColumnAssetSegmentAppendFileAt(stableParent, assetPath)
 	} else {
-		file, needsDirSync, _, err = openColumnAssetSegmentAppendFile(assetPath)
+		file, needsDirSync, created, err = openColumnAssetSegmentAppendFile(assetPath)
 	}
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
@@ -479,35 +479,65 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 			_ = file.Close()
 		}
 	}()
+	rollbackOffset := int64(-1)
+	fail := func(cause error) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
+		var cleanupErr error
+		if created {
+			var validateErr error
+			if stableParent != nil {
+				validateErr = rootpublication.ValidateStableChildLink(stableParent, file, filepath.Base(assetPath))
+			}
+			if closeFile {
+				cleanupErr = errors.Join(cleanupErr, file.Close())
+				closeFile = false
+			}
+			if stableParent != nil && validateErr == nil {
+				cleanupErr = errors.Join(cleanupErr,
+					rootpublication.RemoveStableChildFile(stableParent, filepath.Base(assetPath)), stableParent.Sync())
+			} else if stableParent != nil {
+				cleanupErr = errors.Join(cleanupErr, validateErr)
+			} else {
+				removeErr := os.Remove(assetPath)
+				if errors.Is(removeErr, os.ErrNotExist) {
+					removeErr = nil
+				}
+				cleanupErr = errors.Join(cleanupErr, removeErr, syncColumnAssetDir(namespace.SegmentDir))
+			}
+		} else if rollbackOffset >= 0 {
+			cleanupErr = errors.Join(cleanupErr, file.Truncate(rollbackOffset), file.Sync())
+		}
+		return ColumnAssetRef{}, closeStats, errors.Join(cause, cleanupErr)
+	}
 	offset, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
+	rollbackOffset = offset
 	alignment := columnAssetSegmentPayloadAlignment(kind, cfg)
 	padding := columnAssetSegmentPrefixPadding(offset, alignment)
 	if padding > 0 {
 		written, err := writeColumnAssetSegmentZeroPadding(file, padding)
 		if err != nil {
-			return ColumnAssetRef{}, closeStats, err
+			return fail(err)
 		}
 		if written != padding {
-			return ColumnAssetRef{}, closeStats, io.ErrShortWrite
+			return fail(io.ErrShortWrite)
 		}
 		offset += int64(padding)
 	}
 	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
 	if written != len(payload) {
-		return ColumnAssetRef{}, closeStats, io.ErrShortWrite
+		return fail(io.ErrShortWrite)
 	}
 	ref.Offset = offset
 	start := time.Now()
 	closeStats.FileSyncCount++
 	if err := syncColumnAssetSegmentFileForPublish(file); err != nil {
 		closeStats.FileSync += time.Since(start)
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
 	closeStats.FileSync += time.Since(start)
 	directoryStable := false
@@ -518,28 +548,30 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 			closeStats.DirSync += time.Since(start)
 		}
 		if err != nil {
-			return ColumnAssetRef{}, closeStats, err
+			return fail(err)
+		}
+	}
+	if needsDirSync {
+		if !directoryStable {
+			if capture != nil {
+				return fail(fmt.Errorf("%w: stable column asset capture did not stabilize namespace", rootpublication.ErrUnresolvedResource))
+			}
+			start = time.Now()
+			if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
+				closeStats.DirSync += time.Since(start)
+				return fail(err)
+			}
+			closeStats.DirSync += time.Since(start)
 		}
 	}
 	start = time.Now()
 	if err := file.Close(); err != nil {
 		closeStats.FileClose += time.Since(start)
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
 	closeStats.FileClose += time.Since(start)
 	closeFile = false
 	if needsDirSync {
-		if !directoryStable {
-			if capture != nil {
-				return ColumnAssetRef{}, closeStats, fmt.Errorf("%w: stable column asset capture did not stabilize namespace", rootpublication.ErrUnresolvedResource)
-			}
-			start = time.Now()
-			if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
-				closeStats.DirSync += time.Since(start)
-				return ColumnAssetRef{}, closeStats, err
-			}
-			closeStats.DirSync += time.Since(start)
-		}
 		if capture != nil {
 			// A retained parent may no longer be reachable through assetPath. Do
 			// not let handle-relative stabilization certify a pathname cache entry.

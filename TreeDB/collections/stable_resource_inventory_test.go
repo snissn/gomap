@@ -218,6 +218,58 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	}
 }
 
+func TestStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
+	requireStableColumnNamespace(t)
+	dir := t.TempDir()
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "rollback",
+		},
+	}
+	injected := errors.New("injected file sync failure")
+	originalSync := syncColumnAssetSegmentFileForPublish
+	syncColumnAssetSegmentFileForPublish = func(*os.File) error { return injected }
+	defer func() { syncColumnAssetSegmentFileForPublish = originalSync }()
+
+	if _, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("first"), ColumnAssetKindTCS1TypedColumnPart, 7, 11); !errors.Is(err, injected) {
+		t.Fatalf("first write error=%v want injected failure", err)
+	} else if token != nil {
+		t.Fatal("failed stable write returned a token")
+	}
+	segmentPath, err := columnAssetSegmentPath(dir, ColumnAssetRef{Namespace: cfg.AssetManager.Namespace, FileID: columnAssetM12ASegmentFileID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(segmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed creation left segment entry: %v", err)
+	}
+
+	syncColumnAssetSegmentFileForPublish = originalSync
+	_, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("first"), ColumnAssetKindTCS1TypedColumnPart, 7, 11)
+	if err != nil {
+		t.Fatalf("retry stable write: %v", err)
+	}
+	token.Release()
+	before, err := os.Stat(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncColumnAssetSegmentFileForPublish = func(*os.File) error { return injected }
+	if _, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("unreachable"), ColumnAssetKindTCS1TypedColumnPart, 7, 12); !errors.Is(err, injected) {
+		t.Fatalf("append error=%v want injected failure", err)
+	} else if token != nil {
+		t.Fatal("failed stable append returned a token")
+	}
+	after, err := os.Stat(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Fatalf("failed stable append size=%d want rollback to %d", after.Size(), before.Size())
+	}
+}
+
 func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 	type expectedPolicy struct {
 		field          rootpublication.ReachabilityField
