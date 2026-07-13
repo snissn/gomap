@@ -11,9 +11,10 @@ import (
 )
 
 type stableResourceEntry struct {
-	token        *StableResourceToken
-	frontier     DurableFrontier
-	reachability map[ReachabilityField]struct{}
+	token              *StableResourceToken
+	frontier           DurableFrontier
+	reachability       map[ReachabilityField]struct{}
+	logicalObligations map[string]StableLogicalObligation
 }
 
 func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
@@ -21,7 +22,36 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 	for field := range entry.reachability {
 		reachability[field] = struct{}{}
 	}
-	return stableResourceEntry{token: entry.token, frontier: cloneDurableFrontier(entry.frontier), reachability: reachability}
+	logicalObligations := make(map[string]StableLogicalObligation, len(entry.logicalObligations))
+	for key, obligation := range entry.logicalObligations {
+		logicalObligations[key] = obligation
+	}
+	return stableResourceEntry{
+		token: entry.token, frontier: cloneDurableFrontier(entry.frontier),
+		reachability: reachability, logicalObligations: logicalObligations,
+	}
+}
+
+func mergeStableLogicalObligations(target map[string]StableLogicalObligation, incoming []StableLogicalObligation) error {
+	for _, obligation := range incoming {
+		key := stableLogicalObligationKey(obligation)
+		if existing, ok := target[key]; ok && existing != obligation {
+			return fmt.Errorf("%w: logical obligation %q has conflicting immutable checksum or digest", ErrResourceConflict, key)
+		}
+	}
+	for _, obligation := range incoming {
+		key := stableLogicalObligationKey(obligation)
+		target[key] = obligation
+	}
+	return nil
+}
+
+func stableLogicalObligationMap(obligations []StableLogicalObligation) map[string]StableLogicalObligation {
+	out := make(map[string]StableLogicalObligation, len(obligations))
+	for _, obligation := range obligations {
+		out[stableLogicalObligationKey(obligation)] = obligation
+	}
+	return out
 }
 
 type StableResourceSetBuilder struct {
@@ -89,6 +119,9 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, existing.identityKey())
 		}
+		if err := mergeStableLogicalObligations(entry.logicalObligations, token.logicalObligations); err != nil {
+			return err
+		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability[token.reachability] = struct{}{}
 		if existing.namespace == nil && token.namespace != nil {
@@ -103,7 +136,8 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 	}
 	*entries = append(*entries, stableResourceEntry{
 		token: token, frontier: cloneDurableFrontier(token.frontier),
-		reachability: map[ReachabilityField]struct{}{token.reachability: {}},
+		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
+		logicalObligations: stableLogicalObligationMap(token.logicalObligations),
 	})
 	return nil
 }
@@ -151,6 +185,13 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 		}
 		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, existing.identityKey())
+		}
+		incomingObligations := make([]StableLogicalObligation, 0, len(incoming.logicalObligations))
+		for _, obligation := range incoming.logicalObligations {
+			incomingObligations = append(incomingObligations, obligation)
+		}
+		if err := mergeStableLogicalObligations(entry.logicalObligations, incomingObligations); err != nil {
+			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
 		for field := range incoming.reachability {
@@ -322,15 +363,16 @@ type StableResourceSet struct {
 }
 
 // StableResourceDescriptor is an immutable-by-copy view of one coalesced
-// physical resource obligation. Unlike Tokens, it reports the unioned frontier
-// and every reachability field retained by the frozen set.
+// physical resource obligation. Unlike Tokens, it reports the unioned frontier,
+// every reachability field, and every logical obligation retained by the set.
 type StableResourceDescriptor struct {
-	kind         ResourceKind
-	identity     StableIdentity
-	generation   uint64
-	digest       [32]byte
-	frontier     DurableFrontier
-	reachability []ReachabilityField
+	kind               ResourceKind
+	identity           StableIdentity
+	generation         uint64
+	digest             [32]byte
+	frontier           DurableFrontier
+	reachability       []ReachabilityField
+	logicalObligations []StableLogicalObligation
 }
 
 func (descriptor StableResourceDescriptor) Kind() ResourceKind       { return descriptor.kind }
@@ -348,6 +390,10 @@ func (descriptor StableResourceDescriptor) RIDs() []uint64 {
 
 func (descriptor StableResourceDescriptor) ReachabilityFields() []ReachabilityField {
 	return append([]ReachabilityField(nil), descriptor.reachability...)
+}
+
+func (descriptor StableResourceDescriptor) LogicalObligations() []StableLogicalObligation {
+	return cloneStableLogicalObligations(descriptor.logicalObligations)
 }
 
 func stableResourcePinCounts(entries []stableResourceEntry) map[ResourceKind]uint64 {
@@ -396,9 +442,17 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 			fields = append(fields, field)
 		}
 		sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
+		logicalObligations := make([]StableLogicalObligation, 0, len(entry.logicalObligations))
+		for _, obligation := range entry.logicalObligations {
+			logicalObligations = append(logicalObligations, obligation)
+		}
+		sort.Slice(logicalObligations, func(i, j int) bool {
+			return stableLogicalObligationKey(logicalObligations[i]) < stableLogicalObligationKey(logicalObligations[j])
+		})
 		descriptors[i] = StableResourceDescriptor{
 			kind: entry.token.kind, identity: entry.token.identity, generation: entry.token.generation,
 			digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
+			logicalObligations: logicalObligations,
 		}
 	}
 	return descriptors
@@ -605,6 +659,7 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		}
 		stats.PendingCount++
 		stats.PendingBytes = saturatingAdd(stats.PendingBytes, entry.frontier.Bytes)
+		stats.LogicalObligationCount = saturatingAdd(stats.LogicalObligationCount, uint64(len(entry.logicalObligations)))
 		registered := time.Unix(0, token.metrics.registeredNanos)
 		age := now.Sub(registered)
 		if age > stats.PendingAge {

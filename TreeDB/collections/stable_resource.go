@@ -100,15 +100,52 @@ func stableColumnSegmentDigest(ref ColumnAssetRef) [32]byte {
 	return sha256.Sum256(raw)
 }
 
+func stableColumnLogicalObligation(ref ColumnAssetRef, reachability rootpublication.ReachabilityField) rootpublication.StableLogicalObligation {
+	const obligationClass = "column-asset-ref-v1"
+	appendString := func(raw []byte, value string) []byte {
+		var size [4]byte
+		binary.LittleEndian.PutUint32(size[:], uint32(len(value)))
+		raw = append(raw, size[:]...)
+		return append(raw, value...)
+	}
+	appendUint64 := func(raw []byte, value uint64) []byte {
+		var encoded [8]byte
+		binary.LittleEndian.PutUint64(encoded[:], value)
+		return append(raw, encoded[:]...)
+	}
+	appendUint32 := func(raw []byte, value uint32) []byte {
+		var encoded [4]byte
+		binary.LittleEndian.PutUint32(encoded[:], value)
+		return append(raw, encoded[:]...)
+	}
+	raw := make([]byte, 0, len(ref.Kind)+len(ref.Namespace)+len(reachability)+64)
+	raw = appendString(raw, obligationClass)
+	raw = appendString(raw, string(ref.Kind))
+	raw = appendString(raw, ref.Namespace)
+	raw = appendUint64(raw, ref.Generation)
+	raw = appendUint64(raw, ref.PartID)
+	raw = appendUint32(raw, ref.FileID)
+	raw = appendUint64(raw, uint64(ref.Offset))
+	raw = appendUint64(raw, uint64(ref.Length))
+	raw = appendUint32(raw, ref.Checksum)
+	raw = appendString(raw, string(reachability))
+	return rootpublication.StableLogicalObligation{
+		Class: obligationClass, Kind: string(ref.Kind), Namespace: ref.Namespace,
+		Generation: ref.Generation, PartID: ref.PartID, FileID: uint64(ref.FileID),
+		Offset: ref.Offset, Length: ref.Length, Checksum: ref.Checksum,
+		Reachability: reachability, Digest: sha256.Sum256(raw),
+	}
+}
+
 func stableColumnAssetDiagnosticPath(ref ColumnAssetRef) string {
 	return filepath.Join("column_assets", filepath.FromSlash(ref.Namespace), columnAssetManagerAssetsDirName,
 		columnAssetManagerSegmentsDirName, columnAssetSegmentFileName(ref.FileID))
 }
 
 // stableColumnAssetResourceToken captures the exact already-open segment
-// identity and the greatest byte required by ref. The manifest remains the
-// authority for the ref's range and checksum; tokens for several refs in one
-// segment therefore coalesce by stable identity and maximum frontier.
+// identity and greatest required byte while preserving ref's immutable logical
+// generation, part, range, and checksum obligation. Tokens for several refs in
+// one segment coalesce physically without collapsing those logical obligations.
 func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
 	resourceKind, reachability, _, err := stableColumnAssetResourceClassification(ref.Kind)
 	if err != nil {
@@ -122,6 +159,7 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
+		LogicalObligations: []rootpublication.StableLogicalObligation{stableColumnLogicalObligation(ref, reachability)},
 		// The producer synchronizes the segment before it captures the token.
 		// Publication must account for that step without syncing the same file a
 		// second time.

@@ -249,6 +249,57 @@ func TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor(
 	}
 }
 
+func TestStableResourceSetRejectsConflictingLogicalObligationAtomically(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "logical.asset", "0123456789abcdef")
+	physicalDigest := sha256.Sum256([]byte("physical-segment"))
+	logical := StableLogicalObligation{
+		Class: "column-asset-ref-v1", Kind: "query_ready_base_v1", Namespace: "events",
+		Generation: 7, PartID: 11, FileID: 1, Offset: 0, Length: 4, Checksum: 101,
+		Reachability: ReachabilityQueryReadyBase, Digest: sha256.Sum256([]byte("logical-one")),
+	}
+	newToken := func(frontier uint64, obligation StableLogicalObligation) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceQueryReadyAsset, LogicalLane: "events", ResourceID: "1", Generation: 1,
+			DiagnosticPath: "logical.asset", File: file, Frontier: DurableFrontier{Bytes: frontier},
+			Digest: physicalDigest, Reachability: ReachabilityQueryReadyBase,
+			LogicalObligations: []StableLogicalObligation{obligation},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityQueryReadyBase)
+	if err := builder.Add(newToken(4, logical)); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := logical
+	conflicting.Checksum++
+	conflicting.Digest = sha256.Sum256([]byte("logical-two"))
+	if err := builder.Add(newToken(8, conflicting)); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("conflicting logical obligation error=%v want ErrResourceConflict", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	descriptor := set.Descriptors()[0]
+	if descriptor.Frontier().Bytes != 4 {
+		t.Fatalf("rejected logical obligation advanced frontier=%d want 4", descriptor.Frontier().Bytes)
+	}
+	obligations := descriptor.LogicalObligations()
+	if len(obligations) != 1 || obligations[0] != logical {
+		t.Fatalf("logical obligations after rejection=%+v want original", obligations)
+	}
+	obligations[0].PartID = 99
+	if got := descriptor.LogicalObligations()[0].PartID; got != logical.PartID {
+		t.Fatalf("descriptor logical obligations are mutable through returned slice: part=%d", got)
+	}
+}
+
 func TestStableResourceTokenCapturesExactRIDMembershipByValue(t *testing.T) {
 	dir := t.TempDir()
 	file := writeStableResourceFixture(t, dir, "capture.vlog", "original-resource-bytes")

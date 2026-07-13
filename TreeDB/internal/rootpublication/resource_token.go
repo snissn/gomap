@@ -155,6 +155,60 @@ type exactRIDMembership struct {
 	values []uint64
 }
 
+// StableLogicalObligation preserves one immutable logical reference when
+// several references share and coalesce into one pinned physical resource.
+// Digest binds the complete producer-canonical encoding of these fields.
+type StableLogicalObligation struct {
+	Class        string
+	Kind         string
+	Namespace    string
+	Generation   uint64
+	PartID       uint64
+	FileID       uint64
+	Offset       int64
+	Length       int64
+	Checksum     uint32
+	Reachability ReachabilityField
+	Digest       [32]byte
+}
+
+func stableLogicalObligationKey(obligation StableLogicalObligation) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%020d\x00%020d\x00%020d\x00%020d\x00%020d\x00%s",
+		obligation.Class, obligation.Kind, obligation.Namespace, obligation.Generation, obligation.PartID,
+		obligation.FileID, obligation.Offset, obligation.Length, obligation.Reachability)
+}
+
+func normalizeStableLogicalObligations(obligations []StableLogicalObligation, reachability ReachabilityField) ([]StableLogicalObligation, error) {
+	byKey := make(map[string]StableLogicalObligation, len(obligations))
+	for _, obligation := range obligations {
+		if obligation.Class == "" || obligation.Kind == "" || obligation.Namespace == "" ||
+			obligation.Generation == 0 || obligation.FileID == 0 || obligation.Offset < 0 ||
+			obligation.Length <= 0 || obligation.Reachability == "" || obligation.Digest == [32]byte{} {
+			return nil, fmt.Errorf("%w: incomplete logical resource obligation", ErrUnresolvedResource)
+		}
+		if obligation.Reachability != reachability {
+			return nil, fmt.Errorf("%w: logical obligation field %q differs from token field %q", ErrResourceConflict, obligation.Reachability, reachability)
+		}
+		key := stableLogicalObligationKey(obligation)
+		if existing, ok := byKey[key]; ok && existing != obligation {
+			return nil, fmt.Errorf("%w: logical obligation %q has conflicting immutable checksum or digest", ErrResourceConflict, key)
+		}
+		byKey[key] = obligation
+	}
+	normalized := make([]StableLogicalObligation, 0, len(byKey))
+	for _, obligation := range byKey {
+		normalized = append(normalized, obligation)
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		return stableLogicalObligationKey(normalized[i]) < stableLogicalObligationKey(normalized[j])
+	})
+	return normalized, nil
+}
+
+func cloneStableLogicalObligations(obligations []StableLogicalObligation) []StableLogicalObligation {
+	return append([]StableLogicalObligation(nil), obligations...)
+}
+
 func NewRIDFrontier(rids []uint64) DurableFrontier {
 	ordered := append([]uint64(nil), rids...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
@@ -249,9 +303,12 @@ type StableResourceSpec struct {
 	Digest         [32]byte
 	Reachability   ReachabilityField
 	Namespace      *StableNamespaceToken
-	FlushThrough   resourceOperation
-	SyncThrough    resourceOperation
-	OnRelease      func()
+	// LogicalObligations retains immutable logical references that share this
+	// physical resource and must survive physical pin coalescing.
+	LogicalObligations []StableLogicalObligation
+	FlushThrough       resourceOperation
+	SyncThrough        resourceOperation
+	OnRelease          func()
 
 	// StableIdentityOverride exists for deterministic platform-adapter and
 	// conflict tests. Production producers leave it zero and use handle identity.
@@ -267,24 +324,25 @@ type resourceTokenMetrics struct {
 }
 
 type StableResourceToken struct {
-	kind           ResourceKind
-	logicalLane    string
-	resourceID     string
-	generation     uint64
-	diagnosticPath string
-	identity       StableIdentity
-	frontier       DurableFrontier
-	digest         [32]byte
-	reachability   ReachabilityField
-	stability      ResourceStability
-	namespace      *StableNamespaceToken
-	pinned         *os.File
-	flush          resourceOperation
-	sync           resourceOperation
-	onRelease      func()
-	owner          atomic.Uint32
-	released       atomic.Bool
-	metrics        resourceTokenMetrics
+	kind               ResourceKind
+	logicalLane        string
+	resourceID         string
+	generation         uint64
+	diagnosticPath     string
+	identity           StableIdentity
+	frontier           DurableFrontier
+	digest             [32]byte
+	reachability       ReachabilityField
+	logicalObligations []StableLogicalObligation
+	stability          ResourceStability
+	namespace          *StableNamespaceToken
+	pinned             *os.File
+	flush              resourceOperation
+	sync               resourceOperation
+	onRelease          func()
+	owner              atomic.Uint32
+	released           atomic.Bool
+	metrics            resourceTokenMetrics
 }
 
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
@@ -295,6 +353,10 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		return nil, err
 	}
 	if err := validateDurableFrontier(spec.Frontier); err != nil {
+		return nil, err
+	}
+	logicalObligations, err := normalizeStableLogicalObligations(spec.LogicalObligations, spec.Reachability)
+	if err != nil {
 		return nil, err
 	}
 	stability, ok := stableResourceStabilityForField(spec.Reachability)
@@ -347,7 +409,8 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
 		generation: spec.Generation, diagnosticPath: filepath.ToSlash(spec.DiagnosticPath),
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
-		reachability: spec.Reachability, stability: stability, namespace: spec.Namespace, pinned: pinned,
+		reachability: spec.Reachability, logicalObligations: logicalObligations,
+		stability: stability, namespace: spec.Namespace, pinned: pinned,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease,
 	}
 	token.owner.Store(uint32(ResourceOwnerToken))
@@ -384,6 +447,9 @@ func (token *StableResourceToken) Frontier() DurableFrontier {
 func (token *StableResourceToken) Digest() [32]byte                 { return token.digest }
 func (token *StableResourceToken) Reachability() ReachabilityField  { return token.reachability }
 func (token *StableResourceToken) Namespace() *StableNamespaceToken { return token.namespace }
+func (token *StableResourceToken) LogicalObligations() []StableLogicalObligation {
+	return cloneStableLogicalObligations(token.logicalObligations)
+}
 
 func (token *StableResourceToken) FlushThrough() error {
 	return token.flushThrough(token.frontier)
@@ -788,18 +854,21 @@ func (token *StableNamespaceToken) Release() {
 }
 
 type ResourceKindStats struct {
-	Kind                  ResourceKind
-	PendingCount          uint64
-	PendingBytes          uint64
-	PendingAge            time.Duration
-	Flushes               uint64
-	FlushDuration         time.Duration
-	Syncs                 uint64
-	SyncDuration          time.Duration
-	NamespaceSyncs        uint64
-	NamespaceSyncDuration time.Duration
-	ActivePins            uint64
-	PinHighWater          uint64
+	Kind         ResourceKind
+	PendingCount uint64
+	PendingBytes uint64
+	PendingAge   time.Duration
+	// LogicalObligationCount may exceed PendingCount when several immutable
+	// logical references share one coalesced physical pin.
+	LogicalObligationCount uint64
+	Flushes                uint64
+	FlushDuration          time.Duration
+	Syncs                  uint64
+	SyncDuration           time.Duration
+	NamespaceSyncs         uint64
+	NamespaceSyncDuration  time.Duration
+	ActivePins             uint64
+	PinHighWater           uint64
 }
 
 var _ io.ReaderAt = (*StableResourceToken)(nil)
