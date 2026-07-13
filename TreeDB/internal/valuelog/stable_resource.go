@@ -97,14 +97,14 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 	}
 	frontier := rootpublication.NewRIDFrontier(registration.ExternalRIDs)
 	frontier.Bytes = uint64(info.Size())
-	kind, classification, err := stableValueLogProducerPolicy(registration.Reachability)
+	domain, kind, classification, err := stableValueLogProducerPolicy(registration.Reachability)
 	if err != nil {
 		return nil, err
 	}
 	if registration.Kind != "" && registration.Kind != kind {
 		return nil, fmt.Errorf("%w: valuelog field %q requires kind %q, got %q", rootpublication.ErrResourceConflict, registration.Reachability, kind, registration.Kind)
 	}
-	return rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
+	return rootpublication.NewStableProducerResourceTokenForDomain(domain, rootpublication.StableResourceSpec{
 		Kind: kind, LogicalLane: registration.LogicalLane,
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
@@ -116,16 +116,16 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 // inventory lookup. This writer family may pin only its three exact-handle
 // products; a foreign registerable field must fail instead of echoing that
 // field's generic policy back into the checked constructor.
-func stableValueLogProducerPolicy(field rootpublication.ReachabilityField) (rootpublication.ResourceKind, string, error) {
+func stableValueLogProducerPolicy(field rootpublication.ReachabilityField) (rootpublication.StableProducerDomain, rootpublication.ResourceKind, string, error) {
 	switch field {
 	case rootpublication.ReachabilityValueLogPointer:
-		return rootpublication.ResourceValueLog, "authoritative", nil
+		return rootpublication.StableProducerValueLog, rootpublication.ResourceValueLog, "authoritative", nil
 	case rootpublication.ReachabilityOuterLeafRawPointer:
-		return rootpublication.ResourceOuterLeafLog, "authoritative", nil
+		return rootpublication.StableProducerOuterLeaf, rootpublication.ResourceOuterLeafLog, "authoritative", nil
 	case rootpublication.ReachabilityCommandWALExternalRIDFence:
-		return rootpublication.ResourceCommandWALExternalRID, "authoritative-transitive", nil
+		return rootpublication.StableProducerValueLog, rootpublication.ResourceCommandWALExternalRID, "authoritative-transitive", nil
 	default:
-		return "", "", fmt.Errorf("%w: valuelog producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, field)
+		return "", "", "", fmt.Errorf("%w: valuelog producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, field)
 	}
 }
 

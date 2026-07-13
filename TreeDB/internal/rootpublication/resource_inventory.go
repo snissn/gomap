@@ -2,6 +2,25 @@ package rootpublication
 
 import "fmt"
 
+// StableProducerDomain is the concrete construction owner for an exact-handle
+// resource token. It is separate from ResourceKind: several producers pin the
+// same physical kind, while one producer may own several related kinds.
+type StableProducerDomain string
+
+const (
+	StableProducerDB             StableProducerDomain = "db"
+	StableProducerValueLog       StableProducerDomain = "value-log"
+	StableProducerOuterLeaf      StableProducerDomain = "outer-leaf"
+	StableProducerDictionary     StableProducerDomain = "dictionary"
+	StableProducerTemplate       StableProducerDomain = "template"
+	StableProducerCollection     StableProducerDomain = "collection"
+	StableProducerColumnAsset    StableProducerDomain = "column-asset"
+	StableProducerLegacyVector   StableProducerDomain = "legacy-vector"
+	StableProducerCommandWAL     StableProducerDomain = "command-wal"
+	StableProducerLegacyExcluded StableProducerDomain = "legacy-excluded"
+	StableProducerRaftSnapshot   StableProducerDomain = "raft-snapshot"
+)
+
 // StableResourceInventoryRow is the reviewed ownership table for every root,
 // catalog, and command-frame field in the #3677 closure. Paths are source file
 // paths, not durable resource identities.
@@ -26,44 +45,45 @@ var canonicalReachabilityRequirements = []struct {
 	Field          ReachabilityField
 	Kind           ResourceKind
 	Classification string
+	Producer       StableProducerDomain
 }{
-	{ReachabilityIndexFile, ResourceIndex, "authoritative"},
-	{ReachabilityMetaPage, ResourceMeta, "authoritative"},
-	{ReachabilityUserRoot, ResourceIndex, "authoritative-root-backed"},
-	{ReachabilitySystemRoot, ResourceIndex, "authoritative-root-backed"},
-	{ReachabilityFreelist, ResourceIndex, "authoritative-root-backed"},
-	{ReachabilityValueLogPointer, ResourceValueLog, "authoritative"},
-	{ReachabilityOuterLeafRawPointer, ResourceOuterLeafLog, "authoritative"},
-	{ReachabilityOuterLeafPackedPointer, ResourceOuterLeafPack, "authoritative"},
-	{ReachabilityOuterLeafGeneration, ResourceOuterLeafManifest, "authoritative"},
-	{ReachabilityDictionaryGeneration, ResourceDictionary, "authoritative-transitive"},
-	{ReachabilityTemplateGeneration, ResourceTemplate, "authoritative-transitive"},
-	{ReachabilityCollectionSystemRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionPrimaryRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionTemplateRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionIndexStateRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionColumnRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionSecondaryRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionVectorRoot, ResourceCollectionRoot, "authoritative-root-backed"},
-	{ReachabilityCollectionTextDictionary, ResourceTextAsset, "authoritative-root-backed"},
-	{ReachabilityCollectionTextPosting, ResourceTextAsset, "authoritative-root-backed"},
-	{ReachabilityCollectionTextPosition, ResourceTextAsset, "authoritative-root-backed"},
-	{ReachabilityColumnManifest, ResourceColumnAsset, "authoritative"},
-	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "authoritative"},
-	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "authoritative"},
-	{ReachabilityTypedColumnCode, ResourceTypedColumnAsset, "authoritative"},
-	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "authoritative"},
-	{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "authoritative-transitive"},
-	{ReachabilityLegacyVectorSnapshot, ResourceLegacyVectorSnapshot, "authoritative-legacy"},
-	{ReachabilityCommandWALActive, ResourceCommandWAL, "authoritative"},
-	{ReachabilityCommandWALRotated, ResourceCommandWAL, "authoritative"},
-	{ReachabilityCommandWALExternalRIDFence, ResourceCommandWALExternalRID, "authoritative-transitive"},
-	{ReachabilityQueryReadyBase, ResourceQueryReadyAsset, "rebuildable-non-authoritative"},
-	{ReachabilityQueryReadyDelta, ResourceQueryReadyAsset, "rebuildable-non-authoritative"},
-	{ReachabilityQueryReadyConsolidatedBase, ResourceQueryReadyAsset, "rebuildable-non-authoritative"},
+	{ReachabilityIndexFile, ResourceIndex, "authoritative", StableProducerDB},
+	{ReachabilityMetaPage, ResourceMeta, "authoritative", StableProducerDB},
+	{ReachabilityUserRoot, ResourceIndex, "authoritative-root-backed", StableProducerDB},
+	{ReachabilitySystemRoot, ResourceIndex, "authoritative-root-backed", StableProducerDB},
+	{ReachabilityFreelist, ResourceIndex, "authoritative-root-backed", StableProducerDB},
+	{ReachabilityValueLogPointer, ResourceValueLog, "authoritative", StableProducerValueLog},
+	{ReachabilityOuterLeafRawPointer, ResourceOuterLeafLog, "authoritative", StableProducerOuterLeaf},
+	{ReachabilityOuterLeafPackedPointer, ResourceOuterLeafPack, "authoritative", StableProducerOuterLeaf},
+	{ReachabilityOuterLeafGeneration, ResourceOuterLeafManifest, "authoritative", StableProducerOuterLeaf},
+	{ReachabilityDictionaryGeneration, ResourceDictionary, "authoritative-transitive", StableProducerDictionary},
+	{ReachabilityTemplateGeneration, ResourceTemplate, "authoritative-transitive", StableProducerTemplate},
+	{ReachabilityCollectionSystemRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionPrimaryRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTemplateRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionIndexStateRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionColumnRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionSecondaryRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionVectorRoot, ResourceCollectionRoot, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTextDictionary, ResourceTextAsset, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTextPosting, ResourceTextAsset, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityCollectionTextPosition, ResourceTextAsset, "authoritative-root-backed", StableProducerCollection},
+	{ReachabilityColumnManifest, ResourceColumnAsset, "authoritative", StableProducerColumnAsset},
+	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
+	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
+	{ReachabilityTypedColumnCode, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
+	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "authoritative", StableProducerColumnAsset},
+	{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "authoritative-transitive", StableProducerColumnAsset},
+	{ReachabilityLegacyVectorSnapshot, ResourceLegacyVectorSnapshot, "authoritative-legacy", StableProducerLegacyVector},
+	{ReachabilityCommandWALActive, ResourceCommandWAL, "authoritative", StableProducerCommandWAL},
+	{ReachabilityCommandWALRotated, ResourceCommandWAL, "authoritative", StableProducerCommandWAL},
+	{ReachabilityCommandWALExternalRIDFence, ResourceCommandWALExternalRID, "authoritative-transitive", StableProducerValueLog},
+	{ReachabilityQueryReadyBase, ResourceQueryReadyAsset, "rebuildable-non-authoritative", StableProducerColumnAsset},
+	{ReachabilityQueryReadyDelta, ResourceQueryReadyAsset, "rebuildable-non-authoritative", StableProducerColumnAsset},
+	{ReachabilityQueryReadyConsolidatedBase, ResourceQueryReadyAsset, "rebuildable-non-authoritative", StableProducerColumnAsset},
 	// These are explicit policy exclusions, not unowned durability resources.
-	{ReachabilityLegacyActiveSlab, ResourceLegacyTreeDBField, "explicit-legacy-exclusion"},
-	{ReachabilityRaftSnapshot, ResourceSeparateDurability, "explicit-separate-domain"},
+	{ReachabilityLegacyActiveSlab, ResourceLegacyTreeDBField, "explicit-legacy-exclusion", StableProducerLegacyExcluded},
+	{ReachabilityRaftSnapshot, ResourceSeparateDurability, "explicit-separate-domain", StableProducerRaftSnapshot},
 }
 
 var stableResourceInventory = []StableResourceInventoryRow{
@@ -112,6 +132,7 @@ type StableResourcePolicy struct {
 	Kind           ResourceKind
 	Classification string
 	Registerable   bool
+	Producer       StableProducerDomain
 }
 
 func StableResourcePolicyFor(field ReachabilityField) (StableResourcePolicy, bool) {
@@ -123,9 +144,24 @@ func StableResourcePolicyFor(field ReachabilityField) (StableResourcePolicy, boo
 			requirement.Classification != "explicit-separate-domain"
 		return StableResourcePolicy{
 			Kind: requirement.Kind, Classification: requirement.Classification, Registerable: registerable,
+			Producer: requirement.Producer,
 		}, true
 	}
 	return StableResourcePolicy{}, false
+}
+
+// NewStableProducerResourceTokenForDomain is the production registration
+// boundary. It rejects a canonical field when the calling producer does not
+// own that field, before validating the field's kind and classification.
+func NewStableProducerResourceTokenForDomain(domain StableProducerDomain, spec StableResourceSpec, classification string) (*StableResourceToken, error) {
+	policy, ok := StableResourcePolicyFor(spec.Reachability)
+	if !ok {
+		return nil, fmt.Errorf("%w: unknown reachability field %q", ErrUnresolvedResource, spec.Reachability)
+	}
+	if policy.Producer != domain {
+		return nil, fmt.Errorf("%w: field %q belongs to producer %q, got %q", ErrResourceConflict, spec.Reachability, policy.Producer, domain)
+	}
+	return NewStableProducerResourceToken(spec, classification)
 }
 
 // NewStableProducerResourceToken is the only constructor production resource
