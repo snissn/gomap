@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"os"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -56,6 +58,8 @@ type QueryReadyDeltaOpenStats struct {
 	BytesDecoded   int64
 	BytesCopied    int64
 	BytesValidated int64
+	BytesMapped    int64
+	Mapped         bool
 	OpenTime       time.Duration
 }
 
@@ -71,6 +75,9 @@ type QueryReadyDeltaGeneration struct {
 	AccumulatedDeltaParts int
 	Stats                 QueryReadyDeltaOpenStats
 	data                  []byte
+	release               func() error
+	closeOnce             sync.Once
+	closeErr              error
 }
 
 func (g *QueryReadyDeltaGeneration) Bytes() []byte {
@@ -81,12 +88,22 @@ func (g *QueryReadyDeltaGeneration) Bytes() []byte {
 }
 
 func (g *QueryReadyDeltaGeneration) Close() error {
-	if g == nil || g.Base == nil {
+	if g == nil {
 		return nil
 	}
-	err := g.Base.Close()
-	g.data = nil
-	return err
+	g.closeOnce.Do(func() {
+		var baseErr error
+		if g.Base != nil {
+			baseErr = g.Base.Close()
+		}
+		var releaseErr error
+		if g.release != nil {
+			releaseErr = g.release()
+		}
+		g.closeErr = errors.Join(baseErr, releaseErr)
+		g.data = nil
+	})
+	return g.closeErr
 }
 
 func BuildQueryReadyDeltaGeneration(identity QueryReadyBaseIdentity, parts []QueryReadyBasePartInput, tombstones []Tombstone) (QueryReadyDeltaBuildResult, error) {
@@ -182,8 +199,63 @@ func OpenQueryReadyDeltaGeneration(data []byte, expected QueryReadyBaseIdentity)
 	return openQueryReadyDeltaEnvelope(data, expected, QueryReadyGenerationDelta)
 }
 
+// OpenQueryReadyDeltaGenerationFile opens a QRDG through a read-only mapping.
+// The returned generation owns the mapping until Close. Publication, pinning,
+// and deletion safety remain responsibilities of the caller's existing asset
+// lifecycle; this helper only owns its file descriptor and mapping.
+func OpenQueryReadyDeltaGenerationFile(path string, expected QueryReadyBaseIdentity) (*QueryReadyDeltaGeneration, error) {
+	return OpenQueryReadyDeltaGenerationFileRange(path, 0, 0, expected)
+}
+
+func OpenQueryReadyDeltaGenerationFileRange(path string, offset, length int64, expected QueryReadyBaseIdentity) (*QueryReadyDeltaGeneration, error) {
+	return openQueryReadyDeltaEnvelopeFileRange(path, offset, length, expected, QueryReadyGenerationDelta)
+}
+
 func OpenQueryReadyConsolidatedBaseGeneration(data []byte, expected QueryReadyBaseIdentity) (*QueryReadyDeltaGeneration, error) {
 	return openQueryReadyDeltaEnvelope(data, expected, QueryReadyGenerationConsolidatedBase)
+}
+
+func OpenQueryReadyConsolidatedBaseGenerationFile(path string, expected QueryReadyBaseIdentity) (*QueryReadyDeltaGeneration, error) {
+	return OpenQueryReadyConsolidatedBaseGenerationFileRange(path, 0, 0, expected)
+}
+
+func OpenQueryReadyConsolidatedBaseGenerationFileRange(path string, offset, length int64, expected QueryReadyBaseIdentity) (*QueryReadyDeltaGeneration, error) {
+	return openQueryReadyDeltaEnvelopeFileRange(path, offset, length, expected, QueryReadyGenerationConsolidatedBase)
+}
+
+func openQueryReadyDeltaEnvelopeFileRange(path string, offset, length int64, expected QueryReadyBaseIdentity, kind QueryReadyGenerationKind) (*QueryReadyDeltaGeneration, error) {
+	started := time.Now()
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	logicalLength, err := queryReadyGenerationFileRange(file, offset, length)
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("typedcolumn: query-ready delta range %q: %w", path, err)
+	}
+	data, mapping, err := mmapQueryReadyBaseFileRange(file, offset, logicalLength)
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("typedcolumn: mmap query-ready delta %q offset=%d length=%d: %w", path, offset, logicalLength, err)
+	}
+	release := func() error {
+		return errors.Join(munmapQueryReadyBaseFile(mapping), file.Close())
+	}
+	generation, err := openQueryReadyDeltaEnvelope(data, expected, kind)
+	if err != nil {
+		_ = release()
+		return nil, err
+	}
+	generation.release = release
+	generation.Stats.OpenTime = time.Since(started)
+	generation.Stats.Mapped = true
+	generation.Stats.BytesMapped = int64(len(mapping))
+	if generation.Base != nil {
+		generation.Base.Stats.Mapped = true
+		generation.Base.Stats.BytesMapped = int64(len(mapping))
+	}
+	return generation, nil
 }
 
 func openQueryReadyDeltaEnvelope(data []byte, expected QueryReadyBaseIdentity, expectedKind QueryReadyGenerationKind) (*QueryReadyDeltaGeneration, error) {

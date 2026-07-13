@@ -37,6 +37,10 @@ bytes, part and row counts, whole-part decodes, dictionary constructions, and
 validation/open duration. Build stats report input/output/copied bytes, rows,
 parts, and build/validation duration.
 
+`OpenQueryReadyBaseGenerationFileRange` applies the same validation to an exact
+column-asset segment offset/length. It retains the page-aligned mmap owner while
+exposing only the logical QRBG range, so close always unmaps the correct owner.
+
 Callers must close file-backed views before replacing or deleting their files.
 Lifecycle registration, authoritative publication/recovery, and reclamation
 remain owned by the existing asset-root and GC work. A caller may place QRBG

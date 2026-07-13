@@ -1135,7 +1135,7 @@ func (c *Collection) closeCollectionVectorIndexPreparedSearchCache() error {
 			closeErr = errors.Join(closeErr, entry.prepared.Close())
 		}
 	}
-	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionTypedColumnOneShotCacheEntries() {
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionTypedColumnOneShotCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 	return closeErr

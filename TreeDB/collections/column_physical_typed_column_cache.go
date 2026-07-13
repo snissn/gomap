@@ -235,7 +235,7 @@ func (c *Collection) closeCollectionTypedColumnOneShotCache() {
 	for _, entry := range entries {
 		entry.close()
 	}
-	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() {
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 }

@@ -435,6 +435,12 @@ type Collection struct {
 	typedColumnOneShotMisses        uint64
 	typedColumnOneShotBuilds        uint64
 	typedColumnOneShotInvalidations uint64
+
+	queryReadyGenerationMu            sync.Mutex
+	queryReadyGenerationEntry         *collectionQueryReadyGenerationCacheEntry
+	queryReadyGenerationHits          uint64
+	queryReadyGenerationBuilds        uint64
+	queryReadyGenerationInvalidations uint64
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -1416,9 +1422,10 @@ func (m *CollectionManager) closeForBackend() error {
 	}()
 	m.stopUpdateCombiners()
 	m.closeCollectionTypedColumnOneShotCaches()
+	queryReadyErr := m.closeCollectionQueryReadyGenerationCaches()
 	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
 	flushErr := m.FlushAll()
-	return errors.Join(cacheErr, flushErr)
+	return errors.Join(queryReadyErr, cacheErr, flushErr)
 }
 
 func (m *CollectionManager) isClosing() bool {
