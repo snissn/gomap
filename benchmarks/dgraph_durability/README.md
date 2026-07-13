@@ -34,6 +34,67 @@ GOWORK=off go test ./benchmarks/dgraph_durability \
   -run '^$' -bench '^BenchmarkDgraphShaped' -benchmem -count=5
 ```
 
+## Stable attribution rows
+
+The fixed mixed rows are seeded deterministically and create a fresh database
+per trial. Database open, the 256-key seed commit, stats collection, and close
+are outside the timer. Run them with exactly one fixed-work trial per repeat:
+
+```sh
+GOWORK=off go test ./benchmarks/dgraph_durability \
+  -run '^$' -bench '^BenchmarkDgraphShapedMixedFixed' \
+  -benchmem -benchtime=1x -count=2
+```
+
+Rows are emitted for 50k, 100k, 250k, and 500k operations. The standard Go
+`B/op` and `allocs/op` columns are per fixed-work *trial*; use the explicit
+`workload_B/op` and `workload_allocs/op` metrics for per-operation allocation.
+`operations/trial=...` and `fixture_seed=1` make this boundary machine-readable.
+
+The concurrent durable matrix has concurrency 1/2/4/8/16, values 128 B/4 KiB,
+and commit batches 1/16:
+
+```sh
+GOWORK=off go test ./benchmarks/dgraph_durability \
+  -run '^$' -bench '^BenchmarkDgraphShapedConcurrentDurable' \
+  -benchmem -benchtime=100x -count=5
+```
+
+It reports per-acknowledgement p50/p95/p99 latency. TreeDB rows additionally
+report command-WAL flush/sync, aggregate value-log sync, checkpoint, iterator
+rotation/source, and queue metrics where the public `Stats` map exposes them.
+`command_wal_syncs/write_commit` is also the inverse attribution needed to
+derive acknowledged commits per command-WAL sync. The current implementation
+has no production group-commit counter, so the harness does not invent one.
+
+The MVCC package has a separately named write/read-alternating row:
+
+```sh
+GOWORK=off go test ./TreeDB/mvcc -run '^$' \
+  -bench '^BenchmarkCommitAtGetAtInterleaved$' -benchmem -count=5
+```
+
+This is distinct from `BenchmarkGetAt`, whose history is preloaded before the
+timer and whose timed phase is read-only.
+
+### Result schema and acceptance
+
+The schema is `dgraph-durability-v2`. Archive the raw Go benchmark output with:
+
+- repository SHA and dirty state;
+- exact command and repeat count;
+- Go version, `goos`, `goarch`, package, and CPU;
+- host kernel and filesystem type for the temporary database path;
+- fixture seed, operation count, value size, batch size, concurrency, and
+  durability class encoded in each row name;
+- raw repeats. Use the median only after retaining every repeat and recording
+  any exclusion with a concrete environmental or correctness reason.
+
+Never exclude a slow run solely because it is slow. Do not aggregate relaxed
+and durable rows, or fixed-work and adaptively sized rows. Profile artifacts use
+`<backend>_<class>_<shape>_<sha>.{cpu,mem,block,mutex,trace}` so attribution can
+be matched back to the exact candidate.
+
 For syscall attribution on Linux, select one row at a time (Go benchmark names
 are slash-separated regular expressions):
 
