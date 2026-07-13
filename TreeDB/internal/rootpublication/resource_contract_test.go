@@ -985,6 +985,82 @@ func TestStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
 	}
 }
 
+func TestStableResourceNamespaceRequiresExactLinkedChild(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	linked := writeStableResourceFixture(t, dir, "linked.vlog", "linked-resource")
+	other := writeStableResourceFixture(t, dir, "other.vlog", "other-resource")
+
+	unbound, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "linked.vlog", DiagnosticPath: "segments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unbound.Release()
+	if token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "linked", Generation: 1,
+		DiagnosticPath: "segments/linked.vlog", File: linked, Frontier: DurableFrontier{Bytes: 1},
+		Reachability: ReachabilityValueLogPointer, Namespace: unbound,
+	}); !errors.Is(err, ErrUnresolvedResource) {
+		if token != nil {
+			token.Release()
+		}
+		t.Fatalf("unbound namespace registration=%v want ErrUnresolvedResource", err)
+	}
+
+	bound, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: linked, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "linked.vlog", DiagnosticPath: "segments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bound.Release()
+	if token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "other", Generation: 1,
+		DiagnosticPath: "segments/other.vlog", File: other, Frontier: DurableFrontier{Bytes: 1},
+		Reachability: ReachabilityValueLogPointer, Namespace: bound,
+	}); !errors.Is(err, ErrResourceConflict) {
+		if token != nil {
+			token.Release()
+		}
+		t.Fatalf("wrong linked child registration=%v want ErrResourceConflict", err)
+	}
+}
+
+func TestStableResourceNamespaceAcceptsExactLinkedChild(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	resource := writeStableResourceFixture(t, dir, "linked.vlog", "linked-resource")
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "linked.vlog", DiagnosticPath: "segments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer namespace.Release()
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "linked", Generation: 1,
+		DiagnosticPath: "segments/linked.vlog", File: resource, Frontier: DurableFrontier{Bytes: 1},
+		Reachability: ReachabilityValueLogPointer, Namespace: namespace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token.Release()
+}
+
 func TestStableResourceDefaultFlushDoesNotFsync(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
