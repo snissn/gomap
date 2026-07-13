@@ -373,8 +373,10 @@ func (s *leafGenerationManifestStore) prepareReplacement(manifest *leafGeneratio
 	if manifest == nil {
 		return nil, nil, errors.New("treedb: leaf generation manifest is nil")
 	}
+	if manifest.Version != leafGenerationManifestVersion {
+		return nil, nil, fmt.Errorf("%w: candidate version=%d want=%d", ErrLeafGenerationManifestIncompatible, manifest.Version, leafGenerationManifestVersion)
+	}
 	candidate := manifest.clone()
-	candidate.Version = leafGenerationManifestVersion
 	oldRevision, err := persistedLeafGenerationManifestRevision(s.leafDir, oldFile, allowPathRead)
 	if err != nil {
 		return nil, nil, err
