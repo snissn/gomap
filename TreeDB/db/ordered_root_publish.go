@@ -2602,6 +2602,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	rootsObserved := 0
+	if hook := db.testOrderedRootBatchAfterClosePreflightHook; hook != nil {
+		hook()
+	}
 
 	db.writeMu.RLock()
 	if db.readOnly {

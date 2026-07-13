@@ -204,3 +204,50 @@ func TestCloseClearsCommandWALLeafPageLogAfterWriteAdmissionCloses(t *testing.T)
 		t.Fatalf("leaf page log retained after Close: %T", leafPageLog)
 	}
 }
+
+func TestOptimisticOrderedRootPublishRejectsClosingAfterAdmissionPreflight(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		db.testOrderedRootBatchAfterClosePreflightHook = nil
+		db.closing.Store(false)
+		_ = db.Close()
+	})
+
+	preflightDone := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	db.testOrderedRootBatchAfterClosePreflightHook = func() {
+		close(preflightDone)
+		<-releasePreflight
+	}
+
+	db.writeMu.Lock()
+	publishDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := db.tryPublishOrderedRootDeltaBatchGroupOptimistic(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+			return nil, errors.New("system builder ran after Close won shared write admission")
+		})
+		publishDone <- err
+	}()
+	select {
+	case <-preflightDone:
+	case <-time.After(5 * time.Second):
+		db.writeMu.Unlock()
+		t.Fatal("optimistic ordered-root publish did not complete its close preflight")
+	}
+
+	db.closing.Store(true)
+	close(releasePreflight)
+	db.writeMu.Unlock()
+
+	select {
+	case err := <-publishDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("optimistic ordered-root publish error=%v, want %v", err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("optimistic ordered-root publish remained blocked after writeMu became available")
+	}
+}
