@@ -558,7 +558,12 @@ func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool 
 }
 
 func (token *StableNamespaceToken) retain() error {
-	if token == nil || token.released.Load() {
+	if token == nil {
+		return ErrResourceOwnership
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
 		return ErrResourceOwnership
 	}
 	token.refs.Add(1)
@@ -569,11 +574,11 @@ func (token *StableNamespaceToken) release() {
 	if token == nil {
 		return
 	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
 	if token.refs.Add(-1) > 0 {
 		return
 	}
-	token.mu.Lock()
-	defer token.mu.Unlock()
 	if !token.released.Swap(true) {
 		_ = token.parent.Close()
 	}

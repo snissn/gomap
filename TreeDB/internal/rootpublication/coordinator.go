@@ -827,8 +827,10 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 		return nil
 	}
 	current := union.Stats(c.clock.Now())
+	activePins := activeResourcePinsByKind(sets, c.clock.Now())
 	byKind := make(map[ResourceKind]ResourceKindStats, len(current)+len(c.resourcePinHighWater))
 	for _, stats := range current {
+		stats.ActivePins = activePins[stats.Kind]
 		if highWater := c.resourcePinHighWater[stats.Kind]; highWater > stats.PinHighWater {
 			stats.PinHighWater = highWater
 		}
@@ -836,7 +838,7 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 	}
 	for kind, highWater := range c.resourcePinHighWater {
 		if _, ok := byKind[kind]; !ok {
-			byKind[kind] = ResourceKindStats{Kind: kind, PinHighWater: highWater}
+			byKind[kind] = ResourceKindStats{Kind: kind, ActivePins: activePins[kind], PinHighWater: highWater}
 		}
 	}
 	result := make([]ResourceKindStats, 0, len(byKind))
@@ -854,18 +856,27 @@ func (c *Coordinator) observeResourcePinHighWaterLocked() {
 			sets = append(sets, set)
 		}
 	}
-	union, err := UnionStableResourceSets(sets...)
-	if err != nil {
-		return
-	}
 	if c.resourcePinHighWater == nil {
 		c.resourcePinHighWater = make(map[ResourceKind]uint64)
 	}
-	for _, stats := range union.Stats(c.clock.Now()) {
-		if stats.ActivePins > c.resourcePinHighWater[stats.Kind] {
-			c.resourcePinHighWater[stats.Kind] = stats.ActivePins
+	for kind, activePins := range activeResourcePinsByKind(sets, c.clock.Now()) {
+		if activePins > c.resourcePinHighWater[kind] {
+			c.resourcePinHighWater[kind] = activePins
 		}
 	}
+}
+
+// activeResourcePinsByKind deliberately does not union resource identities:
+// each candidate owns a distinct duplicated descriptor until success/recovery,
+// even when publication can coalesce their logical durability obligation.
+func activeResourcePinsByKind(sets []*StableResourceSet, now time.Time) map[ResourceKind]uint64 {
+	active := make(map[ResourceKind]uint64)
+	for _, set := range sets {
+		for _, stats := range set.Stats(now) {
+			active[stats.Kind] = saturatingAdd(active[stats.Kind], stats.ActivePins)
+		}
+	}
+	return active
 }
 
 func (c *Coordinator) captureRecoveryResourcesLocked() {
