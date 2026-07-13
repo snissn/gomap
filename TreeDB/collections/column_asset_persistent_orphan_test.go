@@ -13,6 +13,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func fileHandleClosedForTest(file *os.File) bool {
+	return errors.Is(file.Close(), os.ErrClosed)
+}
+
 func persistentOrphanColumnStoreConfig(t *testing.T, namespace string) ColumnStoreConfig {
 	t.Helper()
 	input := testColumnStoreConfig(nil)
@@ -64,8 +68,8 @@ func TestColumnAssetCreatedOneShotFailureRetainsPrefixForIdenticalRetry(t *testi
 	if failedFile == nil {
 		t.Fatal("created failed write did not expose exact sync handle")
 	}
-	if _, err := failedFile.Stat(); !fileHandleClosedForTest(err) {
-		t.Fatalf("created failed write leaked exact handle: %v", err)
+	if !fileHandleClosedForTest(failedFile) {
+		t.Fatal("created failed write leaked exact handle")
 	}
 	if got, err := os.ReadFile(assetPath); err != nil || !bytes.Equal(got, failedPayload) {
 		t.Fatalf("created failed prefix=%q err=%v want %q", got, err, failedPayload)
@@ -118,8 +122,8 @@ func TestColumnAssetCreatedOneShotFailureNeverUnlinksReplacement(t *testing.T) {
 	if !errors.Is(err, injected) || ref != (ColumnAssetRef{}) {
 		t.Fatalf("adversarial result ref=%+v err=%v want zero/injected", ref, err)
 	}
-	if _, err := exactFile.Stat(); !fileHandleClosedForTest(err) {
-		t.Fatalf("adversarial cleanup leaked exact child handle: %v", err)
+	if !fileHandleClosedForTest(exactFile) {
+		t.Fatal("adversarial cleanup leaked exact child handle")
 	}
 	if got, err := os.ReadFile(displacedPath); err != nil || !bytes.Equal(got, failedPayload) {
 		t.Fatalf("displaced exact child=%q err=%v want %q", got, err, failedPayload)
@@ -176,11 +180,11 @@ func TestStableColumnAssetCreatedFailureClosesHandlesWithoutValidationOrUnlink(t
 	if exactFile == nil || exactParent == nil {
 		t.Fatalf("stable failure did not capture exact handles file=%p parent=%p", exactFile, exactParent)
 	}
-	if _, err := exactFile.Stat(); !fileHandleClosedForTest(err) {
-		t.Fatalf("stable failure leaked exact child handle: %v", err)
+	if !fileHandleClosedForTest(exactFile) {
+		t.Fatal("stable failure leaked exact child handle")
 	}
-	if _, err := exactParent.Stat(); !fileHandleClosedForTest(err) {
-		t.Fatalf("stable failure leaked exact parent handle: %v", err)
+	if !fileHandleClosedForTest(exactParent) {
+		t.Fatal("stable failure leaked exact parent handle")
 	}
 	if got, err := os.ReadFile(displacedPath); err != nil || !bytes.Equal(got, failedPayload) {
 		t.Fatalf("stable displaced exact child=%q err=%v want %q", got, err, failedPayload)
@@ -224,8 +228,8 @@ func TestColumnAssetAppenderAbortNeverUnlinksReplacement(t *testing.T) {
 	if err := appender.abort(); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
-	if _, err := exactFile.Stat(); !fileHandleClosedForTest(err) {
-		t.Fatalf("abort leaked exact child handle: %v", err)
+	if !fileHandleClosedForTest(exactFile) {
+		t.Fatal("abort leaked exact child handle")
 	}
 	if got, err := os.ReadFile(displacedPath); err != nil || !bytes.Equal(got, failedPayload) {
 		t.Fatalf("aborted displaced child=%q err=%v want %q", got, err, failedPayload)
@@ -276,8 +280,8 @@ func TestColumnAssetAppenderSyncFailureNeverUnlinksReplacement(t *testing.T) {
 	if err := appender.close(); !errors.Is(err, injected) {
 		t.Fatalf("close error=%v want %v", err, injected)
 	}
-	if _, err := exactFile.Stat(); !fileHandleClosedForTest(err) {
-		t.Fatalf("failed close leaked exact child handle: %v", err)
+	if !fileHandleClosedForTest(exactFile) {
+		t.Fatal("failed close leaked exact child handle")
 	}
 	if got, err := os.ReadFile(displacedPath); err != nil || !bytes.Equal(got, failedPayload) {
 		t.Fatalf("failed-close displaced child=%q err=%v want %q", got, err, failedPayload)
@@ -357,8 +361,8 @@ func TestColumnAssetAppenderAbort64CycleHandleAndCachePlateau(t *testing.T) {
 		if err := appender.abort(); err != nil {
 			t.Fatalf("cycle %d abort: %v", cycle, err)
 		}
-		if _, err := exactFile.Stat(); !fileHandleClosedForTest(err) {
-			t.Fatalf("cycle %d leaked exact handle: %v", cycle, err)
+		if !fileHandleClosedForTest(exactFile) {
+			t.Fatalf("cycle %d leaked exact handle", cycle)
 		}
 		if got, err := os.ReadFile(assetPath); err != nil || !bytes.Equal(got, payload) {
 			t.Fatalf("cycle %d orphan=%q err=%v want %q", cycle, got, err, payload)
