@@ -91,10 +91,9 @@ func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 		occurrence int
 	}{
 		{durabilitycut.AfterDependencyFileSync, 1},
-		{durabilitycut.AfterDependencyFileSync, 2},
 		{durabilitycut.AfterWALOrAssetUnlink, 1},
 		{durabilitycut.AfterDeletionDirectorySync, 1},
-		{durabilitycut.AfterDependencyFileSync, 3},
+		{durabilitycut.AfterDependencyFileSync, 2},
 	}
 	for i, cut := range cuts {
 		variant := variants[i%len(variants)]
@@ -148,6 +147,61 @@ func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 				t.Fatalf("tail stat after retry=%v, want removed", err)
 			}
 		})
+	}
+}
+
+func TestRepairCommandWALV2SuffixDefersRetainedAnchorUntilAfterDirectorySync(t *testing.T) {
+	walDir, classification, anchor, _ := commandWALV2RepairFixture(t)
+	anchorBefore := mustReadFile(t, anchor)
+	wantStages := []string{
+		"truncate-sync:commit-l1-000001.log@0",
+		"unlink:commit-l1-000001.log",
+		"directory-sync",
+		"anchor-truncate-sync:commit-l0-000001.log@9",
+	}
+
+	var violation string
+	directorySynced := false
+	anchorFinalStageSeen := false
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceCommandWAL {
+			return nil
+		}
+		if !directorySynced {
+			got, err := os.ReadFile(anchor)
+			if err != nil && violation == "" {
+				violation = fmt.Sprintf("read anchor before directory sync: %v", err)
+			} else if !reflect.DeepEqual(got, anchorBefore) && violation == "" {
+				violation = fmt.Sprintf("anchor changed before directory sync at %s: got %q want %q", event.Point, got, anchorBefore)
+			}
+		}
+		if event.Point == durabilitycut.AfterDeletionDirectorySync {
+			directorySynced = true
+		}
+		if event.Path == anchor && event.Point == durabilitycut.BeforeDependencyFileSync {
+			if !directorySynced && violation == "" {
+				violation = "anchor sync began before deletion directory sync completed"
+			}
+			anchorFinalStageSeen = directorySynced
+		}
+		return nil
+	})
+	diagnostic, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if violation != "" {
+		t.Fatal(violation)
+	}
+	if !directorySynced || !anchorFinalStageSeen {
+		t.Fatalf("directorySynced=%t anchorFinalStageSeen=%t", directorySynced, anchorFinalStageSeen)
+	}
+	if !reflect.DeepEqual(diagnostic.RepairStages, wantStages) {
+		t.Fatalf("repair stages=%v, want %v", diagnostic.RepairStages, wantStages)
+	}
+	if got := mustReadFile(t, anchor); string(got) != "prefix-v2" {
+		t.Fatalf("anchor after repair=%q, want prefix-v2", got)
 	}
 }
 

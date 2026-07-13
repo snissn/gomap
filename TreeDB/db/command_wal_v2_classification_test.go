@@ -29,6 +29,32 @@ func TestClassifyCommandWALV2RelaxedSuffixAboveDurableFrontier(t *testing.T) {
 	}
 }
 
+func TestClassifyCommandWALV2DurableFrontierIncludesAppliedLSN(t *testing.T) {
+	tests := []struct {
+		name   string
+		frames []commandWALV2PhysicalFrame
+	}{
+		{name: "empty"},
+		{
+			name: "relaxed-unapplied-frame",
+			frames: []commandWALV2PhysicalFrame{
+				v2ClassificationFrame(8, commitlog.CommandDurabilityRelaxed, "commit-l0-000001.log", 0, 100, nil),
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := classifyCommandWALV2Frames(tc.frames, 7, func(uint64) bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.DurableFrontier != 7 || result.Diagnostic.DurableFrontier != 7 {
+				t.Fatalf("classification=%+v, want durable frontier and diagnostic frontier 7", result)
+			}
+		})
+	}
+}
+
 func TestClassifyCommandWALV2LaterDurableBarrierRaisesFrontier(t *testing.T) {
 	frames := []commandWALV2PhysicalFrame{
 		v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
