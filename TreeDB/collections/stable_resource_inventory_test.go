@@ -63,7 +63,7 @@ func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 		return parent, nil
 	}
 	defer func() { openStableColumnAssetParent = originalOpenParent }()
-	ref, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
+	ref, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindTCS1TypedColumnPart, 7, 11)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 	if got := fileSyncs.Load(); got != 1 {
 		t.Fatalf("column creation file syncs=%d want exactly 1", got)
 	}
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTypedColumnMultipart)
 	if err := builder.Add(token); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	defer func() { openStableColumnAssetParent = originalOpenParent }()
 
 	ref, token, err := writeColumnAssetToManagerWithStableResource(
-		dir, cfg, []byte("stable-append"), ColumnAssetKindQueryReadyBase, 7, 11,
+		dir, cfg, []byte("stable-append"), ColumnAssetKindTCS1TypedColumnPart, 7, 11,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 		t.Fatal(err)
 	}
 	_, replacementToken, err := writeColumnAssetToManagerWithStableResource(
-		dir, cfg, []byte("replacement-append"), ColumnAssetKindQueryReadyBase, 8, 12,
+		dir, cfg, []byte("replacement-append"), ColumnAssetKindTCS1TypedColumnPart, 8, 12,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 		t.Fatal("stable replacement capture populated pathname-only directory cache")
 	}
 
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTypedColumnMultipart)
 	if err := builder.Add(token); err != nil {
 		t.Fatal(err)
 	}
@@ -335,11 +335,11 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 					Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "coalesce_resource",
 				},
 			}
-			firstRef, first, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("first-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
+			firstRef, first, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("first-payload"), ColumnAssetKindTCS1TypedColumnPart, 7, 11)
 			if err != nil {
 				t.Fatal(err)
 			}
-			secondRef, second, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("second-payload"), ColumnAssetKindQueryReadyBase, 7, 12)
+			secondRef, second, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("second-payload"), ColumnAssetKindTCS1TypedColumnPart, 7, 12)
 			if err != nil {
 				first.Release()
 				t.Fatal(err)
@@ -353,7 +353,7 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 			if reverse {
 				ordered[0], ordered[1] = ordered[1], ordered[0]
 			}
-			builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
+			builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTypedColumnMultipart)
 			for _, token := range ordered {
 				if err := builder.Add(token); err != nil {
 					builder.Abandon()
@@ -397,7 +397,7 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 					obligation.Namespace != ref.Namespace || obligation.Generation != ref.Generation ||
 					obligation.FileID != uint64(ref.FileID) || obligation.Offset != ref.Offset ||
 					obligation.Length != ref.Length || obligation.Checksum != ref.Checksum ||
-					obligation.Reachability != rootpublication.ReachabilityQueryReadyBase || obligation.Digest == [32]byte{} {
+					obligation.Reachability != rootpublication.ReachabilityTypedColumnMultipart || obligation.Digest == [32]byte{} {
 					t.Fatalf("logical obligation=%+v does not preserve ref=%+v", obligation, ref)
 				}
 			}
@@ -418,12 +418,12 @@ func TestStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable_resource",
 		},
 	}
-	ref, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
+	ref, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindTCS1TypedColumnPart, 7, 11)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer token.Release()
-	if token.Kind() != rootpublication.ResourceQueryReadyAsset || token.Reachability() != rootpublication.ReachabilityQueryReadyBase {
+	if token.Kind() != rootpublication.ResourceTypedColumnAsset || token.Reachability() != rootpublication.ReachabilityTypedColumnMultipart {
 		t.Fatalf("token kind=%q field=%q", token.Kind(), token.Reachability())
 	}
 	if token.Frontier().Bytes != uint64(ref.Offset+ref.Length) {

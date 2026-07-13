@@ -32,8 +32,10 @@ func NewStableCollectionResourceToken(spec rootpublication.StableResourceSpec) (
 	}
 }
 
-// NewStableColumnAssetResourceToken registers an exact open segment for all
-// column, typed-column, graph/HNSW, and query-ready asset references.
+// NewStableColumnAssetResourceToken registers an exact open segment for
+// authoritative column, typed-column, and graph/HNSW asset references.
+// Rebuildable query-ready references are mapped here so the canonical
+// production boundary can reject them as non-authoritative.
 func NewStableColumnAssetResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	classification := ""
 	switch spec.Reachability {

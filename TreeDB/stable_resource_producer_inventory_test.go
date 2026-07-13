@@ -37,9 +37,6 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 		rootpublication.ReachabilityCommandWALActive:           commitlog.NewStableCommandWALResourceToken,
 		rootpublication.ReachabilityCommandWALRotated:          commitlog.NewStableCommandWALResourceToken,
 		rootpublication.ReachabilityCommandWALExternalRIDFence: valuelog.NewStableValueLogResourceToken,
-		rootpublication.ReachabilityQueryReadyBase:             collections.NewStableColumnAssetResourceToken,
-		rootpublication.ReachabilityQueryReadyDelta:            collections.NewStableColumnAssetResourceToken,
-		rootpublication.ReachabilityQueryReadyConsolidatedBase: collections.NewStableColumnAssetResourceToken,
 	}
 
 	registerable := 0
