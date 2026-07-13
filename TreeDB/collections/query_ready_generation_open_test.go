@@ -19,12 +19,17 @@ func TestCollectionQueryReadyGenerationKeyIsQueryIndependentAndInvalidatesPhysic
 		t.Fatalf("key=%+v ok=%v want %+v", got, ok, want)
 	}
 	mutations := []func(*ColumnStoreCacheIdentity){
+		func(id *ColumnStoreCacheIdentity) { id.Collection += "-changed" },
 		func(id *ColumnStoreCacheIdentity) { id.SchemaHash++ },
+		func(id *ColumnStoreCacheIdentity) { id.CatalogSystemRoot++ },
 		func(id *ColumnStoreCacheIdentity) { id.ManifestGeneration++ },
 		func(id *ColumnStoreCacheIdentity) { id.ManifestChecksum++ },
 		func(id *ColumnStoreCacheIdentity) { id.CatalogCommitSeq++ },
+		func(id *ColumnStoreCacheIdentity) { id.RecoveryAuthoritativeGeneration++ },
+		func(id *ColumnStoreCacheIdentity) { id.RecoveryAuthoritativeChecksum++ },
 		func(id *ColumnStoreCacheIdentity) { id.RecoveryAuthoritativeAppliedCommandLSN++ },
 		func(id *ColumnStoreCacheIdentity) { id.ManifestRoot++ },
+		func(id *ColumnStoreCacheIdentity) { id.ManifestRootName += "-changed" },
 	}
 	for i, mutate := range mutations {
 		changed := identity
