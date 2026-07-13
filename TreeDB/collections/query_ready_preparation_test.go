@@ -5,9 +5,14 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func TestPrepareQueryReadyColumnGenerationRoutesJSONBenchAfterReopen(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
 	events := columnPhysicalJSONBenchParityEventsP0()
 	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
 	defer closeFn()
@@ -88,6 +93,9 @@ func TestPrepareQueryReadyColumnGenerationRoutesJSONBenchAfterReopen(t *testing.
 }
 
 func TestPrepareQueryReadyColumnGenerationCancellationAndLifetime(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
 	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, columnPhysicalJSONBenchParityEventsP0())
 	defer closeFn()
 
