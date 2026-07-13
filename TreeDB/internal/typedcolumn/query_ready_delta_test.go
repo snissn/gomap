@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"testing"
@@ -92,7 +93,13 @@ func TestQueryReadyDeltaBuildPhaseCountersAreComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildQueryReadyDeltaGeneration: %v", err)
 	}
-	if result.Stats.ValidationTime <= 0 || result.Stats.BaseBuildTime <= 0 || result.Stats.EnvelopeBuildTime <= 0 {
+	if result.Stats.BaseBuildTime < result.Stats.ValidationTime || result.Stats.BuildTime < result.Stats.BaseBuildTime || result.Stats.BuildTime < result.Stats.EnvelopeBuildTime || result.Stats.BuildTime < result.Stats.TombstonePrepareTime {
+		t.Fatalf("inconsistent phase timing: %+v", result.Stats)
+	}
+	// Windows' monotonic clock may report zero for every sub-millisecond
+	// phase. Preserve the ordering assertions above there rather than treating
+	// clock granularity as missing instrumentation.
+	if runtime.GOOS != "windows" && (result.Stats.ValidationTime <= 0 || result.Stats.BaseBuildTime <= 0 || result.Stats.EnvelopeBuildTime <= 0) {
 		t.Fatalf("missing phase timing: %+v", result.Stats)
 	}
 	if got, want := result.Stats.BytesHashed, int64(len(image.Bytes)); got != want {
