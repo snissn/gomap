@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -81,6 +83,34 @@ func TestStableLeafGenerationManifestReplacementIncrementsSameGenerationRevision
 	}
 }
 
+func TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen(t *testing.T) {
+	leafDir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	manifest := newLeafGenerationManifest(10)
+	firstStore := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	first, err := firstStore.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+	firstStore.Close()
+
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil || !ok {
+		t.Fatalf("load after first replace: ok=%v err=%v", ok, err)
+	}
+	secondStore := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	defer secondStore.Close()
+	second, err := secondStore.Replace(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Release()
+	if got, want := loaded.ManifestRevision, uint64(2); got != want {
+		t.Fatalf("persisted replacement revision=%d want %d", got, want)
+	}
+}
+
 func TestStableLeafGenerationManifestReplacementPinnedOldIdentityBlocksOverwrite(t *testing.T) {
 	leafDir := t.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()
@@ -117,5 +147,114 @@ func TestLeafGenerationManifestV2RejectsZeroRevisionOnReopen(t *testing.T) {
 	}
 	if _, _, err := loadLeafGenerationManifest(leafDir); !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
 		t.Fatalf("load error=%v want ErrLeafGenerationManifestIncompatible", err)
+	}
+}
+
+func TestStableLeafGenerationManifestCapabilityFailsBeforeTempVisibility(t *testing.T) {
+	leafDir := t.TempDir()
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	store.stableCapability = func() bool { return false }
+	var beforeTemp atomic.Int32
+	store.hooks.BeforeTempCreate = func() error {
+		beforeTemp.Add(1)
+		return nil
+	}
+	defer store.Close()
+	if _, err := store.Replace(newLeafGenerationManifest(1)); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("Replace error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if got := beforeTemp.Load(); got != 0 {
+		t.Fatalf("temp-create hook calls=%d want 0", got)
+	}
+	entries, err := os.ReadDir(leafDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unsupported stable replacement created files: %v", entries)
+	}
+}
+
+func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t *testing.T) {
+	leafDir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	defer store.Close()
+	manifest := newLeafGenerationManifest(1)
+	first, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+	wantOld, err := os.ReadFile(leafGenerationManifestPath(leafDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := errors.New("pre-rename cut")
+	store.hooks.BeforeRename = func() error { return cut }
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Replace error=%v want pre-rename cut without recovery-required", err)
+	}
+	gotOld, err := os.ReadFile(leafGenerationManifestPath(leafDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotOld) != string(wantOld) {
+		t.Fatal("pre-rename failure changed old manifest bytes")
+	}
+	temps, err := filepath.Glob(filepath.Join(leafDir, leafGenerationManifestFileName+".tmp.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 || registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		t.Fatalf("pre-rename leak temps=%v pins=%d identities=%d", temps, registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
+func TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence(t *testing.T) {
+	leafDir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	var poisoned atomic.Bool
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, func() { poisoned.Store(true) })
+	manifest := newLeafGenerationManifest(1)
+	first, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+	cut := errors.New("post-rename validation cut")
+	store.hooks.BeforeDestinationValidation = func() error { return cut }
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Replace error=%v want cut + ErrRecoveryRequired", err)
+	}
+	if !poisoned.Load() || store.AmbiguousEvidenceCount() != 1 {
+		t.Fatalf("poisoned=%v evidence=%d want true,1", poisoned.Load(), store.AmbiguousEvidenceCount())
+	}
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("poisoned retry error=%v want ErrRecoveryRequired", err)
+	}
+	store.Close()
+	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		t.Fatalf("close leak pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
+func TestCompatibleLeafGenerationManifestSaveDoesNotCertifyStableToken(t *testing.T) {
+	leafDir := t.TempDir()
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+	manifest := newLeafGenerationManifest(1)
+	token, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != nil {
+		t.Fatal("compatibility replacement returned a stable token")
+	}
+	if manifest.ManifestRevision != 1 {
+		t.Fatalf("ManifestRevision=%d want 1", manifest.ManifestRevision)
+	}
+	if _, err := os.Stat(leafGenerationManifestPath(leafDir)); err != nil {
+		t.Fatal(err)
 	}
 }
