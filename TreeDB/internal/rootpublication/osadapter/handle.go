@@ -366,20 +366,33 @@ func newNamespaceHandle(parent *os.File, generation uint64, hooks NamespaceHooks
 }
 
 // RegisterNamespaceToken is the leak-safe namespace registration path.
-func RegisterNamespaceToken(parent *os.File, generation uint64, hooks NamespaceHooks, spec rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
-	if spec.Parent != nil {
-		return nil, fmt.Errorf("%w: namespace spec already has a parent handle", ErrInvalidOpenHandle)
+func RegisterNamespaceToken(parent, child *os.File, generation uint64, hooks NamespaceHooks, spec rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	if spec.Parent != nil || spec.Child != nil {
+		return nil, fmt.Errorf("%w: namespace spec already has a retained handle", ErrInvalidOpenHandle)
+	}
+	childIdentity, err := ResourceIdentity(child)
+	if err != nil {
+		return nil, fmt.Errorf("%w: capture namespace child identity: %w", ErrInvalidOpenHandle, err)
 	}
 	handle, err := NewNamespaceHandle(parent, generation, hooks)
 	if err != nil {
 		return nil, err
 	}
 	spec.Parent = handle
+	spec.Child = retainedIdentity{identity: childIdentity}
 	token, err := rootpublication.NewStableNamespaceToken(spec)
 	if err != nil {
 		return nil, errors.Join(err, handle.Close())
 	}
 	return token, nil
+}
+
+type retainedIdentity struct {
+	identity rootpublication.StableIdentity
+}
+
+func (i retainedIdentity) StableIdentity() (rootpublication.StableIdentity, error) {
+	return i.identity, nil
 }
 
 func (h *NamespaceHandle) StableIdentity() (rootpublication.StableIdentity, error) {

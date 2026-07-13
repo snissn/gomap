@@ -169,8 +169,9 @@ func TestStableResourceTokenPinsIdentityInsteadOfReopeningDiagnosticPath(t *test
 
 func TestStableNamespaceTokenSeparatesFileDataFromNameDurability(t *testing.T) {
 	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 90}, generation: 3, supported: true}
+	file := newTestStableHandle(3, 64)
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: dir,
+		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: dir, TargetName: "segment", Child: file,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +179,6 @@ func TestStableNamespaceTokenSeparatesFileDataFromNameDurability(t *testing.T) {
 	if dir.validates != 1 || dir.syncs != 0 {
 		t.Fatalf("namespace registration validates=%d syncs=%d", dir.validates, dir.syncs)
 	}
-	file := newTestStableHandle(3, 64)
 	token := testResourceToken(t, file, ResourceValueLogSegment, 8, 64, 2, namespace)
 	if err := token.SyncThrough(); err != nil {
 		t.Fatal(err)
@@ -191,6 +191,59 @@ func TestStableNamespaceTokenSeparatesFileDataFromNameDurability(t *testing.T) {
 	}
 	if dir.syncs != 1 || !token.NamespaceStable() {
 		t.Fatalf("namespace syncs=%d stable=%t", dir.syncs, token.NamespaceStable())
+	}
+}
+
+func TestStableResourceTokenRejectsNamespaceChildForAnotherEntry(t *testing.T) {
+	parent := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 91}, generation: 3, supported: true}
+	first := newTestStableHandle(4, 64)
+	later := newTestStableHandle(5, 64)
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: parent,
+		TargetName: "first", Child: first,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "value", ResourceID: "later",
+		DiagnosticPath: "vlog/later", Generation: 1, Handle: later, RequiredFrontier: 64,
+		Namespace: namespace, ReachabilityField: "page.ValuePtr.FileID",
+	}); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("later entry inherited first namespace stability: %v", err)
+	}
+	if err := namespace.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStableResourceSetRejectsSameParentDifferentNamespaceChildren(t *testing.T) {
+	parent := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 92}, generation: 1, supported: true}
+	handle := newTestStableHandle(6, 64)
+	first, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 1, Parent: parent,
+		TargetName: "first", Child: handle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 1, Parent: parent,
+		TargetName: "later", Child: handle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstToken := testResourceToken(t, handle, ResourceValueLogSegment, 1, 64, 1, first)
+	secondToken := testResourceToken(t, handle, ResourceValueLogSegment, 1, 64, 1, second)
+	if _, err := NewStableResourceSet(firstToken, secondToken); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("same parent but distinct target entries coalesced: %v", err)
+	}
+	if err := firstToken.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondToken.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -312,17 +365,17 @@ func TestStableResourceSetTransferAndSupersessionReleaseEveryPinExactlyOnce(t *t
 }
 
 func TestStableResourceLeasesRejectUseAfterOwningSetRelease(t *testing.T) {
+	resourceHandle := newTestStableHandle(44, 128)
 	namespaceHandle := &testNamespaceHandle{
 		identity: StableIdentity{Device: 41, File: 42}, generation: 1, supported: true,
 	}
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
 		Operation: NamespaceCreate, ParentDiagnosticPath: "value_vlog",
-		ParentGeneration: 1, Parent: namespaceHandle,
+		ParentGeneration: 1, Parent: namespaceHandle, TargetName: "segment", Child: resourceHandle,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resourceHandle := newTestStableHandle(44, 128)
 	token, err := NewStableResourceToken(StableResourceSpec{
 		Kind: ResourceValueLogSegment, LogicalNamespace: "value",
 		ResourceID: "segment/1", DiagnosticPath: "value_vlog/value-l1-000001.log",
@@ -574,7 +627,7 @@ func TestCoordinatorRetrySupersessionRetainsAdditiveNamespaceDebt(t *testing.T) 
 	handle := newTestStableHandle(28, 96)
 	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 280}, generation: 3, supported: true}
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Operation: NamespaceRename, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: dir,
+		Operation: NamespaceRename, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: dir, TargetName: "28.data", Child: handle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -969,7 +1022,7 @@ func TestStableResourceSetUsesDeterministicPhysicalAndNamespaceOrder(t *testing.
 			namespaceOrder = append(namespaceOrder, file*10)
 		}
 		namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-			Operation: NamespaceCreate, ParentDiagnosticPath: "segments", ParentGeneration: 1, Parent: dir,
+			Operation: NamespaceCreate, ParentDiagnosticPath: "segments", ParentGeneration: 1, Parent: dir, TargetName: fmt.Sprintf("%d.data", file), Child: handle,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1005,7 +1058,7 @@ func TestStableResourceSetRejectsContradictoryNamespaceDebtForOnePhysicalIdentit
 			identity: StableIdentity{Device: 1, File: parentFile}, generation: 1, supported: true,
 		}
 		namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-			Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 1, Parent: dir,
+			Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 1, Parent: dir, TargetName: "32.data", Child: handle,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1055,8 +1108,9 @@ func TestStableResourcePinBlocksConcurrentUnlinkAndReleasesExactlyOnce(t *testin
 
 func TestUnsupportedNamespacePersistenceFailsClosed(t *testing.T) {
 	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 99}, generation: 4, supported: false}
+	child := newTestStableHandle(101, 1)
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Operation: NamespaceRename, ParentDiagnosticPath: "assets", ParentGeneration: 4, Parent: dir,
+		Operation: NamespaceRename, ParentDiagnosticPath: "assets", ParentGeneration: 4, Parent: dir, TargetName: "child", Child: child,
 	})
 	if !errors.Is(err, ErrNamespacePersistenceUnsupported) || namespace != nil {
 		t.Fatalf("unsupported namespace token=(%v,%v)", namespace, err)
@@ -1065,8 +1119,9 @@ func TestUnsupportedNamespacePersistenceFailsClosed(t *testing.T) {
 
 func TestStableNamespaceSyncSerializesConcurrentCallers(t *testing.T) {
 	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 100}, generation: 5, supported: true}
+	child := newTestStableHandle(102, 1)
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Operation: NamespaceCreate, ParentDiagnosticPath: "assets", ParentGeneration: 5, Parent: dir,
+		Operation: NamespaceCreate, ParentDiagnosticPath: "assets", ParentGeneration: 5, Parent: dir, TargetName: "child", Child: child,
 	})
 	if err != nil {
 		t.Fatal(err)

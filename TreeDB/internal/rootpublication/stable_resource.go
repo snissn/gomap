@@ -86,11 +86,25 @@ type StableNamespaceHandle interface {
 	Release() error
 }
 
+// StableIdentitySource supplies an identity captured from an already-open
+// object. It intentionally has no path or caller-provided identity field.
+type StableIdentitySource interface {
+	StableIdentity() (StableIdentity, error)
+}
+
 type StableNamespaceSpec struct {
 	Operation            NamespaceOperation
 	ParentDiagnosticPath string
 	ParentGeneration     uint64
 	Parent               StableNamespaceHandle
+	// TargetName is the single entry created or renamed in Parent. It is
+	// diagnostic only; Child supplies the identity that makes the obligation
+	// specific to that entry instead of to every later entry in Parent.
+	TargetName string
+	// Child is the already-open resource handle for TargetName. Its identity is
+	// captured during registration and must match the resource token that uses
+	// this namespace obligation.
+	Child StableIdentitySource
 }
 
 // StableNamespaceToken pins the already-open parent namespace adapter and
@@ -101,6 +115,8 @@ type StableNamespaceToken struct {
 	parentIdentity       StableIdentity
 	parentGeneration     uint64
 	parent               StableNamespaceHandle
+	targetName           string
+	childIdentity        StableIdentity
 	syncMu               sync.Mutex
 	stable               atomic.Bool
 	owner                *stableNamespacePinOwner
@@ -138,7 +154,7 @@ func (o *stableNamespacePinOwner) use(fn func() error) error {
 }
 
 func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, error) {
-	if spec.Parent == nil || spec.ParentGeneration == 0 || (spec.Operation != NamespaceCreate && spec.Operation != NamespaceRename) {
+	if spec.Parent == nil || spec.Child == nil || spec.ParentGeneration == 0 || !validNamespaceTargetName(spec.TargetName) || (spec.Operation != NamespaceCreate && spec.Operation != NamespaceRename) {
 		return nil, fmt.Errorf("%w: incomplete namespace token", ErrInvalidStableResource)
 	}
 	identity, err := spec.Parent.StableIdentity()
@@ -147,6 +163,13 @@ func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, e
 	}
 	if !identity.valid() {
 		return nil, fmt.Errorf("%w: empty namespace identity", ErrInvalidStableResource)
+	}
+	childIdentity, err := spec.Child.StableIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("stable namespace child identity: %w", err)
+	}
+	if !childIdentity.valid() {
+		return nil, fmt.Errorf("%w: empty namespace child identity", ErrInvalidStableResource)
 	}
 	generation, err := spec.Parent.StableGeneration()
 	if err != nil {
@@ -166,7 +189,8 @@ func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, e
 	}
 	postIdentity, identityErr := spec.Parent.StableIdentity()
 	postGeneration, generationErr := spec.Parent.StableGeneration()
-	if identityErr != nil || generationErr != nil || postIdentity != identity || postGeneration != generation {
+	postChildIdentity, childIdentityErr := spec.Child.StableIdentity()
+	if identityErr != nil || generationErr != nil || childIdentityErr != nil || postIdentity != identity || postGeneration != generation || postChildIdentity != childIdentity {
 		_ = spec.Parent.Release()
 		return nil, fmt.Errorf("%w: namespace identity/generation changed during registration", ErrResourceConflict)
 	}
@@ -174,13 +198,20 @@ func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, e
 	return &StableNamespaceToken{
 		operation: spec.Operation, parentDiagnosticPath: spec.ParentDiagnosticPath,
 		parentIdentity: identity, parentGeneration: generation, parent: spec.Parent,
+		targetName: spec.TargetName, childIdentity: childIdentity,
 		owner: owner, lease: owner,
 	}, nil
+}
+
+func validNamespaceTargetName(name string) bool {
+	return name != "" && filepath.Base(name) == name && name != "." && name != ".."
 }
 
 func (t *StableNamespaceToken) Identity() StableIdentity      { return t.parentIdentity }
 func (t *StableNamespaceToken) Generation() uint64            { return t.parentGeneration }
 func (t *StableNamespaceToken) Operation() NamespaceOperation { return t.operation }
+func (t *StableNamespaceToken) TargetName() string            { return t.targetName }
+func (t *StableNamespaceToken) ChildIdentity() StableIdentity { return t.childIdentity }
 func (t *StableNamespaceToken) Stable() bool                  { return t != nil && t.stable.Load() }
 
 func (t *StableNamespaceToken) Sync() error {
@@ -321,6 +352,9 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	}
 	if spec.RequiredFrontier > length {
 		return nil, fmt.Errorf("%w: required=%d length=%d", ErrResourceFrontierBeyondLength, spec.RequiredFrontier, length)
+	}
+	if spec.Namespace != nil && spec.Namespace.childIdentity != identity {
+		return nil, fmt.Errorf("%w: namespace target %q child identity does not match resource", ErrResourceConflict, spec.Namespace.targetName)
 	}
 	if err := spec.Handle.Pin(); err != nil {
 		return nil, fmt.Errorf("pin stable resource: %w", err)
@@ -719,7 +753,8 @@ func sameNamespaceToken(a, b *StableNamespaceToken) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.operation == b.operation && a.parentIdentity == b.parentIdentity && a.parentGeneration == b.parentGeneration
+	return a.operation == b.operation && a.parentIdentity == b.parentIdentity && a.parentGeneration == b.parentGeneration &&
+		a.targetName == b.targetName && a.childIdentity == b.childIdentity
 }
 
 func (s *StableResourceSet) Tokens() []*StableResourceToken {
@@ -746,6 +781,8 @@ func (s *StableResourceSet) SyncNamespaces() error {
 		identity   StableIdentity
 		generation uint64
 		operation  NamespaceOperation
+		targetName string
+		child      StableIdentity
 	}
 	groups := make(map[namespaceKey][]*StableNamespaceToken)
 	for _, entry := range s.entries {
@@ -753,7 +790,7 @@ func (s *StableResourceSet) SyncNamespaces() error {
 			continue
 		}
 		namespace := entry.token.namespace
-		key := namespaceKey{namespace.parentIdentity, namespace.parentGeneration, namespace.operation}
+		key := namespaceKey{namespace.parentIdentity, namespace.parentGeneration, namespace.operation, namespace.targetName, namespace.childIdentity}
 		groups[key] = append(groups[key], namespace)
 	}
 	stableNamespaceSyncMu.Lock()
@@ -772,7 +809,16 @@ func (s *StableResourceSet) SyncNamespaces() error {
 		if keys[i].generation != keys[j].generation {
 			return keys[i].generation < keys[j].generation
 		}
-		return keys[i].operation < keys[j].operation
+		if keys[i].operation != keys[j].operation {
+			return keys[i].operation < keys[j].operation
+		}
+		if keys[i].targetName != keys[j].targetName {
+			return keys[i].targetName < keys[j].targetName
+		}
+		if keys[i].child.Device != keys[j].child.Device {
+			return keys[i].child.Device < keys[j].child.Device
+		}
+		return keys[i].child.File < keys[j].child.File
 	})
 	for _, key := range keys {
 		group := groups[key]

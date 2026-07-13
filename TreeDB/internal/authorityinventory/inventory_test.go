@@ -20,6 +20,30 @@ func TestInventoryValid(t *testing.T) {
 	}
 }
 
+func TestAdjacentPageAndRootOwnersAreNotExternalResourceObligations(t *testing.T) {
+	want := map[string]struct{}{
+		"page.MetaPageBody.CommitSeq": {}, "page.MetaPageBody.UserRootPageID": {}, "page.MetaPageBody.SystemRootPageID": {},
+		"page.MetaPageBody.FreelistHeadID": {}, "page.MetaPageBody.TotalPages": {}, "page.MetaPageBody.LastCommitHeight": {},
+		"page.MetaPageBody.AppliedCommandLSN": {}, "page.MetaPageBody.MaxEntryRevision": {},
+		"collections.CollectionRoot": {}, "collections.VectorNativeRoot": {},
+	}
+	for _, row := range Rows {
+		if _, ok := want[row.Field]; !ok {
+			continue
+		}
+		if row.ActivationState != ActivationAdjacent {
+			t.Errorf("%s state=%s, want adjacent owner", row.Field, row.ActivationState)
+		}
+		if row.Registrar != "adjacent issue" || row.DeletionOwner != "adjacent issue" {
+			t.Errorf("%s registrar/deletion=(%q,%q), must not be a ResourceIndex obligation", row.Field, row.Registrar, row.DeletionOwner)
+		}
+		delete(want, row.Field)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing adjacent owner rows: %v", want)
+	}
+}
+
 func TestAuthoritativeStructFamiliesAreExhaustive(t *testing.T) {
 	tests := []struct {
 		file, typeName, prefix string

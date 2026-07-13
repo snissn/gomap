@@ -244,7 +244,8 @@ func TestResourceHandleRenameRecreateSyncsCapturedInode(t *testing.T) {
 }
 
 func TestNamespaceHandleValidationDoesNotSyncAndTokenSyncsOnce(t *testing.T) {
-	parent, err := os.Open(t.TempDir())
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,11 +265,19 @@ func TestNamespaceHandleValidationDoesNotSyncAndTokenSyncsOnce(t *testing.T) {
 	if syncCalls != 0 {
 		t.Fatalf("non-mutating validation performed %d syncs", syncCalls)
 	}
+	child := createResourceFile(t, filepath.Join(dir, "segment"), 1)
+	childHandle, err := NewResourceHandle(child, recorder.resourceHooks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = childHandle.Close() })
 	token, err := rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
 		Operation:            rootpublication.NamespaceCreate,
 		ParentDiagnosticPath: "maindb/value_vlog",
 		ParentGeneration:     7,
 		Parent:               handle,
+		TargetName:           "segment",
+		Child:                childHandle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -432,11 +441,13 @@ func TestRegistrationFailureClosesRetainedDescriptors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = parent.Close() })
+	child := createResourceFile(t, filepath.Join(t.TempDir(), "segment"), 1)
 	before = openDescriptorCount(t)
-	if _, err := RegisterNamespaceToken(parent, 3, recorder.namespaceHooks(), rootpublication.StableNamespaceSpec{
+	if _, err := RegisterNamespaceToken(parent, child, 3, recorder.namespaceHooks(), rootpublication.StableNamespaceSpec{
 		Operation:            rootpublication.NamespaceCreate,
 		ParentDiagnosticPath: "maindb",
 		ParentGeneration:     4,
+		TargetName:           "segment",
 	}); err == nil {
 		t.Fatal("generation-mismatched namespace registration succeeded")
 	}
