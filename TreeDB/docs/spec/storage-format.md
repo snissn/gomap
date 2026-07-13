@@ -2174,18 +2174,42 @@ writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
 reusing segment file names.
 # Freelist Generation V1 (standalone, not yet an active DB meta format)
 
-`TreeDB/freelist.FreelistGenerationV1` encodes an immutable allocator view for
-the upcoming two-meta recovery path. Its byte format starts with `FLGV1`, then
-little-endian generation ID, high-water page ID, free/retired counts, CRC32,
-sorted free page IDs, and `(pageID,lastReachableCommitSeq)` retired pairs.
-The CRC covers every byte except its own four-byte field. Decoders reject bad
-magic, length/count inconsistencies, CRC mismatch, duplicate IDs, and overlap
-between free and retired sets.
+`TreeDB/freelist.FreelistGenerationV1` is the standalone immutable allocator
+view for the upcoming two-meta recovery path. It is encoded as 4096-byte pager
+pages using the normal page header and CRC32 convention. Page types `0x05`
+through `0x08` are reserved for the generation header, radix index, state
+chunk, and candidate reservation record. They are not referenced by production
+metas until the atomic activation owned by #3679.
 
-This is deliberately a model/codec-only format in this change. It is not
-written into TreeDB metas until the atomic activation owned by #3679.
+The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
+index page contains up to 16 ordered child summaries: page identity, free and
+retired counts, and the minimum `lastReachableCommitSeq`. A chunk contains a
+256-bit free bitmap and 256 retirement sequences. Free means bitmap bit 1 and
+sequence 0; retired means bit 0 and sequence non-zero; live or reserved means
+both zero. A one-chunk mutation therefore emits one chunk, one immutable index
+path, one reservation page, and one generation header. Unchanged paths retain
+their existing page identities and bytes.
 
-Pages enter the free set only through an explicit recovery horizon: their
+The generation header binds its exact root page identity and CRC, reservation
+digest, generation/parent identity, commit sequences, high-water boundary, and
+free/retired summaries with SHA-256. The reservation record binds a 128-bit
+candidate identity and canonical extents for reused data pages, appended data
+pages, target metadata pages, and replaced metadata pending retirement. Every
+decoder validates the pager ID/type/CRC, magic/version, canonical zero tail,
+sorted entries, acyclic page graph, bounds below high-water, summary counts,
+and semantic digest.
+
+Freelist metadata pages are allocated only from the candidate-owned high-water
+tail. Replaced parent header, reservation, chunk, and index pages are recorded
+with the parent's commit sequence and imported as retired state by the next
+candidate; they are not recursively inserted into the generation that replaces
+them. Physical file-length convergence is consequently a #3681 vacuum/rewrite
+property, not a claim of this high-water-only codec.
+
+Pages enter the free set only through an explicit recovery capability. Their
 `lastReachableCommitSeq` must be strictly before the oldest recoverable root,
-every snapshot pin, and the retained history floor. Candidate reservations are
-kept outside the encoded generation until publication resolves ownership.
+every snapshot pin, and the retained history floor. Visible, retryable,
+poisoned, and shutdown candidates retain ownership until confirmed durable
+publication. Reopen reconstructs surviving ownership from the selected
+generation and its durable reservation record; elapsed time, `KeepRecent`, and
+the visible commit sequence alone never grant reuse.

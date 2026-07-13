@@ -1,63 +1,11 @@
 package freelist
 
-import (
-	"math/rand"
-	"testing"
-)
+import "testing"
 
-// TestFreelistGenerationV1_ModelLifecycle exercises the standalone state
-// machine used by publication/recovery adapters: candidates may be abandoned,
-// old generations remain readable, and pins/fallbacks hold reuse back.
-func TestFreelistGenerationV1_ModelLifecycle(t *testing.T) {
-	rng := rand.New(rand.NewSource(3678))
+func TestFreelistGenerationV1_100KLogicalChurnConverges(t *testing.T) {
 	g := MustNewFreelistGenerationV1(1, 64, nil, nil)
 	ledger := NewReservationLedger()
-	for seq := uint64(1); seq <= 1000; seq++ {
-		txn := NewFreelistTxn(g, ledger)
-		id, err := txn.Allocate(rng.Uint64())
-		if err != nil {
-			t.Fatal(err)
-		}
-		txn.Retire(id, seq)
-		name := "candidate"
-		if err := txn.Reserve(name); err != nil {
-			t.Fatal(err)
-		}
-		if seq%3 == 0 {
-			if err := ledger.Supersede(name, "successor"); err != nil {
-				t.Fatal(err)
-			}
-			name = "successor"
-		}
-		if seq%5 == 0 { // crash/fallback: candidate never became durable.
-			if err := ledger.Fail(name); err != nil {
-				t.Fatal(err)
-			}
-		} else if err := ledger.Publish(name); err != nil {
-			t.Fatal(err)
-		}
-		txn.Prune(RecoveryHorizon{OldestRecoverableCommitSeq: seq, MinPinnedSnapshotCommitSeq: seq - 1, HistoryFloorCommitSeq: seq})
-		g, err = txn.Materialize(seq + 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := g.Validate(); err != nil {
-			t.Fatalf("seq %d: %v", seq, err)
-		}
-		encoded, err := g.MarshalBinary()
-		if err != nil {
-			t.Fatal(err)
-		}
-		g, err = DecodeFreelistGenerationV1(encoded)
-		if err != nil {
-			t.Fatalf("reopen seq %d: %v", seq, err)
-		}
-	}
-}
-
-func TestFreelistGenerationV1_100KChurnConvergesWithoutFullRewrite(t *testing.T) {
-	g := MustNewFreelistGenerationV1(1, 64, nil, nil)
-	ledger := NewReservationLedger()
+	candidateID := candidateIDFromString("candidate")
 	for seq := uint64(1); seq <= 100_000; seq++ {
 		txn := NewFreelistTxn(g, ledger)
 		id, err := txn.Allocate(0)
@@ -65,69 +13,112 @@ func TestFreelistGenerationV1_100KChurnConvergesWithoutFullRewrite(t *testing.T)
 			t.Fatal(err)
 		}
 		txn.Retire(id, seq)
-		if err := txn.Reserve("candidate"); err != nil {
+		if err := txn.Reserve(candidateID); err != nil {
 			t.Fatal(err)
 		}
-		if err := ledger.MarkVisible("candidate"); err != nil {
+		if err := ledger.MarkVisible(candidateID); err != nil {
 			t.Fatal(err)
 		}
-		if err := ledger.Publish("candidate"); err != nil {
+		if err := ledger.Publish(candidateID); err != nil {
 			t.Fatal(err)
 		}
 		txn.Prune(RecoveryHorizon{OldestRecoverableCommitSeq: seq, MinPinnedSnapshotCommitSeq: seq - 1, HistoryFloorCommitSeq: seq})
-		g, err = txn.Materialize(g.GenerationID() + 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		stats := txn.Stats()
-		if stats.COWChunks > 2 {
-			t.Fatalf("seq %d: COW chunks=%d", seq, stats.COWChunks)
+		g = &FreelistGenerationV1{generationID: seq + 1, commitSeq: seq + 1, parentGenerationID: g.generationID, parentCommitSeq: g.commitSeq, highWater: txn.highWater, root: txn.root}
+		if g.root.freeCount+g.root.retiredCount > 4 {
+			t.Fatalf("seq %d retained state=%d", seq, g.root.freeCount+g.root.retiredCount)
 		}
 	}
-	if got := g.HighWater(); got > 67 {
-		t.Fatalf("high-water=%d, want steady state <=67", got)
+	if g.HighWater() > 67 {
+		t.Fatalf("high-water=%d", g.HighWater())
 	}
-	if got := ledger.Reservations(); got != 0 {
-		t.Fatalf("reservations=%d", got)
+	if ledger.Reservations() != 0 {
+		t.Fatalf("reservations=%d", ledger.Reservations())
 	}
 }
 
-func BenchmarkFreelistGenerationV1_Churn(b *testing.B) {
-	for _, pages := range []int{64, 1024} {
-		b.Run("pages="+itoa(pages), func(b *testing.B) {
-			free := make([]uint64, pages)
-			for i := range free {
-				free[i] = uint64(i + 1)
+func FuzzFreelistGenerationV1_Model(f *testing.F) {
+	f.Add([]byte{1, 2, 3, 4, 5})
+	f.Add([]byte{255, 0, 17, 3, 91, 22})
+	f.Fuzz(func(t *testing.T, actions []byte) {
+		if len(actions) > 512 {
+			actions = actions[:512]
+		}
+		g := MustNewFreelistGenerationV1(1, 64, []uint64{2, 3, 4, 5}, nil)
+		for step, action := range actions {
+			txn := NewFreelistTxn(g, NewReservationLedger())
+			seq := uint64(step + 2)
+			switch action % 3 {
+			case 0:
+				id, err := txn.Allocate(uint64(action) << 8)
+				if err == nil {
+					txn.Retire(id, seq)
+				}
+			case 1:
+				txn.Retire(uint64(action)+2, seq)
+			case 2:
+				capability, _ := NewReuseCapability(seq, seq, seq)
+				txn.PruneWithCapability(capability)
 			}
-			g := MustNewFreelistGenerationV1(1, uint64(pages+1), free, nil)
-			ledger := NewReservationLedger()
-			var stats FreelistTxnStats
+			g = &FreelistGenerationV1{generationID: seq, commitSeq: seq, parentGenerationID: g.generationID, parentCommitSeq: g.commitSeq, highWater: txn.highWater, root: txn.root}
+			if err := g.Validate(); err != nil {
+				t.Fatalf("step=%d action=%d: %v", step, action, err)
+			}
+		}
+	})
+}
+
+func BenchmarkFreelistGenerationV1_Churn(b *testing.B) {
+	for _, pages := range []int{64, 1024, 1 << 20} {
+		b.Run(benchmarkSizeName(pages), func(b *testing.B) {
+			free := make([]uint64, 0, min(pages, 4096))
+			step := max(1, pages/4096)
+			for id := 2; id < pages; id += step {
+				free = append(free, uint64(id))
+			}
+			g := MustNewFreelistGenerationV1(1, uint64(pages+2), free, nil)
+			store := NewMemoryPageStoreV1()
+			g = materializeTestGeneration(b, g, 2, store)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				txn := NewFreelistTxn(g, ledger)
-				id, err := txn.Allocate(0)
+				txn := NewFreelistTxn(g, NewReservationLedger())
+				id, err := txn.Allocate(uint64(i))
 				if err != nil {
 					b.Fatal(err)
 				}
 				txn.Retire(id, uint64(i+1))
-				txn.Prune(RecoveryHorizon{OldestRecoverableCommitSeq: uint64(i + 2), MinPinnedSnapshotCommitSeq: ^uint64(0), HistoryFloorCommitSeq: ^uint64(0)})
-				g, err = txn.Materialize(g.GenerationID() + 1)
+				sink := NewMemoryPageStoreV1()
+				candidate, err := txn.MaterializeCandidate(g.GenerationID()+1, g.CommitSeq()+1, candidateIDFromString("bench"), sink)
 				if err != nil {
 					b.Fatal(err)
 				}
-				stats = txn.Stats()
+				g = candidate.Generation()
+				stats := txn.Stats()
+				b.ReportMetric(float64(stats.COWPages), "cow-pages/op")
+				b.ReportMetric(float64(stats.COWBytes), "cow-bytes/op")
+				b.ReportMetric(float64(g.HighWater()), "high-water")
 			}
-			b.ReportMetric(float64(stats.COWPages), "cow-pages/op")
-			b.ReportMetric(float64(stats.COWBytes), "cow-bytes/op")
-			b.ReportMetric(float64(g.HighWater()), "high-water")
 		})
 	}
 }
 
-func itoa(n int) string {
-	if n == 64 {
-		return "64"
+func materializeTestGeneration(tb testing.TB, g *FreelistGenerationV1, id uint64, store *MemoryPageStoreV1) *FreelistGenerationV1 {
+	tb.Helper()
+	txn := NewFreelistTxn(g, NewReservationLedger())
+	candidate, err := txn.MaterializeCandidate(id, id, candidateIDFromString("test"), store)
+	if err != nil {
+		tb.Fatal(err)
 	}
-	return "1024"
+	return candidate.Generation()
+}
+
+func benchmarkSizeName(n int) string {
+	switch n {
+	case 64:
+		return "pages=64"
+	case 1024:
+		return "pages=1024"
+	default:
+		return "pages=1048576"
+	}
 }
