@@ -2,10 +2,13 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func openPointSuccessorTestDB(t *testing.T, backend *MockBackend) *DB {
@@ -112,6 +115,9 @@ func TestSeekGE_DoesNotRotateOrCreateGeneralIterator(t *testing.T) {
 	if calls, err := strconv.ParseUint(after["treedb.cache.point_successor.calls_total"], 10, 64); err != nil || calls != 1 {
 		t.Fatalf("point successor calls = %q (%v), want 1", after["treedb.cache.point_successor.calls_total"], err)
 	}
+	if merges := after["treedb.cache.point_successor.general_merge_iterators_total"]; merges != "0" {
+		t.Fatalf("point successor general merge iterators = %q, want 0", merges)
+	}
 }
 
 func TestSeekGE_ReturnsOwnedBytes(t *testing.T) {
@@ -126,4 +132,95 @@ func TestSeekGE_ReturnsOwnedBytes(t *testing.T) {
 	}
 	key[0], value[0] = 'x', 'X'
 	requireSeekGE(t, db, []byte("k"), nil, []byte("k"), []byte("value"))
+}
+
+func TestSeekGE_CompetingVersionsAcrossMutableQueuedAndPublishedSources(t *testing.T) {
+	backend := NewMockBackend()
+	backend.Set([]byte("k"), []byte("published"))
+	backend.Set([]byte("z"), []byte("published-z"))
+	db := openPointSuccessorTestDB(t, backend)
+
+	for _, value := range []string{"queued-old", "queued-new"} {
+		if err := db.Set([]byte("k"), []byte(value)); err != nil {
+			t.Fatalf("Set %s: %v", value, err)
+		}
+		rotatePointSuccessorMemtables(t, db)
+	}
+	if err := db.Set([]byte("k"), []byte("mutable")); err != nil {
+		t.Fatalf("Set mutable: %v", err)
+	}
+	requireSeekGE(t, db, []byte("k"), nil, []byte("k"), []byte("mutable"))
+
+	if err := db.Delete([]byte("k")); err != nil {
+		t.Fatalf("Delete mutable: %v", err)
+	}
+	requireSeekGE(t, db, []byte("k"), nil, []byte("z"), []byte("published-z"))
+}
+
+func TestSeekGE_FlushPublicationPreservesAnswer(t *testing.T) {
+	backend := NewMockBackend()
+	db := openPointSuccessorTestDB(t, backend)
+	db.flushMu.Lock()
+	for _, item := range []struct{ key, value string }{{"b", "bee"}, {"d", "dee"}} {
+		if err := db.Set([]byte(item.key), []byte(item.value)); err != nil {
+			db.flushMu.Unlock()
+			t.Fatalf("Set %s: %v", item.key, err)
+		}
+		rotatePointSuccessorMemtables(t, db)
+	}
+	requireSeekGE(t, db, []byte("a"), []byte("c"), []byte("b"), []byte("bee"))
+	db.flushMu.Unlock()
+	db.flushAll(false)
+	requireSeekGE(t, db, []byte("a"), []byte("c"), []byte("b"), []byte("bee"))
+}
+
+func TestSeekGE_ConcurrentCommitSnapshotIsCoherent(t *testing.T) {
+	backend := NewMockBackend()
+	db := openPointSuccessorTestDB(t, backend)
+	if err := db.Set([]byte("k"), []byte("0")); err != nil {
+		t.Fatalf("seed Set: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 200; i++ {
+			if err := db.Set([]byte("k"), []byte(strconv.Itoa(i))); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			key, value, found, err := db.SeekGE([]byte("k"), []byte("l"))
+			if err != nil || !found || !bytes.Equal(key, []byte("k")) {
+				errCh <- errors.New("incoherent point-successor snapshot")
+				return
+			}
+			if _, err := strconv.Atoi(string(value)); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+}
+
+func TestSeekGE_AfterCloseFailsClosed(t *testing.T) {
+	backend := NewMockBackend()
+	db := openPointSuccessorTestDB(t, backend)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, _, found, err := db.SeekGE(nil, nil); !errors.Is(err, backenddb.ErrClosed) || found {
+		t.Fatalf("SeekGE after close: found=%t err=%v, want false ErrClosed", found, err)
+	}
 }

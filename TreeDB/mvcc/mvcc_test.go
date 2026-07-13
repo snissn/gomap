@@ -104,6 +104,63 @@ func TestGetAtUsesPointSuccessorWithoutIteratorRotation(t *testing.T) {
 	}
 }
 
+func TestGetAtPointSuccessorValueLogCheckpointAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	open := func() *treedb.DB {
+		db, err := treedb.Open(treedb.Options{
+			Dir:                          dir,
+			Durability:                   treedb.DurabilityWALOffRelaxed,
+			DisableSideStores:            true,
+			BackgroundCheckpointInterval: -1,
+			ForceValueLogPointers:        true,
+			ValueLogPointerThreshold:     1,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		return db
+	}
+	db := open()
+	store := New(db)
+	value := bytes.Repeat([]byte("v"), 4096)
+	if err := store.CommitAt(7, []Mutation{{Key: []byte("k"), Value: value}}, CommitRelaxed); err != nil {
+		t.Fatalf("CommitAt: %v", err)
+	}
+	requireResult(t, store, []byte("k"), 9, Present, 7, value)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db = open()
+	defer db.Close()
+	requireResult(t, New(db), []byte("k"), 9, Present, 7, value)
+}
+
+func TestGetAtPointSuccessorDiscardFloorAndPruneBoundary(t *testing.T) {
+	db := openTestDB(t, t.TempDir(), treedb.DurabilityWALOffRelaxed)
+	defer db.Close()
+	store := New(db)
+	for ts := uint64(1); ts <= 5; ts++ {
+		if err := store.CommitAt(ts, []Mutation{{Key: []byte("k"), Value: []byte(strconv.FormatUint(ts, 10))}}, CommitRelaxed); err != nil {
+			t.Fatalf("CommitAt(%d): %v", ts, err)
+		}
+	}
+	if err := store.AdvanceDiscardFloor(4, CommitRelaxed); err != nil {
+		t.Fatalf("AdvanceDiscardFloor: %v", err)
+	}
+	if _, err := store.GetAt([]byte("k"), 3); !errors.Is(err, ErrReadBeforeDiscardFloor) {
+		t.Fatalf("GetAt below floor error = %v", err)
+	}
+	if _, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: CommitRelaxed}); err != nil {
+		t.Fatalf("PruneVersions: %v", err)
+	}
+	requireResult(t, store, []byte("k"), 4, Present, 4, []byte("4"))
+	requireResult(t, store, []byte("k"), 5, Present, 5, []byte("5"))
+}
+
 func TestCommitAtMultiKeyAtomicAndDuplicatePolicy(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
 	defer db.Close()
