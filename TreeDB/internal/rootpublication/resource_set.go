@@ -89,7 +89,14 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability[token.reachability] = struct{}{}
-		token.releaseFrom(ResourceOwnerBuilder)
+		if existing.namespace == nil && token.namespace != nil {
+			// Preserve the one namespace-creation obligation independently of
+			// insertion order by making its exact-handle token representative.
+			entry.token = token
+			existing.releaseFrom(ResourceOwnerBuilder)
+		} else {
+			token.releaseFrom(ResourceOwnerBuilder)
+		}
 		return nil
 	}
 	*entries = append(*entries, stableResourceEntry{
@@ -118,6 +125,9 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
 		for field := range incoming.reachability {
 			entry.reachability[field] = struct{}{}
+		}
+		if existing.namespace == nil && incoming.token.namespace != nil {
+			entry.token = incoming.token
 		}
 		return nil
 	}

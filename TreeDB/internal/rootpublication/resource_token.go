@@ -405,7 +405,10 @@ func (token *StableResourceToken) identityKey() string {
 
 func (token *StableResourceToken) namespaceCompatible(other *StableResourceToken) bool {
 	if token.namespace == nil || other.namespace == nil {
-		return token.namespace == nil && other.namespace == nil
+		// A later range in an already-created append-only object legitimately has
+		// no new namespace operation. The coalesced entry retains whichever token
+		// carries the creation obligation.
+		return true
 	}
 	return token.namespace.compatible(other.namespace)
 }
