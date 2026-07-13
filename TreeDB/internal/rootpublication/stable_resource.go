@@ -108,10 +108,11 @@ type StableNamespaceToken struct {
 }
 
 type stableNamespacePinOwner struct {
-	once   sync.Once
-	mu     sync.RWMutex
-	handle StableNamespaceHandle
-	err    error
+	once     sync.Once
+	mu       sync.RWMutex
+	handle   StableNamespaceHandle
+	released bool
+	err      error
 }
 
 func (o *stableNamespacePinOwner) release() error {
@@ -120,13 +121,19 @@ func (o *stableNamespacePinOwner) release() error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.once.Do(func() { o.err = o.handle.Release() })
+	o.once.Do(func() {
+		o.err = o.handle.Release()
+		o.released = true
+	})
 	return o.err
 }
 
 func (o *stableNamespacePinOwner) use(fn func() error) error {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
+	if o.released {
+		return ErrStableResourceOwnershipTransferred
+	}
 	return fn()
 }
 
@@ -233,10 +240,11 @@ type StableResourceSpec struct {
 }
 
 type stablePinOwner struct {
-	once   sync.Once
-	mu     sync.RWMutex
-	handle StableResourceHandle
-	err    error
+	once     sync.Once
+	mu       sync.RWMutex
+	handle   StableResourceHandle
+	released bool
+	err      error
 }
 
 func (o *stablePinOwner) release() error {
@@ -245,13 +253,19 @@ func (o *stablePinOwner) release() error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.once.Do(func() { o.err = o.handle.Release() })
+	o.once.Do(func() {
+		o.err = o.handle.Release()
+		o.released = true
+	})
 	return o.err
 }
 
 func (o *stablePinOwner) use(frontier uint64, fn func(uint64) error) error {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
+	if o.released {
+		return ErrStableResourceOwnershipTransferred
+	}
 	return fn(frontier)
 }
 

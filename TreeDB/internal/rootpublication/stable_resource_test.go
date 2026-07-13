@@ -310,6 +310,48 @@ func TestStableResourceSetTransferAndSupersessionReleaseEveryPinExactlyOnce(t *t
 	}
 }
 
+func TestStableResourceLeasesRejectUseAfterOwningSetRelease(t *testing.T) {
+	namespaceHandle := &testNamespaceHandle{
+		identity: StableIdentity{Device: 41, File: 42}, generation: 1, supported: true,
+	}
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Operation: NamespaceCreate, ParentDiagnosticPath: "value_vlog",
+		ParentGeneration: 1, Parent: namespaceHandle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceHandle := newTestStableHandle(44, 128)
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "value",
+		ResourceID: "segment/1", DiagnosticPath: "value_vlog/value-l1-000001.log",
+		Generation: 1, Handle: resourceHandle, RequiredFrontier: 64,
+		Namespace: namespace, ReachabilityField: "page.ValuePtr.FileID",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := NewStableResourceSet(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := token.FlushThrough(); !errors.Is(err, ErrStableResourceOwnershipTransferred) {
+		t.Fatalf("FlushThrough after release = %v, want ownership error", err)
+	}
+	if err := token.SyncThrough(); !errors.Is(err, ErrStableResourceOwnershipTransferred) {
+		t.Fatalf("SyncThrough after release = %v, want ownership error", err)
+	}
+	if err := namespace.Sync(); !errors.Is(err, ErrStableResourceOwnershipTransferred) {
+		t.Fatalf("namespace Sync after release = %v, want ownership error", err)
+	}
+	if len(resourceHandle.flushes) != 0 || len(resourceHandle.syncs) != 0 || namespaceHandle.syncs != 0 {
+		t.Fatalf("released lease performed I/O: flushes=%d syncs=%d namespace_syncs=%d", len(resourceHandle.flushes), len(resourceHandle.syncs), namespaceHandle.syncs)
+	}
+}
+
 func TestStableResourceTokenRejectsFrontierAndSetRejectsConflicts(t *testing.T) {
 	handle := newTestStableHandle(7, 32)
 	if _, err := NewStableResourceToken(StableResourceSpec{
