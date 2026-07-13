@@ -110,6 +110,9 @@ func freeMutate(n *freeNode, id uint64, add bool, d int) *freeNode {
 		*out = *n
 	}
 	if d == trieDepth {
+		// A copied node still aliases its leaf backing array. Clone before any
+		// append/shift so a later generation cannot alter an older view.
+		out.ids = append([]uint64(nil), out.ids...)
 		i := sort.Search(len(out.ids), func(i int) bool { return out.ids[i] >= id })
 		has := i < len(out.ids) && out.ids[i] == id
 		if add && !has {
@@ -252,8 +255,13 @@ func (t *FreelistTxn) ReservePage(id uint64) error {
 	if err := t.valid(); err != nil {
 		return err
 	}
-	if t.ledger.Reserved(id) {
+	if !freeContains(t.free, id) || t.ledger.Reserved(id) {
 		return ErrPageReserved
+	}
+	for _, allocated := range t.allocated {
+		if allocated == id {
+			return ErrPageReserved
+		}
 	}
 	t.allocated = append(t.allocated, id)
 	return nil

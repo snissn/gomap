@@ -32,6 +32,9 @@ func TestFreeMutate_DoesNotWriteSharedLeafCapacity(t *testing.T) {
 	if got := old.ids; len(got) != 1 || got[0] != 4 {
 		t.Fatalf("old leaf mutated: %v", got)
 	}
+	if got := old.ids[:2][1]; got != 0 {
+		t.Fatalf("old leaf spare capacity mutated: %d", got)
+	}
 	if got := next.ids; len(got) != 2 || got[1] != 8 {
 		t.Fatalf("next leaf: %v", got)
 	}
