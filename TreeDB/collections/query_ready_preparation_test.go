@@ -37,7 +37,7 @@ func TestPrepareQueryReadyColumnGenerationRoutesJSONBenchAfterReopen(t *testing.
 		t.Fatalf("base descriptor end=%d exceeds file=%d", end, info.Size())
 	}
 	stats := prepared.Stats()
-	if stats.SourceParts != 1 || stats.SourceRows != int64(len(events)) || stats.SourceBytes <= 0 || stats.OutputBytes != files.Base.Length || stats.AssetsProduced != 1 {
+	if stats.SourceParts != 1 || stats.SourceRows != int64(len(events)) || stats.SourceBytes <= 0 || stats.OutputBytes != files.Base.Length || stats.ExecutionBytes <= 0 || stats.ExecutionColumns <= 0 || stats.AssetsProduced != 1 {
 		t.Fatalf("preparation stats=%+v", stats)
 	}
 	wantIdentity, ok := collection.ColumnStoreCacheIdentity()
@@ -46,6 +46,10 @@ func TestPrepareQueryReadyColumnGenerationRoutesJSONBenchAfterReopen(t *testing.
 	}
 	if got := prepared.SnapshotIdentity(); got != wantIdentity {
 		t.Fatalf("snapshot identity=%+v want %+v", got, wantIdentity)
+	}
+	openedDuringPreparation := collection.collectionQueryReadyGenerationCacheSnapshot()
+	if !openedDuringPreparation.Present || openedDuringPreparation.Open.OpenAttempts != 1 || openedDuringPreparation.Open.ColdOpens != 1 || openedDuringPreparation.ActiveLeases != 0 {
+		t.Fatalf("query-independent generation was not opened during preparation: %+v", openedDuringPreparation)
 	}
 
 	scanned := scanColumnPhysicalJSONBenchParityEventsP0(t, collection, len(events))
@@ -91,8 +95,50 @@ func TestPrepareQueryReadyColumnGenerationRoutesJSONBenchAfterReopen(t *testing.
 		})
 	}
 	open := collection.collectionQueryReadyGenerationCacheSnapshot().Open
-	if open.OpenAttempts == 0 || open.LogicalImageBytes != files.Base.Length {
+	if open.OpenAttempts != 1 || open.CacheHits < len(cases) || open.LogicalImageBytes != files.Base.Length {
 		t.Fatalf("M3 exact-range open stats=%+v descriptor=%+v", open, files.Base)
+	}
+}
+
+func TestPrepareQueryReadyColumnGenerationPreservesPartLocalPrimaryIDDomains(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
+	events := columnPhysicalJSONBenchParityEventsP0()
+	_, collection, closeFn, refs := openColumnPhysicalJSONBenchTypedColumnPartBatches1947(t, [][]columnPhysicalJSONBenchParityEventP0{
+		events[:len(events)/2],
+		events[len(events)/2:],
+	})
+	defer closeFn()
+	if len(refs) != 2 {
+		t.Fatalf("typed-column source parts=%d want 2", len(refs))
+	}
+
+	prepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{
+		MaxWorkers: 1, MaxInFlightBytes: 64 << 20,
+	})
+	if err != nil {
+		t.Fatalf("prepare query-ready generation: %v", err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if stats := prepared.Stats(); stats.SourceParts != 2 || stats.SourceRows != int64(len(events)) {
+		t.Fatalf("preparation stats=%+v", stats)
+	}
+
+	request := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
+	runner, err := collection.PrepareQueryReadyColumnPhysicalQuery(prepared.Files(), request)
+	if err != nil {
+		t.Fatalf("prepare query-ready query: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatalf("run query-ready query: %v", err)
+	}
+	want := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q1", scanColumnPhysicalJSONBenchParityEventsP0(t, collection, len(events))))
+	got := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0("q1", result.Groups))
+	if got != want || result.Diagnostics.RowsScanned != len(events) {
+		t.Fatalf("hash=%016x want=%016x rows_scanned=%d want=%d groups=%+v diagnostics=%+v", got, want, result.Diagnostics.RowsScanned, len(events), result.Groups, result.Diagnostics)
 	}
 }
 

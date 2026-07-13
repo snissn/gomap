@@ -133,9 +133,9 @@ version iterators cannot surface it as a logical record. The zero marker plus
 `M` identifies metadata and leaves nonzero codec version markers available for
 future versioned-key formats.
 
-## 1.2 Query-Ready Typed-Column Base Generation V1
+## 1.2 Query-Ready Typed-Column Base Generation V3
 
-A query-ready base generation (`QRBG` V1) is a rebuildable, non-authoritative
+A query-ready base generation (`QRBG` V3) is a rebuildable, non-authoritative
 container for a snapshot-visible set of immutable typed-column part images. It
 is a local derived format: it is not an index root, WAL record, recovery
 selector, primary document store, or GC/rewrite owner. Until the authoritative
@@ -147,7 +147,7 @@ All integer fields are little-endian. The 80-byte header is:
 ```text
 offset  size  field
 0       4     magic = "QRBG" (bytes 51 52 42 47)
-4       2     version = 1
+4       2     version = 3
 6       2     reserved = 0
 8       8     exact base generation (nonzero)
 16      32    exact collection schema SHA-256 (nonzero)
@@ -161,9 +161,9 @@ offset  size  field
 
 The header checksum is CRC-32C (Castagnoli) over all 80 header bytes with
 bytes `[52,56)` zeroed. The table checksum is CRC-32C over exactly
-`part_count * 80` bytes beginning at offset 80.
+`part_count * 144` bytes beginning at offset 80.
 
-Each 80-byte part-table entry is:
+Each 144-byte part-table entry is:
 
 ```text
 offset  size  field
@@ -174,6 +174,12 @@ offset  size  field
 32      8     row count
 40      8     typed-column manifest byte length
 48      32    SHA-256 of the complete embedded image
+80      8     signed primary-ID base, encoded as two's-complement uint64
+88      1     primary-ID mode
+89      7     reserved = 0
+96      8     query-ready execution sidecar offset
+104     8     query-ready execution sidecar byte length
+112     32    SHA-256 of the complete execution sidecar
 ```
 
 Entries are strictly ordered by `(source generation, part ID)`. Source
@@ -181,23 +187,73 @@ generations are nonzero and cannot exceed the header's base generation;
 duplicate identities are invalid. Entry row count, part ID, and manifest length
 must exactly match the embedded typed-column image metadata.
 
-The payload begins at `payload_offset`, aligned to 4096 bytes. Every embedded
-image begins at the typed-column image section alignment. Bytes between the
-part table and payload, and between embedded images, must be zero. Images may
-not overlap or extend beyond `total_container_bytes`; that field must equal the
-exact file length, so unaccounted trailing bytes are invalid. The final image
-ends at the end of the container. An empty base is represented by a zero-entry
-table, 4096-byte payload offset, zero padding, and total length equal to that
-payload offset.
+Primary-ID mode `0` preserves the encoded row-locator primary IDs and requires
+a zero base. Mode `1` requires the embedded primary IDs to be the exact dense
+part-local domain `[0,row_count)` and translates them into the logical domain
+as `primary_id_base + encoded_primary_id`; negative bases and signed overflow
+are invalid. This lets insert-only source parts with independently numbered
+local rows remain disjoint after reopen without rewriting their encoded
+payloads. Base-plus-delta visibility and tombstones operate on the translated
+logical IDs.
+
+The payload begins at `payload_offset`, aligned to 4096 bytes. For each entry,
+the embedded typed-column image begins at its section alignment and is followed
+by an 8-byte-aligned query-ready execution sidecar. Bytes between the part
+table, images, and sidecars must be zero. Ranges may not overlap or extend
+beyond `total_container_bytes`; that field must equal the exact file length, so
+unaccounted trailing bytes are invalid. The final sidecar ends at the end of
+the container. An empty base is represented by a zero-entry table, 4096-byte
+payload offset, zero padding, and total length equal to that payload offset.
+
+The execution sidecar (`QRXS` V1) is query-independent physical state, not a
+stored operator or answer. Its 48-byte little-endian header is:
+
+```text
+offset  size  field
+0       4     magic = "QRXS" (bytes 51 52 58 53)
+4       2     version = 1
+6       2     reserved = 0
+8       8     row count
+16      4     column count
+20      4     reserved = 0
+24      8     column-descriptor offset = 48
+32      8     payload offset, aligned to 8 bytes
+40      8     total sidecar bytes
+```
+
+Each 64-byte column descriptor is:
+
+```text
+offset  size  field
+0       4     column-name offset
+4       4     column-name byte length
+8       1     kind: 1 = dictionary code, 2 = signed int64
+9       1     fixed width: 1/2/4 for codes, 8 for int64
+10      1     nullable/absence-bitmap flag: 0 or 1
+11      1     reserved = 0
+12      4     local dictionary cardinality; zero for int64
+16      8     values offset
+24      8     values byte length
+32      8     absence-bitmap offset, or zero
+40      8     absence-bitmap byte length, or zero
+48      8     values plus absence bytes, excluding padding
+56      8     reserved = 0
+```
+
+Descriptors and names are strictly sorted by column name; names and vector
+ranges are contiguous in descriptor order except for required zero alignment
+padding. Code vectors use the minimum width covering the local cardinality.
+Int64 vectors are fixed-width little-endian values. An optional one-bit-per-row
+bitmap records null/default absence. Logical primary-key columns are omitted.
 
 Open requires the caller's expected generation and schema hash and fails closed
 on either mismatch, an unsupported version, nonzero reserved bytes or padding,
 checksum failure, malformed bounds/order, or an invalid embedded typed-column
 manifest/layout. Successful file open uses a read-only mapping where supported.
-Encoded payloads and dictionaries remain direct slices of that mapping; format
-validation must not require whole-part payload attachment, re-encoding, or a
-query-shaped dictionary/rank/offset reconstruction. File-backed views must be
-closed before their files are replaced or deleted.
+Encoded source payloads, direct vectors, and absence bitmaps remain slices of
+that mapping. Format validation must not require whole-part payload attachment,
+re-encoding, or a query-shaped dictionary/rank/offset reconstruction.
+File-backed views must be closed before their files are replaced or deleted.
 
 The implementation and format tests are in
 `TreeDB/internal/typedcolumn/query_ready_base.go` and
@@ -208,7 +264,7 @@ ownership, lifecycle boundary, and performance contract are described in
 ## 1.3 Query-Ready Delta / Consolidated Base Envelope V1
 
 A query-ready delta generation (`QRDG` V1) is a rebuildable, non-authoritative
-envelope containing one QRBG V1 image and a sorted tombstone table. Kind `1`
+envelope containing one QRBG V3 image and a sorted tombstone table. Kind `1`
 represents one ordinary delta generation. Kind `2` represents a standalone,
 bounded multipart replacement base produced by deterministic consolidation.
 It is not an authoritative publication, recovery, or reclamation format.

@@ -7,19 +7,27 @@ persisted in the generation format.
 
 ## Execution contract
 
-`QueryReadyPreparedGeneration.PrepareOperator` constructs query-shaped state
-after query-independent file open. It decodes only the structural part state
-needed by the existing snapshot/tombstone reader, builds stable semantic
-domains for requested low-cardinality columns, and translates each part's
-local codes into those domains. Payload values stay in encoded column blocks
-until `Run` scans them.
+Explicit generation open constructs the structural snapshot/tombstone state,
+decodes local dictionaries once, and builds stable semantic domains and
+part-local translations once. `QueryReadyPreparedGeneration.PrepareOperator`
+then binds only query-shaped predicates and bounded reusable scratch to that
+immutable state. `Run` scans the mmap-backed fixed-width `QRXS` code/int64
+vectors and absence bitmaps directly; it does not decode source column blocks.
+
+Visibility also applies the primary-ID mapping persisted with each QRBG part.
+Ordinary base/delta parts preserve their encoded IDs; validated insert-only
+source parts may use disjoint logical base offsets for their zero-based local
+IDs. Cached and scan-based locator lookup, supersession, and tombstones all use
+the same translated logical identity.
 
 The shared operators cover group count, group count plus distinct, grouped
 hour count, grouped minimum, grouped span, and qexpr's sum of squared
 second-of-day. Equality and IN predicates, grouping, ordering, and top-K all
-run on the same base-plus-delta visibility view. Updates, deletes, tombstones,
-and part-local dictionary additions therefore have the same semantics for all
-six production cells.
+run on the same base-plus-delta visibility view. One-to-three 8-bit equality
+predicates use a shared fused scan kernel, while grouped min/max/span use a
+bounded top-K result shape instead of sorting every group. Updates, deletes,
+tombstones, and part-local dictionary additions therefore have the same
+semantics for all six production cells.
 
 The collection adapter accepts selected generation files and the existing
 `ColumnPhysicalQueryRequest`. It derives the recovery-authoritative schema
@@ -49,8 +57,8 @@ reuse scan, reduction, and result buffers; result slices remain runner-owned
 and are valid until the next run or close.
 
 Diagnostics separate preparation, base scan, delta merge, predicates,
-reduction, grouping, and ordering/top-K time. They also report rows, decoded blocks and
-bytes, code translations, domain count, bounded scratch bytes, and explicit
+reduction, grouping, and ordering/top-K time. They also report rows, physical
+bytes scanned, code translations, domain count, bounded scratch bytes, and explicit
 zero-valued counters for document materialization, legacy scan fallback, and
 precomputed answers.
 

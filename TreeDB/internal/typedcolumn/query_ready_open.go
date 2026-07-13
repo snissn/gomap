@@ -118,6 +118,7 @@ type QueryReadyPreparedGeneration struct {
 	deltas       []*QueryReadyDeltaGeneration
 	parts        []QueryReadyPreparedPartView
 	tombstones   []Tombstone
+	execution    *QueryReadyBaseDeltaReader
 	closeOnce    sync.Once
 	closeErr     error
 	closed       atomic.Bool
@@ -194,6 +195,7 @@ func (p *QueryReadyPreparedGeneration) Close() error {
 		p.closeErr = errors.Join(errs...)
 		p.parts = nil
 		p.tombstones = nil
+		p.execution = nil
 	})
 	return p.closeErr
 }
@@ -433,11 +435,24 @@ func openQueryReadyPreparedGeneration(key QueryReadyGenerationOpenKey, files Que
 		}
 		tombstones = append(tombstones, delta.Tombstones...)
 	}
-	prepared := &QueryReadyPreparedGeneration{key: key, base: base, consolidated: consolidated, deltas: deltas, parts: parts, tombstones: tombstones}
+	execution, executionStats, err := prepareQueryReadyGenerationExecutionState(parts, tombstones)
+	if err != nil {
+		closePartial(deltas)
+		return nil, stats, fmt.Errorf("prepare query-independent execution state: %w", err)
+	}
+	prepared := &QueryReadyPreparedGeneration{key: key, base: base, consolidated: consolidated, deltas: deltas, parts: parts, tombstones: tombstones, execution: execution}
+	stats.PayloadBytesDecoded = executionStats.PayloadBytesDecoded
+	stats.PayloadBytesCopied = executionStats.PayloadBytesCopied
+	stats.PartsDecoded = executionStats.PartsDecoded
+	stats.DomainsConstructed = executionStats.DomainsConstructed
+	stats.RanksConstructed = executionStats.RanksConstructed
+	stats.OffsetsConstructed = executionStats.OffsetsConstructed
+	stats.WholePartDecodesDuringOpen = executionStats.WholePartDecodesDuringOpen
 	stats.ValidationTime = time.Since(validationStarted)
 	stats.MappedFiles = 1 + len(deltas)
-	// Direct views remain encoded. M4 consumes these views; M3 must not hide
-	// whole-part decode or query-shaped domain/rank/offset construction here.
+	// Payload vectors remain encoded and mmap-backed. Open prepares only the
+	// query-independent structural, visibility, and dictionary-domain state
+	// shared by every M4 operator.
 	accumulateQueryReadyOpenBaseStats(&stats, baseView)
 	for _, delta := range deltas {
 		stats.MappedBytes += delta.Stats.BytesMapped

@@ -95,8 +95,8 @@ func TestQueryReadyBaseGenerationRejectsUnaccountedTrailingBytes(t *testing.T) {
 	}
 	shorter := mustTransplantImage(t, mustTransplantPart(t, 708, transplantTestOptions(nil), transplantConstantBatch(1, 42)))
 	forged := queryReadyBaseReplaceFinalPartWithShorterImage(t, result.Bytes, shorter)
-	if _, err := OpenQueryReadyBaseGeneration(forged, identity); err == nil || !strings.Contains(err.Error(), "trailing") {
-		t.Fatalf("forged trailing bytes err=%v want trailing rejection", err)
+	if _, err := OpenQueryReadyBaseGeneration(forged, identity); err == nil || !strings.Contains(err.Error(), "padding") {
+		t.Fatalf("forged unaccounted bytes err=%v want padding rejection", err)
 	}
 }
 
@@ -136,6 +136,58 @@ func TestQueryReadyBaseGenerationBuildIsDeterministic(t *testing.T) {
 	}
 	if a.Dependencies[0].PartID != 704 || a.Dependencies[1].PartID != 705 {
 		t.Fatalf("dependency order=%+v", a.Dependencies)
+	}
+}
+
+func TestQueryReadyBaseGenerationPersistsDensePartLocalPrimaryIDDomains(t *testing.T) {
+	identity := queryReadyBaseTestIdentity(45)
+	left := queryReadyDeltaTestImage(t, 711, map[int64]int64{0: 10, 1: 11})
+	right := queryReadyDeltaTestImage(t, 712, map[int64]int64{0: 20, 1: 21})
+	built, err := BuildQueryReadyBaseGeneration(identity, []QueryReadyBasePartInput{
+		{SourceGeneration: 44, Image: left, PrimaryIDMode: QueryReadyPrimaryIDDensePartLocal, PrimaryIDBase: 0},
+		{SourceGeneration: 44, Image: right, PrimaryIDMode: QueryReadyPrimaryIDDensePartLocal, PrimaryIDBase: 2},
+	})
+	if err != nil {
+		t.Fatalf("build dense part-local base: %v", err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, identity)
+	if err != nil {
+		t.Fatalf("open dense part-local base: %v", err)
+	}
+	defer func() { _ = base.Close() }()
+	if got := base.Dependencies; len(got) != 2 || got[0].PrimaryIDMode != QueryReadyPrimaryIDDensePartLocal || got[0].PrimaryIDBase != 0 || got[1].PrimaryIDBase != 2 {
+		t.Fatalf("persisted dependencies=%+v", got)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, nil, QueryReadyBaseDeltaOptions{SnapshotGeneration: identity.Generation, Bound: QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 1, MaxRows: 4, MaxBytes: 1 << 20}})
+	if err != nil {
+		t.Fatalf("open dense part-local reader: %v", err)
+	}
+	if stats := reader.reader.VisibilityStats(); stats.InputRows != 4 || stats.VisibleRows != 4 || stats.SupersededRows != 0 {
+		t.Fatalf("visibility stats=%+v", stats)
+	}
+	for primaryID, want := range []int64{10, 11, 20, 21} {
+		got, ok, err := reader.ValueAtLatest(int64(primaryID), "value")
+		if err != nil || !ok || got != want {
+			t.Fatalf("primary ID %d value=(%d,%v,%v) want=%d", primaryID, got, ok, err, want)
+		}
+		cached, cachedOK := reader.reader.LatestLocator(int64(primaryID))
+		scanned, scannedOK := reader.reader.ScanLatestLocator(int64(primaryID))
+		if !cachedOK || !scannedOK || cached != scanned {
+			t.Fatalf("primary ID %d cached/scanned locator=(%+v,%v)/(%+v,%v)", primaryID, cached, cachedOK, scanned, scannedOK)
+		}
+	}
+}
+
+func TestQueryReadyBaseGenerationRejectsNonDensePartLocalPrimaryIDs(t *testing.T) {
+	identity := queryReadyBaseTestIdentity(46)
+	image := queryReadyDeltaTestImage(t, 713, map[int64]int64{1: 10, 2: 20})
+	_, err := BuildQueryReadyBaseGeneration(identity, []QueryReadyBasePartInput{{
+		SourceGeneration: 45,
+		Image:            image,
+		PrimaryIDMode:    QueryReadyPrimaryIDDensePartLocal,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "dense part-local ID") {
+		t.Fatalf("non-dense primary IDs err=%v", err)
 	}
 }
 

@@ -110,9 +110,10 @@ type queryReadyExecutionDomain struct {
 }
 
 type queryReadyExecutionPredicate struct {
-	projected int
-	domain    queryReadyExecutionDomain
-	allowed   []bool
+	projected    int
+	domain       queryReadyExecutionDomain
+	allowed      []bool
+	allowedLocal [][]bool
 }
 
 type queryReadyExecutionPart struct {
@@ -123,7 +124,22 @@ type queryReadyExecutionPart struct {
 	values      [][]int64
 	nulls       [][]bool
 	defaults    [][]bool
+	direct      []QueryReadyExecutionColumnView
+	predicates  []queryReadyDirectPredicatePart
 	decodedRows int
+}
+
+type queryReadyDirectPredicatePart struct {
+	column       QueryReadyExecutionColumnView
+	allowed8     *[256]bool
+	emptyAllowed bool
+}
+
+func (p *queryReadyDirectPredicatePart) matches8(row int) bool {
+	if len(p.column.absent) != 0 && p.column.absentAtUnchecked(row) {
+		return p.emptyAllowed
+	}
+	return p.allowed8[p.column.values[row]]
 }
 
 // QueryReadyOperator is immutable in plan/domain state and reuses bounded
@@ -154,8 +170,9 @@ type QueryReadyOperator struct {
 
 const queryReadyMaxGroupDistinctCells = 64 << 20
 
-// PrepareQueryReadyOperator builds query-shaped domains and bounded scratch
-// from an already-open snapshot-correct base-plus-delta reader. It never reads
+// PrepareQueryReadyOperator binds query-shaped predicates and bounded scratch
+// to an already-open snapshot-correct base-plus-delta reader. Prepared file
+// generations reuse domains built once during explicit open. It never reads
 // documents, invokes a legacy collection scan, or persists a final answer.
 func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryReadyOperatorRequest) (*QueryReadyOperator, error) {
 	started := time.Now()
@@ -215,7 +232,15 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 				allowed[index] = true
 			}
 		}
-		runner.predicates = append(runner.predicates, queryReadyExecutionPredicate{projected: runner.projectedByName[predicate.Column], domain: domain, allowed: allowed})
+		allowedLocal := make([][]bool, len(domain.byPart))
+		for partIndex, translation := range domain.byPart {
+			local := make([]bool, len(translation))
+			for code, global := range translation {
+				local[code] = global >= 0 && global < len(allowed) && allowed[global]
+			}
+			allowedLocal[partIndex] = local
+		}
+		runner.predicates = append(runner.predicates, queryReadyExecutionPredicate{projected: runner.projectedByName[predicate.Column], domain: domain, allowed: allowed, allowedLocal: allowedLocal})
 	}
 	if request.GroupColumn != "" {
 		runner.groupDomain = runner.domains[request.GroupColumn]
@@ -246,8 +271,32 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 		if visibleRows > maxVisibleRows {
 			maxVisibleRows = visibleRows
 		}
+		direct := make([]QueryReadyExecutionColumnView, len(runner.projected))
+		if partIndex < len(reader.executions) {
+			for projected, column := range runner.projected {
+				direct[projected], _ = reader.executions[partIndex].Column(column)
+			}
+		}
+		directPredicates := make([]queryReadyDirectPredicatePart, len(runner.predicates))
+		for predicateIndex := range runner.predicates {
+			predicate := &runner.predicates[predicateIndex]
+			column := direct[predicate.projected]
+			directPredicate := queryReadyDirectPredicatePart{column: column, emptyAllowed: predicate.domain.emptyGlobal >= 0 && predicate.allowed[predicate.domain.emptyGlobal]}
+			if column.kind == QueryReadyExecutionColumnCode && column.codeWidth == 1 && partIndex < len(predicate.allowedLocal) {
+				table := new([256]bool)
+				for code, allowed := range predicate.allowedLocal[partIndex] {
+					if code >= len(table) {
+						break
+					}
+					table[code] = allowed
+				}
+				directPredicate.allowed8 = table
+			}
+			directPredicates[predicateIndex] = directPredicate
+		}
 		runner.parts = append(runner.parts, queryReadyExecutionPart{
 			part: loaded.Part, scanner: loaded.Part.NewScanner(), role: loaded.Ref.Role, visible: visible, values: make([][]int64, len(runner.projected)), nulls: make([][]bool, len(runner.projected)), defaults: make([][]bool, len(runner.projected)),
+			direct: direct, predicates: directPredicates,
 		})
 	}
 	runner.matchedRows = make([]int, 0, maxVisibleRows)
@@ -282,34 +331,62 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 	if request.Kind == QueryReadyOperatorSumSecondOfDaySquare {
 		resultCapacity = 1
 	}
+	if runner.usesBoundedTopKShape() && request.TopK < resultCapacity {
+		resultCapacity = request.TopK
+	}
 	runner.resultGroups = make([]QueryReadyOperatorGroup, 0, resultCapacity)
 	runner.prepareNanos = time.Since(started).Nanoseconds()
 	return runner, nil
 }
 
 // PrepareOperator binds one operator to the immutable file-backed generation
-// selected by Open. Decoding here is query preparation, never open/warmup work;
-// payload values remain encoded and are scanned by the operator on Run.
+// selected by Open. Query-independent structural, visibility, dictionary, and
+// domain state is reused; payload values remain mapped direct vectors scanned
+// by the operator on Run.
 func (p *QueryReadyPreparedGeneration) PrepareOperator(request QueryReadyOperatorRequest) (*QueryReadyOperator, error) {
 	started := time.Now()
 	if p == nil || p.Closed() {
 		return nil, errors.New("typedcolumn: query-ready prepared generation is closed")
 	}
-	refs := make([]PartRef, 0, len(p.parts))
-	dictionaries := make([]map[string]map[int64]string, 0, len(p.parts))
-	stats := QueryReadyBaseDeltaStats{TotalParts: len(p.parts), TombstonesApplied: len(p.tombstones)}
-	for index, preparedPart := range p.parts {
-		part, err := ColumnPartFromImageWithOptions(preparedPart.View.Image, ColumnPartImageReadOptions{
-			IncludeRowLocators:  true,
-			ValidateRowLocators: true,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("typedcolumn: prepare query-ready operator part[%d]: %w", index, err)
+	if p.execution == nil {
+		return nil, errors.New("typedcolumn: query-ready prepared generation has no execution state")
+	}
+	runner, err := PrepareQueryReadyOperator(p.execution, request)
+	if err != nil {
+		return nil, err
+	}
+	runner.prepareNanos = time.Since(started).Nanoseconds()
+	return runner, nil
+}
+
+func prepareQueryReadyGenerationExecutionState(parts []QueryReadyPreparedPartView, tombstones []Tombstone) (*QueryReadyBaseDeltaReader, QueryReadyGenerationOpenStats, error) {
+	refs := make([]PartRef, 0, len(parts))
+	dictionaries := make([]map[string]map[int64]string, 0, len(parts))
+	executions := make([]QueryReadyExecutionPartView, 0, len(parts))
+	readerStats := QueryReadyBaseDeltaStats{TotalParts: len(parts), TombstonesApplied: len(tombstones)}
+	openStats := QueryReadyGenerationOpenStats{}
+	denseDisjointScan := len(tombstones) == 0
+	for _, preparedPart := range parts {
+		if preparedPart.Role != PartRoleBase || preparedPart.View.Dependency.PrimaryIDMode != QueryReadyPrimaryIDDensePartLocal {
+			denseDisjointScan = false
+			break
 		}
-		refs = append(refs, PartRef{Role: preparedPart.Role, GenerationID: preparedPart.Generation, Part: part})
+	}
+	for index, preparedPart := range parts {
+		readOptions := ColumnPartImageReadOptions{}
+		if !denseDisjointScan {
+			readOptions.IncludeRowLocators = true
+			readOptions.ValidateRowLocators = true
+		}
+		part, err := ColumnPartFromImageWithOptions(preparedPart.View.Image, readOptions)
+		if err != nil {
+			return nil, QueryReadyGenerationOpenStats{}, fmt.Errorf("typedcolumn: prepare query-ready operator part[%d]: %w", index, err)
+		}
+		refs = append(refs, PartRef{Role: preparedPart.Role, GenerationID: preparedPart.Generation, Part: part, PrimaryIDMode: preparedPart.View.Dependency.PrimaryIDMode, PrimaryIDBase: preparedPart.View.Dependency.PrimaryIDBase})
+		executions = append(executions, preparedPart.View.Execution)
 		decoded, err := preparedPart.View.Image.Dictionaries()
 		if err != nil {
-			return nil, fmt.Errorf("typedcolumn: prepare query-ready operator dictionaries part[%d]: %w", index, err)
+			return nil, QueryReadyGenerationOpenStats{}, fmt.Errorf("typedcolumn: prepare query-ready operator dictionaries part[%d]: %w", index, err)
 		}
 		inverse := make(map[string]map[int64]string, len(decoded))
 		for column, values := range decoded {
@@ -318,29 +395,66 @@ func (p *QueryReadyPreparedGeneration) PrepareOperator(request QueryReadyOperato
 				byCode[code] = value
 			}
 			inverse[column] = byCode
-			stats.LocalDictionaryDecodes++
+			readerStats.LocalDictionaryDecodes++
 		}
 		dictionaries = append(dictionaries, inverse)
-		stats.PartsDecoded++
-		stats.RowsMerged += preparedPart.View.Dependency.Rows
-		stats.BytesDecoded += int64(preparedPart.View.Dependency.ImageBytes)
+		readerStats.PartsDecoded++
+		readerStats.RowsMerged += preparedPart.View.Dependency.Rows
+		readerStats.BytesDecoded += int64(preparedPart.View.Dependency.ImageBytes)
+		openStats.PartsDecoded++
+		for _, section := range preparedPart.View.Image.Sections {
+			if section.Kind != ColumnPartImageSectionDictionaries {
+				continue
+			}
+			decodedBytes := section.RawBytes
+			if decodedBytes == 0 {
+				decodedBytes = section.Length
+			}
+			if decodedBytes < 0 || int64(decodedBytes) > math.MaxInt64-openStats.PayloadBytesDecoded {
+				return nil, QueryReadyGenerationOpenStats{}, errors.New("typedcolumn: query-ready dictionary byte accounting overflow")
+			}
+			openStats.PayloadBytesDecoded += int64(decodedBytes)
+		}
 		if preparedPart.Role == PartRoleBase {
-			stats.BaseInternalParts++
+			readerStats.BaseInternalParts++
 		} else {
-			stats.DeltaParts++
+			readerStats.DeltaParts++
 		}
 	}
-	partSet, err := NewPartSetReader(refs, p.tombstones)
-	if err != nil {
-		return nil, err
+	var partSet *PartSetReader
+	var err error
+	if denseDisjointScan {
+		partSet, err = newDenseDisjointScanPartSetReader(refs)
+	} else {
+		partSet, err = NewPartSetReader(refs, tombstones)
 	}
-	reader := &QueryReadyBaseDeltaReader{reader: partSet, dictionaries: dictionaries, stats: stats}
-	runner, err := PrepareQueryReadyOperator(reader, request)
 	if err != nil {
-		return nil, err
+		return nil, QueryReadyGenerationOpenStats{}, err
 	}
-	runner.prepareNanos = time.Since(started).Nanoseconds()
-	return runner, nil
+	reader := &QueryReadyBaseDeltaReader{reader: partSet, dictionaries: dictionaries, executions: executions, domains: make(map[string]queryReadyExecutionDomain), stats: readerStats}
+	domainColumns := make(map[string]struct{})
+	for _, execution := range executions {
+		for name, column := range execution.columns {
+			if column.kind == QueryReadyExecutionColumnCode {
+				domainColumns[name] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(domainColumns))
+	for name := range domainColumns {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		domain, err := buildQueryReadyExecutionDomain(reader, name)
+		if err != nil {
+			return nil, QueryReadyGenerationOpenStats{}, fmt.Errorf("typedcolumn: prepare query-ready domain %s: %w", name, err)
+		}
+		reader.domains[name] = domain
+		reader.stats.GlobalDictionaryConstructions++
+		openStats.DomainsConstructed++
+	}
+	return reader, openStats, nil
 }
 
 func validateQueryReadyOperatorRequest(request QueryReadyOperatorRequest) error {
@@ -383,6 +497,11 @@ func validateQueryReadyOperatorRequest(request QueryReadyOperatorRequest) error 
 }
 
 func buildQueryReadyExecutionDomain(reader *QueryReadyBaseDeltaReader, column string) (queryReadyExecutionDomain, error) {
+	if reader != nil && reader.domains != nil {
+		if domain, ok := reader.domains[column]; ok {
+			return domain, nil
+		}
+	}
 	set := make(map[string]struct{})
 	for partIndex, dictionaries := range reader.dictionaries {
 		partColumn, ok := reader.reader.parts[partIndex].Part.Columns[column]
@@ -543,6 +662,9 @@ func (r *QueryReadyOperator) Run() (QueryReadyOperatorResult, error) {
 	clear(r.int64Max)
 	clear(r.seen)
 	r.resultGroups = r.resultGroups[:0]
+	if r.canRunDirect() {
+		return r.runDirect(stats)
+	}
 	var expressionSum int64
 	for partIndex := range r.parts {
 		part := &r.parts[partIndex]
@@ -606,6 +728,256 @@ func (r *QueryReadyOperator) Run() (QueryReadyOperatorResult, error) {
 	stats.GroupsReturned = len(r.resultGroups)
 	stats.ScratchBytes = r.scratchBytes()
 	return QueryReadyOperatorResult{Groups: r.resultGroups, Stats: stats}, nil
+}
+
+func (r *QueryReadyOperator) canRunDirect() bool {
+	if r == nil || len(r.parts) == 0 {
+		return false
+	}
+	for i := range r.parts {
+		part := &r.parts[i]
+		if !part.visible.All || len(part.direct) != len(r.projected) {
+			return false
+		}
+		for projected := range r.projected {
+			column := part.direct[projected]
+			if column.rows != part.part.Descriptor.RowCount || (column.kind != QueryReadyExecutionColumnCode && column.kind != QueryReadyExecutionColumnInt64) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (r *QueryReadyOperator) runDirect(stats QueryReadyExecutionStats) (QueryReadyOperatorResult, error) {
+	var expressionSum int64
+	for partIndex := range r.parts {
+		part := &r.parts[partIndex]
+		rows := part.part.Descriptor.RowCount
+		stats.RowsScanned += rows
+		if part.role == PartRoleBase {
+			stats.BaseRowsScanned += rows
+		} else {
+			stats.DeltaRowsScanned += rows
+		}
+		for _, column := range part.direct {
+			stats.DecodedBytes += int64(len(column.values) + len(column.absent))
+		}
+		var selected []int
+		predicateStarted := time.Now()
+		if len(r.predicates) != 0 {
+			if err := r.selectDirectRows(partIndex, part, rows); err != nil {
+				stats.PredicateNanos += time.Since(predicateStarted).Nanoseconds()
+				return QueryReadyOperatorResult{Stats: stats}, err
+			}
+			selected = r.matchedRows
+			stats.RowsMatched += len(selected)
+		} else {
+			stats.RowsMatched += rows
+		}
+		stats.PredicateNanos += time.Since(predicateStarted).Nanoseconds()
+		reductionStarted := time.Now()
+		if err := r.reduceDirectPart(partIndex, part, rows, selected, &expressionSum, &stats); err != nil {
+			stats.ReductionNanos += time.Since(reductionStarted).Nanoseconds()
+			return QueryReadyOperatorResult{Stats: stats}, err
+		}
+		elapsed := time.Since(reductionStarted).Nanoseconds()
+		stats.ReductionNanos += elapsed
+		if part.role == PartRoleBase {
+			stats.BaseScanNanos += elapsed
+		} else {
+			stats.DeltaMergeNanos += elapsed
+		}
+	}
+	shapeStart := time.Now()
+	if err := r.shapeGroups(expressionSum, &stats); err != nil {
+		stats.GroupingNanos = time.Since(shapeStart).Nanoseconds()
+		return QueryReadyOperatorResult{Stats: stats}, err
+	}
+	stats.GroupingNanos = time.Since(shapeStart).Nanoseconds()
+	orderStart := time.Now()
+	r.orderAndLimit()
+	stats.OrderingTopKNanos = time.Since(orderStart).Nanoseconds()
+	stats.GroupsReturned = len(r.resultGroups)
+	stats.ScratchBytes = r.scratchBytes()
+	return QueryReadyOperatorResult{Groups: r.resultGroups, Stats: stats}, nil
+}
+
+func (r *QueryReadyOperator) selectDirectRows(partIndex int, part *queryReadyExecutionPart, rows int) error {
+	r.matchedRows = r.matchedRows[:0]
+	fast8 := len(part.predicates) == len(r.predicates) && len(part.predicates) > 0 && len(part.predicates) <= 3
+	if fast8 {
+		for index := range part.predicates {
+			predicate := &part.predicates[index]
+			if predicate.allowed8 == nil || len(predicate.column.values) < rows {
+				fast8 = false
+				break
+			}
+		}
+	}
+	if fast8 {
+		switch len(part.predicates) {
+		case 1:
+			p0 := &part.predicates[0]
+			for row := range p0.column.values[:rows] {
+				if p0.matches8(row) {
+					r.matchedRows = append(r.matchedRows, row)
+				}
+			}
+		case 2:
+			p0, p1 := &part.predicates[0], &part.predicates[1]
+			for row := range p0.column.values[:rows] {
+				if p0.matches8(row) && p1.matches8(row) {
+					r.matchedRows = append(r.matchedRows, row)
+				}
+			}
+		case 3:
+			p0, p1, p2 := &part.predicates[0], &part.predicates[1], &part.predicates[2]
+			for row := range p0.column.values[:rows] {
+				if p0.matches8(row) && p1.matches8(row) && p2.matches8(row) {
+					r.matchedRows = append(r.matchedRows, row)
+				}
+			}
+		}
+		return nil
+	}
+	for row := 0; row < rows; row++ {
+		matched, err := r.directRowMatches(partIndex, part, row)
+		if err != nil {
+			return err
+		}
+		if matched {
+			r.matchedRows = append(r.matchedRows, row)
+		}
+	}
+	return nil
+}
+
+func (r *QueryReadyOperator) directRowMatches(partIndex int, part *queryReadyExecutionPart, row int) (bool, error) {
+	for predicateIndex := range r.predicates {
+		predicate := &r.predicates[predicateIndex]
+		column := part.direct[predicate.projected]
+		if column.absentAtUnchecked(row) {
+			if predicate.domain.emptyGlobal < 0 || !predicate.allowed[predicate.domain.emptyGlobal] {
+				return false, nil
+			}
+			continue
+		}
+		local := column.codeAtUnchecked(row)
+		if partIndex >= len(predicate.allowedLocal) || int(local) >= len(predicate.allowedLocal[partIndex]) {
+			return false, fmt.Errorf("typedcolumn: query-ready direct predicate code=%d outside domain", local)
+		}
+		if !predicate.allowedLocal[partIndex][local] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (r *QueryReadyOperator) reduceDirectPart(partIndex int, part *queryReadyExecutionPart, rows int, selected []int, expressionSum *int64, stats *QueryReadyExecutionStats) error {
+	rowAt := func(index int) int {
+		if selected == nil {
+			return index
+		}
+		return selected[index]
+	}
+	selectedRows := rows
+	if selected != nil {
+		selectedRows = len(selected)
+	}
+	switch r.request.Kind {
+	case QueryReadyOperatorSumSecondOfDaySquare:
+		column := part.direct[r.valueProjected]
+		for index := 0; index < selectedRows; index++ {
+			seconds := floorUnixSeconds(column.int64AtUnchecked(rowAt(index)))
+			secondOfDay := seconds % 86_400
+			if secondOfDay < 0 {
+				secondOfDay += 86_400
+			}
+			term := secondOfDay * secondOfDay
+			if *expressionSum > math.MaxInt64-term {
+				return fmt.Errorf("typedcolumn: query-ready second-of-day square sum overflow current=%d value=%d", *expressionSum, term)
+			}
+			*expressionSum += term
+		}
+		return nil
+	case QueryReadyOperatorHourCount:
+		column := part.direct[r.valueProjected]
+		for index := 0; index < selectedRows; index++ {
+			secondOfDay := floorUnixSeconds(column.int64AtUnchecked(rowAt(index))) % 86_400
+			if secondOfDay < 0 {
+				secondOfDay += 86_400
+			}
+			r.hourCounts[int(secondOfDay/3_600)]++
+		}
+		return nil
+	}
+	groupColumn := part.direct[r.groupProjected]
+	groupTranslation := r.groupDomain.byPart[partIndex]
+	for index := 0; index < selectedRows; index++ {
+		row := rowAt(index)
+		group := r.groupDomain.emptyGlobal
+		if !groupColumn.absentAtUnchecked(row) {
+			local := groupColumn.codeAtUnchecked(row)
+			if int(local) >= len(groupTranslation) || groupTranslation[local] < 0 {
+				return fmt.Errorf("typedcolumn: query-ready direct group code=%d outside domain", local)
+			}
+			group = groupTranslation[local]
+			stats.CodeTranslations++
+		} else if group < 0 {
+			return errors.New("typedcolumn: query-ready direct nullable group has no empty domain")
+		}
+		switch r.request.Kind {
+		case QueryReadyOperatorGroupCount:
+			r.counts[group]++
+		case QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
+			distinctColumn := part.direct[r.distinctProjected]
+			distinct := r.distinctDomain.emptyGlobal
+			if !distinctColumn.absentAtUnchecked(row) {
+				local := distinctColumn.codeAtUnchecked(row)
+				translation := r.distinctDomain.byPart[partIndex]
+				if int(local) >= len(translation) || translation[local] < 0 {
+					return fmt.Errorf("typedcolumn: query-ready direct distinct code=%d outside domain", local)
+				}
+				distinct = translation[local]
+				stats.CodeTranslations++
+			} else if distinct < 0 {
+				return errors.New("typedcolumn: query-ready direct nullable distinct has no empty domain")
+			}
+			r.counts[group]++
+			cell := group*len(r.distinctDomain.values) + distinct
+			r.distinctBits[cell/64] |= uint64(1) << uint(cell%64)
+		case QueryReadyOperatorGroupHourCount:
+			secondOfDay := floorUnixSeconds(part.direct[r.valueProjected].int64AtUnchecked(row)) % 86_400
+			if secondOfDay < 0 {
+				secondOfDay += 86_400
+			}
+			r.hourCounts[group*24+int(secondOfDay/3_600)]++
+		case QueryReadyOperatorGroupMinInt64:
+			value := part.direct[r.valueProjected].int64AtUnchecked(row)
+			if !r.seen[group] || value < r.int64Values[group] {
+				r.int64Values[group], r.seen[group] = value, true
+			}
+		case QueryReadyOperatorGroupMaxInt64:
+			value := part.direct[r.valueProjected].int64AtUnchecked(row)
+			if !r.seen[group] || value > r.int64Values[group] {
+				r.int64Values[group], r.seen[group] = value, true
+			}
+		case QueryReadyOperatorGroupInt64Span:
+			value := part.direct[r.valueProjected].int64AtUnchecked(row)
+			if !r.seen[group] {
+				r.int64Values[group], r.int64Max[group], r.seen[group] = value, value, true
+			} else {
+				if value < r.int64Values[group] {
+					r.int64Values[group] = value
+				}
+				if value > r.int64Max[group] {
+					r.int64Max[group] = value
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (r *QueryReadyOperator) rowMatches(partIndex int, part *queryReadyExecutionPart, row int, stats *QueryReadyExecutionStats) (bool, error) {
@@ -732,6 +1104,7 @@ func floorUnixSeconds(micros int64) int64 {
 }
 
 func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyExecutionStats) error {
+	groupsConsidered := 0
 	switch r.request.Kind {
 	case QueryReadyOperatorGroupCount:
 		for group, count := range r.counts {
@@ -775,7 +1148,13 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64:
 		for group, seen := range r.seen {
 			if seen && (!r.request.SkipEmptyGroupKey || r.groupDomain.values[group] != "") {
-				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: r.int64Values[group]})
+				candidate := QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: r.int64Values[group]}
+				if r.usesBoundedTopKShape() {
+					groupsConsidered++
+					r.insertBoundedTopK(candidate)
+				} else {
+					r.resultGroups = append(r.resultGroups, candidate)
+				}
 			}
 		}
 	case QueryReadyOperatorGroupInt64Span:
@@ -785,7 +1164,13 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 				if minimum < 0 && maximum > math.MaxInt64+minimum {
 					return fmt.Errorf("typedcolumn: query-ready int64 span overflow minimum=%d maximum=%d", minimum, maximum)
 				}
-				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: maximum - minimum})
+				candidate := QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: maximum - minimum}
+				if r.usesBoundedTopKShape() {
+					groupsConsidered++
+					r.insertBoundedTopK(candidate)
+				} else {
+					r.resultGroups = append(r.resultGroups, candidate)
+				}
 			}
 		}
 	case QueryReadyOperatorSumSecondOfDaySquare:
@@ -793,8 +1178,39 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 			r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Count: stats.RowsMatched, Int64: expressionSum})
 		}
 	}
-	stats.GroupsConsidered = len(r.resultGroups)
+	if r.usesBoundedTopKShape() {
+		stats.GroupsConsidered = groupsConsidered
+	} else {
+		stats.GroupsConsidered = len(r.resultGroups)
+	}
 	return nil
+}
+
+func (r *QueryReadyOperator) usesBoundedTopKShape() bool {
+	if r == nil || r.request.TopK <= 0 {
+		return false
+	}
+	switch r.request.Kind {
+	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *QueryReadyOperator) insertBoundedTopK(candidate QueryReadyOperatorGroup) {
+	limit := r.request.TopK
+	index, _ := slices.BinarySearchFunc(r.resultGroups, candidate, func(existing, candidate QueryReadyOperatorGroup) int {
+		return r.compareOrderedGroup(existing, candidate)
+	})
+	if index >= limit {
+		return
+	}
+	if len(r.resultGroups) < limit {
+		r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{})
+	}
+	copy(r.resultGroups[index+1:], r.resultGroups[index:len(r.resultGroups)-1])
+	r.resultGroups[index] = candidate
 }
 
 func (r *QueryReadyOperator) orderAndLimit() {
@@ -813,44 +1229,49 @@ func (r *QueryReadyOperator) orderAndLimit() {
 		})
 		return
 	}
-	slices.SortFunc(r.resultGroups, func(left, right QueryReadyOperatorGroup) int {
-		switch r.request.Kind {
-		case QueryReadyOperatorGroupCount, QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
-			if left.Count != right.Count {
-				if left.Count > right.Count {
-					return -1
-				}
-				return 1
-			}
-		case QueryReadyOperatorHourCount, QueryReadyOperatorGroupHourCount:
-			if left.Hour != right.Hour {
-				return left.Hour - right.Hour
-			}
-		case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
-			if left.Int64 != right.Int64 {
-				if r.request.Order == QueryReadyOrderInt64Desc {
-					if left.Int64 > right.Int64 {
-						return -1
-					}
-					return 1
-				}
-				if left.Int64 < right.Int64 {
-					return -1
-				}
-				return 1
-			}
-		}
-		if left.Key < right.Key {
-			return -1
-		}
-		if left.Key > right.Key {
-			return 1
-		}
-		return 0
-	})
+	if r.usesBoundedTopKShape() {
+		return
+	}
+	slices.SortFunc(r.resultGroups, r.compareOrderedGroup)
 	if len(r.resultGroups) > r.request.TopK {
 		r.resultGroups = r.resultGroups[:r.request.TopK]
 	}
+}
+
+func (r *QueryReadyOperator) compareOrderedGroup(left, right QueryReadyOperatorGroup) int {
+	switch r.request.Kind {
+	case QueryReadyOperatorGroupCount, QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
+		if left.Count != right.Count {
+			if left.Count > right.Count {
+				return -1
+			}
+			return 1
+		}
+	case QueryReadyOperatorHourCount, QueryReadyOperatorGroupHourCount:
+		if left.Hour != right.Hour {
+			return left.Hour - right.Hour
+		}
+	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
+		if left.Int64 != right.Int64 {
+			if r.request.Order == QueryReadyOrderInt64Desc {
+				if left.Int64 > right.Int64 {
+					return -1
+				}
+				return 1
+			}
+			if left.Int64 < right.Int64 {
+				return -1
+			}
+			return 1
+		}
+	}
+	if left.Key < right.Key {
+		return -1
+	}
+	if left.Key > right.Key {
+		return 1
+	}
+	return 0
 }
 
 func (r *QueryReadyOperator) scratchBytes() int64 {

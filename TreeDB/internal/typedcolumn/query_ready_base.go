@@ -19,9 +19,9 @@ import (
 // publication, recovery selection, or garbage collection.
 const (
 	queryReadyBaseMagic            = uint32(0x47425251) // "QRBG", little-endian.
-	queryReadyBaseVersion          = uint16(1)
+	queryReadyBaseVersion          = uint16(3)
 	queryReadyBaseHeaderBytes      = 80
-	queryReadyBasePartEntryBytes   = 80
+	queryReadyBasePartEntryBytes   = 144
 	queryReadyBasePayloadAlignment = 4096
 )
 
@@ -35,12 +35,25 @@ type QueryReadyBaseIdentity struct {
 	SchemaHash [sha256.Size]byte
 }
 
+// QueryReadyPrimaryIDMode records how a part's encoded row-locator primary IDs
+// map into the logical identity domain shared by a base-plus-delta reader.
+// Preserve retains the encoded IDs. DensePartLocal translates a validated
+// zero-based dense part-local domain by PrimaryIDBase.
+type QueryReadyPrimaryIDMode uint8
+
+const (
+	QueryReadyPrimaryIDPreserve QueryReadyPrimaryIDMode = iota
+	QueryReadyPrimaryIDDensePartLocal
+)
+
 // QueryReadyBasePartInput is one snapshot-visible typed-column part. Build
 // sorts inputs by source generation and part ID, so caller iteration order is
 // not encoded into the durable image.
 type QueryReadyBasePartInput struct {
 	SourceGeneration uint64
 	Image            ColumnPartImage
+	PrimaryIDMode    QueryReadyPrimaryIDMode
+	PrimaryIDBase    int64
 }
 
 // QueryReadyBaseDependency is the complete rebuild dependency for one embedded
@@ -51,6 +64,8 @@ type QueryReadyBaseDependency struct {
 	Rows             int
 	ImageBytes       int
 	ImageChecksum    [sha256.Size]byte
+	PrimaryIDMode    QueryReadyPrimaryIDMode
+	PrimaryIDBase    int64
 }
 
 type QueryReadyBaseBuildStats struct {
@@ -61,6 +76,8 @@ type QueryReadyBaseBuildStats struct {
 	BytesCopied      int64
 	BytesHashed      int64
 	BytesChecksummed int64
+	ExecutionBytes   int64
+	ExecutionColumns int
 	ValidationTime   time.Duration
 	BuildTime        time.Duration
 }
@@ -81,6 +98,8 @@ type QueryReadyBaseOpenStats struct {
 	BytesValidated          int64
 	WholePartDecodes        int
 	DictionaryConstructions int
+	ExecutionBytes          int64
+	ExecutionColumns        int
 	ValidationTime          time.Duration
 	OpenTime                time.Duration
 	Mapped                  bool
@@ -90,6 +109,7 @@ type QueryReadyBasePartView struct {
 	Dependency QueryReadyBaseDependency
 	Offset     int
 	Image      ColumnPartImage
+	Execution  QueryReadyExecutionPartView
 }
 
 // QueryReadyBaseGeneration is a validated read-only view. For file opens, all
@@ -125,17 +145,22 @@ func (g *QueryReadyBaseGeneration) Close() error {
 		g.data = nil
 		for i := range g.Parts {
 			g.Parts[i].Image.Bytes = nil
+			g.Parts[i].Execution = QueryReadyExecutionPartView{}
 		}
 	})
 	return g.closeErr
 }
 
 type queryReadyBaseBuildPart struct {
-	input      QueryReadyBasePartInput
-	parsed     ColumnPartImage
-	checksum   [sha256.Size]byte
-	offset     int
-	dependency QueryReadyBaseDependency
+	input             QueryReadyBasePartInput
+	parsed            ColumnPartImage
+	checksum          [sha256.Size]byte
+	offset            int
+	execution         []byte
+	executionChecksum [sha256.Size]byte
+	executionOffset   int
+	executionColumns  int
+	dependency        QueryReadyBaseDependency
 }
 
 type queryReadyBaseBuildPlan struct {
@@ -182,17 +207,33 @@ func prepareQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []Q
 		if err != nil {
 			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] validate image: %w", i, err)
 		}
-		if _, err := ColumnPartFromImageWithOptions(parsed, ColumnPartImageReadOptions{}); err != nil {
+		readOptions := ColumnPartImageReadOptions{}
+		if input.PrimaryIDMode == QueryReadyPrimaryIDDensePartLocal {
+			readOptions.IncludeRowLocators = true
+			readOptions.ValidateRowLocators = true
+		}
+		decoded, err := ColumnPartFromImageWithOptions(parsed, readOptions)
+		if err != nil {
 			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] validate structures: %w", i, err)
+		}
+		if err := validateQueryReadyPrimaryIDInput(input, decoded); err != nil {
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] primary IDs: %w", i, err)
 		}
 		if _, err := CertifyColumnPartLayoutContractFromImage(parsed); err != nil {
 			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] certify layout: %w", i, err)
 		}
+		execution, executionColumns, err := buildQueryReadyExecutionImage(decoded)
+		if err != nil {
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] build execution image: %w", i, err)
+		}
 		validationTime += time.Since(validationStarted)
 		parts[i] = queryReadyBaseBuildPart{
-			input:    input,
-			parsed:   parsed,
-			checksum: sha256.Sum256(input.Image.Bytes),
+			input:             input,
+			parsed:            parsed,
+			checksum:          sha256.Sum256(input.Image.Bytes),
+			execution:         execution,
+			executionChecksum: sha256.Sum256(execution),
+			executionColumns:  executionColumns,
 		}
 		parts[i].dependency = QueryReadyBaseDependency{
 			SourceGeneration: input.SourceGeneration,
@@ -200,6 +241,8 @@ func prepareQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []Q
 			Rows:             parsed.Rows,
 			ImageBytes:       len(input.Image.Bytes),
 			ImageChecksum:    parts[i].checksum,
+			PrimaryIDMode:    input.PrimaryIDMode,
+			PrimaryIDBase:    input.PrimaryIDBase,
 		}
 	}
 	sort.Slice(parts, func(i, j int) bool {
@@ -232,8 +275,60 @@ func prepareQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []Q
 			return queryReadyBaseBuildPlan{}, errors.New("typedcolumn: query-ready base image exceeds host size")
 		}
 		totalBytes += len(parts[i].input.Image.Bytes)
+		totalBytes, err = queryReadyBaseAlign(totalBytes, queryReadyExecutionImagePayloadAlign)
+		if err != nil {
+			return queryReadyBaseBuildPlan{}, err
+		}
+		parts[i].executionOffset = totalBytes
+		if len(parts[i].execution) > math.MaxInt-totalBytes {
+			return queryReadyBaseBuildPlan{}, errors.New("typedcolumn: query-ready execution image exceeds host size")
+		}
+		totalBytes += len(parts[i].execution)
 	}
 	return queryReadyBaseBuildPlan{parts: parts, payloadOffset: payloadOffset, totalBytes: totalBytes, validationTime: validationTime}, nil
+}
+
+func validateQueryReadyPrimaryIDInput(input QueryReadyBasePartInput, part *ColumnPart) error {
+	if part == nil {
+		return errors.New("nil typed-column part")
+	}
+	if err := validateQueryReadyPrimaryIDMetadata(input.PrimaryIDMode, input.PrimaryIDBase, int64(part.Descriptor.RowCount)); err != nil {
+		return err
+	}
+	if input.PrimaryIDMode != QueryReadyPrimaryIDDensePartLocal {
+		return nil
+	}
+	if len(part.Locators) != part.Descriptor.RowCount {
+		return fmt.Errorf("dense part-local locator count=%d want rows=%d", len(part.Locators), part.Descriptor.RowCount)
+	}
+	for primaryID := range part.Locators {
+		if primaryID < 0 || primaryID >= int64(part.Descriptor.RowCount) {
+			return fmt.Errorf("dense part-local ID %d outside [0,%d)", primaryID, part.Descriptor.RowCount)
+		}
+	}
+	return nil
+}
+
+func validateQueryReadyPrimaryIDMetadata(mode QueryReadyPrimaryIDMode, base, rows int64) error {
+	if rows < 0 {
+		return fmt.Errorf("negative row count %d", rows)
+	}
+	switch mode {
+	case QueryReadyPrimaryIDPreserve:
+		if base != 0 {
+			return fmt.Errorf("preserved primary IDs have nonzero base %d", base)
+		}
+	case QueryReadyPrimaryIDDensePartLocal:
+		if base < 0 {
+			return fmt.Errorf("dense part-local primary ID base %d is negative", base)
+		}
+		if rows > 0 && base > math.MaxInt64-(rows-1) {
+			return fmt.Errorf("dense part-local range base=%d rows=%d overflows int64", base, rows)
+		}
+	default:
+		return fmt.Errorf("unsupported primary ID mode %d", mode)
+	}
+	return nil
 }
 
 func encodeQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, plan queryReadyBaseBuildPlan, out []byte) QueryReadyBaseBuildResult {
@@ -252,7 +347,8 @@ func encodeQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, plan queryR
 	binary.LittleEndian.PutUint64(out[64:72], uint64(payloadOffset))
 	binary.LittleEndian.PutUint64(out[72:80], uint64(totalBytes))
 	dependencies := make([]QueryReadyBaseDependency, len(parts))
-	var rows, inputBytes int64
+	var rows, inputBytes, executionBytes int64
+	var executionColumns int
 	for i := range parts {
 		entry := out[queryReadyBaseHeaderBytes+i*queryReadyBasePartEntryBytes:]
 		binary.LittleEndian.PutUint64(entry[0:8], parts[i].input.SourceGeneration)
@@ -262,10 +358,18 @@ func encodeQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, plan queryR
 		binary.LittleEndian.PutUint64(entry[32:40], uint64(parts[i].parsed.Rows))
 		binary.LittleEndian.PutUint64(entry[40:48], uint64(parts[i].parsed.ManifestBytes))
 		copy(entry[48:80], parts[i].checksum[:])
+		binary.LittleEndian.PutUint64(entry[80:88], uint64(parts[i].input.PrimaryIDBase))
+		entry[88] = byte(parts[i].input.PrimaryIDMode)
+		binary.LittleEndian.PutUint64(entry[96:104], uint64(parts[i].executionOffset))
+		binary.LittleEndian.PutUint64(entry[104:112], uint64(len(parts[i].execution)))
+		copy(entry[112:144], parts[i].executionChecksum[:])
 		copy(out[parts[i].offset:], parts[i].input.Image.Bytes)
+		copy(out[parts[i].executionOffset:], parts[i].execution)
 		dependencies[i] = parts[i].dependency
 		rows += int64(parts[i].parsed.Rows)
 		inputBytes += int64(len(parts[i].input.Image.Bytes))
+		executionBytes += int64(len(parts[i].execution))
+		executionColumns += parts[i].executionColumns
 	}
 	table := out[queryReadyBaseHeaderBytes : queryReadyBaseHeaderBytes+tableBytes]
 	binary.LittleEndian.PutUint32(out[56:60], crc32.Checksum(table, queryReadyBaseCRCTable))
@@ -278,9 +382,11 @@ func encodeQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, plan queryR
 			Rows:             rows,
 			InputBytes:       inputBytes,
 			OutputBytes:      int64(len(out)),
-			BytesCopied:      inputBytes,
-			BytesHashed:      inputBytes,
+			BytesCopied:      inputBytes + executionBytes,
+			BytesHashed:      inputBytes + executionBytes,
 			BytesChecksummed: int64(tableBytes + queryReadyBaseHeaderBytes),
+			ExecutionBytes:   executionBytes,
+			ExecutionColumns: executionColumns,
 			ValidationTime:   plan.validationTime,
 		},
 	}
@@ -419,13 +525,23 @@ func openQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity, 
 		length64 := binary.LittleEndian.Uint64(entry[24:32])
 		rows64 := binary.LittleEndian.Uint64(entry[32:40])
 		manifest64 := binary.LittleEndian.Uint64(entry[40:48])
+		primaryIDBase := int64(binary.LittleEndian.Uint64(entry[80:88]))
+		primaryIDMode := QueryReadyPrimaryIDMode(entry[88])
+		executionOffset64 := binary.LittleEndian.Uint64(entry[96:104])
+		executionLength64 := binary.LittleEndian.Uint64(entry[104:112])
+		if slices.ContainsFunc(entry[89:96], func(value byte) bool { return value != 0 }) {
+			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] reserved entry bytes are nonzero", i)
+		}
+		if err := validateQueryReadyPrimaryIDMetadata(primaryIDMode, primaryIDBase, int64(rows64)); err != nil {
+			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] primary IDs: %w", i, err)
+		}
 		if sourceGeneration == 0 || sourceGeneration > identity.Generation {
 			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] source generation=%d invalid for base generation=%d", i, sourceGeneration, identity.Generation)
 		}
 		if i > 0 && (sourceGeneration < previousSource || (sourceGeneration == previousSource && partID <= previousPart)) {
 			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] dependency order is not strictly increasing", i)
 		}
-		if offset64 > math.MaxInt || length64 > math.MaxInt || rows64 > math.MaxInt || manifest64 > math.MaxInt {
+		if offset64 > math.MaxInt || length64 > math.MaxInt || rows64 > math.MaxInt || manifest64 > math.MaxInt || executionOffset64 > math.MaxInt || executionLength64 > math.MaxInt {
 			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] fields exceed host bounds", i)
 		}
 		offset, length := int(offset64), int(length64)
@@ -462,14 +578,34 @@ func openQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity, 
 		if err := validateQueryReadyBasePartStructures(image); err != nil {
 			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] validate structures: %w", i, err)
 		}
-		dependency := QueryReadyBaseDependency{SourceGeneration: sourceGeneration, PartID: partID, Rows: image.Rows, ImageBytes: len(partBytes), ImageChecksum: wantChecksum}
+		executionOffset, executionLength := int(executionOffset64), int(executionLength64)
+		imageEnd := offset + length
+		if executionOffset < imageEnd || executionOffset%queryReadyExecutionImagePayloadAlign != 0 || executionLength < queryReadyExecutionImageHeaderBytes || executionLength > len(data)-executionOffset {
+			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] execution offset=%d length=%d invalid for image_end=%d total=%d", i, executionOffset, executionLength, imageEnd, len(data))
+		}
+		if err := queryReadyBaseValidateZeroPadding(data[imageEnd:executionOffset], fmt.Sprintf("before part[%d] execution", i)); err != nil {
+			return nil, err
+		}
+		executionBytes := data[executionOffset : executionOffset+executionLength]
+		var wantExecutionChecksum [sha256.Size]byte
+		copy(wantExecutionChecksum[:], entry[112:144])
+		if got := sha256.Sum256(executionBytes); got != wantExecutionChecksum {
+			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] execution checksum=%x want %x", i, got, wantExecutionChecksum)
+		}
+		execution, err := parseQueryReadyExecutionImage(executionBytes, image.Rows)
+		if err != nil {
+			return nil, fmt.Errorf("typedcolumn: query-ready base part[%d] execution image: %w", i, err)
+		}
+		dependency := QueryReadyBaseDependency{SourceGeneration: sourceGeneration, PartID: partID, Rows: image.Rows, ImageBytes: len(partBytes), ImageChecksum: wantChecksum, PrimaryIDMode: primaryIDMode, PrimaryIDBase: primaryIDBase}
 		dependencies = append(dependencies, dependency)
-		parts = append(parts, QueryReadyBasePartView{Dependency: dependency, Offset: offset, Image: image})
+		parts = append(parts, QueryReadyBasePartView{Dependency: dependency, Offset: offset, Image: image, Execution: execution})
 		stats.Parts++
 		stats.Rows += int64(image.Rows)
 		stats.BytesDecoded += int64(manifestLength + queryReadyBaseStructuralBytes(image))
+		stats.ExecutionBytes += int64(executionLength)
+		stats.ExecutionColumns += len(execution.columns)
 		previousSource, previousPart = sourceGeneration, partID
-		previousEnd = offset + length
+		previousEnd = executionOffset + executionLength
 	}
 	if previousEnd != len(data) {
 		return nil, fmt.Errorf("typedcolumn: query-ready base has %d trailing bytes after final part", len(data)-previousEnd)

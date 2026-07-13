@@ -54,6 +54,8 @@ type QueryReadyColumnPreparationStats struct {
 	BytesCopied                int64         `json:"bytes_copied"`
 	BytesHashed                int64         `json:"bytes_hashed"`
 	BytesChecksummed           int64         `json:"bytes_checksummed"`
+	ExecutionBytes             int64         `json:"execution_bytes"`
+	ExecutionColumns           int           `json:"execution_columns"`
 	AssetsProduced             int           `json:"assets_produced"`
 	PartsProduced              int           `json:"parts_produced"`
 	ReservedInFlightBytes      int64         `json:"build_reserved_in_flight_bytes"`
@@ -66,6 +68,10 @@ type QueryReadyColumnPreparationStats struct {
 	AssetPreparationTime       time.Duration `json:"asset_preparation_nanoseconds"`
 	ManagerRegistrationTime    time.Duration `json:"manager_registration_nanoseconds"`
 	PublicationHandoffTime     time.Duration `json:"publication_handoff_nanoseconds"`
+	GenerationOpenTime         time.Duration `json:"generation_open_nanoseconds"`
+	OpenPartsDecoded           int           `json:"open_parts_decoded"`
+	OpenDictionaryBytesDecoded int64         `json:"open_dictionary_bytes_decoded"`
+	OpenDomainsConstructed     int           `json:"open_domains_constructed"`
 	TotalTime                  time.Duration `json:"total_nanoseconds"`
 }
 
@@ -284,7 +290,12 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 		}
 		stats.SourceRows += int64(image.Rows)
 		stats.SourceBytes += int64(len(raw))
-		parts = append(parts, typedcolumn.QueryReadyBasePartInput{SourceGeneration: ref.Generation, Image: image})
+		parts = append(parts, typedcolumn.QueryReadyBasePartInput{
+			SourceGeneration: ref.Generation,
+			Image:            image,
+			PrimaryIDMode:    typedcolumn.QueryReadyPrimaryIDDensePartLocal,
+			PrimaryIDBase:    stats.SourceRows - int64(image.Rows),
+		})
 	}
 	request := queryReadyBuildRequest{Kind: queryReadyBuildBase, Identity: key.Identity, Parts: parts}
 	buildWorkingBytes, err := estimateQueryReadyBuildWorkingBytes(request)
@@ -322,11 +333,26 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 	build := prepared.Stats
 	stats.Rows, stats.InputBytes, stats.OutputBytes = build.Rows, build.InputBytes, build.OutputBytes
 	stats.BytesCopied, stats.BytesHashed, stats.BytesChecksummed = build.BytesCopied, build.BytesHashed, build.BytesChecksummed
+	stats.ExecutionBytes, stats.ExecutionColumns = build.ExecutionBytes, build.ExecutionColumns
 	stats.AssetsProduced, stats.PartsProduced = build.AssetsProduced, build.PartsProduced
 	stats.ReservedInFlightBytes, stats.EstimatedPeakInFlightBytes, stats.EncodedBufferPeakBytes = build.ReservedInFlightBytes, stats.SourceBytes+build.EstimatedPeakInFlightBytes, build.EncodedBufferPeakBytes
 	stats.WorkerLimit, stats.QueueCapacity, stats.QueueWaitTime = build.WorkerLimit, build.QueueCapacity, build.QueueWaitTime
 	stats.BuildTime, stats.AssetPreparationTime = build.BaseBuildTime, build.AssetPreparationTime
 	stats.ManagerRegistrationTime, stats.PublicationHandoffTime = build.ManagerRegistrationTime, build.HandoffTime
+	openStarted := time.Now()
+	openLease, err := c.openCollectionQueryReadyGenerationForIdentity(identity, selectedFiles)
+	stats.GenerationOpenTime = time.Since(openStarted)
+	if err != nil {
+		return nil, err
+	}
+	if err := openLease.Close(); err != nil {
+		retireErr := c.retireCollectionQueryReadyGenerationCache(identity, selectedFiles)
+		return nil, errors.Join(err, retireErr)
+	}
+	openStats := c.collectionQueryReadyGenerationCacheSnapshot().Open
+	stats.OpenPartsDecoded = openStats.PartsDecoded
+	stats.OpenDictionaryBytesDecoded = openStats.PayloadBytesDecoded
+	stats.OpenDomainsConstructed = openStats.DomainsConstructed
 	stats.TotalTime = time.Since(started)
 	lifetime := &queryReadyColumnPreparedLifetime{collection: c, identity: identity, files: selectedFiles, prepared: prepared, refs: 1}
 	files.lifetime = lifetime

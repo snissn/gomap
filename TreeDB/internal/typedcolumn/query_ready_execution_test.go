@@ -1,13 +1,73 @@
 package typedcolumn
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestQueryReadyGenerationOpenBuildsExecutionDomainsExactlyOnce(t *testing.T) {
+	requireQueryReadyGenerationFileOpen(t)
+	image := queryReadyJSONBenchImage(t, 8999,
+		[]int64{1, 2, 3},
+		[]string{"post", "like", "post"},
+		[]string{"did:1", "did:2", "did:1"},
+		[]string{"commit", "commit", "identity"},
+		[]string{"create", "delete", "create"},
+		[]int64{11, 22, 33},
+	)
+	identity := queryReadyBaseTestIdentity(1)
+	built, err := BuildQueryReadyBaseGeneration(identity, []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "base.qrbg")
+	if err := os.WriteFile(path, built.Bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := QueryReadyGenerationOpenKey{Identity: identity, ManifestHash: sha256.Sum256([]byte("open-execution-domains"))}
+	cache := NewQueryReadyGenerationOpenCache(key)
+	t.Cleanup(func() { _ = cache.Close() })
+	prepared, err := cache.Open(QueryReadyGenerationOpenFiles{
+		Key:                key,
+		Base:               QueryReadyGenerationFile{Path: path, Identity: identity, Kind: QueryReadyGenerationBase},
+		SnapshotGeneration: identity.Generation,
+		Bound:              QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 1, MaxAccumulatedDeltaParts: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cache.Stats()
+	if before.PartsDecoded != 1 || before.DomainsConstructed != 4 || before.PayloadBytesDecoded == 0 || before.WholePartDecodesDuringOpen != 0 {
+		t.Fatalf("open stats=%+v", before)
+	}
+	requests := []QueryReadyOperatorRequest{
+		{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"},
+		{Kind: QueryReadyOperatorSumSecondOfDaySquare, ValueColumn: "time_us"},
+	}
+	for repeat := 0; repeat < 3; repeat++ {
+		for _, request := range requests {
+			runner, err := prepared.PrepareOperator(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.Run(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	after := cache.Stats()
+	if after.PartsDecoded != before.PartsDecoded || after.PayloadBytesDecoded != before.PayloadBytesDecoded || after.DomainsConstructed != before.DomainsConstructed || after.WholePartDecodesAfterOpen != 0 {
+		t.Fatalf("query preparation rebuilt open state: before=%+v after=%+v", before, after)
+	}
+}
 
 func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 	reader := queryReadyJSONBenchReader(t)
@@ -667,6 +727,159 @@ func queryReadyJSONBenchImageWithGranules(t testing.TB, partID uint64, ids []int
 		t.Fatal(err)
 	}
 	return image
+}
+
+func TestQueryReadyBaseGenerationPersistsQueryIndependentExecutionColumns(t *testing.T) {
+	image := queryReadyJSONBenchImage(t, 9901,
+		[]int64{0, 1, 2, 3},
+		[]string{"post", "like", "post", "repost"},
+		[]string{"did:1", "did:2", "did:1", "did:3"},
+		[]string{"commit", "commit", "identity", "commit"},
+		[]string{"create", "delete", "", "create"},
+		[]int64{11, 22, 33, 44},
+	)
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{
+		SourceGeneration: 1,
+		Image:            image,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(base.Parts) != 1 || base.Parts[0].Execution.Rows() != 4 {
+		t.Fatalf("execution view parts=%d rows=%d", len(base.Parts), base.Parts[0].Execution.Rows())
+	}
+	event, ok := base.Parts[0].Execution.Column("event")
+	if !ok || event.Kind() != QueryReadyExecutionColumnCode || event.CodeWidth() != 1 {
+		t.Fatalf("event execution column=%+v ok=%v", event, ok)
+	}
+	if got, absent, err := event.CodeAt(2); err != nil || absent || got != 0 {
+		t.Fatalf("event row 2 code=%d absent=%v err=%v", got, absent, err)
+	}
+	timeUS, ok := base.Parts[0].Execution.Column("time_us")
+	if !ok || timeUS.Kind() != QueryReadyExecutionColumnInt64 {
+		t.Fatalf("time_us execution column=%+v ok=%v", timeUS, ok)
+	}
+	if got, absent, err := timeUS.Int64At(3); err != nil || absent || got != 44 {
+		t.Fatalf("time_us row 3 value=%d absent=%v err=%v", got, absent, err)
+	}
+}
+
+func TestQueryReadyExecutionImageUpperBoundCoversBuiltSidecarWithoutAllocating(t *testing.T) {
+	image := queryReadyJSONBenchImage(t, 9902,
+		[]int64{0, 1, 2, 3},
+		[]string{"post", "like", "post", "repost"},
+		[]string{"did:1", "did:2", "did:1", "did:3"},
+		[]string{"commit", "commit", "identity", "commit"},
+		[]string{"create", "delete", "", "create"},
+		[]int64{11, 22, 33, 44},
+	)
+	upper, err := EstimateQueryReadyExecutionImageUpperBound(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.Stats.ExecutionBytes <= 0 || built.Stats.ExecutionBytes > upper {
+		t.Fatalf("execution bytes=%d upper=%d", built.Stats.ExecutionBytes, upper)
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		if _, err := EstimateQueryReadyExecutionImageUpperBound(image); err != nil {
+			panic(err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("upper-bound estimate allocated %.1f times", allocs)
+	}
+}
+
+func TestQueryReadyExecutionImageRejectsOverflowingVectorRange(t *testing.T) {
+	image := queryReadyJSONBenchImage(t, 9903,
+		[]int64{0, 1, 2, 3},
+		[]string{"post", "like", "post", "repost"},
+		[]string{"did:1", "did:2", "did:1", "did:3"},
+		[]string{"commit", "commit", "identity", "commit"},
+		[]string{"create", "delete", "", "create"},
+		[]int64{11, 22, 33, 44},
+	)
+	part, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, _, err := buildQueryReadyExecutionImage(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := append([]byte(nil), execution...)
+	descriptorOffset := queryReadyExecutionImageHeaderBytes + 4*queryReadyExecutionImageColumnBytes
+	descriptor := corrupt[descriptorOffset : descriptorOffset+queryReadyExecutionImageColumnBytes]
+	binary.LittleEndian.PutUint64(descriptor[16:24], math.MaxUint64-31)
+	if _, err := parseQueryReadyExecutionImage(corrupt, part.Descriptor.RowCount); err == nil {
+		t.Fatal("overflowing vector range was accepted")
+	}
+}
+
+func TestQueryReadyExecutionImageRejectsNonCanonicalRangesAndPadding(t *testing.T) {
+	image := queryReadyJSONBenchImage(t, 9904,
+		[]int64{0, 1, 2, 3},
+		[]string{"post", "like", "post", "repost"},
+		[]string{"did:1", "did:2", "did:1", "did:3"},
+		[]string{"commit", "commit", "identity", "commit"},
+		[]string{"create", "delete", "", "create"},
+		[]int64{11, 22, 33, 44},
+	)
+	part, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, _, err := buildQueryReadyExecutionImage(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := func(data []byte, index int) []byte {
+		start := queryReadyExecutionImageHeaderBytes + index*queryReadyExecutionImageColumnBytes
+		return data[start : start+queryReadyExecutionImageColumnBytes]
+	}
+	tests := []struct {
+		name    string
+		corrupt func([]byte)
+	}{
+		{
+			name: "name gap",
+			corrupt: func(data []byte) {
+				first := descriptor(data, 0)
+				binary.LittleEndian.PutUint32(first[4:8], binary.LittleEndian.Uint32(first[4:8])-1)
+			},
+		},
+		{
+			name: "nonzero name padding",
+			corrupt: func(data []byte) {
+				last := descriptor(data, int(binary.LittleEndian.Uint32(data[16:20]))-1)
+				nameEnd := binary.LittleEndian.Uint32(last[0:4]) + binary.LittleEndian.Uint32(last[4:8])
+				data[nameEnd] = 1
+			},
+		},
+		{
+			name: "overlapping values",
+			corrupt: func(data []byte) {
+				first, second := descriptor(data, 0), descriptor(data, 1)
+				copy(second[16:24], first[16:24])
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := append([]byte(nil), execution...)
+			tc.corrupt(corrupt)
+			if _, err := parseQueryReadyExecutionImage(corrupt, part.Descriptor.RowCount); err == nil {
+				t.Fatal("non-canonical execution image was accepted")
+			}
+		})
+	}
 }
 
 var queryReadyBenchmarkResult QueryReadyOperatorResult
