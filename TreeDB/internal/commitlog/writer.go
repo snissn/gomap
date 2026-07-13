@@ -500,8 +500,33 @@ func (w *Writer) RotateTo(path string) error {
 // the provided path and reuses the writer's buffers for future appends. When
 // syncCurrent is false, the current file is flushed to the OS but not fsynced.
 func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
-	_, err := w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+	outcome, err := w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+	if outcome.Installed && err != nil {
+		return rotationInstalledError{err: err}
+	}
 	return err
+}
+
+type rotationInstalledMarker interface {
+	RotationInstalled() bool
+}
+
+type rotationInstalledError struct {
+	err error
+}
+
+func (err rotationInstalledError) Error() string { return err.err.Error() }
+func (err rotationInstalledError) Unwrap() error { return err.err }
+func (rotationInstalledError) RotationInstalled() bool {
+	return true
+}
+
+// RotationInstalled reports whether a rotation error happened only after the
+// successor became the writer's authoritative file. Callers must finish their
+// corresponding metadata transition before propagating such an error.
+func RotationInstalled(err error) bool {
+	var marker rotationInstalledMarker
+	return errors.As(err, &marker) && marker.RotationInstalled()
 }
 
 type writerRotationOutcome struct {

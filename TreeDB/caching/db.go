@@ -26937,12 +26937,15 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	name := commitLogName(l.id, nextSeq)
 	path := filepath.Join(db.dir, name)
 
-	l.walCoalesceSeq = 0
+	var rotationErr error
 	if l.wal != nil {
 		oldPath := l.walPath
 		oldSize := l.wal.Size()
 		if err := l.wal.RotateToWithSync(path, !db.relaxedSync); err != nil {
-			return err
+			if !commitlog.RotationInstalled(err) {
+				return err
+			}
+			rotationErr = err
 		}
 		l.walSeq = nextSeq
 		l.walLiveBytes.Store(0)
@@ -26964,13 +26967,17 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 		l.walLiveBytes.Store(0)
 	}
 	l.walPath = path
+	l.walCoalesceSeq = 0
 	l.walLiveBytes.Store(0)
 	if rotateValueLog && db.splitValueLogEnabled() {
 		if err := db.rotateValueLogLocked(l); err != nil {
+			if rotationErr != nil {
+				return errors.Join(rotationErr, err)
+			}
 			return err
 		}
 	}
-	return nil
+	return rotationErr
 }
 
 func (db *DB) rotateValueLogLocked(l *lane) error {
