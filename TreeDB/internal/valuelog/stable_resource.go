@@ -14,6 +14,63 @@ import (
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 var openStableValueLogParent = os.Open
 
+func observeStableWriterFile(file *os.File, registry *rootpublication.IdentityPinRegistry) (rootpublication.StableIdentity, error) {
+	if registry == nil {
+		return rootpublication.StableIdentity{}, nil
+	}
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	if err := registry.Observe(identity); err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	return identity, nil
+}
+
+func (w *Writer) observeStableResourceFile(file *os.File, registry *rootpublication.IdentityPinRegistry) error {
+	if w == nil || registry == nil {
+		return nil
+	}
+	identity, err := observeStableWriterFile(file, registry)
+	if err != nil {
+		return err
+	}
+	w.stableResourcePins = registry
+	w.stableResourceIdentity = identity
+	w.stableResourceObserved = true
+	return nil
+}
+
+func (w *Writer) releaseStableResourceObservation() error {
+	if w == nil || !w.stableResourceObserved || w.stableResourcePins == nil {
+		return nil
+	}
+	err := w.stableResourcePins.Unobserve(w.stableResourceIdentity)
+	w.stableResourceIdentity = rootpublication.StableIdentity{}
+	w.stableResourceObserved = false
+	return err
+}
+
+func (w *Writer) bindStableResourcePinRegistry(registration *StableResourceRegistration) error {
+	if w == nil || registration == nil {
+		return nil
+	}
+	if registration.PinRegistry != nil {
+		if w.stableResourcePins == nil || !w.stableResourceObserved {
+			return fmt.Errorf("%w: writer registry must be installed before the file becomes deletable", rootpublication.ErrUnresolvedResource)
+		}
+		if registration.PinRegistry != w.stableResourcePins {
+			return fmt.Errorf("%w: writer stable identity registry differs from registration", rootpublication.ErrResourceConflict)
+		}
+		return nil
+	}
+	if w.stableResourcePins != nil {
+		registration.PinRegistry = w.stableResourcePins
+	}
+	return nil
+}
+
 // SetStableResourcePinRegistry installs the DB-scoped physical identity gate
 // used by every manager that can delete these segment files.
 func (m *Manager) SetStableResourcePinRegistry(registry *rootpublication.IdentityPinRegistry) error {
@@ -257,11 +314,12 @@ func closeAndRemoveStableSegmentFileResult(file *File, validateIdentity bool) (b
 }
 
 // removeStableSegmentFileOnce first moves the linked name into a private
-// same-directory quarantine, then validates and unlinks that renamed object.
-// A replacement created at the original name after the rename is never passed
-// to the unlink syscall.
+// same-directory quarantine and records that completed canonical-name unlink.
+// It then validates and unlinks the renamed object. A replacement created at
+// the original name after the rename is never passed to the unlink syscall.
 func removeStableSegmentFileOnce(path string, identity rootpublication.StableIdentity) (bool, error) {
 	parent := filepath.Dir(path)
+	resource := segmentNamespaceResource(path)
 	quarantineDir, err := os.MkdirTemp(parent, "."+filepath.Base(path)+".delete-")
 	if err != nil {
 		return false, err
@@ -274,11 +332,19 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		}
 		return false, err
 	}
+	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, resource, parent, path, ""); err != nil {
+		// The canonical name is already gone. Commit the identity deletion even
+		// though the injected cut deliberately leaves the private inode behind.
+		return true, err
+	}
 	restore := func() error {
 		if err := os.Link(quarantinePath, path); err != nil {
 			return err
 		}
-		return os.Remove(quarantinePath)
+		if err := os.Remove(quarantinePath); err != nil {
+			return err
+		}
+		return durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, resource, parent, "", path)
 	}
 	if err := validateStableDeletePathIdentity(quarantinePath, identity); err != nil {
 		restoreErr := restore()
@@ -296,8 +362,7 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		return false, removeErr
 	}
 	cleanupErr := os.Remove(quarantineDir)
-	cutErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, segmentNamespaceResource(path), parent, path, "")
-	return true, errors.Join(cleanupErr, cutErr)
+	return true, cleanupErr
 }
 
 func (m *Manager) deleteZombieFile(file *File) error {
@@ -447,6 +512,9 @@ func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
+	if err := w.bindStableResourcePinRegistry(&registration); err != nil {
+		return nil, err
+	}
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
@@ -567,6 +635,12 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if active.NamespaceOperation == rootpublication.NamespaceNone {
 		return nil, errors.New("valuelog: stable rotation requires active namespace operation")
 	}
+	if err := w.bindStableResourcePinRegistry(&closed); err != nil {
+		return nil, err
+	}
+	if err := w.bindStableResourcePinRegistry(&active); err != nil {
+		return nil, err
+	}
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
@@ -591,10 +665,22 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		closedToken.Release()
 		return nil, err
 	}
+	preparedIdentity, err := observeStableWriterFile(prepared, w.stableResourcePins)
+	if err != nil {
+		closedToken.Release()
+		_ = prepared.Close()
+		_ = rootpublication.RemoveStableChildFile(w.stableParent, filepath.Base(path))
+		_ = w.stableParent.Sync()
+		return nil, err
+	}
+	preparedObserved := w.stableResourcePins != nil
 	installed := false
 	defer func() {
 		if installed {
 			return
+		}
+		if preparedObserved {
+			_ = w.stableResourcePins.Unobserve(preparedIdentity)
 		}
 		validateErr := rootpublication.ValidateStableChildLink(w.stableParent, prepared, filepath.Base(path))
 		closeErr := prepared.Close()
@@ -633,11 +719,19 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	}
 	old := w.f
 	if err := old.Close(); err != nil {
+		observeErr := w.releaseStableResourceObservation()
 		activeToken.Release()
 		closedToken.Release()
 		w.f = nil
 		w.bw = nil
-		return nil, fmt.Errorf("valuelog: close old writer during stable rotation: %w", err)
+		return nil, fmt.Errorf("valuelog: close old writer during stable rotation: %w", errors.Join(err, observeErr))
+	}
+	if err := w.releaseStableResourceObservation(); err != nil {
+		activeToken.Release()
+		closedToken.Release()
+		w.f = nil
+		w.bw = nil
+		return nil, fmt.Errorf("valuelog: release old writer observation during stable rotation: %w", err)
 	}
 	w.f = prepared
 	w.bw = nil
@@ -646,6 +740,11 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	w.appendMax = defaultBufferSize
 	w.appendBuf = w.appendBuf[:0]
 	w.trimTransientScratchBuffers()
+	if preparedObserved {
+		w.stableResourceIdentity = preparedIdentity
+		w.stableResourceObserved = true
+		preparedObserved = false
+	}
 	installed = true
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
 }

@@ -246,7 +246,7 @@ func TestManagerStableIdentityPinBlocksSecondManagerDelete(t *testing.T) {
 	}
 }
 
-func TestManagerStableDeleteCommitsUnlinkBeforePostUnlinkCut(t *testing.T) {
+func TestManagerStableDeleteEmitsCanonicalUnlinkCutBeforeQuarantineUnlink(t *testing.T) {
 	dir := t.TempDir()
 	fileID, path := writeIdentityPinTestSegment(t, dir)
 	registry := rootpublication.NewIdentityPinRegistry()
@@ -260,6 +260,14 @@ func TestManagerStableDeleteCommitsUnlinkBeforePostUnlinkCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer deleter.Close()
+
+	originalRemove := removeSegmentPath
+	quarantineUnlinked := false
+	removeSegmentPath = func(removePath string) error {
+		quarantineUnlinked = true
+		return originalRemove(removePath)
+	}
+	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
 	wantErr := errors.New("injected post-unlink cut")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -275,6 +283,9 @@ func TestManagerStableDeleteCommitsUnlinkBeforePostUnlinkCut(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("RemoveSegment error=%v, want post-unlink cut", err)
 	}
+	if quarantineUnlinked {
+		t.Fatal("stable delete unlinked the quarantined inode before emitting the canonical-name cut")
+	}
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("post-unlink cut path stat=%v, want removed", statErr)
 	}
@@ -289,6 +300,40 @@ func TestManagerStableDeleteCommitsUnlinkBeforePostUnlinkCut(t *testing.T) {
 	}
 	if !errors.Is(pinErr, rootpublication.ErrResourceConflict) {
 		t.Fatalf("late pin after committed unlink error=%v, want ErrResourceConflict", pinErr)
+	}
+}
+
+func TestManagerStableDeleteRestoreCompensatesCanonicalUnlink(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	wantErr := errors.New("injected quarantine unlink failure")
+	originalRemove := removeSegmentPath
+	removeSegmentPath = func(string) error { return wantErr }
+	t.Cleanup(func() { removeSegmentPath = originalRemove })
+
+	var operations []durabilitycut.NamespaceOperation
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if filepath.Clean(event.OldPath) == filepath.Clean(path) || filepath.Clean(event.NewPath) == filepath.Clean(path) {
+			operations = append(operations, event.Namespace)
+		}
+		return nil
+	})
+	err = manager.RemoveSegment(fileID)
+	restore()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("RemoveSegment error=%v, want quarantine unlink failure", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("restored segment stat: %v", err)
+	}
+	if len(operations) != 2 || operations[0] != durabilitycut.NamespaceUnlink || operations[1] != durabilitycut.NamespaceCreate {
+		t.Fatalf("namespace operations=%v, want [unlink create]", operations)
 	}
 }
 
