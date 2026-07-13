@@ -268,6 +268,100 @@ func TestStableResourceNestedUnionMustResolveEveryRequiredChild(t *testing.T) {
 	set.Release()
 }
 
+func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testing.T) {
+	type childSpec struct {
+		field ReachabilityField
+		kind  ResourceKind
+		id    string
+	}
+	children := []childSpec{
+		{ReachabilityDictionaryGeneration, ResourceDictionary, "dictionary-7"},
+		{ReachabilityTemplateGeneration, ResourceTemplate, "template-9"},
+		{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "vector-11"},
+		{ReachabilityCollectionTextPosting, ResourceTextAsset, "text-13"},
+	}
+	required := make([]ReachabilityField, len(children))
+	for i := range children {
+		required[i] = children[i].field
+	}
+	buildChild := func(t *testing.T, spec childSpec, suffix string) *StableResourceSet {
+		t.Helper()
+		dir := t.TempDir()
+		token := stableTokenFixture(t, dir, spec.id+suffix, 1, 4, spec.field, spec.id, func(tokenSpec *StableResourceSpec) {
+			tokenSpec.Kind = spec.kind
+		})
+		builder := NewStableResourceSetBuilder(spec.field)
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
+
+	for omitted := range children {
+		for _, reverse := range []bool{false, true} {
+			name := fmt.Sprintf("omit-%s-reverse-%t", children[omitted].field, reverse)
+			t.Run(name, func(t *testing.T) {
+				registrar := NewStableCompositeRegistrar(required...)
+				order := append([]childSpec(nil), children...)
+				if reverse {
+					for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
+						order[i], order[j] = order[j], order[i]
+					}
+				}
+				for _, child := range order {
+					if child.field == children[omitted].field {
+						continue
+					}
+					if err := registrar.RegisterChild(child.field, child.id, buildChild(t, child, name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				set, ids, err := registrar.Freeze()
+				if !errors.Is(err, ErrUnresolvedResource) || set != nil || ids != nil {
+					t.Fatalf("incomplete Freeze set=%v ids=%v err=%v", set, ids, err)
+				}
+				registrar.Abandon()
+			})
+		}
+	}
+
+	var wantIDs []string
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete-reverse-%t", reverse), func(t *testing.T) {
+			registrar := NewStableCompositeRegistrar(required...)
+			order := append([]childSpec(nil), children...)
+			if reverse {
+				for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
+					order[i], order[j] = order[j], order[i]
+				}
+			}
+			for _, child := range order {
+				if err := registrar.RegisterChild(child.field, child.id, buildChild(t, child, fmt.Sprint(reverse))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			set, ids, err := registrar.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Release()
+			got := make([]string, len(ids))
+			for i := range ids {
+				got[i] = string(ids[i].Field()) + "=" + ids[i].Value()
+			}
+			if wantIDs == nil {
+				wantIDs = got
+			} else if fmt.Sprint(got) != fmt.Sprint(wantIDs) {
+				t.Fatalf("registered IDs order=%v want deterministic %v", got, wantIDs)
+			}
+		})
+	}
+}
+
 func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 	dir := t.TempDir()
 	token := stableTokenFixture(t, dir, "pinned.vlog", 1, 4, ReachabilityValueLogPointer, "pinned")
