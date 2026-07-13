@@ -76,6 +76,9 @@ func TestReadCommandWALV2IncompleteRelaxedTailFailsBelowLaterBarrier(t *testing.
 	if len(frames) != 3 || !frames[1].Incomplete {
 		t.Fatalf("physical frames=%+v, want incomplete lsn 2", frames)
 	}
+	if got := frames[1].Coordinate; got.Lane != 1 || got.SegmentSequence != 1 || got.StartOffset != 0 || got.EndOffset != 8+56 || got.SourceSegment != lane1 {
+		t.Fatalf("incomplete coordinate=%+v, want exact lane-1 terminal tail", got)
+	}
 	if _, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return true }); !errors.Is(err, commitlog.ErrCorrupt) {
 		t.Fatalf("classification error=%v, want corruption below barrier", err)
 	}

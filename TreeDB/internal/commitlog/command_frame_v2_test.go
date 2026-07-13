@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 	"testing"
 )
 
@@ -185,4 +186,96 @@ func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
 	if CommandFrameVersion != 1 {
 		t.Fatalf("production CommandFrameVersion=%d, V2 activation belongs to #3718", CommandFrameVersion)
 	}
+
+	dir := t.TempDir()
+	journal, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.AppendCommand(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	}); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("production V2 append error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	if lsn, err := journal.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil || lsn != 1 {
+		t.Fatalf("production V1 append lsn=%d err=%v", lsn, err)
+	}
+	path, _ := journal.ActiveSegmentSnapshot()
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lsn, err := reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil || lsn != 2 {
+		t.Fatalf("production V1 append after reopen lsn=%d err=%v", lsn, err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for wantLSN := uint64(1); wantLSN <= 2; wantLSN++ {
+		got, err := reader.ReadCommandFrame()
+		if err != nil {
+			t.Fatalf("read production frame %d: %v", wantLSN, err)
+		}
+		if got.Version != CommandFrameVersion || got.LSN != wantLSN {
+			t.Fatalf("production frame=%+v, want V1 lsn=%d", got, wantLSN)
+		}
+	}
+	if _, err := reader.ReadCommandFrame(); !errors.Is(err, io.EOF) {
+		t.Fatalf("read after production frames error=%v, want EOF", err)
+	}
+}
+
+func TestCommandWALFormatGoldenV2RawKVExternalRefFence(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSetRID, Key: []byte("nine-a"), RID: 9},
+		{Op: RawKVOpSet, Key: []byte("inline"), Value: []byte("value")},
+		{Op: RawKVOpSetRID, Key: []byte("three"), RID: 3},
+		{Op: RawKVOpSetRID, Key: []byte("nine-b"), RID: 9},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             7,
+		BaseAppliedLSN:  3,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGoldenHex(t, "command_wal_v2_raw_kv_external_ref_fence.hex", frame)
+}
+
+func TestCommandWALFormatGoldenV2DurablePrefixBarrier(t *testing.T) {
+	frame, err := EncodeCommandFrameV2(NewDurablePrefixBarrierV1(8, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGoldenHex(t, "command_wal_v2_durable_prefix_barrier.hex", frame)
 }

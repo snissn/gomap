@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -40,6 +41,106 @@ func TestClassifyCommandWALV2LaterDurableBarrierRaisesFrontier(t *testing.T) {
 	_, err := classifyCommandWALV2Frames(frames, 0, func(rid uint64) bool { return false })
 	if !errors.Is(err, ErrCommandWALMissingValueLogRID) {
 		t.Fatalf("classification error=%v, want ErrCommandWALMissingValueLogRID", err)
+	}
+}
+
+func TestClassifyCommandWALV2RejectsDurableFrameOwnMissingRID(t *testing.T) {
+	frames := []commandWALV2PhysicalFrame{
+		v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, []uint64{41}),
+	}
+	wantFrames := append([]commandWALV2PhysicalFrame(nil), frames...)
+	_, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return false })
+	if !errors.Is(err, ErrCommandWALMissingValueLogRID) {
+		t.Fatalf("classification error=%v, want ErrCommandWALMissingValueLogRID", err)
+	}
+	if !reflect.DeepEqual(frames, wantFrames) {
+		t.Fatalf("classification mutated input: got=%+v want=%+v", frames, wantFrames)
+	}
+}
+
+func TestClassifyCommandWALV2GapAndDuplicateAtOrBelowDurableFrontierAreCorruption(t *testing.T) {
+	tests := map[string][]commandWALV2PhysicalFrame{
+		"gap": {
+			v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
+			v2ClassificationFrame(3, commitlog.CommandDurabilityDurable, "commit-l1-000001.log", 0, 100, nil),
+		},
+		"duplicate": {
+			v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
+			v2ClassificationFrame(2, commitlog.CommandDurabilityRelaxed, "commit-l0-000001.log", 100, 200, nil),
+			v2ClassificationFrame(2, commitlog.CommandDurabilityDurable, "commit-l1-000001.log", 0, 100, nil),
+		},
+	}
+	for name, frames := range tests {
+		t.Run(name, func(t *testing.T) {
+			wantFrames := append([]commandWALV2PhysicalFrame(nil), frames...)
+			_, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return true })
+			if !errors.Is(err, ErrCommandWALAppliedLSNNonContig) {
+				t.Fatalf("classification error=%v, want ErrCommandWALAppliedLSNNonContig", err)
+			}
+			if !reflect.DeepEqual(frames, wantFrames) {
+				t.Fatalf("classification mutated input: got=%+v want=%+v", frames, wantFrames)
+			}
+		})
+	}
+}
+
+func TestClassifyCommandWALV2GapAndDuplicateAboveDurableFrontierStartDiscardSuffix(t *testing.T) {
+	tests := []struct {
+		name              string
+		frames            []commandWALV2PhysicalFrame
+		wantPrefix        int
+		wantSuffix        int
+		wantFirstDiscard  uint64
+		wantDiscardedByte uint64
+	}{
+		{
+			name: "gap",
+			frames: []commandWALV2PhysicalFrame{
+				v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
+				v2ClassificationFrame(3, commitlog.CommandDurabilityRelaxed, "commit-l1-000001.log", 0, 120, nil),
+			},
+			wantPrefix: 1, wantSuffix: 1, wantFirstDiscard: 2, wantDiscardedByte: 120,
+		},
+		{
+			name: "duplicate",
+			frames: []commandWALV2PhysicalFrame{
+				v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
+				v2ClassificationFrame(2, commitlog.CommandDurabilityRelaxed, "commit-l0-000001.log", 100, 200, nil),
+				v2ClassificationFrame(2, commitlog.CommandDurabilityRelaxed, "commit-l1-000001.log", 0, 120, nil),
+			},
+			wantPrefix: 2, wantSuffix: 1, wantFirstDiscard: 3, wantDiscardedByte: 120,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wantFrames := append([]commandWALV2PhysicalFrame(nil), tc.frames...)
+			result, err := classifyCommandWALV2Frames(tc.frames, 0, func(uint64) bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.CompletePrefix) != tc.wantPrefix || len(result.DiscardSuffix) != tc.wantSuffix || result.Diagnostic.FirstDiscardedLSN != tc.wantFirstDiscard || result.Diagnostic.DiscardedBytes != tc.wantDiscardedByte {
+				t.Fatalf("classification=%+v", result)
+			}
+			if !reflect.DeepEqual(tc.frames, wantFrames) {
+				t.Fatalf("classification mutated input: got=%+v want=%+v", tc.frames, wantFrames)
+			}
+		})
+	}
+}
+
+func TestClassifyCommandWALV2LaterDurableRawFrameRaisesFrontier(t *testing.T) {
+	frames := []commandWALV2PhysicalFrame{
+		v2ClassificationFrame(1, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 0, 100, nil),
+		v2ClassificationFrame(2, commitlog.CommandDurabilityRelaxed, "commit-l1-000001.log", 0, 120, []uint64{41}),
+		v2ClassificationFrame(3, commitlog.CommandDurabilityDurable, "commit-l0-000001.log", 100, 200, nil),
+	}
+	wantFrames := append([]commandWALV2PhysicalFrame(nil), frames...)
+	_, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return false })
+	if !errors.Is(err, ErrCommandWALMissingValueLogRID) {
+		t.Fatalf("classification error=%v, want ErrCommandWALMissingValueLogRID", err)
+	}
+	if !reflect.DeepEqual(frames, wantFrames) {
+		t.Fatalf("classification mutated input: got=%+v want=%+v", frames, wantFrames)
 	}
 }
 
