@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -35,6 +36,60 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 	}
 	if _, _, err := stableColumnAssetResourceClassification(ColumnAssetKind("future-authoritative-kind")); err == nil {
 		t.Fatal("unknown column asset kind did not fail inventory coverage")
+	}
+}
+
+func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "creation-first", true: "creation-last"}[reverse], func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := ColumnStoreConfig{
+				Enabled: true,
+				AssetManager: &ColumnAssetManagerConfig{
+					Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "coalesce_resource",
+				},
+			}
+			firstRef, first, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("first-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondRef, second, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("second-payload"), ColumnAssetKindQueryReadyBase, 7, 12)
+			if err != nil {
+				first.Release()
+				t.Fatal(err)
+			}
+			if first.Namespace() == nil || second.Namespace() != nil {
+				first.Release()
+				second.Release()
+				t.Fatalf("namespace obligations first=%v second=%v", first.Namespace() != nil, second.Namespace() != nil)
+			}
+			ordered := []*rootpublication.StableResourceToken{first, second}
+			if reverse {
+				ordered[0], ordered[1] = ordered[1], ordered[0]
+			}
+			builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
+			for _, token := range ordered {
+				if err := builder.Add(token); err != nil {
+					builder.Abandon()
+					t.Fatal(err)
+				}
+			}
+			set, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Release()
+			if set.Len() != 1 {
+				t.Fatalf("coalesced len=%d want 1", set.Len())
+			}
+			if got, want := set.FrontierFor(first.Identity(), uint64(firstRef.FileID)).Bytes, uint64(secondRef.Offset+secondRef.Length); got != want {
+				t.Fatalf("coalesced frontier=%d want %d", got, want)
+			}
+			stats := set.Stats(time.Now())
+			if len(stats) != 1 || stats[0].ActivePins != 1 || stats[0].NamespaceSyncs != 1 {
+				t.Fatalf("coalesced stats=%+v", stats)
+			}
+		})
 	}
 }
 
