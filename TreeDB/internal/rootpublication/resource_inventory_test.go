@@ -228,6 +228,42 @@ func TestCanonicalProducerPolicyRejectsExcludedFields(t *testing.T) {
 	}
 }
 
+func TestProductionConstructorsRejectStableIdentityOverride(t *testing.T) {
+	dir := t.TempDir()
+	file, err := os.OpenFile(filepath.Join(dir, "index.db"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.Write([]byte("index-resource")); err != nil {
+		t.Fatal(err)
+	}
+	spec := StableResourceSpec{
+		Kind: ResourceIndex, LogicalLane: "main", ResourceID: "index", Generation: 1,
+		DiagnosticPath: "index.db", File: file, Frontier: DurableFrontier{Bytes: 1},
+		Digest: sha256.Sum256([]byte("index")), Reachability: ReachabilityIndexFile,
+		StableIdentityOverride: StableIdentity{Platform: "forged", ObjectID: [16]byte{1}},
+	}
+	for name, construct := range map[string]func() (*StableResourceToken, error){
+		"policy": func() (*StableResourceToken, error) {
+			return NewStableProducerResourceToken(spec, "authoritative")
+		},
+		"domain": func() (*StableResourceToken, error) {
+			return NewStableProducerResourceTokenForDomain(StableProducerDB, spec, "authoritative")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			token, err := construct()
+			if token != nil {
+				token.Release()
+			}
+			if !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("production identity override error=%v want ErrResourceConflict", err)
+			}
+		})
+	}
+}
+
 func TestEveryInventoryFieldFailsAllButOneClosure(t *testing.T) {
 	for _, omitted := range RequiredReachabilityFields() {
 		t.Run(string(omitted), func(t *testing.T) {
