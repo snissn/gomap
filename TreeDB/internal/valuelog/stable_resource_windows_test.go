@@ -58,6 +58,26 @@ func TestStableValueLogRotationFailsClosedWithoutSuccessorVisibility(t *testing.
 	}
 }
 
+func TestStableValueLogCurrentCreationUsesRetainedParentAndFailsTyped(t *testing.T) {
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(t.TempDir(), "000001.vlog"), 1, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "outer-leaf", Generation: 1, DiagnosticPath: "leaf_vlog/000001.vlog",
+		Reachability: rootpublication.ReachabilityOuterLeafRawPointer, ParentGeneration: 1,
+		NamespaceOperation: rootpublication.NamespaceCreate,
+	})
+	if token != nil {
+		token.Release()
+		t.Fatal("unsupported current-segment capture returned a token")
+	}
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("current-segment capture error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+}
+
 func TestOrdinaryValueLogRotationRemainsUsableAndStableRotationFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	secondPath := filepath.Join(dir, "000002.vlog")

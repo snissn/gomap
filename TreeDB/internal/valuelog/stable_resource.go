@@ -798,6 +798,9 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 	if creationPending && registration.NamespaceOperation != rootpublication.NamespaceCreate {
 		return nil, fmt.Errorf("%w: current value-log segment requires NamespaceCreate evidence", rootpublication.ErrNamespaceUnstable)
 	}
+	if registration.NamespaceOperation == rootpublication.NamespaceCreate && registration.NamespaceParent == nil {
+		registration.NamespaceParent = w.stableParent
+	}
 	var namespace *rootpublication.StableNamespaceToken
 	var err error
 	if registration.NamespaceOperation == rootpublication.NamespaceCreate {
