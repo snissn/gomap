@@ -173,6 +173,9 @@ Invariant:
 - V2 durability class and canonical RID-fence bytes decode strictly; V1,
   unknown classes/versions, malformed fences, and complete dependency defects
   fail closed.
+- Complete and terminal compressed V2 segment records fail closed with the
+  typed unsupported-compression error; a torn compressed payload is never
+  interpreted as an uncompressed identity header.
 - The highest complete durable frame or barrier establishes the horizon.
   Defects through it cause no mutation; only one relaxed suffix above it is
   discardable.

@@ -212,7 +212,7 @@ func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 // ReadCommandFrameV2 reads one length/CRC-bounded segment payload and applies
 // the strict V2 decoder. It never falls back to the production V1 codec.
 func (r *Reader) ReadCommandFrameV2() (CommandEnvelope, error) {
-	payload, err := r.readSegmentPayload(true)
+	payload, err := r.readSegmentPayloadWithCompression(true, false)
 	if err != nil {
 		return CommandEnvelope{}, err
 	}
@@ -262,6 +262,13 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 	}
 	if segmentStart < 0 || segmentStart+segmentHeaderSize > info.Size() {
 		return env, info.Size(), ErrCorrupt
+	}
+	var segmentHeader [segmentHeaderSize]byte
+	if _, err := f.ReadAt(segmentHeader[:], segmentStart); err != nil {
+		return env, info.Size(), err
+	}
+	if binary.LittleEndian.Uint32(segmentHeader[0:4])&segmentFlagCompressed != 0 {
+		return env, info.Size(), ErrCommandWALV2CompressedRecordUnsupported
 	}
 	available := info.Size() - segmentStart - segmentHeaderSize
 	if available < 56 {

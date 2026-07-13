@@ -264,6 +264,11 @@ their bytes and failure rules can be reviewed independently. During that phase:
   append/reopen path;
 - V2 encode, strict decode, physical scan, classification, and suffix-repair
   functions are explicit entry points that production `Open` does not call;
+- strict V2 scan rejects commit-log segment compression with the typed
+  `ErrCommandWALV2CompressedRecordUnsupported`, because a torn compressed
+  record does not expose an authenticated LSN or durability class; #3718 must
+  disable segment compression at activation or first add an uncompressed
+  identity prefix;
 - a production append rejects a caller-supplied V2 envelope without consuming
   an LSN or mixing versions in the active segment; and
 - #3718 owns the one-time activation of append, dependency preparation, replay,

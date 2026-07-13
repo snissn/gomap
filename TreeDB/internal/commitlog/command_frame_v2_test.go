@@ -136,7 +136,7 @@ func TestCommandFrameV2RejectsCompressedSegmentStorage(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{
 		Op:    RawKVOpSet,
 		Key:   []byte("compressible"),
-		Value: bytes.Repeat([]byte("v2-compression-must-stay-disabled"), 1024),
+		Value: bytes.Repeat([]byte("v2-compression-must-stay-disabled"), 4096),
 	}})
 	if err != nil {
 		t.Fatal(err)

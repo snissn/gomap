@@ -1751,6 +1751,15 @@ There is no mixed V1/V2 append mode. A strict V2 reader that encounters V1
 returns a pre-alpha rebuild-required error, and an unsupported version fails
 closed.
 
+The inert V2 boundary forbids the commit-log segment-level compressed flag.
+A torn compressed segment exposes only compressed bytes after `RawLen`, so its
+LSN and durability class cannot be authenticated before deciding whether it is
+above the durable frontier. Strict V2 readers therefore return
+`ErrCommandWALV2CompressedRecordUnsupported` for both complete and terminal
+compressed records. #3718 must activate V2 with segment compression disabled,
+or first introduce and verify a new framing that keeps the required terminal
+identity prefix uncompressed. It may not silently inherit `Options.Compress`.
+
 V2 keeps the 72-byte envelope above and assigns the former reserved header
 field at bytes `[54,56)` to a little-endian durability class:
 

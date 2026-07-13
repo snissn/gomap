@@ -30,6 +30,13 @@ append, and reopen remain V1 until #3718 activates the complete dependency and
 publication protocol. This boundary prevents a binary from partially enabling
 V2 recovery while still appending V1 frames.
 
+V2 command segments are currently required to be uncompressed at the outer
+commit-log segment layer. A terminal compressed record cannot expose a trusted
+LSN/class prefix, so both complete and torn compressed V2 records fail closed
+with `ErrCommandWALV2CompressedRecordUnsupported`. #3718 must keep segment
+compression disabled when it activates V2 unless a later format change makes
+that identity prefix independently readable and authenticated.
+
 For V2 recovery, scan every unapplied physical frame across all lanes and retain
 its lane, segment sequence, byte start/end offsets, and source path. After
 strict envelope, class, segment CRC, canonical external-RID fence, and dependency

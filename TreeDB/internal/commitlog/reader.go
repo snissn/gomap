@@ -47,6 +47,10 @@ func (r *Reader) Offset() (int64, error) {
 }
 
 func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
+	return r.readSegmentPayloadWithCompression(commandMode, true)
+}
+
+func (r *Reader) readSegmentPayloadWithCompression(commandMode, allowCompressed bool) ([]byte, error) {
 	var header [segmentHeaderSize]byte
 	if n, err := io.ReadFull(r.f, header[:]); err != nil {
 		if commandMode && n > 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
@@ -58,6 +62,9 @@ func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
 	lengthField := binary.LittleEndian.Uint32(header[0:4])
 	wantCRC := binary.LittleEndian.Uint32(header[4:8])
 	compressed := lengthField&segmentFlagCompressed != 0
+	if compressed && !allowCompressed {
+		return nil, ErrCommandWALV2CompressedRecordUnsupported
+	}
 	length := lengthField & segmentLenMask
 	if r.maxSegmentSize > 0 && int64(length) > r.maxSegmentSize {
 		return nil, ErrCorrupt
