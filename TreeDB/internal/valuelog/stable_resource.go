@@ -190,11 +190,34 @@ func (m *Manager) stableDeleteLease(f *File) (*rootpublication.IdentityDeleteLea
 		}
 		return nil, err
 	}
-	lease, err := m.stableResourcePins.BeginDelete(identity)
+	lease, err := m.stableResourcePins.BeginDeleteAt(identity, f.Path)
 	if errors.Is(err, rootpublication.ErrResourcePinned) {
 		return nil, &filePinnedError{id: f.ID, op: "delete stable resource"}
 	}
 	return lease, err
+}
+
+// validateStableDeletePath proves that the diagnostic namespace still names
+// the open identity covered by lease. The shared registry serializes every
+// process-local deleter of this path from BeginDeleteAt through unlink. An
+// external process can still replace the pathname after validation; callers
+// therefore never treat a detected mismatch as permission to unlink.
+func validateStableDeletePath(f *File) error {
+	if f == nil || f.File == nil || f.Path == "" {
+		return fmt.Errorf("%w: invalid value-log delete target", rootpublication.ErrInvalidStableResource)
+	}
+	openInfo, err := f.File.Stat()
+	if err != nil {
+		return err
+	}
+	pathInfo, err := os.Stat(f.Path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(openInfo, pathInfo) {
+		return fmt.Errorf("%w: value-log path no longer names captured identity", rootpublication.ErrResourceConflict)
+	}
+	return nil
 }
 
 func (m *Manager) stableIdentityForFile(f *File) (rootpublication.StableIdentity, error) {
@@ -246,6 +269,11 @@ func (m *Manager) deleteZombieFile(f *File) error {
 		return nil
 	}
 	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if err := validateStableDeletePath(f); err != nil {
+		abortStableDeleteLease(lease)
 		m.mu.Unlock()
 		return err
 	}

@@ -75,6 +75,16 @@ func TestStableResourcePinBlocksDeleteThroughSecondManager(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("segment still exists after release/delete: %v", err)
 	}
+	replacement := []byte("replacement inode")
+	if err := os.WriteFile(path, replacement, 0o600); err != nil {
+		t.Fatalf("recreate segment path: %v", err)
+	}
+	if err := first.RemoveSegment(fileID); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("stale manager RemoveSegment after path recreation = %v, want ErrResourceConflict", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(replacement) {
+		t.Fatalf("replacement path changed by stale manager: got=%q err=%v", got, err)
+	}
 	if _, err := first.RegisterStableResourceToken(fileID, func(*os.File, uint64) error { return nil }, rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceValueLogSegment, LogicalNamespace: "test/value",
 		ResourceID: "segment/stale", DiagnosticPath: "value_vlog/value-l1-000001.log",

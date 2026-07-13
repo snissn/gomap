@@ -1987,6 +1987,11 @@ func (m *Manager) retryZombieDelete(f *File) {
 			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, err)
 			return
 		}
+		if err := validateStableDeletePath(f); err != nil {
+			abortStableDeleteLease(lease)
+			log.Printf("valuelog: retry zombie delete path validation failed for %s: %v", f.Path, err)
+			return
+		}
 		if err := removeSegmentFileOnce(f.Path); err == nil {
 			closeErr := f.Close()
 			commitStableDeleteLease(lease)
@@ -2417,6 +2422,11 @@ func (m *Manager) RemoveSegment(id uint32) error {
 		m.mu.Unlock()
 		return err
 	}
+	if err := validateStableDeletePath(f); err != nil {
+		abortStableDeleteLease(lease)
+		m.mu.Unlock()
+		return err
+	}
 	delete(m.files, id)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
@@ -2455,6 +2465,11 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, err
 	}
+	if err := validateStableDeletePath(f); err != nil {
+		abortStableDeleteLease(lease)
+		m.mu.Unlock()
+		return false, err
+	}
 	delete(m.files, id)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
@@ -2478,6 +2493,11 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if err := validateStableDeletePath(f); err != nil {
+		abortStableDeleteLease(lease)
 		m.mu.Unlock()
 		return err
 	}

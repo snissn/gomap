@@ -13,8 +13,9 @@ var ErrUnbalancedResourcePin = errors.New("stable resource release without a mat
 // explicitly DB-scoped and injected into each producer/deleter; there is no
 // process-global lookup by path.
 type IdentityPinRegistry struct {
-	mu     sync.Mutex
-	states map[StableIdentity]*identityPinState
+	mu         sync.Mutex
+	states     map[StableIdentity]*identityPinState
+	namespaces map[string]bool
 }
 
 type identityPinState struct {
@@ -28,14 +29,17 @@ type identityPinState struct {
 // IdentityDeleteLease excludes new pins while a deleter closes and unlinks the
 // captured identity. End must be called whether deletion succeeds or fails.
 type IdentityDeleteLease struct {
-	registry *IdentityPinRegistry
-	identity StableIdentity
-	once     sync.Once
-	retired  bool
+	registry  *IdentityPinRegistry
+	identity  StableIdentity
+	namespace string
+	once      sync.Once
 }
 
 func NewIdentityPinRegistry() *IdentityPinRegistry {
-	return &IdentityPinRegistry{states: make(map[StableIdentity]*identityPinState)}
+	return &IdentityPinRegistry{
+		states:     make(map[StableIdentity]*identityPinState),
+		namespaces: make(map[string]bool),
+	}
 }
 
 func (r *IdentityPinRegistry) Pin(identity StableIdentity) error {
@@ -116,6 +120,23 @@ func (r *IdentityPinRegistry) Unobserve(identity StableIdentity) error {
 // BeginDelete atomically excludes later pins, or fails with
 // ErrResourcePinned while an existing token still owns the identity.
 func (r *IdentityPinRegistry) BeginDelete(identity StableIdentity) (*IdentityDeleteLease, error) {
+	return r.beginDelete(identity, "")
+}
+
+// BeginDeleteAt atomically excludes later identity pins and other process-local
+// deleters of namespace. Callers must validate that the namespace still names
+// identity while holding the returned lease, then retain the lease through the
+// unlink. This closes process-local stale-path races; external processes can
+// still replace a pathname and callers must fail closed when validation detects
+// that condition.
+func (r *IdentityPinRegistry) BeginDeleteAt(identity StableIdentity, namespace string) (*IdentityDeleteLease, error) {
+	if namespace == "" {
+		return nil, fmt.Errorf("%w: empty delete namespace", ErrInvalidStableResource)
+	}
+	return r.beginDelete(identity, namespace)
+}
+
+func (r *IdentityPinRegistry) beginDelete(identity StableIdentity, namespace string) (*IdentityDeleteLease, error) {
 	if r == nil || !identity.valid() {
 		return nil, fmt.Errorf("%w: invalid delete identity", ErrInvalidStableResource)
 	}
@@ -126,10 +147,16 @@ func (r *IdentityPinRegistry) BeginDelete(identity StableIdentity) (*IdentityDel
 		return nil, ErrResourcePinned
 	}
 	if state.retired {
-		return &IdentityDeleteLease{registry: r, identity: identity, retired: true}, nil
+		return nil, ErrResourceConflict
+	}
+	if namespace != "" && r.namespaces[namespace] {
+		return nil, ErrResourcePinned
 	}
 	state.deleting = true
-	return &IdentityDeleteLease{registry: r, identity: identity}, nil
+	if namespace != "" {
+		r.namespaces[namespace] = true
+	}
+	return &IdentityDeleteLease{registry: r, identity: identity, namespace: namespace}, nil
 }
 
 // WaitUnpinned returns a channel closed after the current pins drain. The
@@ -185,12 +212,13 @@ func (l *IdentityDeleteLease) Abort() {
 		r := l.registry
 		r.mu.Lock()
 		state := r.states[l.identity]
-		if state != nil && !l.retired {
+		if state != nil {
 			state.deleting = false
 			if state.pins == 0 && state.observers == 0 && !state.retired {
 				delete(r.states, l.identity)
 			}
 		}
+		delete(r.namespaces, l.namespace)
 		r.mu.Unlock()
 	})
 }
@@ -211,6 +239,7 @@ func (l *IdentityDeleteLease) CommitDeleted() {
 		if state.observers == 0 && state.pins == 0 {
 			delete(r.states, l.identity)
 		}
+		delete(r.namespaces, l.namespace)
 		r.mu.Unlock()
 	})
 }
