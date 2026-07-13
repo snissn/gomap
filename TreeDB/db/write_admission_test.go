@@ -394,3 +394,56 @@ func TestStorageMaintenanceRejectsClosingAfterMaintenancePreflight(t *testing.T)
 		})
 	}
 }
+
+func TestValueLogRewriteRejectsCloseBeforeManagerInspection(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	beforeManagerInspection := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			close(releasePreflight)
+			released = true
+		}
+	}
+	db.testStorageMaintenanceBeforeLockHook = func(got string) {
+		if got == "value-log-rewrite" {
+			close(beforeManagerInspection)
+			<-releasePreflight
+		}
+	}
+	t.Cleanup(func() {
+		release()
+		db.testStorageMaintenanceBeforeLockHook = nil
+		_ = db.Close()
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogRewriteOnline(nil, ValueLogRewriteOnlineOptions{})
+		done <- err
+	}()
+	select {
+	case <-beforeManagerInspection:
+	case <-time.After(5 * time.Second):
+		t.Fatal("value-log rewrite did not reach the pre-manager admission seam")
+	}
+
+	if err := db.Close(); err != nil {
+		release()
+		t.Fatalf("Close: %v", err)
+	}
+	release()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("value-log rewrite error=%v, want %v", err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("value-log rewrite remained blocked after Close completed")
+	}
+}
