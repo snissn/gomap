@@ -1624,7 +1624,7 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	}
 }
 
-func TestPrepareColumnPhysicalAssetRowsRemovesDirectViewAfterSharedCloseFailure3151(t *testing.T) {
+func TestPrepareColumnPhysicalAssetRowsRetainsUnreachableDirectViewAfterSharedCloseFailure3151(t *testing.T) {
 	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
@@ -1700,8 +1700,11 @@ func TestPrepareColumnPhysicalAssetRowsRemovesDirectViewAfterSharedCloseFailure3
 	if _, err := os.Stat(sharedPath); err != nil {
 		t.Fatalf("shared path after failed prepare stat=%v want preserved existing segment", err)
 	}
-	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("direct path after failed prepare stat=%v want removed new segment", err)
+	if _, err := os.Stat(directPath); err != nil {
+		t.Fatalf("direct path after failed prepare stat=%v want retained unreachable segment", err)
+	}
+	if columnAssetSegmentDirSyncKnown(directPath) {
+		t.Fatal("failed prepare marked unreachable direct segment directory-sync cache known")
 	}
 }
 

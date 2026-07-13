@@ -12,8 +12,8 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParent(t)
 }
 
-func TestStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
-	testStableColumnAssetFailureRollsBackAndRemainsRetryable(t)
+func TestStableColumnAssetCreatedFailureRetainsOrphanAndRemainsRetryable(t *testing.T) {
+	testStableColumnAssetCreatedFailureRetainsOrphanAndRemainsRetryable(t)
 }
 
 func TestStableColumnAssetCaptureFailureInvalidatesPathSyncCache(t *testing.T) {

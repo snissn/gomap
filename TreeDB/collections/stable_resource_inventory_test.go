@@ -208,7 +208,7 @@ func testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	}
 }
 
-func testStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
+func testStableColumnAssetCreatedFailureRetainsOrphanAndRemainsRetryable(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -230,16 +230,34 @@ func testStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(segmentPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed creation left segment entry: %v", err)
+	failedInfo, err := os.Stat(segmentPath)
+	if err != nil {
+		t.Fatalf("failed creation orphan stat: %v", err)
+	}
+	if failedInfo.Size() != int64(len("first")) {
+		t.Fatalf("failed creation orphan size=%d want %d", failedInfo.Size(), len("first"))
+	}
+	if columnAssetSegmentDirSyncKnown(segmentPath) {
+		t.Fatal("failed stable creation marked pathname directory-sync cache known")
 	}
 
 	syncColumnAssetSegmentFileForPublish = originalSync
-	_, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("first"), ColumnAssetKindTCS1TypedColumnPart, 7, 11)
+	retryPayload := []byte("retry")
+	retryRef, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, retryPayload, ColumnAssetKindTCS1TypedColumnPart, 7, 11)
 	if err != nil {
 		t.Fatalf("retry stable write: %v", err)
 	}
 	token.Release()
+	if retryRef.Offset != failedInfo.Size() {
+		t.Fatalf("retry offset=%d want after orphan prefix %d", retryRef.Offset, failedInfo.Size())
+	}
+	got, err := readColumnPhysicalAssetFromManager(dir, retryRef)
+	if err != nil {
+		t.Fatalf("read retry ref: %v", err)
+	}
+	if string(got) != string(retryPayload) {
+		t.Fatalf("retry payload=%q want %q", got, retryPayload)
+	}
 	before, err := os.Stat(segmentPath)
 	if err != nil {
 		t.Fatal(err)
