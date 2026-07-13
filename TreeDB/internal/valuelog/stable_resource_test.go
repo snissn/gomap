@@ -175,6 +175,37 @@ func TestStableValueLogRotationUsesParentRefreshedByOrdinaryRotation(t *testing.
 	}
 }
 
+func TestRotateToWithSyncMarksInstalledParentCloseFailure(t *testing.T) {
+	requireStableValueLogNamespace(t)
+	dir := t.TempDir()
+	writer, err := NewWriter(filepath.Join(dir, "000001.vlog"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	oldParent := writer.stableParent
+	cleanupErr := errors.New("test: close superseded parent")
+	writer.closeRotateFn = func(file *os.File) error {
+		if file == oldParent {
+			return cleanupErr
+		}
+		return file.Close()
+	}
+	err = writer.RotateToWithSync(filepath.Join(dir, "000002.vlog"), 2, false)
+	writer.closeRotateFn = nil
+	defer oldParent.Close()
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("RotateToWithSync error=%v want cleanup error", err)
+	}
+	if !RotationInstalled(err) {
+		t.Fatalf("RotationInstalled(%v)=false want true", err)
+	}
+	if writer.fileID != 2 || filepath.Base(writer.f.Name()) != "000002.vlog" {
+		t.Fatalf("installed writer state fileID=%d path=%q", writer.fileID, writer.f.Name())
+	}
+}
+
 func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
 	writer, err := NewWriter(filepath.Join(t.TempDir(), "000001.vlog"), 1)
 	if err != nil {

@@ -121,6 +121,7 @@ type Writer struct {
 	noBenefit              uint8
 	skipRemain             uint16
 	syncFn                 func(*os.File) error
+	closeRotateFn          func(*os.File) error
 	fileSyncCalls          atomic.Uint64
 	fileSyncNs             atomic.Uint64
 	fileSyncErrors         atomic.Uint64
@@ -134,6 +135,38 @@ type Writer struct {
 	keepIoNsPerStoredByte  float64
 	keepEncodeNsPerRawByte float64
 	keepSafetyMargin       float64
+}
+
+type rotationInstalledMarker interface {
+	RotationInstalled() bool
+}
+
+type rotationInstalledError struct {
+	err error
+}
+
+func (err rotationInstalledError) Error() string { return err.err.Error() }
+func (err rotationInstalledError) Unwrap() error { return err.err }
+func (rotationInstalledError) RotationInstalled() bool {
+	return true
+}
+
+// RotationInstalled reports whether a rotation error happened only after the
+// successor became the writer's authoritative file. Callers must finish their
+// corresponding metadata transition before propagating such an error.
+func RotationInstalled(err error) bool {
+	var marker rotationInstalledMarker
+	return errors.As(err, &marker) && marker.RotationInstalled()
+}
+
+func (w *Writer) closeRotatedResource(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	if w.closeRotateFn != nil {
+		return w.closeRotateFn(file)
+	}
+	return file.Close()
 }
 
 // DurabilityStats reports calls to the writer's injected durability
@@ -954,7 +987,9 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		w.appendBuf = w.appendBuf[:0]
 		w.trimTransientScratchBuffers()
 		if oldStableParent != nil {
-			return oldStableParent.Close()
+			if err := w.closeRotatedResource(oldStableParent); err != nil {
+				return rotationInstalledError{err: err}
+			}
 		}
 		return nil
 	}
@@ -1001,13 +1036,16 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
-	closeErr := old.Close()
+	closeErr := w.closeRotatedResource(old)
 	var closeParentErr error
 	if oldStableParent != nil {
-		closeParentErr = oldStableParent.Close()
+		closeParentErr = w.closeRotatedResource(oldStableParent)
 	}
 	w.trimTransientScratchBuffers()
-	return errors.Join(closeErr, closeParentErr)
+	if err := errors.Join(closeErr, closeParentErr); err != nil {
+		return rotationInstalledError{err: err}
+	}
+	return nil
 }
 
 func syncDir(path string) (err error) {

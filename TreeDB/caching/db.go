@@ -27025,6 +27025,7 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 	var (
 		closedPrev    int64
 		hadClosedPrev bool
+		rotationErr   error
 	)
 	name := valueLogName(l.id, nextSeq)
 	path := filepath.Join(db.valueLogDirForLane(l), name)
@@ -27036,7 +27037,10 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 	if l.vlog != nil {
 		oldSize := l.vlog.Size()
 		if err := l.vlog.RotateToWithSync(path, fileID, !db.relaxedSync); err != nil {
-			return err
+			if !valuelog.RotationInstalled(err) {
+				return err
+			}
+			rotationErr = err
 		}
 		l.vlogRotateTotal.Add(1)
 		// Avoid counting an "idle rotation" when there was no previous segment.
@@ -27110,19 +27114,19 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 			l.vlogSeq = oldSeq
 			l.vlogPath = oldPath
 			l.vlogLiveBytes.Store(0)
-			return errors.Join(err, rollbackErr)
+			return errors.Join(err, rotationErr, rollbackErr)
 		}
 		l.vlogSeq = oldSeq
 		l.vlogPath = oldPath
 		l.vlogLiveBytes.Store(0)
-		return err
+		return errors.Join(err, rotationErr)
 	}
 	l.vlogPath = path
 	l.vlogLiveBytes.Store(0)
 	if db.isLeafLogAppendLane(l) {
 		l.vlogCreatedSegments = append(l.vlogCreatedSegments, laneValueLogSegment{path: path, fileID: fileID})
 	}
-	return nil
+	return rotationErr
 }
 
 func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
