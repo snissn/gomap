@@ -6,20 +6,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-// NewStableDBResourceToken registers an exact already-open index handle for a
-// DB/meta/root field. Publication integration consumes the returned token; the
-// producer never reopens DiagnosticPath to establish identity.
+// NewStableDBResourceToken registers the exact already-open index handle.
+// Meta/root/freelist publication stays adjacent (#3678) because those fields
+// have no independent external identity to register.
 func NewStableDBResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
-	classification := ""
 	switch spec.Reachability {
-	case rootpublication.ReachabilityIndexFile, rootpublication.ReachabilityMetaPage:
-		classification = "authoritative"
-	case rootpublication.ReachabilityUserRoot, rootpublication.ReachabilitySystemRoot, rootpublication.ReachabilityFreelist:
-		classification = "authoritative-root-backed"
+	case rootpublication.ReachabilityIndexFile:
+		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerDB, spec, "authoritative")
+	case rootpublication.ReachabilityMetaPage, rootpublication.ReachabilityUserRoot,
+		rootpublication.ReachabilitySystemRoot, rootpublication.ReachabilityFreelist:
+		return nil, fmt.Errorf("%w: %s is owned by adjacent root/freelist publication issue #3678", rootpublication.ErrResourceExcluded, spec.Reachability)
 	default:
 		return nil, fmt.Errorf("%w: db producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
 	}
-	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerDB, spec, classification)
 }
 
 // NewStableOuterLeafResourceToken registers an exact packed segment or

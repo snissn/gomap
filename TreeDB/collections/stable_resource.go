@@ -11,8 +11,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-// NewStableCollectionResourceToken registers an exact index handle for a
-// collection or text root before the corresponding catalog ID is exposed.
+// NewStableCollectionResourceToken rejects collection/text named roots until
+// their adjacent publication milestone (#3679); they have no independent
+// external identity that #3677 can register.
 func NewStableCollectionResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	switch spec.Reachability {
 	case rootpublication.ReachabilityCollectionSystemRoot,
@@ -25,7 +26,7 @@ func NewStableCollectionResourceToken(spec rootpublication.StableResourceSpec) (
 		rootpublication.ReachabilityCollectionTextDictionary,
 		rootpublication.ReachabilityCollectionTextPosting,
 		rootpublication.ReachabilityCollectionTextPosition:
-		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerCollection, spec, "authoritative-root-backed")
+		return nil, fmt.Errorf("%w: %s is owned by adjacent collection root publication issue #3679", rootpublication.ErrResourceExcluded, spec.Reachability)
 	default:
 		return nil, fmt.Errorf("%w: collection producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
 	}
