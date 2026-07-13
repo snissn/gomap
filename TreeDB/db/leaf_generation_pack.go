@@ -597,7 +597,7 @@ func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leaf
 		return nil
 	}
 	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
-	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+	if err := db.replaceLeafGenerationManifest(manifest); err != nil {
 		return err
 	}
 	var firstErr error

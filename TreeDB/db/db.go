@@ -97,6 +97,7 @@ type DB struct {
 	leafPageLogVersion             uint64
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
+	leafGenerationManifestStore    *leafGenerationManifestStore
 	leafGenerationPendingMu        sync.Mutex
 	leafGenerationPendingFileIDs   []uint32
 	leafGenerationPendingSet       map[uint32]struct{}
@@ -1963,6 +1964,17 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	manifestMode := leafGenerationManifestCompatibility
+	if rootpublication.StableRelativeNamespaceSupported() {
+		manifestMode = leafGenerationManifestStable
+	}
+	db.leafGenerationManifestStore = newLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins, manifestMode, func() {
+		db.publicationPoisoned.Store(true)
+	})
+	db.registerInternalTeardownHook(func() error {
+		db.leafGenerationManifestStore.Close()
+		return nil
+	})
 	db.ghostManager.start()
 	db.idx.Store(gen)
 	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
@@ -2128,7 +2140,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, false)
+		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
 		if err != nil {
 			db.Close()
 			return nil, err

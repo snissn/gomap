@@ -778,6 +778,28 @@ func RemoveStableChildFile(parent *os.File, name string) error {
 	return removeStableChildFile(parent, name)
 }
 
+// RenameStableChildFile atomically replaces newName with oldName relative to
+// the exact already-open parent directory. Unsupported platforms fail closed;
+// this operation never reopens the parent's diagnostic pathname.
+func RenameStableChildFile(parent *os.File, oldName, newName string) error {
+	if parent == nil || !stableChildBaseName(oldName) || !stableChildBaseName(newName) || oldName == newName {
+		return fmt.Errorf("%w: stable child rename requires distinct base names and an exact parent handle", ErrUnresolvedResource)
+	}
+	return renameStableChildFile(parent, oldName, newName)
+}
+
+func stableChildBaseName(name string) bool {
+	return name != "" && filepath.Base(name) == name && name != "." && name != ".."
+}
+
+// StableRelativeNamespaceSupported reports whether exact retained-parent
+// create, rename, validation, removal, and namespace persistence primitives
+// are available on this platform. Producers use this as a preflight before
+// creating a temporary child or exposing any stable-mode visibility.
+func StableRelativeNamespaceSupported() bool {
+	return stableRelativeNamespaceSupported()
+}
+
 func validateStableChildLink(parent, resource *os.File, name string) error {
 	resourceIdentity, err := stableIdentityFromFile(resource)
 	if err != nil {
