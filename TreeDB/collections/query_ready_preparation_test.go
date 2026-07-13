@@ -285,6 +285,13 @@ func TestPrepareQueryReadyColumnGenerationExecutesCanonicalColumnStoreKinds(t *t
 			if !slices.Equal(got.Groups, want.Groups) {
 				t.Fatalf("groups=%+v want=%+v", got.Groups, want.Groups)
 			}
+			if tc.req.Kind == ColumnPhysicalQueryHourCount {
+				for _, group := range got.Groups {
+					if group.Hour != 0 {
+						t.Fatalf("plain hour-count group=%+v leaked internal hour; want the public key/count shape", group)
+					}
+				}
+			}
 			if got.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta || got.Diagnostics.QueryReadyEncodedExecutions != 1 || got.Diagnostics.DocumentMaterializations != 0 || got.Diagnostics.QueryReadyLegacyFallbacks != 0 {
 				t.Fatalf("routing diagnostics=%+v", got.Diagnostics)
 			}

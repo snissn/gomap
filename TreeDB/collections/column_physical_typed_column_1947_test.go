@@ -428,8 +428,8 @@ func TestColumnPhysicalJSONBenchTypedColumnPartEdgeShapes1947(t *testing.T) {
 		t.Fatalf("hour-count result=%+v diagnostics=%+v want typed source groups", hourCount.Groups, hourCount.Diagnostics)
 	}
 	for _, group := range hourCount.Groups {
-		if group.Key == "" || group.Count == 0 || group.Key != columnPhysicalQueryHourKey(group.Hour) {
-			t.Fatalf("hour-count group=%+v want key/count/hour populated consistently", group)
+		if group.Key == "" || group.Count == 0 || group.Hour != 0 {
+			t.Fatalf("hour-count group=%+v want public key/count shape without group-hour metadata", group)
 		}
 	}
 }

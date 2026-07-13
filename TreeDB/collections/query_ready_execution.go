@@ -132,6 +132,7 @@ func (r *QueryReadyColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, 
 		out.Groups[i] = ColumnPhysicalQueryGroup{Key: group.Key, Hour: group.Hour, Count: group.Count, DistinctCount: group.DistinctCount, Int64: group.Int64}
 		if r.request.Kind == ColumnPhysicalQueryHourCount {
 			out.Groups[i].Key = columnPhysicalQueryHourKey(group.Hour)
+			out.Groups[i].Hour = 0
 		} else if r.request.Kind == ColumnPhysicalQuerySumSecondOfDaySquare {
 			out.Groups[i].Key = columnPhysicalQuerySumSecondOfDaySquareKey(r.request.ValueColumn)
 		}
