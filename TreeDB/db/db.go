@@ -2456,13 +2456,14 @@ func (db *DB) closeAfterHooks() error {
 		db.flushApplyWorkerPool = nil
 	}
 	db.clearFlushApplyReadOnlyPrepareBuffers()
-	db.writeMu.Unlock()
 	// Commit post-work persists the leaf-generation manifest while its writer
 	// still holds writeMu. Keep the retained manifest handles usable until every
-	// in-flight writer has drained, then release them before index teardown.
+	// in-flight writer has drained. Close them before releasing writeMu so a
+	// caller queued behind Close cannot enter the drain-to-teardown handoff.
 	if leafGenerationManifestStore != nil {
 		leafGenerationManifestStore.Close()
 	}
+	db.writeMu.Unlock()
 	// Operations using teardownMu may briefly take writeMu while preparing or
 	// revalidating work. Never wait for them while holding writeMu.
 	db.teardownMu.Lock()
@@ -2841,6 +2842,12 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
+	}
+	// Close sets closing before draining writeMu. Recheck at the common publish
+	// boundary so callers that queued before observing Close cannot publish after
+	// teardown has won the lock.
+	if db.closing.Load() {
+		return post, ErrClosed
 	}
 	prePublishErr := func(err error) error {
 		return wrapFinalizeCommitError(err, true)

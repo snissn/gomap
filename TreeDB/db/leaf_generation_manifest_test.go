@@ -699,6 +699,109 @@ func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T
 	}
 }
 
+func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := db.leafGenerationManifestStore
+	if store == nil {
+		t.Fatal("leaf generation manifest store is nil")
+	}
+
+	teardownStarted := make(chan struct{})
+	db.registerInternalTeardownHook(func() error {
+		close(teardownStarted)
+		return nil
+	})
+	store.mu.Lock()
+	storeLocked := true
+	defer func() {
+		if storeLocked {
+			store.mu.Unlock()
+		}
+	}()
+	db.writeMu.RLock()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- db.Close() }()
+	select {
+	case <-teardownStarted:
+	case <-time.After(5 * time.Second):
+		db.writeMu.RUnlock()
+		t.Fatal("Close did not begin internal teardown")
+	}
+
+	writeMuAcquired := make(chan struct{})
+	go func() {
+		db.writeMu.RLock()
+		close(writeMuAcquired)
+		db.writeMu.RUnlock()
+	}()
+	db.writeMu.RUnlock()
+
+	select {
+	case <-writeMuAcquired:
+		store.mu.Unlock()
+		storeLocked = false
+		<-closeDone
+		t.Fatal("writeMu became available before manifest store teardown completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	store.mu.Unlock()
+	storeLocked = false
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after manifest store teardown unblocked")
+	}
+	select {
+	case <-writeMuAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("writeMu remained unavailable after Close completed")
+	}
+}
+
+func TestCommitRejectsClosingDBAfterWriteMuAcquisition(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		db.closing.Store(false)
+		_ = db.Close()
+	})
+
+	db.mu.RLock()
+	rootID := db.meta.UserRootPageID
+	commitSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	db.writeMu.Lock()
+	db.closing.Store(true)
+	commitDone := make(chan error, 1)
+	go func() { commitDone <- db.Commit(rootID) }()
+	db.writeMu.Unlock()
+
+	select {
+	case err := <-commitDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Commit error=%v, want %v", err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Commit remained blocked after writeMu became available")
+	}
+	db.mu.RLock()
+	gotCommitSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	if gotCommitSeq != commitSeq {
+		t.Fatalf("CommitSeq=%d after closing Commit, want %d", gotCommitSeq, commitSeq)
+	}
+}
+
 func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
