@@ -248,8 +248,38 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 			if got, want := set.FrontierFor(first.Identity(), uint64(firstRef.FileID)).Bytes, uint64(secondRef.Offset+secondRef.Length); got != want {
 				t.Fatalf("coalesced frontier=%d want %d", got, want)
 			}
+			if firstRef.Generation != secondRef.Generation || firstRef.FileID != secondRef.FileID ||
+				firstRef.PartID == secondRef.PartID || firstRef.Offset == secondRef.Offset ||
+				firstRef.Length == secondRef.Length || firstRef.Checksum == secondRef.Checksum {
+				t.Fatalf("test requires sibling logical refs in one physical segment: first=%+v second=%+v", firstRef, secondRef)
+			}
+			descriptors := set.Descriptors()
+			if len(descriptors) != 1 {
+				t.Fatalf("descriptors=%d want one coalesced physical descriptor", len(descriptors))
+			}
+			obligations := descriptors[0].LogicalObligations()
+			if len(obligations) != 2 {
+				t.Fatalf("logical obligations=%+v want both sibling refs", obligations)
+			}
+			byPart := make(map[uint64]rootpublication.StableLogicalObligation, len(obligations))
+			for _, obligation := range obligations {
+				byPart[obligation.PartID] = obligation
+			}
+			for _, ref := range []ColumnAssetRef{firstRef, secondRef} {
+				obligation, ok := byPart[ref.PartID]
+				if !ok {
+					t.Fatalf("logical obligations=%+v missing part %d", obligations, ref.PartID)
+				}
+				if obligation.Class != "column-asset-ref-v1" || obligation.Kind != string(ref.Kind) ||
+					obligation.Namespace != ref.Namespace || obligation.Generation != ref.Generation ||
+					obligation.FileID != uint64(ref.FileID) || obligation.Offset != ref.Offset ||
+					obligation.Length != ref.Length || obligation.Checksum != ref.Checksum ||
+					obligation.Reachability != rootpublication.ReachabilityQueryReadyBase || obligation.Digest == [32]byte{} {
+					t.Fatalf("logical obligation=%+v does not preserve ref=%+v", obligation, ref)
+				}
+			}
 			stats := set.Stats(time.Now())
-			if len(stats) != 1 || stats[0].ActivePins != 1 || stats[0].NamespaceSyncs != 1 {
+			if len(stats) != 1 || stats[0].ActivePins != 1 || stats[0].NamespaceSyncs != 1 || stats[0].LogicalObligationCount != 2 {
 				t.Fatalf("coalesced stats=%+v", stats)
 			}
 		})
