@@ -256,18 +256,31 @@ func OpenQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity) 
 }
 
 func OpenQueryReadyBaseGenerationFile(path string, expected QueryReadyBaseIdentity) (*QueryReadyBaseGeneration, error) {
+	return OpenQueryReadyBaseGenerationFileRange(path, 0, 0, expected)
+}
+
+// OpenQueryReadyBaseGenerationFileRange maps one exact QRBG image embedded in
+// a segment file. Offset and length must either both be zero (whole file) or
+// describe a non-empty in-bounds range. The mapping owner may include page
+// alignment prefix bytes; Stats.BytesMapped reports that actual mapped span.
+func OpenQueryReadyBaseGenerationFileRange(path string, offset, length int64, expected QueryReadyBaseIdentity) (*QueryReadyBaseGeneration, error) {
 	started := time.Now()
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	data, err := mmapQueryReadyBaseFile(file)
+	logicalLength, err := queryReadyGenerationFileRange(file, offset, length)
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("typedcolumn: mmap query-ready base %q: %w", path, err)
+		return nil, fmt.Errorf("typedcolumn: query-ready base range %q: %w", path, err)
+	}
+	data, mapping, err := mmapQueryReadyBaseFileRange(file, offset, logicalLength)
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("typedcolumn: mmap query-ready base %q offset=%d length=%d: %w", path, offset, logicalLength, err)
 	}
 	release := func() error {
-		unmapErr := munmapQueryReadyBaseFile(data)
+		unmapErr := munmapQueryReadyBaseFile(mapping)
 		closeErr := file.Close()
 		return errors.Join(unmapErr, closeErr)
 	}
@@ -277,7 +290,26 @@ func OpenQueryReadyBaseGenerationFile(path string, expected QueryReadyBaseIdenti
 		return nil, err
 	}
 	base.Stats.OpenTime = time.Since(started)
+	base.Stats.BytesMapped = int64(len(mapping))
 	return base, nil
+}
+
+func queryReadyGenerationFileRange(file *os.File, offset, length int64) (int, error) {
+	if file == nil || offset < 0 || length < 0 || (length == 0 && offset != 0) {
+		return 0, os.ErrInvalid
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	size := info.Size()
+	if length == 0 {
+		length = size
+	}
+	if length <= 0 || offset > size || length > size-offset || length > int64(math.MaxInt) {
+		return 0, fmt.Errorf("offset=%d length=%d file_bytes=%d: %w", offset, length, size, os.ErrInvalid)
+	}
+	return int(length), nil
 }
 
 func openQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity, mapped bool, release func() error) (*QueryReadyBaseGeneration, error) {

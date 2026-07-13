@@ -564,7 +564,7 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
-	if !c.hasNativePersistentVectorIndexLocked() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() {
+	if !c.hasNativePersistentVectorIndexLocked() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 }
@@ -900,7 +900,7 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 			return err
 		}
 	}
-	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() {
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 	return nil

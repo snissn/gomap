@@ -631,6 +631,11 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #2118 is the scoped production physical-accounting reporter that
 		// reads validated typed-column part images for byte accounting only.
 		filepath.Clean(filepath.Join(collectionsDir, "column_store_physical_accounting.go")): {},
+		// #3698 is the scoped query-independent generation-open seam. It binds
+		// validated QRBG/QRDG direct views to the existing collection physical
+		// identity and reader leases without exposing query-shaped operators or
+		// publication ownership.
+		filepath.Clean(filepath.Join(collectionsDir, "query_ready_generation_open.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -651,7 +656,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting)", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting, #3698 query-ready generation open)", path)
 		}
 		return nil
 	})
