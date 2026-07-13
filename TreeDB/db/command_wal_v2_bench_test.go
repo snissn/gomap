@@ -15,18 +15,34 @@ var commandWALV2BenchSink struct {
 
 func BenchmarkClassifyCommandWALV2Frames(b *testing.B) {
 	for _, frameCount := range []int{32, 256, 2048} {
-		b.Run(fmt.Sprintf("frames_%d", frameCount), func(b *testing.B) {
-			frames := commandWALV2BenchFrames(frameCount)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				classification, err := classifyCommandWALV2Frames(frames, 0, func(uint64) bool { return true })
+		for _, benchCase := range []struct {
+			name    string
+			frames  []commandWALV2PhysicalFrame
+			hasRID  func(uint64) bool
+			discard bool
+		}{
+			{name: "found_rid", frames: commandWALV2BenchFrames(frameCount), hasRID: func(uint64) bool { return true }},
+			{name: "missing_rid_discard", frames: commandWALV2BenchMissingRIDFrames(frameCount), hasRID: func(uint64) bool { return false }, discard: true},
+		} {
+			b.Run(fmt.Sprintf("%s/frames_%d", benchCase.name, frameCount), func(b *testing.B) {
+				classification, err := classifyCommandWALV2Frames(benchCase.frames, 0, benchCase.hasRID)
 				if err != nil {
 					b.Fatal(err)
 				}
-				commandWALV2BenchSink.classification = classification
-			}
-		})
+				if benchCase.discard && (len(classification.DiscardSuffix) == 0 || classification.Diagnostic.MissingRIDCount == 0) {
+					b.Fatalf("benchmark setup missed discard diagnostics: %+v", classification.Diagnostic)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					classification, err := classifyCommandWALV2Frames(benchCase.frames, 0, benchCase.hasRID)
+					if err != nil {
+						b.Fatal(err)
+					}
+					commandWALV2BenchSink.classification = classification
+				}
+			})
+		}
 	}
 }
 
@@ -75,6 +91,14 @@ func commandWALV2BenchFrames(frameCount int) []commandWALV2PhysicalFrame {
 				SourceSegment:   path,
 			},
 		}
+	}
+	return frames
+}
+
+func commandWALV2BenchMissingRIDFrames(frameCount int) []commandWALV2PhysicalFrame {
+	frames := commandWALV2BenchFrames(frameCount)
+	for i := frameCount / 2; i < len(frames); i++ {
+		frames[i].RequiredRIDs = []uint64{uint64(i + 1)}
 	}
 	return frames
 }

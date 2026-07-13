@@ -182,6 +182,7 @@ The target envelope is:
 ```go
 type CommandEnvelope struct {
     Version          uint16
+    DurabilityClass  CommandDurabilityClass
     LSN              uint64
     Kind             CommandKind
     Scope            CommandScope
