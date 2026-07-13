@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func stableRelativeNamespaceSupported() bool { return true }
+
 func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
 	if parent == nil {
 		return nil, os.ErrInvalid
@@ -29,6 +31,21 @@ func removeStableChildFile(parent *os.File, name string) error {
 	for {
 		err := unix.Unlinkat(int(parent.Fd()), name, 0)
 		if err == nil || err == unix.ENOENT {
+			return nil
+		}
+		if err != unix.EINTR {
+			return err
+		}
+	}
+}
+
+func renameStableChildFile(parent *os.File, oldName, newName string) error {
+	if parent == nil {
+		return os.ErrInvalid
+	}
+	for {
+		err := unix.Renameat(int(parent.Fd()), oldName, int(parent.Fd()), newName)
+		if err == nil {
 			return nil
 		}
 		if err != unix.EINTR {

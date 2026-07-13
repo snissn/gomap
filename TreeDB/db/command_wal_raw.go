@@ -1376,6 +1376,9 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	sync = commandWALIntentPublishSync(intent, sync)
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()

@@ -38,6 +38,9 @@ type finalizeCommitOptions struct {
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 
 	db.mu.RLock()
 	baseSeq := db.meta.CommitSeq

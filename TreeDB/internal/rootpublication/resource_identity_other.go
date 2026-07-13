@@ -4,11 +4,17 @@ package rootpublication
 
 import "os"
 
+func stableRelativeNamespaceSupported() bool { return false }
+
 func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }
 
 func removeStableChildFile(*os.File, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
+func renameStableChildFile(*os.File, string, string) error {
 	return ErrNamespacePersistenceUnsupported
 }
 

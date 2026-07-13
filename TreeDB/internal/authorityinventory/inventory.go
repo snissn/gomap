@@ -51,7 +51,7 @@ func buildRows() []Row {
 		add(active("page.LogRecordRef."+field, "outer-leaf record", "mutable outer-leaf log segment range", "caching leaf-log appender", "pinned leaf-log file identity and FileID", "complete grouped record end from Offset and RecordLengthHint", "leaf-log segment (no rename)", "leaf-log append/publication adapter", "leaf record decode, CRC, and sub-index validation", "leaf-generation GC with segment pins"))
 	}
 
-	for _, field := range []string{"Version", "CurrentGenerationID", "NextGenerationID", "Generations"} {
+	for _, field := range []string{"Version", "ManifestRevision", "CurrentGenerationID", "NextGenerationID", "Generations"} {
 		add(active("db.leafGenerationManifest."+field, "leaf-generation manifest", "immutable manifest replacement", "saveLeafGenerationManifest", "pinned temporary file plus final manifest namespace generation", "encoded manifest digest", "temporary create then rename to manifest.json", "leaf-generation manifest publication adapter", "load and validate leaf-generation manifest", "leaf-generation manifest replacement owner"))
 	}
 	for _, field := range []string{"GenerationID", "State", "FileIDs", "CreatedCommitSeq", "SealedCommitSeq", "RetiredCommitSeq", "DeletedCommitSeq", "PublishedCommitSeq"} {

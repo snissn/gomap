@@ -438,11 +438,17 @@ func (tx *ConditionalTxn) validateReadSetOnly() error {
 	if len(tx.reads) == 0 {
 		return nil
 	}
+	if hook := tx.db.testConditionalReadOnlyAfterClosePreflight; hook != nil {
+		hook()
+	}
 	tx.db.writeMu.RLock()
+	defer tx.db.writeMu.RUnlock()
+	if err := tx.db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 	tx.db.commitMu.Lock()
 	err := tx.validateReadSetAtPublish()
 	tx.db.commitMu.Unlock()
-	tx.db.writeMu.RUnlock()
 	return err
 }
 

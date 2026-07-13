@@ -307,7 +307,7 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	}
 
 	if decision.intermediateChanged {
-		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+		if err := db.replaceLeafGenerationManifest(manifest); err != nil {
 			return stats, err
 		}
 		db.leafGenerationManifest = manifest
@@ -328,7 +328,7 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	}
 	stats.GenerationsDeleted = countPrunedLeafGenerations(prePrune, manifest)
 	stats.FilesDeleted = filesDeleted
-	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+	if err := db.replaceLeafGenerationManifest(manifest); err != nil {
 		return stats, err
 	}
 	db.leafGenerationManifest = manifest

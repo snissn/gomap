@@ -2,6 +2,7 @@ package atomicfile
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,24 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+// ReplacementMayHaveCommitted reports whether an atomic replacement reached
+// the rename boundary before returning an error. Callers that cache the old
+// document must treat this outcome as ambiguous until they reopen it.
+func ReplacementMayHaveCommitted(err error) bool {
+	var committed *replacementMayHaveCommittedError
+	return errors.As(err, &committed)
+}
+
+type replacementMayHaveCommittedError struct {
+	err error
+}
+
+func (e *replacementMayHaveCommittedError) Error() string {
+	return fmt.Sprintf("atomic replacement may have committed: %v", e.err)
+}
+
+func (e *replacementMayHaveCommittedError) Unwrap() error { return e.err }
 
 // Write atomically replaces path with data using a temp file in the same
 // directory. On Windows it retries rename on transient sharing/access errors.
@@ -47,7 +66,10 @@ func Write(path string, data []byte, perm os.FileMode) error {
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		if err := os.Rename(tmp, path); err == nil {
-			return durabilitycut.EmitNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceAuxiliary, dir, tmp, path)
+			if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceAuxiliary, dir, tmp, path); err != nil {
+				return &replacementMayHaveCommittedError{err: err}
+			}
+			return nil
 		}
 		lastErr = err
 		if runtime.GOOS != "windows" {

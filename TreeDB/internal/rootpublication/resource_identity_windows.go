@@ -11,12 +11,18 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func stableRelativeNamespaceSupported() bool { return false }
+
 func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, fmt.Errorf("%w: relative directory-handle open is unavailable", ErrNamespacePersistenceUnsupported)
 }
 
 func removeStableChildFile(*os.File, string) error {
 	return fmt.Errorf("%w: relative directory-handle unlink is unavailable", ErrNamespacePersistenceUnsupported)
+}
+
+func renameStableChildFile(*os.File, string, string) error {
+	return fmt.Errorf("%w: relative directory-handle rename is unavailable", ErrNamespacePersistenceUnsupported)
 }
 
 type stableWindowsFileIDInfo struct {

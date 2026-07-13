@@ -97,6 +97,7 @@ type DB struct {
 	leafPageLogVersion             uint64
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
+	leafGenerationManifestStore    *leafGenerationManifestStore
 	leafGenerationPendingMu        sync.Mutex
 	leafGenerationPendingFileIDs   []uint32
 	leafGenerationPendingSet       map[uint32]struct{}
@@ -495,15 +496,19 @@ type DB struct {
 	testFailWriteMeta atomic.Bool
 	// testFailSyncMeta fails after the alternate meta page has been written but
 	// before its durability outcome is known.
-	testFailSyncMeta                       atomic.Bool
-	testFailCommandWALFlush                atomic.Bool
-	testAfterOptimisticApplyHook           func()
-	testAfterOptimisticPublishPrepareHook  func()
-	testCheckpointAfterPoisonPreflightHook func()
-	testCommandWALRecoveryFailAfterLSN     atomic.Uint64
-	commandWALReplayLSN                    atomic.Uint64
-	commandWALReplayToken                  atomic.Uint64
-	commandWALReplayTokenSeq               atomic.Uint64
+	testFailSyncMeta                            atomic.Bool
+	testFailCommandWALFlush                     atomic.Bool
+	testAfterOptimisticApplyHook                func()
+	testAfterOptimisticPublishPrepareHook       func()
+	testCheckpointAfterPoisonPreflightHook      func()
+	testConditionalReadOnlyAfterClosePreflight  func()
+	testOrderedRootBatchAfterClosePreflightHook func()
+	testStorageMaintenanceBeforeLockHook        func(string)
+	testStorageMaintenanceAfterLockHook         func(string) error
+	testCommandWALRecoveryFailAfterLSN          atomic.Uint64
+	commandWALReplayLSN                         atomic.Uint64
+	commandWALReplayToken                       atomic.Uint64
+	commandWALReplayTokenSeq                    atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
@@ -1963,6 +1968,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()
 	db.idx.Store(gen)
 	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
@@ -2128,7 +2134,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, false)
+		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
 		if err != nil {
 			db.Close()
 			return nil, err
@@ -2448,11 +2454,19 @@ func (db *DB) closeAfterHooks() error {
 	// worker pool and tearing down index resources.
 	db.writeMu.Lock()
 	leafPageLog := db.leafPageLog
+	leafGenerationManifestStore := db.leafGenerationManifestStore
 	if db.flushApplyWorkerPool != nil {
 		db.flushApplyWorkerPool.Close()
 		db.flushApplyWorkerPool = nil
 	}
 	db.clearFlushApplyReadOnlyPrepareBuffers()
+	// Commit post-work persists the leaf-generation manifest while its writer
+	// still holds writeMu. Keep the retained manifest handles usable until every
+	// in-flight writer has drained. Close them before releasing writeMu so a
+	// caller queued behind Close cannot enter the drain-to-teardown handoff.
+	if leafGenerationManifestStore != nil {
+		leafGenerationManifestStore.Close()
+	}
 	db.writeMu.Unlock()
 	// Operations using teardownMu may briefly take writeMu while preparing or
 	// revalidating work. Never wait for them while holding writeMu.
@@ -3240,6 +3254,9 @@ func (db *DB) Commit(newRootID uint64) error {
 	// We need to serialize with other writers.
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 
 	// Since we are committing a root provided by caller, we assume they based it on current state?
 	// If caller is external, they might have read old state.
@@ -3275,6 +3292,9 @@ func (db *DB) Checkpoint() error {
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
@@ -3563,6 +3583,16 @@ func (db *DB) IsClosing() bool {
 	return db == nil || db.closing.Load()
 }
 
+// checkWriteAdmissionLocked rejects writers that lost the race with Close.
+// Callers must hold writeMu for reading or writing so a successful admission
+// remains valid until their write-critical section completes.
+func (db *DB) checkWriteAdmissionLocked() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	return nil
+}
+
 func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager) {
 	if db == nil {
 		return
@@ -3707,6 +3737,9 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 func (db *DB) CompactIndex() error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}

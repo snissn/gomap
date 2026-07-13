@@ -1525,12 +1525,25 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err := db.commandWALPoisonedError(); err != nil {
 		return stats, err
 	}
-	if db.valueLogManager == nil {
-		return stats, fmt.Errorf("value log manager unavailable")
+	if lockMaintenance {
+		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
+			hook("value-log-rewrite")
+		}
 	}
 	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
+	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return stats, err
+	}
+	if db.valueLogManager == nil {
+		return stats, fmt.Errorf("value log manager unavailable")
+	}
+	if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
+		if err := hook("value-log-rewrite"); err != nil {
+			return stats, err
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()

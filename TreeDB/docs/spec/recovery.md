@@ -131,6 +131,17 @@ Commit-log segments are discovered from `<maindb>/wal` by filename parsing.
 Value-log segments are discovered from `<maindb>/value_vlog`; split leaf-log
 segments are discovered from `<maindb>/leaf_vlog`.
 
+The split-leaf `manifest.json` is accepted only as one complete coherent
+version-2 document with a non-zero `manifest_revision`. A failed stable
+replacement before rename leaves the previous complete manifest authoritative.
+Once rename has succeeded, failure to validate the destination identity or to
+stabilize the retained parent namespace makes the outcome ambiguous: the live
+handle is poisoned and returns `ErrRecoveryRequired`. Reopen may accept the
+complete old or complete new document observed after the cut, but never an
+empty, truncated, malformed, zero-revision, or unsupported-version document.
+Ambiguous cleanup is handle-owned until close; recovery does not guess a
+temporary pathname to unlink.
+
 Before `command_wal_v1`, accepted patterns include:
 
 - canonical commit log: `commit-l<lane>-<seq>.log`

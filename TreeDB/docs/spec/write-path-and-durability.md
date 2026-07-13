@@ -416,6 +416,14 @@ the roots, the command-WAL V1 marker, and `AppliedCommandLSN` together. A
 post-commit sidecar, format-config marker, manifest, system-root-only update, or
 stats update is not a valid source of recovery truth.
 
+Stable split-leaf manifest replacement is a separately certified dependency
+operation: exactly one sync persists the encoded manifest file and exactly one
+retained-parent sync persists its rename. A token captured after those steps is
+already content-synced, so `SyncThrough` must not repeat the file sync. Until
+#3679 transfers that token into the selected root publication candidate, the
+replacement does not by itself make the manifest a root or `AppliedLSN`
+dependency and does not change the broader publication ordering.
+
 Under the user-command WAL target, `DB.Checkpoint()` success must cover command
 WAL. A checkpoint that cannot publish `AppliedLSN` covering pre-cut command
 frames must return an error or expose explicit command WAL debt through a new

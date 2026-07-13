@@ -16,7 +16,7 @@ import (
 
 const (
 	leafGenerationManifestFileName = "manifest.json"
-	leafGenerationManifestVersion  = 1
+	leafGenerationManifestVersion  = 2
 
 	leafGenerationStateWritable = "writable"
 	leafGenerationStateSealed   = "sealed"
@@ -24,8 +24,13 @@ const (
 	leafGenerationStateDeleted  = "deleted"
 )
 
+// ErrLeafGenerationManifestIncompatible reports an on-disk split-leaf
+// manifest version or revision that this pre-alpha binary will not migrate.
+var ErrLeafGenerationManifestIncompatible = errors.New("treedb: incompatible leaf generation manifest")
+
 type leafGenerationManifest struct {
 	Version             int                    `json:"version"`
+	ManifestRevision    uint64                 `json:"manifest_revision"`
 	CurrentGenerationID uint64                 `json:"current_generation_id"`
 	NextGenerationID    uint64                 `json:"next_generation_id"`
 	Generations         []leafGenerationRecord `json:"generations"`
@@ -52,6 +57,7 @@ func leafGenerationManifestPath(leafDir string) string {
 func newLeafGenerationManifest(commitSeq uint64) *leafGenerationManifest {
 	return &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
+		ManifestRevision:    0,
 		CurrentGenerationID: 1,
 		NextGenerationID:    2,
 		Generations: []leafGenerationRecord{{
@@ -284,6 +290,7 @@ func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 	}
 	out := &leafGenerationManifest{
 		Version:             m.Version,
+		ManifestRevision:    m.ManifestRevision,
 		CurrentGenerationID: m.CurrentGenerationID,
 		NextGenerationID:    m.NextGenerationID,
 		Generations:         make([]leafGenerationRecord, len(m.Generations)),
@@ -296,6 +303,22 @@ func (m *leafGenerationManifest) clone() *leafGenerationManifest {
 		out.Generations[i].FileIDs = append([]uint32(nil), m.Generations[i].FileIDs...)
 	}
 	return out
+}
+
+func validatePersistedLeafGenerationManifest(m *leafGenerationManifest) error {
+	if m == nil {
+		return fmt.Errorf("%w: nil manifest", ErrLeafGenerationManifestIncompatible)
+	}
+	if m.Version != leafGenerationManifestVersion {
+		return fmt.Errorf("%w: version=%d want=%d", ErrLeafGenerationManifestIncompatible, m.Version, leafGenerationManifestVersion)
+	}
+	if m.ManifestRevision == 0 {
+		return fmt.Errorf("%w: manifest_revision must be non-zero", ErrLeafGenerationManifestIncompatible)
+	}
+	if err := validateLeafGenerationManifest(m); err != nil {
+		return fmt.Errorf("%w: %v", ErrLeafGenerationManifestIncompatible, err)
+	}
+	return nil
 }
 
 func validateLeafGenerationManifest(m *leafGenerationManifest) error {
@@ -666,7 +689,7 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 	if !changedAny {
 		return nil
 	}
-	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), nextManifest); err != nil {
+	if err := db.replaceLeafGenerationManifest(nextManifest); err != nil {
 		return err
 	}
 	db.mu.Lock()
@@ -708,32 +731,49 @@ func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, 
 		}
 		return nil, false, err
 	}
+	manifest, err := decodeLeafGenerationManifest(data, filepath.Base(path))
+	if err != nil {
+		return nil, false, err
+	}
+	return manifest, true, nil
+}
+
+func decodeLeafGenerationManifest(data []byte, diagnosticName string) (*leafGenerationManifest, error) {
 	if len(data) == 0 {
-		return nil, false, fmt.Errorf("treedb: decode %s: empty file", filepath.Base(path))
+		return nil, fmt.Errorf("%w: decode %s: empty file", ErrLeafGenerationManifestIncompatible, diagnosticName)
 	}
 	var manifest leafGenerationManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("%w: decode %s: %w", ErrLeafGenerationManifestIncompatible, diagnosticName, err)
 	}
-	if err := validateLeafGenerationManifest(&manifest); err != nil {
-		return nil, false, err
+	if err := validatePersistedLeafGenerationManifest(&manifest); err != nil {
+		return nil, fmt.Errorf("%w: decode %s: %w", ErrLeafGenerationManifestIncompatible, diagnosticName, err)
 	}
-	return manifest.clone(), true, nil
+	return manifest.clone(), nil
 }
 
 func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest) error {
-	path := leafGenerationManifestPath(leafDir)
-	if path == "" {
-		return errors.New("missing leaf_vlog dir")
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+	_, err := store.Replace(manifest)
+	return err
+}
+
+func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) error {
+	if db == nil {
+		return ErrClosed
 	}
-	if err := validateLeafGenerationManifest(manifest); err != nil {
-		return err
+	if db.leafGenerationManifestStore == nil {
+		return saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest)
 	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return err
+	token, err := db.leafGenerationManifestStore.Replace(manifest)
+	if token != nil {
+		// #3679 will transfer this token into the root candidate. Until that
+		// ordering owner lands, current paths explicitly release the exact pin
+		// after the replacement itself is certified.
+		token.Release()
 	}
-	return writeFileAtomic(path, data, 0o600)
+	return err
 }
 
 type leafGenerationBootstrapFile struct {
@@ -770,6 +810,10 @@ func listLeafGenerationBootstrapFiles(leafDir string) ([]leafGenerationBootstrap
 		}
 		return nil, err
 	}
+	return leafGenerationBootstrapFilesFromEntries(entries)
+}
+
+func leafGenerationBootstrapFilesFromEntries(entries []os.DirEntry) ([]leafGenerationBootstrapFile, error) {
 	files := make([]leafGenerationBootstrapFile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -805,11 +849,16 @@ func bootstrapLeafGenerationManifestFromDir(leafDir string, commitSeq uint64) (*
 	if err != nil {
 		return nil, err
 	}
+	return bootstrapLeafGenerationManifestFromFiles(files, commitSeq)
+}
+
+func bootstrapLeafGenerationManifestFromFiles(files []leafGenerationBootstrapFile, commitSeq uint64) (*leafGenerationManifest, error) {
 	if len(files) == 0 {
 		return newLeafGenerationManifest(commitSeq), nil
 	}
 	manifest := &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
+		ManifestRevision:    0,
 		CurrentGenerationID: uint64(len(files)),
 		NextGenerationID:    uint64(len(files) + 1),
 		Generations:         make([]leafGenerationRecord, 0, len(files)),
@@ -944,6 +993,13 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	if err != nil {
 		return nil, false, err
 	}
+	return reconcileLeafGenerationManifestWithFiles(manifest, files, commitSeq)
+}
+
+func reconcileLeafGenerationManifestWithFiles(manifest *leafGenerationManifest, files []leafGenerationBootstrapFile, commitSeq uint64) (*leafGenerationManifest, bool, error) {
+	if manifest == nil {
+		return nil, false, nil
+	}
 	diskFiles := make(map[uint32]struct{}, len(files))
 	for _, file := range files {
 		if file.rawFileID != 0 {
@@ -1009,18 +1065,39 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 }
 
 func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOnly bool) (*leafGenerationManifest, error) {
-	manifest, ok, err := loadLeafGenerationManifest(leafDir)
+	return loadOrCreateLeafGenerationManifestWithStore(leafDir, commitSeq, readOnly, nil)
+}
+
+func loadOrCreateLeafGenerationManifestWithStore(leafDir string, commitSeq uint64, readOnly bool, store *leafGenerationManifestStore) (*leafGenerationManifest, error) {
+	var manifest *leafGenerationManifest
+	var ok bool
+	var err error
+	if store == nil {
+		manifest, ok, err = loadLeafGenerationManifest(leafDir)
+	} else {
+		manifest, ok, err = store.Load()
+	}
 	if err != nil {
 		return nil, err
 	}
 	if ok {
-		reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, manifest, commitSeq)
+		var reconciled *leafGenerationManifest
+		var changed bool
+		if store == nil {
+			reconciled, changed, err = reconcileLeafGenerationManifestWithDir(leafDir, manifest, commitSeq)
+		} else {
+			var files []leafGenerationBootstrapFile
+			files, err = store.listBootstrapFiles()
+			if err == nil {
+				reconciled, changed, err = reconcileLeafGenerationManifestWithFiles(manifest, files, commitSeq)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
 		if changed {
 			if !readOnly {
-				if err := saveLeafGenerationManifest(leafDir, reconciled); err != nil {
+				if err := replaceLeafGenerationManifestWithStore(leafDir, reconciled, store); err != nil {
 					return nil, err
 				}
 			}
@@ -1028,17 +1105,36 @@ func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOn
 		}
 		return manifest, nil
 	}
-	manifest, err = bootstrapLeafGenerationManifestFromDir(leafDir, commitSeq)
+	if store == nil {
+		manifest, err = bootstrapLeafGenerationManifestFromDir(leafDir, commitSeq)
+	} else {
+		var files []leafGenerationBootstrapFile
+		files, err = store.listBootstrapFiles()
+		if err == nil {
+			manifest, err = bootstrapLeafGenerationManifestFromFiles(files, commitSeq)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	if readOnly {
 		return manifest, nil
 	}
-	if err := saveLeafGenerationManifest(leafDir, manifest); err != nil {
+	if err := replaceLeafGenerationManifestWithStore(leafDir, manifest, store); err != nil {
 		return nil, err
 	}
 	return manifest.clone(), nil
+}
+
+func replaceLeafGenerationManifestWithStore(leafDir string, manifest *leafGenerationManifest, store *leafGenerationManifestStore) error {
+	if store == nil {
+		return saveLeafGenerationManifest(leafDir, manifest)
+	}
+	token, err := store.Replace(manifest)
+	if token != nil {
+		token.Release()
+	}
+	return err
 }
 
 func (db *DB) reconcileLeafGenerationManifestWithDirInPlace(commitSeq uint64) (bool, error) {
@@ -1055,11 +1151,22 @@ func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bo
 		return false, nil
 	}
 	leafDir := LeafLogDirPath(db.dir)
-	reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, db.leafGenerationManifest, commitSeq)
+	var reconciled *leafGenerationManifest
+	var changed bool
+	var err error
+	if db.leafGenerationManifestStore == nil {
+		reconciled, changed, err = reconcileLeafGenerationManifestWithDir(leafDir, db.leafGenerationManifest, commitSeq)
+	} else {
+		var files []leafGenerationBootstrapFile
+		files, err = db.leafGenerationManifestStore.listBootstrapFiles()
+		if err == nil {
+			reconciled, changed, err = reconcileLeafGenerationManifestWithFiles(db.leafGenerationManifest, files, commitSeq)
+		}
+	}
 	if err != nil || !changed {
 		return false, err
 	}
-	if err := saveLeafGenerationManifest(leafDir, reconciled); err != nil {
+	if err := db.replaceLeafGenerationManifest(reconciled); err != nil {
 		return false, err
 	}
 	db.mu.Lock()

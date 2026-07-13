@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,10 +9,46 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestCompatibleLeafGenerationManifestPostRenameFailurePoisonsAndAdvancesRevision(t *testing.T) {
+	leafDir := t.TempDir()
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+	manifest := newLeafGenerationManifest(1)
+	cut := errors.New("post-rename observation cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == durabilitycut.NamespaceRename && event.NewPath == leafGenerationManifestPath(leafDir) {
+			return cut
+		}
+		return nil
+	})
+	_, err := store.Replace(manifest)
+	restore()
+	if !errors.Is(err, cut) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Replace error=%v, want cut + ErrRecoveryRequired", err)
+	}
+	if manifest.ManifestRevision != 1 {
+		t.Fatalf("ManifestRevision=%d, want committed revision 1", manifest.ManifestRevision)
+	}
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil || !ok || loaded.ManifestRevision != 1 {
+		t.Fatalf("persisted manifest: revision=%v ok=%v err=%v", func() uint64 {
+			if loaded == nil {
+				return 0
+			}
+			return loaded.ManifestRevision
+		}(), ok, err)
+	}
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("poisoned retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
 
 type manifestTestLeafPageLog struct {
 	path   string
@@ -106,11 +143,91 @@ func TestLeafGenerationManifest_LoadRejectsUnsupportedVersion(t *testing.T) {
 		t.Fatalf("WriteFile(manifest): %v", err)
 	}
 	_, ok, err := loadLeafGenerationManifest(leafDir)
-	if err == nil {
-		t.Fatalf("expected loadLeafGenerationManifest error")
+	if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("load error=%v want ErrLeafGenerationManifestIncompatible", err)
 	}
 	if ok {
 		t.Fatalf("expected ok=false on unsupported version")
+	}
+}
+
+func TestLeafGenerationManifest_LoadRejectsVersionOneWithoutMigration(t *testing.T) {
+	leafDir := t.TempDir()
+	path := leafGenerationManifestPath(leafDir)
+	data := []byte(`{"version":1,"current_generation_id":1,"next_generation_id":2,"generations":[{"generation_id":1,"state":"writable"}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := loadLeafGenerationManifest(leafDir); !errors.Is(err, ErrLeafGenerationManifestIncompatible) || ok {
+		t.Fatalf("load v1 ok=%v error=%v want typed incompatibility", ok, err)
+	}
+}
+
+func TestLeafGenerationManifest_LoadClassifiesPersistedDocumentCorruption(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       string
+		wantSyntax bool
+	}{
+		{
+			name:       "malformed_json",
+			data:       `{"version":2,"manifest_revision":1,`,
+			wantSyntax: true,
+		},
+		{
+			name: "structurally_invalid_v2",
+			data: `{"version":2,"manifest_revision":1,"current_generation_id":1,"next_generation_id":2,"generations":[]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			leafDir := t.TempDir()
+			if err := os.WriteFile(leafGenerationManifestPath(leafDir), []byte(tt.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, ok, err := loadLeafGenerationManifest(leafDir)
+			if ok || !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+				t.Fatalf("load ok=%v error=%v want false, ErrLeafGenerationManifestIncompatible", ok, err)
+			}
+			if tt.wantSyntax {
+				var syntaxErr *json.SyntaxError
+				if !errors.As(err, &syntaxErr) {
+					t.Fatalf("load error=%v does not preserve json.SyntaxError", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCompatibleLeafGenerationManifestReplacementPreservesPersistedSyntaxError(t *testing.T) {
+	leafDir := t.TempDir()
+	if err := os.WriteFile(leafGenerationManifestPath(leafDir), []byte(`{"version":2,"manifest_revision":1,`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+
+	_, err := store.Replace(newLeafGenerationManifest(1))
+	if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("Replace error=%v want ErrLeafGenerationManifestIncompatible", err)
+	}
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("Replace error=%v does not preserve json.SyntaxError", err)
+	}
+}
+
+func TestLeafGenerationManifest_LoadDoesNotClassifyFilesystemIOErrorAsIncompatible(t *testing.T) {
+	leafDir := t.TempDir()
+	if err := os.Mkdir(leafGenerationManifestPath(leafDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := loadLeafGenerationManifest(leafDir)
+	if err == nil || ok {
+		t.Fatalf("load directory as manifest ok=%v error=%v want filesystem error", ok, err)
+	}
+	if errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("filesystem error=%v must not be classified as ErrLeafGenerationManifestIncompatible", err)
 	}
 }
 
@@ -564,6 +681,171 @@ func TestOpen_IndexOuterLeavesInValueLog_CreatesLeafGenerationManifest(t *testin
 	}
 }
 
+func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := db.leafGenerationManifestStore
+	if store == nil {
+		t.Fatal("leaf generation manifest store is nil")
+	}
+
+	teardownStarted := make(chan struct{})
+	db.registerInternalTeardownHook(func() error {
+		close(teardownStarted)
+		return nil
+	})
+	db.writeMu.RLock()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- db.Close() }()
+	select {
+	case <-teardownStarted:
+	case <-time.After(5 * time.Second):
+		db.writeMu.RUnlock()
+		t.Fatal("Close did not begin internal teardown")
+	}
+
+	manifest := db.leafGenerationManifest.clone()
+	token, err := store.Replace(manifest)
+	if err != nil {
+		db.writeMu.RUnlock()
+		t.Fatalf("manifest replacement while Close waits for writer: %v", err)
+	}
+	if token != nil {
+		token.Release()
+	}
+	db.writeMu.RUnlock()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after writer drained")
+	}
+	store.mu.Lock()
+	closed := store.closed
+	store.mu.Unlock()
+	if !closed {
+		t.Fatal("leaf generation manifest store remained open after Close")
+	}
+}
+
+func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := db.leafGenerationManifestStore
+	if store == nil {
+		t.Fatal("leaf generation manifest store is nil")
+	}
+
+	teardownStarted := make(chan struct{})
+	db.registerInternalTeardownHook(func() error {
+		close(teardownStarted)
+		return nil
+	})
+	store.mu.Lock()
+	storeLocked := true
+	defer func() {
+		if storeLocked {
+			store.mu.Unlock()
+		}
+	}()
+	db.writeMu.RLock()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- db.Close() }()
+	select {
+	case <-teardownStarted:
+	case <-time.After(5 * time.Second):
+		db.writeMu.RUnlock()
+		t.Fatal("Close did not begin internal teardown")
+	}
+	writerQueuedDeadline := time.Now().Add(5 * time.Second)
+	for db.writeMu.TryRLock() {
+		db.writeMu.RUnlock()
+		if time.Now().After(writerQueuedDeadline) {
+			db.writeMu.RUnlock()
+			t.Fatal("Close did not queue for writeMu")
+		}
+		runtime.Gosched()
+	}
+
+	writeMuAcquired := make(chan struct{})
+	go func() {
+		db.writeMu.RLock()
+		close(writeMuAcquired)
+		db.writeMu.RUnlock()
+	}()
+	db.writeMu.RUnlock()
+
+	select {
+	case <-writeMuAcquired:
+		store.mu.Unlock()
+		storeLocked = false
+		<-closeDone
+		t.Fatal("writeMu became available before manifest store teardown completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	store.mu.Unlock()
+	storeLocked = false
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after manifest store teardown unblocked")
+	}
+	select {
+	case <-writeMuAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("writeMu remained unavailable after Close completed")
+	}
+}
+
+func TestCommitRejectsClosingDBAfterWriteMuAcquisition(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		db.closing.Store(false)
+		_ = db.Close()
+	})
+
+	db.mu.RLock()
+	rootID := db.meta.UserRootPageID
+	commitSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	db.writeMu.Lock()
+	db.closing.Store(true)
+	commitDone := make(chan error, 1)
+	go func() { commitDone <- db.Commit(rootID) }()
+	db.writeMu.Unlock()
+
+	select {
+	case err := <-commitDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Commit error=%v, want %v", err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Commit remained blocked after writeMu became available")
+	}
+	db.mu.RLock()
+	gotCommitSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	if gotCommitSeq != commitSeq {
+		t.Fatalf("CommitSeq=%d after closing Commit, want %d", gotCommitSeq, commitSeq)
+	}
+}
+
 func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
@@ -695,15 +977,15 @@ func TestNoteLeafGenerationWritableFileIDs_PersistsSealedRecordLengthIndex(t *te
 }
 
 func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based save failure is not reliable on Windows")
-	}
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	if db.leafGenerationManifestStore == nil || db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
+		t.Skip("stable manifest replacement hooks are unavailable")
+	}
 
 	leafDir := LeafLogDirPath(dir)
 	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
@@ -713,14 +995,10 @@ func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *
 	if err := db.noteLeafGenerationWritableFileID(fileID1, 55); err != nil {
 		t.Fatalf("noteLeafGenerationWritableFileID first: %v", err)
 	}
-	if err := os.Chmod(leafDir, 0o500); err != nil {
-		t.Fatalf("Chmod read-only leaf dir: %v", err)
-	}
-	defer func() {
-		_ = os.Chmod(leafDir, 0o700)
-	}()
-	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err == nil {
-		t.Fatal("expected manifest save failure")
+	cut := errors.New("manifest save cut")
+	db.leafGenerationManifestStore.hooks.BeforeTempCreate = func() error { return cut }
+	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); !errors.Is(err, cut) {
+		t.Fatalf("manifest save error=%v, want %v", err, cut)
 	}
 	current := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
 	if got, want := current.FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
@@ -736,9 +1014,7 @@ func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *
 	if got, want := loadedBefore.Generations[loadedBefore.currentGenerationIndex()].FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("persisted current FileIDs before retry=%v, want %v", got, want)
 	}
-	if err := os.Chmod(leafDir, 0o700); err != nil {
-		t.Fatalf("Chmod writable leaf dir: %v", err)
-	}
+	db.leafGenerationManifestStore.hooks.BeforeTempCreate = nil
 	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err != nil {
 		t.Fatalf("noteLeafGenerationWritableFileID retry: %v", err)
 	}
