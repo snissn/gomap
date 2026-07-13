@@ -290,6 +290,46 @@ func TestStableValueLogPendingSuccessorTransfersRegistryObservationOnRetry(t *te
 	}
 }
 
+func TestStableValueLogPendingSuccessorReleasesRegistryObservationOnClose(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "000001.vlog")
+	secondPath := filepath.Join(dir, "000002.vlog")
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(firstPath, 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendStablePendingValue(t, writer, 1)
+	closed, active := stablePendingRegistrations(1, 2)
+
+	injected := errors.New("injected value-log namespace-token failure")
+	originalFactory := newValueLogStableNamespaceToken
+	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+		return nil, injected
+	}
+	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
+	newValueLogStableNamespaceToken = originalFactory
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("failed rotation returned owned resources")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("rotation error=%v want token failure", err)
+	}
+	if got := registry.ActiveIdentities(); got != 2 {
+		t.Fatalf("pending rotation identities=%d want old and exact successor", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("closed pending writer identities=%d want 0", got)
+	}
+	if _, err := os.Stat(secondPath); err != nil {
+		t.Fatalf("close removed persistent pending successor: %v", err)
+	}
+}
+
 func TestStableValueLogPendingSuccessorReplacementFailsClosedWithoutUnlink(t *testing.T) {
 	beforeFDs, checkFDs := valueLogOpenDescriptorCount(t)
 	dir := t.TempDir()
