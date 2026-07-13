@@ -138,6 +138,7 @@ type Writer struct {
 	compress               bool
 	enc                    *zstd.Encoder
 	syncFn                 func(*os.File) error
+	closeRotateFn          func(*os.File) error
 	fileSyncCalls          atomic.Uint64
 	fileSyncNs             atomic.Uint64
 	fileSyncErrors         atomic.Uint64
@@ -499,36 +500,41 @@ func (w *Writer) RotateTo(path string) error {
 // the provided path and reuses the writer's buffers for future appends. When
 // syncCurrent is false, the current file is flushed to the OS but not fsynced.
 func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
-	return w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+	_, err := w.rotateToWithSyncObserved(path, syncCurrent, "", false)
+	return err
 }
 
-func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) error {
+type writerRotationOutcome struct {
+	Installed bool
+}
+
+func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) (writerRotationOutcome, error) {
 	if w == nil {
-		return errors.New("commitlog: nil writer")
+		return writerRotationOutcome{}, errors.New("commitlog: nil writer")
 	}
 
 	if w.f == nil {
 		f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
 		if err != nil {
-			return err
+			return writerRotationOutcome{}, err
 		}
 		if syncCurrent {
 			if err := syncNewLogFileDirectory(w, path); err != nil {
 				_ = f.Close()
-				return err
+				return writerRotationOutcome{}, err
 			}
 		}
 		info, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
-			return err
+			return writerRotationOutcome{}, err
 		}
 		w.f = f
 		w.fileSink.file = f
 		w.bw.Reset(&w.fileSink)
 		w.size = info.Size()
 		w.scratch = w.scratch[:0]
-		return nil
+		return writerRotationOutcome{Installed: true}, nil
 	}
 
 	before, after := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
@@ -537,44 +543,44 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	}
 	if observe {
 		if err := durabilitycut.EmitPath(before, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
-			return err
+			return writerRotationOutcome{}, err
 		}
 	}
 	if w.pendingBatchRecs != 0 {
 		if err := w.flushPendingBatch(); err != nil {
-			return err
+			return writerRotationOutcome{}, err
 		}
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
-		return err
+		return writerRotationOutcome{}, err
 	}
 	if err := w.bw.Flush(); err != nil {
-		return err
+		return writerRotationOutcome{}, err
 	}
 	if syncCurrent {
 		if err := w.syncFile(); err != nil {
-			return err
+			return writerRotationOutcome{}, err
 		}
 	}
 	if observe {
 		if err := durabilitycut.EmitPath(after, durabilitycut.ResourceCommandWAL, root, w.f.Name()); err != nil {
-			return err
+			return writerRotationOutcome{}, err
 		}
 	}
 
 	f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
 	if err != nil {
-		return err
+		return writerRotationOutcome{}, err
 	}
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
-		return err
+		return writerRotationOutcome{}, err
 	}
 	if syncCurrent {
 		if err := syncNewLogFileDirectory(w, path); err != nil {
 			_ = f.Close()
-			return err
+			return writerRotationOutcome{}, err
 		}
 	}
 
@@ -584,10 +590,11 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	w.bw.Reset(&w.fileSink)
 	w.size = info.Size()
 	w.scratch = w.scratch[:0]
-	if err := old.Close(); err != nil {
-		return err
+	closeOld := old.Close
+	if w.closeRotateFn != nil {
+		closeOld = func() error { return w.closeRotateFn(old) }
 	}
-	return nil
+	return writerRotationOutcome{Installed: true}, closeOld()
 }
 
 func syncDir(path string) (err error) {

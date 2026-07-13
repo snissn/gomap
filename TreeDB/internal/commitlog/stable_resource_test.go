@@ -90,6 +90,48 @@ func TestCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) 
 	}
 }
 
+func TestCommandJournalStableRotationUsesParentRefreshedByOrdinaryRotation(t *testing.T) {
+	requireStableCommandWALNamespace(t)
+	root := t.TempDir()
+	walDir := filepath.Join(root, "wal")
+	journal, err := OpenCommandJournal(walDir, CommandJournalOptions{Lane: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+
+	movedDir := filepath.Join(root, "wal-moved")
+	if err := os.Rename(walDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(walDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	injectedClose := errors.New("injected old command-WAL close failure")
+	journal.writer.closeRotateFn = func(file *os.File) error {
+		journal.writer.closeRotateFn = nil
+		return errors.Join(file.Close(), injectedClose)
+	}
+	if err := journal.RotateActiveSegment(false); !errors.Is(err, injectedClose) {
+		t.Fatalf("ordinary rotation error=%v want injected close failure", err)
+	}
+	if journal.segmentSeq != 2 || filepath.Base(journal.path) != CommandSegmentName(6, 2) {
+		t.Fatalf("installed journal state seq=%d path=%q", journal.segmentSeq, journal.path)
+	}
+	rotation, err := journal.RotateActiveSegmentWithStableResources(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	newName := CommandSegmentName(6, 3)
+	if _, err := os.Stat(filepath.Join(walDir, newName)); err != nil {
+		t.Fatalf("refreshed-parent command WAL: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(movedDir, newName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale retained parent unexpectedly received command WAL: %v", err)
+	}
+}
+
 func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	requireStableCommandWALNamespace(t)
 	dir := t.TempDir()

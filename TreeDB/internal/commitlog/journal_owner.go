@@ -565,16 +565,28 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
 	closedBytes := j.writer.ActiveBytes()
-	if err := j.writer.rotateToWithSyncObserved(nextPath, syncCurrent, filepath.Dir(j.walDir), observe); err != nil {
-		return err
+	outcome, rotateErr := j.writer.rotateToWithSyncObserved(nextPath, syncCurrent, filepath.Dir(j.walDir), observe)
+	if !outcome.Installed {
+		return rotateErr
 	}
+	stableParent, stableParentErr := captureStableCommandWALParent(j.walDir, j.writer.f)
+	oldStableParent := j.stableParent
+	j.stableParent = stableParent
+	j.stableParentErr = stableParentErr
 	if closedBytes > 0 && j.onSegmentRotated != nil {
 		j.onSegmentRotated(closedBytes)
 	}
 	j.segmentSeq = nextSeq
 	j.path = nextPath
 	j.activeSegmentMaxLSN = 0
-	return nil
+	var closeParentErr error
+	if oldStableParent != nil {
+		closeParentErr = oldStableParent.Close()
+	}
+	if j.captureStableResources {
+		return errors.Join(rotateErr, stableParentErr, closeParentErr)
+	}
+	return errors.Join(rotateErr, closeParentErr)
 }
 
 // RotateActiveSegment rotates the command WAL to the next segment. It is safe to

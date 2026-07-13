@@ -941,7 +941,11 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			_ = f.Close()
 			return err
 		}
+		stableParent, stableParentErr := captureStableValueLogParent(path, f)
+		oldStableParent := w.stableParent
 		w.f = f
+		w.stableParent = stableParent
+		w.stableParentErr = stableParentErr
 		// File-backed writers do not use bufio; drop any sink buffer.
 		w.bw = nil
 		w.size = info.Size()
@@ -949,6 +953,9 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		w.appendMax = defaultBufferSize
 		w.appendBuf = w.appendBuf[:0]
 		w.trimTransientScratchBuffers()
+		if oldStableParent != nil {
+			return oldStableParent.Close()
+		}
 		return nil
 	}
 
@@ -976,26 +983,31 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			return err
 		}
 	}
-
 	old := w.f
+	oldStableParent := w.stableParent
 	if w.bw != nil {
 		if err := w.bw.Flush(); err != nil {
 			_ = f.Close()
 			return err
 		}
 	}
+	stableParent, stableParentErr := captureStableValueLogParent(path, f)
 	w.f = f
+	w.stableParent = stableParent
+	w.stableParentErr = stableParentErr
 	// File-backed writers do not use bufio. Drop any leftover sink buffer
 	// rather than retargeting it across rotations.
 	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
-	if err := old.Close(); err != nil {
-		return err
+	closeErr := old.Close()
+	var closeParentErr error
+	if oldStableParent != nil {
+		closeParentErr = oldStableParent.Close()
 	}
 	w.trimTransientScratchBuffers()
-	return nil
+	return errors.Join(closeErr, closeParentErr)
 }
 
 func syncDir(path string) (err error) {

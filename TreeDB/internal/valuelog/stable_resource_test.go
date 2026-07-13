@@ -133,6 +133,48 @@ func TestStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
 	}
 }
 
+func TestStableValueLogRotationUsesParentRefreshedByOrdinaryRotation(t *testing.T) {
+	requireStableValueLogNamespace(t)
+	root := t.TempDir()
+	segmentDir := filepath.Join(root, "segments")
+	if err := os.Mkdir(segmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewWriter(filepath.Join(segmentDir, "000001.vlog"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	movedDir := filepath.Join(root, "segments-moved")
+	if err := os.Rename(segmentDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(segmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.RotateToWithSync(filepath.Join(segmentDir, "000002.vlog"), 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if writer.fileID != 2 || filepath.Base(writer.f.Name()) != "000002.vlog" {
+		t.Fatalf("installed writer state fileID=%d path=%q", writer.fileID, writer.f.Name())
+	}
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(segmentDir, "000003.vlog"), 3, false,
+		StableResourceRegistration{LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog", Reachability: rootpublication.ReachabilityValueLogPointer},
+		StableResourceRegistration{LogicalLane: "main", Generation: 3, DiagnosticPath: "maindb/value_vlog/000003.vlog", Reachability: rootpublication.ReachabilityValueLogPointer,
+			ParentGeneration: 3, NamespaceOperation: rootpublication.NamespaceCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	if _, err := os.Stat(filepath.Join(segmentDir, "000003.vlog")); err != nil {
+		t.Fatalf("refreshed-parent active segment: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(movedDir, "000003.vlog")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale retained parent unexpectedly received active segment: %v", err)
+	}
+}
+
 func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
 	writer, err := NewWriter(filepath.Join(t.TempDir(), "000001.vlog"), 1)
 	if err != nil {
