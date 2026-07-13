@@ -156,3 +156,23 @@ func TestStableValueLogRegistrationSupportsOuterLeafProducerKinds(t *testing.T) 
 		t.Fatalf("token kind=%q", token.Kind())
 	}
 }
+
+func TestStableValueLogRegistrationRejectsForeignProducerField(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewWriter(filepath.Join(dir, "000010.vlog"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Append(0, nil, 1, []byte("foreign-field")); err != nil {
+		t.Fatal(err)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		Kind: rootpublication.ResourceColumnAsset, LogicalLane: "main", Generation: 10,
+		DiagnosticPath: "column_assets/foreign/segments/000010.seg",
+		Reachability:   rootpublication.ReachabilityColumnManifest,
+	})
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("foreign producer field token=%v err=%v", token, err)
+	}
+}
