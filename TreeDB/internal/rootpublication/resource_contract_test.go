@@ -554,6 +554,7 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 		dir := t.TempDir()
 		token := stableTokenFixture(t, dir, spec.id+suffix, 1, 4, spec.field, spec.id, func(tokenSpec *StableResourceSpec) {
 			tokenSpec.Kind = spec.kind
+			tokenSpec.ResourceID = spec.id
 		})
 		builder := NewStableResourceSetBuilder(spec.field)
 		if err := builder.Add(token); err != nil {
@@ -624,6 +625,28 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 				t.Fatalf("registered IDs order=%v want deterministic %v", got, wantIDs)
 			}
 		})
+	}
+}
+
+func TestCompositeRegistrarRejectsIDUnrelatedToCoveredChildResource(t *testing.T) {
+	dir := t.TempDir()
+	childBuilder := NewStableResourceSetBuilder(ReachabilityDictionaryGeneration)
+	if err := childBuilder.Add(stableTokenFixture(
+		t, dir, "dictionary-7", 7, 4, ReachabilityDictionaryGeneration, "dictionary-7",
+		func(spec *StableResourceSpec) { spec.Kind = ResourceDictionary },
+	)); err != nil {
+		t.Fatal(err)
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Release()
+
+	registrar := NewStableCompositeRegistrar(ReachabilityDictionaryGeneration)
+	defer registrar.Abandon()
+	if err := registrar.RegisterChild(ReachabilityDictionaryGeneration, "dictionary-999", child); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("RegisterChild error=%v want ErrResourceConflict", err)
 	}
 }
 

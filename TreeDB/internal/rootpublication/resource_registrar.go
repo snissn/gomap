@@ -66,14 +66,46 @@ func (registrar *StableCompositeRegistrar) RegisterChild(field ReachabilityField
 	if existing, ok := registrar.pending[field]; ok && existing != id {
 		return fmt.Errorf("%w: field %q already registered as %q", ErrResourceConflict, field, existing)
 	}
-	if !child.covers(field) {
-		return fmt.Errorf("%w: child %q does not cover reachability field %q", ErrUnresolvedResource, id, field)
+	boundID, err := stableChildIDForField(child, field)
+	if err != nil {
+		return err
+	}
+	if boundID != id {
+		return fmt.Errorf("%w: child field %q is bound to resource ID %q, not %q", ErrResourceConflict, field, boundID, id)
 	}
 	if err := registrar.builder.Merge(child); err != nil {
 		return err
 	}
 	registrar.pending[field] = id
 	return nil
+}
+
+// stableChildIDForField derives the only logical ID a child can register from
+// the stable token metadata covering field. A field backed by different IDs is
+// ambiguous and cannot yield a publication-ready ID.
+func stableChildIDForField(child *StableResourceSet, field ReachabilityField) (string, error) {
+	child.mu.Lock()
+	defer child.mu.Unlock()
+	if ResourceOwnerState(child.owner.Load()) != ResourceOwnerBuilder {
+		return "", ErrResourceOwnership
+	}
+	var id string
+	for _, entry := range child.entries {
+		if _, covered := entry.reachability[field]; !covered {
+			continue
+		}
+		if id == "" {
+			id = entry.token.resourceID
+			continue
+		}
+		if id != entry.token.resourceID {
+			return "", fmt.Errorf("%w: child field %q has multiple resource IDs", ErrResourceConflict, field)
+		}
+	}
+	if id == "" {
+		return "", fmt.Errorf("%w: child does not cover reachability field %q", ErrUnresolvedResource, field)
+	}
+	return id, nil
 }
 
 // Freeze is the sole publication boundary. Missing child registrations are
