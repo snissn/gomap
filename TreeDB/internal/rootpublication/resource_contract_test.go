@@ -362,6 +362,151 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 	}
 }
 
+func TestMutableIndexAliasesCoalesceByPhysicalIdentity(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "index.db", "0123456789abcdef")
+	digest := sha256.Sum256([]byte("index-header"))
+	fields := []ReachabilityField{
+		ReachabilityIndexFile,
+		ReachabilityMetaPage,
+		ReachabilityUserRoot,
+		ReachabilitySystemRoot,
+		ReachabilityFreelist,
+	}
+	builder := NewStableResourceSetBuilder(fields...)
+	var identity StableIdentity
+	for i, field := range fields {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceIndex, LogicalLane: fmt.Sprintf("root-lane-%d", i),
+			ResourceID: fmt.Sprintf("root-page-%d", i), Generation: 9,
+			DiagnosticPath: "maindb/index.db", File: file,
+			Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Digest: digest, Reachability: field,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			identity = token.Identity()
+		}
+		if err := builder.Add(token); err != nil {
+			builder.Abandon()
+			t.Fatalf("Add %q: %v", field, err)
+		}
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if set.Len() != 1 {
+		t.Fatalf("same-index DB aliases retained %d physical pins, want 1", set.Len())
+	}
+	if got := set.FrontierFor(identity, 9).Bytes; got != uint64(len(fields)) {
+		t.Fatalf("same-index DB frontier=%d want %d", got, len(fields))
+	}
+}
+
+func TestMutableCollectionAndTextRootAliasesCoalesceByPhysicalIdentity(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "index.db", "0123456789abcdef")
+	digest := sha256.Sum256([]byte("index-header"))
+	fields := []ReachabilityField{
+		ReachabilityCollectionSystemRoot,
+		ReachabilityCollectionPrimaryRoot,
+		ReachabilityCollectionTemplateRoot,
+		ReachabilityCollectionIndexStateRoot,
+		ReachabilityCollectionColumnRoot,
+		ReachabilityCollectionSecondaryRoot,
+		ReachabilityCollectionVectorRoot,
+		ReachabilityCollectionTextDictionary,
+		ReachabilityCollectionTextPosting,
+		ReachabilityCollectionTextPosition,
+	}
+	builder := NewStableResourceSetBuilder(fields...)
+	for i, field := range fields {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceIndex, LogicalLane: fmt.Sprintf("collection-%d", i),
+			ResourceID: fmt.Sprintf("catalog-root-%d", i), Generation: 11,
+			DiagnosticPath: "maindb/index.db", File: file,
+			Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Digest: digest, Reachability: field,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.Add(token); err != nil {
+			builder.Abandon()
+			t.Fatalf("Add %q: %v", field, err)
+		}
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if set.Len() != 1 {
+		t.Fatalf("same-index collection/text aliases retained %d physical pins, want 1", set.Len())
+	}
+}
+
+func TestImmutableAliasesCoalesceByIdentityAndDigest(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "generation.pack", "immutable-pack")
+	digest := sha256.Sum256([]byte("immutable-pack"))
+	builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+	for i := range 2 {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceOuterLeafPack, LogicalLane: fmt.Sprintf("pack-lane-%d", i),
+			ResourceID: fmt.Sprintf("pack-alias-%d", i), Generation: uint64(i + 1),
+			DiagnosticPath: "maindb/outer_leaf/generation.pack", File: file,
+			Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Digest: digest,
+			Reachability: ReachabilityOuterLeafPackedPointer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.Add(token); err != nil {
+			builder.Abandon()
+			t.Fatalf("Add immutable alias: %v", err)
+		}
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if set.Len() != 1 {
+		t.Fatalf("immutable aliases retained %d physical pins, want 1", set.Len())
+	}
+}
+
+func TestImmutableIdentityRejectsConflictingDigest(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "generation.pack", "immutable-pack")
+	builder := NewStableResourceSetBuilder()
+	for i, digest := range [][32]byte{sha256.Sum256([]byte("first")), sha256.Sum256([]byte("second"))} {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceOuterLeafPack, LogicalLane: fmt.Sprintf("pack-%d", i), ResourceID: fmt.Sprint(i),
+			Generation: uint64(i + 1), DiagnosticPath: "maindb/outer_leaf/generation.pack", File: file,
+			Frontier: DurableFrontier{Bytes: 1}, Digest: digest, Reachability: ReachabilityOuterLeafPackedPointer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = builder.Add(token)
+		if i == 1 {
+			if !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("conflicting immutable digest error=%v want ErrResourceConflict", err)
+			}
+			builder.Abandon()
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("conflicting immutable digest unexpectedly registered")
+}
+
 func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 	dir := t.TempDir()
 	token := stableTokenFixture(t, dir, "pinned.vlog", 1, 4, ReachabilityValueLogPointer, "pinned")
