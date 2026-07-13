@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -451,6 +452,40 @@ func TestCommandWALFormatGoldenV2RawKVExternalRefFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertGoldenHex(t, "command_wal_v2_raw_kv_external_ref_fence.hex", frame)
+}
+
+func TestExternalRefFenceV1CompactZeroDoesNotMaterializeDeclaredValue(t *testing.T) {
+	const declaredValueLen = 16 << 20
+	for _, version := range []uint16{rawKVZeroBatchPayloadV2, rawKVZeroBatchPayloadV3} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			opHeaderSize := rawKVZeroOpHeaderSizeForVersion(version)
+			payload := make([]byte, rawKVZeroBatchHeaderSize+opHeaderSize+1)
+			binary.LittleEndian.PutUint16(payload[0:2], version)
+			binary.LittleEndian.PutUint32(payload[2:6], 1)
+			binary.LittleEndian.PutUint32(payload[6:10], declaredValueLen)
+			if version == rawKVZeroBatchPayloadV3 {
+				binary.LittleEndian.PutUint16(payload[10:12], 1)
+			} else {
+				binary.LittleEndian.PutUint32(payload[10:14], 1)
+			}
+			payload[len(payload)-1] = 'k'
+
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			fence, err := ExternalRefFenceV1FromRawKVPayload(payload)
+			runtime.ReadMemStats(&after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fence != (ExternalRefFenceV1{}) {
+				t.Fatalf("compact-zero fence=%+v, want empty", fence)
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+				t.Fatalf("compact-zero fence allocated %d bytes for %d-byte declaration, want bounded metadata-only scan", allocated, declaredValueLen)
+			}
+		})
+	}
 }
 
 func TestCommandWALFormatGoldenV2DurablePrefixBarrier(t *testing.T) {

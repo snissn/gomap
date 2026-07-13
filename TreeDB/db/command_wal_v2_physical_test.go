@@ -54,6 +54,27 @@ func TestReadCommandWALV2PhysicalFramesAcrossLanes(t *testing.T) {
 	}
 }
 
+func TestReadCommandWALV2RejectsNonIncreasingPhysicalSegmentBeforeRepair(t *testing.T) {
+	walDir := t.TempDir()
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	writeCommandWALV2Segment(t, path,
+		mustCommandWALV2Frame(t, 1, commitlog.CommandDurabilityDurable, nil),
+		mustCommandWALV2Frame(t, 3, commitlog.CommandDurabilityRelaxed, nil),
+		mustCommandWALV2Frame(t, 2, commitlog.CommandDurabilityRelaxed, []uint64{41}),
+	)
+	before := mustReadFile(t, path)
+	segments, err := listSegmentsInDir(walDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCommandWALV2PhysicalFrames(segments, 0, 0); !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("physical scan error=%v, want ErrCommandWALDuplicateLSN before global sorting", err)
+	}
+	if after := mustReadFile(t, path); !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed-closed physical scan mutated segment: before=%d bytes after=%d bytes", len(before), len(after))
+	}
+}
+
 func TestReadCommandWALV2IncompleteRelaxedTailFailsBelowLaterBarrier(t *testing.T) {
 	walDir := t.TempDir()
 	lane0 := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
@@ -214,6 +235,65 @@ func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 				t.Fatalf("tail stat after retry=%v, want removed", err)
 			}
 		})
+	}
+}
+
+func TestRepairCommandWALV2SuffixRetryNeverExtendsShortenedNonAnchorSegment(t *testing.T) {
+	walDir := t.TempDir()
+	anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	tail := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	writeCommandWALV2Segment(t, anchor,
+		mustCommandWALV2Frame(t, 1, commitlog.CommandDurabilityDurable, nil),
+		mustCommandWALV2Frame(t, 2, commitlog.CommandDurabilityRelaxed, []uint64{41}),
+	)
+	writeCommandWALV2Segment(t, tail,
+		mustCommandWALV2Frame(t, 3, commitlog.CommandDurabilityRelaxed, nil),
+		mustCommandWALV2Frame(t, 4, commitlog.CommandDurabilityRelaxed, nil),
+	)
+	classification := classifyCommandWALV2Directory(t, walDir)
+	if len(classification.DiscardSuffix) != 3 || classification.DiscardSuffix[0].Envelope.LSN != 2 {
+		t.Fatalf("classification=%+v, want discarded LSNs 2..4", classification)
+	}
+
+	firstCrash := errors.New("injected after shortest non-anchor truncate sync")
+	nonAnchorSyncs := 0
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Path == tail && event.Point == durabilitycut.AfterDependencyFileSync {
+			nonAnchorSyncs++
+			if nonAnchorSyncs == 2 {
+				return firstCrash
+			}
+		}
+		return nil
+	})
+	_, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if !errors.Is(err, firstCrash) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("first repair error=%v, want injected retryable crash", err)
+	}
+	if info, statErr := os.Stat(tail); statErr != nil || info.Size() != 0 {
+		t.Fatalf("shortened non-anchor stat=(%v, %v), want zero-byte synced suffix", info, statErr)
+	}
+
+	retryGrowth := errors.New("retry attempted to grow shortened segment")
+	retryGrowthSeen := false
+	restore = durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Path == tail && event.Point == durabilitycut.BeforeDependencyFileSync {
+			retryGrowthSeen = true
+			return retryGrowth
+		}
+		return nil
+	})
+	_, err = repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if retryGrowthSeen || err != nil {
+		if info, statErr := os.Stat(tail); statErr == nil {
+			t.Fatalf("repair retry grew non-anchor segment to %d bytes: error=%v", info.Size(), err)
+		}
+		t.Fatalf("repair retry growth event=%t error=%v, want monotonic removal", retryGrowthSeen, err)
+	}
+	if _, err := os.Stat(tail); !os.IsNotExist(err) {
+		t.Fatalf("non-anchor segment stat after retry=%v, want removed", err)
 	}
 }
 
