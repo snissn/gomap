@@ -7,3 +7,7 @@ import "os"
 func captureStableNamespaceDirectoryPlatform(string) (*os.File, StableFileIdentity, error) {
 	return nil, StableFileIdentity{}, ErrStableNamespaceUnsupported
 }
+
+func stableNamespaceTargetIdentity(*os.File, string) (StableFileIdentity, error) {
+	return StableFileIdentity{}, ErrStableNamespaceUnsupported
+}

@@ -21,6 +21,7 @@ type stableNamespaceState struct {
 	directory      *os.File
 	parentIdentity StableFileIdentity
 	targetIdentity StableFileIdentity
+	targetName     string
 	targetPath     string
 	generation     uint64
 	established    bool
@@ -31,10 +32,15 @@ type stableNamespaceState struct {
 
 func newStableNamespaceState(path string, target StableFileIdentity, generation uint64, syncDirectory func(*os.File, string) error) *stableNamespaceState {
 	directory, parent, err := captureStableNamespaceDirectory(path)
+	targetName := filepath.Base(path)
+	if targetName == "." || targetName == string(filepath.Separator) {
+		err = fmt.Errorf("invalid namespace target path %q", path)
+	}
 	return &stableNamespaceState{
 		directory:      directory,
 		parentIdentity: parent,
 		targetIdentity: target,
+		targetName:     targetName,
 		targetPath:     path,
 		generation:     generation,
 		err:            err,
@@ -101,19 +107,11 @@ func (s *stableNamespaceState) establish(ctx context.Context) error {
 	if s.err != nil || s.directory == nil || s.syncDirectory == nil {
 		return fmt.Errorf("%w: %v", ErrStableNamespaceUnsupported, s.err)
 	}
-	// A retained parent-directory descriptor is not enough: after a
-	// rename/recreate race, syncing that directory would certify the replacement
-	// name while the resource token still syncs the original file descriptor.
-	// Revalidate that the target entry names the captured child identity before
-	// establishing the namespace boundary.
-	target, err := os.Open(s.targetPath)
+	// Resolve the child through the retained parent descriptor. targetPath
+	// is display-only and may now name a replacement directory or file.
+	identity, err := stableNamespaceTargetIdentity(s.directory, s.targetName)
 	if err != nil {
-		return fmt.Errorf("valuelog: reopen stable namespace target for identity validation: %w", err)
-	}
-	identity, identityErr := StableFileIdentityFromFile(target)
-	closeErr := target.Close()
-	if identityErr != nil || closeErr != nil {
-		return errors.Join(identityErr, closeErr)
+		return fmt.Errorf("valuelog: inspect stable namespace target: %w", err)
 	}
 	if identity != s.targetIdentity {
 		return fmt.Errorf("valuelog: namespace target identity changed")

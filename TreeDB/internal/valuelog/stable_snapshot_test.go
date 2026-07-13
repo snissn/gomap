@@ -296,6 +296,45 @@ func TestStableWriterSnapshot_NewRotationNamespaceEstablishedExactlyOnce(t *test
 	}
 }
 
+func TestStableWriterSnapshot_NamespaceIgnoresDiagnosticPathReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	w, err := NewWriter(path1, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	if err := w.RotateToWithSync(path2, page.ValueLogFileID(2), false); err != nil {
+		t.Fatalf("RotateToWithSync: %v", err)
+	}
+	if _, err := w.Append(0, nil, 2, []byte("new")); err != nil {
+		t.Fatalf("Append new: %v", err)
+	}
+
+	snapshot, err := w.CaptureStableSnapshot(path2)
+	if runtime.GOOS == "windows" {
+		if !errors.Is(err, ErrStableNamespaceUnsupported) {
+			t.Fatalf("CaptureStableSnapshot error=%v want %v", err, ErrStableNamespaceUnsupported)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("CaptureStableSnapshot: %v", err)
+	}
+	defer snapshot.Release()
+
+	replacementDir := t.TempDir()
+	replacementPath := filepath.Join(replacementDir, filepath.Base(path2))
+	if err := os.WriteFile(replacementPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatalf("Write replacement: %v", err)
+	}
+	snapshot.namespace.targetPath = replacementPath
+	if err := snapshot.EstablishNamespace(context.Background()); err != nil {
+		t.Fatalf("EstablishNamespace consulted diagnostic path: %v", err)
+	}
+}
+
 func TestStableWriterSnapshot_UnsupportedNamespaceFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewWriter(filepath.Join(dir, "value-l0-000001.log"), page.ValueLogFileID(1))
