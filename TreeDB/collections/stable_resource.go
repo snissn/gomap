@@ -14,24 +14,24 @@ import (
 // stableColumnAssetResourceClassification is the checked producer policy for
 // every currently-declared physical column asset kind. Unknown future kinds
 // fail closed until their durability ownership is reviewed.
-func stableColumnAssetResourceClassification(kind ColumnAssetKind) (rootpublication.ResourceKind, rootpublication.ReachabilityField, error) {
+func stableColumnAssetResourceClassification(kind ColumnAssetKind) (rootpublication.ResourceKind, rootpublication.ReachabilityField, string, error) {
 	switch kind {
 	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart:
-		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, nil
+		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, "authoritative", nil
 	case ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1Int64Values:
-		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, nil
+		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative", nil
 	case ColumnAssetKindTCS1DictionaryCodes:
-		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnCode, nil
+		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnCode, "authoritative", nil
 	case ColumnAssetKindTCS1HNSWSearchPack:
-		return rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, nil
+		return rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, "authoritative", nil
 	case ColumnAssetKindQueryReadyBase:
-		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyBase, nil
+		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyBase, "rebuildable-non-authoritative", nil
 	case ColumnAssetKindQueryReadyDelta:
-		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyDelta, nil
+		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyDelta, "rebuildable-non-authoritative", nil
 	case ColumnAssetKindQueryReadyConsolidatedBase:
-		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyConsolidatedBase, nil
+		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyConsolidatedBase, "rebuildable-non-authoritative", nil
 	default:
-		return "", "", fmt.Errorf("collections: stable resource inventory missing column asset kind %q", kind)
+		return "", "", "", fmt.Errorf("collections: stable resource inventory missing column asset kind %q", kind)
 	}
 }
 
@@ -57,23 +57,19 @@ func stableColumnAssetDiagnosticPath(ref ColumnAssetRef) string {
 // authority for the ref's range and checksum; tokens for several refs in one
 // segment therefore coalesce by stable identity and maximum frontier.
 func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
-	resourceKind, reachability, err := stableColumnAssetResourceClassification(ref.Kind)
+	resourceKind, reachability, classification, err := stableColumnAssetResourceClassification(ref.Kind)
 	if err != nil {
 		return nil, err
 	}
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
-	policy, ok := rootpublication.StableResourcePolicyFor(reachability)
-	if !ok {
-		return nil, fmt.Errorf("collections: stable resource policy missing field %q", reachability)
-	}
 	return rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
 		Kind: resourceKind, LogicalLane: ref.Namespace, ResourceID: fmt.Sprint(ref.FileID),
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
-	}, policy.Classification)
+	}, classification)
 }
 
 func stableColumnAssetNamespaceToken(segmentDir string, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {

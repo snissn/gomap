@@ -97,20 +97,36 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 	}
 	frontier := rootpublication.NewRIDFrontier(registration.ExternalRIDs)
 	frontier.Bytes = uint64(info.Size())
-	policy, ok := rootpublication.StableResourcePolicyFor(registration.Reachability)
-	if !ok {
-		return nil, fmt.Errorf("valuelog: unknown stable resource reachability %q", registration.Reachability)
+	kind, classification, err := stableValueLogProducerPolicy(registration.Reachability)
+	if err != nil {
+		return nil, err
 	}
-	kind := registration.Kind
-	if kind == "" {
-		kind = policy.Kind
+	if registration.Kind != "" && registration.Kind != kind {
+		return nil, fmt.Errorf("%w: valuelog field %q requires kind %q, got %q", rootpublication.ErrResourceConflict, registration.Reachability, kind, registration.Kind)
 	}
 	return rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
 		Kind: kind, LogicalLane: registration.LogicalLane,
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-	}, policy.Classification)
+	}, classification)
+}
+
+// stableValueLogProducerPolicy is deliberately independent of the generic
+// inventory lookup. This writer family may pin only its three exact-handle
+// products; a foreign registerable field must fail instead of echoing that
+// field's generic policy back into the checked constructor.
+func stableValueLogProducerPolicy(field rootpublication.ReachabilityField) (rootpublication.ResourceKind, string, error) {
+	switch field {
+	case rootpublication.ReachabilityValueLogPointer:
+		return rootpublication.ResourceValueLog, "authoritative", nil
+	case rootpublication.ReachabilityOuterLeafRawPointer:
+		return rootpublication.ResourceOuterLeafLog, "authoritative", nil
+	case rootpublication.ReachabilityCommandWALExternalRIDFence:
+		return rootpublication.ResourceCommandWALExternalRID, "authoritative-transitive", nil
+	default:
+		return "", "", fmt.Errorf("%w: valuelog producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, field)
+	}
 }
 
 func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegistration) (*rootpublication.StableNamespaceToken, error) {
