@@ -733,6 +733,56 @@ func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
 	}
 }
 
+func TestWriterRotateToWithSyncCloseErrorKeepsInstalledSuccessor(t *testing.T) {
+	dir := t.TempDir()
+	path0 := filepath.Join(dir, "commit-0.log")
+	path1 := filepath.Join(dir, "commit-1.log")
+	writer, err := NewWriter(path0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = writer.Close()
+		}
+	})
+	oldFile := writer.f
+	injected := errors.New("injected public writer rotation close error")
+	hookInstalled := true
+	writer.closeRotateFn = func(file *os.File) error {
+		return errors.Join(file.Close(), injected)
+	}
+	t.Cleanup(func() {
+		if hookInstalled {
+			writer.closeRotateFn = nil
+		}
+	})
+
+	err = writer.RotateToWithSync(path1, false)
+	writer.closeRotateFn = nil
+	hookInstalled = false
+	if !errors.Is(err, injected) {
+		t.Fatalf("RotateToWithSync error=%v, want injected close error", err)
+	}
+	if writer.f == nil {
+		t.Fatal("successor not installed after close error: current file is nil")
+	}
+	if writer.f == oldFile || writer.f.Name() != path1 {
+		t.Fatalf("successor not installed after close error: current=%p name=%q old=%p", writer.f, writer.f.Name(), oldFile)
+	}
+	if _, err := oldFile.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("old file remains open after injected close error: %v", err)
+	}
+	if err := writer.AppendBatch([]Record{{Op: OpSetInline, Key: []byte("key"), Value: []byte("value"), Seq: 1}}); err != nil {
+		t.Fatalf("append through installed successor: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+}
+
 func TestWriterSyncFallsBackToFileSyncWhenHookNil(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commit.log")
 	writer, err := NewWriter(path)

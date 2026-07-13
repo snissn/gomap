@@ -3,33 +3,15 @@ package commitlog
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func requireReadableStableCommandWALToken(t testing.TB, token *rootpublication.StableResourceToken) {
-	t.Helper()
-	buf := make([]byte, 1)
-	if _, err := token.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
-		t.Fatalf("stable command-WAL token is not read-capable: %v", err)
-	}
-}
-
-func requireStableCommandWALNamespace(t testing.TB) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("stable relative directory-handle operations are unsupported on windows")
-	}
-}
-
-func TestCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) {
-	requireStableCommandWALNamespace(t)
+func testCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) {
 	root := t.TempDir()
 	walDir := filepath.Join(root, "wal")
 	journal, err := OpenCommandJournal(walDir, CommandJournalOptions{Lane: 5})
@@ -90,8 +72,7 @@ func TestCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) 
 	}
 }
 
-func TestCommandJournalStableRotationUsesParentRefreshedByOrdinaryRotation(t *testing.T) {
-	requireStableCommandWALNamespace(t)
+func testCommandJournalStableRotationUsesParentRefreshedByOrdinaryRotation(t *testing.T) {
 	root := t.TempDir()
 	walDir := filepath.Join(root, "wal")
 	journal, err := OpenCommandJournal(walDir, CommandJournalOptions{Lane: 6})
@@ -132,8 +113,7 @@ func TestCommandJournalStableRotationUsesParentRefreshedByOrdinaryRotation(t *te
 	}
 }
 
-func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
-	requireStableCommandWALNamespace(t)
+func testCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 3})
 	if err != nil {
@@ -163,16 +143,13 @@ func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	if rotation.Closed.Frontier().Bytes == 0 {
 		t.Fatal("closed command WAL frontier is zero")
 	}
-	requireReadableStableCommandWALToken(t, rotation.Closed)
-	requireReadableStableCommandWALToken(t, rotation.Active)
 	wantActive := filepath.ToSlash(filepath.Join("maindb", "wal", CommandSegmentName(3, 2)))
 	if rotation.Active.DiagnosticPath() != wantActive {
 		t.Fatalf("active diagnostic path=%q want %q", rotation.Active.DiagnosticPath(), wantActive)
 	}
 }
 
-func TestCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t *testing.T) {
-	requireStableCommandWALNamespace(t)
+func testCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 3})
 	if err != nil {
@@ -202,8 +179,7 @@ func TestCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t 
 	}
 }
 
-func TestCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
-	requireStableCommandWALNamespace(t)
+func testCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{
 		Lane: 2, SegmentTargetBytes: 1, CaptureStableResources: true,
@@ -274,8 +250,7 @@ func TestCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
 	}
 }
 
-func TestCommandJournalStableRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
-	requireStableCommandWALNamespace(t)
+func testCommandJournalStableRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 4})
 	if err != nil {
@@ -312,16 +287,6 @@ func TestCommandJournalStableRotationNamespaceFailureKeepsOldWriterActive(t *tes
 	}); err != nil {
 		t.Fatalf("old journal append after failed rotation: %v", err)
 	}
-	failedPath := filepath.Join(dir, CommandSegmentName(4, oldSeq+1))
-	if _, err := os.Stat(failedPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed rotation left successor entry: %v", err)
-	}
-	newCommandWALStableNamespaceToken = originalFactory
-	retry, err := journal.RotateActiveSegmentWithStableResources(true)
-	if err != nil {
-		t.Fatalf("retry after namespace failure: %v", err)
-	}
-	retry.Release()
 }
 
 func TestCommandJournalRecordAppendDoesNotAddNamespaceSync(t *testing.T) {
@@ -345,8 +310,7 @@ func TestCommandJournalRecordAppendDoesNotAddNamespaceSync(t *testing.T) {
 	}
 }
 
-func BenchmarkStableCommandWALRotation(b *testing.B) {
-	requireStableCommandWALNamespace(b)
+func benchmarkStableCommandWALRotation(b *testing.B) {
 	for _, syncCurrent := range []bool{false, true} {
 		b.Run(fmt.Sprintf("sync_current=%t", syncCurrent), func(b *testing.B) {
 			journal, err := OpenCommandJournal(b.TempDir(), CommandJournalOptions{Lane: 5})

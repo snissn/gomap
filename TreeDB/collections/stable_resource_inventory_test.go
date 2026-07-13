@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,15 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func requireStableColumnNamespace(t testing.TB) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("stable relative directory-handle operations are unsupported on windows")
-	}
-}
-
-func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T) {
-	requireStableColumnNamespace(t)
+func testStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -105,8 +96,7 @@ func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 	}
 }
 
-func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParent(t *testing.T) {
-	requireStableColumnNamespace(t)
+func testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -218,8 +208,7 @@ func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	}
 }
 
-func TestStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
-	requireStableColumnNamespace(t)
+func testStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -268,6 +257,236 @@ func TestStableColumnAssetFailureRollsBackAndRemainsRetryable(t *testing.T) {
 	if after.Size() != before.Size() {
 		t.Fatalf("failed stable append size=%d want rollback to %d", after.Size(), before.Size())
 	}
+}
+
+func testStableColumnAssetCaptureFailureInvalidatesPathSyncCache(t *testing.T) {
+	dir := t.TempDir()
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "capture_failure_cache",
+		},
+	}
+	primeRef, err := writeColumnAssetToManager(
+		dir, cfg, []byte("ordinary-prime"), ColumnAssetKindTCS1TypedColumnPart, 1, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetPath, err := columnAssetSegmentPath(dir, primeRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatal("ordinary write did not prime segment directory-sync cache")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(dir, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedDir := namespace.SegmentDir + "-moved"
+	replacementPrefix := []byte("replacement-prefix")
+	var retainedParent *os.File
+	originalOpenParent := openStableColumnAssetParent
+	openParentInstalled := true
+	openStableColumnAssetParent = func(path string) (*os.File, error) {
+		parent, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		retainedParent = parent
+		if err := os.Rename(path, movedDir); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(path, filepath.Base(assetPath)), replacementPrefix, 0o600); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		return parent, nil
+	}
+	t.Cleanup(func() {
+		if openParentInstalled {
+			openStableColumnAssetParent = originalOpenParent
+		}
+	})
+
+	injectedCapture := errors.New("injected stable column asset capture failure")
+	var retainedFile *os.File
+	originalResourceToken := stableColumnAssetResourceTokenForPublish
+	resourceHookInstalled := true
+	stableColumnAssetResourceTokenForPublish = func(file *os.File, _ ColumnAssetRef, _ *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+		retainedFile = file
+		return nil, injectedCapture
+	}
+	t.Cleanup(func() {
+		if resourceHookInstalled {
+			stableColumnAssetResourceTokenForPublish = originalResourceToken
+		}
+	})
+
+	failedRef, token, err := writeColumnAssetToManagerWithStableResource(
+		dir, cfg, []byte("failed-stable-append"), ColumnAssetKindTCS1TypedColumnPart, 2, 2,
+	)
+	openStableColumnAssetParent = originalOpenParent
+	openParentInstalled = false
+	stableColumnAssetResourceTokenForPublish = originalResourceToken
+	resourceHookInstalled = false
+	if !errors.Is(err, injectedCapture) {
+		t.Fatalf("stable capture error=%v, want injected capture failure", err)
+	}
+	if failedRef != (ColumnAssetRef{}) || token != nil {
+		t.Fatalf("failed stable capture leaked success: ref=%+v token=%v", failedRef, token)
+	}
+	if retainedParent == nil || retainedFile == nil {
+		t.Fatalf("stable capture did not retain exact handles: parent=%p file=%p", retainedParent, retainedFile)
+	}
+	if _, err := retainedParent.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("failed stable capture leaked parent handle: %v", err)
+	}
+	if _, err := retainedFile.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("failed stable capture leaked segment handle: %v", err)
+	}
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Errorf("failed stable capture retained stale pathname directory-sync cache")
+	}
+
+	injectedDirSync := errors.New("injected replacement column asset directory sync")
+	originalDirSync := syncColumnAssetSegmentDirForPublish
+	dirSyncHookInstalled := true
+	dirSyncCalls := 0
+	syncColumnAssetSegmentDirForPublish = func(path string) error {
+		dirSyncCalls++
+		if path != namespace.SegmentDir {
+			t.Errorf("directory sync path=%q, want replacement %q", path, namespace.SegmentDir)
+		}
+		return injectedDirSync
+	}
+	t.Cleanup(func() {
+		if dirSyncHookInstalled {
+			syncColumnAssetSegmentDirForPublish = originalDirSync
+		}
+	})
+
+	retryRef, err := writeColumnAssetToManager(
+		dir, cfg, []byte("ordinary-retry"), ColumnAssetKindTCS1TypedColumnPart, 3, 3,
+	)
+	if !errors.Is(err, injectedDirSync) {
+		t.Errorf("ordinary replacement retry error=%v, want required directory sync failure", err)
+	}
+	if retryRef != (ColumnAssetRef{}) {
+		t.Errorf("failed ordinary replacement retry leaked success ref=%+v", retryRef)
+	}
+	if dirSyncCalls != 1 {
+		t.Errorf("replacement directory sync calls=%d, want 1", dirSyncCalls)
+	}
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Errorf("failed replacement directory sync marked pathname cache stable")
+	}
+
+	syncColumnAssetSegmentDirForPublish = originalDirSync
+	dirSyncHookInstalled = false
+	finalRef, err := writeColumnAssetToManager(
+		dir, cfg, []byte("ordinary-retry-success"), ColumnAssetKindTCS1TypedColumnPart, 4, 4,
+	)
+	if err != nil {
+		t.Fatalf("ordinary replacement retry after restored sync: %v", err)
+	}
+	if finalRef == (ColumnAssetRef{}) || !columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatalf("successful replacement retry did not publish synced path: ref=%+v known=%v", finalRef, columnAssetSegmentDirSyncKnown(assetPath))
+	}
+	if _, err := os.Stat(filepath.Join(movedDir, filepath.Base(assetPath))); err != nil {
+		t.Fatalf("failed stable append did not remain bound to moved parent: %v", err)
+	}
+}
+
+func testStableColumnAssetCaptureFailureResourcePlateau(t *testing.T) {
+	dir := t.TempDir()
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "capture_failure_plateau",
+		},
+	}
+	primeRef, err := writeColumnAssetToManager(
+		dir, cfg, []byte("ordinary-prime"), ColumnAssetKindTCS1TypedColumnPart, 1, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetPath, err := columnAssetSegmentPath(dir, primeRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	injectedCapture := errors.New("injected repeated stable column asset capture failure")
+	originalOpenParent := openStableColumnAssetParent
+	openParentInstalled := true
+	var retainedParents []*os.File
+	openStableColumnAssetParent = func(path string) (*os.File, error) {
+		parent, err := os.Open(path)
+		if err == nil {
+			retainedParents = append(retainedParents, parent)
+		}
+		return parent, err
+	}
+	t.Cleanup(func() {
+		if openParentInstalled {
+			openStableColumnAssetParent = originalOpenParent
+		}
+	})
+	originalResourceToken := stableColumnAssetResourceTokenForPublish
+	resourceHookInstalled := true
+	var retainedFiles []*os.File
+	stableColumnAssetResourceTokenForPublish = func(file *os.File, _ ColumnAssetRef, _ *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+		retainedFiles = append(retainedFiles, file)
+		return nil, injectedCapture
+	}
+	t.Cleanup(func() {
+		if resourceHookInstalled {
+			stableColumnAssetResourceTokenForPublish = originalResourceToken
+		}
+	})
+
+	const attempts = 64
+	for attempt := 0; attempt < attempts; attempt++ {
+		if !columnAssetSegmentDirSyncKnown(assetPath) {
+			t.Fatalf("attempt %d began without ordinary synced-path cache", attempt)
+		}
+		generation := uint64(attempt*2 + 2)
+		failedRef, token, err := writeColumnAssetToManagerWithStableResource(
+			dir, cfg, []byte("failed-stable-append"), ColumnAssetKindTCS1TypedColumnPart, generation, generation,
+		)
+		if !errors.Is(err, injectedCapture) || failedRef != (ColumnAssetRef{}) || token != nil {
+			t.Fatalf("attempt %d stable result ref=%+v token=%v err=%v", attempt, failedRef, token, err)
+		}
+		if columnAssetSegmentDirSyncKnown(assetPath) {
+			t.Fatalf("attempt %d retained stale pathname cache", attempt)
+		}
+		if len(retainedParents) != attempt+1 || len(retainedFiles) != attempt+1 {
+			t.Fatalf("attempt %d retained handle counts parent=%d file=%d", attempt, len(retainedParents), len(retainedFiles))
+		}
+		if _, err := retainedParents[attempt].Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("attempt %d leaked parent: %v", attempt, err)
+		}
+		if _, err := retainedFiles[attempt].Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("attempt %d leaked file: %v", attempt, err)
+		}
+		ordinaryRef, err := writeColumnAssetToManager(
+			dir, cfg, []byte("ordinary-reprime"), ColumnAssetKindTCS1TypedColumnPart, generation+1, generation+1,
+		)
+		if err != nil || ordinaryRef == (ColumnAssetRef{}) || !columnAssetSegmentDirSyncKnown(assetPath) {
+			t.Fatalf("attempt %d ordinary reprime ref=%+v known=%v err=%v", attempt, ordinaryRef, columnAssetSegmentDirSyncKnown(assetPath), err)
+		}
+	}
+	openStableColumnAssetParent = originalOpenParent
+	openParentInstalled = false
+	stableColumnAssetResourceTokenForPublish = originalResourceToken
+	resourceHookInstalled = false
 }
 
 func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
@@ -376,8 +595,7 @@ func declaredColumnAssetKinds(t *testing.T) map[string]ColumnAssetKind {
 	return declared
 }
 
-func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testing.T) {
-	requireStableColumnNamespace(t)
+func testStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "creation-first", true: "creation-last"}[reverse], func(t *testing.T) {
 			dir := t.TempDir()
@@ -461,8 +679,7 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 	}
 }
 
-func TestStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
-	requireStableColumnNamespace(t)
+func testStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,

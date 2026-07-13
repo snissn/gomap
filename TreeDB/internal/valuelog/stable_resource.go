@@ -17,6 +17,9 @@ var openStableValueLogParent = os.Open
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
 	parent, err := openStableValueLogParent(filepath.Dir(path))
 	if err != nil {
+		if parent != nil {
+			_ = parent.Close()
+		}
 		return nil, err
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, resource, filepath.Base(path)); err != nil {
@@ -24,6 +27,19 @@ func captureStableValueLogParent(path string, resource *os.File) (*os.File, erro
 		return nil, err
 	}
 	return parent, nil
+}
+
+// replaceStableValueLogParent transfers ownership of parent to w and releases
+// the previously retained directory handle. A capture failure is retained so
+// ordinary rotation remains usable while every later stable rotation fails
+// closed instead of falling back to an older namespace identity.
+func (w *Writer) replaceStableValueLogParent(parent *os.File, captureErr error) {
+	old := w.stableParent
+	w.stableParent = parent
+	w.stableParentErr = captureErr
+	if old != nil && old != parent {
+		_ = old.Close()
+	}
 }
 
 // NewStableValueLogResourceToken registers an exact already-open persistent

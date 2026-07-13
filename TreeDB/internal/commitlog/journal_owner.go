@@ -613,6 +613,9 @@ var openStableCommandWALParent = os.Open
 func captureStableCommandWALParent(walDir string, resource *os.File) (*os.File, error) {
 	parent, err := openStableCommandWALParent(walDir)
 	if err != nil {
+		if parent != nil {
+			_ = parent.Close()
+		}
 		return nil, err
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, resource, filepath.Base(resource.Name())); err != nil {

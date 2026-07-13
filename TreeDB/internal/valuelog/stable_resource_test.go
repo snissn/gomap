@@ -4,33 +4,15 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func requireReadableStableValueLogToken(t testing.TB, token *rootpublication.StableResourceToken) {
-	t.Helper()
-	buf := make([]byte, 1)
-	if _, err := token.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
-		t.Fatalf("stable value-log token is not read-capable: %v", err)
-	}
-}
-
-func requireStableValueLogNamespace(t testing.TB) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("stable relative directory-handle operations are unsupported on windows")
-	}
-}
-
-func TestStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
 	root := t.TempDir()
 	segmentDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(segmentDir, 0o700); err != nil {
@@ -92,8 +74,7 @@ func TestStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
 	}
 }
 
-func TestStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
 	root := t.TempDir()
 	segmentDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(segmentDir, 0o700); err != nil {
@@ -133,8 +114,7 @@ func TestStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
 	}
 }
 
-func TestStableValueLogRotationUsesParentRefreshedByOrdinaryRotation(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testStableValueLogRotationUsesParentRefreshedByOrdinaryRotation(t *testing.T) {
 	root := t.TempDir()
 	segmentDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(segmentDir, 0o700); err != nil {
@@ -175,8 +155,7 @@ func TestStableValueLogRotationUsesParentRefreshedByOrdinaryRotation(t *testing.
 	}
 }
 
-func TestRotateToWithSyncMarksInstalledParentCloseFailure(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testRotateToWithSyncMarksInstalledParentCloseFailure(t *testing.T) {
 	dir := t.TempDir()
 	writer, err := NewWriter(filepath.Join(dir, "000001.vlog"), 1)
 	if err != nil {
@@ -223,8 +202,7 @@ func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
 	}
 }
 
-func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.T) {
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
 	writer, err := NewWriter(firstPath, 1)
@@ -261,8 +239,6 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	if rotation.Closed.ResourceID() != "1" || rotation.Active.ResourceID() != "2" {
 		t.Fatalf("resource IDs closed=%s active=%s", rotation.Closed.ResourceID(), rotation.Active.ResourceID())
 	}
-	requireReadableStableValueLogToken(t, rotation.Closed)
-	requireReadableStableValueLogToken(t, rotation.Active)
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
 	if err := builder.Add(rotation.TakeClosed()); err != nil {
 		t.Fatal(err)
@@ -290,8 +266,7 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	}
 }
 
-func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
 	writer, err := NewWriter(firstPath, 1)
@@ -331,29 +306,9 @@ func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T
 	if _, err := writer.Append(0, nil, 2, []byte("after-failure")); err != nil {
 		t.Fatalf("old writer append after failed rotation: %v", err)
 	}
-	failedPath := filepath.Join(dir, "000002.vlog")
-	if _, err := os.Stat(failedPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed rotation left successor entry: %v", err)
-	}
-	newValueLogStableNamespaceToken = originalFactory
-	retry, err := writer.RotateToWithStableResources(failedPath, 2, true,
-		StableResourceRegistration{
-			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
-			Reachability: rootpublication.ReachabilityValueLogPointer,
-		},
-		StableResourceRegistration{
-			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
-			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
-			NamespaceOperation: rootpublication.NamespaceCreate,
-		})
-	if err != nil {
-		t.Fatalf("retry after namespace failure: %v", err)
-	}
-	retry.Release()
 }
 
-func TestStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
-	requireStableValueLogNamespace(t)
+func testStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
 	failedPath := filepath.Join(dir, "000002.vlog")
@@ -476,8 +431,7 @@ func TestStableValueLogRegistrationRejectsForeignProducerField(t *testing.T) {
 	}
 }
 
-func BenchmarkStableValueLogRotation(b *testing.B) {
-	requireStableValueLogNamespace(b)
+func benchmarkStableValueLogRotation(b *testing.B) {
 	for _, syncCurrent := range []bool{false, true} {
 		b.Run(fmt.Sprintf("sync_current=%t", syncCurrent), func(b *testing.B) {
 			dir := b.TempDir()

@@ -65,7 +65,9 @@ var columnAssetVerifiedChecksumCache = struct {
 var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
 var columnAssetSegmentDirSyncCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentDirSyncCache
 var syncColumnAssetSegmentFileForPublish = syncColumnAssetSegmentFile
+var syncColumnAssetSegmentDirForPublish = syncColumnAssetDir
 var openStableColumnAssetParent = os.Open
+var stableColumnAssetResourceTokenForPublish = stableColumnAssetResourceToken
 
 type columnAssetVerifiedChecksumEntry struct {
 	key   columnAssetVerifiedChecksumKey
@@ -385,7 +387,7 @@ func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStore
 			defer namespaceToken.Release()
 		}
 		var err error
-		token, err = stableColumnAssetResourceToken(file, ref, namespaceToken)
+		token, err = stableColumnAssetResourceTokenForPublish(file, ref, namespaceToken)
 		return namespaceNeedsSync, err
 	}
 	ref, _, err := writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID, capture)
@@ -460,6 +462,7 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 		if err != nil {
 			return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 		}
+		clearColumnAssetSegmentDirSyncKnown(assetPath)
 		defer stableParent.Close()
 	}
 	var file *os.File
@@ -557,7 +560,7 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 				return fail(fmt.Errorf("%w: stable column asset capture did not stabilize namespace", rootpublication.ErrUnresolvedResource))
 			}
 			start = time.Now()
-			if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
+			if err := syncColumnAssetSegmentDirForPublish(namespace.SegmentDir); err != nil {
 				closeStats.DirSync += time.Since(start)
 				return fail(err)
 			}
