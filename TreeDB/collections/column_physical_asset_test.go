@@ -1905,7 +1905,7 @@ func TestColumnAssetSegmentAppenderAbortRetainsUnreachableOrphanM15C(t *testing.
 	if err := appender.abort(); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
-	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+	if _, err := file.Stat(); !fileHandleClosedForTest(err) {
 		t.Fatalf("abort leaked exact file handle: %v", err)
 	}
 	if got, err := os.ReadFile(assetPath); err != nil || !bytes.Equal(got, failedPayload) {

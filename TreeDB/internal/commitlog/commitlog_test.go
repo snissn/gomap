@@ -793,7 +793,7 @@ func TestWriterRotateToWithSyncCloseErrorKeepsInstalledSuccessor(t *testing.T) {
 			if writer.f == oldFile || writer.f.Name() != path1 {
 				t.Fatalf("successor not installed after close error: current=%p name=%q old=%p", writer.f, writer.f.Name(), oldFile)
 			}
-			if _, err := oldFile.Stat(); !errors.Is(err, os.ErrClosed) {
+			if _, err := oldFile.Stat(); !fileHandleClosedForTest(err) {
 				t.Fatalf("old file remains open after injected close error: %v", err)
 			}
 			if err := writer.AppendBatch([]Record{{Op: OpSetInline, Key: []byte("key"), Value: []byte("value"), Seq: 1}}); err != nil {

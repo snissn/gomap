@@ -10,6 +10,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func fileHandleClosedForTest(err error) bool {
+	return errors.Is(err, os.ErrClosed) || errors.Is(err, windows.ERROR_INVALID_HANDLE)
+}
+
 func TestFileHandleClosedForTestWindows(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "closed-handle-")
 	if err != nil {
