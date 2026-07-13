@@ -243,6 +243,27 @@ func TestQueryReadyGenerationOpenRejectsStaleSchemaOrGeneration(t *testing.T) {
 	}
 }
 
+func TestQueryReadyGenerationOpenRejectsSnapshotGenerationOverclaim(t *testing.T) {
+	requireQueryReadyGenerationFileOpen(t)
+	files := queryReadyOpenTestFiles(t)
+	files.Key.Identity.Generation++
+	files.SnapshotGeneration = files.Key.Identity.Generation
+	cache := NewQueryReadyGenerationOpenCache(files.Key)
+	t.Cleanup(func() { _ = cache.Close() })
+
+	prepared, err := cache.Open(files)
+	if err == nil || prepared != nil {
+		t.Fatalf("prepared=%p err=%v want selected-prefix generation overclaim rejection", prepared, err)
+	}
+	var openErr *QueryReadyGenerationOpenError
+	if !errors.As(err, &openErr) || openErr.State != QueryReadyOpenUnsupportedOrStale {
+		t.Fatalf("err=%v want unsupported/stale generation overclaim", err)
+	}
+	if stats := cache.Stats(); stats.Published != 0 || stats.State != QueryReadyOpenUnsupportedOrStale {
+		t.Fatalf("stats=%+v want fail-closed without publication", stats)
+	}
+}
+
 func TestQueryReadyGenerationOpenDoesNotDecodeWholePartsAfterReady(t *testing.T) {
 	requireQueryReadyGenerationFileOpen(t)
 	files := queryReadyOpenTestFiles(t)

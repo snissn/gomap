@@ -512,6 +512,13 @@ func validateAndSelectQueryReadyOpenDeltas(base *QueryReadyBaseGeneration, delta
 		}
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].Identity.Generation < selected[j].Identity.Generation })
+	wantGeneration := base.Identity.Generation
+	if len(selected) > 0 {
+		wantGeneration = selected[len(selected)-1].Identity.Generation
+	}
+	if snapshot != wantGeneration {
+		return nil, fmt.Errorf("typedcolumn: query-ready open snapshot generation=%d overclaims stale selected prefix ending at %d", snapshot, wantGeneration)
+	}
 	return selected, nil
 }
 
