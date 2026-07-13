@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 )
 
 func TestReadCommandWALV2PhysicalFramesAcrossLanes(t *testing.T) {
@@ -81,6 +82,7 @@ func TestReadCommandWALV2IncompleteRelaxedTailFailsBelowLaterBarrier(t *testing.
 }
 
 func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
+	variants := commandWALV2RepairVariants(t)
 	cuts := []struct {
 		point      durabilitycut.Point
 		occurrence int
@@ -91,8 +93,9 @@ func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 		{durabilitycut.AfterDeletionDirectorySync, 1},
 		{durabilitycut.AfterDependencyFileSync, 3},
 	}
-	for _, cut := range cuts {
-		name := fmt.Sprintf("repair-v2/%s/%d", cut.point, cut.occurrence)
+	for i, cut := range cuts {
+		variant := variants[i%len(variants)]
+		name := fmt.Sprintf("%s/%s/%d", variant.ID, cut.point, cut.occurrence)
 		t.Run(name, func(t *testing.T) {
 			walDir, classification, anchor, tail := commandWALV2RepairFixture(t)
 			anchorBefore := mustReadFile(t, anchor)
@@ -143,6 +146,52 @@ func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func commandWALV2RepairVariants(t *testing.T) []powerlossoracle.Variant {
+	t.Helper()
+	root := t.TempDir()
+	path := "commit-l1-000001.log"
+	fullPath := filepath.Join(root, path)
+	if err := os.WriteFile(fullPath, []byte("stable-command-prefix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := powerlossoracle.Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullPath, []byte("stable-command-prefix-discardable-relaxed-suffix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Overlay(root); err != nil {
+		t.Fatal(err)
+	}
+	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+		ID:         "command-wal-v2-physical-suffix-repair",
+		Point:      powerlossoracle.AfterDependencyFileSync,
+		Occurrence: 1,
+		Model:      model,
+		Dependencies: []powerlossoracle.DirtyResource{{
+			Kind: powerlossoracle.ResourceCommandWAL,
+			ID:   "relaxed-suffix-segment",
+			Path: path,
+		}},
+		RequiredFamilies: []powerlossoracle.VariantFamily{
+			powerlossoracle.VariantSyncedOnly,
+			powerlossoracle.VariantFullWriteback,
+		},
+		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+			powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Generated != len(variants) || len(variants) < 2 {
+		t.Fatalf("repair variant coverage=%+v variants=%d", coverage, len(variants))
+	}
+	return variants
 }
 
 func commandWALV2RepairFixture(t *testing.T) (string, commandWALV2Classification, string, string) {
