@@ -22,6 +22,11 @@ the selected row's part. Thus code reuse such as `0=user` in a base and
 dictionary construction or code translation. Counters distinguish local
 dictionary decodes from global dictionary constructions and translations.
 
+M3 additionally provides file-backed QRDG and consolidated-base open, including
+exact nonzero segment offset/length ranges. These mappings retain the QRDG
+envelope and embedded QRBG as encoded direct views; their mapping lifetime is
+closed exactly once and is pinned by the collection-scoped M3 reader lease.
+
 ## Bounds and consolidation
 
 The default policy permits at most four visible delta generations and eight
