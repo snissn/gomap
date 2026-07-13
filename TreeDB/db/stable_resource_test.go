@@ -27,3 +27,19 @@ func TestStableDBAdjacentPublicationIssueRouting(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenSharesValueLogIdentityPinRegistryWithManager(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	registry := database.ValueLogIdentityPinRegistry()
+	if registry == nil {
+		t.Fatal("opened DB has no value-log identity pin registry")
+	}
+	if got := database.valueLogManager.StableResourcePinRegistry(); got != registry {
+		t.Fatalf("value-log manager registry = %p, DB registry = %p", got, registry)
+	}
+}

@@ -113,7 +113,11 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 		if seg.fileID == 0 || seg.path == "" {
 			continue
 		}
-		if db != nil && db.valueLogManager != nil && db.valueLogManager.HasSegment(seg.fileID) {
+		if db != nil && db.valueLogManager != nil {
+			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
+				errs = append(errs, fmt.Errorf("register rewrite-created segment %d for removal: %w", seg.fileID, err))
+				continue
+			}
 			if err := db.valueLogManager.RemoveSegmentForce(seg.fileID); err != nil {
 				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, errors.Join(err, ErrRecoveryRequired)))
 			}
