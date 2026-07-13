@@ -43,7 +43,11 @@ var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
 func openLogFile(path string) (*os.File, error) {
-	const flags = os.O_WRONLY | os.O_APPEND
+	// Stable-resource publication retains this exact descriptor for both
+	// durability operations and recovery validation. Keep writer descriptors
+	// read-capable so a duplicated pin can serve ReadAt without reopening by
+	// pathname and losing physical-identity authority.
+	const flags = os.O_RDWR | os.O_APPEND
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
@@ -79,6 +83,8 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 
 type Writer struct {
 	f                      *os.File
+	stableParent           *os.File
+	stableParentErr        error
 	bw                     *bufio.Writer
 	size                   int64
 	fileID                 uint32
@@ -115,6 +121,7 @@ type Writer struct {
 	noBenefit              uint8
 	skipRemain             uint16
 	syncFn                 func(*os.File) error
+	closeRotateFn          func(*os.File) error
 	fileSyncCalls          atomic.Uint64
 	fileSyncNs             atomic.Uint64
 	fileSyncErrors         atomic.Uint64
@@ -128,6 +135,38 @@ type Writer struct {
 	keepIoNsPerStoredByte  float64
 	keepEncodeNsPerRawByte float64
 	keepSafetyMargin       float64
+}
+
+type rotationInstalledMarker interface {
+	RotationInstalled() bool
+}
+
+type rotationInstalledError struct {
+	err error
+}
+
+func (err rotationInstalledError) Error() string { return err.err.Error() }
+func (err rotationInstalledError) Unwrap() error { return err.err }
+func (rotationInstalledError) RotationInstalled() bool {
+	return true
+}
+
+// RotationInstalled reports whether a rotation error happened only after the
+// successor became the writer's authoritative file. Callers must finish their
+// corresponding metadata transition before propagating such an error.
+func RotationInstalled(err error) bool {
+	var marker rotationInstalledMarker
+	return errors.As(err, &marker) && marker.RotationInstalled()
+}
+
+func (w *Writer) closeRotatedResource(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	if w.closeRotateFn != nil {
+		return w.closeRotateFn(file)
+	}
+	return file.Close()
 }
 
 // DurabilityStats reports calls to the writer's injected durability
@@ -602,15 +641,22 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		f:      f,
 		syncFn: syncFn,
 	}
+	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
 	if syncDirectory {
 		if err := syncNewFileDirectory(w, path); err != nil {
 			_ = f.Close()
+			if w.stableParent != nil {
+				_ = w.stableParent.Close()
+			}
 			return nil, err
 		}
 	}
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+		}
 		return nil, err
 	}
 	w.f = f
@@ -928,7 +974,11 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			_ = f.Close()
 			return err
 		}
+		stableParent, stableParentErr := captureStableValueLogParent(path, f)
+		oldStableParent := w.stableParent
 		w.f = f
+		w.stableParent = stableParent
+		w.stableParentErr = stableParentErr
 		// File-backed writers do not use bufio; drop any sink buffer.
 		w.bw = nil
 		w.size = info.Size()
@@ -936,6 +986,11 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		w.appendMax = defaultBufferSize
 		w.appendBuf = w.appendBuf[:0]
 		w.trimTransientScratchBuffers()
+		if oldStableParent != nil {
+			if err := w.closeRotatedResource(oldStableParent); err != nil {
+				return rotationInstalledError{err: err}
+			}
+		}
 		return nil
 	}
 
@@ -963,25 +1018,33 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			return err
 		}
 	}
-
 	old := w.f
+	oldStableParent := w.stableParent
 	if w.bw != nil {
 		if err := w.bw.Flush(); err != nil {
 			_ = f.Close()
 			return err
 		}
 	}
+	stableParent, stableParentErr := captureStableValueLogParent(path, f)
 	w.f = f
+	w.stableParent = stableParent
+	w.stableParentErr = stableParentErr
 	// File-backed writers do not use bufio. Drop any leftover sink buffer
 	// rather than retargeting it across rotations.
 	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
-	if err := old.Close(); err != nil {
-		return err
+	closeErr := w.closeRotatedResource(old)
+	var closeParentErr error
+	if oldStableParent != nil {
+		closeParentErr = w.closeRotatedResource(oldStableParent)
 	}
 	w.trimTransientScratchBuffers()
+	if err := errors.Join(closeErr, closeParentErr); err != nil {
+		return rotationInstalledError{err: err}
+	}
 	return nil
 }
 
@@ -2453,13 +2516,28 @@ func (w *Writer) Close() error {
 		if w.f != nil {
 			_ = w.f.Close()
 		}
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+			w.stableParent = nil
+		}
 		return err
 	}
 	if w.f == nil {
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+			w.stableParent = nil
+		}
 		return nil
 	}
+	var first error
 	if err := w.f.Close(); err != nil {
-		return err
+		first = err
 	}
-	return nil
+	if w.stableParent != nil {
+		if err := w.stableParent.Close(); err != nil && first == nil {
+			first = err
+		}
+		w.stableParent = nil
+	}
+	return first
 }

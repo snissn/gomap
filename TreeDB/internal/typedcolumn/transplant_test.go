@@ -640,6 +640,14 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// rebuildable prepared generations through the existing asset manager;
 		// it does not publish a root or introduce another recovery data plane.
 		filepath.Clean(filepath.Join(collectionsDir, "query_ready_build.go")): {},
+		// #3699 is the scoped shared encoded q1-q5/qexpr execution seam over
+		// already-selected query-ready base-plus-delta generations. It does not
+		// own publication, retention, document materialization, or legacy scans.
+		filepath.Clean(filepath.Join(collectionsDir, "query_ready_execution.go")): {},
+		// #3699 prepares the recovery-authoritative insert-only typed-column
+		// inventory through the approved M5 asset-manager bridge. The QRBG stays
+		// rebuildable and non-authoritative and owns no publication root.
+		filepath.Clean(filepath.Join(collectionsDir, "query_ready_preparation.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -660,7 +668,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting, #3698 query-ready generation open, #3700 query-ready build handoff)", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state, #2041 prepared views, #2118 physical accounting, #3698 query-ready generation open, #3699 query-ready encoded execution, #3700 query-ready build handoff)", path)
 		}
 		return nil
 	})

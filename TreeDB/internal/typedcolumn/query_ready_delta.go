@@ -43,6 +43,8 @@ type QueryReadyDeltaBuildStats struct {
 	BytesHashed            int64
 	BytesChecksummed       int64
 	BytesCompressed        int64
+	ExecutionBytes         int64
+	ExecutionColumns       int
 	PeakEncodedBufferBytes int64
 	WriteAmplification     float64
 	ValidationTime         time.Duration
@@ -203,8 +205,10 @@ func buildQueryReadyDeltaEnvelope(kind QueryReadyGenerationKind, identity QueryR
 		OriginBaseParts: lineage.OriginBaseParts, AccumulatedDeltaParts: lineage.AccumulatedDeltaParts,
 		InputBytes: inputBytes, OutputBytes: int64(len(out)),
 		BytesCopied:            inner.Stats.BytesCopied + int64(len(table)),
-		BytesHashed:            inner.Stats.InputBytes,
+		BytesHashed:            inner.Stats.BytesHashed,
 		BytesChecksummed:       inner.Stats.BytesChecksummed + int64(len(table)+queryReadyDeltaHeaderBytes),
+		ExecutionBytes:         inner.Stats.ExecutionBytes,
+		ExecutionColumns:       inner.Stats.ExecutionColumns,
 		PeakEncodedBufferBytes: int64(len(out)),
 		WriteAmplification:     writeAmplification,
 		ValidationTime:         basePlan.validationTime,
@@ -591,6 +595,8 @@ type QueryReadyBaseDeltaStats struct {
 type QueryReadyBaseDeltaReader struct {
 	reader       *PartSetReader
 	dictionaries []map[string]map[int64]string
+	executions   []QueryReadyExecutionPartView
+	domains      map[string]queryReadyExecutionDomain
 	stats        QueryReadyBaseDeltaStats
 }
 
@@ -692,6 +698,7 @@ func newQueryReadyBaseDeltaReader(base *QueryReadyBaseGeneration, baseTombstones
 	}
 	refs := make([]PartRef, 0, len(base.Parts)+len(selected))
 	dictionaries := make([]map[string]map[int64]string, 0, len(base.Parts)+len(selected))
+	executions := make([]QueryReadyExecutionPartView, 0, len(base.Parts)+len(selected))
 	tombstones := append([]Tombstone(nil), baseTombstones...)
 	stats := QueryReadyBaseDeltaStats{
 		VisibleBaseGenerations: 1, VisibleDeltaGenerations: len(selected),
@@ -705,7 +712,8 @@ func newQueryReadyBaseDeltaReader(base *QueryReadyBaseGeneration, baseTombstones
 			if err != nil {
 				return err
 			}
-			refs = append(refs, PartRef{Role: role, GenerationID: view.Dependency.SourceGeneration, Part: part})
+			refs = append(refs, PartRef{Role: role, GenerationID: view.Dependency.SourceGeneration, Part: part, PrimaryIDMode: view.Dependency.PrimaryIDMode, PrimaryIDBase: view.Dependency.PrimaryIDBase})
+			executions = append(executions, view.Execution)
 			decoded, err := view.Image.Dictionaries()
 			if err != nil {
 				return err
@@ -740,7 +748,7 @@ func newQueryReadyBaseDeltaReader(base *QueryReadyBaseGeneration, baseTombstones
 		return nil, err
 	}
 	stats.TombstonesApplied = len(tombstones)
-	return &QueryReadyBaseDeltaReader{reader: reader, dictionaries: dictionaries, stats: stats}, nil
+	return &QueryReadyBaseDeltaReader{reader: reader, dictionaries: dictionaries, executions: executions, stats: stats}, nil
 }
 
 type QueryReadyConsolidationStats struct {
@@ -755,6 +763,8 @@ type QueryReadyConsolidationStats struct {
 	BytesCopied              int64
 	BytesHashed              int64
 	BytesChecksummed         int64
+	ExecutionBytes           int64
+	ExecutionColumns         int
 	WriteAmplification       float64
 	PeakEncodedBufferBytes   int64
 	CodeTranslations         int
@@ -840,12 +850,12 @@ func consolidateQueryReadyBaseDelta(base *QueryReadyBaseGeneration, baseTombston
 	tombstones := append([]Tombstone(nil), baseTombstones...)
 	inputBytes := int64(len(baseTombstones) * queryReadyDeltaTombstoneBytes)
 	for _, view := range base.Parts {
-		parts = append(parts, QueryReadyBasePartInput{SourceGeneration: view.Dependency.SourceGeneration, Image: view.Image})
+		parts = append(parts, QueryReadyBasePartInput{SourceGeneration: view.Dependency.SourceGeneration, Image: view.Image, PrimaryIDMode: view.Dependency.PrimaryIDMode, PrimaryIDBase: view.Dependency.PrimaryIDBase})
 		inputBytes += int64(view.Dependency.ImageBytes)
 	}
 	for _, delta := range selected {
 		for _, view := range delta.Base.Parts {
-			parts = append(parts, QueryReadyBasePartInput{SourceGeneration: view.Dependency.SourceGeneration, Image: view.Image})
+			parts = append(parts, QueryReadyBasePartInput{SourceGeneration: view.Dependency.SourceGeneration, Image: view.Image, PrimaryIDMode: view.Dependency.PrimaryIDMode, PrimaryIDBase: view.Dependency.PrimaryIDBase})
 			inputBytes += int64(view.Dependency.ImageBytes)
 		}
 		tombstones = append(tombstones, delta.Tombstones...)
@@ -866,6 +876,7 @@ func consolidateQueryReadyBaseDelta(base *QueryReadyBaseGeneration, baseTombston
 		PartsMerged: len(parts), RowsMerged: built.Stats.Rows, TombstonesMerged: built.Stats.Tombstones,
 		InputBytes: inputBytes, OutputBytes: int64(len(built.Bytes)), BytesCopied: built.Stats.BytesCopied,
 		BytesHashed: built.Stats.BytesHashed, BytesChecksummed: built.Stats.BytesChecksummed,
+		ExecutionBytes: built.Stats.ExecutionBytes, ExecutionColumns: built.Stats.ExecutionColumns,
 		WriteAmplification: writeAmplification, PeakEncodedBufferBytes: built.Stats.PeakEncodedBufferBytes, BuildTime: time.Since(started),
 	}}, nil
 }

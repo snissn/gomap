@@ -90,8 +90,15 @@ func (w *rotateSwapValueWriter) Sync() error  { return nil }
 func (w *rotateSwapValueWriter) Close() error { return nil }
 
 type rotateFailValueWriter struct {
-	size int64
+	size      int64
+	installed bool
 }
+
+type installedValueLogRotationError struct{ err error }
+
+func (err installedValueLogRotationError) Error() string       { return err.err.Error() }
+func (err installedValueLogRotationError) Unwrap() error       { return err.err }
+func (installedValueLogRotationError) RotationInstalled() bool { return true }
 
 func (w *rotateFailValueWriter) Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	return page.ValuePtr{}, errors.New("test: unexpected Append call")
@@ -107,6 +114,9 @@ func (w *rotateFailValueWriter) RotateTo(path string, fileID uint32) error {
 	return w.RotateToWithSync(path, fileID, true)
 }
 func (w *rotateFailValueWriter) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
+	if w.installed {
+		return installedValueLogRotationError{err: errRotateFailed}
+	}
 	return errRotateFailed
 }
 func (w *rotateFailValueWriter) Size() int64  { return w.size }
@@ -247,6 +257,39 @@ func TestRotateValueLogMuHeld_DoesNotAdvanceSeqOnFailure(t *testing.T) {
 	}
 	if l.vlog != writer {
 		t.Fatalf("expected original writer to remain installed")
+	}
+}
+
+func TestRotateValueLogMuHeld_CompletesMetadataAfterInstalledCleanupFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, valueLogName(0, 59))
+	writer := &rotateFailValueWriter{size: 128, installed: true}
+	l := &lane{
+		id:       0,
+		vlog:     writer,
+		vlogSeq:  59,
+		vlogPath: oldPath,
+	}
+	db := &DB{dir: dir}
+
+	err := db.rotateValueLogLocked(l)
+	if !errors.Is(err, errRotateFailed) {
+		t.Fatalf("rotateValueLogLocked err=%v want=%v", err, errRotateFailed)
+	}
+	if got := l.vlogSeq; got != 60 {
+		t.Fatalf("vlogSeq=%d want 60 after installed rotation", got)
+	}
+	wantPath := filepath.Join(db.valueLogDirForLane(l), valueLogName(l.id, 60))
+	if got := l.vlogPath; got != wantPath {
+		t.Fatalf("vlogPath=%q want %q after installed rotation", got, wantPath)
+	}
+	if got := l.vlogClosedSizes[oldPath]; got != writer.size {
+		t.Fatalf("closed size=%d want %d", got, writer.size)
+	}
+	if l.vlog != writer {
+		t.Fatalf("expected installed writer to remain authoritative")
 	}
 }
 

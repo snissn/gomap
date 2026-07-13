@@ -124,6 +124,8 @@ type queryReadyBuildStats struct {
 	BytesCompressed            int64
 	BytesHashed                int64
 	BytesChecksummed           int64
+	ExecutionBytes             int64
+	ExecutionColumns           int
 	BaseBytesRewritten         int64
 	AssetsProduced             int
 	PartsProduced              int
@@ -283,6 +285,7 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 		kind, partID = ColumnAssetKindQueryReadyBase, queryReadyBaseAssetPartID
 		stats.Rows, stats.InputBytes, stats.OutputBytes = built.Stats.Rows, built.Stats.InputBytes, built.Stats.OutputBytes
 		stats.BytesCopied, stats.BytesHashed, stats.BytesChecksummed = built.Stats.BytesCopied, built.Stats.BytesHashed, built.Stats.BytesChecksummed
+		stats.ExecutionBytes, stats.ExecutionColumns = built.Stats.ExecutionBytes, built.Stats.ExecutionColumns
 		stats.EncodedBufferPeakBytes, stats.BaseBuildTime = built.Stats.OutputBytes, built.Stats.BuildTime
 	case queryReadyBuildDelta:
 		built, err := typedcolumn.BuildQueryReadyDeltaGeneration(request.Identity, request.Parts, request.Tombstones)
@@ -293,6 +296,7 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 		kind, partID = ColumnAssetKindQueryReadyDelta, queryReadyDeltaAssetPartID
 		stats.Rows, stats.InputBytes, stats.OutputBytes = built.Stats.Rows, built.Stats.InputBytes, built.Stats.OutputBytes
 		stats.BytesCopied, stats.BytesCompressed, stats.BytesHashed, stats.BytesChecksummed = built.Stats.BytesCopied, built.Stats.BytesCompressed, built.Stats.BytesHashed, built.Stats.BytesChecksummed
+		stats.ExecutionBytes, stats.ExecutionColumns = built.Stats.ExecutionBytes, built.Stats.ExecutionColumns
 		stats.EncodedBufferPeakBytes, stats.WriteAmplification = built.Stats.PeakEncodedBufferBytes, built.Stats.WriteAmplification
 		stats.BaseBuildTime, stats.DeltaBuildTime = built.Stats.BaseBuildTime, built.Stats.BuildTime
 	case queryReadyBuildConsolidatedBase:
@@ -314,6 +318,7 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 		kind, partID = ColumnAssetKindQueryReadyConsolidatedBase, queryReadyConsolidatedBaseAssetPartID
 		stats.Rows, stats.InputBytes, stats.OutputBytes = built.Stats.RowsMerged, built.Stats.InputBytes, built.Stats.OutputBytes
 		stats.BytesCopied, stats.BytesHashed, stats.BytesChecksummed, stats.EncodedBufferPeakBytes = built.Stats.BytesCopied, built.Stats.BytesHashed, built.Stats.BytesChecksummed, built.Stats.PeakEncodedBufferBytes
+		stats.ExecutionBytes, stats.ExecutionColumns = built.Stats.ExecutionBytes, built.Stats.ExecutionColumns
 		stats.WriteAmplification, stats.ConsolidationTime = built.Stats.WriteAmplification, built.Stats.BuildTime
 	default:
 		return nil, fmt.Errorf("collections: unsupported query-ready build kind %d", request.Kind)
@@ -389,9 +394,26 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 		return total + value, nil
 	}
 	total := fixedBuildBytes
-	addPart := func(imageBytes int) error {
-		var err error
-		total, err = add(total, int64(imageBytes)+perPartAlignmentBytes+perPartMetadataBytes)
+	addPart := func(image typedcolumn.ColumnPartImage) error {
+		executionBytes, err := typedcolumn.EstimateQueryReadyExecutionImageUpperBound(image)
+		if err != nil {
+			return err
+		}
+		// The build plan retains each generated sidecar while the final
+		// generation buffer is allocated and receives a second copy. Charging
+		// two conservative sidecar bounds covers both live representations.
+		if executionBytes > math.MaxInt64/2 {
+			return errors.New("collections: query-ready execution build size overflow")
+		}
+		partBytes, err := add(int64(len(image.Bytes)), executionBytes*2)
+		if err != nil {
+			return err
+		}
+		partBytes, err = add(partBytes, perPartAlignmentBytes+perPartMetadataBytes)
+		if err != nil {
+			return err
+		}
+		total, err = add(total, partBytes)
 		return err
 	}
 	tombstones := int64(len(request.Tombstones))
@@ -402,7 +424,7 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 		}
 		tombstones = int64(len(inheritedTombstones))
 		for _, view := range base.Parts {
-			if err := addPart(len(view.Image.Bytes)); err != nil {
+			if err := addPart(view.Image); err != nil {
 				return 0, err
 			}
 		}
@@ -422,7 +444,7 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 				return 0, err
 			}
 			for _, view := range delta.Base.Parts {
-				if err := addPart(len(view.Image.Bytes)); err != nil {
+				if err := addPart(view.Image); err != nil {
 					return 0, err
 				}
 			}
@@ -433,7 +455,7 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 		}
 	} else {
 		for _, part := range request.Parts {
-			if err := addPart(len(part.Image.Bytes)); err != nil {
+			if err := addPart(part.Image); err != nil {
 				return 0, err
 			}
 		}

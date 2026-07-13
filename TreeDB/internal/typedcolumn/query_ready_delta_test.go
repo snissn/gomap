@@ -72,8 +72,8 @@ func TestQueryReadyDeltaBuildUsesSingleBoundedOutputBuffer(t *testing.T) {
 	if got, want := result.Stats.PeakEncodedBufferBytes, result.Stats.OutputBytes; got != want {
 		t.Fatalf("peak encoded buffer bytes=%d want one final output buffer=%d", got, want)
 	}
-	if got, want := result.Stats.BytesCopied, result.Stats.InputBytes; got != want {
-		t.Fatalf("bytes copied=%d want input bytes copied once=%d", got, want)
+	if got, want := result.Stats.BytesCopied, result.Stats.InputBytes+standalone.Stats.ExecutionBytes; got != want {
+		t.Fatalf("bytes copied=%d want source plus generated execution bytes copied once=%d", got, want)
 	}
 	opened, err := OpenQueryReadyDeltaGeneration(result.Bytes, identity)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestQueryReadyDeltaBuildPhaseCountersAreComplete(t *testing.T) {
 	if runtime.GOOS != "windows" && (result.Stats.ValidationTime <= 0 || result.Stats.BaseBuildTime <= 0 || result.Stats.EnvelopeBuildTime <= 0) {
 		t.Fatalf("missing phase timing: %+v", result.Stats)
 	}
-	if got, want := result.Stats.BytesHashed, int64(len(image.Bytes)); got != want {
+	if got, want := result.Stats.BytesHashed, int64(len(image.Bytes))+result.Stats.ExecutionBytes; got != want {
 		t.Fatalf("bytes hashed=%d want %d", got, want)
 	}
 	if result.Stats.BytesChecksummed <= int64(queryReadyBaseHeaderBytes+queryReadyDeltaHeaderBytes) {

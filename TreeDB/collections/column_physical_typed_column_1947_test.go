@@ -428,8 +428,8 @@ func TestColumnPhysicalJSONBenchTypedColumnPartEdgeShapes1947(t *testing.T) {
 		t.Fatalf("hour-count result=%+v diagnostics=%+v want typed source groups", hourCount.Groups, hourCount.Diagnostics)
 	}
 	for _, group := range hourCount.Groups {
-		if group.Key == "" || group.Count == 0 || group.Key != columnPhysicalQueryHourKey(group.Hour) {
-			t.Fatalf("hour-count group=%+v want key/count/hour populated consistently", group)
+		if group.Key == "" || group.Count == 0 || group.Hour != 0 {
+			t.Fatalf("hour-count group=%+v want public key/count shape without group-hour metadata", group)
 		}
 	}
 }
@@ -653,6 +653,10 @@ func BenchmarkColumnPhysicalJSONBenchTypedColumnPartDirectSmoke1947(b *testing.B
 }
 
 func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events []columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func(), []ColumnAssetRef) {
+	return openColumnPhysicalJSONBenchTypedColumnPartBatches1947(tb, [][]columnPhysicalJSONBenchParityEventP0{events})
+}
+
+func openColumnPhysicalJSONBenchTypedColumnPartBatches1947(tb testing.TB, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func(), []ColumnAssetRef) {
 	tb.Helper()
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -683,7 +687,11 @@ func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events
 		_ = d.Close()
 		tb.Fatalf("OpenCollection setup: %v", err)
 	}
-	if len(events) != 0 {
+	wantTypedRefs := 0
+	for batchIndex, events := range batches {
+		if len(events) == 0 {
+			continue
+		}
 		ids := make([][]byte, len(events))
 		docs := make([][]byte, len(events))
 		for i, event := range events {
@@ -692,14 +700,11 @@ func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events
 		}
 		if _, err := col.InsertBatch(ids, docs); err != nil {
 			_ = d.Close()
-			tb.Fatalf("InsertBatch: %v", err)
+			tb.Fatalf("InsertBatch[%d]: %v", batchIndex, err)
 		}
+		wantTypedRefs++
 	}
 	preCloseTypedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(tb, d, col))
-	wantTypedRefs := 0
-	if len(events) != 0 {
-		wantTypedRefs = 1
-	}
 	if len(preCloseTypedRefs) != wantTypedRefs {
 		_ = d.Close()
 		tb.Fatalf("typed refs=%+v want %d", preCloseTypedRefs, wantTypedRefs)

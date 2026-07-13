@@ -4,11 +4,89 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
+
+func TestQueryReadyExecutionColdReopenParity(t *testing.T) {
+	identity := queryReadyCollectionTestIdentity()
+	opened := queryReadyCollectionValidFiles(t, identity, 8401)
+	files := QueryReadyColumnGenerationFiles{Base: QueryReadyColumnGenerationFile{
+		Path: opened.Base.Path, Offset: opened.Base.Offset, Length: opened.Base.Length,
+		Generation: opened.Base.Identity.Generation, Kind: QueryReadyColumnGenerationBase,
+	}}
+	request := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQuerySumSecondOfDaySquare, ValueColumn: "value"}
+	collection := &Collection{}
+	run := func() ColumnPhysicalQueryResult {
+		runner, err := collection.prepareQueryReadyColumnPhysicalQueryForIdentity(identity, files, request)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		result, err := runner.Run()
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if err := runner.Close(); err != nil {
+			t.Fatalf("close runner: %v", err)
+		}
+		if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta || result.Diagnostics.QueryReadyEncodedExecutions != 1 || result.Diagnostics.DocumentMaterializations != 0 || result.Diagnostics.QueryReadyLegacyFallbacks != 0 {
+			t.Fatalf("diagnostics=%+v", result.Diagnostics)
+		}
+		return result
+	}
+	first := run()
+	if err := collection.closeCollectionQueryReadyGenerationCache(); err != nil {
+		t.Fatal(err)
+	}
+	second := run()
+	if !slices.Equal(first.Groups, second.Groups) {
+		t.Fatalf("cold reopen groups first=%+v second=%+v", first.Groups, second.Groups)
+	}
+	if err := collection.closeCollectionQueryReadyGenerationCache(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueryReadyColumnOpenFilesPreservesDefaultGenerationAndPartBoundsOnPartialOverride(t *testing.T) {
+	identity := queryReadyCollectionTestIdentity()
+	defaults := typedcolumn.DefaultQueryReadyDeltaBoundPolicy()
+	tests := []struct {
+		name     string
+		maxRows  int64
+		maxBytes int64
+	}{
+		{name: "rows", maxRows: 123},
+		{name: "bytes", maxBytes: 456},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opened, err := queryReadyColumnOpenFiles(identity, QueryReadyColumnGenerationFiles{
+				Base: QueryReadyColumnGenerationFile{
+					Path:       "base.qrbg",
+					Generation: identity.ManifestGeneration,
+					Kind:       QueryReadyColumnGenerationBase,
+				},
+				MaxRows:  test.maxRows,
+				MaxBytes: test.maxBytes,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := opened.Bound.MaxVisibleGenerations; got != defaults.MaxVisibleGenerations {
+				t.Fatalf("MaxVisibleGenerations=%d want default %d", got, defaults.MaxVisibleGenerations)
+			}
+			if got := opened.Bound.MaxAccumulatedDeltaParts; got != defaults.MaxAccumulatedDeltaParts {
+				t.Fatalf("MaxAccumulatedDeltaParts=%d want default %d", got, defaults.MaxAccumulatedDeltaParts)
+			}
+			if opened.Bound.MaxRows != test.maxRows || opened.Bound.MaxBytes != test.maxBytes {
+				t.Fatalf("partial override bound=%+v want rows=%d bytes=%d", opened.Bound, test.maxRows, test.maxBytes)
+			}
+		})
+	}
+}
 
 func TestCollectionQueryReadyGenerationKeyIsQueryIndependentAndInvalidatesPhysicalIdentity(t *testing.T) {
 	identity := queryReadyCollectionTestIdentity()
@@ -92,6 +170,50 @@ func TestCollectionQueryReadyGenerationCacheRejectsStaleAndReplacesByColumnStore
 	}
 	if closed := collection.collectionQueryReadyGenerationCacheSnapshot(); closed.Present || closed.Invalidations != 2 {
 		t.Fatalf("closed=%+v", closed)
+	}
+}
+
+func TestCollectionQueryReadyGenerationCacheInvalidatesWhenFileSelectionChanges(t *testing.T) {
+	collection := &Collection{}
+	identity := queryReadyCollectionTestIdentity()
+	firstFiles := queryReadyCollectionValidFiles(t, identity, 8051)
+	first, err := collection.openCollectionQueryReadyGenerationForIdentity(identity, firstFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPart, ok := first.Prepared().Part(0)
+	if !ok {
+		t.Fatal("first prepared generation has no part")
+	}
+	firstImage := slices.Clone(firstPart.View.Image.Bytes)
+	if len(firstImage) == 0 {
+		t.Fatal("first prepared generation has an empty part image")
+	}
+	if firstPart.View.Image.PartID != 42 {
+		t.Fatalf("first part=%+v", firstPart)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondFiles := queryReadyCollectionValidFiles(t, identity, 8052)
+	second, err := collection.openCollectionQueryReadyGenerationForIdentity(identity, secondFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	secondPart, ok := second.Prepared().Part(0)
+	if !ok {
+		t.Fatal("second prepared generation has no part")
+	}
+	if slices.Equal(secondPart.View.Image.Bytes, firstImage) {
+		t.Fatal("file selection replacement reused the first mapped generation")
+	}
+	if secondPart.View.Image.PartID != 42 {
+		t.Fatalf("second part=%+v", secondPart)
+	}
+	if snapshot := collection.collectionQueryReadyGenerationCacheSnapshot(); snapshot.CacheBuilds != 2 || snapshot.Invalidations != 1 || snapshot.CacheHits != 0 {
+		t.Fatalf("replacement snapshot=%+v", snapshot)
 	}
 }
 
