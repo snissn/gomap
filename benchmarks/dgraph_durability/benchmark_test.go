@@ -298,12 +298,14 @@ func benchmarkConcurrentDurable(b *testing.B, profile benchmarkProfile, concurre
 	var nextTimestamp atomic.Uint64
 	nextTimestamp.Store(benchmarkWarmupCommits)
 	var wg sync.WaitGroup
+	start := make(chan struct{})
 	wg.Add(concurrency)
 	b.ReportAllocs()
-	b.ResetTimer()
+	b.StopTimer()
 	for worker := 0; worker < concurrency; worker++ {
 		go func() {
 			defer wg.Done()
+			<-start
 			for index := range jobs {
 				started := time.Now()
 				timestamp := nextTimestamp.Add(1)
@@ -314,6 +316,9 @@ func benchmarkConcurrentDurable(b *testing.B, profile benchmarkProfile, concurre
 			}
 		}()
 	}
+	b.ResetTimer()
+	b.StartTimer()
+	close(start)
 	for i := 0; i < b.N; i++ {
 		jobs <- i
 	}
