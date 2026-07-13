@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -64,6 +65,7 @@ var columnAssetVerifiedChecksumCache = struct {
 var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
 var columnAssetSegmentDirSyncCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentDirSyncCache
 var syncColumnAssetSegmentFileForPublish = syncColumnAssetSegmentFile
+var openStableColumnAssetParent = os.Open
 
 type columnAssetVerifiedChecksumEntry struct {
 	key   columnAssetVerifiedChecksumKey
@@ -366,6 +368,34 @@ func writeColumnAssetToManagerWithStats(rootDir string, cfg ColumnStoreConfig, p
 	return writeColumnAssetToManagerSegmentWithStats(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
 }
 
+func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, *rootpublication.StableResourceToken, error) {
+	var token *rootpublication.StableResourceToken
+	capture := func(file, parent *os.File, ref ColumnAssetRef, namespace columnAssetManagerNamespace, namespaceNeedsSync bool) (bool, error) {
+		var namespaceToken *rootpublication.StableNamespaceToken
+		if namespaceNeedsSync {
+			var err error
+			namespaceToken, err = stableColumnAssetNamespaceToken(parent, file, ref)
+			if err != nil {
+				return false, err
+			}
+			if err := namespaceToken.Stabilize(); err != nil {
+				namespaceToken.Release()
+				return false, err
+			}
+			defer namespaceToken.Release()
+		}
+		var err error
+		token, err = stableColumnAssetResourceToken(file, ref, namespaceToken)
+		return namespaceNeedsSync, err
+	}
+	ref, _, err := writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID, capture)
+	if err != nil {
+		token.Release()
+		return ColumnAssetRef{}, nil, err
+	}
+	return ref, token, nil
+}
+
 func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
 	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID, fileID)
 }
@@ -376,6 +406,12 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 }
 
 func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
+	return writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, fileID, nil)
+}
+
+type columnAssetStableResourceCapture func(*os.File, *os.File, ColumnAssetRef, columnAssetManagerNamespace, bool) (bool, error)
+
+func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32, capture columnAssetStableResourceCapture) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
 	if cfg.AssetManager == nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset write requires asset manager")
 	}
@@ -418,7 +454,21 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	file, needsDirSync, _, err := openColumnAssetSegmentAppendFile(assetPath)
+	var stableParent *os.File
+	if capture != nil {
+		stableParent, err = openStableColumnAssetParent(namespace.SegmentDir)
+		if err != nil {
+			return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
+		}
+		defer stableParent.Close()
+	}
+	var file *os.File
+	var needsDirSync, created bool
+	if stableParent != nil {
+		file, needsDirSync, created, err = openColumnAssetSegmentAppendFileAt(stableParent, assetPath)
+	} else {
+		file, needsDirSync, created, err = openColumnAssetSegmentAppendFile(assetPath)
+	}
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
@@ -429,54 +479,108 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 			_ = file.Close()
 		}
 	}()
+	rollbackOffset := int64(-1)
+	fail := func(cause error) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
+		var cleanupErr error
+		if created {
+			var validateErr error
+			if stableParent != nil {
+				validateErr = rootpublication.ValidateStableChildLink(stableParent, file, filepath.Base(assetPath))
+			}
+			if closeFile {
+				cleanupErr = errors.Join(cleanupErr, file.Close())
+				closeFile = false
+			}
+			if stableParent != nil && validateErr == nil {
+				cleanupErr = errors.Join(cleanupErr,
+					rootpublication.RemoveStableChildFile(stableParent, filepath.Base(assetPath)), stableParent.Sync())
+			} else if stableParent != nil {
+				cleanupErr = errors.Join(cleanupErr, validateErr)
+			} else {
+				removeErr := os.Remove(assetPath)
+				if errors.Is(removeErr, os.ErrNotExist) {
+					removeErr = nil
+				}
+				cleanupErr = errors.Join(cleanupErr, removeErr, syncColumnAssetDir(namespace.SegmentDir))
+			}
+		} else if rollbackOffset >= 0 {
+			cleanupErr = errors.Join(cleanupErr, file.Truncate(rollbackOffset), file.Sync())
+		}
+		return ColumnAssetRef{}, closeStats, errors.Join(cause, cleanupErr)
+	}
 	offset, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
+	rollbackOffset = offset
 	alignment := columnAssetSegmentPayloadAlignment(kind, cfg)
 	padding := columnAssetSegmentPrefixPadding(offset, alignment)
 	if padding > 0 {
 		written, err := writeColumnAssetSegmentZeroPadding(file, padding)
 		if err != nil {
-			return ColumnAssetRef{}, closeStats, err
+			return fail(err)
 		}
 		if written != padding {
-			return ColumnAssetRef{}, closeStats, io.ErrShortWrite
+			return fail(io.ErrShortWrite)
 		}
 		offset += int64(padding)
 	}
 	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
 	if written != len(payload) {
-		return ColumnAssetRef{}, closeStats, io.ErrShortWrite
+		return fail(io.ErrShortWrite)
 	}
+	ref.Offset = offset
 	start := time.Now()
 	closeStats.FileSyncCount++
 	if err := syncColumnAssetSegmentFileForPublish(file); err != nil {
 		closeStats.FileSync += time.Since(start)
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
 	closeStats.FileSync += time.Since(start)
+	directoryStable := false
+	if capture != nil {
+		start = time.Now()
+		directoryStable, err = capture(file, stableParent, ref, namespace, needsDirSync)
+		if needsDirSync {
+			closeStats.DirSync += time.Since(start)
+		}
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if needsDirSync {
+		if !directoryStable {
+			if capture != nil {
+				return fail(fmt.Errorf("%w: stable column asset capture did not stabilize namespace", rootpublication.ErrUnresolvedResource))
+			}
+			start = time.Now()
+			if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
+				closeStats.DirSync += time.Since(start)
+				return fail(err)
+			}
+			closeStats.DirSync += time.Since(start)
+		}
+	}
 	start = time.Now()
 	if err := file.Close(); err != nil {
 		closeStats.FileClose += time.Since(start)
-		return ColumnAssetRef{}, closeStats, err
+		return fail(err)
 	}
 	closeStats.FileClose += time.Since(start)
 	closeFile = false
 	if needsDirSync {
-		start = time.Now()
-		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
-			closeStats.DirSync += time.Since(start)
-			return ColumnAssetRef{}, closeStats, err
+		if capture != nil {
+			// A retained parent may no longer be reachable through assetPath. Do
+			// not let handle-relative stabilization certify a pathname cache entry.
+			clearColumnAssetSegmentDirSyncKnown(assetPath)
+		} else {
+			markColumnAssetSegmentDirSynced(assetPath)
 		}
-		closeStats.DirSync += time.Since(start)
-		markColumnAssetSegmentDirSynced(assetPath)
 	}
 	closeStats.SyncEpochCount = 1
-	ref.Offset = offset
 	return ref, closeStats, nil
 }
 
@@ -904,6 +1008,24 @@ func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, e
 		return nil, false, false, err
 	}
 	return file, !columnAssetSegmentDirSyncKnown(assetPath), false, nil
+}
+
+func openColumnAssetSegmentAppendFileAt(parent *os.File, assetPath string) (*os.File, bool, bool, error) {
+	name := filepath.Base(assetPath)
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
+	if err == nil {
+		return file, true, true, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, false, false, err
+	}
+	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, false, false, err
+	}
+	// A pathname-only cache cannot prove that the entry opened through this
+	// retained parent has a durable namespace.
+	return file, true, false, nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {

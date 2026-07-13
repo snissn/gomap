@@ -1,10 +1,11 @@
 // Package rootpublication provides the dormant scheduling primitive for
 // coalescing prepared TreeDB roots before stable publication.
 //
-// The package deliberately has no connection to TreeDB's current commit,
-// pager, meta, recovery, maintenance, or public-profile paths. Later durability
-// tickets add exact resource ownership and stable-root publication before the
-// coordinator is activated.
+// The package now owns exact stable resource and namespace dependencies plus
+// their candidate-to-coordinator transfer contract. It deliberately has no
+// connection to TreeDB's current commit, pager, meta, recovery, maintenance,
+// or public-profile paths; later durability tickets activate publication and
+// deletion consumers.
 package rootpublication
 
 import (
@@ -73,6 +74,7 @@ type CandidateSpec struct {
 	DependencyBytes uint64
 	IndexBytes      uint64
 	Obligations     []ObligationID
+	ResourceSet     *StableResourceSet
 }
 
 // ObligationID is an opaque, path-free identity for dependency ownership. Its
@@ -84,7 +86,7 @@ type ObligationID [16]byte
 // #3678, and #3679. Keeping them private prevents this foundation from
 // inventing a path-based identity or prematurely exposing a public contract.
 type immutableExtension interface {
-	union(immutableExtension) immutableExtension
+	union(immutableExtension) (immutableExtension, error)
 }
 
 type extensionSlots struct {
@@ -114,6 +116,18 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 	if spec.Frontier.commitSeq == 0 {
 		return nil, fmt.Errorf("%w: commit sequence is zero", ErrInvalidCandidate)
 	}
+	if spec.ResourceSet != nil {
+		if extensions.resourceSet != nil {
+			return nil, fmt.Errorf("%w: duplicate resource-set extension", ErrInvalidCandidate)
+		}
+		if err := spec.ResourceSet.validateResolved(); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidCandidate, err)
+		}
+		if err := spec.ResourceSet.transfer(ResourceOwnerBuilder, ResourceOwnerCandidate); err != nil {
+			return nil, fmt.Errorf("%w: transfer resource set: %w", ErrInvalidCandidate, err)
+		}
+		extensions.resourceSet = spec.ResourceSet
+	}
 	return &PreparedRootCandidate{
 		frontier: spec.Frontier, freelistHeadID: spec.FreelistHeadID,
 		totalPages: spec.TotalPages, dependencyBytes: spec.DependencyBytes,
@@ -133,9 +147,29 @@ func (c *PreparedRootCandidate) OwnedBytes() uint64 {
 	return saturatingAdd(c.dependencyBytes, c.indexBytes)
 }
 
-func coalesceCandidates(candidates []*PreparedRootCandidate) *PreparedRootCandidate {
+func (c *PreparedRootCandidate) resourceSet() *StableResourceSet {
+	if c == nil || c.extensions.resourceSet == nil {
+		return nil
+	}
+	set, _ := c.extensions.resourceSet.(*StableResourceSet)
+	return set
+}
+
+// Resources exposes the immutable candidate-scoped token union to the
+// publisher. The returned set does not permit mutation or ownership transfer.
+func (c *PreparedRootCandidate) Resources() *StableResourceSet { return c.resourceSet() }
+
+// AbandonResources releases a prepared candidate that failed before Enqueue.
+// It is idempotent and cannot release coordinator-owned resources.
+func (c *PreparedRootCandidate) AbandonResources() {
+	if set := c.resourceSet(); set != nil {
+		set.releaseFrom(ResourceOwnerCandidate)
+	}
+}
+
+func coalesceCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandidate, error) {
 	if len(candidates) == 1 {
-		return candidates[0]
+		return candidates[0], nil
 	}
 	latest := candidates[len(candidates)-1]
 	coalesced := *latest
@@ -143,30 +177,65 @@ func coalesceCandidates(candidates []*PreparedRootCandidate) *PreparedRootCandid
 	coalesced.indexBytes = 0
 	coalesced.obligations = nil
 	coalesced.extensions = extensionSlots{}
+	resourceExtensions := make([]immutableExtension, 0, len(candidates))
 	for _, candidate := range candidates {
 		coalesced.dependencyBytes = saturatingAdd(coalesced.dependencyBytes, candidate.dependencyBytes)
 		coalesced.indexBytes = saturatingAdd(coalesced.indexBytes, candidate.indexBytes)
 		coalesced.obligations = append(coalesced.obligations, candidate.obligations...)
-		coalesced.extensions = unionExtensionSlots(coalesced.extensions, candidate.extensions)
+		if candidate.extensions.resourceSet != nil {
+			resourceExtensions = append(resourceExtensions, candidate.extensions.resourceSet)
+		}
+		var err error
+		coalesced.extensions.cowFreelist, err = unionExtensionValue(coalesced.extensions.cowFreelist, candidate.extensions.cowFreelist)
+		if err != nil {
+			return nil, err
+		}
+		coalesced.extensions.durableRootRecord, err = unionExtensionValue(coalesced.extensions.durableRootRecord, candidate.extensions.durableRootRecord)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	coalesced.extensions.resourceSet, err = unionResourceExtensions(resourceExtensions)
+	if err != nil {
+		return nil, err
 	}
 	coalesced.obligations = normalizeObligations(coalesced.obligations)
-	return &coalesced
+	return &coalesced, nil
 }
 
-func unionExtensionSlots(older, newer extensionSlots) extensionSlots {
-	return extensionSlots{
-		resourceSet:       unionExtensionValue(older.resourceSet, newer.resourceSet),
-		cowFreelist:       unionExtensionValue(older.cowFreelist, newer.cowFreelist),
-		durableRootRecord: unionExtensionValue(older.durableRootRecord, newer.durableRootRecord),
+func unionResourceExtensions(extensions []immutableExtension) (immutableExtension, error) {
+	if len(extensions) == 0 {
+		return nil, nil
 	}
+	sets := make([]*StableResourceSet, len(extensions))
+	for i, extension := range extensions {
+		set, ok := extension.(*StableResourceSet)
+		if !ok {
+			// Reserved-slot tests and future extension implementations retain the
+			// generic pairwise contract. Production resource sets use the batched
+			// path below so a growing pin union is never repeatedly cloned.
+			result := extensions[0]
+			var err error
+			for _, next := range extensions[1:] {
+				result, err = result.union(next)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return result, nil
+		}
+		sets[i] = set
+	}
+	return UnionStableResourceSets(sets...)
 }
 
-func unionExtensionValue(older, newer immutableExtension) immutableExtension {
+func unionExtensionValue(older, newer immutableExtension) (immutableExtension, error) {
 	if older == nil {
-		return newer
+		return newer, nil
 	}
 	if newer == nil {
-		return older
+		return older, nil
 	}
 	return older.union(newer)
 }
@@ -256,4 +325,8 @@ type Stats struct {
 	Poisoned                   bool
 	WakeReason                 WakeReason
 	PublishCalls               uint64
+	ResourceCoalesces          uint64
+	ResourceConflicts          uint64
+	RejectedCandidates         uint64
+	Resources                  []ResourceKindStats
 }

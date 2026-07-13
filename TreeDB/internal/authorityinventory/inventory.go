@@ -1,0 +1,226 @@
+// Package authorityinventory is the typed source of truth for every field that
+// can make a root publication depend on storage outside the page file.
+package authorityinventory
+
+//go:generate go run ../../cmd/authority_inventory
+
+import (
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+)
+
+type ActivationState string
+
+const (
+	ActivationActive           ActivationState = "active"
+	ActivationAdjacent         ActivationState = "adjacent"
+	ActivationQuarantined      ActivationState = "quarantined"
+	ActivationNonAuthoritative ActivationState = "non_authoritative"
+)
+
+// Row assigns one persisted field or closed family to its publication authority.
+// Field is a stable, source-shaped key used by the drift tests.
+type Row struct {
+	Field             string
+	Scope             string
+	ResourceClass     string
+	Producer          string
+	IdentitySource    string
+	FrontierOrDigest  string
+	NamespaceSite     string
+	Registrar         string
+	RecoveryValidator string
+	DeletionOwner     string
+	ActivationState   ActivationState
+	AdjacentIssue     string
+	ExclusionReason   string
+}
+
+var Rows = buildRows()
+
+func buildRows() []Row {
+	var rows []Row
+	add := func(items ...Row) { rows = append(rows, items...) }
+
+	for _, field := range []string{"Offset", "Length", "FileID"} {
+		add(active("page.ValuePtr."+field, "value-log record", "mutable value-log segment range", "valuelog.Writer.Append", "pinned value-log file identity and FileID", "complete record end: Offset + decoded record Length", "value_vlog segment (no rename)", "value-log append/publication adapter", "value-log manager record CRC and pointer decode", "value-log GC/rewrite with segment pins"))
+	}
+	for _, field := range []string{"FileID", "Offset", "RecordLengthHint", "SubIndex"} {
+		add(active("page.LogRecordRef."+field, "outer-leaf record", "mutable outer-leaf log segment range", "caching leaf-log appender", "pinned leaf-log file identity and FileID", "complete grouped record end from Offset and RecordLengthHint", "leaf-log segment (no rename)", "leaf-log append/publication adapter", "leaf record decode, CRC, and sub-index validation", "leaf-generation GC with segment pins"))
+	}
+
+	for _, field := range []string{"Version", "CurrentGenerationID", "NextGenerationID", "Generations"} {
+		add(active("db.leafGenerationManifest."+field, "leaf-generation manifest", "immutable manifest replacement", "saveLeafGenerationManifest", "pinned temporary file plus final manifest namespace generation", "encoded manifest digest", "temporary create then rename to manifest.json", "leaf-generation manifest publication adapter", "load and validate leaf-generation manifest", "leaf-generation manifest replacement owner"))
+	}
+	for _, field := range []string{"GenerationID", "State", "FileIDs", "CreatedCommitSeq", "SealedCommitSeq", "RetiredCommitSeq", "DeletedCommitSeq", "PublishedCommitSeq"} {
+		add(active("db.leafGenerationRecord."+field, "leaf-generation manifest entry", "sealed leaf-generation closure", "leaf-generation pack/rewrite scheduler", "generation ID plus every referenced leaf FileID identity", "manifest digest plus sealed file digests/frontiers", "leaf generation files and manifest replacement", "leaf-generation manifest publication adapter", "manifest validation plus segment registration and CRC", "leaf-generation GC with manifest and segment pins"))
+	}
+
+	for _, field := range []string{"Kind", "Namespace", "Generation", "PartID", "FileID", "Offset", "Length", "Checksum"} {
+		add(active("collections.ColumnAssetRef."+field, "column manifest asset ref", "logical immutable range in shared .tca segment", "column asset manager appenders", "namespace, generation, part, FileID, and pinned .tca identity", "Offset + Length and Checksum", "isolated column asset namespace", "column manifest publication adapter", "column asset header/schema/checksum validation", "column asset reachability GC with segment pins"))
+	}
+
+	columnConfigFields := []string{
+		"Enabled", "Columns", "SortKey", "AggregateMetadata", "RetainedPayload", "RetainedPayloadEncoding", "Reconstruction",
+		"AssetManager", "ManifestRoot", "ActiveManifest", "RecoveryAuthoritativeManifest", "RecoveryAuthoritativeAppliedCommandLSN",
+		"PhysicalMutationParts", "ProfileSupport", "TypedColumnCompression", "TypedColumnSectionCompression", "Locator",
+		"ControlRootStoragePolicy", "SchemaHash",
+	}
+	for _, field := range columnConfigFields {
+		issue := "#3679"
+		reason := "column-store catalog fields select named-root and manifest closure; external obligations enter through ColumnAssetRef and transitive value pointers"
+		if field == "RecoveryAuthoritativeAppliedCommandLSN" {
+			issue = "#3718"
+			reason = "the recovery-authoritative applied LSN joins catalog visibility to the atomic command-WAL durability cutover"
+		}
+		add(adjacent("collections.ColumnStoreConfig."+field, "collection column-store catalog", "index/root authority metadata", issue, reason))
+	}
+
+	activeColumnKinds := []string{
+		"ColumnAssetKindTCS1PartImage", "ColumnAssetKindTCS1TypedColumnPart", "ColumnAssetKindTCS1AggregateMetadata",
+		"ColumnAssetKindTCS1DictionaryCodes", "ColumnAssetKindTCS1Int64Values", "ColumnAssetKindTCS1HNSWSearchPack",
+	}
+	for _, name := range activeColumnKinds {
+		add(active("collections.ColumnAssetKind."+name, "column asset kind", "logical immutable range in shared .tca segment", "typed-column and vector asset builders", "ColumnAssetRef plus pinned backing .tca identity", "asset range end and checksum", "isolated column asset namespace", "column manifest publication adapter", "kind-specific asset decoder and checksum", "column asset reachability GC with segment pins"))
+	}
+	for _, name := range []string{"ColumnAssetKindQueryReadyBase", "ColumnAssetKindQueryReadyDelta", "ColumnAssetKindQueryReadyConsolidatedBase"} {
+		add(nonAuthoritative("collections.ColumnAssetKind."+name, "query-ready cache asset kind", "rebuildable prepared asset", "#3677", "query-ready base, delta, and consolidated files are cache accelerators and do not select recovery state"))
+	}
+
+	add(active("commitlog.ExternalRefClass.ExternalRefValueLog", "command WAL external ref", "mutable value-log segment range", "command envelope encoder", "value-log FileID plus pinned file identity", "Offset + Length and optional Digest", "value_vlog segment", "command journal append adapter", "command replay resolves and validates the value-log record", "value-log GC/rewrite with WAL reachability pins"))
+	add(active("commitlog.ExternalRefClass.ExternalRefLeafLog", "command WAL external ref", "mutable outer-leaf log segment range", "command envelope encoder", "leaf-log FileID plus pinned file identity", "Offset + Length and optional Digest", "leaf-log segment", "command journal append adapter", "command replay resolves and validates the leaf-log record", "leaf-generation GC with WAL reachability pins"))
+	add(quarantined("commitlog.ExternalRefClass.ExternalRefPayloadFile", "command WAL external ref", "payload side file", "#3677", "no production producer exists outside tests; publication must reject this class until it has identity, sync, recovery, and deletion ownership"))
+	for _, field := range []string{"Class", "Flags", "FileID", "Offset", "Length", "Digest"} {
+		add(active("commitlog.ExternalRef."+field, "command WAL external ref field", "typed external resource range", "command envelope encoder", "class, FileID, and pinned backing identity", "Offset + Length and Digest", "class-selected value or leaf log namespace", "command journal publication adapter", "replay resolves the typed ref and validates its fence", "class-selected GC with WAL reachability pins"))
+	}
+	add(Row{
+		Field: "commitlog.ExternalRef.Path", Scope: "command WAL external ref field", ResourceClass: "diagnostic DB-relative path",
+		Producer: "command envelope encoder", IdentitySource: "not an identity; diagnostic display only", FrontierOrDigest: "not applicable",
+		NamespaceSite: "not a namespace authority", Registrar: "must ignore Path for identity and pinning", RecoveryValidator: "resolve typed Class and FileID instead of reopening Path",
+		DeletionOwner: "must ignore Path and use the pinned typed resource", ActivationState: ActivationNonAuthoritative, AdjacentIssue: "#3677",
+		ExclusionReason: "paths are diagnostic only and cannot replace a pinned identity or typed FileID during sync, recovery, or deletion",
+	})
+
+	for _, field := range []string{"Version", "DurabilityClass", "LSN", "Kind", "Scope", "FeatureFlags", "CatalogEpoch", "SchemaEpoch", "BaseAppliedLSN", "PayloadFormat", "Payload", "Preconditions", "ResultAssertions"} {
+		add(adjacent("commitlog.CommandEnvelope."+field, "command WAL envelope field", "logical command and durable-horizon authority", "#3718", "V2 envelope activation and durable prefix semantics are owned by the atomic command-WAL cutover"))
+	}
+	add(active("commitlog.CommandEnvelope.ExternalRefs", "command WAL envelope field", "transitive external resource closure", "command envelope encoder", "typed ExternalRef identities", "every referenced range frontier and digest", "class-selected value or leaf log namespace", "command journal publication adapter", "fence and referenced-record validation", "class-selected GC with WAL reachability pins"))
+	for _, field := range []string{"Type", "Payload"} {
+		add(adjacent("commitlog.CommandExtension."+field, "command WAL extension field", "V2 precondition/assertion extension", "#3718", "extension activation and critical-field handling are part of the atomic V2 command-WAL cutover"))
+	}
+	for _, field := range []string{"Count", "Digest"} {
+		add(adjacent("commitlog.ExternalRefFenceV1."+field, "external-ref fence field", "canonical RID-set fence", "#3718", "the V2 external-ref fence becomes recovery authority only with the atomic command-WAL cutover"))
+	}
+
+	add(active("commitlog.CommandJournal.Frame", "command WAL frame", "mutable command-WAL segment range", "commitlog.CommandJournal.Append", "pinned journal segment identity plus LSN", "complete encoded frame end and checksum", "wal segment (no rename)", "command journal publication adapter", "journal scan validates framing, checksum, and LSN order", "command WAL retention with segment pins"))
+	add(active("dictionary.GlobalID", "value-log dictionary dependency", "transitive immutable dictionary closure", "value-log compression encoder", "dictionary ID resolved through dictdb", "dictionary definition digest", "dictionary side store", "value-log publication closure registrar", "dictionary lookup and definition decode", "retain forever; no deletion until pin-aware dictionary GC exists"))
+	add(active("template.GlobalID", "template-v1 value dependency", "transitive immutable template closure", "template-v1 encoder", "template ID resolved through templatedb", "template definition digest", "template side store", "value-log publication closure registrar", "template lookup and definition decode", "retain forever; no deletion until pin-aware template GC exists"))
+
+	for _, name := range []string{"collectionTextIndexRootName", "collectionTextStateRootName", "collectionTextStatsRootName"} {
+		add(adjacent("collections.TextV1Root."+name, "named text-v1 root", "index/value-log transitive closure", "#3679", "text roots are page-index closure with transitive value pointers, not independent external resource files"))
+	}
+	for _, name := range []string{"collectionTextV2DocIDRootName", "collectionTextV2DocMapRootName", "collectionTextV2TermsRootName", "collectionTextV2PostingBlocksRootName", "collectionTextV2NormBlocksRootName", "collectionTextV2PositionsRootName", "collectionTextV2GenerationsRootName"} {
+		add(adjacent("collections.TextV2Root."+name, "named text-v2 root", "index/value-log transitive closure", "#3679", "text roots are page-index closure with transitive value pointers, not independent external resource files"))
+	}
+
+	metaAdjacent := []struct{ field, issue string }{
+		{"CommitSeq", "#3679"}, {"UserRootPageID", "#3679"}, {"SystemRootPageID", "#3679"}, {"FreelistHeadID", "#3678"},
+		{"TotalPages", "#3678"}, {"LastCommitHeight", "#3679"}, {"AppliedCommandLSN", "#3718"}, {"MaxEntryRevision", "#3679"},
+	}
+	for _, entry := range metaAdjacent {
+		add(adjacent("page.MetaPageBody."+entry.field, "meta-page scalar", "page-file publication scalar", entry.issue, "owned by page/meta publication ordering rather than an external resource token"))
+	}
+	for _, field := range []string{"ActiveSlabID", "ActiveSlabTail"} {
+		add(quarantined("page.MetaPageBody."+field, "legacy meta-page scalar", "removed legacy value-store namespace", "#3677", "TreeDB no longer has the legacy value-store path; these format fields are decoded only for compatibility"))
+	}
+	add(adjacent("collections.CollectionRoot", "named collection root", "index/value-log transitive closure", "#3679", "named roots are page-index authority, not external resource kinds"))
+	add(adjacent("collections.VectorNativeRoot", "native vector root", "index/value-log transitive closure", "#3679", "native vector state is stored in named roots and value-log closure, not vector sidecar files"))
+	add(quarantined("collections.LegacyVectorSidecar", "legacy vector sidecar", "legacy side file", "#3677", "legacy vector sidecars have no current publication token contract and cannot activate"))
+
+	return rows
+}
+
+func active(field, scope, class, producer, identity, frontier, namespace, registrar, recovery, deletion string) Row {
+	return Row{field, scope, class, producer, identity, frontier, namespace, registrar, recovery, deletion, ActivationActive, "", ""}
+}
+
+func adjacent(field, scope, class, issue, reason string) Row {
+	return Row{field, scope, class, "not applicable: adjacent authority", "page/root identity", "page/root closure", "page file or named root", "adjacent issue", "adjacent issue", "adjacent issue", ActivationAdjacent, issue, reason}
+}
+
+func quarantined(field, scope, class, issue, reason string) Row {
+	return Row{field, scope, class, "blocked", "not established", "not established", "not authoritative", "reject activation", "fail closed", "retain; do not delete by publication", ActivationQuarantined, issue, reason}
+}
+
+func nonAuthoritative(field, scope, class, issue, reason string) Row {
+	return Row{field, scope, class, "cache builder", "cache identity only", "rebuildable checksum", "cache namespace", "never register as authority", "rebuild or fail closed", "cache lifecycle manager", ActivationNonAuthoritative, issue, reason}
+}
+
+func Validate(rows []Row) error {
+	seen := make(map[string]struct{}, len(rows))
+	for i, row := range rows {
+		if strings.TrimSpace(row.Field) == "" {
+			return fmt.Errorf("authority inventory row %d has empty Field", i)
+		}
+		if _, ok := seen[row.Field]; ok {
+			return fmt.Errorf("authority inventory has duplicate Field %q", row.Field)
+		}
+		seen[row.Field] = struct{}{}
+		required := map[string]string{
+			"Scope": row.Scope, "ResourceClass": row.ResourceClass, "Producer": row.Producer,
+			"IdentitySource": row.IdentitySource, "FrontierOrDigest": row.FrontierOrDigest,
+			"NamespaceSite": row.NamespaceSite, "Registrar": row.Registrar,
+			"RecoveryValidator": row.RecoveryValidator, "DeletionOwner": row.DeletionOwner,
+		}
+		for name, value := range required {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("authority inventory row %q has empty %s", row.Field, name)
+			}
+		}
+		switch row.ActivationState {
+		case ActivationActive:
+			if row.AdjacentIssue != "" || row.ExclusionReason != "" {
+				return fmt.Errorf("active authority inventory row %q must not have adjacent issue or exclusion reason", row.Field)
+			}
+		case ActivationAdjacent, ActivationQuarantined, ActivationNonAuthoritative:
+			if strings.TrimSpace(row.AdjacentIssue) == "" || strings.TrimSpace(row.ExclusionReason) == "" {
+				return fmt.Errorf("inactive authority inventory row %q must name an owner issue and reason", row.Field)
+			}
+		default:
+			return fmt.Errorf("authority inventory row %q has invalid activation state %q", row.Field, row.ActivationState)
+		}
+	}
+	return nil
+}
+
+func RenderMarkdown(rows []Row) []byte {
+	if err := Validate(rows); err != nil {
+		panic(err)
+	}
+	ordered := append([]Row(nil), rows...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Field < ordered[j].Field })
+	var b bytes.Buffer
+	b.WriteString("<!-- Code generated by go generate ./TreeDB/internal/authorityinventory; DO NOT EDIT. -->\n")
+	b.WriteString("# Root publication authority inventory\n\n")
+	b.WriteString("This table is the fail-closed source-of-truth projection for issue #3677. `active` rows must have a complete producer-to-deletion chain. `adjacent` rows remain owned by the named issue. `quarantined` and `non_authoritative` rows cannot select recovery state or satisfy publication durability.\n\n")
+	b.WriteString("| Field | Scope | Resource / physical class | Producer | Identity source | Frontier or digest | Namespace site | Registrar | Recovery validator | Deletion owner | Activation state | Adjacent issue | Exclusion reason |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, row := range ordered {
+		values := []string{row.Field, row.Scope, row.ResourceClass, row.Producer, row.IdentitySource, row.FrontierOrDigest, row.NamespaceSite, row.Registrar, row.RecoveryValidator, row.DeletionOwner, string(row.ActivationState), row.AdjacentIssue, row.ExclusionReason}
+		b.WriteString("|")
+		for _, value := range values {
+			b.WriteString(" ")
+			b.WriteString(markdownCell(value))
+			b.WriteString(" |")
+		}
+		b.WriteByte('\n')
+	}
+	return b.Bytes()
+}
+
+func markdownCell(value string) string {
+	value = strings.ReplaceAll(value, "|", "\\|")
+	return strings.ReplaceAll(value, "\n", " ")
+}
