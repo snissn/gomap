@@ -153,6 +153,40 @@ func TestStableResourceSetRetainsRotatedIdentitiesAndGreatestFrontier(t *testing
 	}
 }
 
+func TestStableResourceSetSyncUsesCoalescedGreatestFrontier(t *testing.T) {
+	dir := t.TempDir()
+	var synced atomic.Uint64
+	first := stableTokenFixture(t, dir, "frontier-first.vlog", 1, 8, ReachabilityValueLogPointer, "same-header", func(spec *StableResourceSpec) {
+		spec.ResourceID = "frontier.vlog"
+		spec.SyncThrough = func(_ *os.File, frontier DurableFrontier) error {
+			synced.Store(frontier.Bytes)
+			return nil
+		}
+	})
+	advanced := stableTokenFixture(t, dir, "frontier-advanced.vlog", 1, 16, ReachabilityValueLogPointer, "same-header", func(spec *StableResourceSpec) {
+		spec.ResourceID = first.ResourceID()
+		spec.StableIdentityOverride = first.Identity()
+	})
+	builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	if err := builder.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Add(advanced); err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := synced.Load(); got != 16 {
+		t.Fatalf("sync frontier=%d want coalesced greatest frontier 16", got)
+	}
+}
+
 func TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts(t *testing.T) {
 	dir := t.TempDir()
 	t.Run("frontier beyond file", func(t *testing.T) {
