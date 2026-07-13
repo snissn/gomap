@@ -1,6 +1,9 @@
 package commitlog
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 const (
 	Version = 1
@@ -40,6 +43,7 @@ var (
 	ErrCommandWALTerminalTail            = errors.New("commitlog: command wal terminal incomplete tail")
 	ErrCommandWALLegacyPayload           = errors.New("commitlog: legacy raw payload in command wal")
 	ErrCommandWALUnsupportedVersion      = errors.New("commitlog: command wal unsupported version")
+	ErrCommandWALV1RebuildRequired       = fmt.Errorf("%w: command WAL V1 requires rebuilding this pre-alpha database for V2", ErrCommandWALUnsupportedVersion)
 	ErrCommandWALUnsupportedKind         = errors.New("commitlog: command wal unsupported kind")
 	ErrCommandWALUnsupportedCriticalFlag = errors.New("commitlog: command wal unsupported critical flag")
 	ErrCommandWALDuplicateLSN            = errors.New("commitlog: command wal duplicate lsn")

@@ -13,6 +13,9 @@ import (
 
 const (
 	CommandFrameVersion uint16 = 1
+	// CommandFrameVersionV2 is intentionally separate from CommandFrameVersion.
+	// Production activation remains owned by #3718.
+	CommandFrameVersionV2 uint16 = 2
 
 	CommandWALNonCriticalFlagStart uint64 = 1 << 32
 
@@ -75,6 +78,7 @@ const (
 	CommandKindCollectionRebuildVectorIndex CommandKind = 103
 	CommandKindCatalogCreateCollection      CommandKind = 200
 	CommandKindCatalogMutationPlaceholder   CommandKind = CommandKindCatalogCreateCollection
+	CommandKindDurablePrefixBarrier         CommandKind = 300
 )
 
 // CommandScope identifies which logical TreeDB surface a command mutates.
@@ -84,6 +88,7 @@ const (
 	CommandScopeRawKV CommandScope = iota + 1
 	CommandScopeCollection
 	CommandScopeCatalog
+	CommandScopeSystem
 )
 
 // PayloadFormat identifies the canonical payload encoding inside the envelope.
@@ -97,6 +102,7 @@ const (
 	PayloadFormatCollectionUpdateBatchByIDV1    PayloadFormat = 5
 	PayloadFormatCatalogCreateCollectionV1      PayloadFormat = 6
 	PayloadFormatCollectionRebuildVectorIndexV1 PayloadFormat = 7
+	PayloadFormatDurablePrefixBarrierV1         PayloadFormat = 8
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -1718,6 +1724,7 @@ type CommandExtension struct {
 
 type CommandEnvelope struct {
 	Version          uint16
+	DurabilityClass  CommandDurabilityClass
 	LSN              uint64
 	Kind             CommandKind
 	Scope            CommandScope
