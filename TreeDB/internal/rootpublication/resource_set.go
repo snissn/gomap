@@ -636,7 +636,7 @@ func (set *StableResourceSet) DeletionGuard() StableResourceDeletionGuard {
 
 func (guard StableResourceDeletionGuard) Check(identity StableIdentity, generation uint64) error {
 	for _, entry := range guard.entries {
-		if entry.token.identity == identity && entry.token.generation == generation && !entry.token.released.Load() {
+		if sameStableObject(entry.token.identity, identity) && entry.token.generation == generation && !entry.token.released.Load() {
 			return ErrResourcePinned
 		}
 	}

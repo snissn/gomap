@@ -134,6 +134,22 @@ func TestPageAndNamedRootPoliciesRemainAdjacent(t *testing.T) {
 	}
 }
 
+func TestRebuildableQueryReadyPoliciesAreNotRegisterable(t *testing.T) {
+	for _, field := range []ReachabilityField{
+		ReachabilityQueryReadyBase,
+		ReachabilityQueryReadyDelta,
+		ReachabilityQueryReadyConsolidatedBase,
+	} {
+		policy, ok := StableResourcePolicyFor(field)
+		if !ok {
+			t.Fatalf("rebuildable field %q missing canonical policy", field)
+		}
+		if policy.Registerable || policy.Classification != "rebuildable-non-authoritative" {
+			t.Errorf("rebuildable field %q policy=%+v want non-registerable", field, policy)
+		}
+	}
+}
+
 func TestAdjacentDBPublicationIssueRouting(t *testing.T) {
 	wantIssue := map[ReachabilityField]string{
 		ReachabilityMetaPage:   "#3679",

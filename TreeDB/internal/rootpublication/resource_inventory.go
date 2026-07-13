@@ -202,7 +202,8 @@ func StableResourcePolicyFor(field ReachabilityField) (StableResourcePolicy, boo
 func registerableClassification(classification string) bool {
 	switch classification {
 	case "adjacent-root-publication", "adjacent-freelist-publication",
-		"explicit-legacy-exclusion", "explicit-separate-domain":
+		"explicit-legacy-exclusion", "explicit-separate-domain",
+		"rebuildable-non-authoritative":
 		return false
 	default:
 		return true
