@@ -1,6 +1,7 @@
 package freelist
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 
@@ -542,6 +543,55 @@ func TestFreelistGenerationV1_OneChunkDeltaEmitsOnlyOnePath(t *testing.T) {
 	}
 	if stats.COWBytes != stats.COWPages*4096 {
 		t.Fatalf("bytes=%d pages=%d", stats.COWBytes, stats.COWPages)
+	}
+}
+
+func TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages(t *testing.T) {
+	store := NewMemoryPageStoreV1()
+	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, []uint64{2, 300}, nil), 2, store)
+	txn := NewFreelistTxn(base, NewReservationLedger())
+	allocated, err := txn.Allocate(300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated != 300 {
+		t.Fatalf("allocated=%d want 300", allocated)
+	}
+	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("shared-ancestor-pages"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadGenerationV1(store, candidate.GenerationRef())
+	if err != nil {
+		t.Fatalf("LoadGenerationV1 shared ancestor pages: %v", err)
+	}
+	if !loaded.Allocatable(2) {
+		t.Fatal("shared ancestor chunk lost its free page after reopen")
+	}
+	if loaded.Allocatable(300) {
+		t.Fatal("changed chunk returned the allocated page after reopen")
+	}
+
+	corrupt := NewMemoryPageStoreV1()
+	for id, data := range store.Pages {
+		corrupt.Pages[id] = append([]byte(nil), data...)
+	}
+	foundSharedChunk := false
+	for _, data := range corrupt.Pages {
+		h := page.DecodeHeader(data)
+		if page.PageType(h.Flags&0xff) != page.PageTypeFreelistChunk || binary.LittleEndian.Uint64(data[40:48]) != 0 || binary.LittleEndian.Uint64(data[32:40]) != 2 {
+			continue
+		}
+		binary.LittleEndian.PutUint64(data[32:40], 3)
+		page.UpdateChecksum(data)
+		foundSharedChunk = true
+		break
+	}
+	if !foundSharedChunk {
+		t.Fatal("shared ancestor chunk page not found")
+	}
+	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("newer child under ancestor page error=%v want %v", err, ErrGenerationFormat)
 	}
 }
 

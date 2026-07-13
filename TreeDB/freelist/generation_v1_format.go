@@ -143,8 +143,9 @@ func encodeChunkPage(id, generationID uint64, chunk *stateChunk) []byte {
 	return b
 }
 
-func decodeChunkPage(b []byte, expectedGeneration, expectedChunk uint64) (*stateChunk, error) {
-	if !bytes.Equal(b[16:24], chunkMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != chunkHeaderSize || !zeroTail(b[28:32], 0) || binary.LittleEndian.Uint64(b[32:40]) != expectedGeneration {
+func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk, error) {
+	pageGeneration := binary.LittleEndian.Uint64(b[32:40])
+	if !bytes.Equal(b[16:24], chunkMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != chunkHeaderSize || !zeroTail(b[28:32], 0) || pageGeneration == 0 || pageGeneration > maxGeneration {
 		return nil, ErrGenerationFormat
 	}
 	chunkNo := binary.LittleEndian.Uint64(b[40:48])
@@ -295,7 +296,7 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	}
 	seen := make(map[uint64]struct{})
 	rootID := binary.LittleEndian.Uint64(b[64:72])
-	g.root, err = loadStateNode(src, rootID, 0, 0, g.generationID, g.highWater, seen)
+	g.root, err = loadStateNode(src, rootID, 0, 0, g.generationID, true, g.highWater, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +315,7 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	return g, nil
 }
 
-func loadStateNode(src PageSource, id uint64, depth int, prefix, generationID, highWater uint64, seen map[uint64]struct{}) (*stateNode, error) {
+func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration uint64, exactGeneration bool, highWater uint64, seen map[uint64]struct{}) (*stateNode, error) {
 	if depth > chunkTrieDepth {
 		return nil, ErrGenerationFormat
 	}
@@ -327,7 +328,8 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, generationID, h
 		return nil, err
 	}
 	h := page.DecodeHeader(b)
-	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || int(b[28]) != depth || b[29] != 0 || binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || binary.LittleEndian.Uint64(b[32:40]) != generationID || int(h.Count) > 16 || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) {
+	pageGeneration := binary.LittleEndian.Uint64(b[32:40])
+	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || int(b[28]) != depth || b[29] != 0 || binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || pageGeneration == 0 || pageGeneration > maxGeneration || (exactGeneration && pageGeneration != maxGeneration) || int(h.Count) > 16 || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) {
 		return nil, ErrGenerationFormat
 	}
 	n := &stateNode{pageID: id, checksum: h.Checksum}
@@ -359,7 +361,7 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, generationID, h
 				return nil, ErrGenerationFormat
 			}
 			seen[childID] = struct{}{}
-			n.chunk, err = decodeChunkPage(chunkPage, generationID, prefix)
+			n.chunk, err = decodeChunkPage(chunkPage, pageGeneration, prefix)
 			if err != nil {
 				return nil, err
 			}
@@ -371,7 +373,7 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, generationID, h
 			if kind != 0 {
 				return nil, ErrGenerationFormat
 			}
-			child, err := loadStateNode(src, childID, depth+1, childPrefix, generationID, highWater, seen)
+			child, err := loadStateNode(src, childID, depth+1, childPrefix, pageGeneration, false, highWater, seen)
 			if err != nil {
 				return nil, err
 			}
