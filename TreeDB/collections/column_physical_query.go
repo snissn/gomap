@@ -248,6 +248,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	QueryReadyBaseScanNanos      int64
 	QueryReadyDeltaMergeNanos    int64
 	QueryReadyPredicateNanos     int64
+	QueryReadyReductionNanos     int64
 	QueryReadyGroupingNanos      int64
 	QueryReadyOrderingTopKNanos  int64
 	QueryReadyLegacyFallbacks    int
@@ -1561,6 +1562,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.QueryReadyBaseScanNanos += right.QueryReadyBaseScanNanos
 	left.QueryReadyDeltaMergeNanos += right.QueryReadyDeltaMergeNanos
 	left.QueryReadyPredicateNanos += right.QueryReadyPredicateNanos
+	left.QueryReadyReductionNanos += right.QueryReadyReductionNanos
 	left.QueryReadyGroupingNanos += right.QueryReadyGroupingNanos
 	left.QueryReadyOrderingTopKNanos += right.QueryReadyOrderingTopKNanos
 	left.QueryReadyLegacyFallbacks += right.QueryReadyLegacyFallbacks

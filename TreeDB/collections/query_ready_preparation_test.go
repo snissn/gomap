@@ -205,6 +205,11 @@ func TestPrepareQueryReadyColumnGenerationRejectsCombinedSourceBuildBound(t *tes
 	if !errors.As(err, &bound) || bound.RequiredBytes != refs[0].Length || bound.MaxBytes != refs[0].Length-1 {
 		t.Fatalf("bound err=%v detail=%+v", err, bound)
 	}
+	bound = nil
+	_, err = collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{MaxWorkers: 1, MaxInFlightBytes: refs[0].Length})
+	if !errors.As(err, &bound) || bound.RequiredBytes <= refs[0].Length || bound.MaxBytes != refs[0].Length {
+		t.Fatalf("combined bound err=%v detail=%+v", err, bound)
+	}
 	if after := len(collection.columnAssetLifecycleRegistrySnapshot()); after != before {
 		t.Fatalf("bound rejection registered prepared assets: before=%d after=%d", before, after)
 	}

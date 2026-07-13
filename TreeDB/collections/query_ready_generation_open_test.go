@@ -135,6 +135,50 @@ func TestCollectionQueryReadyGenerationCacheRejectsStaleAndReplacesByColumnStore
 	}
 }
 
+func TestCollectionQueryReadyGenerationCacheInvalidatesWhenFileSelectionChanges(t *testing.T) {
+	collection := &Collection{}
+	identity := queryReadyCollectionTestIdentity()
+	firstFiles := queryReadyCollectionValidFiles(t, identity, 8051)
+	first, err := collection.openCollectionQueryReadyGenerationForIdentity(identity, firstFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPart, ok := first.Prepared().Part(0)
+	if !ok {
+		t.Fatal("first prepared generation has no part")
+	}
+	firstImage := slices.Clone(firstPart.View.Image.Bytes)
+	if len(firstImage) == 0 {
+		t.Fatal("first prepared generation has an empty part image")
+	}
+	if firstPart.View.Image.PartID != 42 {
+		t.Fatalf("first part=%+v", firstPart)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondFiles := queryReadyCollectionValidFiles(t, identity, 8052)
+	second, err := collection.openCollectionQueryReadyGenerationForIdentity(identity, secondFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	secondPart, ok := second.Prepared().Part(0)
+	if !ok {
+		t.Fatal("second prepared generation has no part")
+	}
+	if slices.Equal(secondPart.View.Image.Bytes, firstImage) {
+		t.Fatal("file selection replacement reused the first mapped generation")
+	}
+	if secondPart.View.Image.PartID != 42 {
+		t.Fatalf("second part=%+v", secondPart)
+	}
+	if snapshot := collection.collectionQueryReadyGenerationCacheSnapshot(); snapshot.CacheBuilds != 2 || snapshot.Invalidations != 1 || snapshot.CacheHits != 0 {
+		t.Fatalf("replacement snapshot=%+v", snapshot)
+	}
+}
+
 func TestCollectionQueryReadyGenerationLeasePinsOldMappingAcrossInvalidation(t *testing.T) {
 	collection := &Collection{}
 	identity := queryReadyCollectionTestIdentity()

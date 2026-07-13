@@ -49,7 +49,7 @@ reuse scan, reduction, and result buffers; result slices remain runner-owned
 and are valid until the next run or close.
 
 Diagnostics separate preparation, base scan, delta merge, predicates,
-grouping, and ordering/top-K time. They also report rows, decoded blocks and
+reduction, grouping, and ordering/top-K time. They also report rows, decoded blocks and
 bytes, code translations, domain count, bounded scratch bytes, and explicit
 zero-valued counters for document materialization, legacy scan fallback, and
 precomputed answers.

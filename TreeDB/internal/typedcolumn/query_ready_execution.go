@@ -88,6 +88,7 @@ type QueryReadyExecutionStats struct {
 	BaseScanNanos              int64
 	DeltaMergeNanos            int64
 	PredicateNanos             int64
+	ReductionNanos             int64
 	GroupingNanos              int64
 	OrderingTopKNanos          int64
 	MaterializationNanos       int64
@@ -147,6 +148,7 @@ type QueryReadyOperator struct {
 	int64Values       []int64
 	int64Max          []int64
 	seen              []bool
+	matchedRows       []int
 	resultGroups      []QueryReadyOperatorGroup
 }
 
@@ -221,6 +223,7 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 	if request.DistinctColumn != "" {
 		runner.distinctDomain = runner.domains[request.DistinctColumn]
 	}
+	maxVisibleRows := 0
 	for partIndex, loaded := range reader.reader.parts {
 		for _, column := range runner.projected {
 			partColumn, ok := loaded.Part.Columns[column]
@@ -235,10 +238,19 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 				return nil, fmt.Errorf("typedcolumn: query-ready operator value column %s type=%s encoding=%s want non-null int64", column, partColumn.Definition.Type, partColumn.Definition.Encoding)
 			}
 		}
+		visible := reader.reader.visibleRowsForPart(partIndex)
+		visibleRows := len(visible.Rows)
+		if visible.All {
+			visibleRows = loaded.Part.Descriptor.RowCount
+		}
+		if visibleRows > maxVisibleRows {
+			maxVisibleRows = visibleRows
+		}
 		runner.parts = append(runner.parts, queryReadyExecutionPart{
-			part: loaded.Part, scanner: loaded.Part.NewScanner(), role: loaded.Ref.Role, visible: reader.reader.visibleRowsForPart(partIndex), values: make([][]int64, len(runner.projected)), nulls: make([][]bool, len(runner.projected)), defaults: make([][]bool, len(runner.projected)),
+			part: loaded.Part, scanner: loaded.Part.NewScanner(), role: loaded.Ref.Role, visible: visible, values: make([][]int64, len(runner.projected)), nulls: make([][]bool, len(runner.projected)), defaults: make([][]bool, len(runner.projected)),
 		})
 	}
+	runner.matchedRows = make([]int, 0, maxVisibleRows)
 	groups := len(runner.groupDomain.values)
 	switch request.Kind {
 	case QueryReadyOperatorGroupCount:
@@ -555,24 +567,34 @@ func (r *QueryReadyOperator) Run() (QueryReadyOperatorResult, error) {
 			stats.DeltaRowsScanned += rows
 			stats.DeltaMergeNanos += time.Since(phaseStart).Nanoseconds()
 		}
+		r.matchedRows = r.matchedRows[:0]
 		predicateStart := time.Now()
 		for row := 0; row < rows; row++ {
 			matched, err := r.rowMatches(partIndex, part, row, &stats)
 			if err != nil {
+				stats.PredicateNanos += time.Since(predicateStart).Nanoseconds()
 				return QueryReadyOperatorResult{Stats: stats}, err
 			}
-			if !matched {
-				continue
-			}
-			stats.RowsMatched++
-			if err := r.reduceRow(partIndex, part, row, &expressionSum, &stats); err != nil {
-				return QueryReadyOperatorResult{Stats: stats}, err
+			if matched {
+				r.matchedRows = append(r.matchedRows, row)
 			}
 		}
 		stats.PredicateNanos += time.Since(predicateStart).Nanoseconds()
+		stats.RowsMatched += len(r.matchedRows)
+		reductionStart := time.Now()
+		for _, row := range r.matchedRows {
+			if err := r.reduceRow(partIndex, part, row, &expressionSum, &stats); err != nil {
+				stats.ReductionNanos += time.Since(reductionStart).Nanoseconds()
+				return QueryReadyOperatorResult{Stats: stats}, err
+			}
+		}
+		stats.ReductionNanos += time.Since(reductionStart).Nanoseconds()
 	}
 	shapeStart := time.Now()
-	r.shapeGroups(expressionSum, &stats)
+	if err := r.shapeGroups(expressionSum, &stats); err != nil {
+		stats.GroupingNanos = time.Since(shapeStart).Nanoseconds()
+		return QueryReadyOperatorResult{Stats: stats}, err
+	}
 	stats.GroupingNanos = time.Since(shapeStart).Nanoseconds()
 	orderStart := time.Now()
 	r.orderAndLimit()
@@ -705,7 +727,7 @@ func floorUnixSeconds(micros int64) int64 {
 	return seconds
 }
 
-func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyExecutionStats) {
+func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyExecutionStats) error {
 	switch r.request.Kind {
 	case QueryReadyOperatorGroupCount:
 		for group, count := range r.counts {
@@ -755,7 +777,11 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 	case QueryReadyOperatorGroupInt64Span:
 		for group, seen := range r.seen {
 			if seen && (!r.request.SkipEmptyGroupKey || r.groupDomain.values[group] != "") {
-				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: r.int64Max[group] - r.int64Values[group]})
+				minimum, maximum := r.int64Values[group], r.int64Max[group]
+				if minimum < 0 && maximum > math.MaxInt64+minimum {
+					return fmt.Errorf("typedcolumn: query-ready int64 span overflow minimum=%d maximum=%d", minimum, maximum)
+				}
+				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: maximum - minimum})
 			}
 		}
 	case QueryReadyOperatorSumSecondOfDaySquare:
@@ -764,6 +790,7 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 		}
 	}
 	stats.GroupsConsidered = len(r.resultGroups)
+	return nil
 }
 
 func (r *QueryReadyOperator) orderAndLimit() {
@@ -823,7 +850,7 @@ func (r *QueryReadyOperator) orderAndLimit() {
 }
 
 func (r *QueryReadyOperator) scratchBytes() int64 {
-	bytes := int64(cap(r.counts)+cap(r.hourCounts))*8 + int64(cap(r.seen)) + int64(cap(r.int64Values)+cap(r.int64Max)+cap(r.distinctBits))*8
+	bytes := int64(cap(r.counts)+cap(r.hourCounts)+cap(r.matchedRows))*8 + int64(cap(r.seen)) + int64(cap(r.int64Values)+cap(r.int64Max)+cap(r.distinctBits))*8
 	for _, domain := range r.domains {
 		for _, translation := range domain.byPart {
 			bytes += int64(cap(translation)) * 8

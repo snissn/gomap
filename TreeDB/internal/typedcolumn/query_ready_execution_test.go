@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -256,6 +257,35 @@ func TestQueryReadyGroupHourNormalizesNegativeTimestamps(t *testing.T) {
 	hourWant := []QueryReadyOperatorGroup{{Hour: 0, Count: 1}, {Hour: 23, Count: 3}}
 	if !slices.Equal(hourResult.Groups, hourWant) {
 		t.Fatalf("hour groups=%+v want %+v", hourResult.Groups, hourWant)
+	}
+}
+
+func TestQueryReadyGroupInt64SpanRejectsOverflow(t *testing.T) {
+	image := queryReadyJSONBenchImage(t, 9004,
+		[]int64{1, 2},
+		[]string{"event", "event"},
+		[]string{"did", "did"},
+		[]string{"commit", "commit"},
+		[]string{"create", "create"},
+		[]int64{math.MinInt64, math.MaxInt64})
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, nil, QueryReadyBaseDeltaOptions{SnapshotGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(); err == nil || !strings.Contains(err.Error(), "span overflow") {
+		t.Fatalf("span overflow err=%v", err)
 	}
 }
 

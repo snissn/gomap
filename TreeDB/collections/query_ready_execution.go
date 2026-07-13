@@ -94,13 +94,11 @@ func (c *Collection) prepareQueryReadyColumnPhysicalQueryForIdentity(identity Co
 	}
 	operatorRequest, err := queryReadyColumnOperatorRequest(request)
 	if err != nil {
-		_ = lease.Close()
-		return nil, err
+		return nil, errors.Join(err, lease.Close())
 	}
 	operator, err := lease.Prepared().PrepareOperator(operatorRequest)
 	if err != nil {
-		_ = lease.Close()
-		return nil, err
+		return nil, errors.Join(err, lease.Close())
 	}
 	releaseLifetime = false
 	return &QueryReadyColumnPhysicalQueryRunner{lease: lease, operator: operator, request: request, lifetime: files.lifetime}, nil
@@ -261,13 +259,14 @@ func applyQueryReadyExecutionDiagnostics(diag *ColumnPhysicalQueryDiagnostics, r
 	}
 	diag.TopKLimit, diag.TopKOrder, diag.TopKCandidates = request.TopK, string(request.TopKOrder), stats.GroupsConsidered
 	diag.ScanNanos = stats.BaseScanNanos + stats.DeltaMergeNanos + stats.PredicateNanos
-	diag.ReduceNanos, diag.ResultShapeNanos = stats.GroupingNanos, stats.OrderingTopKNanos
+	diag.ReduceNanos, diag.ResultShapeNanos = stats.ReductionNanos, stats.GroupingNanos+stats.OrderingTopKNanos
 	diag.QueryReadyEncodedExecutions, diag.QueryReadyPreparedParts = stats.EncodedBaseDeltaExecutions, stats.PreparedParts
 	diag.QueryReadyBaseParts, diag.QueryReadyDeltaParts = stats.BaseParts, stats.DeltaParts
 	diag.QueryReadyRowsCandidate, diag.QueryReadyRowsVisible, diag.QueryReadyRowsSuperseded = stats.RowsCandidate, stats.RowsVisible, stats.RowsSuperseded
 	diag.QueryReadyCodeTranslations, diag.QueryReadyDictionaryDomains, diag.QueryReadyScratchBytes = stats.CodeTranslations, stats.DictionaryDomains, stats.ScratchBytes
 	diag.QueryReadyPreparationNanos, diag.QueryReadyBaseScanNanos, diag.QueryReadyDeltaMergeNanos = stats.PreparationNanos, stats.BaseScanNanos, stats.DeltaMergeNanos
-	diag.QueryReadyPredicateNanos, diag.QueryReadyGroupingNanos, diag.QueryReadyOrderingTopKNanos = stats.PredicateNanos, stats.GroupingNanos, stats.OrderingTopKNanos
+	diag.QueryReadyPredicateNanos, diag.QueryReadyReductionNanos = stats.PredicateNanos, stats.ReductionNanos
+	diag.QueryReadyGroupingNanos, diag.QueryReadyOrderingTopKNanos = stats.GroupingNanos, stats.OrderingTopKNanos
 	diag.QueryReadyLegacyFallbacks, diag.QueryReadyPrecomputedAnswers = stats.LegacyScanFallbacks, stats.PrecomputedAnswers
 	diag.DocumentMaterializations, diag.FallbackReads = stats.DocumentMaterializations, stats.Fallbacks
 }
