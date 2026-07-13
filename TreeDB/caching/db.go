@@ -30008,6 +30008,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.point_successor.backend_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorBackendProbesTotal.Load())
 	stats["treedb.cache.point_successor.sources_total"] = fmt.Sprintf("%d", db.pointSuccessorSourcesTotal.Load())
 	stats["treedb.cache.point_successor.sources_max"] = fmt.Sprintf("%d", db.pointSuccessorSourcesMax.Load())
+	// This metric is an invariant sentinel for SeekGE, not a global iterator
+	// construction counter. It must stay zero because the point-successor path
+	// has no general-merge fallback; any future fallback must increment it at
+	// the construction site.
 	stats["treedb.cache.point_successor.general_merge_iterators_total"] = fmt.Sprintf("%d", db.pointSuccessorGeneralMergeIteratorsTotal.Load())
 	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
 	stats["treedb.cache.flush_apply.coordinator.active_workers"] = fmt.Sprintf("%d", db.flushCoordinatorActiveWorkers.Load())

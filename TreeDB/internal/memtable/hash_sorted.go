@@ -574,6 +574,13 @@ func (m *HashSorted) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, b
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// CommitAt/GetAt commonly seeks the physical key it just wrote. Resolve that
+	// exact hit from the hash index before rebuilding sortedKeys: every new key
+	// invalidates the sorted index, so sorting here would turn an interleaved
+	// write/read workload into an O(n log n) rebuild per read.
+	if ent, ok := m.entryForReadLocked(bytesToStringNoCopy(start)); ok {
+		return hashSortedSeekResult(start, ent)
+	}
 	if !m.sortedValid {
 		m.ensureSortedLocked()
 	}
@@ -586,11 +593,14 @@ func (m *HashSorted) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, b
 	if end != nil && bytes.Compare(key, end) >= 0 {
 		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
-	entryIdx, ok := m.items[keyString]
-	if !ok || int(entryIdx) >= len(m.entries) {
+	ent, ok := m.entryForReadLocked(keyString)
+	if !ok {
 		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
-	ent := m.entries[entryIdx]
+	return hashSortedSeekResult(key, ent)
+}
+
+func hashSortedSeekResult(key []byte, ent hashEntry) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	if ent.flags&node.FlagTombstone != 0 {
 		return key, nil, page.ValuePtr{}, ent.flags, ent.revision, true
 	}
