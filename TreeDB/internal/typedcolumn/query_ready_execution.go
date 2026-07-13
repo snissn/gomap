@@ -16,9 +16,12 @@ type QueryReadyOperatorKind string
 
 const (
 	QueryReadyOperatorGroupCount            QueryReadyOperatorKind = "group_count"
+	QueryReadyOperatorGroupCountDistinct    QueryReadyOperatorKind = "group_count_distinct"
 	QueryReadyOperatorGroupCountAndDistinct QueryReadyOperatorKind = "group_count_and_distinct"
+	QueryReadyOperatorHourCount             QueryReadyOperatorKind = "hour_count"
 	QueryReadyOperatorGroupHourCount        QueryReadyOperatorKind = "group_hour_count"
 	QueryReadyOperatorGroupMinInt64         QueryReadyOperatorKind = "group_min_int64"
+	QueryReadyOperatorGroupMaxInt64         QueryReadyOperatorKind = "group_max_int64"
 	QueryReadyOperatorGroupInt64Span        QueryReadyOperatorKind = "group_int64_span"
 	QueryReadyOperatorSumSecondOfDaySquare  QueryReadyOperatorKind = "sum_second_of_day_square"
 )
@@ -240,7 +243,7 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 	switch request.Kind {
 	case QueryReadyOperatorGroupCount:
 		runner.counts = make([]int, groups)
-	case QueryReadyOperatorGroupCountAndDistinct:
+	case QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
 		distinct := len(runner.distinctDomain.values)
 		if groups > 0 && distinct > queryReadyMaxGroupDistinctCells/groups {
 			return nil, fmt.Errorf("typedcolumn: query-ready group-distinct dimensions=%dx%d exceed cell bound=%d", groups, distinct, queryReadyMaxGroupDistinctCells)
@@ -248,16 +251,20 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 		cells := groups * distinct
 		runner.counts = make([]int, groups)
 		runner.distinctBits = make([]uint64, (cells+63)/64)
+	case QueryReadyOperatorHourCount:
+		runner.hourCounts = make([]int, 24)
 	case QueryReadyOperatorGroupHourCount:
 		runner.hourCounts = make([]int, groups*24)
-	case QueryReadyOperatorGroupMinInt64:
+	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64:
 		runner.int64Values, runner.seen = make([]int64, groups), make([]bool, groups)
 	case QueryReadyOperatorGroupInt64Span:
 		runner.int64Values, runner.int64Max, runner.seen = make([]int64, groups), make([]int64, groups), make([]bool, groups)
 	case QueryReadyOperatorSumSecondOfDaySquare:
 	}
 	resultCapacity := groups
-	if request.Kind == QueryReadyOperatorGroupHourCount {
+	if request.Kind == QueryReadyOperatorHourCount {
+		resultCapacity = 24
+	} else if request.Kind == QueryReadyOperatorGroupHourCount {
 		resultCapacity *= 24
 	}
 	if request.Kind == QueryReadyOperatorSumSecondOfDaySquare {
@@ -338,11 +345,15 @@ func validateQueryReadyOperatorRequest(request QueryReadyOperatorRequest) error 
 		if request.GroupColumn == "" {
 			return errors.New("typedcolumn: query-ready group count requires group column")
 		}
-	case QueryReadyOperatorGroupCountAndDistinct:
+	case QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
 		if request.GroupColumn == "" || request.DistinctColumn == "" {
 			return errors.New("typedcolumn: query-ready count-distinct requires group and distinct columns")
 		}
-	case QueryReadyOperatorGroupHourCount, QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupInt64Span:
+	case QueryReadyOperatorHourCount:
+		if request.ValueColumn == "" {
+			return errors.New("typedcolumn: query-ready hour count requires value column")
+		}
+	case QueryReadyOperatorGroupHourCount, QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
 		if request.GroupColumn == "" || request.ValueColumn == "" {
 			return errors.New("typedcolumn: query-ready grouped int64 operator requires group and value columns")
 		}
@@ -628,6 +639,14 @@ func (r *QueryReadyOperator) reduceRow(partIndex int, part *queryReadyExecutionP
 		*expressionSum += term
 		return nil
 	}
+	if r.request.Kind == QueryReadyOperatorHourCount {
+		secondOfDay := floorUnixSeconds(part.values[r.valueProjected][row]) % 86_400
+		if secondOfDay < 0 {
+			secondOfDay += 86_400
+		}
+		r.hourCounts[int(secondOfDay/3_600)]++
+		return nil
+	}
 	group, err := r.globalCodeForRow(r.groupDomain, partIndex, part, r.groupProjected, row, stats)
 	if err != nil {
 		return err
@@ -635,7 +654,7 @@ func (r *QueryReadyOperator) reduceRow(partIndex int, part *queryReadyExecutionP
 	switch r.request.Kind {
 	case QueryReadyOperatorGroupCount:
 		r.counts[group]++
-	case QueryReadyOperatorGroupCountAndDistinct:
+	case QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
 		distinct, err := r.globalCodeForRow(r.distinctDomain, partIndex, part, r.distinctProjected, row, stats)
 		if err != nil {
 			return err
@@ -653,6 +672,12 @@ func (r *QueryReadyOperator) reduceRow(partIndex int, part *queryReadyExecutionP
 	case QueryReadyOperatorGroupMinInt64:
 		value := part.values[r.valueProjected][row]
 		if !r.seen[group] || value < r.int64Values[group] {
+			r.int64Values[group] = value
+			r.seen[group] = true
+		}
+	case QueryReadyOperatorGroupMaxInt64:
+		value := part.values[r.valueProjected][row]
+		if !r.seen[group] || value > r.int64Values[group] {
 			r.int64Values[group] = value
 			r.seen[group] = true
 		}
@@ -688,7 +713,7 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Count: count})
 			}
 		}
-	case QueryReadyOperatorGroupCountAndDistinct:
+	case QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
 		cardinality := len(r.distinctDomain.values)
 		for group, count := range r.counts {
 			if count == 0 {
@@ -701,7 +726,17 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 					distinct++
 				}
 			}
-			r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Count: count, DistinctCount: distinct})
+			groupResult := QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Count: count, DistinctCount: distinct}
+			if r.request.Kind == QueryReadyOperatorGroupCountDistinct {
+				groupResult.Count, groupResult.DistinctCount = distinct, 0
+			}
+			r.resultGroups = append(r.resultGroups, groupResult)
+		}
+	case QueryReadyOperatorHourCount:
+		for hour, count := range r.hourCounts {
+			if count != 0 {
+				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Hour: hour, Count: count})
+			}
 		}
 	case QueryReadyOperatorGroupHourCount:
 		for group, key := range r.groupDomain.values {
@@ -711,7 +746,7 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 				}
 			}
 		}
-	case QueryReadyOperatorGroupMinInt64:
+	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64:
 		for group, seen := range r.seen {
 			if seen && (!r.request.SkipEmptyGroupKey || r.groupDomain.values[group] != "") {
 				r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Key: r.groupDomain.values[group], Int64: r.int64Values[group]})
@@ -740,7 +775,7 @@ func (r *QueryReadyOperator) orderAndLimit() {
 			if left.Key > right.Key {
 				return 1
 			}
-			if r.request.Kind == QueryReadyOperatorGroupHourCount {
+			if r.request.Kind == QueryReadyOperatorHourCount || r.request.Kind == QueryReadyOperatorGroupHourCount {
 				return left.Hour - right.Hour
 			}
 			return 0
@@ -749,18 +784,18 @@ func (r *QueryReadyOperator) orderAndLimit() {
 	}
 	slices.SortFunc(r.resultGroups, func(left, right QueryReadyOperatorGroup) int {
 		switch r.request.Kind {
-		case QueryReadyOperatorGroupCount, QueryReadyOperatorGroupCountAndDistinct:
+		case QueryReadyOperatorGroupCount, QueryReadyOperatorGroupCountDistinct, QueryReadyOperatorGroupCountAndDistinct:
 			if left.Count != right.Count {
 				if left.Count > right.Count {
 					return -1
 				}
 				return 1
 			}
-		case QueryReadyOperatorGroupHourCount:
+		case QueryReadyOperatorHourCount, QueryReadyOperatorGroupHourCount:
 			if left.Hour != right.Hour {
 				return left.Hour - right.Hour
 			}
-		case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupInt64Span:
+		case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
 			if left.Int64 != right.Int64 {
 				if r.request.Order == QueryReadyOrderInt64Desc {
 					if left.Int64 > right.Int64 {

@@ -44,6 +44,13 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 			want: []QueryReadyOperatorGroup{{Key: "app.bsky.feed.post", Count: 4, DistinctCount: 2}, {Key: "app.bsky.feed.repost", Count: 1, DistinctCount: 1}},
 		},
 		{
+			name: "q2-distinct-only",
+			req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCountDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{
+				{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}},
+			}},
+			want: []QueryReadyOperatorGroup{{Key: "app.bsky.feed.post", Count: 2}, {Key: "app.bsky.feed.repost", Count: 1}},
+		},
+		{
 			name: "q3",
 			req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: []QueryReadyStringPredicate{
 				{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}},
@@ -58,9 +65,22 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 			},
 		},
 		{
+			name: "q3-hour-only",
+			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorHourCount, ValueColumn: "time_us"},
+			want: []QueryReadyOperatorGroup{
+				{Hour: 1, Count: 1}, {Hour: 5, Count: 1}, {Hour: 6, Count: 1},
+				{Hour: 7, Count: 1}, {Hour: 8, Count: 1}, {Hour: 9, Count: 1},
+			},
+		},
+		{
 			name: "q4",
 			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Asc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
 			want: []QueryReadyOperatorGroup{{Key: "alice", Int64: 3_600_000_000}, {Key: "dave", Int64: 28_800_000_000}},
+		},
+		{
+			name: "q4b",
+			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+			want: []QueryReadyOperatorGroup{{Key: "alice", Int64: 32_400_000_000}, {Key: "dave", Int64: 28_800_000_000}},
 		},
 		{
 			name: "q5",
@@ -224,6 +244,18 @@ func TestQueryReadyGroupHourNormalizesNegativeTimestamps(t *testing.T) {
 	want := []QueryReadyOperatorGroup{{Key: "event", Hour: 0, Count: 1}, {Key: "event", Hour: 23, Count: 3}}
 	if !slices.Equal(result.Groups, want) {
 		t.Fatalf("groups=%+v want %+v", result.Groups, want)
+	}
+	hourRunner, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{Kind: QueryReadyOperatorHourCount, ValueColumn: "time_us"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hourResult, err := hourRunner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hourWant := []QueryReadyOperatorGroup{{Hour: 0, Count: 1}, {Hour: 23, Count: 3}}
+	if !slices.Equal(hourResult.Groups, hourWant) {
+		t.Fatalf("hour groups=%+v want %+v", hourResult.Groups, hourWant)
 	}
 }
 
@@ -551,11 +583,14 @@ var queryReadyBenchmarkResult QueryReadyOperatorResult
 func BenchmarkQueryReadyEncodedJSONBenchOperators(b *testing.B) {
 	reader := queryReadyJSONBenchBenchmarkReader(b, 100_000, 20_000)
 	requests := map[string]QueryReadyOperatorRequest{
-		"q2": {Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}}},
-		"q3": {Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}, {Column: "event", Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}}}},
-		"q5": {Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+		"q2":            {Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}}},
+		"q3":            {Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}, {Column: "event", Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}}}},
+		"q5":            {Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+		"canonical-q2":  {Kind: QueryReadyOperatorGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
+		"canonical-q3":  {Kind: QueryReadyOperatorHourCount, ValueColumn: "time_us"},
+		"canonical-q4b": {Kind: QueryReadyOperatorGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
 	}
-	for _, name := range []string{"q2", "q3", "q5"} {
+	for _, name := range []string{"q2", "q3", "q5", "canonical-q2", "canonical-q3", "canonical-q4b"} {
 		b.Run(name, func(b *testing.B) {
 			runner, err := PrepareQueryReadyOperator(reader, requests[name])
 			if err != nil {

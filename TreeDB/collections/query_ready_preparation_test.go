@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -145,6 +146,50 @@ func TestPrepareQueryReadyColumnGenerationCancellationAndLifetime(t *testing.T) 
 	}
 	if info.Size() != files.Base.Offset {
 		t.Fatalf("prepared tail retained after final lease: size=%d want %d", info.Size(), files.Base.Offset)
+	}
+}
+
+func TestPrepareQueryReadyColumnGenerationExecutesCanonicalColumnStoreKinds(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, columnPhysicalJSONBenchParityEventsP0())
+	defer closeFn()
+	prepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+
+	for _, tc := range []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+	}{
+		{name: "q2_group_count_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}},
+		{name: "q3_hour_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
+		{name: "q4b_group_max", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("reference query: %v", err)
+			}
+			runner, err := collection.PrepareQueryReadyColumnPhysicalQuery(prepared.Files(), tc.req)
+			if err != nil {
+				t.Fatalf("prepare query-ready query: %v", err)
+			}
+			defer func() { _ = runner.Close() }()
+			got, err := runner.Run()
+			if err != nil {
+				t.Fatalf("run query-ready query: %v", err)
+			}
+			if !slices.Equal(got.Groups, want.Groups) {
+				t.Fatalf("groups=%+v want=%+v", got.Groups, want.Groups)
+			}
+			if got.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta || got.Diagnostics.QueryReadyEncodedExecutions != 1 || got.Diagnostics.DocumentMaterializations != 0 || got.Diagnostics.QueryReadyLegacyFallbacks != 0 {
+				t.Fatalf("routing diagnostics=%+v", got.Diagnostics)
+			}
+		})
 	}
 }
 

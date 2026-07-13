@@ -132,7 +132,9 @@ func (r *QueryReadyColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, 
 	out := ColumnPhysicalQueryResult{Groups: r.groups}
 	for i, group := range result.Groups {
 		out.Groups[i] = ColumnPhysicalQueryGroup{Key: group.Key, Hour: group.Hour, Count: group.Count, DistinctCount: group.DistinctCount, Int64: group.Int64}
-		if r.request.Kind == ColumnPhysicalQuerySumSecondOfDaySquare {
+		if r.request.Kind == ColumnPhysicalQueryHourCount {
+			out.Groups[i].Key = columnPhysicalQueryHourKey(group.Hour)
+		} else if r.request.Kind == ColumnPhysicalQuerySumSecondOfDaySquare {
 			out.Groups[i].Key = columnPhysicalQuerySumSecondOfDaySquareKey(r.request.ValueColumn)
 		}
 	}
@@ -209,7 +211,7 @@ func queryReadyColumnOpenFiles(identity ColumnStoreCacheIdentity, files QueryRea
 func queryReadyColumnOperatorRequest(request ColumnPhysicalQueryRequest) (typedcolumn.QueryReadyOperatorRequest, error) {
 	kind := typedcolumn.QueryReadyOperatorKind(request.Kind)
 	switch request.Kind {
-	case ColumnPhysicalQueryGroupCount, ColumnPhysicalQueryGroupCountAndDistinct, ColumnPhysicalQueryGroupHourCount, ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupInt64Span, ColumnPhysicalQuerySumSecondOfDaySquare:
+	case ColumnPhysicalQueryGroupCount, ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct, ColumnPhysicalQueryHourCount, ColumnPhysicalQueryGroupHourCount, ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span, ColumnPhysicalQuerySumSecondOfDaySquare:
 	default:
 		return typedcolumn.QueryReadyOperatorRequest{}, fmt.Errorf("%w: query-ready physical query kind %q", ErrColumnQueryPlanUnsupported, request.Kind)
 	}
