@@ -530,8 +530,12 @@ func TestManagerStableIdentityPinBlocksSecondManagerDelete(t *testing.T) {
 func TestManagerStableDeleteEmitsCanonicalUnlinkCutBeforeQuarantineUnlink(t *testing.T) {
 	dir := t.TempDir()
 	fileID, path := writeIdentityPinTestSegment(t, dir)
-	identity := identityPinTestIdentity(t, path)
 	registry := rootpublication.NewIdentityPinRegistry()
+	producer, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
 	deleter, err := NewManagerWithStableResourcePinRegistry(dir, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -567,7 +571,11 @@ func TestManagerStableDeleteEmitsCanonicalUnlinkCutBeforeQuarantineUnlink(t *tes
 		t.Fatalf("post-unlink cut path stat=%v, want removed", statErr)
 	}
 
-	token, pinErr := registry.Pin(identity)
+	token, pinErr := producer.StableResourceToken(fileID, StableResourceRegistration{
+		Kind: rootpublication.ResourceValueLog, LogicalLane: "main", Generation: 2,
+		DiagnosticPath: "value_vlog/" + filepath.Base(path),
+		Digest:         [32]byte{2}, Reachability: rootpublication.ReachabilityValueLogPointer,
+	})
 	if token != nil {
 		token.Release()
 	}
