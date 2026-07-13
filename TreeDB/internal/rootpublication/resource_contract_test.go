@@ -536,6 +536,123 @@ func TestLogicalResourceRejectsDifferentPhysicalIdentity(t *testing.T) {
 	t.Fatal("logical resource identity replacement unexpectedly registered")
 }
 
+func TestBuilderMergeReleasesDroppedDuplicateChildPin(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "shared.vlog", "shared-value-log")
+	digest := sha256.Sum256([]byte("vlog-header"))
+	var parentReleased, childReleased atomic.Uint64
+	makeToken := func(field ReachabilityField, lane, id string, frontier uint64, released *atomic.Uint64) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: lane, ResourceID: id, Generation: 3,
+			DiagnosticPath: "maindb/value_vlog/000003.vlog", File: file,
+			Frontier: DurableFrontier{Bytes: frontier}, Digest: digest, Reachability: field,
+			OnRelease: func() { released.Add(1) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	parent := NewStableResourceSetBuilder()
+	if err := parent.Add(makeToken(ReachabilityValueLogPointer, "main", "3", 4, &parentReleased)); err != nil {
+		t.Fatal(err)
+	}
+	childBuilder := NewStableResourceSetBuilder()
+	if err := childBuilder.Add(makeToken(ReachabilityCommandWALExternalRIDFence, "external", "alias-3", 8, &childReleased)); err != nil {
+		t.Fatal(err)
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Merge(child); err != nil {
+		t.Fatal(err)
+	}
+	if got := childReleased.Load(); got != 1 {
+		t.Fatalf("coalesced child releases=%d want 1 immediately after ownership transfer", got)
+	}
+	if got := parentReleased.Load(); got != 0 {
+		t.Fatalf("representative parent releases=%d before final set release", got)
+	}
+	set, err := parent.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Len() != 1 {
+		t.Fatalf("merged physical pins=%d want 1", set.Len())
+	}
+	set.Release()
+	if got := parentReleased.Load(); got != 1 {
+		t.Fatalf("representative parent releases=%d want 1", got)
+	}
+}
+
+func TestBuilderMergeDuplicateChildPinStressDoesNotGrowDescriptors(t *testing.T) {
+	beforeEntries, fdCheck := os.ReadDir("/dev/fd")
+	checkFDs := fdCheck == nil
+	const iterations = 256
+	var releases atomic.Uint64
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shared.vlog")
+	for i := range iterations {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write([]byte("shared-value-log")); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256([]byte("vlog-header"))
+		makeToken := func(field ReachabilityField, id string) *StableResourceToken {
+			token, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceValueLog, LogicalLane: id, ResourceID: id, Generation: uint64(i + 1),
+				DiagnosticPath: "maindb/value_vlog/shared.vlog", File: file,
+				Frontier: DurableFrontier{Bytes: 1}, Digest: digest, Reachability: field,
+				OnRelease: func() { releases.Add(1) },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return token
+		}
+		parent := NewStableResourceSetBuilder()
+		if err := parent.Add(makeToken(ReachabilityValueLogPointer, "parent")); err != nil {
+			t.Fatal(err)
+		}
+		childBuilder := NewStableResourceSetBuilder()
+		if err := childBuilder.Add(makeToken(ReachabilityCommandWALExternalRIDFence, "child")); err != nil {
+			t.Fatal(err)
+		}
+		child, err := childBuilder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := parent.Merge(child); err != nil {
+			t.Fatal(err)
+		}
+		set, err := parent.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		set.Release()
+		_ = file.Close()
+	}
+	if got, want := releases.Load(), uint64(iterations*2); got != want {
+		t.Fatalf("released duplicate/representative pins=%d want %d", got, want)
+	}
+	if checkFDs {
+		afterEntries, err := os.ReadDir("/dev/fd")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, wantMax := len(afterEntries), len(beforeEntries)+2; got > wantMax {
+			t.Fatalf("descriptor count grew from %d to %d after %d duplicate merges", len(beforeEntries), got, iterations)
+		}
+	}
+}
+
 func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 	dir := t.TempDir()
 	token := stableTokenFixture(t, dir, "pinned.vlog", 1, 4, ReachabilityValueLogPointer, "pinned")
