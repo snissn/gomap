@@ -89,6 +89,7 @@ func TestStableResourceTokenRejectsDigestAndNamespaceConflicts(t *testing.T) {
 	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
 		t.Fatalf("digest err=%v", err)
 	}
+	one.NamespaceToken = StableNamespaceToken{Required: true, ParentIdentity: "parent", Identity: "inode", Generation: 1, Establish: func(context.Context) error { return nil }}
 	two = one
 	two.NamespaceToken.Identity = "other-dir"
 	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
@@ -98,11 +99,6 @@ func TestStableResourceTokenRejectsDigestAndNamespaceConflicts(t *testing.T) {
 	two.NamespaceToken.Generation++
 	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
 		t.Fatalf("generation err=%v", err)
-	}
-	two = one
-	two.Provider = NewStableResourceLease(nil)
-	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
-		t.Fatalf("operation err=%v", err)
 	}
 }
 
@@ -127,21 +123,21 @@ func TestStableResourceTokenCoalescingPreservesReachabilityUnion(t *testing.T) {
 	}
 }
 
-func TestStableResourceTokenDuplicateRejectsDistinctProviders(t *testing.T) {
+func TestStableResourceTokenDuplicateProvidersCoalesceAndReleaseBoth(t *testing.T) {
 	var left, right atomic.Uint64
 	one := stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil })
 	one.Lease = NewStableResourceLease(func() { left.Add(1) })
 	one.Provider = one.Lease
 	two := one
+	two.Frontier = 2
 	two.Lease = NewStableResourceLease(func() { right.Add(1) })
 	two.Provider = two.Lease
-	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
-		t.Fatalf("err=%v", err)
-	}
-	two = one
 	set, err := NewStableResourceSet([]StableResourceToken{one, two})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if set.Len() != 1 || set.Tokens()[0].Frontier != 2 {
+		t.Fatalf("set=%+v", set.Tokens())
 	}
 	debt := NewStableResourceDebt(set)
 	debt.Retry()
@@ -158,8 +154,35 @@ func TestStableResourceTokenDuplicateRejectsDistinctProviders(t *testing.T) {
 		t.Fatal("transferred debt released")
 	}
 	NewStableResourceDebt(set).AbandonPreVisibility()
-	if left.Load() != 1 || right.Load() != 0 {
+	if left.Load() != 1 || right.Load() != 1 {
 		t.Fatalf("left=%d right=%d", left.Load(), right.Load())
+	}
+}
+
+func TestStableResourceTokenCoalescingRetainsOutstandingNamespaceDebt(t *testing.T) {
+	var namespaceSyncs atomic.Uint64
+	one := stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil })
+	two := one
+	two.Frontier = 2
+	two.NamespaceToken = StableNamespaceToken{
+		Required:       true,
+		ParentIdentity: "parent",
+		Identity:       "inode",
+		Generation:     1,
+		Establish: func(context.Context) error {
+			namespaceSyncs.Add(1)
+			return nil
+		},
+	}
+	set, err := NewStableResourceSet([]StableResourceToken{one, two})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.FlushAndSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if namespaceSyncs.Load() != 1 {
+		t.Fatalf("namespace syncs=%d want 1", namespaceSyncs.Load())
 	}
 }
 

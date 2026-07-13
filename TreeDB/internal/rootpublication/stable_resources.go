@@ -206,24 +206,44 @@ func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *Stab
 
 func mergeStableResourceToken(left, right StableResourceToken) (StableResourceToken, error) {
 	if left.Digest != right.Digest ||
-		left.MutableAppend != right.MutableAppend ||
-		left.Provider != right.Provider ||
-		left.NamespaceToken.Identity != right.NamespaceToken.Identity ||
-		left.NamespaceToken.ParentIdentity != right.NamespaceToken.ParentIdentity ||
-		left.NamespaceToken.Generation != right.NamespaceToken.Generation {
+		left.MutableAppend != right.MutableAppend {
 		return StableResourceToken{}, fmt.Errorf("%w: conflicting stable resource identity %q", ErrInvalidCandidate, left.Identity)
 	}
-	if left.Lease != right.Lease {
-		return StableResourceToken{}, fmt.Errorf("%w: duplicate resource %q has distinct ownership leases", ErrInvalidCandidate, left.Identity)
+	namespace, err := mergeStableNamespaceToken(left.NamespaceToken, right.NamespaceToken)
+	if err != nil {
+		return StableResourceToken{}, fmt.Errorf("%w: conflicting namespace for stable resource identity %q", err, left.Identity)
 	}
+	left.NamespaceToken = namespace
 	if right.Frontier > left.Frontier {
-		left.Frontier, left.FlushThrough, left.SyncThrough = right.Frontier, right.FlushThrough, right.SyncThrough
+		left.Frontier = right.Frontier
+		left.Provider = right.Provider
+		left.FlushThrough = right.FlushThrough
+		left.SyncThrough = right.SyncThrough
 	}
+	left.Lease = joinStableResourceLeases(left.Lease, right.Lease)
 	reachableBy, err := mergeReachability(left.ReachableBy, right.ReachableBy)
 	if err != nil {
 		return StableResourceToken{}, err
 	}
 	left.ReachableBy = reachableBy
+	return left, nil
+}
+
+func mergeStableNamespaceToken(left, right StableNamespaceToken) (StableNamespaceToken, error) {
+	if !left.Required {
+		return right, nil
+	}
+	if !right.Required {
+		return left, nil
+	}
+	if left.Identity != right.Identity ||
+		left.ParentIdentity != right.ParentIdentity ||
+		left.Generation != right.Generation {
+		return StableNamespaceToken{}, ErrInvalidCandidate
+	}
+	// Both callbacks are bound to the same captured parent/target/generation.
+	// Retaining either obligation is sufficient; its implementation is
+	// idempotent and the joined resource lease keeps both captures alive.
 	return left, nil
 }
 
