@@ -241,6 +241,39 @@ func TestStableResourceSetCoalescesSameIdentityToGreatestFrontier(t *testing.T) 
 	}
 }
 
+func TestStableResourceSetCoalescesGenericPhysicalSegmentAcrossAuthorityFields(t *testing.T) {
+	handle := newTestStableHandle(27, 96)
+	first, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "collection/1", ResourceID: "value/7",
+		DiagnosticPath: "vlog/27.data", Generation: 4, Handle: handle, RequiredFrontier: 40,
+		ReachabilityField: "meta.user_root.values[7]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "command/9", ResourceID: "external/3",
+		DiagnosticPath: "vlog/27.data", Generation: 4, Handle: handle, RequiredFrontier: 80,
+		ReachabilityField: "command.external_refs[3]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := NewStableResourceSet(first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Tokens(); len(got) != 1 || got[0].RequiredFrontier() != 80 {
+		t.Fatalf("generic physical coalescing=%v", got)
+	}
+	if err := set.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if handle.releases != 2 || handle.pins != 0 {
+		t.Fatalf("coalesced physical owners releases=%d pins=%d", handle.releases, handle.pins)
+	}
+}
+
 func TestStableResourceSetTransferAndSupersessionReleaseEveryPinExactlyOnce(t *testing.T) {
 	oldHandle := newTestStableHandle(10, 64)
 	newHandle := newTestStableHandle(11, 64)
@@ -494,6 +527,164 @@ func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
 	})
 }
 
+func TestCoordinatorRetrySupersessionRetainsAdditiveNamespaceDebt(t *testing.T) {
+	handle := newTestStableHandle(28, 96)
+	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 280}, generation: 3, supported: true}
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Operation: NamespaceRename, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	low, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "collection/1", ResourceID: "value/1",
+		DiagnosticPath: "vlog/28.data", Generation: 4, Handle: handle, RequiredFrontier: 40,
+		Namespace: namespace, ReachabilityField: "meta.user_root.values[1]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowSet, err := NewStableResourceSet(low)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, lowSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	high, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "command/2", ResourceID: "external/2",
+		DiagnosticPath: "vlog/28.data", Generation: 4, Handle: handle, RequiredFrontier: 80,
+		ReachabilityField: "command.external_refs[2]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	highSet, err := NewStableResourceSet(high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(2, 2, 2, 2, 2)}, highSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+		tokens := candidate.Resources()
+		if len(tokens) != 1 {
+			t.Errorf("published physical tokens=%v", tokens)
+			return PublishResult{Outcome: PublishRetryableFailure, Err: errors.New("invalid snapshot")}
+		}
+		switch calls.Add(1) {
+		case 1:
+			if tokens[0].RequiredFrontier() != 40 || tokens[0].NamespaceStable() {
+				t.Errorf("first attempt frontier/stable=%d/%t", tokens[0].RequiredFrontier(), tokens[0].NamespaceStable())
+			}
+			return PublishResult{Outcome: PublishRetryableFailure, Err: errors.New("injected retry")}
+		case 2:
+			if tokens[0].RequiredFrontier() != 80 || tokens[0].NamespaceStable() {
+				t.Errorf("superseding snapshot dropped debt frontier/stable=%d/%t", tokens[0].RequiredFrontier(), tokens[0].NamespaceStable())
+			}
+			if err := tokens[0].SyncNamespace(); err != nil {
+				t.Errorf("sync retained namespace: %v", err)
+				return PublishResult{Outcome: PublishRetryableFailure, Err: err}
+			}
+			return PublishResult{Outcome: PublishSucceeded}
+		default:
+			return PublishResult{Outcome: PublishRetryableFailure, Err: errors.New("unexpected publish")}
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Enqueue(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.WaitThrough(context.Background(), 1); err == nil {
+		t.Fatal("first attempt unexpectedly succeeded")
+	}
+	if err := coordinator.Supersede(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.WaitThrough(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if dir.syncs != 1 || dir.releases != 1 || dir.pins != 0 {
+		t.Fatalf("namespace syncs/releases/pins=%d/%d/%d", dir.syncs, dir.releases, dir.pins)
+	}
+	if handle.releases != 2 || handle.pins != 0 {
+		t.Fatalf("resource releases/pins=%d/%d", handle.releases, handle.pins)
+	}
+	stopClean(t, coordinator)
+}
+
+func TestCoordinatorActiveSnapshotExcludesLaterEnqueueAndRetainsSuffixOwnership(t *testing.T) {
+	firstHandle := newTestStableHandle(30, 32)
+	secondHandle := newTestStableHandle(31, 32)
+	makeCandidate := func(seq uint64, handle *testStableHandle) *PreparedRootCandidate {
+		t.Helper()
+		set, err := NewStableResourceSet(testResourceToken(t, handle, ResourceValueLogSegment, seq, 32, 0, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(seq, seq, seq, seq, seq)}, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return candidate
+	}
+	first := makeCandidate(1, firstHandle)
+	second := makeCandidate(2, secondHandle)
+	started := make(chan struct{})
+	allowFirst := make(chan struct{})
+	var calls atomic.Int32
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+		call := calls.Add(1)
+		tokens := candidate.Resources()
+		if len(tokens) != 1 {
+			t.Errorf("attempt %d resources=%v", call, tokens)
+		} else if call == 1 && tokens[0].Identity() != firstHandle.identity {
+			t.Errorf("first snapshot identity=%+v", tokens[0].Identity())
+		} else if call == 2 && tokens[0].Identity() != secondHandle.identity {
+			t.Errorf("second snapshot identity=%+v", tokens[0].Identity())
+		}
+		if call == 1 {
+			close(started)
+			<-allowFirst
+		}
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Enqueue(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	firstWait := make(chan error, 1)
+	go func() { firstWait <- coordinator.WaitThrough(context.Background(), 1) }()
+	<-started
+	if err := coordinator.Enqueue(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	close(allowFirst)
+	if err := <-firstWait; err != nil {
+		t.Fatal(err)
+	}
+	if firstHandle.releases != 1 || firstHandle.pins != 0 {
+		t.Fatalf("captured owner releases/pins=%d/%d", firstHandle.releases, firstHandle.pins)
+	}
+	if secondHandle.releases != 0 || secondHandle.pins != 1 {
+		t.Fatalf("later owner prematurely released=%d/%d", secondHandle.releases, secondHandle.pins)
+	}
+	if err := coordinator.WaitThrough(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if secondHandle.releases != 1 || secondHandle.pins != 0 {
+		t.Fatalf("suffix owner releases/pins=%d/%d", secondHandle.releases, secondHandle.pins)
+	}
+	stopClean(t, coordinator)
+}
+
 func TestStableResourceSetPreservesLogicalRangesAndSyncsSharedSegmentOnce(t *testing.T) {
 	handle := newTestStableHandle(24, 128)
 	segment := testResourceToken(t, handle, ResourceColumnAssetSegment, 3, 96, 0, nil)
@@ -552,6 +743,47 @@ func TestStableResourceSetRequiresMatchingPhysicalBacking(t *testing.T) {
 		t.Fatalf("logical token without backing=%v", err)
 	}
 	if err := logical.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStableResourceSetPreservesDistinctLogicalRefsToIdenticalRange(t *testing.T) {
+	handle := newTestStableHandle(29, 64)
+	backing := testResourceToken(t, handle, ResourceValueLogSegment, 2, 40, 0, nil)
+	makeRef := func(resourceID, field string) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLogReference, LogicalNamespace: "collection/1", ResourceID: resourceID,
+			DiagnosticPath: "vlog/29.data", Generation: 2, Handle: handle, RangeStart: 8,
+			RequiredFrontier: 40, BackingKind: ResourceValueLogSegment, Digest: []byte{1},
+			ReachabilityField: field,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	first := makeRef("value/1", "meta.user_root.values[1]")
+	second := makeRef("value/2", "meta.system_root.values[2]")
+	set, err := NewStableResourceSet(backing, first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Tokens(); len(got) != 3 {
+		t.Fatalf("distinct logical refs collapsed=%v", got)
+	}
+	if err := set.ValidateReachabilityFields([]string{
+		"meta.user_root.values[1]", "meta.system_root.values[2]",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := handle.syncs; len(got) != 1 || got[0] != 40 {
+		t.Fatalf("identical range physical syncs=%v", got)
+	}
+	if err := set.Release(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -647,6 +879,42 @@ func TestStableResourceSetUsesDeterministicPhysicalAndNamespaceOrder(t *testing.
 		t.Fatalf("namespace order=%s want=%s", got, want)
 	}
 	if err := set.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStableResourceSetRejectsContradictoryNamespaceDebtForOnePhysicalIdentity(t *testing.T) {
+	handle := newTestStableHandle(32, 32)
+	makeToken := func(parentFile uint64, resourceID string) *StableResourceToken {
+		t.Helper()
+		dir := &testNamespaceHandle{
+			identity: StableIdentity{Device: 1, File: parentFile}, generation: 1, supported: true,
+		}
+		namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+			Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 1, Parent: dir,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLogSegment, LogicalNamespace: "producer", ResourceID: resourceID,
+			DiagnosticPath: "vlog/32.data", Generation: 1, Handle: handle, RequiredFrontier: 32,
+			Namespace: namespace, ReachabilityField: "producer.value_log_segment",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	first := makeToken(320, "first")
+	second := makeToken(321, "second")
+	if _, err := NewStableResourceSet(first, second); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("contradictory namespace debt=%v", err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Release(); err != nil {
 		t.Fatal(err)
 	}
 }

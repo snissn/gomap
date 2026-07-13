@@ -39,7 +39,9 @@ type ResourceKind string
 
 const (
 	ResourceValueLogSegment       ResourceKind = "value_log_segment"
+	ResourceValueLogReference     ResourceKind = "value_log_reference"
 	ResourceOuterLeafSegment      ResourceKind = "outer_leaf_segment"
+	ResourceOuterLeafReference    ResourceKind = "outer_leaf_reference"
 	ResourceOuterLeafGeneration   ResourceKind = "outer_leaf_generation"
 	ResourceOuterLeafManifest     ResourceKind = "outer_leaf_manifest"
 	ResourceDictionaryGeneration  ResourceKind = "dictionary_generation"
@@ -50,6 +52,7 @@ const (
 	ResourceTypedColumnCodeAsset  ResourceKind = "typed_column_code_asset"
 	ResourceVectorGraphPack       ResourceKind = "vector_graph_pack"
 	ResourceCommandWALSegment     ResourceKind = "command_wal_segment"
+	ResourceCommandWALReference   ResourceKind = "command_wal_reference"
 	ResourceCommandWALExternalRID ResourceKind = "command_wal_external_rid"
 )
 
@@ -285,7 +288,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		return nil, fmt.Errorf("%w: invalid required frontier/range", ErrInvalidStableResource)
 	}
 	if resourceKindClass(spec.Kind) == resourceClassLogicalRange {
-		if !resourceKindMutable(spec.BackingKind) {
+		if !validResourceBackingKind(spec.Kind, spec.BackingKind) {
 			return nil, fmt.Errorf("%w: logical range requires mutable backing kind", ErrInvalidStableResource)
 		}
 	} else if spec.BackingKind != "" {
@@ -339,11 +342,12 @@ func validDiagnosticPath(path string) bool {
 
 func validResourceKind(kind ResourceKind) bool {
 	switch kind {
-	case ResourceValueLogSegment, ResourceOuterLeafSegment, ResourceOuterLeafGeneration,
+	case ResourceValueLogSegment, ResourceValueLogReference,
+		ResourceOuterLeafSegment, ResourceOuterLeafReference, ResourceOuterLeafGeneration,
 		ResourceOuterLeafManifest, ResourceDictionaryGeneration, ResourceTemplateCatalog,
 		ResourceColumnAssetSegment, ResourceColumnAsset,
 		ResourceTypedColumnValueAsset, ResourceTypedColumnCodeAsset, ResourceVectorGraphPack,
-		ResourceCommandWALSegment, ResourceCommandWALExternalRID:
+		ResourceCommandWALSegment, ResourceCommandWALReference, ResourceCommandWALExternalRID:
 		return true
 	default:
 		return false
@@ -377,11 +381,29 @@ func resourceKindClass(kind ResourceKind) resourceClass {
 	}
 	switch kind {
 	case ResourceColumnAsset, ResourceTypedColumnValueAsset, ResourceTypedColumnCodeAsset,
-		ResourceVectorGraphPack, ResourceCommandWALExternalRID,
+		ResourceVectorGraphPack, ResourceValueLogReference, ResourceOuterLeafReference,
+		ResourceCommandWALReference, ResourceCommandWALExternalRID,
 		ResourceDictionaryGeneration, ResourceTemplateCatalog:
 		return resourceClassLogicalRange
 	default:
 		return resourceClassImmutableFile
+	}
+}
+
+func validResourceBackingKind(kind, backing ResourceKind) bool {
+	switch kind {
+	case ResourceValueLogReference, ResourceDictionaryGeneration, ResourceTemplateCatalog:
+		return backing == ResourceValueLogSegment
+	case ResourceOuterLeafReference:
+		return backing == ResourceOuterLeafSegment
+	case ResourceColumnAsset, ResourceTypedColumnValueAsset, ResourceTypedColumnCodeAsset, ResourceVectorGraphPack:
+		return backing == ResourceColumnAssetSegment
+	case ResourceCommandWALReference:
+		return backing == ResourceCommandWALSegment
+	case ResourceCommandWALExternalRID:
+		return backing == ResourceValueLogSegment || backing == ResourceOuterLeafSegment
+	default:
+		return false
 	}
 }
 
@@ -451,6 +473,13 @@ func NewStableResourceSet(tokens ...*StableResourceToken) (*StableResourceSet, e
 	defer stableOwnershipMu.Unlock()
 	uniqueNamespaces := make(map[*StableNamespaceToken]struct{})
 	for i := range entries {
+		first := entries[i].firstSource
+		if first.owner == nil {
+			return nil, ErrStableResourceOwnershipTransferred
+		}
+		if first.namespace != nil {
+			uniqueNamespaces[first.namespace] = struct{}{}
+		}
 		for _, token := range entries[i].sourceTokens {
 			if token.owner == nil {
 				return nil, ErrStableResourceOwnershipTransferred
@@ -466,6 +495,9 @@ func NewStableResourceSet(tokens ...*StableResourceToken) (*StableResourceSet, e
 		}
 	}
 	for i := range entries {
+		first := entries[i].firstSource
+		entries[i].owners = append(entries[i].owners, first.owner)
+		first.owner = nil
 		for _, token := range entries[i].sourceTokens {
 			owner := token.owner
 			token.owner = nil
@@ -486,46 +518,84 @@ func NewStableResourceSet(tokens ...*StableResourceToken) (*StableResourceSet, e
 
 type normalizedResourceEntry struct {
 	token        *StableResourceToken
+	firstSource  *StableResourceToken
 	sourceTokens []*StableResourceToken
 	owners       []*stablePinOwner
 }
 
+func appendNormalizedResourceSource(entry *normalizedResourceEntry, token *StableResourceToken) {
+	entry.sourceTokens = append(entry.sourceTokens, token)
+}
+
 func normalizeStableResourceTokens(tokens []*StableResourceToken) ([]normalizedResourceEntry, error) {
 	entries := make([]normalizedResourceEntry, 0, len(tokens))
+	logical := make(map[stableResourceLogicalKey]*StableResourceToken, len(tokens))
+	logicalEntries := make(map[stableResourceLogicalKey]int, len(tokens))
+	physical := make(map[stableResourcePhysicalKey]int, len(tokens))
 	for _, token := range tokens {
 		if token == nil {
 			return nil, fmt.Errorf("%w: nil token", ErrInvalidStableResource)
 		}
-		merged := false
-		for _, existing := range entries {
-			if stableResourceSameLogicalKey(existing.token, token) {
-				if existing.token.identity != token.identity ||
-					(resourceKindClass(token.kind) == resourceClassLogicalRange && !stableResourceMetadataCompatible(existing.token, token)) {
-					return nil, fmt.Errorf("%w: logical resource %s/%s changed contract", ErrResourceConflict, token.logicalNamespace, token.resourceID)
-				}
+		logicalKey := stableResourceLogicalKeyOf(token)
+		if existing := logical[logicalKey]; existing != nil {
+			if existing.identity != token.identity ||
+				(resourceKindClass(token.kind) == resourceClassLogicalRange && !stableResourceMetadataCompatible(existing, token)) {
+				return nil, fmt.Errorf("%w: logical resource %s/%s changed contract", ErrResourceConflict, token.logicalNamespace, token.resourceID)
 			}
+		} else {
+			logical[logicalKey] = token
 		}
-		for i := range entries {
-			entry := &entries[i]
-			if !stableResourceSamePhysicalKey(entry.token, token) {
-				continue
+		if resourceKindClass(token.kind) == resourceClassLogicalRange {
+			if i, ok := logicalEntries[logicalKey]; ok {
+				entry := &entries[i]
+				namespace, err := mergeNamespaceToken(entry.token.namespace, token.namespace)
+				if err != nil {
+					return nil, fmt.Errorf("%w: logical resource %s/%s: %v", ErrResourceConflict, token.logicalNamespace, token.resourceID, err)
+				}
+				representative := entry.token
+				if representative.namespace != namespace {
+					clone := *representative
+					clone.namespace = namespace
+					clone.owner = nil
+					representative = &clone
+				}
+				appendNormalizedResourceSource(entry, token)
+				entry.token = representative
+			} else {
+				logicalEntries[logicalKey] = len(entries)
+				entries = append(entries, normalizedResourceEntry{token: token, firstSource: token})
 			}
+			continue
+		}
+		physicalKey := stableResourcePhysicalKeyOf(token)
+		if i, ok := physical[physicalKey]; ok {
+			entry := &entries[i]
 			if !stableResourcePhysicalContractCompatible(entry.token, token) {
 				return nil, fmt.Errorf("%w: kind=%s identity=%+v", ErrResourceConflict, token.kind, token.identity)
 			}
+			namespace, err := mergeNamespaceToken(entry.token.namespace, token.namespace)
+			if err != nil {
+				return nil, fmt.Errorf("%w: kind=%s identity=%+v: %v", ErrResourceConflict, token.kind, token.identity, err)
+			}
+			representative := entry.token
 			if resourceKindMutable(token.kind) {
 				if token.requiredFrontier > entry.token.requiredFrontier {
-					entry.token = token
+					representative = token
 				}
 			} else if resourceKindClass(token.kind) == resourceClassImmutableFile && token.requiredFrontier != entry.token.requiredFrontier {
 				return nil, fmt.Errorf("%w: immutable resource frontier changed", ErrResourceConflict)
 			}
-			entry.sourceTokens = append(entry.sourceTokens, token)
-			merged = true
-			break
-		}
-		if !merged {
-			entries = append(entries, normalizedResourceEntry{token: token, sourceTokens: []*StableResourceToken{token}})
+			if representative.namespace != namespace {
+				clone := *representative
+				clone.namespace = namespace
+				clone.owner = nil
+				representative = &clone
+			}
+			appendNormalizedResourceSource(entry, token)
+			entry.token = representative
+		} else {
+			physical[physicalKey] = len(entries)
+			entries = append(entries, normalizedResourceEntry{token: token, firstSource: token})
 		}
 	}
 	for _, entry := range entries {
@@ -533,21 +603,50 @@ func normalizeStableResourceTokens(tokens []*StableResourceToken) ([]normalizedR
 		if resourceKindClass(token.kind) != resourceClassLogicalRange {
 			continue
 		}
-		found := false
-		for _, backing := range entries {
-			candidate := backing.token
-			if candidate.kind == token.backingKind && candidate.identity == token.identity &&
-				candidate.generation == token.generation && candidate.requiredFrontier >= token.requiredFrontier {
-				found = true
-				break
-			}
+		backingKey := stableResourcePhysicalKey{
+			kind: token.backingKind, identity: token.identity, generation: token.generation,
+			class: resourceClassMutableSegment,
 		}
-		if !found {
+		backingIndex, found := physical[backingKey]
+		if !found || entries[backingIndex].token.requiredFrontier < token.requiredFrontier {
 			return nil, fmt.Errorf("%w: logical resource %s/%s lacks %s backing through %d", ErrMissingResourceDependency, token.logicalNamespace, token.resourceID, token.backingKind, token.requiredFrontier)
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return stableResourceLess(entries[i].token, entries[j].token) })
 	return entries, nil
+}
+
+type stableResourceLogicalKey struct {
+	kind             ResourceKind
+	logicalNamespace string
+	resourceID       string
+	generation       uint64
+}
+
+func stableResourceLogicalKeyOf(token *StableResourceToken) stableResourceLogicalKey {
+	return stableResourceLogicalKey{token.kind, token.logicalNamespace, token.resourceID, token.generation}
+}
+
+type stableResourcePhysicalKey struct {
+	kind       ResourceKind
+	identity   StableIdentity
+	generation uint64
+	rangeStart uint64
+	frontier   uint64
+	class      resourceClass
+}
+
+func stableResourcePhysicalKeyOf(token *StableResourceToken) stableResourcePhysicalKey {
+	key := stableResourcePhysicalKey{kind: token.kind, identity: token.identity, class: resourceKindClass(token.kind)}
+	switch key.class {
+	case resourceClassMutableSegment:
+		key.generation = token.generation
+	case resourceClassLogicalRange:
+		key.generation = token.generation
+		key.rangeStart = token.rangeStart
+		key.frontier = token.requiredFrontier
+	}
+	return key
 }
 
 func stableResourceLess(a, b *StableResourceToken) bool {
@@ -575,42 +674,31 @@ func stableResourceLess(a, b *StableResourceToken) bool {
 	return a.resourceID < b.resourceID
 }
 
-func stableResourceSamePhysicalKey(a, b *StableResourceToken) bool {
-	if a.kind != b.kind || a.identity != b.identity {
-		return false
-	}
-	if resourceKindMutable(a.kind) {
-		return a.generation == b.generation
-	}
-	if resourceKindClass(a.kind) == resourceClassLogicalRange {
-		return a.generation == b.generation && a.rangeStart == b.rangeStart && a.requiredFrontier == b.requiredFrontier
-	}
-	return true
-}
-
-func stableResourceSameLogicalKey(a, b *StableResourceToken) bool {
-	return a.kind == b.kind && a.logicalNamespace == b.logicalNamespace && a.resourceID == b.resourceID &&
-		a.generation == b.generation
-}
-
 func stableResourceMetadataCompatible(a, b *StableResourceToken) bool {
 	return a.logicalNamespace == b.logicalNamespace && a.resourceID == b.resourceID &&
 		a.generation == b.generation && a.rangeStart == b.rangeStart && a.requiredFrontier == b.requiredFrontier &&
 		a.backingKind == b.backingKind && a.reachabilityField == b.reachabilityField &&
-		bytes.Equal(a.digest, b.digest) && sameNamespaceToken(a.namespace, b.namespace)
+		bytes.Equal(a.digest, b.digest)
 }
 
 func stableResourcePhysicalContractCompatible(a, b *StableResourceToken) bool {
-	if !resourceKindMutable(a.kind) {
-		return stableResourceMetadataCompatible(a, b)
+	if resourceKindMutable(a.kind) {
+		return true
 	}
-	// A mutable physical segment may advance while retaining the same stable
-	// identity and producer contract. The union keeps the greatest frontier,
-	// but must not silently combine different logical registrations.
-	return a.logicalNamespace == b.logicalNamespace && a.resourceID == b.resourceID &&
-		a.generation == b.generation && a.rangeStart == b.rangeStart &&
-		a.backingKind == b.backingKind && a.reachabilityField == b.reachabilityField &&
-		bytes.Equal(a.digest, b.digest) && sameNamespaceToken(a.namespace, b.namespace)
+	return stableResourceMetadataCompatible(a, b)
+}
+
+func mergeNamespaceToken(a, b *StableNamespaceToken) (*StableNamespaceToken, error) {
+	if a == nil {
+		return b, nil
+	}
+	if b == nil {
+		return a, nil
+	}
+	if !sameNamespaceToken(a, b) {
+		return nil, errors.New("contradictory namespace obligation")
+	}
+	return a, nil
 }
 
 func sameNamespaceToken(a, b *StableNamespaceToken) bool {
@@ -701,11 +789,12 @@ func (s *StableResourceSet) syncPhysical(op func(*StableResourceToken) error) er
 	selected := make(map[physicalKey]*StableResourceToken)
 	for _, entry := range s.entries {
 		token := entry.token
-		kind := token.kind
 		if resourceKindClass(token.kind) == resourceClassLogicalRange {
-			kind = token.backingKind
+			// The matching physical token is the producer-owned sync adapter.
+			// Logical references preserve authority and digest obligations only.
+			continue
 		}
-		key := physicalKey{kind, token.identity, token.generation}
+		key := physicalKey{token.kind, token.identity, token.generation}
 		if current := selected[key]; current == nil || token.requiredFrontier > current.requiredFrontier {
 			selected[key] = token
 		}
@@ -817,6 +906,7 @@ func TransferUnionStableResourceSets(sets ...*StableResourceSet) (*StableResourc
 	outEntries := make([]stableResourceEntry, len(normalized))
 	for i := range normalized {
 		owners := make([]*stablePinOwner, 0)
+		owners = append(owners, ownersByToken[normalized[i].firstSource]...)
 		for _, source := range normalized[i].sourceTokens {
 			owners = append(owners, ownersByToken[source]...)
 		}
