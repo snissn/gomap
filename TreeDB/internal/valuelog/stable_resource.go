@@ -2,12 +2,15 @@ package valuelog
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 
 // StableResourceRegistration describes the logical placement and immutable
 // metadata attached to the writer's already-open segment. DiagnosticPath is
@@ -78,41 +81,51 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
-	info, err := w.f.Stat()
+	namespace, err := stableValueLogNamespaceToken(w.f, registration)
+	if err != nil {
+		return nil, err
+	}
+	defer namespace.Release()
+	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace)
+}
+
+func stableValueLogResourceToken(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	frontier := rootpublication.NewRIDFrontier(registration.ExternalRIDs)
 	frontier.Bytes = uint64(info.Size())
-
-	var namespace *rootpublication.StableNamespaceToken
-	if registration.NamespaceOperation != rootpublication.NamespaceNone {
-		parent, err := os.Open(filepath.Dir(w.f.Name()))
-		if err != nil {
-			return nil, err
-		}
-		namespace, err = rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
-			Parent: parent, ParentGeneration: registration.ParentGeneration,
-			Operation: registration.NamespaceOperation, OldName: registration.OldName,
-			NewName: filepath.Base(w.f.Name()), DiagnosticPath: filepath.Dir(registration.DiagnosticPath),
-		})
-		_ = parent.Close()
-		if err != nil {
-			return nil, err
-		}
-		if err := namespace.Stabilize(); err != nil {
-			namespace.Release()
-			return nil, err
-		}
-		defer namespace.Release()
-	}
-
 	return rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceValueLog, LogicalLane: registration.LogicalLane,
-		ResourceID: strconv.FormatUint(uint64(w.fileID), 10), Generation: registration.Generation,
-		DiagnosticPath: registration.DiagnosticPath, File: w.f, Frontier: frontier,
+		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
+		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
 	})
+}
+
+func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegistration) (*rootpublication.StableNamespaceToken, error) {
+	if registration.NamespaceOperation == rootpublication.NamespaceNone {
+		return nil, nil
+	}
+	parent, err := os.Open(filepath.Dir(file.Name()))
+	if err != nil {
+		return nil, err
+	}
+	namespace, err := newValueLogStableNamespaceToken(rootpublication.StableNamespaceSpec{
+		Parent: parent, ParentGeneration: registration.ParentGeneration,
+		Operation: registration.NamespaceOperation, OldName: registration.OldName,
+		NewName: filepath.Base(file.Name()), DiagnosticPath: filepath.Dir(registration.DiagnosticPath),
+	})
+	_ = parent.Close()
+	if err != nil {
+		return nil, err
+	}
+	if err := namespace.Stabilize(); err != nil {
+		namespace.Release()
+		return nil, err
+	}
+	return namespace, nil
 }
 
 // RotateToWithStableResources pins the flushed old segment before writer state
@@ -133,18 +146,52 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			return nil, err
 		}
 	}
-	closedToken, err := w.stableResourceTokenAfterFlush(closed)
+	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, nil)
 	if err != nil {
 		return nil, err
 	}
-	if err := w.RotateToWithSync(path, fileID, false); err != nil {
-		closedToken.Release()
-		return nil, err
-	}
-	activeToken, err := w.StableResourceToken(active)
+	prepared, err := openLogFile(path)
 	if err != nil {
 		closedToken.Release()
 		return nil, err
 	}
+	closePrepared := true
+	defer func() {
+		if closePrepared {
+			_ = prepared.Close()
+		}
+	}()
+	preparedInfo, err := prepared.Stat()
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	namespace, err := stableValueLogNamespaceToken(prepared, active)
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	activeToken, err := stableValueLogResourceToken(prepared, fileID, active, namespace)
+	namespace.Release()
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	old := w.f
+	if err := old.Close(); err != nil {
+		activeToken.Release()
+		closedToken.Release()
+		w.f = nil
+		w.bw = nil
+		return nil, fmt.Errorf("valuelog: close old writer during stable rotation: %w", err)
+	}
+	w.f = prepared
+	w.bw = nil
+	w.size = preparedInfo.Size()
+	w.fileID = fileID
+	w.appendMax = defaultBufferSize
+	w.appendBuf = w.appendBuf[:0]
+	w.trimTransientScratchBuffers()
+	closePrepared = false
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
 }
