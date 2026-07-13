@@ -129,6 +129,30 @@ func TestReadCommandWALV2TailWithoutCompleteClassFailsClosed(t *testing.T) {
 	}
 }
 
+func TestReadCommandWALV2TerminalTailCriticalFeatureFlagFailsClosed(t *testing.T) {
+	walDir := t.TempDir()
+	lane0 := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	lane1 := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	writeCommandWALV2Segment(t, lane0, mustCommandWALV2Frame(t, 1, commitlog.CommandDurabilityDurable, nil))
+	tail := mustCommandWALV2Frame(t, 2, commitlog.CommandDurabilityRelaxed, nil)
+	binary.LittleEndian.PutUint64(tail[12:20], 1)
+	writeCommandWALV2Segment(t, lane1, tail)
+	if err := os.Truncate(lane1, 8+56); err != nil {
+		t.Fatal(err)
+	}
+	segments, err := listSegmentsInDir(walDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = readCommandWALV2PhysicalFrames(segments, 0, 0)
+	if !errors.Is(err, commitlog.ErrCommandWALUnsupportedCriticalFlag) {
+		t.Fatalf("terminal tail error=%v, want ErrCommandWALUnsupportedCriticalFlag", err)
+	}
+	if info, statErr := os.Stat(lane1); statErr != nil || info.Size() != 8+56 {
+		t.Fatalf("failed-closed tail stat=(%v, %v), want untouched size %d", info, statErr, 8+56)
+	}
+}
+
 func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 	cuts := []struct {
 		point      durabilitycut.Point

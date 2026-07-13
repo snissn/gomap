@@ -225,6 +225,24 @@ func TestInspectCommandFrameV2TerminalTailRequiresCompleteLSNAndClass(t *testing
 	}
 }
 
+func TestInspectCommandFrameV2TerminalTailRejectsCriticalFeatureFlags(t *testing.T) {
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             2,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint64(frame[12:20], 1)
+	path := writeTruncatedCommandFrameV2ForInspection(t, frame, 56)
+	if _, _, err := InspectCommandFrameV2TerminalTail(path, 0); !errors.Is(err, ErrCommandWALUnsupportedCriticalFlag) {
+		t.Fatalf("inspection error=%v, want ErrCommandWALUnsupportedCriticalFlag", err)
+	}
+}
+
 func writeTruncatedCommandFrameV2ForInspection(t *testing.T, frame []byte, available int64) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
