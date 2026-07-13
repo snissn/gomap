@@ -12,6 +12,28 @@ import (
 
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 
+// NewStableValueLogResourceToken registers an exact already-open persistent
+// value-log handle, including the external-RID fence view used by command WAL.
+func NewStableValueLogResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	switch spec.Reachability {
+	case rootpublication.ReachabilityValueLogPointer:
+		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerValueLog, spec, "authoritative")
+	case rootpublication.ReachabilityCommandWALExternalRIDFence:
+		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerValueLog, spec, "authoritative-transitive")
+	default:
+		return nil, fmt.Errorf("%w: value-log producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
+	}
+}
+
+// NewStableOuterLeafRawResourceToken registers the exact raw outer-leaf log
+// handle before its active lane can rotate.
+func NewStableOuterLeafRawResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	if spec.Reachability != rootpublication.ReachabilityOuterLeafRawPointer {
+		return nil, fmt.Errorf("%w: raw outer-leaf producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
+	}
+	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerOuterLeaf, spec, "authoritative")
+}
+
 // StableResourceRegistration describes the logical placement and immutable
 // metadata attached to the writer's already-open segment. DiagnosticPath is
 // informational and must be relative to the DB root; identity is always read
@@ -97,19 +119,27 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 	}
 	frontier := rootpublication.NewRIDFrontier(registration.ExternalRIDs)
 	frontier.Bytes = uint64(info.Size())
-	domain, kind, classification, err := stableValueLogProducerPolicy(registration.Reachability)
+	domain, kind, _, err := stableValueLogProducerPolicy(registration.Reachability)
 	if err != nil {
 		return nil, err
 	}
 	if registration.Kind != "" && registration.Kind != kind {
 		return nil, fmt.Errorf("%w: valuelog field %q requires kind %q, got %q", rootpublication.ErrResourceConflict, registration.Reachability, kind, registration.Kind)
 	}
-	return rootpublication.NewStableProducerResourceTokenForDomain(domain, rootpublication.StableResourceSpec{
+	spec := rootpublication.StableResourceSpec{
 		Kind: kind, LogicalLane: registration.LogicalLane,
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-	}, classification)
+	}
+	switch domain {
+	case rootpublication.StableProducerValueLog:
+		return NewStableValueLogResourceToken(spec)
+	case rootpublication.StableProducerOuterLeaf:
+		return NewStableOuterLeafRawResourceToken(spec)
+	default:
+		return nil, fmt.Errorf("%w: unsupported valuelog producer domain %q", rootpublication.ErrUnresolvedResource, domain)
+	}
 }
 
 // stableValueLogProducerPolicy is deliberately independent of the generic

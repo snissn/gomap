@@ -11,6 +11,58 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+// NewStableCollectionResourceToken registers an exact index handle for a
+// collection or text root before the corresponding catalog ID is exposed.
+func NewStableCollectionResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	switch spec.Reachability {
+	case rootpublication.ReachabilityCollectionSystemRoot,
+		rootpublication.ReachabilityCollectionPrimaryRoot,
+		rootpublication.ReachabilityCollectionTemplateRoot,
+		rootpublication.ReachabilityCollectionIndexStateRoot,
+		rootpublication.ReachabilityCollectionColumnRoot,
+		rootpublication.ReachabilityCollectionSecondaryRoot,
+		rootpublication.ReachabilityCollectionVectorRoot,
+		rootpublication.ReachabilityCollectionTextDictionary,
+		rootpublication.ReachabilityCollectionTextPosting,
+		rootpublication.ReachabilityCollectionTextPosition:
+		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerCollection, spec, "authoritative-root-backed")
+	default:
+		return nil, fmt.Errorf("%w: collection producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
+	}
+}
+
+// NewStableColumnAssetResourceToken registers an exact open segment for all
+// column, typed-column, graph/HNSW, and query-ready asset references.
+func NewStableColumnAssetResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	classification := ""
+	switch spec.Reachability {
+	case rootpublication.ReachabilityColumnManifest,
+		rootpublication.ReachabilityTypedColumnMultipart,
+		rootpublication.ReachabilityTypedColumnValue,
+		rootpublication.ReachabilityTypedColumnCode,
+		rootpublication.ReachabilityHNSWSearchPack:
+		classification = "authoritative"
+	case rootpublication.ReachabilityVectorGraphPack:
+		classification = "authoritative-transitive"
+	case rootpublication.ReachabilityQueryReadyBase,
+		rootpublication.ReachabilityQueryReadyDelta,
+		rootpublication.ReachabilityQueryReadyConsolidatedBase:
+		classification = "rebuildable-non-authoritative"
+	default:
+		return nil, fmt.Errorf("%w: column-asset producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
+	}
+	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerColumnAsset, spec, classification)
+}
+
+// NewStableLegacyVectorResourceToken registers an exact immutable file in a
+// legacy vector snapshot generation before its manifest becomes reachable.
+func NewStableLegacyVectorResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	if spec.Reachability != rootpublication.ReachabilityLegacyVectorSnapshot {
+		return nil, fmt.Errorf("%w: legacy-vector producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
+	}
+	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerLegacyVector, spec, "authoritative-legacy")
+}
+
 // stableColumnAssetResourceClassification is the checked producer policy for
 // every currently-declared physical column asset kind. Unknown future kinds
 // fail closed until their durability ownership is reviewed.
@@ -57,19 +109,19 @@ func stableColumnAssetDiagnosticPath(ref ColumnAssetRef) string {
 // authority for the ref's range and checksum; tokens for several refs in one
 // segment therefore coalesce by stable identity and maximum frontier.
 func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
-	resourceKind, reachability, classification, err := stableColumnAssetResourceClassification(ref.Kind)
+	resourceKind, reachability, _, err := stableColumnAssetResourceClassification(ref.Kind)
 	if err != nil {
 		return nil, err
 	}
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
-	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerColumnAsset, rootpublication.StableResourceSpec{
+	return NewStableColumnAssetResourceToken(rootpublication.StableResourceSpec{
 		Kind: resourceKind, LogicalLane: ref.Namespace, ResourceID: fmt.Sprint(ref.FileID),
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
-	}, classification)
+	})
 }
 
 func stableColumnAssetNamespaceToken(segmentDir string, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {

@@ -587,14 +587,25 @@ func commandWALDiagnosticPath(path string) string {
 	return filepath.Join("maindb", "wal", filepath.Base(path))
 }
 
+// NewStableCommandWALResourceToken registers an exact active or rotated
+// command-WAL segment handle captured by the journal owner.
+func NewStableCommandWALResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	switch spec.Reachability {
+	case rootpublication.ReachabilityCommandWALActive, rootpublication.ReachabilityCommandWALRotated:
+		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerCommandWAL, spec, "authoritative")
+	default:
+		return nil, fmt.Errorf("%w: command-WAL producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
+	}
+}
+
 func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
 	digest := sha256.Sum256([]byte(fmt.Sprintf("command-wal/lane=%d/segment=%d", j.lane, seq)))
-	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerCommandWAL, rootpublication.StableResourceSpec{
+	return NewStableCommandWALResourceToken(rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceCommandWAL, LogicalLane: fmt.Sprintf("lane-%d", j.lane),
 		ResourceID: fmt.Sprintf("%d:%d", j.lane, seq), Generation: seq,
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
-	}, "authoritative")
+	})
 }
 
 func (j *CommandJournal) lastReservedLSNLocked() uint64 {
