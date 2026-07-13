@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -72,14 +73,22 @@ func (h *testStableHandle) TryUnlink() error {
 }
 
 type testNamespaceHandle struct {
-	identity  StableIdentity
-	validates int
-	syncs     int
-	supported bool
+	mu         sync.Mutex
+	identity   StableIdentity
+	generation uint64
+	validates  int
+	syncs      int
+	pins       int
+	releases   int
+	supported  bool
+	syncErr    error
 }
 
 func (h *testNamespaceHandle) StableIdentity() (StableIdentity, error) { return h.identity, nil }
+func (h *testNamespaceHandle) StableGeneration() (uint64, error)       { return h.generation, nil }
 func (h *testNamespaceHandle) ValidateNamespacePersistence() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.validates++
 	if !h.supported {
 		return ErrNamespacePersistenceUnsupported
@@ -87,10 +96,28 @@ func (h *testNamespaceHandle) ValidateNamespacePersistence() error {
 	return nil
 }
 func (h *testNamespaceHandle) SyncNamespace() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if !h.supported {
 		return ErrNamespacePersistenceUnsupported
 	}
 	h.syncs++
+	if h.syncErr != nil {
+		return h.syncErr
+	}
+	return nil
+}
+func (h *testNamespaceHandle) Pin() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pins++
+	return nil
+}
+func (h *testNamespaceHandle) Release() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pins--
+	h.releases++
 	return nil
 }
 
@@ -132,9 +159,9 @@ func TestStableResourceTokenPinsIdentityInsteadOfReopeningDiagnosticPath(t *test
 }
 
 func TestStableNamespaceTokenSeparatesFileDataFromNameDurability(t *testing.T) {
-	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 90}, supported: true}
+	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 90}, generation: 3, supported: true}
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", Parent: dir,
+		Operation: NamespaceCreate, ParentDiagnosticPath: "vlog", ParentGeneration: 3, Parent: dir,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -345,6 +372,56 @@ func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
 			t.Fatalf("stop abandonment releases=%d pins=%d", handle.releases, handle.pins)
 		}
 	})
+
+	t.Run("multi candidate retry borrows then success releases originals", func(t *testing.T) {
+		firstHandle := newTestStableHandle(21, 32)
+		secondHandle := newTestStableHandle(22, 32)
+		firstSet, err := NewStableResourceSet(testResourceToken(t, firstHandle, ResourceValueLogSegment, 1, 32, 1, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		secondSet, err := NewStableResourceSet(testResourceToken(t, secondHandle, ResourceValueLogSegment, 2, 32, 1, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, firstSet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(2, 2, 2, 2, 2)}, secondSet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var calls atomic.Int32
+		coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			if calls.Add(1) == 1 {
+				return PublishResult{Outcome: PublishRetryableFailure, Err: errors.New("injected")}
+			}
+			return PublishResult{Outcome: PublishSucceeded}
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), first); err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), second); err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.WaitThrough(context.Background(), 2); err == nil {
+			t.Fatal("first grouped attempt unexpectedly succeeded")
+		}
+		if firstHandle.pins != 1 || secondHandle.pins != 1 || firstHandle.releases != 0 || secondHandle.releases != 0 {
+			t.Fatalf("retry ownership first=%d/%d second=%d/%d", firstHandle.pins, firstHandle.releases, secondHandle.pins, secondHandle.releases)
+		}
+		if err := coordinator.WaitThrough(context.Background(), 2); err != nil {
+			t.Fatal(err)
+		}
+		if firstHandle.pins != 0 || secondHandle.pins != 0 || firstHandle.releases != 1 || secondHandle.releases != 1 {
+			t.Fatalf("success ownership first=%d/%d second=%d/%d", firstHandle.pins, firstHandle.releases, secondHandle.pins, secondHandle.releases)
+		}
+		stopClean(t, coordinator)
+	})
 }
 
 func TestStableResourcePinBlocksConcurrentUnlinkAndReleasesExactlyOnce(t *testing.T) {
@@ -368,11 +445,100 @@ func TestStableResourcePinBlocksConcurrentUnlinkAndReleasesExactlyOnce(t *testin
 }
 
 func TestUnsupportedNamespacePersistenceFailsClosed(t *testing.T) {
-	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 99}, supported: false}
+	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 99}, generation: 4, supported: false}
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Operation: NamespaceRename, ParentDiagnosticPath: "assets", Parent: dir,
+		Operation: NamespaceRename, ParentDiagnosticPath: "assets", ParentGeneration: 4, Parent: dir,
 	})
 	if !errors.Is(err, ErrNamespacePersistenceUnsupported) || namespace != nil {
 		t.Fatalf("unsupported namespace token=(%v,%v)", namespace, err)
+	}
+}
+
+func TestStableNamespaceSyncSerializesConcurrentCallers(t *testing.T) {
+	dir := &testNamespaceHandle{identity: StableIdentity{Device: 1, File: 100}, generation: 5, supported: true}
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Operation: NamespaceCreate, ParentDiagnosticPath: "assets", ParentGeneration: 5, Parent: dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan error, 32)
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- namespace.Sync()
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dir.syncs != 1 {
+		t.Fatalf("concurrent namespace sync calls=%d want 1", dir.syncs)
+	}
+	if err := namespace.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if dir.pins != 0 || dir.releases != 1 {
+		t.Fatalf("namespace pins=%d releases=%d", dir.pins, dir.releases)
+	}
+}
+
+func TestStableResourceSetFailedConstructionLeavesUnconsumedTokenOwned(t *testing.T) {
+	firstHandle := newTestStableHandle(17, 32)
+	first := testResourceToken(t, firstHandle, ResourceValueLogSegment, 1, 32, 1, nil)
+	owned, err := NewStableResourceSet(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHandle := newTestStableHandle(18, 32)
+	second := testResourceToken(t, secondHandle, ResourceValueLogSegment, 2, 32, 1, nil)
+	if _, err := NewStableResourceSet(first, second); !errors.Is(err, ErrStableResourceOwnershipTransferred) {
+		t.Fatalf("partial transfer construction=%v", err)
+	}
+	if err := second.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if secondHandle.releases != 1 || secondHandle.pins != 0 {
+		t.Fatalf("unconsumed token releases=%d pins=%d", secondHandle.releases, secondHandle.pins)
+	}
+	if err := owned.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTransferUnionDeduplicatesRepeatedSourceSet(t *testing.T) {
+	handle := newTestStableHandle(19, 32)
+	set, err := NewStableResourceSet(testResourceToken(t, handle, ResourceValueLogSegment, 1, 32, 1, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	union, err := TransferUnionStableResourceSets(set, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := union.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if handle.releases != 1 || handle.pins != 0 {
+		t.Fatalf("duplicate transfer releases=%d pins=%d", handle.releases, handle.pins)
+	}
+}
+
+func TestStableResourceKindIsClosedAndInventoryChecked(t *testing.T) {
+	handle := newTestStableHandle(20, 32)
+	if _, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceKind("future_unregistered_kind"), LogicalNamespace: "future", ResourceID: "1",
+		Generation: 1, Handle: handle, RequiredFrontier: 32, Digest: []byte{1}, ReachabilityField: "meta.future",
+	}); !errors.Is(err, ErrInvalidStableResource) {
+		t.Fatalf("unregistered kind=%v", err)
+	}
+	if handle.pins != 0 {
+		t.Fatalf("unregistered kind acquired pins=%d", handle.pins)
 	}
 }
