@@ -10,8 +10,51 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCertifyStableCreationNamespaceRetainsProofAfterCompletedSyncCut(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := writer.RotateToWithSync(filepath.Join(dir, "000002.vlog"), 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if !writer.creationUncertified || writer.creationProof != nil {
+		t.Fatalf("relaxed rotation state proof=%v uncertified=%t", writer.creationProof, writer.creationUncertified)
+	}
+	before := writer.DurabilityStats().DirectorySyncCalls
+	injected := errors.New("injected after namespace sync")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.AfterNewFileDirectorySync {
+			return injected
+		}
+		return nil
+	})
+	err = writer.CertifyStableCreationNamespace()
+	restore()
+	if !errors.Is(err, injected) {
+		t.Fatalf("certify error=%v want injected cut", err)
+	}
+	if writer.creationProof == nil || writer.creationUncertified {
+		t.Fatalf("completed sync proof=%v uncertified=%t", writer.creationProof, writer.creationUncertified)
+	}
+	after := writer.DurabilityStats().DirectorySyncCalls
+	if after != before+1 {
+		t.Fatalf("directory syncs before=%d after=%d want +1", before, after)
+	}
+	if err := writer.CertifyStableCreationNamespace(); err != nil {
+		t.Fatalf("certify retry: %v", err)
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != after {
+		t.Fatalf("certify retry repeated sync: before=%d after=%d", after, got)
+	}
+}
 
 func TestOrdinaryRotationRefreshesStableParentBeforeStableRotation(t *testing.T) {
 	root := t.TempDir()
