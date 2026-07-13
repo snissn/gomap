@@ -3,10 +3,70 @@ package rootpublication
 import (
 	"crypto/sha256"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
+
+func declaredStringConstants(t *testing.T, typeName string) map[string]string {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "resource_token.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse resource_token.go: %v", err)
+	}
+	declared := make(map[string]string)
+	for _, declaration := range parsed.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.CONST {
+			continue
+		}
+		for _, rawSpec := range general.Specs {
+			spec := rawSpec.(*ast.ValueSpec)
+			identifier, ok := spec.Type.(*ast.Ident)
+			if !ok || identifier.Name != typeName || len(spec.Names) != 1 || len(spec.Values) != 1 {
+				continue
+			}
+			literal, ok := spec.Values[0].(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				t.Fatalf("%s constant %s is not an explicit string literal", typeName, spec.Names[0].Name)
+			}
+			value, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				t.Fatalf("unquote %s: %v", spec.Names[0].Name, err)
+			}
+			declared[spec.Names[0].Name] = value
+		}
+	}
+	return declared
+}
+
+func TestEveryDeclaredResourceConstantHasCanonicalPolicy(t *testing.T) {
+	declaredFields := declaredStringConstants(t, "ReachabilityField")
+	declaredKinds := declaredStringConstants(t, "ResourceKind")
+	canonicalFields := make(map[string]struct{}, len(canonicalReachabilityRequirements))
+	canonicalKinds := make(map[string]struct{}, len(canonicalReachabilityRequirements))
+	for _, requirement := range canonicalReachabilityRequirements {
+		canonicalFields[string(requirement.Field)] = struct{}{}
+		canonicalKinds[string(requirement.Kind)] = struct{}{}
+	}
+	for name, value := range declaredFields {
+		if _, ok := canonicalFields[value]; !ok {
+			t.Errorf("declared reachability constant %s=%q has no canonical policy", name, value)
+		}
+	}
+	for name, value := range declaredKinds {
+		if _, ok := canonicalKinds[value]; !ok {
+			t.Errorf("declared resource kind %s=%q has no canonical policy", name, value)
+		}
+	}
+	if len(declaredFields) != len(canonicalFields) {
+		t.Errorf("declared reachability constants=%d canonical fields=%d", len(declaredFields), len(canonicalFields))
+	}
+}
 
 func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 	rows := StableResourceInventory()
