@@ -331,7 +331,10 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	identity.Generation = spec.Generation
 	flush := spec.FlushThrough
 	if flush == nil {
-		flush = func(file *os.File, _ DurableFrontier) error { return file.Sync() }
+		// Concrete producers drain userspace buffers before registration. The
+		// publication flush phase therefore has no additional file primitive;
+		// SyncThrough below owns the single default content fsync.
+		flush = func(*os.File, DurableFrontier) error { return nil }
 	}
 	syncThrough := spec.SyncThrough
 	if syncThrough == nil {
@@ -529,6 +532,7 @@ func maxFrontier(older, newer DurableFrontier) DurableFrontier {
 
 type namespacePersistenceAdapter interface {
 	Identity(*os.File) (StableIdentity, error)
+	ValidateLink(*os.File, *os.File, string) error
 	Sync(*os.File) error
 }
 
@@ -538,12 +542,17 @@ func (nativeNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
 	return stableIdentityFromFile(file)
 }
 
+func (nativeNamespaceAdapter) ValidateLink(parent, resource *os.File, name string) error {
+	return validateStableChildLink(parent, resource, name)
+}
+
 func (nativeNamespaceAdapter) Sync(file *os.File) error {
 	return syncStableNamespace(file)
 }
 
 type StableNamespaceSpec struct {
 	Parent           *os.File
+	LinkedResource   *os.File
 	ParentGeneration uint64
 	Operation        NamespaceOperation
 	OldName          string
@@ -588,6 +597,11 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 	if err := validateDiagnosticPath(spec.DiagnosticPath); err != nil {
 		return nil, err
 	}
+	if spec.LinkedResource != nil {
+		if err := adapter.ValidateLink(spec.Parent, spec.LinkedResource, spec.NewName); err != nil {
+			return nil, err
+		}
+	}
 	pinned, err := duplicateStableFile(spec.Parent)
 	if err != nil {
 		return nil, fmt.Errorf("duplicate namespace handle: %w", err)
@@ -603,6 +617,41 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 		oldName: spec.OldName, newName: spec.NewName,
 		diagnosticPath: filepath.ToSlash(spec.DiagnosticPath), adapter: adapter,
 	}, nil
+}
+
+// OpenStableChildFile opens or creates name relative to the exact already-open
+// parent directory handle. Platforms without a real relative-directory handle
+// primitive return ErrNamespacePersistenceUnsupported rather than reopening a
+// diagnostic path.
+func OpenStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
+	if parent == nil || name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return nil, fmt.Errorf("%w: stable child requires a base name and exact parent handle", ErrUnresolvedResource)
+	}
+	return openStableChildFile(parent, name, flags, perm)
+}
+
+func validateStableChildLink(parent, resource *os.File, name string) error {
+	linked, err := OpenStableChildFile(parent, name, os.O_RDONLY, 0)
+	if err != nil {
+		if errors.Is(err, ErrNamespacePersistenceUnsupported) {
+			return err
+		}
+		return fmt.Errorf("%w: open %q relative to exact parent: %v", ErrResourceConflict, name, err)
+	}
+	defer linked.Close()
+	linkedIdentity, err := stableIdentityFromFile(linked)
+	if err != nil {
+		return err
+	}
+	resourceIdentity, err := stableIdentityFromFile(resource)
+	if err != nil {
+		return err
+	}
+	if linkedIdentity.Platform != resourceIdentity.Platform || linkedIdentity.VolumeID != resourceIdentity.VolumeID ||
+		linkedIdentity.ObjectID != resourceIdentity.ObjectID {
+		return fmt.Errorf("%w: resource %q is not linked from exact parent", ErrResourceConflict, name)
+	}
+	return nil
 }
 
 func (token *StableNamespaceToken) ParentIdentity() StableIdentity { return token.parentIdentity }

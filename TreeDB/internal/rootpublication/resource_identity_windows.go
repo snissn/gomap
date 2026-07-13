@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
+	return nil, fmt.Errorf("%w: relative directory-handle open is unavailable", ErrNamespacePersistenceUnsupported)
+}
+
 type stableWindowsFileIDInfo struct {
 	VolumeSerialNumber uint64
 	FileID             [16]byte

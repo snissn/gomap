@@ -4,6 +4,10 @@ package rootpublication
 
 import "os"
 
+func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
+	return nil, ErrNamespacePersistenceUnsupported
+}
+
 func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }

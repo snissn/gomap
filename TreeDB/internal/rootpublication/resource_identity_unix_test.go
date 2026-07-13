@@ -1,0 +1,52 @@
+//go:build darwin || linux || freebsd || netbsd || openbsd
+
+package rootpublication
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestOpenStableChildFileUsesCapturedParentAfterPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	originalDir := filepath.Join(root, "segments")
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := os.Open(originalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	movedDir := filepath.Join(root, "segments-moved")
+	if err := os.Rename(originalDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	child, err := OpenStableChildFile(parent, "000001.vlog", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	if _, err := os.Stat(filepath.Join(movedDir, "000001.vlog")); err != nil {
+		t.Fatalf("captured-parent child: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(originalDir, "000001.vlog")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement path unexpectedly received child: %v", err)
+	}
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: child, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "000001.vlog", DiagnosticPath: "segments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer namespace.Release()
+	if err := namespace.Stabilize(); err != nil {
+		t.Fatal(err)
+	}
+}

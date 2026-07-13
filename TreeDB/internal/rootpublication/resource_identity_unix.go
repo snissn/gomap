@@ -11,6 +11,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
+	if parent == nil {
+		return nil, os.ErrInvalid
+	}
+	fd, err := unix.Openat(int(parent.Fd()), name, flags|unix.O_CLOEXEC, uint32(perm.Perm()))
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), parent.Name()+string(os.PathSeparator)+name), nil
+}
+
 func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid
