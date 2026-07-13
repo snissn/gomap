@@ -914,6 +914,23 @@ func (r *QueryReadyOperator) reduceDirectPart(partIndex int, part *queryReadyExe
 	}
 	groupColumn := part.direct[r.groupProjected]
 	groupTranslation := r.groupDomain.byPart[partIndex]
+	if r.request.Kind == QueryReadyOperatorGroupCount && selected == nil && groupColumn.codeWidth == 1 {
+		values := groupColumn.values[:rows]
+		for row, localCode := range values {
+			group := r.groupDomain.emptyGlobal
+			if !groupColumn.absentAtUnchecked(row) {
+				if int(localCode) >= len(groupTranslation) || groupTranslation[localCode] < 0 {
+					return fmt.Errorf("typedcolumn: query-ready direct group code=%d outside domain", localCode)
+				}
+				group = groupTranslation[localCode]
+				stats.CodeTranslations++
+			} else if group < 0 {
+				return errors.New("typedcolumn: query-ready direct nullable group has no empty domain")
+			}
+			r.counts[group]++
+		}
+		return nil
+	}
 	for index := 0; index < selectedRows; index++ {
 		row := rowAt(index)
 		group := r.groupDomain.emptyGlobal
