@@ -67,7 +67,10 @@ func TestCleanupRewriteCreatedSegmentRespectsStableIdentityPin(t *testing.T) {
 }
 
 func TestCleanupRewriteCreatedManagerSegmentPostUnlinkCutRequiresRecovery(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), leafVLogDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll leaf_vlog: %v", err)
+	}
 	fileID, err := valuelog.EncodeFileID(42, 1)
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
@@ -86,7 +89,7 @@ func TestCleanupRewriteCreatedManagerSegmentPostUnlinkCutRequiresRecovery(t *tes
 	wantErr := errors.New("injected post-unlink cut")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Namespace == durabilitycut.NamespaceUnlink &&
-			event.Resource == durabilitycut.ResourceValueLog &&
+			event.Resource == durabilitycut.ResourceOuterLeaf &&
 			filepath.Clean(event.OldPath) == filepath.Clean(path) {
 			return wantErr
 		}

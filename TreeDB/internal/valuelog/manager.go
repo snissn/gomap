@@ -2542,10 +2542,17 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 
 var removeSegmentPath = os.Remove
 
+func segmentNamespaceResource(path string) durabilitycut.Resource {
+	if filepath.Base(filepath.Dir(filepath.Clean(path))) == "leaf_vlog" {
+		return durabilitycut.ResourceOuterLeaf
+	}
+	return durabilitycut.ResourceValueLog
+}
+
 func removeSegmentFileOnce(path string) (bool, error) {
 	err := removeSegmentPath(path)
 	if err == nil {
-		return true, durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceValueLog, filepath.Dir(path), path, "")
+		return true, durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, segmentNamespaceResource(path), filepath.Dir(path), path, "")
 	}
 	if os.IsNotExist(err) {
 		return true, nil

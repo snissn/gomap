@@ -296,7 +296,7 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		return false, removeErr
 	}
 	cleanupErr := os.Remove(quarantineDir)
-	cutErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceValueLog, parent, path, "")
+	cutErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, segmentNamespaceResource(path), parent, path, "")
 	return true, errors.Join(cleanupErr, cutErr)
 }
 
