@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
 func runAfterCloseWinsWriteAdmission(t *testing.T, db *DB, call func() error) {
@@ -67,8 +68,9 @@ func TestExclusiveWritersRejectCloseAfterQueuingForWriteMu(t *testing.T) {
 	db.mu.RUnlock()
 
 	newIter := func() iterator.UnsafeIterator {
-		return mustFrozenSystemMemtable(t).NewIterator(nil, nil)
+		return &closeCountingUnsafeIterator{}
 	}
+	maintenanceRootDelta := mustFrozenSystemMemtable(t, "maintenance/root", "value")
 	tests := []struct {
 		name string
 		call func() error
@@ -76,6 +78,23 @@ func TestExclusiveWritersRejectCloseAfterQueuingForWriteMu(t *testing.T) {
 		{name: "commit", call: func() error { return db.Commit(userRoot) }},
 		{name: "checkpoint", call: db.Checkpoint},
 		{name: "compact-index", call: db.CompactIndex},
+		{name: "compact-storage-plan", call: func() error {
+			_, err := db.CompactStoragePlan(nil, CompactStorageOptions{})
+			return err
+		}},
+		{name: "set-leaf-page-log", call: func() error {
+			db.writeMu.RLock()
+			beforeVersion := db.leafPageLogVersion
+			db.writeMu.RUnlock()
+			db.SetLeafPageLog(replayInlineLeafPageLog{})
+			db.writeMu.RLock()
+			unchanged := db.leafPageLogVersion == beforeVersion
+			db.writeMu.RUnlock()
+			if unchanged {
+				return ErrClosed
+			}
+			return nil
+		}},
 		{name: "command-wal-roots", call: func() error {
 			return db.publishCommandWALRoots(userRoot, systemRoot, appliedLSN, nil, false)
 		}},
@@ -95,6 +114,20 @@ func TestExclusiveWritersRejectCloseAfterQueuingForWriteMu(t *testing.T) {
 			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
 				return nil, errors.New("system builder ran after Close won write admission")
 			})
+			return err
+		}},
+		{name: "storage-maintenance-ordered-root-delta-group", call: func() error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+				storagemaintenance.ColumnAssetRewritePlan(),
+				[]StorageMaintenanceRootDeltaPublishInput{{
+					BaseRoot: 0,
+					Iter:     maintenanceRootDelta.NewIterator(nil, nil),
+				}},
+				nil,
+				func([]uint64) (iterator.UnsafeIterator, error) {
+					return nil, errors.New("maintenance system builder ran after Close won write admission")
+				},
+			)
 			return err
 		}},
 		{name: "ordered-root-delta-batch-group", call: func() error {

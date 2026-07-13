@@ -645,12 +645,15 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 		installed = wrapLeafPageLogWithLaneSelection(wrapLeafPageLogWithRecordLengthHints(db, log))
 	}
 	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if db.closing.Load() {
+		return
+	}
 	db.leafPageLog = installed
 	db.leafPageLogVersion++
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
 		idx.zipper.SetLeafPageLog(installed)
 	}
-	db.writeMu.Unlock()
 }
 
 func (db *DB) leafValueLogLanes() []LeafPageLog {

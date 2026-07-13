@@ -212,14 +212,20 @@ func (db *DB) runCompactStorageAuditProtectedBasisHook(stage string, attempt int
 }
 
 func (db *DB) prepareCompactStorageAuditTopology() error {
-	if db == nil || db.valueLogManager == nil {
+	if db == nil {
+		return nil
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
+	if db.valueLogManager == nil {
 		return nil
 	}
 	refreshed := false
 	if db.indexOuterLeavesInValueLog {
-		db.writeMu.Lock()
 		if err := db.valueLogManager.Refresh(); err != nil {
-			db.writeMu.Unlock()
 			return err
 		}
 		refreshed = true
@@ -228,10 +234,8 @@ func (db *DB) prepareCompactStorageAuditTopology() error {
 			commitSeq = state.CommitSeq
 		}
 		if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
-			db.writeMu.Unlock()
 			return err
 		}
-		db.writeMu.Unlock()
 	}
 	managerSet := db.valueLogManager.CurrentSetNoRefresh()
 	if managerSet == nil {

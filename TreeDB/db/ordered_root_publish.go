@@ -2049,10 +2049,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	defer finishPublish()
-	if !storageMaintenance {
-		if err = db.checkWriteAdmissionLocked(); err != nil {
-			return 0, nil, preApplyErr(err)
-		}
+	if err = db.checkWriteAdmissionLocked(); err != nil {
+		return 0, nil, preApplyErr(err)
 	}
 
 	if db.readOnly {
