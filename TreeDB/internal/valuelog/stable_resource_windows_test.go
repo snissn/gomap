@@ -96,3 +96,44 @@ func TestOrdinaryValueLogRotationRemainsUsableAndStableRotationFailsClosed(t *te
 		t.Fatalf("unsupported stable rotation exposed successor: %v", err)
 	}
 }
+
+func TestUnsupportedStableRotationDoesNotLeakRegistryOwnership(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 2,
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("unsupported stable rotation returned owned resources")
+	}
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("stable rotation error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("unsupported rotation retained %d pins", got)
+	}
+	if got := registry.ActiveIdentities(); got != 1 {
+		t.Fatalf("unsupported rotation identities=%d want active writer only", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("closed writer retained %d identities", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+}

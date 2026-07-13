@@ -9,11 +9,12 @@ Recovery is executed during `Open` for read-write handles.
 Current high-level order for non-collection cached WAL:
 
 1. recover index metadata/root state,
-2. discover value-log and commit-log segments from their canonical directories,
-3. validate reachable value-log and split leaf-log records needed by replay,
-4. replay cached commit logs if WAL mode permits,
-5. expose recovered backend roots and memtables,
-6. clean obsolete commit-log segments only after replay permits it.
+2. reconcile identity-encoded value-log delete quarantines on read-write open,
+3. discover value-log and commit-log segments from their canonical directories,
+4. validate reachable value-log and split leaf-log records needed by replay,
+5. replay cached commit logs if WAL mode permits,
+6. expose recovered backend roots and memtables,
+7. clean obsolete commit-log segments only after replay permits it.
 
 Target user-command WAL extension:
 
@@ -116,6 +117,15 @@ From chosen meta:
 - set allocator head from `FreelistHeadID`.
 
 ## 3. WAL Segment Discovery
+
+Before a writable value-log manager scans a segment directory, it reconciles
+any same-parent delete intent named
+`.<segment-name>.delete-<volume-id>-<object-id>`. If the quarantined file has
+the encoded physical identity, recovery completes its deletion. If it has a
+different identity and the canonical name is absent, recovery restores it. A
+canonical and quarantined pair with conflicting identities, or malformed
+quarantine contents, fails closed rather than guessing. Reconciliation runs
+before segment handles become visible to publication or maintenance.
 
 Commit-log segments are discovered from `<maindb>/wal` by filename parsing.
 Value-log segments are discovered from `<maindb>/value_vlog`; split leaf-log
@@ -439,6 +449,13 @@ cleaned.
 ## 7. Read-Only Open
 
 Read-only open must not perform mutating command WAL replay.
+
+Read-only open also does not reconcile value-log delete quarantines. If any
+recognized identity-encoded quarantine is present, both shared-lock and
+no-lock read-only open return public `ErrRecoveryRequired` and leave the
+canonical path, quarantine directory, and quarantined file unchanged. An
+operator may preserve/copy the directory and then use a read-write open to run
+the deterministic reconciliation.
 
 Before exposing state, read-only open must scan command WAL segment metadata,
 cleanup metadata, and `AppliedLSN` enough to determine whether any complete

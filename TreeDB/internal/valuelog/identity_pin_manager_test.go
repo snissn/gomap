@@ -711,14 +711,11 @@ func TestManagerStableDeleteRejectsReplacedPath(t *testing.T) {
 	}
 	dir := t.TempDir()
 	fileID, path := writeIdentityPinTestSegment(t, dir)
-	manager, err := NewManager(dir)
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	if err := manager.SetStableResourcePinRegistry(rootpublication.NewIdentityPinRegistry()); err != nil {
-		t.Fatal(err)
-	}
 	oldPath := path + ".old"
 	if err := os.Rename(path, oldPath); err != nil {
 		t.Fatal(err)
