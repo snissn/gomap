@@ -134,6 +134,31 @@ func TestPageAndNamedRootPoliciesRemainAdjacent(t *testing.T) {
 	}
 }
 
+func TestAdjacentDBPublicationIssueRouting(t *testing.T) {
+	wantIssue := map[ReachabilityField]string{
+		ReachabilityMetaPage:   "#3679",
+		ReachabilityUserRoot:   "#3679",
+		ReachabilitySystemRoot: "#3679",
+		ReachabilityFreelist:   "#3678",
+	}
+	for field, issue := range wantIssue {
+		row, ok := stableResourceInventoryRow(field)
+		if !ok {
+			t.Fatalf("missing inventory row for %q", field)
+		}
+		if !strings.Contains(row.Producer, issue) {
+			t.Errorf("field %q producer=%q want routing to %s", field, row.Producer, issue)
+		}
+		other := "#3678"
+		if issue == other {
+			other = "#3679"
+		}
+		if strings.Contains(row.Producer, other) {
+			t.Errorf("field %q producer=%q also routes to %s", field, row.Producer, other)
+		}
+	}
+}
+
 func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 	rows := StableResourceInventory()
 	if len(rows) == 0 {

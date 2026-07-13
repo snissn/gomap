@@ -7,15 +7,17 @@ import (
 )
 
 // NewStableDBResourceToken registers the exact already-open index handle.
-// Meta/root/freelist publication stays adjacent (#3678) because those fields
-// have no independent external identity to register.
+// Meta/root publication stays adjacent (#3679), while freelist/COW publication
+// stays adjacent (#3678); neither has an independent external identity here.
 func NewStableDBResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	switch spec.Reachability {
 	case rootpublication.ReachabilityIndexFile:
 		return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerDB, spec, "authoritative")
 	case rootpublication.ReachabilityMetaPage, rootpublication.ReachabilityUserRoot,
-		rootpublication.ReachabilitySystemRoot, rootpublication.ReachabilityFreelist:
-		return nil, fmt.Errorf("%w: %s is owned by adjacent root/freelist publication issue #3678", rootpublication.ErrResourceExcluded, spec.Reachability)
+		rootpublication.ReachabilitySystemRoot:
+		return nil, fmt.Errorf("%w: %s is owned by adjacent root publication issue #3679", rootpublication.ErrResourceExcluded, spec.Reachability)
+	case rootpublication.ReachabilityFreelist:
+		return nil, fmt.Errorf("%w: %s is owned by adjacent freelist/COW publication issue #3678", rootpublication.ErrResourceExcluded, spec.Reachability)
 	default:
 		return nil, fmt.Errorf("%w: db producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
 	}
