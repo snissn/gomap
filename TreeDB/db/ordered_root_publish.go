@@ -2607,6 +2607,10 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}
 
 	db.writeMu.RLock()
+	if err = db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.RUnlock()
+		return 0, nil, false, err
+	}
 	if db.readOnly {
 		db.writeMu.RUnlock()
 		err = ErrReadOnly

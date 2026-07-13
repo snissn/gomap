@@ -3581,8 +3581,8 @@ func (db *DB) IsClosing() bool {
 }
 
 // checkWriteAdmissionLocked rejects writers that lost the race with Close.
-// Callers must hold writeMu exclusively so a successful admission remains
-// valid until their write-critical section completes.
+// Callers must hold writeMu for reading or writing so a successful admission
+// remains valid until their write-critical section completes.
 func (db *DB) checkWriteAdmissionLocked() error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
