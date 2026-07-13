@@ -298,6 +298,7 @@ jobs:
               root_all_file="$(make_tmp)"
               root_test_file="$(make_tmp)"
               root_pin_file="$(make_tmp)"
+              root_windows_pin_file="$(make_tmp)"
               db_all_file="$(make_tmp)"
               db_test_file="$(make_tmp)"
               db_pin_file="$(make_tmp)"
@@ -305,6 +306,8 @@ jobs:
               go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
               ci_list ../.github/ci/treedb_root_weighted_shard0_tests.txt > "$root_pin_file"
+              ci_list ../.github/ci/treedb_root_windows_weighted_shard0_tests.txt > "$root_windows_pin_file"
+              sort -u "$root_pin_file" "$root_windows_pin_file" -o "$root_pin_file"
               ci_list ../.github/ci/treedb_db_weighted_shard0_tests.txt > "$db_pin_file"
               if [ "$package_shard_count" -eq 2 ]; then
                 case "$package_shard_index" in
