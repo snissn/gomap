@@ -81,6 +81,29 @@ func TestCommitAtGetAtGoldenHistories(t *testing.T) {
 	requireResult(t, store, key, 30, Present, 30, []byte("thirty-replaced"))
 }
 
+func TestGetAtUsesPointSuccessorWithoutIteratorRotation(t *testing.T) {
+	db := openTestDB(t, t.TempDir(), treedb.DurabilityWALOffRelaxed)
+	defer db.Close()
+	store := New(db)
+	if err := store.CommitAt(7, []Mutation{{Key: []byte("k"), Value: []byte("seven")}}, CommitRelaxed); err != nil {
+		t.Fatalf("CommitAt: %v", err)
+	}
+	before := db.Stats()
+	requireResult(t, store, []byte("k"), 9, Present, 7, []byte("seven"))
+	after := db.Stats()
+	for _, name := range []string{
+		"treedb.cache.iterator.calls_total",
+		"treedb.cache.iterator.snapshot_rotations_total",
+	} {
+		if before[name] != after[name] {
+			t.Fatalf("%s changed across GetAt: %q -> %q", name, before[name], after[name])
+		}
+	}
+	if before["treedb.cache.queue_len"] != after["treedb.cache.queue_len"] {
+		t.Fatalf("queue length changed across GetAt: %q -> %q", before["treedb.cache.queue_len"], after["treedb.cache.queue_len"])
+	}
+}
+
 func TestCommitAtMultiKeyAtomicAndDuplicatePolicy(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
 	defer db.Close()
