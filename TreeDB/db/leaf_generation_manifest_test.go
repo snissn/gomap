@@ -731,6 +731,15 @@ func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.
 		db.writeMu.RUnlock()
 		t.Fatal("Close did not begin internal teardown")
 	}
+	writerQueuedDeadline := time.Now().Add(5 * time.Second)
+	for db.writeMu.TryRLock() {
+		db.writeMu.RUnlock()
+		if time.Now().After(writerQueuedDeadline) {
+			db.writeMu.RUnlock()
+			t.Fatal("Close did not queue for writeMu")
+		}
+		runtime.Gosched()
+	}
 
 	writeMuAcquired := make(chan struct{})
 	go func() {
