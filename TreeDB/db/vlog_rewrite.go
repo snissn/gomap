@@ -2095,17 +2095,28 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			protectedPaths[path] = struct{}{}
 		}
 	}
-	var (
-		protectedIDs map[uint32]struct{}
-		activeIDs    map[uint32]struct{}
-	)
-	// Enable active-segment skip whenever callers provide explicit protected
-	// scope, and also for internal unlocked rewrite flows where concurrent
-	// writers may append pointers after the index reachability scan.
-	allowActiveSkip := !lockMaintenance || len(opts.ProtectedPaths) > 0 || len(opts.SourceFileIDs) > 0 || len(opts.SourceChunks) > 0
-	{
+	// Capture and retirement share publishPrepareMu with stable-resource token
+	// creation. Holding it exclusively across the identity snapshot, zombie
+	// marking, and set publication prevents both directions of the race: rewrite
+	// cannot retire an already-pinned generation, and a new token cannot pin a
+	// generation after it has been selected for retirement but before that
+	// retirement becomes visible.
+	if err := func() error {
+		db.publishPrepareMu.Lock()
+		defer db.publishPrepareMu.Unlock()
+
+		var (
+			protectedIDs map[uint32]struct{}
+			activeIDs    map[uint32]struct{}
+			stablePinned map[uint32]struct{}
+		)
+		// Enable active-segment skip whenever callers provide explicit protected
+		// scope, and also for internal unlocked rewrite flows where concurrent
+		// writers may append pointers after the index reachability scan.
+		allowActiveSkip := !lockMaintenance || len(opts.ProtectedPaths) > 0 || len(opts.SourceFileIDs) > 0 || len(opts.SourceChunks) > 0
 		currentSet := db.valueLogManager.CurrentSetNoRefresh()
 		if currentSet != nil {
+			defer func() { _ = db.valueLogManager.Release(currentSet) }()
 			if len(protectedPaths) > 0 {
 				if allowActiveSkip {
 					activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
@@ -2125,44 +2136,49 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			} else if allowActiveSkip {
 				activeIDs = currentValueLogIDs(currentSet)
 			}
-			_ = db.valueLogManager.Release(currentSet)
-		}
-	}
-	markZombieCandidate := func(id uint32, existedBefore bool) error {
-		if _, ok := referencedAfter[id]; ok {
-			return nil
-		}
-		if _, ok := protectedIDs[id]; ok {
-			return nil
-		}
-		// When active-segment skipping is enabled, avoid marking currently
-		// active pre-existing segments zombie. Concurrent writers may still be
-		// appending records whose pointers are not yet visible in the backend
-		// index.
-		if existedBefore && allowActiveSkip {
-			if _, ok := activeIDs[id]; ok {
-				return nil
+			var err error
+			stablePinned, err = matchStableValueLogPinnedFileIDs(currentSet.Files, db.stableValueLogPinnedIdentities())
+			if err != nil {
+				return err
 			}
 		}
-		if err := db.valueLogManager.MarkZombie(id); err != nil {
-			return err
+
+		markZombieCandidate := func(id uint32, existedBefore bool) error {
+			if _, ok := referencedAfter[id]; ok {
+				return nil
+			}
+			if _, ok := protectedIDs[id]; ok {
+				return nil
+			}
+			if _, ok := stablePinned[id]; ok {
+				return nil
+			}
+			// When active-segment skipping is enabled, avoid marking currently
+			// active pre-existing segments zombie. Concurrent writers may still be
+			// appending records whose pointers are not yet visible in the backend
+			// index.
+			if existedBefore && allowActiveSkip {
+				if _, ok := activeIDs[id]; ok {
+					return nil
+				}
+			}
+			return db.valueLogManager.MarkZombie(id)
 		}
-		return nil
-	}
-	for id := range oldValueIDs {
-		if err := markZombieCandidate(id, true); err != nil {
-			return stats, err
+		for id := range oldValueIDs {
+			if err := markZombieCandidate(id, true); err != nil {
+				return err
+			}
 		}
-	}
-	for _, id := range newValueIDs {
-		if _, existed := oldValueIDs[id]; existed {
-			continue
+		for _, id := range newValueIDs {
+			if _, existed := oldValueIDs[id]; existed {
+				continue
+			}
+			if err := markZombieCandidate(id, false); err != nil {
+				return err
+			}
 		}
-		if err := markZombieCandidate(id, false); err != nil {
-			return stats, err
-		}
-	}
-	if err := db.publishValueLogSetNoRefresh(); err != nil {
+		return db.publishValueLogSetNoRefresh()
+	}(); err != nil {
 		return stats, err
 	}
 	postSet := db.valueLogManager.CurrentSetNoRefresh()
