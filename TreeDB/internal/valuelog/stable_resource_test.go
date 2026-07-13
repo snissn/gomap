@@ -2,6 +2,7 @@ package valuelog
 
 import (
 	"crypto/sha256"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,48 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	defer set.Release()
 	if set.Len() != 2 {
 		t.Fatalf("rotated set len=%d want 2", set.Len())
+	}
+}
+
+func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "000001.vlog")
+	writer, err := NewWriter(firstPath, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Append(0, nil, 1, []byte("before-failure")); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected namespace failure")
+	originalFactory := newValueLogStableNamespaceToken
+	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+		return nil, injected
+	}
+	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, true,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 1,
+			NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+	if !errors.Is(err, injected) {
+		t.Fatalf("rotation error=%v want injected namespace failure", err)
+	}
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("failed rotation returned owned resources")
+	}
+	if writer.FileID() != 1 || writer.f == nil || writer.f.Name() != firstPath {
+		t.Fatalf("failed rotation changed active writer: id=%d file=%v", writer.FileID(), writer.f)
+	}
+	if _, err := writer.Append(0, nil, 2, []byte("after-failure")); err != nil {
+		t.Fatalf("old writer append after failed rotation: %v", err)
 	}
 }
 
