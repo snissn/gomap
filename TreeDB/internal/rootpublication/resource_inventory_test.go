@@ -29,6 +29,20 @@ func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 			t.Errorf("required reachability field %q absent from inventory", field)
 		}
 	}
+	if len(seen) != len(canonicalReachabilityRequirements) {
+		t.Fatalf("inventory fields=%d canonical requirements=%d", len(seen), len(canonicalReachabilityRequirements))
+	}
+	for _, requirement := range canonicalReachabilityRequirements {
+		row, ok := stableResourceInventoryRow(requirement.Field)
+		if !ok {
+			t.Errorf("canonical field %q absent from inventory", requirement.Field)
+			continue
+		}
+		if row.Kind != requirement.Kind || row.Classification != requirement.Classification {
+			t.Errorf("canonical field %q inventory kind/classification=(%q,%q) want (%q,%q)",
+				requirement.Field, row.Kind, row.Classification, requirement.Kind, requirement.Classification)
+		}
+	}
 }
 
 func TestEveryInventoryFieldFailsAllButOneClosure(t *testing.T) {

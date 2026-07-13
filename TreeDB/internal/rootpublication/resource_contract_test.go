@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -263,6 +265,52 @@ func (unsupportedNamespaceAdapter) Sync(*os.File) error {
 	return ErrNamespacePersistenceUnsupported
 }
 
+type countingNamespaceAdapter struct {
+	syncs atomic.Uint64
+}
+
+func (*countingNamespaceAdapter) Identity(*os.File) (StableIdentity, error) {
+	return StableIdentity{Platform: "test", ObjectID: [16]byte{1}}, nil
+}
+
+func (adapter *countingNamespaceAdapter) Sync(*os.File) error {
+	adapter.syncs.Add(1)
+	time.Sleep(time.Millisecond)
+	return nil
+}
+
+func TestStableNamespaceStabilizeIsSingleFlight(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	adapter := &countingNamespaceAdapter{}
+	namespace, err := newStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "single-flight.vlog", DiagnosticPath: "single-flight.vlog",
+	}, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer namespace.Release()
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if err := namespace.Stabilize(); err != nil {
+				t.Errorf("Stabilize: %v", err)
+			}
+		}()
+	}
+	workers.Wait()
+	if got := adapter.syncs.Load(); got != 1 {
+		t.Fatalf("namespace sync calls=%d want 1", got)
+	}
+}
+
 func TestUnsupportedNamespaceFailsBeforeCandidateVisibility(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
@@ -365,7 +413,10 @@ func TestResourceOwnershipSuccessRetryStopAndPoison(t *testing.T) {
 		if err := coordinator.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
 			t.Fatalf("Stop=%v want ErrPublicationStopped", err)
 		}
-		handoff := coordinator.TakeRecoveryHandoff()
+		handoff, err := coordinator.TakeRecoveryHandoff()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if handoff.Len() != 1 {
 			t.Fatalf("handoff len=%d want 1", handoff.Len())
 		}
@@ -394,13 +445,150 @@ func TestResourceOwnershipSuccessRetryStopAndPoison(t *testing.T) {
 		if got := released.Load(); got != 0 {
 			t.Fatalf("release count before handoff=%d want 0", got)
 		}
-		handoff := coordinator.TakeRecoveryHandoff()
+		handoff, err := coordinator.TakeRecoveryHandoff()
+		if err != nil {
+			t.Fatal(err)
+		}
 		handoff.Release()
 		if got := released.Load(); got != 1 {
 			t.Fatalf("release count after handoff=%d want 1", got)
 		}
 		_ = coordinator.Stop(context.Background())
 	})
+}
+
+func TestRecoveryHandoffRejectsLiveAndPublishingCoordinator(t *testing.T) {
+	var released atomic.Uint64
+	started := make(chan struct{})
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(ctx context.Context, _ *PreparedRootCandidate) PublishResult {
+		close(started)
+		<-ctx.Done()
+		return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	token := stableTokenFixture(t, dir, "live.vlog", 1, 4, ReachabilityValueLogPointer, "live", func(spec *StableResourceSpec) {
+		spec.OnRelease = func() { released.Add(1) }
+	})
+	builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := NewPreparedRootCandidate(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1), ResourceSet: set})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- coordinator.WaitThrough(context.Background(), 1) }()
+	<-started
+	if _, err := coordinator.TakeRecoveryHandoff(); !errors.Is(err, ErrRecoveryHandoffUnavailable) {
+		t.Fatalf("live TakeRecoveryHandoff=%v want unavailable", err)
+	}
+	if got := released.Load(); got != 0 {
+		t.Fatalf("live handoff released pins=%d", got)
+	}
+	if err := coordinator.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("Stop=%v", err)
+	}
+	if err := <-waitDone; !errors.Is(err, ErrPublicationStopped) {
+		t.Fatalf("WaitThrough=%v", err)
+	}
+	handoff, err := coordinator.TakeRecoveryHandoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff.Release()
+	if got := released.Load(); got != 1 {
+		t.Fatalf("release count=%d want 1", got)
+	}
+}
+
+func TestStableResourceSetConcurrentReadsAndRelease(t *testing.T) {
+	dir := t.TempDir()
+	token := stableTokenFixture(t, dir, "race.vlog", 1, 4, ReachabilityValueLogPointer, "race")
+	builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := token.Identity()
+	start := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 16 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			<-start
+			for range 100 {
+				_ = set.Len()
+				_ = set.Tokens()
+				_ = set.FrontierFor(identity, 1)
+				_ = set.DeletionGuard()
+				_ = set.Stats(time.Now())
+				_, _ = UnionStableResourceSets(set)
+			}
+		}()
+	}
+	close(start)
+	set.Release()
+	readers.Wait()
+}
+
+func TestCoordinatorResourcePinHighWaterSurvivesRiseAndRelease(t *testing.T) {
+	releasePublish := make(chan struct{})
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		<-releasePublish
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(1); seq <= 3; seq++ {
+		dir := t.TempDir()
+		token := stableTokenFixture(t, dir, fmt.Sprintf("hwm-%d.vlog", seq), seq, 4, ReachabilityValueLogPointer, fmt.Sprint(seq))
+		builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidate(CandidateSpec{Frontier: NewFrontier(seq, seq, seq, seq, seq), ResourceSet: set})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats := coordinator.Stats().Resources
+	if len(stats) != 1 || stats[0].ActivePins != 3 || stats[0].PinHighWater != 3 {
+		t.Fatalf("peak resource stats=%+v", stats)
+	}
+	close(releasePublish)
+	if err := coordinator.WaitThrough(context.Background(), 3); err != nil {
+		t.Fatal(err)
+	}
+	stats = coordinator.Stats().Resources
+	if len(stats) != 1 || stats[0].ActivePins != 0 || stats[0].PinHighWater != 3 {
+		t.Fatalf("released resource stats=%+v", stats)
+	}
+	if err := coordinator.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestConflictingCandidateRejectedBeforeVisibleFrontier(t *testing.T) {
@@ -449,7 +637,11 @@ func TestConflictingCandidateRejectedBeforeVisibleFrontier(t *testing.T) {
 	if err := coordinator.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
 		t.Fatalf("Stop=%v", err)
 	}
-	coordinator.TakeRecoveryHandoff().Release()
+	handoff, err := coordinator.TakeRecoveryHandoff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff.Release()
 }
 
 func TestStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
