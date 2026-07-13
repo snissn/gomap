@@ -135,6 +135,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		snapPool:    NewSnapshotPool(),
 		notifyError: opts.NotifyError,
 	}
+	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.idx.Store(gen)
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
@@ -161,7 +162,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		db.cacheCommandWALRequiredFeatureStats()
 	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
+		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
 		if err != nil {
 			_ = db.Close()
 			return nil, err
@@ -285,6 +286,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		snapPool:    NewSnapshotPool(),
 		notifyError: opts.NotifyError,
 	}
+	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.idx.Store(gen)
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
@@ -311,7 +313,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		db.cacheCommandWALRequiredFeatureStats()
 	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
+		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
 		if err != nil {
 			_ = db.Close()
 			return nil, err

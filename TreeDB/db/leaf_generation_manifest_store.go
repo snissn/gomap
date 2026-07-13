@@ -81,6 +81,27 @@ func newLeafGenerationManifestStore(leafDir string, registry *rootpublication.Id
 	return store
 }
 
+func leafGenerationManifestReplacementModeForPlatform() leafGenerationManifestReplacementMode {
+	if rootpublication.StableRelativeNamespaceSupported() {
+		return leafGenerationManifestStable
+	}
+	return leafGenerationManifestCompatibility
+}
+
+func (db *DB) initializeLeafGenerationManifestStore(leafDir string, registry *rootpublication.IdentityPinRegistry) {
+	if db == nil || db.leafGenerationManifestStore != nil {
+		return
+	}
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestReplacementModeForPlatform(), func() {
+		db.publicationPoisoned.Store(true)
+	})
+	db.leafGenerationManifestStore = store
+	db.registerInternalTeardownHook(func() error {
+		store.Close()
+		return nil
+	})
+}
+
 func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {
 	if s == nil || s.leafDir == "" {
 		return nil, errors.New("missing leaf_vlog manifest store")
@@ -111,6 +132,9 @@ func (s *leafGenerationManifestStore) Load() (*leafGenerationManifest, bool, err
 	if s.closed {
 		return nil, false, rootpublication.ErrResourceOwnership
 	}
+	if s.poisoned {
+		return nil, false, fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
+	}
 	if s.mode == leafGenerationManifestCompatibility {
 		return loadLeafGenerationManifest(s.leafDir)
 	}
@@ -140,13 +164,19 @@ func (s *leafGenerationManifestStore) Load() (*leafGenerationManifest, bool, err
 }
 
 func (s *leafGenerationManifestStore) listBootstrapFiles() ([]leafGenerationBootstrapFile, error) {
-	if s == nil || s.mode == leafGenerationManifestCompatibility {
-		return listLeafGenerationBootstrapFiles(s.leafDir)
+	if s == nil || s.leafDir == "" {
+		return nil, errors.New("missing leaf_vlog manifest store")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil, rootpublication.ErrResourceOwnership
+	}
+	if s.poisoned {
+		return nil, fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
+	}
+	if s.mode == leafGenerationManifestCompatibility {
+		return listLeafGenerationBootstrapFiles(s.leafDir)
 	}
 	if s.stableCapability == nil || !s.stableCapability() {
 		return nil, fmt.Errorf("%w: retained-parent manifest scan unavailable", rootpublication.ErrNamespacePersistenceUnsupported)

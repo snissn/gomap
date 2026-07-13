@@ -1964,17 +1964,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
-	manifestMode := leafGenerationManifestCompatibility
-	if rootpublication.StableRelativeNamespaceSupported() {
-		manifestMode = leafGenerationManifestStable
-	}
-	db.leafGenerationManifestStore = newLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins, manifestMode, func() {
-		db.publicationPoisoned.Store(true)
-	})
-	db.registerInternalTeardownHook(func() error {
-		db.leafGenerationManifestStore.Close()
-		return nil
-	})
+	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()
 	db.idx.Store(gen)
 	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
