@@ -568,6 +568,7 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 					}
 					b.Cleanup(func() { _ = writer.Close() })
 					beforeContentSyncs := writer.DurabilityStats().FileSyncCalls
+					beforeDirectorySyncs := writer.DurabilityStats().DirectorySyncCalls
 					var namespaceSyncs uint64
 					b.ReportAllocs()
 					b.ResetTimer()
@@ -610,9 +611,14 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 						}
 						rotation.Release()
 						stats := set.Stats(time.Now())
-						wantNamespaceSyncs := uint64(1)
-						if withRegistry {
-							wantNamespaceSyncs = 2
+						// A writer opened without stable capture has no creation witness for
+						// its initial segment. Every later closed segment was created by the
+						// preceding stable rotation, so it retains that witness alongside the
+						// newly active segment. Registry-backed construction captures the
+						// initial segment as well.
+						wantNamespaceSyncs := uint64(2)
+						if !withRegistry && i == 0 {
+							wantNamespaceSyncs = 1
 						}
 						if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != wantNamespaceSyncs {
 							set.Release()
@@ -623,21 +629,23 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 						b.StartTimer()
 					}
 					contentSyncs := writer.DurabilityStats().FileSyncCalls - beforeContentSyncs
+					physicalNamespaceSyncs := writer.DurabilityStats().DirectorySyncCalls - beforeDirectorySyncs
 					wantContentSyncs := uint64(0)
 					if syncCurrent {
 						wantContentSyncs = uint64(b.N)
 					}
-					wantNamespaceSyncs := uint64(b.N)
-					if withRegistry {
-						wantNamespaceSyncs *= 2
+					wantNamespaceSyncs := uint64(2 * b.N)
+					if !withRegistry {
+						wantNamespaceSyncs--
 					}
-					if namespaceSyncs != wantNamespaceSyncs || contentSyncs != wantContentSyncs {
-						b.Fatalf("rotation counters namespace=%d content=%d want namespace=%d content=%d", namespaceSyncs, contentSyncs, wantNamespaceSyncs, wantContentSyncs)
+					if namespaceSyncs != wantNamespaceSyncs || physicalNamespaceSyncs != uint64(b.N) || contentSyncs != wantContentSyncs {
+						b.Fatalf("rotation counters witnesses=%d physical_namespace=%d content=%d want witnesses=%d physical_namespace=%d content=%d", namespaceSyncs, physicalNamespaceSyncs, contentSyncs, wantNamespaceSyncs, b.N, wantContentSyncs)
 					}
 					if registry != nil && (registry.ActivePins() != 0 || registry.ActiveIdentities() != 1) {
 						b.Fatalf("rotation registry pins=%d identities=%d, want 0 pins and one active writer", registry.ActivePins(), registry.ActiveIdentities())
 					}
 					b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "stable-token-namespace-sync/op")
+					b.ReportMetric(float64(physicalNamespaceSyncs)/float64(b.N), "producer-namespace-sync/op")
 					b.ReportMetric(float64(contentSyncs)/float64(b.N), "producer-content-sync/op")
 				})
 			}
