@@ -3,9 +3,11 @@ package valuelog
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -192,6 +194,16 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	if set.Len() != 2 {
 		t.Fatalf("rotated set len=%d want 2", set.Len())
 	}
+	if err := set.FlushThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	stats := set.Stats(time.Now())
+	if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].Flushes != 2 || stats[0].Syncs != 2 || stats[0].NamespaceSyncs != 1 {
+		t.Fatalf("stable rotation operation counts=%+v", stats)
+	}
 }
 
 func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
@@ -305,5 +317,79 @@ func TestStableValueLogRegistrationRejectsForeignProducerField(t *testing.T) {
 	})
 	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
 		t.Fatalf("foreign producer field token=%v err=%v", token, err)
+	}
+}
+
+func BenchmarkStableValueLogRotation(b *testing.B) {
+	for _, syncCurrent := range []bool{false, true} {
+		b.Run(fmt.Sprintf("sync_current=%t", syncCurrent), func(b *testing.B) {
+			dir := b.TempDir()
+			writer, err := NewWriter(filepath.Join(dir, "000001.vlog"), 1)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = writer.Close() })
+			beforeContentSyncs := writer.DurabilityStats().FileSyncCalls
+			var namespaceSyncs uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				if _, err := writer.Append(0, nil, uint64(i+1), []byte("rotation-benchmark-value")); err != nil {
+					b.Fatal(err)
+				}
+				closedID := writer.FileID()
+				activeID := closedID + 1
+				activeName := fmt.Sprintf("%06d.vlog", activeID)
+				b.StartTimer()
+				rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, activeName), activeID, syncCurrent,
+					StableResourceRegistration{
+						LogicalLane: "main", Generation: uint64(closedID), DiagnosticPath: filepath.Join("maindb", "value_vlog", fmt.Sprintf("%06d.vlog", closedID)),
+						Reachability: rootpublication.ReachabilityValueLogPointer,
+					},
+					StableResourceRegistration{
+						LogicalLane: "main", Generation: uint64(activeID), DiagnosticPath: filepath.Join("maindb", "value_vlog", activeName),
+						Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: uint64(activeID),
+						NamespaceOperation: rootpublication.NamespaceCreate,
+					})
+				b.StopTimer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+				if err := builder.Add(rotation.TakeClosed()); err != nil {
+					rotation.Release()
+					b.Fatal(err)
+				}
+				if err := builder.Add(rotation.TakeActive()); err != nil {
+					rotation.Release()
+					b.Fatal(err)
+				}
+				set, err := builder.Freeze()
+				if err != nil {
+					rotation.Release()
+					b.Fatal(err)
+				}
+				rotation.Release()
+				stats := set.Stats(time.Now())
+				if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != 1 {
+					set.Release()
+					b.Fatalf("stable rotation operation counts=%+v", stats)
+				}
+				namespaceSyncs += stats[0].NamespaceSyncs
+				set.Release()
+				b.StartTimer()
+			}
+			contentSyncs := writer.DurabilityStats().FileSyncCalls - beforeContentSyncs
+			wantContentSyncs := uint64(0)
+			if syncCurrent {
+				wantContentSyncs = uint64(b.N)
+			}
+			if namespaceSyncs != uint64(b.N) || contentSyncs != wantContentSyncs {
+				b.Fatalf("rotation counters namespace=%d content=%d want namespace=%d content=%d", namespaceSyncs, contentSyncs, b.N, wantContentSyncs)
+			}
+			b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "stable-token-namespace-sync/op")
+			b.ReportMetric(float64(contentSyncs)/float64(b.N), "producer-content-sync/op")
+		})
 	}
 }

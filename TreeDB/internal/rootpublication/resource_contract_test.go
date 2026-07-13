@@ -1703,6 +1703,53 @@ func BenchmarkStableResourceSetCoalesce(b *testing.B) {
 	}
 }
 
+func BenchmarkStableResourceSetCoalesceDuplicatePhysical(b *testing.B) {
+	dir := b.TempDir()
+	file := writeStableResourceFixture(b, dir, "coalesce-shared.vlog", "shared-benchmark-resource")
+	sets := make([]*StableResourceSet, 8)
+	for i := range sets {
+		builder := NewStableResourceSetBuilder()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: fmt.Sprintf("lane-%d", i), ResourceID: fmt.Sprintf("alias-%d", i), Generation: 1,
+			DiagnosticPath: "maindb/value_vlog/coalesce-shared.vlog", File: file,
+			Frontier: DurableFrontier{Bytes: 4}, Digest: sha256.Sum256([]byte("shared-benchmark-header")),
+			Reachability: ReachabilityValueLogPointer,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := builder.Add(token); err != nil {
+			b.Fatal(err)
+		}
+		sets[i], err = builder.Freeze()
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer sets[i].Release()
+	}
+	view, err := UnionStableResourceSets(sets...)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if got := view.Len(); got != 1 {
+		b.Fatalf("duplicate physical union len=%d want 1", got)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		view, err := UnionStableResourceSets(sets...)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got := view.Len(); got != 1 {
+			b.Fatalf("duplicate physical union len=%d want 1", got)
+		}
+	}
+	b.ReportMetric(float64(len(sets)), "physical-inputs/op")
+	b.ReportMetric(1, "physical-pins/op")
+	b.ReportMetric(float64(len(sets)-1), "coalesces/op")
+}
+
 func TestStableResourceTokenPinnedReadRemainsUsable(t *testing.T) {
 	dir := t.TempDir()
 	token := stableTokenFixture(t, dir, "read.vlog", 1, 4, ReachabilityValueLogPointer, "read")

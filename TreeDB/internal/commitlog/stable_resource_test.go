@@ -2,6 +2,7 @@ package commitlog
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -175,5 +176,69 @@ func TestCommandJournalRecordAppendDoesNotAddNamespaceSync(t *testing.T) {
 	after := journal.WriterDurabilityStats().DirectorySyncCalls
 	if after != before {
 		t.Fatalf("ordinary appends added namespace syncs: before=%d after=%d", before, after)
+	}
+}
+
+func BenchmarkStableCommandWALRotation(b *testing.B) {
+	for _, syncCurrent := range []bool{false, true} {
+		b.Run(fmt.Sprintf("sync_current=%t", syncCurrent), func(b *testing.B) {
+			journal, err := OpenCommandJournal(b.TempDir(), CommandJournalOptions{Lane: 5})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = journal.Close() })
+			beforeContentSyncs := journal.WriterDurabilityStats().FileSyncCalls
+			var namespaceSyncs uint64
+			envelope := CommandEnvelope{
+				Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				if _, err := journal.AppendCommand(envelope); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				rotation, err := journal.RotateActiveSegmentWithStableResources(syncCurrent)
+				b.StopTimer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALRotated, rootpublication.ReachabilityCommandWALActive)
+				if err := builder.Add(rotation.TakeClosed()); err != nil {
+					rotation.Release()
+					b.Fatal(err)
+				}
+				if err := builder.Add(rotation.TakeActive()); err != nil {
+					rotation.Release()
+					b.Fatal(err)
+				}
+				set, err := builder.Freeze()
+				if err != nil {
+					rotation.Release()
+					b.Fatal(err)
+				}
+				rotation.Release()
+				stats := set.Stats(time.Now())
+				if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != 1 {
+					set.Release()
+					b.Fatalf("stable rotation operation counts=%+v", stats)
+				}
+				namespaceSyncs += stats[0].NamespaceSyncs
+				set.Release()
+				b.StartTimer()
+			}
+			contentSyncs := journal.WriterDurabilityStats().FileSyncCalls - beforeContentSyncs
+			wantContentSyncs := uint64(0)
+			if syncCurrent {
+				wantContentSyncs = uint64(b.N)
+			}
+			if namespaceSyncs != uint64(b.N) || contentSyncs != wantContentSyncs {
+				b.Fatalf("rotation counters namespace=%d content=%d want namespace=%d content=%d", namespaceSyncs, contentSyncs, b.N, wantContentSyncs)
+			}
+			b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "stable-token-namespace-sync/op")
+			b.ReportMetric(float64(contentSyncs)/float64(b.N), "producer-content-sync/op")
+		})
 	}
 }
