@@ -690,6 +690,33 @@ func TestManagerStableDeleteRejectsReplacedPath(t *testing.T) {
 	}
 }
 
+func TestManagerRemoveSegmentExpectedIdentityRejectsRegisteredReplacement(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	expected := identityPinTestIdentity(t, path)
+	if err := os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	_, replacementPath := writeIdentityPinTestSegment(t, dir)
+	replacement := identityPinTestIdentity(t, replacementPath)
+	if rootpublication.SamePhysicalIdentity(expected, replacement) {
+		t.Fatal("replacement unexpectedly reused the original physical identity")
+	}
+
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if err := manager.RemoveSegmentExpectedIdentity(fileID, expected); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("RemoveSegmentExpectedIdentity replacement error = %v, want ErrResourceConflict", err)
+	}
+	got := identityPinTestIdentity(t, replacementPath)
+	if !rootpublication.SamePhysicalIdentity(got, replacement) {
+		t.Fatal("expected-identity removal changed the registered replacement")
+	}
+}
+
 func TestManagerRegisterSegmentRejectsSameIDReboundPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not permit replacing an open segment path")

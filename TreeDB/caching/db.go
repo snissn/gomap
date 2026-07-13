@@ -5169,24 +5169,19 @@ func (db *DB) cleanupOrphanedRetainedValueLogExpected(path string, expected root
 	if err != nil {
 		return false
 	}
-	if expected != (rootpublication.StableIdentity{}) {
-		file, err := os.Open(path)
-		if err != nil {
-			return os.IsNotExist(err) && db.cleanupMissingRetainedValueLog(path)
-		}
-		identity, identityErr := rootpublication.StableIdentityFromFile(file)
-		closeErr := file.Close()
-		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(expected, identity) {
-			return false
-		}
-	}
 	if err := db.valueLogReader.RegisterSegment(path, id); err != nil {
 		if os.IsNotExist(err) {
 			return db.cleanupMissingRetainedValueLog(path)
 		}
 		return false
 	}
-	if err := db.valueLogReader.RemoveSegment(id); err != nil {
+	var removeErr error
+	if expected != (rootpublication.StableIdentity{}) {
+		removeErr = db.valueLogReader.RemoveSegmentExpectedIdentity(id, expected)
+	} else {
+		removeErr = db.valueLogReader.RemoveSegment(id)
+	}
+	if removeErr != nil {
 		return false
 	}
 	if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {

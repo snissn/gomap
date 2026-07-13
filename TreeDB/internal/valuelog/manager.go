@@ -2476,6 +2476,13 @@ func (m *Manager) DecodeScratchStats() DecodeScratchStats {
 }
 
 func (m *Manager) RemoveSegment(id uint32) error {
+	return m.RemoveSegmentExpectedIdentity(id, rootpublication.StableIdentity{})
+}
+
+// RemoveSegmentExpectedIdentity removes id only when the manager-observed
+// physical identity matches expected. A zero expected identity preserves the
+// ordinary RemoveSegment behavior.
+func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublication.StableIdentity) error {
 	m.mu.Lock()
 	f, ok := m.files[id]
 	if !ok {
@@ -2485,6 +2492,21 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	if f.RefCount.Load() != 0 {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "remove"}
+	}
+	if expected != (rootpublication.StableIdentity{}) {
+		actual := f.stableIdentity
+		if actual == (rootpublication.StableIdentity{}) {
+			var err error
+			actual, err = rootpublication.StableIdentityFromFile(f.File)
+			if err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
+		if !rootpublication.SamePhysicalIdentity(expected, actual) {
+			m.mu.Unlock()
+			return fmt.Errorf("%w: value-log file id %d identity changed", rootpublication.ErrResourceConflict, id)
+		}
 	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
