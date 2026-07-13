@@ -444,15 +444,70 @@ func (l *cachingLeafPageLog) appendPreparedLeafPages(leafPages [][]byte, prepare
 }
 
 func (l *cachingLeafPageLog) AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
-	refs, _, err := l.appendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs, false)
-	return refs, err
+	refs = refs[:0]
+	if l == nil || l.db == nil || l.lane == nil {
+		return nil, errWALUnavailable
+	}
+	if len(leafPages) == 0 {
+		return refs, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: prepared leaf page child-ref batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	if len(leafPages) == 1 {
+		ptr, err := l.AppendPreparedLeafPage(leafPages[0], preparedPayloads[0])
+		if err != nil {
+			return nil, err
+		}
+		return append(refs, page.LeafLogChildRef(ptr)), nil
+	}
+	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
+	if err != nil {
+		return nil, err
+	}
+	records := getValueLogRecordsCap(len(leafPages))
+	records = records[:len(leafPages)]
+	defer func() {
+		for i := range records {
+			records[i] = valuelog.Record{}
+		}
+		putValueLogRecordsNoClear(records)
+	}()
+	for i := range leafPages {
+		if len(leafPages[i]) != page.PageSize {
+			return nil, fmt.Errorf("cachingdb: prepared leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPages[i]), page.PageSize)
+		}
+		records[i] = valuelog.Record{
+			RID:   startRID + uint64(i),
+			Value: preparedPayloads[i],
+		}
+	}
+	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	if err != nil {
+		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
+		return nil, err
+	}
+	defer putValueLogPtrs(valuePtrs)
+	if len(valuePtrs) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: prepared leaf page child-ref batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+	}
+	if cap(refs) < len(valuePtrs) {
+		refs = make([]page.ChildRef, len(valuePtrs))
+	} else {
+		refs = refs[:len(valuePtrs)]
+	}
+	for i, ptr := range valuePtrs {
+		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+		if convErr != nil {
+			return nil, convErr
+		}
+		refs[i] = page.LeafLogChildRef(leafPtr)
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	return refs, nil
 }
 
 func (l *cachingLeafPageLog) AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error) {
-	return l.appendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs, true)
-}
-
-func (l *cachingLeafPageLog) appendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef, stable bool) ([]page.ChildRef, *rootpublication.StableResourceSet, error) {
 	refs = refs[:0]
 	if l == nil || l.db == nil || l.lane == nil {
 		return nil, nil, errWALUnavailable
@@ -462,13 +517,6 @@ func (l *cachingLeafPageLog) appendPreparedLeafPageChildRefs(leafPages [][]byte,
 	}
 	if len(preparedPayloads) != len(leafPages) {
 		return nil, nil, fmt.Errorf("cachingdb: prepared leaf page child-ref batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
-	}
-	if len(leafPages) == 1 && !stable {
-		ptr, err := l.AppendPreparedLeafPage(leafPages[0], preparedPayloads[0])
-		if err != nil {
-			return nil, nil, err
-		}
-		return append(refs, page.LeafLogChildRef(ptr)), nil, nil
 	}
 	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
 	if err != nil {
@@ -491,13 +539,7 @@ func (l *cachingLeafPageLog) appendPreparedLeafPageChildRefs(leafPages [][]byte,
 			Value: preparedPayloads[i],
 		}
 	}
-	var resources *rootpublication.StableResourceSet
-	var valuePtrs []page.ValuePtr
-	if stable {
-		valuePtrs, resources, err = l.db.appendValueLogWithStableResources(l.lane, 0, nil, records, journalDurabilityNone)
-	} else {
-		valuePtrs, err = l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
-	}
+	valuePtrs, resources, err := l.db.appendValueLogWithStableResources(l.lane, 0, nil, records, journalDurabilityNone)
 	if err != nil {
 		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
 		return nil, nil, err
