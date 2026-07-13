@@ -13,3 +13,9 @@ func TestErrLeafGenerationGCStaleScanReexportsBackendSentinel(t *testing.T) {
 		t.Fatal("public ErrLeafGenerationGCStaleScan does not match backend sentinel")
 	}
 }
+
+func TestErrLeafGenerationManifestIncompatibleReexportsBackendSentinel(t *testing.T) {
+	if !errors.Is(treedbdb.ErrLeafGenerationManifestIncompatible, treedb.ErrLeafGenerationManifestIncompatible) {
+		t.Fatal("public ErrLeafGenerationManifestIncompatible does not match backend sentinel")
+	}
+}

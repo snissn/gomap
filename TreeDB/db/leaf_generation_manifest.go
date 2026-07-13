@@ -24,6 +24,8 @@ const (
 	leafGenerationStateDeleted  = "deleted"
 )
 
+// ErrLeafGenerationManifestIncompatible reports an on-disk split-leaf
+// manifest version or revision that this pre-alpha binary will not migrate.
 var ErrLeafGenerationManifestIncompatible = errors.New("treedb: incompatible leaf generation manifest")
 
 type leafGenerationManifest struct {
