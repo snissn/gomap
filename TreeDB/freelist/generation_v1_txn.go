@@ -173,6 +173,8 @@ type FreelistTxn struct {
 	root             *stateNode
 	highWater        uint64
 	allocated        []allocatedPage
+	abandonedAppends []ReservationExtentV1
+	consumed         bool
 	changedChunks    map[uint64]struct{}
 	replacedMetadata map[uint64]struct{}
 	stats            FreelistTxnStats
@@ -215,6 +217,9 @@ func (t *FreelistTxn) valid() error {
 	if t == nil || t.base == nil || t.root == nil || t.changedChunks == nil {
 		return ErrGenerationFormat
 	}
+	if t.consumed {
+		return ErrCandidateConsumed
+	}
 	return nil
 }
 
@@ -254,8 +259,15 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 	if t.highWater == math.MaxUint64 {
 		return 0, ErrNoAllocatablePage
 	}
-	id := t.highWater
-	t.highWater++
+	start := t.highWater
+	id, ok := t.ledger.firstUnreservedAtOrAfter(start)
+	if !ok || id == math.MaxUint64 {
+		return 0, ErrNoAllocatablePage
+	}
+	if id > start {
+		t.abandonedAppends = appendReservationRange(t.abandonedAppends, start, id-start, ReservationAbandonedAppend, 0)
+	}
+	t.highWater = id + 1
 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
 	t.stats.AppendAllocations++
 	return id, nil
@@ -285,7 +297,7 @@ func (t *FreelistTxn) rootAllocatable(id uint64) bool {
 }
 
 func (t *FreelistTxn) retire(id, seq uint64) {
-	if id < 2 || id >= t.highWater || seq == 0 {
+	if t == nil || t.consumed || id < 2 || id >= t.highWater || seq == 0 {
 		return
 	}
 	offset := id & (freelistChunkSize - 1)
@@ -327,7 +339,7 @@ func collectPrunable(n *stateNode, depth int, cap ReuseCapability, out *[]retire
 }
 
 func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
-	if t == nil || cap.oldestRecoverableCommitSeq == 0 {
+	if t == nil || t.consumed || cap.oldestRecoverableCommitSeq == 0 {
 		return
 	}
 	t.stats.OldestRecoverableCommitSeq = cap.oldestRecoverableCommitSeq
@@ -431,6 +443,33 @@ func appendIDExtents(extents []ReservationExtentV1, ids []uint64, kind Reservati
 	return extents
 }
 
+func appendReservationRange(extents []ReservationExtentV1, start, count uint64, kind ReservationKindV1, seq uint64) []ReservationExtentV1 {
+	for count > 0 {
+		chunk := min(count, uint64(^uint32(0)))
+		extents = append(extents, ReservationExtentV1{StartPageID: start, Count: uint32(chunk), Kind: kind, LastReachableCommitSeq: seq})
+		start += chunk
+		count -= chunk
+	}
+	return extents
+}
+
+func countUnmaterializedStatePages(n *stateNode, depth int) uint64 {
+	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
+		return 0
+	}
+	count := uint64(1) // This index page.
+	if depth == chunkTrieDepth {
+		if n.chunk != nil && n.chunk.pageID == 0 {
+			count++
+		}
+		return count
+	}
+	for _, child := range n.child {
+		count += countUnmaterializedStatePages(child, depth+1)
+	}
+	return count
+}
+
 func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
 	if err := t.valid(); err != nil {
 		return nil, err
@@ -444,9 +483,59 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if t.base.ref.HeaderPageID != 0 && generationID <= t.base.generationID {
 		return nil, ErrGenerationParent
 	}
-	next := t.highWater
-	recorded := &recordingSink{sink: sink}
+	// Page IDs are assigned while writing. Once materialization starts, success
+	// or failure consumes this transaction; retry must begin from the immutable
+	// base so a partial sink failure cannot retain unwritten page identities.
+	t.consumed = true
 	t.root = detachUnmaterialized(t.root, 0)
+	var reused, appended []uint64
+	dataIDs := make([]uint64, 0, len(t.allocated))
+	for _, allocation := range t.allocated {
+		dataIDs = append(dataIDs, allocation.id)
+		if allocation.kind == ReservationReusedData {
+			reused = append(reused, allocation.id)
+		} else {
+			appended = append(appended, allocation.id)
+		}
+	}
+	var extents []ReservationExtentV1
+	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
+	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
+	extents = append(extents, t.abandonedAppends...)
+	// The target metadata extent includes the COW pages, the reservation chain,
+	// and the generation header. Its count does not change the number of
+	// normalized reservation extents, so compute the chain length first.
+	replaced := make([]uint64, 0, len(t.replacedMetadata))
+	for id := range t.replacedMetadata {
+		replaced = append(replaced, id)
+	}
+	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
+	minimumMetadataStart := t.highWater
+	if minimumMetadataStart == math.MaxUint64 {
+		return nil, ErrNoAllocatablePage
+	}
+	extents, err := normalizeExtents(extents)
+	if err != nil {
+		return nil, err
+	}
+	statePageCount := countUnmaterializedStatePages(t.root, 0)
+	if t.root.freeCount+t.root.retiredCount == 0 && t.root.pageID == 0 {
+		statePageCount = 1
+	}
+	metadataStart, reservedMetadataCount, err := t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, uint64(len(extents)), dataIDs)
+	if err != nil {
+		return nil, err
+	}
+	if metadataStart > minimumMetadataStart {
+		extents = appendReservationRange(extents, minimumMetadataStart, metadataStart-minimumMetadataStart, ReservationAbandonedAppend, 0)
+	}
+	extents = append(extents, ReservationExtentV1{StartPageID: metadataStart, Count: 1, Kind: ReservationTargetMetadata})
+	pageCount := reservationPagesForEntries(uint64(len(extents)))
+	if pageCount > uint64(^uint16(0)) || statePageCount+pageCount+1 != reservedMetadataCount {
+		return nil, ErrGenerationFormat
+	}
+	next := metadataStart
+	recorded := &recordingSink{sink: sink}
 	if t.root.freeCount+t.root.retiredCount == 0 {
 		if t.root.pageID == 0 {
 			// An empty tree still has one immutable root index page.
@@ -464,41 +553,16 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	} else if err := emitStatePages(t.root, 0, generationID, &next, recorded); err != nil {
 		return nil, err
 	}
-	metadataStart := t.highWater
 	reservationID := next
-	var reused, appended []uint64
-	for _, allocation := range t.allocated {
-		if allocation.kind == ReservationReusedData {
-			reused = append(reused, allocation.id)
-		} else {
-			appended = append(appended, allocation.id)
-		}
-	}
-	var extents []ReservationExtentV1
-	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
-	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
-	// The target metadata extent includes the COW pages, the reservation chain,
-	// and the generation header. Its count does not change the number of
-	// normalized reservation extents, so compute the chain length first.
-	extents = append(extents, ReservationExtentV1{StartPageID: metadataStart, Count: 1, Kind: ReservationTargetMetadata})
-	replaced := make([]uint64, 0, len(t.replacedMetadata))
-	for id := range t.replacedMetadata {
-		replaced = append(replaced, id)
-	}
-	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
-	extents, err := normalizeExtents(extents)
-	if err != nil {
-		return nil, err
-	}
-	pageCount := (len(extents) + reservationEntriesPerPage - 1) / reservationEntriesPerPage
-	if pageCount == 0 {
-		pageCount = 1
-	}
-	headerID := reservationID + uint64(pageCount)
+	headerID := reservationID + pageCount
 	next = headerID + 1
 	for i := range extents {
 		if extents[i].Kind == ReservationTargetMetadata {
-			extents[i].Count = uint32(next - metadataStart)
+			metadataCount := next - metadataStart
+			if metadataCount > uint64(^uint32(0)) {
+				return nil, ErrGenerationFormat
+			}
+			extents[i].Count = uint32(metadataCount)
 			break
 		}
 	}
@@ -533,6 +597,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount, g.root.retiredCount
 	t.stats.GenerationID = generationID
 	t.stats.ReservationRecords = uint64(len(record.pageIDs))
+	t.stats.Reservations = uint64(len(dataIDs)) + (next - metadataStart)
 	t.stats.PendingMetadataRetirements = uint64(len(record.pendingMetadata()))
 	dirty := make([]uint64, len(recorded.pages))
 	for i := range recorded.pages {

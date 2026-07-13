@@ -14,6 +14,7 @@ var (
 	ErrGenerationParent   = errors.New("stale freelist generation parent")
 	ErrPageReserved       = errors.New("freelist page is reserved by a visible candidate")
 	ErrNoAllocatablePage  = errors.New("no allocatable freelist page")
+	ErrCandidateConsumed  = errors.New("freelist candidate transaction already materialized")
 )
 
 const (

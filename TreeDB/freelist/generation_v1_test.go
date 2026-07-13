@@ -118,6 +118,119 @@ func TestFreelistTxn_AllocateSkipsAnotherCandidateReservation(t *testing.T) {
 	}
 }
 
+func TestFreelistTxn_AppendFallbackSkipsAnotherCandidatesMetadataTail(t *testing.T) {
+	ledger := NewReservationLedger()
+	base := MustNewFreelistGenerationV1(1, 8, []uint64{2}, nil)
+	firstID := candidateIDFromString("first-tail-owner")
+	first := NewFreelistTxn(base, ledger)
+	if id, err := first.Allocate(0); err != nil || id != 2 {
+		t.Fatalf("first allocation=(%d,%v), want reused page 2", id, err)
+	}
+	if err := first.Reserve(firstID); err != nil {
+		t.Fatal(err)
+	}
+	firstCandidate, err := first.MaterializeCandidate(2, 2, firstID, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstMetadata := firstCandidate.ReservationRecord().metadataPages()
+	if len(firstMetadata) == 0 || firstMetadata[0] != base.HighWater() {
+		t.Fatalf("first metadata=%v, want tail starting at %d", firstMetadata, base.HighWater())
+	}
+	if got, want := ledger.Reservations(), uint64(1+len(firstMetadata)); got != want {
+		t.Fatalf("first candidate reservations=%d, want data plus metadata=%d", got, want)
+	}
+	for _, id := range firstMetadata {
+		if !ledger.Reserved(id) {
+			t.Fatalf("first candidate metadata page %d is not reserved", id)
+		}
+	}
+
+	secondID := candidateIDFromString("second-tail-owner")
+	second := NewFreelistTxn(base, ledger)
+	allocated, err := second.Allocate(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated != firstCandidate.Generation().HighWater() {
+		t.Fatalf("contention append=%d, want first unreserved tail page %d", allocated, firstCandidate.Generation().HighWater())
+	}
+	if err := second.Reserve(secondID); err != nil {
+		t.Fatal(err)
+	}
+	secondCandidate, err := second.MaterializeCandidate(3, 3, secondID, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range secondCandidate.DirtyPageIDs() {
+		for _, firstID := range firstMetadata {
+			if id == firstID {
+				t.Fatalf("second candidate metadata page %d overlaps first candidate", id)
+			}
+		}
+	}
+	foundAbandoned := false
+	for _, extent := range secondCandidate.ReservationRecord().Entries() {
+		if extent.Kind == ReservationAbandonedAppend && extent.StartPageID == base.HighWater() && uint64(extent.Count) == uint64(len(firstMetadata)) {
+			foundAbandoned = true
+		}
+	}
+	if !foundAbandoned {
+		t.Fatalf("second reservation record does not account for skipped metadata: %+v", secondCandidate.ReservationRecord().Entries())
+	}
+}
+
+func TestFreelistTxn_ReservationRejectsAppendChosenBeforeCompetingMetadataTail(t *testing.T) {
+	ledger := NewReservationLedger()
+	base := MustNewFreelistGenerationV1(1, 8, nil, nil)
+	late := NewFreelistTxn(base, ledger)
+	if id, err := late.Allocate(0); err != nil || id != 8 {
+		t.Fatalf("late allocation=(%d,%v), want append page 8", id, err)
+	}
+
+	earlyID := candidateIDFromString("early-metadata-owner")
+	early := NewFreelistTxn(base, ledger)
+	earlyCandidate, err := early.MaterializeCandidate(2, 2, earlyID, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata := earlyCandidate.ReservationRecord().metadataPages(); len(metadata) == 0 || metadata[0] != 8 {
+		t.Fatalf("early metadata=%v, want tail starting at page 8", metadata)
+	}
+
+	lateID := candidateIDFromString("late-data-owner")
+	if err := late.Reserve(lateID); !errors.Is(err, ErrPageReserved) {
+		t.Fatalf("late reserve error=%v, want metadata-tail collision rejection", err)
+	}
+	if _, err := late.MaterializeCandidate(3, 3, lateID, NewMemoryPageStoreV1()); !errors.Is(err, ErrPageReserved) {
+		t.Fatalf("late materialization error=%v, want metadata-tail collision rejection", err)
+	}
+}
+
+type failingPageSinkV1 struct{}
+
+func (failingPageSinkV1) WritePage(uint64, []byte) error {
+	return errors.New("injected page write failure")
+}
+
+func TestFreelistTxn_SinkFailureConsumesTransaction(t *testing.T) {
+	ledger := NewReservationLedger()
+	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 8, []uint64{2}, nil), ledger)
+	candidateID := candidateIDFromString("failed-materialization")
+	if _, err := txn.MaterializeCandidate(2, 2, candidateID, failingPageSinkV1{}); err == nil {
+		t.Fatal("materialization unexpectedly succeeded")
+	}
+	if err := ledger.Fail(candidateID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("unsafe-retry"), NewMemoryPageStoreV1()); !errors.Is(err, ErrCandidateConsumed) {
+		t.Fatalf("retry error=%v, want consumed transaction", err)
+	}
+	if _, err := txn.Allocate(0); !errors.Is(err, ErrCandidateConsumed) {
+		t.Fatalf("post-failure allocation error=%v, want consumed transaction", err)
+	}
+}
+
 func TestReservationLedger_VisibleAndAmbiguousStatesRetainOwnership(t *testing.T) {
 	ledger := NewReservationLedger()
 	candidateID := candidateIDFromString("candidate")

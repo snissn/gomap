@@ -2203,11 +2203,19 @@ canonical zero tail, chain order and cardinality, sorted entries, acyclic page
 graph, bounds below high-water, summary counts, and semantic digest.
 
 Freelist metadata pages are allocated only from the candidate-owned high-water
-tail. Replaced parent header, reservation-chain, chunk, and index pages are recorded
-with the parent's commit sequence and imported as retired state by the next
-candidate; they are not recursively inserted into the generation that replaces
-them. Physical file-length convergence is consequently a #3681 vacuum/rewrite
-property, not a claim of this high-water-only codec.
+tail. Before any metadata page is written, the process reservation ledger
+atomically owns the candidate's complete contiguous metadata range as well as
+its data-page allocations. A competing candidate skips an owned tail range;
+its durable reservation record classifies the skipped prefix as abandoned
+append space instead of silently treating those page IDs as its own data or
+metadata. A candidate transaction is single-use once materialization begins:
+after any page-sink failure, retry starts from the immutable base rather than
+reusing a partially assigned COW tree. Replaced parent header,
+reservation-chain, chunk, and index pages are recorded with the parent's commit
+sequence and imported as retired state by the next candidate; they are not
+recursively inserted into the generation that replaces them. Physical
+file-length convergence is consequently a #3681 vacuum/rewrite property, not a
+claim of this high-water-only codec.
 
 Pages enter the free set only through an explicit recovery capability. Their
 `lastReachableCommitSeq` must be strictly before the oldest recoverable root,

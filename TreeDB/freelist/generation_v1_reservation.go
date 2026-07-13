@@ -274,8 +274,11 @@ const (
 )
 
 type reservation struct {
-	state CandidateState
-	ids   map[uint64]struct{}
+	state        CandidateState
+	ids          []uint64
+	tailReserved bool
+	tailStart    uint64
+	tailCount    uint64
 }
 
 type ReservationLedger struct {
@@ -291,8 +294,31 @@ func NewReservationLedger() *ReservationLedger {
 func (l *ReservationLedger) Reserved(id uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, ok := l.owners[id]
-	return ok
+	return l.reservedLocked(id)
+}
+
+func (l *ReservationLedger) reservedLocked(id uint64) bool {
+	if _, ok := l.owners[id]; ok {
+		return true
+	}
+	for _, candidate := range l.candidates {
+		if candidate.tailReserved && id >= candidate.tailStart && id-candidate.tailStart < candidate.tailCount {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *ReservationLedger) reservedByOtherLocked(candidate CandidateIDV1, id uint64) bool {
+	if owner, ok := l.owners[id]; ok && owner != candidate {
+		return true
+	}
+	for idCandidate, reservation := range l.candidates {
+		if idCandidate != candidate && reservation.tailReserved && id >= reservation.tailStart && id-reservation.tailStart < reservation.tailCount {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64) error {
@@ -305,16 +331,119 @@ func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64) error
 		return fmt.Errorf("candidate %x exists", candidate)
 	}
 	for _, id := range ids {
-		if _, exists := l.owners[id]; exists {
+		if l.reservedByOtherLocked(candidate, id) {
 			return ErrPageReserved
 		}
 	}
-	r := &reservation{state: CandidatePreVisible, ids: make(map[uint64]struct{}, len(ids))}
+	r := &reservation{state: CandidatePreVisible, ids: append([]uint64(nil), ids...)}
 	for _, id := range ids {
-		l.owners[id], r.ids[id] = candidate, struct{}{}
+		l.owners[id] = candidate
 	}
 	l.candidates[candidate] = r
 	return nil
+}
+
+func (l *ReservationLedger) firstConflictingOwnerLocked(start, count uint64) (uint64, bool, bool) {
+	if count == 0 || start > ^uint64(0)-count {
+		return 0, false, false
+	}
+	end := start + count
+	for id := start; id < end; id++ {
+		if l.reservedLocked(id) {
+			return id, true, true
+		}
+	}
+	return 0, false, true
+}
+
+func reservationPagesForEntries(entries uint64) uint64 {
+	if entries == 0 {
+		return 1
+	}
+	perPage := uint64(reservationEntriesPerPage)
+	return (entries-1)/perPage + 1
+}
+
+// reserveTail atomically chooses and owns a contiguous metadata range. The
+// range may move above another candidate's reservation; callers persist the
+// skipped prefix as abandoned append space in their reservation record.
+func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount, baseExtentCount uint64, dataIDs []uint64) (uint64, uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if candidate == (CandidateIDV1{}) || minimumStart < 2 {
+		return 0, 0, ErrGenerationFormat
+	}
+	r := l.candidates[candidate]
+	if r != nil && r.state != CandidatePreVisible {
+		return 0, 0, fmt.Errorf("candidate %x is already visible", candidate)
+	}
+	if r != nil && r.tailReserved {
+		return 0, 0, fmt.Errorf("candidate %x metadata tail already reserved", candidate)
+	}
+	for _, id := range dataIDs {
+		if l.reservedByOtherLocked(candidate, id) {
+			return 0, 0, ErrPageReserved
+		}
+	}
+	start := minimumStart
+	var count uint64
+	for {
+		skippedExtentCount := uint64(0)
+		if skipped := start - minimumStart; skipped != 0 {
+			skippedExtentCount = (skipped-1)/uint64(^uint32(0)) + 1
+		}
+		if baseExtentCount > ^uint64(0)-skippedExtentCount-1 {
+			return 0, 0, ErrGenerationFormat
+		}
+		recordPageCount := reservationPagesForEntries(baseExtentCount + skippedExtentCount + 1)
+		if recordPageCount > uint64(^uint16(0)) || statePageCount > ^uint64(0)-recordPageCount-1 {
+			return 0, 0, ErrGenerationFormat
+		}
+		count = statePageCount + recordPageCount + 1
+		if count > uint64(^uint32(0)) {
+			return 0, 0, ErrGenerationFormat
+		}
+		conflictID, conflict, valid := l.firstConflictingOwnerLocked(start, count)
+		if !valid {
+			return 0, 0, ErrNoAllocatablePage
+		}
+		if !conflict {
+			break
+		}
+		if conflictID == ^uint64(0) {
+			return 0, 0, ErrNoAllocatablePage
+		}
+		start = conflictID + 1
+	}
+	if r == nil {
+		r = &reservation{state: CandidatePreVisible, ids: make([]uint64, 0, len(dataIDs))}
+		l.candidates[candidate] = r
+	}
+	for _, id := range dataIDs {
+		if owner, exists := l.owners[id]; !exists {
+			l.owners[id] = candidate
+			r.ids = append(r.ids, id)
+		} else if owner != candidate || l.reservedByOtherLocked(candidate, id) {
+			return 0, 0, ErrPageReserved
+		}
+	}
+	r.tailReserved = true
+	r.tailStart = start
+	r.tailCount = count
+	return start, count, nil
+}
+
+func (l *ReservationLedger) firstUnreservedAtOrAfter(start uint64) (uint64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id := start; ; id++ {
+		if !l.reservedLocked(id) {
+			return id, true
+		}
+		if id == ^uint64(0) {
+			return 0, false
+		}
+	}
 }
 
 func (l *ReservationLedger) transition(candidate CandidateIDV1, to CandidateState) error {
@@ -361,7 +490,7 @@ func (l *ReservationLedger) Supersede(old, next CandidateIDV1) error {
 	}
 	l.candidates[next] = r
 	delete(l.candidates, old)
-	for id := range r.ids {
+	for _, id := range r.ids {
 		l.owners[id] = next
 	}
 	return nil
@@ -377,7 +506,7 @@ func (l *ReservationLedger) release(candidate CandidateIDV1, preVisibleOnly bool
 	if preVisibleOnly && r.state != CandidatePreVisible {
 		return fmt.Errorf("candidate %x is visible", candidate)
 	}
-	for id := range r.ids {
+	for _, id := range r.ids {
 		delete(l.owners, id)
 	}
 	delete(l.candidates, candidate)
@@ -391,5 +520,12 @@ func (l *ReservationLedger) Publish(c CandidateIDV1) error { return l.release(c,
 func (l *ReservationLedger) Reservations() uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return uint64(len(l.owners))
+	count := uint64(len(l.owners))
+	for _, candidate := range l.candidates {
+		if ^uint64(0)-count < candidate.tailCount {
+			return ^uint64(0)
+		}
+		count += candidate.tailCount
+	}
+	return count
 }
