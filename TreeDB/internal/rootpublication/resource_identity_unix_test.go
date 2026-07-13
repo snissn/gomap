@@ -50,3 +50,36 @@ func TestOpenStableChildFileUsesCapturedParentAfterPathReplacement(t *testing.T)
 		t.Fatal(err)
 	}
 }
+
+func TestStableNamespaceRejectsChildReplacementBeforeStabilize(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	original, err := OpenStableChildFile(parent, "000001.vlog", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: original, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "000001.vlog", DiagnosticPath: "display-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer namespace.Release()
+	if err := os.Rename(filepath.Join(dir, "000001.vlog"), filepath.Join(dir, "original.vlog")); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := OpenStableChildFile(parent, "000001.vlog", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = replacement.Close()
+	if err := namespace.Stabilize(); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("Stabilize after child replacement error=%v want ErrResourceConflict", err)
+	}
+}

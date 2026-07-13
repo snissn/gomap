@@ -308,7 +308,11 @@ type StableResourceSpec struct {
 	LogicalObligations []StableLogicalObligation
 	FlushThrough       resourceOperation
 	SyncThrough        resourceOperation
-	OnRelease          func()
+	// ContentSynced records that the exact registered frontier was already
+	// persisted before capture. A later coalesced frontier is not covered and
+	// must still execute SyncThrough on the pinned identity.
+	ContentSynced bool
+	OnRelease     func()
 
 	// StableIdentityOverride exists for deterministic platform-adapter and
 	// conflict tests. Production producers leave it zero and use handle identity.
@@ -339,6 +343,8 @@ type StableResourceToken struct {
 	pinned             *os.File
 	flush              resourceOperation
 	sync               resourceOperation
+	syncedFrontier     DurableFrontier
+	hasSyncedFrontier  bool
 	onRelease          func()
 	owner              atomic.Uint32
 	released           atomic.Bool
@@ -413,6 +419,10 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		stability: stability, namespace: spec.Namespace, pinned: pinned,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease,
 	}
+	if spec.ContentSynced {
+		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
+		token.hasSyncedFrontier = true
+	}
 	token.owner.Store(uint32(ResourceOwnerToken))
 	token.metrics.registeredNanos = time.Now().UnixNano()
 	if token.namespace != nil {
@@ -475,10 +485,34 @@ func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
 		return ErrResourceOwnership
 	}
 	started := time.Now()
-	err := token.sync(token.pinned, frontier)
+	var err error
+	if !token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier) {
+		err = token.sync(token.pinned, frontier)
+	}
 	token.metrics.syncs.Add(1)
 	token.metrics.syncNanos.Add(uint64(time.Since(started)))
 	return err
+}
+
+func durableFrontierCovers(stable, required DurableFrontier) bool {
+	if stable.Bytes < required.Bytes || stable.MaxLSN < required.MaxLSN {
+		return false
+	}
+	stableRIDs, requiredRIDs := stable.RIDs(), required.RIDs()
+	if len(requiredRIDs) == 0 {
+		return true
+	}
+	i := 0
+	for _, requiredRID := range requiredRIDs {
+		for i < len(stableRIDs) && stableRIDs[i] < requiredRID {
+			i++
+		}
+		if i == len(stableRIDs) || stableRIDs[i] != requiredRID {
+			return false
+		}
+		i++
+	}
+	return true
 }
 
 func (token *StableResourceToken) ReadAt(dst []byte, offset int64) (int, error) {
@@ -602,6 +636,7 @@ func maxFrontier(older, newer DurableFrontier) DurableFrontier {
 type namespacePersistenceAdapter interface {
 	Identity(*os.File) (StableIdentity, error)
 	ValidateLink(*os.File, *os.File, string) error
+	ValidateIdentity(*os.File, StableIdentity, string) error
 	Sync(*os.File) error
 }
 
@@ -613,6 +648,10 @@ func (nativeNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
 
 func (nativeNamespaceAdapter) ValidateLink(parent, resource *os.File, name string) error {
 	return validateStableChildLink(parent, resource, name)
+}
+
+func (nativeNamespaceAdapter) ValidateIdentity(parent *os.File, identity StableIdentity, name string) error {
+	return validateStableChildIdentity(parent, identity, name)
 }
 
 func (nativeNamespaceAdapter) Sync(file *os.File) error {
@@ -714,6 +753,20 @@ func OpenStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 }
 
 func validateStableChildLink(parent, resource *os.File, name string) error {
+	resourceIdentity, err := stableIdentityFromFile(resource)
+	if err != nil {
+		return err
+	}
+	return validateStableChildIdentity(parent, resourceIdentity, name)
+}
+
+// ValidateStableChildLink proves that resource is the entry named from the
+// exact retained parent handle. It never resolves the parent's diagnostic path.
+func ValidateStableChildLink(parent, resource *os.File, name string) error {
+	return validateStableChildLink(parent, resource, name)
+}
+
+func validateStableChildIdentity(parent *os.File, resourceIdentity StableIdentity, name string) error {
 	linked, err := OpenStableChildFile(parent, name, os.O_RDONLY, 0)
 	if err != nil {
 		if errors.Is(err, ErrNamespacePersistenceUnsupported) {
@@ -723,10 +776,6 @@ func validateStableChildLink(parent, resource *os.File, name string) error {
 	}
 	defer linked.Close()
 	linkedIdentity, err := stableIdentityFromFile(linked)
-	if err != nil {
-		return err
-	}
-	resourceIdentity, err := stableIdentityFromFile(resource)
 	if err != nil {
 		return err
 	}
@@ -756,6 +805,13 @@ func (token *StableNamespaceToken) Stabilize() error {
 		return token.stabilizeErr
 	}
 	started := time.Now()
+	if token.hasLinkedResource {
+		if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
+			token.stabilizeErr = err
+			token.state.Store(namespaceFailed)
+			return err
+		}
+	}
 	err := token.adapter.Sync(token.parent)
 	token.syncs.Add(1)
 	token.syncNanos.Add(uint64(time.Since(started)))

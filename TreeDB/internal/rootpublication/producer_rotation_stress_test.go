@@ -16,6 +16,9 @@ import (
 )
 
 func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stable relative directory-handle operations are unsupported on windows")
+	}
 	const iterations = 320
 	root := t.TempDir()
 	valueDir := filepath.Join(root, "value_vlog")

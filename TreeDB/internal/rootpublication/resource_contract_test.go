@@ -8,12 +8,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func requireNativeStableNamespace(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stable relative directory-handle operations are unsupported on windows")
+	}
+}
 
 func writeStableResourceFixture(t testing.TB, dir, name, contents string) *os.File {
 	t.Helper()
@@ -54,6 +62,7 @@ func stableTokenFixture(t testing.TB, dir, name string, generation, frontier uin
 }
 
 func TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing.T) {
+	requireNativeStableNamespace(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "000001.vlog")
 	file := writeStableResourceFixture(t, dir, "000001.vlog", "old-identity")
@@ -93,6 +102,7 @@ func TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing
 }
 
 func TestStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
+	requireNativeStableNamespace(t)
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -372,6 +382,73 @@ func TestStableResourceSetSyncUsesCoalescedGreatestFrontier(t *testing.T) {
 	}
 	if got := synced.Load(); got != 16 {
 		t.Fatalf("sync frontier=%d want coalesced greatest frontier 16", got)
+	}
+}
+
+func TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier(t *testing.T) {
+	for _, syncedFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("synced-first=%t", syncedFirst), func(t *testing.T) {
+			dir := t.TempDir()
+			file, err := os.OpenFile(filepath.Join(dir, "shared.vlog"), os.O_CREATE|os.O_RDWR, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if _, err := file.Write([]byte("12345678")); err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			var syncCalls atomic.Uint64
+			var syncedBytes atomic.Uint64
+			newToken := func(frontier uint64, alreadySynced bool) *StableResourceToken {
+				token, err := NewStableResourceToken(StableResourceSpec{
+					Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "shared", Generation: 1,
+					DiagnosticPath: "shared.vlog", File: file, Frontier: DurableFrontier{Bytes: frontier},
+					Digest: sha256.Sum256([]byte("same-header")), Reachability: ReachabilityValueLogPointer,
+					ContentSynced: alreadySynced,
+					SyncThrough: func(_ *os.File, requested DurableFrontier) error {
+						syncCalls.Add(1)
+						syncedBytes.Store(requested.Bytes)
+						return nil
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return token
+			}
+			synced := newToken(8, true)
+			if _, err := file.Write([]byte("abcdefgh")); err != nil {
+				t.Fatal(err)
+			}
+			advanced := newToken(16, false)
+			builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+			ordered := []*StableResourceToken{synced, advanced}
+			if !syncedFirst {
+				ordered[0], ordered[1] = ordered[1], ordered[0]
+			}
+			for _, token := range ordered {
+				if err := builder.Add(token); err != nil {
+					t.Fatal(err)
+				}
+			}
+			set, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Release()
+			if err := set.SyncThrough(); err != nil {
+				t.Fatal(err)
+			}
+			if got := syncCalls.Load(); got != 1 {
+				t.Fatalf("physical sync calls=%d want 1", got)
+			}
+			if got := syncedBytes.Load(); got != 16 {
+				t.Fatalf("synced bytes=%d want 16", got)
+			}
+		})
 	}
 }
 
@@ -923,6 +1000,9 @@ func (unsupportedNamespaceAdapter) Sync(*os.File) error {
 }
 
 func (unsupportedNamespaceAdapter) ValidateLink(*os.File, *os.File, string) error { return nil }
+func (unsupportedNamespaceAdapter) ValidateIdentity(*os.File, StableIdentity, string) error {
+	return nil
+}
 
 type countingNamespaceAdapter struct {
 	syncs atomic.Uint64
@@ -939,6 +1019,9 @@ func (adapter *countingNamespaceAdapter) Sync(*os.File) error {
 }
 
 func (*countingNamespaceAdapter) ValidateLink(*os.File, *os.File, string) error { return nil }
+func (*countingNamespaceAdapter) ValidateIdentity(*os.File, StableIdentity, string) error {
+	return nil
+}
 
 type exactParentNamespaceAdapter struct {
 	syncedIdentity StableIdentity
@@ -954,6 +1037,10 @@ func (adapter *exactParentNamespaceAdapter) ValidateLink(parent, resource *os.Fi
 	return validateStableChildLink(parent, resource, name)
 }
 
+func (adapter *exactParentNamespaceAdapter) ValidateIdentity(parent *os.File, identity StableIdentity, name string) error {
+	return validateStableChildIdentity(parent, identity, name)
+}
+
 func (adapter *exactParentNamespaceAdapter) Sync(parent *os.File) error {
 	identity, err := stableIdentityFromFile(parent)
 	if err == nil {
@@ -963,6 +1050,7 @@ func (adapter *exactParentNamespaceAdapter) Sync(parent *os.File) error {
 }
 
 func TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate(t *testing.T) {
+	requireNativeStableNamespace(t)
 	root := t.TempDir()
 	originalDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(originalDir, 0o700); err != nil {
@@ -1017,6 +1105,7 @@ func TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate(t *testing.T) 
 }
 
 func TestStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
+	requireNativeStableNamespace(t)
 	root := t.TempDir()
 	leftDir, rightDir := filepath.Join(root, "left"), filepath.Join(root, "right")
 	if err := os.Mkdir(leftDir, 0o700); err != nil {
@@ -1041,6 +1130,7 @@ func TestStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
 }
 
 func TestStableResourceNamespaceRequiresExactLinkedChild(t *testing.T) {
+	requireNativeStableNamespace(t)
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -1090,6 +1180,7 @@ func TestStableResourceNamespaceRequiresExactLinkedChild(t *testing.T) {
 }
 
 func TestStableResourceNamespaceAcceptsExactLinkedChild(t *testing.T) {
+	requireNativeStableNamespace(t)
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -1609,6 +1700,7 @@ func TestConflictingCandidateRejectedBeforeVisibleFrontier(t *testing.T) {
 }
 
 func TestStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
+	requireNativeStableNamespace(t)
 	dir := t.TempDir()
 	resource := writeStableResourceFixture(t, dir, "metrics.vlog", "original-resource-bytes")
 	parent, err := os.Open(dir)

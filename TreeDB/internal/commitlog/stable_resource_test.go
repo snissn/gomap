@@ -5,13 +5,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func requireStableCommandWALNamespace(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stable relative directory-handle operations are unsupported on windows")
+	}
+}
+
 func TestCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) {
+	requireStableCommandWALNamespace(t)
 	root := t.TempDir()
 	walDir := filepath.Join(root, "wal")
 	journal, err := OpenCommandJournal(walDir, CommandJournalOptions{Lane: 5})
@@ -25,23 +34,12 @@ func TestCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) 
 		t.Fatal(err)
 	}
 	movedDir := filepath.Join(root, "wal-moved")
-	originalOpenParent := openStableCommandWALParent
-	openStableCommandWALParent = func(path string) (*os.File, error) {
-		parent, err := os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-		if err := os.Rename(walDir, movedDir); err != nil {
-			_ = parent.Close()
-			return nil, err
-		}
-		if err := os.Mkdir(walDir, 0o700); err != nil {
-			_ = parent.Close()
-			return nil, err
-		}
-		return parent, nil
+	if err := os.Rename(walDir, movedDir); err != nil {
+		t.Fatal(err)
 	}
-	defer func() { openStableCommandWALParent = originalOpenParent }()
+	if err := os.Mkdir(walDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	before := journal.WriterDurabilityStats()
 	rotation, err := journal.RotateActiveSegmentWithStableResources(false)
 	if err != nil {
@@ -84,6 +82,7 @@ func TestCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) 
 }
 
 func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
+	requireStableCommandWALNamespace(t)
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 3})
 	if err != nil {
@@ -119,7 +118,77 @@ func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	}
 }
 
+func TestCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t *testing.T) {
+	requireStableCommandWALNamespace(t)
+	dir := t.TempDir()
+	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	appendedLSN, err := journal.AppendCommand(CommandEnvelope{
+		Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservedOnly, err := journal.owner.reserveLSN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reservedOnly <= appendedLSN {
+		t.Fatalf("reserved LSN=%d want greater than appended %d", reservedOnly, appendedLSN)
+	}
+	rotation, err := journal.RotateActiveSegmentWithStableResources(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	if got := rotation.Closed.Frontier().MaxLSN; got != appendedLSN {
+		t.Fatalf("closed segment MaxLSN=%d want appended LSN %d, excluding reserved-only %d", got, appendedLSN, reservedOnly)
+	}
+}
+
+func TestCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
+	requireStableCommandWALNamespace(t)
+	dir := t.TempDir()
+	journal, err := OpenCommandJournal(dir, CommandJournalOptions{
+		Lane: 2, SegmentTargetBytes: 1, CaptureStableResources: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	for i := 0; i < 2; i++ {
+		if _, err := journal.AppendCommand(CommandEnvelope{
+			Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotations := journal.TakePendingStableRotations()
+	if len(rotations) == 0 {
+		t.Fatal("automatic size rotation returned no stable resources")
+	}
+	for _, rotation := range rotations {
+		if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
+			t.Fatalf("incomplete automatic stable rotation: %+v", rotation)
+		}
+		if rotation.Closed.Frontier().MaxLSN == 0 || rotation.Closed.Frontier().Bytes == 0 {
+			t.Fatalf("closed automatic rotation lost frontier: %+v", rotation.Closed.Frontier())
+		}
+		if rotation.Active.Namespace() == nil {
+			t.Fatal("automatic successor has no stable namespace token")
+		}
+		rotation.Release()
+	}
+	if again := journal.TakePendingStableRotations(); len(again) != 0 {
+		t.Fatalf("stable rotations transferred twice: %d", len(again))
+	}
+}
+
 func TestCommandJournalStableRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
+	requireStableCommandWALNamespace(t)
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 4})
 	if err != nil {
@@ -180,6 +249,7 @@ func TestCommandJournalRecordAppendDoesNotAddNamespaceSync(t *testing.T) {
 }
 
 func BenchmarkStableCommandWALRotation(b *testing.B) {
+	requireStableCommandWALNamespace(b)
 	for _, syncCurrent := range []bool{false, true} {
 		b.Run(fmt.Sprintf("sync_current=%t", syncCurrent), func(b *testing.B) {
 			journal, err := OpenCommandJournal(b.TempDir(), CommandJournalOptions{Lane: 5})

@@ -370,9 +370,9 @@ func writeColumnAssetToManagerWithStats(rootDir string, cfg ColumnStoreConfig, p
 
 func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, *rootpublication.StableResourceToken, error) {
 	var token *rootpublication.StableResourceToken
-	capture := func(file, parent *os.File, ref ColumnAssetRef, namespace columnAssetManagerNamespace, created bool) (bool, error) {
+	capture := func(file, parent *os.File, ref ColumnAssetRef, namespace columnAssetManagerNamespace, namespaceNeedsSync bool) (bool, error) {
 		var namespaceToken *rootpublication.StableNamespaceToken
-		if created {
+		if namespaceNeedsSync {
 			var err error
 			namespaceToken, err = stableColumnAssetNamespaceToken(parent, file, ref)
 			if err != nil {
@@ -386,7 +386,7 @@ func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStore
 		}
 		var err error
 		token, err = stableColumnAssetResourceToken(file, ref, namespaceToken)
-		return created, err
+		return namespaceNeedsSync, err
 	}
 	ref, _, err := writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID, capture)
 	if err != nil {
@@ -463,11 +463,11 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 		defer stableParent.Close()
 	}
 	var file *os.File
-	var needsDirSync, created bool
+	var needsDirSync bool
 	if stableParent != nil {
-		file, needsDirSync, created, err = openColumnAssetSegmentAppendFileAt(stableParent, assetPath)
+		file, needsDirSync, _, err = openColumnAssetSegmentAppendFileAt(stableParent, assetPath)
 	} else {
-		file, needsDirSync, created, err = openColumnAssetSegmentAppendFile(assetPath)
+		file, needsDirSync, _, err = openColumnAssetSegmentAppendFile(assetPath)
 	}
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
@@ -513,8 +513,8 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	directoryStable := false
 	if capture != nil {
 		start = time.Now()
-		directoryStable, err = capture(file, stableParent, ref, namespace, created)
-		if created {
+		directoryStable, err = capture(file, stableParent, ref, namespace, needsDirSync)
+		if needsDirSync {
 			closeStats.DirSync += time.Since(start)
 		}
 		if err != nil {
@@ -530,6 +530,9 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	closeFile = false
 	if needsDirSync {
 		if !directoryStable {
+			if capture != nil {
+				return ColumnAssetRef{}, closeStats, fmt.Errorf("%w: stable column asset capture did not stabilize namespace", rootpublication.ErrUnresolvedResource)
+			}
 			start = time.Now()
 			if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
 				closeStats.DirSync += time.Since(start)

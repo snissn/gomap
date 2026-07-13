@@ -6,13 +6,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func requireStableValueLogNamespace(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stable relative directory-handle operations are unsupported on windows")
+	}
+}
+
 func TestStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
+	requireStableValueLogNamespace(t)
 	root := t.TempDir()
 	segmentDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(segmentDir, 0o700); err != nil {
@@ -75,6 +84,7 @@ func TestStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
 }
 
 func TestStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
+	requireStableValueLogNamespace(t)
 	root := t.TempDir()
 	segmentDir := filepath.Join(root, "segments")
 	if err := os.Mkdir(segmentDir, 0o700); err != nil {
@@ -89,23 +99,12 @@ func TestStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	movedDir := filepath.Join(root, "segments-moved")
-	originalOpenParent := openStableValueLogParent
-	openStableValueLogParent = func(path string) (*os.File, error) {
-		parent, err := os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-		if err := os.Rename(segmentDir, movedDir); err != nil {
-			_ = parent.Close()
-			return nil, err
-		}
-		if err := os.Mkdir(segmentDir, 0o700); err != nil {
-			_ = parent.Close()
-			return nil, err
-		}
-		return parent, nil
+	if err := os.Rename(segmentDir, movedDir); err != nil {
+		t.Fatal(err)
 	}
-	defer func() { openStableValueLogParent = originalOpenParent }()
+	if err := os.Mkdir(segmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	rotation, err := writer.RotateToWithStableResources(filepath.Join(segmentDir, "000002.vlog"), 2, false,
 		StableResourceRegistration{LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog", Reachability: rootpublication.ReachabilityValueLogPointer},
 		StableResourceRegistration{LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog", Reachability: rootpublication.ReachabilityValueLogPointer,
@@ -143,6 +142,7 @@ func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
 }
 
 func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.T) {
+	requireStableValueLogNamespace(t)
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
 	writer, err := NewWriter(firstPath, 1)
@@ -207,6 +207,7 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 }
 
 func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
+	requireStableValueLogNamespace(t)
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
 	writer, err := NewWriter(firstPath, 1)
@@ -321,6 +322,7 @@ func TestStableValueLogRegistrationRejectsForeignProducerField(t *testing.T) {
 }
 
 func BenchmarkStableValueLogRotation(b *testing.B) {
+	requireStableValueLogNamespace(b)
 	for _, syncCurrent := range []bool{false, true} {
 		b.Run(fmt.Sprintf("sync_current=%t", syncCurrent), func(b *testing.B) {
 			dir := b.TempDir()

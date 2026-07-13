@@ -14,6 +14,18 @@ import (
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 var openStableValueLogParent = os.Open
 
+func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
+	parent, err := openStableValueLogParent(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	if err := rootpublication.ValidateStableChildLink(parent, resource, filepath.Base(path)); err != nil {
+		_ = parent.Close()
+		return nil, err
+	}
+	return parent, nil
+}
+
 // NewStableValueLogResourceToken registers an exact already-open persistent
 // value-log handle, including the external-RID fence view used by command WAL.
 func NewStableValueLogResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
@@ -135,9 +147,7 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-	}
-	if contentSynced {
-		spec.SyncThrough = func(*os.File, rootpublication.DurableFrontier) error { return nil }
+		ContentSynced: contentSynced,
 	}
 	switch domain {
 	case rootpublication.StableProducerValueLog:
@@ -232,13 +242,14 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if err != nil {
 		return nil, err
 	}
-	parent, err := openStableValueLogParent(filepath.Dir(path))
-	if err != nil {
+	if w.stableParentErr != nil || w.stableParent == nil {
 		closedToken.Release()
-		return nil, err
+		if w.stableParentErr != nil {
+			return nil, fmt.Errorf("valuelog: stable parent unavailable: %w", w.stableParentErr)
+		}
+		return nil, errors.New("valuelog: stable parent unavailable")
 	}
-	defer parent.Close()
-	prepared, err := openStableValueLogFile(parent, path)
+	prepared, err := openStableValueLogFile(w.stableParent, path)
 	if err != nil {
 		closedToken.Release()
 		return nil, err
@@ -254,11 +265,11 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		closedToken.Release()
 		return nil, err
 	}
-	if active.NamespaceParent != nil {
+	if active.NamespaceParent != nil && active.NamespaceParent != w.stableParent {
 		closedToken.Release()
-		return nil, fmt.Errorf("%w: valuelog stable rotation owns active parent capture", rootpublication.ErrResourceConflict)
+		return nil, fmt.Errorf("%w: valuelog active parent differs from retained writer parent", rootpublication.ErrResourceConflict)
 	}
-	active.NamespaceParent = parent
+	active.NamespaceParent = w.stableParent
 	if active.NewName != "" && active.NewName != filepath.Base(path) {
 		closedToken.Release()
 		return nil, fmt.Errorf("%w: valuelog active namespace name %q differs from %q", rootpublication.ErrResourceConflict, active.NewName, filepath.Base(path))

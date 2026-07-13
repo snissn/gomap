@@ -160,10 +160,9 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
 		LogicalObligations: []rootpublication.StableLogicalObligation{stableColumnLogicalObligation(ref, reachability)},
-		// The producer synchronizes the segment before it captures the token.
-		// Publication must account for that step without syncing the same file a
-		// second time.
-		SyncThrough: func(*os.File, rootpublication.DurableFrontier) error { return nil },
+		// The producer synchronizes the exact registered frontier before capture.
+		// A later coalesced frontier still performs a real sync.
+		ContentSynced: true,
 	})
 }
 

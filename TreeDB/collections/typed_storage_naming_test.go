@@ -472,7 +472,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_storage_layout.go", classification: typedStorageLegacyCompatibility, matchingLines: 26, occurrences: 52},
 	{path: "TreeDB/collections/typed_storage_layout_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 41, occurrences: 41},
 	{path: "TreeDB/collections/typed_storage_naming_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 33, occurrences: 33},
-	{path: "TreeDB/collections/stable_resource_inventory_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/collections/stable_resource_inventory_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/docs/spec/authority-inventory.md", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 56},
 	{path: "TreeDB/internal/authorityinventory/inventory.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
 	{path: "TreeDB/internal/authorityinventory/inventory_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},

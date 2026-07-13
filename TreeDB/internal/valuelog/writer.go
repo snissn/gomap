@@ -79,6 +79,8 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 
 type Writer struct {
 	f                      *os.File
+	stableParent           *os.File
+	stableParentErr        error
 	bw                     *bufio.Writer
 	size                   int64
 	fileID                 uint32
@@ -602,15 +604,22 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		f:      f,
 		syncFn: syncFn,
 	}
+	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
 	if syncDirectory {
 		if err := syncNewFileDirectory(w, path); err != nil {
 			_ = f.Close()
+			if w.stableParent != nil {
+				_ = w.stableParent.Close()
+			}
 			return nil, err
 		}
 	}
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+		}
 		return nil, err
 	}
 	w.f = f
@@ -2453,13 +2462,28 @@ func (w *Writer) Close() error {
 		if w.f != nil {
 			_ = w.f.Close()
 		}
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+			w.stableParent = nil
+		}
 		return err
 	}
 	if w.f == nil {
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+			w.stableParent = nil
+		}
 		return nil
 	}
+	var first error
 	if err := w.f.Close(); err != nil {
-		return err
+		first = err
 	}
-	return nil
+	if w.stableParent != nil {
+		if err := w.stableParent.Close(); err != nil && first == nil {
+			first = err
+		}
+		w.stableParent = nil
+	}
+	return first
 }

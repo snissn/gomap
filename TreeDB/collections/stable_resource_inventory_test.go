@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -17,7 +18,15 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func requireStableColumnNamespace(t testing.TB) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stable relative directory-handle operations are unsupported on windows")
+	}
+}
+
 func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T) {
+	requireStableColumnNamespace(t)
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -93,6 +102,95 @@ func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 	stats := set.Stats(time.Now())
 	if len(stats) != 1 || stats[0].NamespaceSyncs != 1 || stats[0].Flushes != 1 || stats[0].Syncs != 1 {
 		t.Fatalf("column stable operation counts=%+v", stats)
+	}
+}
+
+func TestStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParent(t *testing.T) {
+	requireStableColumnNamespace(t)
+	dir := t.TempDir()
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "existing_captured_parent",
+		},
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(dir, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatal(err)
+	}
+	refForPath := ColumnAssetRef{Namespace: cfg.AssetManager.Namespace, FileID: columnAssetM12ASegmentFileID}
+	segmentPath, err := columnAssetSegmentPath(dir, refForPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const existing = "existing-segment-prefix"
+	if err := os.WriteFile(segmentPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearColumnAssetSegmentDirSyncKnown(segmentPath)
+
+	movedDir := namespace.SegmentDir + "-moved"
+	originalOpenParent := openStableColumnAssetParent
+	openStableColumnAssetParent = func(path string) (*os.File, error) {
+		parent, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Rename(path, movedDir); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		// Deliberately leave path absent. A path-based directory-sync fallback
+		// would fail; stable capture must use the retained parent handle.
+		return parent, nil
+	}
+	defer func() { openStableColumnAssetParent = originalOpenParent }()
+
+	ref, token, err := writeColumnAssetToManagerWithStableResource(
+		dir, cfg, []byte("stable-append"), ColumnAssetKindQueryReadyBase, 7, 11,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	if token.Namespace() == nil {
+		t.Fatal("existing segment with unknown directory stability missing namespace token")
+	}
+	if ref.Offset != int64(len(existing)) {
+		t.Fatalf("append offset=%d want %d", ref.Offset, len(existing))
+	}
+	if _, err := os.Stat(namespace.SegmentDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("original segment path unexpectedly exists: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(movedDir, filepath.Base(segmentPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != existing+"stable-append" {
+		t.Fatalf("captured-parent segment contents=%q", got)
+	}
+
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := set.FlushThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	stats := set.Stats(time.Now())
+	if len(stats) != 1 || stats[0].NamespaceSyncs != 1 {
+		t.Fatalf("stable operation counts=%+v want one namespace sync", stats)
 	}
 }
 
@@ -203,6 +301,7 @@ func declaredColumnAssetKinds(t *testing.T) map[string]ColumnAssetKind {
 }
 
 func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testing.T) {
+	requireStableColumnNamespace(t)
 	for _, reverse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "creation-first", true: "creation-last"}[reverse], func(t *testing.T) {
 			dir := t.TempDir()
@@ -287,6 +386,7 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 }
 
 func TestStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
+	requireStableColumnNamespace(t)
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
