@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -128,6 +129,9 @@ func (a *cachingValueLogAppender) CaptureValueLogStableSnapshot() (*valuelog.Sta
 	}
 	snapshot, err := provider.CaptureStableSnapshot(l.vlogPath)
 	if err != nil {
+		if errors.Is(err, valuelog.ErrStableNamespaceUnsupported) {
+			return nil, rootpublication.StableNamespaceToken{}, fmt.Errorf("%w: %v", rootpublication.ErrNamespacePersistenceUnsupported, err)
+		}
 		return nil, rootpublication.StableNamespaceToken{}, err
 	}
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
@@ -138,9 +142,17 @@ func (a *cachingValueLogAppender) CaptureValueLogStableSnapshot() (*valuelog.Sta
 		}
 		return nil, rootpublication.StableNamespaceToken{}, fmt.Errorf("cachingdb: captured value-log file ID %d does not match lane identity %d", snapshot.FileID(), fileID)
 	}
-	// NewWriter/RotateTo establish the segment namespace before the writer is
-	// installed. Ordinary append snapshots therefore carry no namespace debt.
-	return snapshot, rootpublication.StableNamespaceToken{}, nil
+	namespaceToken := rootpublication.StableNamespaceToken{}
+	if snapshot.NamespaceRequired() {
+		namespaceToken = rootpublication.StableNamespaceToken{
+			Required:       true,
+			ParentIdentity: snapshot.NamespaceParentIdentity().Token(),
+			Identity:       snapshot.NamespaceTargetIdentity().Token(),
+			Generation:     snapshot.NamespaceGeneration(),
+			Establish:      snapshot.EstablishNamespace,
+		}
+	}
+	return snapshot, namespaceToken, nil
 }
 
 func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -376,7 +377,16 @@ func TestValueLogGC_StableResourcePinBlocksDeletionUntilRelease(t *testing.T) {
 		t.Fatalf("RefreshValueLogSet: %v", err)
 	}
 
-	pin := db.pinStableValueLogResource(pinnedID)
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || set.Files[pinnedID] == nil {
+		t.Fatalf("missing stable-pinned segment %d", pinnedID)
+	}
+	identity, err := set.Files[pinnedID].StableFileIdentity()
+	_ = db.valueLogManager.Release(set)
+	if err != nil {
+		t.Fatalf("stable file identity: %v", err)
+	}
+	pin := db.pinStableValueLogResource(identity)
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC while pinned: %v", err)
@@ -399,6 +409,95 @@ func TestValueLogGC_StableResourcePinBlocksDeletionUntilRelease(t *testing.T) {
 	}
 	if _, err := os.Stat(pinnedPath); !os.IsNotExist(err) {
 		t.Fatalf("released segment still exists: %v", err)
+	}
+}
+
+func TestValueLogGC_OldIdentityPinDoesNotProtectSamePathSameIDReplacement(t *testing.T) {
+	dir := t.TempDir()
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value log: %v", err)
+	}
+	path := filepath.Join(valueLogDir, "value-l0-000001.log")
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	oldWriter, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter old: %v", err)
+	}
+	if _, err := oldWriter.Append(0, nil, 1, []byte("old")); err != nil {
+		t.Fatalf("Append old: %v", err)
+	}
+	oldSnapshot, err := oldWriter.CaptureStableSnapshot(path)
+	if err != nil {
+		t.Fatalf("Capture old: %v", err)
+	}
+	oldIdentity := oldSnapshot.FileIdentity()
+	if err := oldWriter.Close(); err != nil {
+		t.Fatalf("Close old: %v", err)
+	}
+	oldSnapshot.Release()
+	if err := os.Rename(path, filepath.Join(dir, "retired-value-l0-000001.log")); err != nil {
+		t.Fatalf("rename old: %v", err)
+	}
+	replacementWriter, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter replacement: %v", err)
+	}
+	if _, err := replacementWriter.Append(0, nil, 2, []byte("replacement")); err != nil {
+		t.Fatalf("Append replacement: %v", err)
+	}
+	if err := replacementWriter.Flush(); err != nil {
+		t.Fatalf("Flush replacement: %v", err)
+	}
+	if err := replacementWriter.Close(); err != nil {
+		t.Fatalf("Close replacement: %v", err)
+	}
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open DB over replacement: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || set.Files[fileID] == nil {
+		t.Fatalf("replacement segment %d not registered", fileID)
+	}
+	replacementIdentity, err := set.Files[fileID].StableFileIdentity()
+	_ = db.valueLogManager.Release(set)
+	if err != nil {
+		t.Fatalf("replacement identity: %v", err)
+	}
+	if replacementIdentity == oldIdentity {
+		t.Fatal("same-path/same-ID replacement reused old identity")
+	}
+	if err := db.ValidateValueLogStableResource(rootpublication.StableResourceToken{
+		Kind:          rootpublication.StableResourceValueLog,
+		Namespace:     "value_vlog",
+		Identity:      oldIdentity.Token(),
+		Generation:    uint64(fileID),
+		Frontier:      1,
+		MutableAppend: true,
+	}); err == nil {
+		t.Fatal("validator accepted stale identity for same-path/same-ID replacement")
+	}
+	pin := db.pinStableValueLogResource(oldIdentity)
+	defer pin.Release()
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{fileID},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC replacement: %v", err)
+	}
+	if stats.ObservedSourceSegmentsProtected != 0 || stats.ObservedSourceSegmentsDeleted != 1 {
+		t.Fatalf("old identity pin protected replacement: %+v", stats)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("replacement was not deleted by GC: %v", err)
 	}
 }
 

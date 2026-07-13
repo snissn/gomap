@@ -252,7 +252,11 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	for id := range pendingAppendIDs {
 		keptIDs[id] = struct{}{}
 	}
-	stablePinnedIDs := db.stableValueLogPinnedFileIDs()
+	stablePinnedIdentities := db.stableValueLogPinnedIdentities()
+	stablePinnedIDs, err := matchStableValueLogPinnedFileIDs(files, stablePinnedIdentities)
+	if err != nil {
+		return stats, err
+	}
 	for id := range stablePinnedIDs {
 		keptIDs[id] = struct{}{}
 	}
@@ -555,6 +559,23 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		db.persistValueLogRefTrackerBestEffort()
 	}
 	return stats, nil
+}
+
+func matchStableValueLogPinnedFileIDs(files map[uint32]*valuelog.File, pinned map[valuelog.StableFileIdentity]struct{}) (map[uint32]struct{}, error) {
+	matched := make(map[uint32]struct{}, len(pinned))
+	if len(pinned) == 0 {
+		return matched, nil
+	}
+	for id, file := range files {
+		identity, err := file.StableFileIdentity()
+		if err != nil {
+			return nil, fmt.Errorf("value log GC stable identity for file %d: %w", id, err)
+		}
+		if _, ok := pinned[identity]; ok {
+			matched[id] = struct{}{}
+		}
+	}
+	return matched, nil
 }
 
 func currentValueLogIDs(set *valuelog.Set) map[uint32]struct{} {

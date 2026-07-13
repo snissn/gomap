@@ -42,20 +42,21 @@ const (
 var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
-func openLogFile(path string) (*os.File, error) {
+func openLogFile(path string) (*os.File, bool, error) {
 	const flags = os.O_WRONLY | os.O_APPEND
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
 			_ = created.Close()
-			return nil, observeErr
+			return nil, false, observeErr
 		}
-		return created, nil
+		return created, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return nil, err
+		return nil, false, err
 	}
-	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(path, flags|os.O_CREATE, 0o600)
+	return f, false, err
 }
 
 func syncNewFileDirectory(w *Writer, path string) error {
@@ -79,6 +80,7 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 
 type Writer struct {
 	f                      *os.File
+	stableNamespace        *stableNamespaceState
 	bw                     *bufio.Writer
 	size                   int64
 	fileID                 uint32
@@ -594,7 +596,7 @@ func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
 }
 
 func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error) (*Writer, error) {
-	f, err := openLogFile(path)
+	f, created, err := openLogFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -602,14 +604,18 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		f:      f,
 		syncFn: syncFn,
 	}
-	if syncDirectory {
+	w.stableNamespace = w.newStableNamespaceState(path, f, uint64(fileID), created)
+	if syncDirectory && created {
 		if err := syncNewFileDirectory(w, path); err != nil {
+			w.stableNamespace.release()
 			_ = f.Close()
 			return nil, err
 		}
+		w.stableNamespace.markEstablished()
 	}
 	info, err := f.Stat()
 	if err != nil {
+		w.stableNamespace.release()
 		_ = f.Close()
 		return nil, err
 	}
@@ -913,22 +919,29 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 				return err
 			}
 		}
-		f, err := openLogFile(path)
+		f, created, err := openLogFile(path)
 		if err != nil {
 			return err
 		}
-		if syncCurrent {
+		namespace := w.newStableNamespaceState(path, f, uint64(fileID), created)
+		if syncCurrent && created {
 			if err := syncNewFileDirectory(w, path); err != nil {
+				namespace.release()
 				_ = f.Close()
 				return err
 			}
+			namespace.markEstablished()
 		}
 		info, err := f.Stat()
 		if err != nil {
+			namespace.release()
 			_ = f.Close()
 			return err
 		}
+		oldNamespace := w.stableNamespace
 		w.f = f
+		w.stableNamespace = namespace
+		oldNamespace.release()
 		// File-backed writers do not use bufio; drop any sink buffer.
 		w.bw = nil
 		w.size = info.Size()
@@ -948,38 +961,47 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		}
 	}
 
-	f, err := openLogFile(path)
+	f, created, err := openLogFile(path)
 	if err != nil {
 		return err
 	}
+	namespace := w.newStableNamespaceState(path, f, uint64(fileID), created)
 	info, err := f.Stat()
 	if err != nil {
+		namespace.release()
 		_ = f.Close()
 		return err
 	}
-	if syncCurrent {
+	if syncCurrent && created {
 		if err := syncNewFileDirectory(w, path); err != nil {
+			namespace.release()
 			_ = f.Close()
 			return err
 		}
+		namespace.markEstablished()
 	}
 
 	old := w.f
+	oldNamespace := w.stableNamespace
 	if w.bw != nil {
 		if err := w.bw.Flush(); err != nil {
+			namespace.release()
 			_ = f.Close()
 			return err
 		}
 	}
 	w.f = f
+	w.stableNamespace = namespace
 	// File-backed writers do not use bufio. Drop any leftover sink buffer
 	// rather than retargeting it across rotations.
 	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
-	if err := old.Close(); err != nil {
-		return err
+	closeErr := old.Close()
+	oldNamespace.release()
+	if closeErr != nil {
+		return closeErr
 	}
 	w.trimTransientScratchBuffers()
 	return nil
@@ -2453,13 +2475,15 @@ func (w *Writer) Close() error {
 		if w.f != nil {
 			_ = w.f.Close()
 		}
+		w.stableNamespace.release()
+		w.stableNamespace = nil
 		return err
 	}
 	if w.f == nil {
 		return nil
 	}
-	if err := w.f.Close(); err != nil {
-		return err
-	}
-	return nil
+	closeErr := w.f.Close()
+	w.stableNamespace.release()
+	w.stableNamespace = nil
+	return closeErr
 }

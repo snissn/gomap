@@ -18,12 +18,14 @@ var (
 // It owns a duplicated descriptor, so rotation or path replacement cannot
 // retarget durability callbacks to a newer segment.
 type StableWriterSnapshot struct {
-	mu       sync.RWMutex
-	f        *os.File
-	path     string
-	fileID   uint32
-	frontier uint64
-	once     sync.Once
+	mu        sync.RWMutex
+	f         *os.File
+	path      string
+	fileID    uint32
+	identity  StableFileIdentity
+	frontier  uint64
+	namespace *stableNamespaceState
+	once      sync.Once
 }
 
 // CaptureStableSnapshot flushes the current append buffer and captures the
@@ -53,11 +55,23 @@ func (w *Writer) CaptureStableSnapshot(path string) (*StableWriterSnapshot, erro
 		_ = duplicate.Close()
 		return nil, fmt.Errorf("%w: descriptor length %d below captured frontier %d", ErrStableSnapshotFrontier, info.Size(), frontier)
 	}
+	identity, err := StableFileIdentityFromFile(duplicate)
+	if err != nil {
+		_ = duplicate.Close()
+		return nil, err
+	}
+	namespace, err := w.stableNamespace.acquire(identity)
+	if err != nil {
+		_ = duplicate.Close()
+		return nil, err
+	}
 	return &StableWriterSnapshot{
-		f:        duplicate,
-		path:     path,
-		fileID:   w.fileID,
-		frontier: uint64(frontier),
+		f:         duplicate,
+		path:      path,
+		fileID:    w.fileID,
+		identity:  identity,
+		frontier:  uint64(frontier),
+		namespace: namespace,
 	}, nil
 }
 
@@ -65,7 +79,7 @@ func (s *StableWriterSnapshot) StableIdentity() string {
 	if s == nil {
 		return ""
 	}
-	return fmt.Sprintf("value-log:%08x", s.fileID)
+	return s.identity.Token()
 }
 
 func (s *StableWriterSnapshot) StableGeneration() uint64 {
@@ -94,6 +108,45 @@ func (s *StableWriterSnapshot) FileID() uint32 {
 		return 0
 	}
 	return s.fileID
+}
+
+func (s *StableWriterSnapshot) FileIdentity() StableFileIdentity {
+	if s == nil {
+		return StableFileIdentity{}
+	}
+	return s.identity
+}
+
+func (s *StableWriterSnapshot) NamespaceRequired() bool {
+	return s != nil && s.namespace != nil
+}
+
+func (s *StableWriterSnapshot) NamespaceParentIdentity() StableFileIdentity {
+	if s == nil || s.namespace == nil {
+		return StableFileIdentity{}
+	}
+	return s.namespace.parentIdentity
+}
+
+func (s *StableWriterSnapshot) NamespaceTargetIdentity() StableFileIdentity {
+	if s == nil || s.namespace == nil {
+		return StableFileIdentity{}
+	}
+	return s.namespace.targetIdentity
+}
+
+func (s *StableWriterSnapshot) NamespaceGeneration() uint64 {
+	if s == nil || s.namespace == nil {
+		return 0
+	}
+	return s.namespace.generation
+}
+
+func (s *StableWriterSnapshot) EstablishNamespace(ctx context.Context) error {
+	if s == nil || s.namespace == nil {
+		return nil
+	}
+	return s.namespace.establish(ctx)
 }
 
 func (s *StableWriterSnapshot) FlushThrough(ctx context.Context, frontier uint64) error {
@@ -162,5 +215,6 @@ func (s *StableWriterSnapshot) Release() {
 			s.f = nil
 		}
 		s.mu.Unlock()
+		s.namespace.release()
 	})
 }

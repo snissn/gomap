@@ -121,7 +121,7 @@ func (db *DB) CaptureValueLogStableResourceToken(reachableBy string) (rootpublic
 	if snapshot == nil {
 		return rootpublication.StableResourceToken{}, ErrValueLogStableSnapshotUnavailable
 	}
-	pin := db.pinStableValueLogResource(snapshot.FileID())
+	pin := db.pinStableValueLogResource(snapshot.FileIdentity())
 	release := func() {
 		snapshot.Release()
 		pin.Release()
