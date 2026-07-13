@@ -1795,7 +1795,7 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 func mappedResourceKeyForColumnAssetRef(ref ColumnAssetRef) mappedresource.Key {
 	class := mappedresource.ClassTypedRowAsset
 	switch ref.Kind {
-	case ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values, ColumnAssetKindTCS1HNSWSearchPack:
+	case ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values, ColumnAssetKindTCS1HNSWSearchPack, ColumnAssetKindQueryReadyBase, ColumnAssetKindQueryReadyDelta, ColumnAssetKindQueryReadyConsolidatedBase:
 		class = mappedresource.ClassTypedColumnAsset
 	}
 	return mappedresource.Key{
