@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -8,22 +9,30 @@ import (
 )
 
 type testStableHandle struct {
-	mu       sync.Mutex
-	identity StableIdentity
-	length   uint64
-	flushes  []uint64
-	syncs    []uint64
-	pins     int
-	releases int
-	unlinked bool
+	mu               sync.Mutex
+	identity         StableIdentity
+	length           uint64
+	flushes          []uint64
+	syncs            []uint64
+	pins             int
+	releases         int
+	unlinked         bool
+	identityAfterPin StableIdentity
 }
 
 func newTestStableHandle(identity byte, length uint64) *testStableHandle {
 	return &testStableHandle{identity: StableIdentity{Device: 1, File: uint64(identity)}, length: length}
 }
 
-func (h *testStableHandle) StableIdentity() (StableIdentity, error) { return h.identity, nil }
-func (h *testStableHandle) StableLength() (uint64, error)           { return h.length, nil }
+func (h *testStableHandle) StableIdentity() (StableIdentity, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pins != 0 && h.identityAfterPin.valid() {
+		return h.identityAfterPin, nil
+	}
+	return h.identity, nil
+}
+func (h *testStableHandle) StableLength() (uint64, error) { return h.length, nil }
 func (h *testStableHandle) FlushThrough(frontier uint64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -246,6 +255,96 @@ func TestStableResourceTokenRejectsFrontierAndSetRejectsConflicts(t *testing.T) 
 	if _, err := NewStableResourceSet(a, b); !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("digest conflict=%v", err)
 	}
+}
+
+func TestStableResourceTokenUnpinsWhenIdentityChangesDuringRegistration(t *testing.T) {
+	handle := newTestStableHandle(12, 32)
+	handle.identityAfterPin = StableIdentity{Device: 1, File: 13}
+	if _, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLogSegment, LogicalNamespace: "primary", ResourceID: "12",
+		Generation: 12, Handle: handle, RequiredFrontier: 32, ReachabilityField: "meta.value_log_id",
+	}); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("identity changed during registration=%v", err)
+	}
+	if handle.pins != 0 || handle.releases != 1 {
+		t.Fatalf("failed registration pins=%d releases=%d", handle.pins, handle.releases)
+	}
+}
+
+func TestImmutableAssetRequiresDigest(t *testing.T) {
+	handle := newTestStableHandle(14, 32)
+	if _, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceVectorGraphPack, LogicalNamespace: "vectors", ResourceID: "14",
+		Generation: 14, Handle: handle, RequiredFrontier: 32, ReachabilityField: "meta.vector_graph_pack_id",
+	}); !errors.Is(err, ErrInvalidStableResource) {
+		t.Fatalf("immutable asset without digest=%v", err)
+	}
+	if handle.pins != 0 {
+		t.Fatalf("invalid immutable asset acquired pin=%d", handle.pins)
+	}
+}
+
+func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
+	t.Run("success releases covered originals", func(t *testing.T) {
+		handle := newTestStableHandle(15, 32)
+		set, err := NewStableResourceSet(testResourceToken(t, handle, ResourceValueLogSegment, 1, 32, 1, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishSucceeded}
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.WaitThrough(context.Background(), 1); err != nil {
+			t.Fatal(err)
+		}
+		if handle.releases != 1 || handle.pins != 0 {
+			t.Fatalf("success releases=%d pins=%d", handle.releases, handle.pins)
+		}
+		stopClean(t, coordinator)
+	})
+
+	t.Run("retry retains and stop safely abandons", func(t *testing.T) {
+		handle := newTestStableHandle(16, 32)
+		set, err := NewStableResourceSet(testResourceToken(t, handle, ResourceValueLogSegment, 1, 32, 1, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishRetryableFailure, Err: errors.New("injected")}
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.WaitThrough(context.Background(), 1); err == nil {
+			t.Fatal("retry unexpectedly succeeded")
+		}
+		if handle.releases != 0 || handle.pins != 1 {
+			t.Fatalf("retry releases=%d pins=%d", handle.releases, handle.pins)
+		}
+		if err := coordinator.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
+			t.Fatalf("stop=%v", err)
+		}
+		if handle.releases != 1 || handle.pins != 0 {
+			t.Fatalf("stop abandonment releases=%d pins=%d", handle.releases, handle.pins)
+		}
+	})
 }
 
 func TestStableResourcePinBlocksConcurrentUnlinkAndReleasesExactlyOnce(t *testing.T) {
