@@ -3,6 +3,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,18 @@ type countingStableNamespaceBatchAdapter struct {
 	native nativeNamespaceAdapter
 	mu     sync.Mutex
 	syncs  map[StableIdentity]int
+}
+
+type failingStableNamespaceBatchAdapter struct {
+	countingStableNamespaceBatchAdapter
+	err error
+}
+
+func (adapter *failingStableNamespaceBatchAdapter) Sync(parent *os.File) error {
+	if err := adapter.countingStableNamespaceBatchAdapter.Sync(parent); err != nil {
+		return err
+	}
+	return adapter.err
 }
 
 func (adapter *countingStableNamespaceBatchAdapter) Identity(file *os.File) (StableIdentity, error) {
@@ -106,5 +119,76 @@ func TestStableNamespaceBatchSyncsEachDistinctParentOnce(t *testing.T) {
 		if got := adapter.syncs[identity]; got != 1 {
 			t.Fatalf("parent %s syncs=%d want 1", parent.Name(), got)
 		}
+	}
+}
+
+func TestStableNamespaceBatchFirstSyncFailureClosesEveryRetainedParent(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	destinationDir := filepath.Join(root, "destination")
+	for _, dir := range []string{sourceDir, destinationDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceParent, err := os.Open(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceParent.Close()
+	destinationParent, err := os.Open(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destinationParent.Close()
+	child, err := OpenStableChildFile(destinationParent, "packed.log", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	parentGeneration, err := StableNamespaceParentGeneration(destinationParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := StableNamespaceBatchSpec{
+		Registrations: []StableNamespaceSpec{{
+			Parent: destinationParent, LinkedResource: child, ParentGeneration: parentGeneration,
+			Operation: NamespaceRename, OldName: "packed.log", NewName: "packed.log", DiagnosticPath: "leaf_vlog",
+		}},
+		AdditionalParents: []*os.File{sourceParent},
+	}
+	testErr := errors.New("first parent sync failed")
+	adapter := &failingStableNamespaceBatchAdapter{err: testErr}
+	const attempts = 64
+	for attempt := 0; attempt < attempts; attempt++ {
+		var duplicates []*os.File
+		duplicate := func(file *os.File) (*os.File, error) {
+			retained, err := duplicateStableFile(file)
+			if err == nil {
+				duplicates = append(duplicates, retained)
+			}
+			return retained, err
+		}
+		_, err := newStableNamespaceBatchTokensWithDuplicate(spec, adapter, duplicate)
+		if !errors.Is(err, testErr) {
+			t.Fatalf("attempt %d error=%v want %v", attempt, err, testErr)
+		}
+		if len(duplicates) != 2 {
+			t.Fatalf("attempt %d retained parents=%d want 2", attempt, len(duplicates))
+		}
+		for i, retained := range duplicates {
+			if _, statErr := retained.Stat(); !errors.Is(statErr, os.ErrClosed) {
+				t.Fatalf("attempt %d retained parent %d remains open: %v", attempt, i, statErr)
+			}
+		}
+	}
+	adapter.mu.Lock()
+	var syncCalls int
+	for _, calls := range adapter.syncs {
+		syncCalls += calls
+	}
+	adapter.mu.Unlock()
+	if syncCalls != attempts {
+		t.Fatalf("sync calls=%d want exactly first parent per attempt=%d", syncCalls, attempts)
 	}
 }

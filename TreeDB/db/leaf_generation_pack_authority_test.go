@@ -1,8 +1,9 @@
-//go:build darwin || linux || freebsd || netbsd || openbsd
+//go:build linux
 
 package db
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -274,6 +275,47 @@ func TestLeafGenerationPackPromotionAuthorityRejectsExistingDestinationBeforeMut
 	data, err := os.ReadFile(replacement)
 	if err != nil || string(data) != "replacement" {
 		t.Fatalf("replacement changed data=%q err=%v", data, err)
+	}
+}
+
+func TestLeafGenerationPackPromotionAuthorityRejectsReboundSourceBeforeMutation(t *testing.T) {
+	fixture := newLeafPackAuthorityFixture(t)
+	defer fixture.close(t)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.release()
+	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.close(t)
+	originalPath := fixture.path + ".original"
+	if err := os.Rename(fixture.path, originalPath); err != nil {
+		t.Fatal(err)
+	}
+	originalBefore, err := os.ReadFile(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const replacement = "rebound-staging-replacement"
+	if err := os.WriteFile(fixture.path, []byte(replacement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	promoted, mutated, err := authority.promote()
+	if mutated || !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("promote mutated=%v promoted=%v err=%v want pre-mutation conflict", mutated, promoted, err)
+	}
+	if originalAfter, readErr := os.ReadFile(originalPath); readErr != nil || !bytes.Equal(originalAfter, originalBefore) {
+		t.Fatalf("original changed after rebound rejection: bytes_equal=%v err=%v", bytes.Equal(originalAfter, originalBefore), readErr)
+	}
+	if replacementAfter, readErr := os.ReadFile(fixture.path); readErr != nil || string(replacementAfter) != replacement {
+		t.Fatalf("replacement changed after rebound rejection: data=%q err=%v", replacementAfter, readErr)
+	}
+	destination := filepath.Join(fixture.destination, filepath.Base(fixture.path))
+	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination appeared after rebound rejection: %v", statErr)
 	}
 }
 

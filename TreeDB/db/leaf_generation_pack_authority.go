@@ -46,7 +46,7 @@ type leafGenerationPackPromotionAuthority struct {
 }
 
 func leafGenerationPackPromotionPreflight() error {
-	if !rootpublication.StableRelativeNamespaceSupported() {
+	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
 		return fmt.Errorf("%w: leaf generation pack promotion", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	return nil
@@ -230,7 +230,7 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 	for i := range authority.segments {
 		segment := &authority.segments[i]
 		name := filepath.Base(segment.created.path)
-		installed, err := rootpublication.MoveStableChildFileNoReplace(authority.stagingParent, name, authority.destinationParent, name)
+		installed, err := rootpublication.MoveStableChildFileNoReplace(authority.stagingParent, segment.handle, name, authority.destinationParent, name)
 		mutated = mutated || installed
 		if err != nil {
 			return promoted, mutated, err

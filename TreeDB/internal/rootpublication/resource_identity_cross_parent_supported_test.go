@@ -1,4 +1,4 @@
-//go:build darwin || linux || freebsd || netbsd || openbsd
+//go:build linux
 
 package rootpublication
 
@@ -41,7 +41,7 @@ func TestMoveStableChildFileNoReplaceCrossParentPreservesIdentity(t *testing.T) 
 		t.Fatalf("source identity: %v", err)
 	}
 
-	installed, err := MoveStableChildFileNoReplace(sourceParent, "segment.pack", destinationParent, "segment.pack")
+	installed, err := MoveStableChildFileNoReplace(sourceParent, child, "segment.pack", destinationParent, "segment.pack")
 	if err != nil || !installed {
 		t.Fatalf("MoveStableChildFileNoReplace installed=%v err=%v", installed, err)
 	}
@@ -96,7 +96,7 @@ func TestMoveStableChildFileNoReplaceRejectsReplacement(t *testing.T) {
 	defer destination.Close()
 	destinationIdentity, _ := StableIdentityFromFile(destination)
 
-	installed, err := MoveStableChildFileNoReplace(sourceParent, "segment.pack", destinationParent, "segment.pack")
+	installed, err := MoveStableChildFileNoReplace(sourceParent, source, "segment.pack", destinationParent, "segment.pack")
 	if installed || !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("MoveStableChildFileNoReplace installed=%v err=%v want conflict before mutation", installed, err)
 	}
@@ -111,5 +111,62 @@ func TestMoveStableChildFileNoReplaceRejectsReplacement(t *testing.T) {
 	gotIdentity, _ := StableIdentityFromFile(got)
 	if !SamePhysicalIdentity(gotIdentity, destinationIdentity) {
 		t.Fatal("destination was replaced")
+	}
+}
+
+func TestMoveStableChildFileNoReplaceRejectsReboundSourceBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	destinationDir := filepath.Join(root, "destination")
+	for _, dir := range []string{sourceDir, destinationDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourceParent, err := os.Open(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceParent.Close()
+	destinationParent, err := os.Open(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destinationParent.Close()
+	original, err := OpenStableChildFile(sourceParent, "segment.pack", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	if _, err := original.WriteString("original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(sourceDir, "segment.pack"), filepath.Join(sourceDir, "original.saved")); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := OpenStableChildFile(sourceParent, "segment.pack", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Close()
+	if _, err := replacement.WriteString("replacement"); err != nil {
+		t.Fatal(err)
+	}
+
+	installed, err := MoveStableChildFileNoReplace(sourceParent, original, "segment.pack", destinationParent, "segment.pack")
+	if installed || !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("rebound move installed=%v err=%v want pre-mutation conflict", installed, err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(sourceDir, "original.saved"): "original",
+		filepath.Join(sourceDir, "segment.pack"):   "replacement",
+	} {
+		got, readErr := os.ReadFile(path)
+		if readErr != nil || string(got) != want {
+			t.Fatalf("%s data=%q err=%v want %q", path, got, readErr, want)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(destinationDir, "segment.pack")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination appeared after rebound rejection: %v", statErr)
 	}
 }

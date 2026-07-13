@@ -701,7 +701,11 @@ func NewStableNamespaceBatchTokens(spec StableNamespaceBatchSpec) ([]*StableName
 }
 
 func newStableNamespaceBatchTokens(spec StableNamespaceBatchSpec, adapter namespacePersistenceAdapter) ([]*StableNamespaceToken, error) {
-	if len(spec.Registrations) == 0 || adapter == nil {
+	return newStableNamespaceBatchTokensWithDuplicate(spec, adapter, duplicateStableFile)
+}
+
+func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, adapter namespacePersistenceAdapter, duplicate func(*os.File) (*os.File, error)) ([]*StableNamespaceToken, error) {
+	if len(spec.Registrations) == 0 || adapter == nil || duplicate == nil {
 		return nil, fmt.Errorf("%w: empty stable namespace batch", ErrUnresolvedResource)
 	}
 	tokens := make([]*StableNamespaceToken, 0, len(spec.Registrations))
@@ -723,6 +727,11 @@ func newStableNamespaceBatchTokens(spec StableNamespaceBatchSpec, adapter namesp
 		file     *os.File
 	}
 	parents := make([]stableBatchParent, 0, len(tokens)+len(spec.AdditionalParents))
+	defer func() {
+		for _, parent := range parents {
+			_ = parent.file.Close()
+		}
+	}()
 	seen := make(map[StableIdentity]struct{}, cap(parents))
 	addParent := func(parent *os.File) error {
 		if parent == nil {
@@ -736,7 +745,7 @@ func newStableNamespaceBatchTokens(spec StableNamespaceBatchSpec, adapter namesp
 		if _, ok := seen[identity]; ok {
 			return nil
 		}
-		pinned, err := duplicateStableFile(parent)
+		pinned, err := duplicate(parent)
 		if err != nil {
 			return err
 		}
@@ -747,18 +756,12 @@ func newStableNamespaceBatchTokens(spec StableNamespaceBatchSpec, adapter namesp
 	for _, registration := range spec.Registrations {
 		if err := addParent(registration.Parent); err != nil {
 			releaseTokens()
-			for _, parent := range parents {
-				_ = parent.file.Close()
-			}
 			return nil, err
 		}
 	}
 	for _, parent := range spec.AdditionalParents {
 		if err := addParent(parent); err != nil {
 			releaseTokens()
-			for _, retained := range parents {
-				_ = retained.file.Close()
-			}
 			return nil, err
 		}
 	}
@@ -768,7 +771,6 @@ func newStableNamespaceBatchTokens(spec StableNamespaceBatchSpec, adapter namesp
 		started := time.Now()
 		err := adapter.Sync(parent.file)
 		elapsed := uint64(time.Since(started))
-		_ = parent.file.Close()
 		if err != nil {
 			releaseTokens()
 			return nil, err
@@ -1054,15 +1056,21 @@ func RenameStableChildFile(parent *os.File, oldName, newName string) error {
 	return renameStableChildFile(parent, oldName, newName)
 }
 
-// MoveStableChildFileNoReplace moves oldName between two exact retained parent
-// handles without replacing an existing destination. The boolean reports that
-// the destination link was installed even when removing the source link then
-// failed; callers must treat that outcome as namespace-ambiguous.
-func MoveStableChildFileNoReplace(sourceParent *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
-	if sourceParent == nil || destinationParent == nil || !stableChildBaseName(oldName) || !stableChildBaseName(newName) {
-		return false, fmt.Errorf("%w: stable cross-parent move requires base names and exact parent handles", ErrUnresolvedResource)
+// MoveStableChildFileNoReplace atomically moves oldName between two exact
+// retained parent handles without replacing an existing destination. Expected
+// is the retained source child identity; a rebound source is rejected before
+// mutation. The boolean reports whether the atomic move committed.
+func MoveStableChildFileNoReplace(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+	if sourceParent == nil || expected == nil || destinationParent == nil || !stableChildBaseName(oldName) || !stableChildBaseName(newName) {
+		return false, fmt.Errorf("%w: stable cross-parent move requires base names and exact parent/child handles", ErrUnresolvedResource)
 	}
-	return moveStableChildFileNoReplace(sourceParent, oldName, destinationParent, newName)
+	return moveStableChildFileNoReplace(sourceParent, expected, oldName, destinationParent, newName)
+}
+
+// StableCrossParentMoveNoReplaceSupported reports whether the platform exposes
+// an atomic cross-parent no-replace primitive used by packed promotion.
+func StableCrossParentMoveNoReplaceSupported() bool {
+	return stableCrossParentMoveNoReplaceSupported()
 }
 
 func stableChildBaseName(name string) bool {
