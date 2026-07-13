@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -123,6 +124,56 @@ func TestLeafGenerationManifest_LoadRejectsVersionOneWithoutMigration(t *testing
 	}
 	if _, ok, err := loadLeafGenerationManifest(leafDir); !errors.Is(err, ErrLeafGenerationManifestIncompatible) || ok {
 		t.Fatalf("load v1 ok=%v error=%v want typed incompatibility", ok, err)
+	}
+}
+
+func TestLeafGenerationManifest_LoadClassifiesPersistedDocumentCorruption(t *testing.T) {
+	tests := []struct {
+		name       string
+		data       string
+		wantSyntax bool
+	}{
+		{
+			name:       "malformed_json",
+			data:       `{"version":2,"manifest_revision":1,`,
+			wantSyntax: true,
+		},
+		{
+			name: "structurally_invalid_v2",
+			data: `{"version":2,"manifest_revision":1,"current_generation_id":1,"next_generation_id":2,"generations":[]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			leafDir := t.TempDir()
+			if err := os.WriteFile(leafGenerationManifestPath(leafDir), []byte(tt.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, ok, err := loadLeafGenerationManifest(leafDir)
+			if ok || !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+				t.Fatalf("load ok=%v error=%v want false, ErrLeafGenerationManifestIncompatible", ok, err)
+			}
+			if tt.wantSyntax {
+				var syntaxErr *json.SyntaxError
+				if !errors.As(err, &syntaxErr) {
+					t.Fatalf("load error=%v does not preserve json.SyntaxError", err)
+				}
+			}
+		})
+	}
+}
+
+func TestLeafGenerationManifest_LoadDoesNotClassifyFilesystemIOErrorAsIncompatible(t *testing.T) {
+	leafDir := t.TempDir()
+	if err := os.Mkdir(leafGenerationManifestPath(leafDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := loadLeafGenerationManifest(leafDir)
+	if err == nil || ok {
+		t.Fatalf("load directory as manifest ok=%v error=%v want filesystem error", ok, err)
+	}
+	if errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("filesystem error=%v must not be classified as ErrLeafGenerationManifestIncompatible", err)
 	}
 }
 
