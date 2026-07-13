@@ -184,6 +184,11 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 			queue = snap.immutables
 		}
 	}
+	var callSources uint64
+	defer func() {
+		db.pointSuccessorSourcesTotal.Add(callSources)
+		updateAtomicMaxUint64(&db.pointSuccessorSourcesMax, callSources)
+	}()
 	// CommitAt/GetAt normally asks for the exact physical version just written.
 	// Its mutable shard has absolute precedence and no key can sort before an
 	// exact lower-bound hit, so avoid acquiring a backend cursor in this case.
@@ -194,9 +199,8 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		if initialTarget >= 0 && initialTarget < len(mutables) {
 			initialCandidate = seekPointSuccessorTable(mutables[initialTarget], start, end, nil, 0, 0)
 			db.pointSuccessorMutableProbesTotal.Add(1)
+			callSources++
 			if initialCandidate.found && bytes.Equal(initialCandidate.key, start) && initialCandidate.flags&node.FlagTombstone == 0 {
-				db.pointSuccessorSourcesTotal.Add(1)
-				updateAtomicMaxUint64(&db.pointSuccessorSourcesMax, 1)
 				return db.materializePointSuccessor(initialCandidate)
 			}
 		}
@@ -212,7 +216,6 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 	for end == nil || bytes.Compare(lower, end) < 0 {
 		best := pointSuccessorCandidate{}
 		priority := 0
-		probes := 0
 		if len(mutables) > 0 {
 			target := db.shardIndex(lower)
 			if target >= 0 && target < len(mutables) {
@@ -220,13 +223,11 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 				if target != initialTarget || !bytes.Equal(lower, start) {
 					candidate = seekPointSuccessorTable(mutables[target], lower, end, nil, 0, priority)
 					db.pointSuccessorMutableProbesTotal.Add(1)
+					callSources++
 				}
-				probes++
 				best = choosePointSuccessor(best, candidate)
 				priority++
 				if candidate.found && bytes.Equal(candidate.key, lower) && candidate.flags&node.FlagTombstone == 0 {
-					db.pointSuccessorSourcesTotal.Add(uint64(probes))
-					updateAtomicMaxUint64(&db.pointSuccessorSourcesMax, uint64(probes))
 					return db.materializePointSuccessor(candidate)
 				}
 			}
@@ -236,25 +237,25 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 				}
 				best = choosePointSuccessor(best, seekPointSuccessorTable(mt, lower, end, nil, 0, priority))
 				db.pointSuccessorMutableProbesTotal.Add(1)
-				probes++
+				callSources++
 				priority++
 			}
 		}
 		for i := len(queue) - 1; i >= 0; i-- {
 			best = choosePointSuccessor(best, seekPointSuccessorTable(queue[i], lower, end, spans, i+1, priority))
 			db.pointSuccessorQueueProbesTotal.Add(1)
-			probes++
+			callSources++
 			priority++
 		}
-		candidate, probeErr := seekPointSuccessorIterator(disk, lower, end, spans, priority)
-		db.pointSuccessorBackendProbesTotal.Add(1)
-		probes++
-		if probeErr != nil {
-			return nil, nil, false, probeErr
+		if disk != nil {
+			candidate, probeErr := seekPointSuccessorIterator(disk, lower, end, spans, priority)
+			db.pointSuccessorBackendProbesTotal.Add(1)
+			callSources++
+			if probeErr != nil {
+				return nil, nil, false, probeErr
+			}
+			best = choosePointSuccessor(best, candidate)
 		}
-		best = choosePointSuccessor(best, candidate)
-		db.pointSuccessorSourcesTotal.Add(uint64(probes))
-		updateAtomicMaxUint64(&db.pointSuccessorSourcesMax, uint64(probes))
 		if !best.found {
 			return nil, nil, false, nil
 		}

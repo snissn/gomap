@@ -73,7 +73,7 @@ func TestSeekGE_SourcePrecedenceTombstonesAndBounds(t *testing.T) {
 
 func TestSeekGE_SourceCountersSpanTombstoneRounds(t *testing.T) {
 	backend := NewMockBackend()
-	backend.Set([]byte("z"), []byte("disjoint"))
+	backend.Set([]byte("c"), []byte("older-visible"))
 	db, err := Open(t.TempDir(), backend, Options{
 		FlushThreshold:     1 << 30,
 		MemtableShards:     1,
