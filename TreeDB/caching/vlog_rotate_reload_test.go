@@ -13,6 +13,8 @@ import (
 
 var errStaleValueLogWriterUsed = errors.New("test: stale value-log writer used after rotation")
 var errRotateFailed = errors.New("test: rotate failed")
+var errCommitRotateCleanup = errors.New("test: commit-log predecessor cleanup failed")
+var errSplitValueRotateFailed = errors.New("test: split value-log rotation failed")
 
 type rotateSwapValueWriter struct {
 	lane *lane
@@ -90,8 +92,10 @@ func (w *rotateSwapValueWriter) Sync() error  { return nil }
 func (w *rotateSwapValueWriter) Close() error { return nil }
 
 type rotateFailValueWriter struct {
-	size      int64
-	installed bool
+	size        int64
+	installed   bool
+	rotateErr   error
+	rotateCalls int
 }
 
 type installedValueLogRotationError struct{ err error }
@@ -114,10 +118,15 @@ func (w *rotateFailValueWriter) RotateTo(path string, fileID uint32) error {
 	return w.RotateToWithSync(path, fileID, true)
 }
 func (w *rotateFailValueWriter) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
-	if w.installed {
-		return installedValueLogRotationError{err: errRotateFailed}
+	w.rotateCalls++
+	err := w.rotateErr
+	if err == nil {
+		err = errRotateFailed
 	}
-	return errRotateFailed
+	if w.installed {
+		return installedValueLogRotationError{err: err}
+	}
+	return err
 }
 func (w *rotateFailValueWriter) Size() int64  { return w.size }
 func (w *rotateFailValueWriter) Flush() error { return nil }
@@ -125,8 +134,18 @@ func (w *rotateFailValueWriter) Sync() error  { return nil }
 func (w *rotateFailValueWriter) Close() error { return nil }
 
 type rotateFailCommitWriter struct {
-	size int64
+	size        int64
+	installed   bool
+	rotateErr   error
+	rotateCalls int
+	currentPath string
 }
+
+type installedCommitLogRotationError struct{ err error }
+
+func (err installedCommitLogRotationError) Error() string       { return err.err.Error() }
+func (err installedCommitLogRotationError) Unwrap() error       { return err.err }
+func (installedCommitLogRotationError) RotationInstalled() bool { return true }
 
 func (w *rotateFailCommitWriter) Append(record logRecord) error {
 	return errors.New("test: unexpected Append call")
@@ -134,9 +153,20 @@ func (w *rotateFailCommitWriter) Append(record logRecord) error {
 func (w *rotateFailCommitWriter) AppendBatch(records []logRecord) error {
 	return errors.New("test: unexpected AppendBatch call")
 }
-func (w *rotateFailCommitWriter) RotateTo(path string) error { return errRotateFailed }
+func (w *rotateFailCommitWriter) RotateTo(path string) error {
+	return w.RotateToWithSync(path, true)
+}
 func (w *rotateFailCommitWriter) RotateToWithSync(path string, syncCurrent bool) error {
-	return errRotateFailed
+	w.rotateCalls++
+	err := w.rotateErr
+	if err == nil {
+		err = errRotateFailed
+	}
+	if w.installed {
+		w.currentPath = path
+		return installedCommitLogRotationError{err: err}
+	}
+	return err
 }
 func (w *rotateFailCommitWriter) Size() int64  { return w.size }
 func (w *rotateFailCommitWriter) Flush() error { return nil }
@@ -298,16 +328,26 @@ func TestRotateWALLockedWithOptions_DoesNotAdvanceSeqOnFailure(t *testing.T) {
 
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, commitLogName(0, 59))
-	writer := &rotateFailCommitWriter{size: 128}
+	writer := &rotateFailCommitWriter{size: 128, currentPath: oldPath}
+	oldVLogPath := filepath.Join(dir, valueLogName(0, 9))
+	vlog := &rotateFailValueWriter{size: 64, rotateErr: errSplitValueRotateFailed}
 	l := &lane{
-		id:      0,
-		wal:     writer,
-		walSeq:  59,
-		walPath: oldPath,
+		id:             0,
+		wal:            writer,
+		walSeq:         59,
+		walPath:        oldPath,
+		walClosedSizes: map[string]int64{oldPath: 17},
+		walCoalesceSeq: 41,
+		vlog:           vlog,
+		vlogSeq:        9,
+		vlogPath:       oldVLogPath,
 	}
+	l.walLiveBytes.Store(73)
+	l.walClosedBytes.Store(17)
+	l.vlogLiveBytes.Store(29)
 	db := &DB{dir: dir}
 
-	err := db.rotateWALLockedWithOptions(l, false)
+	err := db.rotateWALLockedWithOptions(l, true)
 	if !errors.Is(err, errRotateFailed) {
 		t.Fatalf("rotateWALLockedWithOptions err=%v want=%v", err, errRotateFailed)
 	}
@@ -317,7 +357,116 @@ func TestRotateWALLockedWithOptions_DoesNotAdvanceSeqOnFailure(t *testing.T) {
 	if got := l.walPath; got != oldPath {
 		t.Fatalf("walPath=%q want %q", got, oldPath)
 	}
+	if got := l.walLiveBytes.Load(); got != 73 {
+		t.Fatalf("walLiveBytes=%d want 73", got)
+	}
+	if got := l.walClosedSizes[oldPath]; got != 17 {
+		t.Fatalf("closed size=%d want unchanged 17", got)
+	}
+	if got := l.walClosedBytes.Load(); got != 17 {
+		t.Fatalf("walClosedBytes=%d want unchanged 17", got)
+	}
+	if got := l.walCoalesceSeq; got != 41 {
+		t.Fatalf("walCoalesceSeq=%d want unchanged 41", got)
+	}
 	if l.wal != writer {
 		t.Fatalf("expected original writer to remain installed")
+	}
+	if writer.currentPath != oldPath || writer.rotateCalls != 1 {
+		t.Fatalf("writer authority path=%q calls=%d want old path and one failed attempt", writer.currentPath, writer.rotateCalls)
+	}
+	if l.vlogSeq != 9 || l.vlogPath != oldVLogPath || l.vlogLiveBytes.Load() != 29 || vlog.rotateCalls != 0 {
+		t.Fatalf("split value-log changed after pre-install WAL failure: seq=%d path=%q live=%d calls=%d", l.vlogSeq, l.vlogPath, l.vlogLiveBytes.Load(), vlog.rotateCalls)
+	}
+}
+
+func TestRotateWALLockedWithOptions_CompletesMetadataAfterInstalledCleanupFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, commitLogName(0, 59))
+	writer := &rotateFailCommitWriter{
+		size: 128, installed: true, rotateErr: errCommitRotateCleanup, currentPath: oldPath,
+	}
+	l := &lane{
+		id:             0,
+		wal:            writer,
+		walSeq:         59,
+		walPath:        oldPath,
+		walClosedSizes: map[string]int64{oldPath: 17},
+		walCoalesceSeq: 41,
+	}
+	l.walLiveBytes.Store(73)
+	l.walClosedBytes.Store(17)
+	db := &DB{dir: dir}
+
+	err := db.rotateWALLockedWithOptions(l, false)
+	if !errors.Is(err, errCommitRotateCleanup) {
+		t.Fatalf("rotateWALLockedWithOptions err=%v want=%v", err, errCommitRotateCleanup)
+	}
+	wantPath := filepath.Join(dir, commitLogName(0, 60))
+	if got := l.walSeq; got != 60 {
+		t.Fatalf("walSeq=%d want 60 after installed rotation", got)
+	}
+	if got := l.walPath; got != wantPath {
+		t.Fatalf("walPath=%q want %q after installed rotation", got, wantPath)
+	}
+	if got := l.walLiveBytes.Load(); got != 0 {
+		t.Fatalf("walLiveBytes=%d want 0 after installed rotation", got)
+	}
+	if got := l.walClosedSizes[oldPath]; got != writer.size {
+		t.Fatalf("closed size=%d want %d", got, writer.size)
+	}
+	if got := l.walClosedBytes.Load(); got != writer.size {
+		t.Fatalf("walClosedBytes=%d want %d", got, writer.size)
+	}
+	if got := l.walCoalesceSeq; got != 0 {
+		t.Fatalf("walCoalesceSeq=%d want 0 after installed rotation", got)
+	}
+	if l.wal != writer || writer.currentPath != wantPath || writer.rotateCalls != 1 {
+		t.Fatalf("writer authority lane=%p writer=%p path=%q calls=%d", l.wal, writer, writer.currentPath, writer.rotateCalls)
+	}
+}
+
+func TestRotateWALLockedWithOptions_JoinsInstalledCleanupAndSplitValueLogErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	oldWALPath := filepath.Join(dir, commitLogName(0, 59))
+	wal := &rotateFailCommitWriter{
+		size: 128, installed: true, rotateErr: errCommitRotateCleanup, currentPath: oldWALPath,
+	}
+	oldVLogPath := filepath.Join(dir, valueLogName(0, 9))
+	vlog := &rotateFailValueWriter{size: 64, rotateErr: errSplitValueRotateFailed}
+	l := &lane{
+		id:             0,
+		wal:            wal,
+		walSeq:         59,
+		walPath:        oldWALPath,
+		walClosedSizes: map[string]int64{},
+		vlog:           vlog,
+		vlogSeq:        9,
+		vlogPath:       oldVLogPath,
+	}
+	l.walLiveBytes.Store(73)
+	l.vlogLiveBytes.Store(29)
+	db := &DB{dir: dir}
+
+	err := db.rotateWALLockedWithOptions(l, true)
+	if !errors.Is(err, errCommitRotateCleanup) || !errors.Is(err, errSplitValueRotateFailed) {
+		t.Fatalf("rotateWALLockedWithOptions err=%v want both WAL cleanup and split value-log errors", err)
+	}
+	wantWALPath := filepath.Join(dir, commitLogName(0, 60))
+	if l.walSeq != 60 || l.walPath != wantWALPath || l.walLiveBytes.Load() != 0 {
+		t.Fatalf("WAL authority seq=%d path=%q live=%d want 60/%q/0", l.walSeq, l.walPath, l.walLiveBytes.Load(), wantWALPath)
+	}
+	if l.walClosedSizes[oldWALPath] != wal.size || l.walClosedBytes.Load() != wal.size {
+		t.Fatalf("WAL accounting size=%d total=%d want %d", l.walClosedSizes[oldWALPath], l.walClosedBytes.Load(), wal.size)
+	}
+	if l.wal != wal || wal.currentPath != wantWALPath || wal.rotateCalls != 1 {
+		t.Fatalf("WAL writer authority lane=%p writer=%p path=%q calls=%d", l.wal, wal, wal.currentPath, wal.rotateCalls)
+	}
+	if l.vlogSeq != 9 || l.vlogPath != oldVLogPath || l.vlogLiveBytes.Load() != 29 || vlog.rotateCalls != 1 {
+		t.Fatalf("split value-log authority seq=%d path=%q live=%d calls=%d", l.vlogSeq, l.vlogPath, l.vlogLiveBytes.Load(), vlog.rotateCalls)
 	}
 }
