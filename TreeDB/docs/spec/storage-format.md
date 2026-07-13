@@ -1744,6 +1744,42 @@ bytes Preconditions[PreconditionsLen]
 bytes ResultAssertions[ResultAssertionsLen]
 ```
 
+Production append and reopen continue to use frame version 1. The version-2
+candidate is implemented as an explicit, inert codec and recovery boundary;
+activation is owned by #3718 and must switch append, scan, and open atomically.
+There is no mixed V1/V2 append mode. A strict V2 reader that encounters V1
+returns a pre-alpha rebuild-required error, and an unsupported version fails
+closed.
+
+V2 keeps the 72-byte envelope above and assigns the former reserved header
+field at bytes `[54,56)` to a little-endian durability class:
+
+| Value | Durability class | Recovery meaning |
+|---:|---|---|
+| 1 | `Durable` | this complete valid frame raises the durable frontier |
+| 2 | `Relaxed` | eligible for suffix discard only above the durable frontier |
+
+Zero and unknown classes are corruption. Encoders validate the class and all
+semantic fields before mutating caller-owned destination storage.
+
+Every V2 `RawKVBatch` frame has exactly one `ExternalRefFenceV1` precondition,
+including a frame with no `SetRID` operations. Its payload is:
+
+```text
+u32 UniqueRIDCount
+bytes[32] SHA256(sorted unique u64-le RIDs concatenated in order)
+```
+
+Decode recomputes this fence from the canonical decoded `RawKVBatch` payload
+before any RID lookup. Missing, duplicate, malformed, count-mismatched, or
+digest-mismatched fences are corruption. The stable V1 fixtures remain under
+`TreeDB/internal/commitlog/testdata/command_wal_v1_*.hex`; V2 fence and barrier
+fixtures use the corresponding `command_wal_v2_*.hex` names.
+
+V2 also reserves command kind `300`, system scope, and payload format `8` for
+`DurablePrefixBarrierV1`. It is a durable, empty/no-op frame whose LSN advances
+the recovery frontier without carrying a user mutation.
+
 Current command kinds:
 
 | Value | Kind | Scope | Payload format | Status |
@@ -1754,6 +1790,7 @@ Current command kinds:
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
+| 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | V2 empty durable-frontier record; inert until #3718 |
 
 Current payload format IDs:
 
@@ -1766,6 +1803,7 @@ Current payload format IDs:
 | 5 | `CollectionUpdateBatchByIDV1` |
 | 6 | `CatalogCreateCollectionV1` |
 | 7 | `CollectionRebuildVectorIndexV1` |
+| 8 | `DurablePrefixBarrierV1` |
 
 `RawKVBatchV1` payload:
 

@@ -166,7 +166,33 @@ Evidence label: `process-crash` for subprocess/`os.Exit` cases and
 `clean-reopen` for orderly reopen cases. These tests are not
 `modeled-power-loss` evidence.
 
-## 2.1 Publication Readability
+## 2.1 Inert Command-Frame V2 Recovery Boundary
+
+Invariant:
+
+- V2 durability class and canonical RID-fence bytes decode strictly; V1,
+  unknown classes/versions, malformed fences, and complete dependency defects
+  fail closed.
+- The highest complete durable frame or barrier establishes the horizon.
+  Defects through it cause no mutation; only one relaxed suffix above it is
+  discardable.
+- Physical repair is reverse-LSN, directory durable before anchor truncation,
+  retryable at every registered cut, and read-only inspection is non-mutating.
+- Production journal append and reopen continue to emit only V1 until #3718.
+
+Coverage:
+
+- `TreeDB/internal/commitlog/command_frame_v2_test.go`
+- `TreeDB/internal/commitlog/testdata/command_wal_v2_*.hex`
+- `TreeDB/db/command_wal_v2_classification_test.go`
+- `TreeDB/db/command_wal_v2_physical_test.go`
+
+The physical suffix-repair test uses #3717 `powerlossoracle.CutSpec` variants
+and stable variant IDs at dependency-file sync, unlink, deletion-directory
+sync, and final anchor sync cuts. This is deterministic crash-model unit
+evidence for the inert repair boundary, not public-`Open` activation evidence.
+
+## 2.2 Publication Readability
 
 Invariant:
 - Published commit state exposes roots, system-root collection catalog metadata,
