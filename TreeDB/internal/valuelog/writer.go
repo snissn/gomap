@@ -67,13 +67,14 @@ func openLogFile(path string) (*os.File, bool, error) {
 
 func syncNewFileDirectory(w *Writer, path string) error {
 	dir := filepath.Dir(path)
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceValueLog, "", dir); err != nil {
+	resource := segmentNamespaceResource(path)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, resource, "", dir); err != nil {
 		return err
 	}
 	if err := w.syncDirectory(path); err != nil {
 		return err
 	}
-	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceValueLog, "", dir)
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, resource, "", dir)
 }
 
 func recordSizeExceedsMax(valueLen uint32) bool {

@@ -9,8 +9,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestOrdinaryOuterLeafCreationClassifiesFallbackDirectorySync(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "leaf_vlog")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "000001.vlog")
+	var outerCreates, valueSyncs, outerBeforeSyncs, outerAfterSyncs int
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Namespace == durabilitycut.NamespaceCreate && event.NewPath == path && event.Resource == durabilitycut.ResourceOuterLeaf:
+			outerCreates++
+		case event.Point == durabilitycut.BeforeNewFileDirectorySync && event.Resource == durabilitycut.ResourceOuterLeaf:
+			outerBeforeSyncs++
+		case event.Point == durabilitycut.AfterNewFileDirectorySync && event.Resource == durabilitycut.ResourceOuterLeaf:
+			outerAfterSyncs++
+		case (event.Point == durabilitycut.BeforeNewFileDirectorySync || event.Point == durabilitycut.AfterNewFileDirectorySync) && event.Resource == durabilitycut.ResourceValueLog:
+			valueSyncs++
+		}
+		return nil
+	})
+	defer restore()
+
+	writer, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if outerCreates != 1 || outerBeforeSyncs != 1 || outerAfterSyncs != 1 || valueSyncs != 0 {
+		t.Fatalf("ordinary outer-leaf creation cuts create=%d directory(before/after)=%d/%d value-sync=%d want 1, 1/1, 0",
+			outerCreates, outerBeforeSyncs, outerAfterSyncs, valueSyncs)
+	}
+}
 
 func testStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
 	root := t.TempDir()
