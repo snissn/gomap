@@ -14,6 +14,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/mvcc"
 )
 
@@ -470,6 +471,8 @@ func openTreeDBDurable(tb testing.TB, dir string) versionedStore {
 
 func openTreeDB(tb testing.TB, dir string, profile treedb.Profile, mode mvcc.CommitMode) versionedStore {
 	tb.Helper()
+	caching.SetIteratorDebug(true)
+	tb.Cleanup(func() { caching.SetIteratorDebug(false) })
 	opts := treedb.OptionsFor(profile, dir)
 	db, err := treedb.Open(opts)
 	if err != nil {

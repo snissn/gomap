@@ -2443,7 +2443,8 @@ const (
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
-// CachingDB.Iterator. It is intended for benchmarking/diagnostics.
+// CachingDB.Iterator and collecting iterator shape counters in Stats. It is
+// intended for benchmarking/diagnostics and is disabled by default.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
 }
@@ -32303,7 +32304,10 @@ func (db *DB) Drain() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
-	db.iteratorCallsTotal.Add(1)
+	iteratorDebug := iteratorDebugEnabled.Load()
+	if iteratorDebug {
+		db.iteratorCallsTotal.Add(1)
+	}
 	db.noteRead()
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
@@ -32340,7 +32344,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			db.mu.Unlock()
 			return nil, err
 		}
-		db.iteratorSnapshotRotationsTotal.Add(1)
+		if iteratorDebug {
+			db.iteratorSnapshotRotationsTotal.Add(1)
+		}
 	}
 
 	backendRangeKnown := db.backendRangeKnown
@@ -32366,8 +32372,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			view = nil
 		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
-			db.observeIteratorShape(0, sourcesUsed)
-			if iteratorDebugEnabled.Load() {
+			if iteratorDebug {
+				db.observeIteratorShape(0, sourcesUsed)
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
 			return db.wrapForegroundIterator(it)
@@ -32430,8 +32436,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	queueLen := len(queue)
 	hasMemSource := false
 	decorateIterator := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
-		db.observeIteratorShape(queueLen, sourcesUsed)
-		if iteratorDebugEnabled.Load() {
+		if iteratorDebug {
+			db.observeIteratorShape(queueLen, sourcesUsed)
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
 		if hasMemSource && view != nil {

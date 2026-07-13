@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 )
 
@@ -95,6 +96,8 @@ func BenchmarkGetAt(b *testing.B) {
 // rows above. Each iteration writes a new version and immediately performs a
 // point lookup, exposing snapshot rotations and source accumulation.
 func BenchmarkCommitAtGetAtInterleaved(b *testing.B) {
+	caching.SetIteratorDebug(true)
+	b.Cleanup(func() { caching.SetIteratorDebug(false) })
 	db := openBenchDB(b)
 	store := New(db)
 	key := []byte("benchmark-key")
