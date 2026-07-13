@@ -63,6 +63,31 @@ func TestCommandFrameV2ClassFenceAndBarrier(t *testing.T) {
 	}
 }
 
+func TestCommandFrameV2RawKVWithoutSetRIDHasNoFence(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := DecodeCommandFrameV2(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fence, present, err := RawKVExternalRefFenceV1(env); err != nil || present || fence != (ExternalRefFenceV1{}) {
+		t.Fatalf("fence=%+v present=%t err=%v, want absent", fence, present, err)
+	}
+}
+
 func TestCommandFrameV2RejectsInvalidClassBeforeDestinationMutation(t *testing.T) {
 	dst := []byte("caller-owned-buffer")
 	want := append([]byte(nil), dst...)

@@ -1762,8 +1762,9 @@ field at bytes `[54,56)` to a little-endian durability class:
 Zero and unknown classes are corruption. Encoders validate the class and all
 semantic fields before mutating caller-owned destination storage.
 
-Every V2 `RawKVBatch` frame has exactly one `ExternalRefFenceV1` precondition,
-including a frame with no `SetRID` operations. Its payload is:
+Every V2 `RawKVBatch` frame containing at least one `SetRID` operation has
+exactly one `ExternalRefFenceV1` precondition. Frames without `SetRID` have no
+RID fence. Its payload is:
 
 ```text
 u32 UniqueRIDCount

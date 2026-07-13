@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sort"
 )
 
 const (
@@ -388,7 +389,7 @@ func ExternalRefFenceV1FromRawKVPayload(payload []byte) (ExternalRefFenceV1, err
 	if len(rids) == 0 {
 		return ExternalRefFenceV1{}, nil
 	}
-	sortUint64s(rids)
+	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
 	unique := rids[:0]
 	for _, rid := range rids {
 		if len(unique) == 0 || unique[len(unique)-1] != rid {
@@ -405,14 +406,6 @@ func ExternalRefFenceV1FromRawKVPayload(payload []byte) (ExternalRefFenceV1, err
 	fence.Count = uint32(len(unique))
 	copy(fence.Digest[:], h.Sum(nil))
 	return fence, nil
-}
-
-func sortUint64s(values []uint64) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
-	}
 }
 
 // RawKVExternalRefFenceV1 returns the one validated V2 fence, when present.

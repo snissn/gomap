@@ -271,9 +271,10 @@ their bytes and failure rules can be reviewed independently. During that phase:
 
 V2 persists `CommandDurabilityClass` in header bytes `[54,56)` (`Durable=1`,
 `Relaxed=2`). It adds the empty durable `DurablePrefixBarrierV1` and requires
-one canonical `ExternalRefFenceV1` precondition on every raw-KV frame. The fence
-is the unique RID count plus SHA-256 over sorted unique little-endian RIDs and
-is verified from decoded payload bytes before external dependency lookup.
+one canonical `ExternalRefFenceV1` precondition on every raw-KV frame containing
+`SetRID`; a frame without `SetRID` has no RID fence. The fence is the unique RID
+count plus SHA-256 over sorted unique little-endian RIDs and is verified from
+decoded payload bytes before external dependency lookup.
 
 Recovery first derives the highest valid durable frontier and validates the
 entire prefix through it without mutation. Only a complete contiguous
