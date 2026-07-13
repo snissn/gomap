@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -642,6 +643,58 @@ func TestOpen_IndexOuterLeavesInValueLog_CreatesLeafGenerationManifest(t *testin
 	}
 	if got, want := loaded.CurrentGenerationID, uint64(1); got != want {
 		t.Fatalf("CurrentGenerationID=%d, want %d", got, want)
+	}
+}
+
+func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	store := db.leafGenerationManifestStore
+	if store == nil {
+		t.Fatal("leaf generation manifest store is nil")
+	}
+
+	teardownStarted := make(chan struct{})
+	db.registerInternalTeardownHook(func() error {
+		close(teardownStarted)
+		return nil
+	})
+	db.writeMu.RLock()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- db.Close() }()
+	select {
+	case <-teardownStarted:
+	case <-time.After(5 * time.Second):
+		db.writeMu.RUnlock()
+		t.Fatal("Close did not begin internal teardown")
+	}
+
+	manifest := db.leafGenerationManifest.clone()
+	token, err := store.Replace(manifest)
+	if err != nil {
+		db.writeMu.RUnlock()
+		t.Fatalf("manifest replacement while Close waits for writer: %v", err)
+	}
+	if token != nil {
+		token.Release()
+	}
+	db.writeMu.RUnlock()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after writer drained")
+	}
+	store.mu.Lock()
+	closed := store.closed
+	store.mu.Unlock()
+	if !closed {
+		t.Fatal("leaf generation manifest store remained open after Close")
 	}
 }
 

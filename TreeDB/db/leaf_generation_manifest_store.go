@@ -96,10 +96,6 @@ func (db *DB) initializeLeafGenerationManifestStore(leafDir string, registry *ro
 		db.publicationPoisoned.Store(true)
 	})
 	db.leafGenerationManifestStore = store
-	db.registerInternalTeardownHook(func() error {
-		store.Close()
-		return nil
-	})
 }
 
 func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {

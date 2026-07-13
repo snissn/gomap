@@ -2450,12 +2450,19 @@ func (db *DB) closeAfterHooks() error {
 	// worker pool and tearing down index resources.
 	db.writeMu.Lock()
 	leafPageLog := db.leafPageLog
+	leafGenerationManifestStore := db.leafGenerationManifestStore
 	if db.flushApplyWorkerPool != nil {
 		db.flushApplyWorkerPool.Close()
 		db.flushApplyWorkerPool = nil
 	}
 	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
+	// Commit post-work persists the leaf-generation manifest while its writer
+	// still holds writeMu. Keep the retained manifest handles usable until every
+	// in-flight writer has drained, then release them before index teardown.
+	if leafGenerationManifestStore != nil {
+		leafGenerationManifestStore.Close()
+	}
 	// Operations using teardownMu may briefly take writeMu while preparing or
 	// revalidating work. Never wait for them while holding writeMu.
 	db.teardownMu.Lock()
