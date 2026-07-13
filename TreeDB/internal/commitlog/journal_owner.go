@@ -531,9 +531,6 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 		return nil
 	}
 	if j.captureStableResources {
-		if len(j.pendingStableRotations) != 0 {
-			return fmt.Errorf("%w: drain pending stable command-WAL rotation before rotating again", rootpublication.ErrResourceOwnership)
-		}
 		rotation, err := j.rotateActiveSegmentWithStableResourcesLocked(syncCurrent)
 		if err != nil {
 			return err
@@ -544,6 +541,13 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 	return j.rotateActiveSegmentLockedObserved(syncCurrent, observe)
 }
 
+func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
+	if len(j.pendingStableRotations) != 0 {
+		return fmt.Errorf("%w: drain pending stable command-WAL rotation before rotating again", rootpublication.ErrResourceOwnership)
+	}
+	return nil
+}
+
 func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
 	return j.rotateActiveSegmentLockedObserved(syncCurrent, false)
 }
@@ -551,6 +555,9 @@ func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
 func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe bool) error {
 	if j == nil || j.writer == nil {
 		return errors.New("commitlog: command journal is closed")
+	}
+	if err := j.requireNoPendingStableRotationLocked(); err != nil {
+		return err
 	}
 	if j.segmentSeq == ^uint64(0) {
 		return ErrCommandWALSegmentSeqExhausted
@@ -691,6 +698,9 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent bool) (*CommandJournalStableRotation, error) {
 	if j.writer == nil || j.writer.f == nil {
 		return nil, errors.New("commitlog: command journal is closed")
+	}
+	if err := j.requireNoPendingStableRotationLocked(); err != nil {
+		return nil, err
 	}
 	if j.segmentSeq == ^uint64(0) {
 		return nil, ErrCommandWALSegmentSeqExhausted

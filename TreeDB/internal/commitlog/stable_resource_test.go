@@ -168,6 +168,20 @@ func TestCommandJournalAutomaticRotationCapturesStableResources(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := journal.RotateActiveSegment(false); !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("legacy rotation before pending drain error=%v want ErrResourceOwnership", err)
+	}
+	rotation, err := journal.RotateActiveSegmentWithStableResources(false)
+	if !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		if rotation != nil {
+			rotation.Release()
+		}
+		t.Fatalf("stable rotation before pending drain error=%v want ErrResourceOwnership", err)
+	}
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("stable rotation before pending drain returned owned resources")
+	}
 	if _, err := journal.AppendCommand(CommandEnvelope{
 		Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
 	}); !errors.Is(err, rootpublication.ErrResourceOwnership) {
