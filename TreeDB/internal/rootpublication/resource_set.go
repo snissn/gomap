@@ -162,6 +162,13 @@ func stableResourcesCoalesce(existing, incoming *StableResourceToken) (bool, err
 		if existing.digest != incoming.digest {
 			return false, fmt.Errorf("%w: immutable physical identity has conflicting content digest", ErrResourceConflict)
 		}
+		// A physical immutable file may satisfy multiple logical generations,
+		// but each generation remains an independent publication and deletion
+		// obligation. Keep one owned pin per generation so generation-scoped
+		// frontier and deletion lookups cannot lose authority during coalescing.
+		if existing.generation != incoming.generation {
+			return false, nil
+		}
 		return true, nil
 	default:
 		return false, fmt.Errorf("%w: missing stability policy", ErrUnresolvedResource)

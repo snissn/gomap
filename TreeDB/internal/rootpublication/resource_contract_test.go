@@ -749,7 +749,7 @@ func TestImmutableAliasesCoalesceByIdentityAndDigest(t *testing.T) {
 	for i := range 2 {
 		token, err := NewStableResourceToken(StableResourceSpec{
 			Kind: ResourceOuterLeafPack, LogicalLane: fmt.Sprintf("pack-lane-%d", i),
-			ResourceID: fmt.Sprintf("pack-alias-%d", i), Generation: uint64(i + 1),
+			ResourceID: fmt.Sprintf("pack-alias-%d", i), Generation: 7,
 			DiagnosticPath: "maindb/outer_leaf/generation.pack", File: file,
 			Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Digest: digest,
 			Reachability: ReachabilityOuterLeafPackedPointer,
@@ -769,6 +769,48 @@ func TestImmutableAliasesCoalesceByIdentityAndDigest(t *testing.T) {
 	defer set.Release()
 	if set.Len() != 1 {
 		t.Fatalf("immutable aliases retained %d physical pins, want 1", set.Len())
+	}
+}
+
+func TestImmutableAliasesPreserveDistinctGenerationPins(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "generation.pack", "immutable-pack")
+	digest := sha256.Sum256([]byte("immutable-pack"))
+	builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+	tokens := make([]*StableResourceToken, 0, 2)
+	for i := range 2 {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceOuterLeafPack, LogicalLane: fmt.Sprintf("pack-lane-%d", i),
+			ResourceID: fmt.Sprintf("pack-alias-%d", i), Generation: uint64(i + 1),
+			DiagnosticPath: "maindb/outer_leaf/generation.pack", File: file,
+			Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Digest: digest,
+			Reachability: ReachabilityOuterLeafPackedPointer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.Add(token); err != nil {
+			builder.Abandon()
+			t.Fatalf("Add immutable generation: %v", err)
+		}
+		tokens = append(tokens, token)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if set.Len() != len(tokens) {
+		t.Fatalf("immutable generations retained %d physical pins, want %d", set.Len(), len(tokens))
+	}
+	guard := set.DeletionGuard()
+	for _, token := range tokens {
+		if err := guard.Check(token.Identity(), token.Generation()); !errors.Is(err, ErrResourcePinned) {
+			t.Fatalf("Check generation %d=%v want ErrResourcePinned", token.Generation(), err)
+		}
+		if got, want := set.FrontierFor(token.Identity(), token.Generation()), token.Frontier(); got.Bytes != want.Bytes {
+			t.Fatalf("FrontierFor generation %d=%+v want %+v", token.Generation(), got, want)
+		}
 	}
 }
 
