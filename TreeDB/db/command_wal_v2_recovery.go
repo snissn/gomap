@@ -199,7 +199,6 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 
 	expected := applied + 1
 	discardAt := -1
-	missingByFrame := make([][]uint64, len(ordered))
 	for i := range ordered {
 		frame := &ordered[i]
 		lsn := frame.Envelope.LSN
@@ -209,7 +208,6 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 		contiguous := lsn == expected
 		duplicate := i > 0 && ordered[i-1].Envelope.LSN == lsn
 		missing := commandWALV2MissingRIDs(frame.RequiredRIDs, hasRID)
-		missingByFrame[i] = missing
 		atOrBelowFrontier := lsn <= result.DurableFrontier || expected <= result.DurableFrontier
 		if frame.Incomplete {
 			if atOrBelowFrontier || frame.Envelope.DurabilityClass == commitlog.CommandDurabilityDurable {
@@ -250,9 +248,12 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 	result.Diagnostic.FirstDiscardedLSN = first.Envelope.LSN
 	result.Diagnostic.DiscardedFrameCount = uint64(len(result.DiscardSuffix))
 	result.Diagnostic.SourceSegment = filepath.Base(first.Coordinate.SourceSegment)
-	missingInSuffix := make(map[uint64]struct{})
-	for i := discardAt; i < len(missingByFrame); i++ {
-		for _, rid := range missingByFrame[i] {
+	var missingInSuffix map[uint64]struct{}
+	for i := range result.DiscardSuffix {
+		for _, rid := range commandWALV2MissingRIDs(result.DiscardSuffix[i].RequiredRIDs, hasRID) {
+			if missingInSuffix == nil {
+				missingInSuffix = make(map[uint64]struct{})
+			}
 			missingInSuffix[rid] = struct{}{}
 		}
 	}
