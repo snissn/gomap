@@ -668,6 +668,27 @@ func TestFreelistGenerationV1_ParentChecksumRejectsRecomputedChildCRC(t *testing
 	}
 }
 
+func TestFreelistGenerationV1_EncodeIndexRejectsChildSummaryOverflow(t *testing.T) {
+	overflow := uint64(^uint32(0)) + 1
+	for _, tc := range []struct {
+		name    string
+		free    uint64
+		retired uint64
+	}{
+		{name: "free", free: overflow},
+		{name: "retired", retired: overflow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := &stateNode{pageID: 2, checksum: 1, freeCount: tc.free, retiredCount: tc.retired}
+			root := &stateNode{freeCount: tc.free, retiredCount: tc.retired}
+			root.child[0] = child
+			if _, err := encodeIndexPage(3, 1, root, 0); !errors.Is(err, ErrGenerationFormat) {
+				t.Fatalf("encode overflow error=%v want %v", err, ErrGenerationFormat)
+			}
+		})
+	}
+}
+
 func TestFreelistGenerationV1_LoadStateNodeAcceptsZeroChildChecksum(t *testing.T) {
 	chunk := &stateChunk{}
 	for offset := uint64(32); offset < 64; offset++ {

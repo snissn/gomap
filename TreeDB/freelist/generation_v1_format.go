@@ -180,7 +180,7 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 		count = 1
 	} else {
 		for _, child := range n.child {
-			if child != nil && child.freeCount+child.retiredCount != 0 {
+			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
 				if child.pageID == 0 {
 					return nil, ErrGenerationFormat
 				}
@@ -199,7 +199,10 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 	binary.LittleEndian.PutUint64(b[48:56], n.retiredCount)
 	binary.LittleEndian.PutUint64(b[56:64], n.minRetiredSeq)
 	o := indexHeaderSize
-	write := func(slot byte, kind byte, childChecksum uint32, childID, freeCount, retiredCount, minSeq uint64) {
+	write := func(slot byte, kind byte, childChecksum uint32, childID, freeCount, retiredCount, minSeq uint64) error {
+		if freeCount > uint64(^uint32(0)) || retiredCount > uint64(^uint32(0)) {
+			return ErrGenerationFormat
+		}
 		b[o], b[o+1] = slot, kind
 		binary.LittleEndian.PutUint32(b[o+2:o+6], childChecksum)
 		binary.LittleEndian.PutUint64(b[o+8:o+16], childID)
@@ -207,14 +210,19 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(retiredCount))
 		binary.LittleEndian.PutUint64(b[o+24:o+32], minSeq)
 		o += indexEntrySize
+		return nil
 	}
 	if depth == chunkTrieDepth {
 		retiredCount, minSeq := n.chunk.retiredSummary()
-		write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq)
+		if err := write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq); err != nil {
+			return nil, err
+		}
 	} else {
 		for slot, child := range n.child {
-			if child != nil && child.freeCount+child.retiredCount != 0 {
-				write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq)
+			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
+				if err := write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
