@@ -41,3 +41,43 @@ func TestTableSeekGE_ModeMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestHashSortedSeekGE_ExactDoesNotRebuildSortedKeys(t *testing.T) {
+	m := NewHashSorted()
+	m.Set([]byte("a"), []byte("aye"))
+	m.Set([]byte("c"), []byte("see"))
+
+	// Establish a sorted index, then invalidate it with an interleaved write.
+	if key, _, _, _, _, found := m.SeekGE([]byte("b"), nil); !found || !bytes.Equal(key, []byte("c")) {
+		t.Fatalf("SeekGE(b) key=%q found=%t, want c,true", key, found)
+	}
+	ptr := page.ValuePtr{FileID: 42, Offset: 7, Length: 3}
+	m.SetEntryWithRevision([]byte("b"), []byte("raw"), ptr, node.FlagPointer, 11)
+
+	m.mu.RLock()
+	if m.sortedValid {
+		m.mu.RUnlock()
+		t.Fatal("interleaved write did not invalidate sorted keys")
+	}
+	before := append([]string(nil), m.sortedKeys...)
+	m.mu.RUnlock()
+
+	key, value, gotPtr, flags, revision, found := m.SeekGE([]byte("b"), []byte("c"))
+	if !found || !bytes.Equal(key, []byte("b")) || !bytes.Equal(value, []byte("raw")) || gotPtr != ptr || flags != node.FlagPointer || revision != 11 {
+		t.Fatalf("SeekGE(b,c) = (%q,%q,%+v,%#x,%d,%t), want pointer b@11", key, value, gotPtr, flags, revision, found)
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.sortedValid {
+		t.Fatal("exact SeekGE rebuilt the invalid sorted-key index")
+	}
+	if len(m.sortedKeys) != len(before) {
+		t.Fatalf("exact SeekGE changed sorted-key length from %d to %d", len(before), len(m.sortedKeys))
+	}
+	for i := range before {
+		if m.sortedKeys[i] != before[i] {
+			t.Fatalf("exact SeekGE changed sorted key %d from %q to %q", i, before[i], m.sortedKeys[i])
+		}
+	}
+}
