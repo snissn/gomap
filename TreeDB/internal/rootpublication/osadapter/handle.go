@@ -76,6 +76,19 @@ func NewResourceHandle(file *os.File, hooks ResourceHooks) (*ResourceHandle, err
 	return newResourceHandle(file, hooks, syncOpenResource)
 }
 
+// ResourceIdentity returns the platform identity of an already-open regular
+// file without resolving its diagnostic name.
+func ResourceIdentity(file *os.File) (rootpublication.StableIdentity, error) {
+	snapshot, err := inspectOpenHandle(file)
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	if !snapshot.regularFile {
+		return rootpublication.StableIdentity{}, fmt.Errorf("%w: resource is not a regular file", ErrInvalidOpenHandle)
+	}
+	return snapshot.identity, nil
+}
+
 func newResourceHandle(file *os.File, hooks ResourceHooks, syncOpen syncOpenHandle) (*ResourceHandle, error) {
 	if !stableOSHandlesSupported() {
 		return nil, ErrUnsupportedPlatform

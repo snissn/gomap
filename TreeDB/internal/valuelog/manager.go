@@ -18,6 +18,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
@@ -49,6 +50,9 @@ type File struct {
 	RefCount           atomic.Int64
 	IsZombie           atomic.Bool
 	retryDeletePending atomic.Bool
+	stableIdentity     rootpublication.StableIdentity
+	stableIdentitySet  bool
+	stableObserved     bool
 	currentWritable    atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
@@ -1269,6 +1273,7 @@ type Manager struct {
 	groupedFrameCacheBudget    *groupedFrameCacheBudget
 	currentWritableMmap        atomic.Bool
 	currentWritableReadBarrier atomic.Value
+	stableResourcePins         *rootpublication.IdentityPinRegistry
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -1494,8 +1499,11 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 	var err error
 	for _, f := range m.files {
+		if e := m.unobserveStableFileLocked(f); e != nil {
+			err = errors.Join(err, e)
+		}
 		if e := f.Close(); e != nil {
-			err = e
+			err = errors.Join(err, e)
 		}
 	}
 	m.files = nil
@@ -1627,6 +1635,10 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
+	if err := m.observeStableFileLocked(f); err != nil {
+		_ = f.Close()
+		return err
+	}
 	m.files[id] = f
 	return nil
 }
@@ -1942,33 +1954,8 @@ func (m *Manager) Release(set *Set) error {
 	for _, f := range set.Files {
 		newRef := f.RefCount.Add(-1)
 		if newRef == 0 && f.IsZombie.Load() {
-			shouldRemove := false
-			m.mu.Lock()
-			if f.RefCount.Load() == 0 {
-				if cur, exists := m.files[f.ID]; exists && cur == f {
-					shouldRemove = true
-				}
-			}
-			m.mu.Unlock()
-			if shouldRemove {
-				if e := f.Close(); e != nil {
-					err = e
-				}
-				if e := removeSegmentFileWithRetry(f.Path); e != nil {
-					if isWindowsSharingViolationError(e) {
-						if f.retryDeletePending.CompareAndSwap(false, true) {
-							go m.retryZombieDelete(f)
-						}
-						continue
-					}
-					err = e
-					continue
-				}
-				m.mu.Lock()
-				if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
-					delete(m.files, f.ID)
-				}
-				m.mu.Unlock()
+			if e := m.deleteZombieFile(f); e != nil {
+				err = errors.Join(err, e)
 			}
 		}
 	}
@@ -1991,17 +1978,34 @@ func (m *Manager) retryZombieDelete(f *File) {
 			return
 		}
 
+		lease, err := m.stableDeleteLease(f)
+		if errors.Is(err, ErrFilePinned) {
+			<-m.stableWaitUnpinned(f)
+			continue
+		}
+		if err != nil {
+			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, err)
+			return
+		}
 		if err := removeSegmentFileOnce(f.Path); err == nil {
+			closeErr := f.Close()
+			commitStableDeleteLease(lease)
 			m.mu.Lock()
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
 				delete(m.files, f.ID)
+				_ = m.unobserveStableFileLocked(f)
 			}
 			m.mu.Unlock()
+			if closeErr != nil {
+				log.Printf("valuelog: close retired zombie %s failed: %v", f.Path, closeErr)
+			}
 			return
 		} else if !isWindowsSharingViolationError(err) {
+			abortStableDeleteLease(lease)
 			log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, err)
 			return
 		}
+		abortStableDeleteLease(lease)
 
 		time.Sleep(backoff)
 		if backoff < 2*time.Second {
@@ -2052,8 +2056,9 @@ func (m *Manager) EvictSegment(id uint32) error {
 		return &filePinnedError{id: id, op: "evict"}
 	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-	return f.Close()
+	return errors.Join(unobserveErr, f.Close())
 }
 
 // RemapStats reports aggregate remap executions and tracked dead mappings.
@@ -2407,10 +2412,21 @@ func (m *Manager) RemoveSegment(id uint32) error {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "remove"}
 	}
+	lease, err := m.stableDeleteLease(f)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-
-	return closeAndRemoveSegmentFile(f)
+	deleted, removeErr := closeAndRemoveSegmentFileResult(f)
+	if deleted {
+		commitStableDeleteLease(lease)
+	} else {
+		abortStableDeleteLease(lease)
+	}
+	return errors.Join(unobserveErr, removeErr)
 }
 
 // RemoveSegmentIfUnpinned removes a tracked segment only when no live snapshot
@@ -2430,10 +2446,25 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, nil
 	}
+	lease, err := m.stableDeleteLease(f)
+	if errors.Is(err, ErrFilePinned) {
+		m.mu.Unlock()
+		return false, nil
+	}
+	if err != nil {
+		m.mu.Unlock()
+		return false, err
+	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-
-	return true, closeAndRemoveSegmentFile(f)
+	deleted, removeErr := closeAndRemoveSegmentFileResult(f)
+	if deleted {
+		commitStableDeleteLease(lease)
+	} else {
+		abortStableDeleteLease(lease)
+	}
+	return true, errors.Join(unobserveErr, removeErr)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.
@@ -2445,19 +2476,37 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 		m.mu.Unlock()
 		return nil
 	}
+	lease, err := m.stableDeleteLease(f)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	delete(m.files, id)
+	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-
-	return closeAndRemoveSegmentFile(f)
+	deleted, removeErr := closeAndRemoveSegmentFileResult(f)
+	if deleted {
+		commitStableDeleteLease(lease)
+	} else {
+		abortStableDeleteLease(lease)
+	}
+	return errors.Join(unobserveErr, removeErr)
 }
 
 var removeSegmentPath = os.Remove
 
 func closeAndRemoveSegmentFile(f *File) error {
+	_, err := closeAndRemoveSegmentFileResult(f)
+	return err
+}
+
+func closeAndRemoveSegmentFileResult(f *File) (deleted bool, err error) {
 	if f == nil {
-		return nil
+		return true, nil
 	}
-	return errors.Join(f.Close(), removeSegmentFileWithRetry(f.Path))
+	closeErr := f.Close()
+	removeErr := removeSegmentFileWithRetry(f.Path)
+	return removeErr == nil, errors.Join(closeErr, removeErr)
 }
 
 func removeSegmentFileOnce(path string) error {
