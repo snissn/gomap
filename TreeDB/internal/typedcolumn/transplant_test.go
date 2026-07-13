@@ -644,6 +644,10 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// already-selected query-ready base-plus-delta generations. It does not
 		// own publication, retention, document materialization, or legacy scans.
 		filepath.Clean(filepath.Join(collectionsDir, "query_ready_execution.go")): {},
+		// #3699 prepares the recovery-authoritative insert-only typed-column
+		// inventory through the approved M5 asset-manager bridge. The QRBG stays
+		// rebuildable and non-authoritative and owns no publication root.
+		filepath.Clean(filepath.Join(collectionsDir, "query_ready_preparation.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {

@@ -256,6 +256,35 @@ func (c *Collection) closeCollectionQueryReadyGenerationCache() error {
 	return err
 }
 
+// retireCollectionQueryReadyGenerationCache closes the exact M3 cache that
+// may map a prepared QRBG before its asset-manager tail is reclaimed. It
+// refuses to detach a cache with live leases so cleanup cannot truncate under
+// an active mmap.
+func (c *Collection) retireCollectionQueryReadyGenerationCache(identity ColumnStoreCacheIdentity) error {
+	if c == nil {
+		return nil
+	}
+	c.queryReadyGenerationMu.Lock()
+	entry := c.queryReadyGenerationEntry
+	if entry == nil || entry.identity != identity {
+		c.queryReadyGenerationMu.Unlock()
+		return nil
+	}
+	if entry.refs != 0 {
+		c.queryReadyGenerationMu.Unlock()
+		return ErrQueryReadyColumnGenerationBusy
+	}
+	c.queryReadyGenerationEntry = nil
+	entry.stale = true
+	c.queryReadyGenerationInvalidations++
+	c.queryReadyGenerationMu.Unlock()
+	err := entry.cache.Close()
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() {
+		c.manager.unregisterCollectionHandle(c)
+	}
+	return err
+}
+
 func (m *CollectionManager) closeCollectionQueryReadyGenerationCaches() error {
 	if m == nil {
 		return nil

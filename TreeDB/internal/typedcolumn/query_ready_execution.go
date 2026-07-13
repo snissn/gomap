@@ -639,10 +639,11 @@ func (r *QueryReadyOperator) reduceRow(partIndex int, part *queryReadyExecutionP
 		cell := group*len(r.distinctDomain.values) + distinct
 		r.distinctBits[cell/64] |= uint64(1) << uint(cell%64)
 	case QueryReadyOperatorGroupHourCount:
-		hour := int(floorUnixSeconds(part.values[r.valueProjected][row])%86_400) / 3_600
-		if hour < 0 {
-			hour += 24
+		secondOfDay := floorUnixSeconds(part.values[r.valueProjected][row]) % 86_400
+		if secondOfDay < 0 {
+			secondOfDay += 86_400
 		}
+		hour := int(secondOfDay / 3_600)
 		r.hourCounts[group*24+hour]++
 	case QueryReadyOperatorGroupMinInt64:
 		value := part.values[r.valueProjected][row]

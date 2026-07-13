@@ -37,6 +37,7 @@ type QueryReadyColumnGenerationFiles struct {
 	MaxAccumulatedDeltaParts int
 	MaxRows                  int64
 	MaxBytes                 int64
+	lifetime                 *queryReadyColumnPreparedLifetime
 }
 
 // QueryReadyColumnPhysicalQueryRunner owns a collection generation lease and
@@ -49,6 +50,7 @@ type QueryReadyColumnPhysicalQueryRunner struct {
 	closeOnce sync.Once
 	closeErr  error
 	closed    bool
+	lifetime  *queryReadyColumnPreparedLifetime
 }
 
 // PrepareQueryReadyColumnPhysicalQuery prepares q1-q5/qexpr-compatible shared
@@ -65,6 +67,17 @@ func (c *Collection) PrepareQueryReadyColumnPhysicalQuery(files QueryReadyColumn
 }
 
 func (c *Collection) prepareQueryReadyColumnPhysicalQueryForIdentity(identity ColumnStoreCacheIdentity, files QueryReadyColumnGenerationFiles, request ColumnPhysicalQueryRequest) (*QueryReadyColumnPhysicalQueryRunner, error) {
+	if files.lifetime != nil {
+		if err := files.lifetime.acquire(); err != nil {
+			return nil, err
+		}
+	}
+	releaseLifetime := true
+	defer func() {
+		if releaseLifetime && files.lifetime != nil {
+			_ = files.lifetime.release()
+		}
+	}()
 	if err := validateColumnPhysicalQueryRequest(request); err != nil {
 		return nil, err
 	}
@@ -89,7 +102,8 @@ func (c *Collection) prepareQueryReadyColumnPhysicalQueryForIdentity(identity Co
 		_ = lease.Close()
 		return nil, err
 	}
-	return &QueryReadyColumnPhysicalQueryRunner{lease: lease, operator: operator, request: request}, nil
+	releaseLifetime = false
+	return &QueryReadyColumnPhysicalQueryRunner{lease: lease, operator: operator, request: request, lifetime: files.lifetime}, nil
 }
 
 // RunQueryReadyColumnPhysicalQuery is the one-shot production adapter. Hot
@@ -118,6 +132,9 @@ func (r *QueryReadyColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, 
 	out := ColumnPhysicalQueryResult{Groups: r.groups}
 	for i, group := range result.Groups {
 		out.Groups[i] = ColumnPhysicalQueryGroup{Key: group.Key, Hour: group.Hour, Count: group.Count, DistinctCount: group.DistinctCount, Int64: group.Int64}
+		if r.request.Kind == ColumnPhysicalQuerySumSecondOfDaySquare {
+			out.Groups[i].Key = columnPhysicalQuerySumSecondOfDaySquareKey(r.request.ValueColumn)
+		}
 	}
 	applyQueryReadyExecutionDiagnostics(&out.Diagnostics, r.request, result.Stats)
 	return out, err
@@ -134,6 +151,10 @@ func (r *QueryReadyColumnPhysicalQueryRunner) Close() error {
 		if r.lease != nil {
 			r.closeErr = r.lease.Close()
 			r.lease = nil
+		}
+		if r.lifetime != nil {
+			r.closeErr = errors.Join(r.closeErr, r.lifetime.release())
+			r.lifetime = nil
 		}
 	})
 	return r.closeErr

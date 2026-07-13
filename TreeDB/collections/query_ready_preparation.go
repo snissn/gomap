@@ -1,0 +1,330 @@
+package collections
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+)
+
+const (
+	defaultQueryReadyColumnPreparationWorkers       = 1
+	defaultQueryReadyColumnPreparationInFlightBytes = int64(1 << 30)
+)
+
+// QueryReadyColumnPreparationOptions bounds one query-independent build from
+// the current recovery-authoritative insert-only typed-column inventory.
+// Zero values select conservative defaults.
+type QueryReadyColumnPreparationOptions struct {
+	MaxWorkers       int
+	MaxInFlightBytes int64
+}
+
+// QueryReadyColumnPreparationBoundError is returned before retaining the next
+// source image or admitting M5 build allocation when their combined estimated
+// peak exceeds the configured per-worker share.
+type QueryReadyColumnPreparationBoundError struct {
+	RequiredBytes int64
+	MaxBytes      int64
+}
+
+func (e *QueryReadyColumnPreparationBoundError) Error() string {
+	if e == nil {
+		return "collections: query-ready column preparation bound exceeded"
+	}
+	return fmt.Sprintf("collections: query-ready column preparation requires %d bytes; bound is %d", e.RequiredBytes, e.MaxBytes)
+}
+
+// QueryReadyColumnPreparationStats separates source preparation from M5's
+// bounded generation build/publication handoff. It is intended for benchmark
+// harness reporting outside timed query attempts.
+type QueryReadyColumnPreparationStats struct {
+	SourceParts                int           `json:"source_parts"`
+	SourceRows                 int64         `json:"source_rows"`
+	SourceBytes                int64         `json:"source_bytes"`
+	SourceReadTime             time.Duration `json:"source_read_nanoseconds"`
+	SourceDecodeTime           time.Duration `json:"source_decode_nanoseconds"`
+	Rows                       int64         `json:"rows"`
+	InputBytes                 int64         `json:"input_bytes"`
+	OutputBytes                int64         `json:"output_bytes"`
+	BytesCopied                int64         `json:"bytes_copied"`
+	BytesHashed                int64         `json:"bytes_hashed"`
+	BytesChecksummed           int64         `json:"bytes_checksummed"`
+	AssetsProduced             int           `json:"assets_produced"`
+	PartsProduced              int           `json:"parts_produced"`
+	ReservedInFlightBytes      int64         `json:"build_reserved_in_flight_bytes"`
+	EstimatedPeakInFlightBytes int64         `json:"combined_estimated_peak_in_flight_bytes"`
+	EncodedBufferPeakBytes     int64         `json:"encoded_buffer_peak_bytes"`
+	WorkerLimit                int           `json:"worker_limit"`
+	QueueCapacity              int           `json:"queue_capacity"`
+	QueueWaitTime              time.Duration `json:"queue_wait_nanoseconds"`
+	BuildTime                  time.Duration `json:"build_nanoseconds"`
+	AssetPreparationTime       time.Duration `json:"asset_preparation_nanoseconds"`
+	ManagerRegistrationTime    time.Duration `json:"manager_registration_nanoseconds"`
+	PublicationHandoffTime     time.Duration `json:"publication_handoff_nanoseconds"`
+	TotalTime                  time.Duration `json:"total_nanoseconds"`
+}
+
+// QueryReadyColumnPreparedGeneration owns one rebuildable, non-authoritative
+// QRBG asset. A successful Close prevents new runners and reclaims the asset.
+// Close returns ErrQueryReadyColumnGenerationBusy without changing ownership
+// while runners are active, so the owner may retry after they close.
+type QueryReadyColumnPreparedGeneration struct {
+	files    QueryReadyColumnGenerationFiles
+	stats    QueryReadyColumnPreparationStats
+	identity ColumnStoreCacheIdentity
+	lifetime *queryReadyColumnPreparedLifetime
+}
+
+// ErrQueryReadyColumnGenerationBusy reports an attempted owner Close while a
+// prepared physical-query runner still pins the M3 mapping.
+var ErrQueryReadyColumnGenerationBusy = errors.New("collections: query-ready prepared generation has active runners")
+
+// Files returns the exact nonzero M3 byte range selected by preparation.
+func (p *QueryReadyColumnPreparedGeneration) Files() QueryReadyColumnGenerationFiles {
+	if p == nil {
+		return QueryReadyColumnGenerationFiles{}
+	}
+	files := p.files
+	files.Deltas = append([]QueryReadyColumnGenerationFile(nil), p.files.Deltas...)
+	return files
+}
+
+// Stats returns the one-time source/build/handoff accounting for this asset.
+func (p *QueryReadyColumnPreparedGeneration) Stats() QueryReadyColumnPreparationStats {
+	if p == nil {
+		return QueryReadyColumnPreparationStats{}
+	}
+	return p.stats
+}
+
+// SnapshotIdentity returns the recovery-authoritative collection identity
+// pinned while the source typed-column inventory was selected.
+func (p *QueryReadyColumnPreparedGeneration) SnapshotIdentity() ColumnStoreCacheIdentity {
+	if p == nil {
+		return ColumnStoreCacheIdentity{}
+	}
+	return p.identity
+}
+
+// Close releases the owner lease and is idempotent after successful cleanup.
+// A busy Close leaves the owner and file set valid for subsequent runners.
+func (p *QueryReadyColumnPreparedGeneration) Close() error {
+	if p == nil || p.lifetime == nil {
+		return nil
+	}
+	return p.lifetime.closeOwner()
+}
+
+type queryReadyColumnPreparedLifetime struct {
+	collection *Collection
+	identity   ColumnStoreCacheIdentity
+	prepared   *queryReadyPreparedGeneration
+
+	mu       sync.Mutex
+	refs     int
+	closing  bool
+	cleaned  bool
+	closeErr error
+}
+
+func (l *queryReadyColumnPreparedLifetime) acquire() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closing || l.cleaned || l.prepared == nil {
+		return errors.New("collections: query-ready prepared generation is closed")
+	}
+	l.refs++
+	return nil
+}
+
+func (l *queryReadyColumnPreparedLifetime) closeOwner() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	if l.cleaned {
+		err := l.closeErr
+		l.mu.Unlock()
+		return err
+	}
+	if l.refs > 1 {
+		l.mu.Unlock()
+		return ErrQueryReadyColumnGenerationBusy
+	}
+	l.closing = true
+	l.mu.Unlock()
+	if err := l.collection.retireCollectionQueryReadyGenerationCache(l.identity); err != nil {
+		l.mu.Lock()
+		l.closing = false
+		l.mu.Unlock()
+		return err
+	}
+	var cleanupErr error
+	if l.prepared != nil {
+		cleanupErr = l.prepared.Abort()
+	}
+	l.mu.Lock()
+	l.refs = 0
+	l.cleaned = true
+	l.prepared = nil
+	l.closeErr = errors.Join(l.closeErr, cleanupErr)
+	err := l.closeErr
+	l.mu.Unlock()
+	return err
+}
+
+func (l *queryReadyColumnPreparedLifetime) release() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	if l.refs > 0 {
+		l.refs--
+	}
+	l.mu.Unlock()
+	return nil
+}
+
+// PrepareQueryReadyColumnGeneration builds one QRBG from the exact
+// recovery-authoritative insert-only typed-column parts pinned by a DB
+// snapshot. It neither publishes a manifest/root nor assumes GC ownership.
+func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, options QueryReadyColumnPreparationOptions) (_ *QueryReadyColumnPreparedGeneration, retErr error) {
+	started := time.Now()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if options.MaxWorkers == 0 {
+		options.MaxWorkers = defaultQueryReadyColumnPreparationWorkers
+	}
+	if options.MaxInFlightBytes == 0 {
+		options.MaxInFlightBytes = defaultQueryReadyColumnPreparationInFlightBytes
+	}
+	coordinator, err := newQueryReadyBuildCoordinator(c, queryReadyBuildLimits{MaxWorkers: options.MaxWorkers, MaxInFlightBytes: options.MaxInFlightBytes})
+	if err != nil {
+		return nil, err
+	}
+	preparationBudget := options.MaxInFlightBytes / int64(options.MaxWorkers)
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars(ctx, columnManifestScanNoSidecars())
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		return nil, err
+	}
+	identity, ok := columnStoreCacheIdentity(view.Catalog, view.SystemRoot, view.CommitSeq)
+	if !ok {
+		return nil, errors.New("collections: query-ready preparation has no snapshot column-store identity")
+	}
+	key, ok := collectionQueryReadyGenerationOpenKey(identity)
+	if !ok {
+		return nil, errors.New("collections: query-ready preparation has incomplete snapshot identity")
+	}
+	if view.MutationParts != 0 {
+		return nil, fmt.Errorf("%w: query-ready preparation requires insert-only recovery state", ErrColumnQueryPlanUnsupported)
+	}
+	refs := append([]columnManifestAssetRefForScan(nil), view.TypedColumnPartRefs...)
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("%w: query-ready preparation requires typed-column parts", ErrColumnQueryPlanUnsupported)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Ref.Generation != refs[j].Ref.Generation {
+			return refs[i].Ref.Generation < refs[j].Ref.Generation
+		}
+		return refs[i].Ref.PartID < refs[j].Ref.PartID
+	})
+	stats := QueryReadyColumnPreparationStats{SourceParts: len(refs)}
+	parts := make([]typedcolumn.QueryReadyBasePartInput, 0, len(refs))
+	for index, source := range refs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ref := source.Ref
+		if ref.Kind != ColumnAssetKindTCS1TypedColumnPart || source.Reason != ColumnPublishOperationInsert || source.Role != ColumnManifestPartRoleBase {
+			return nil, fmt.Errorf("%w: query-ready source[%d] kind=%q reason=%q role=%q is not an insert-only typed-column base", ErrColumnQueryPlanUnsupported, index, ref.Kind, source.Reason, source.Role)
+		}
+		if ref.Generation == 0 || ref.Generation > identity.ManifestGeneration || source.Rows < 0 {
+			return nil, fmt.Errorf("collections: invalid query-ready source[%d] generation=%d rows=%d", index, ref.Generation, source.Rows)
+		}
+		if ref.Length <= 0 || stats.SourceBytes > preparationBudget-ref.Length {
+			required := stats.SourceBytes
+			if ref.Length > 0 && required <= int64(^uint64(0)>>1)-ref.Length {
+				required += ref.Length
+			}
+			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: required, MaxBytes: preparationBudget}
+		}
+		readStarted := time.Now()
+		raw, err := readColumnPhysicalAssetFromManager(view.ColumnAssetRootDir, ref)
+		stats.SourceReadTime += time.Since(readStarted)
+		if err != nil {
+			return nil, fmt.Errorf("collections: read query-ready source[%d]: %w", index, err)
+		}
+		decodeStarted := time.Now()
+		image, err := typedcolumn.ParseColumnPartImage(raw)
+		stats.SourceDecodeTime += time.Since(decodeStarted)
+		if err != nil {
+			return nil, fmt.Errorf("collections: decode query-ready source[%d]: %w", index, err)
+		}
+		if image.PartID != ref.PartID || image.Rows != source.Rows {
+			return nil, fmt.Errorf("collections: query-ready source[%d] image identity part_id=%d rows=%d want part_id=%d rows=%d", index, image.PartID, image.Rows, ref.PartID, source.Rows)
+		}
+		stats.SourceRows += int64(image.Rows)
+		stats.SourceBytes += int64(len(raw))
+		parts = append(parts, typedcolumn.QueryReadyBasePartInput{SourceGeneration: ref.Generation, Image: image})
+	}
+	request := queryReadyBuildRequest{Kind: queryReadyBuildBase, Identity: key.Identity, Parts: parts}
+	buildWorkingBytes, err := estimateQueryReadyBuildWorkingBytes(request)
+	if err != nil {
+		return nil, err
+	}
+	if buildWorkingBytes > preparationBudget-stats.SourceBytes {
+		return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: stats.SourceBytes + buildWorkingBytes, MaxBytes: preparationBudget}
+	}
+	prepared, err := coordinator.prepare(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	cleanup := true
+	defer func() {
+		if retErr != nil && cleanup {
+			retErr = errors.Join(retErr, prepared.Abort())
+		}
+	}()
+	descriptor, err := prepared.OpenFileDescriptor()
+	if err != nil {
+		return nil, err
+	}
+	if descriptor.Offset <= 0 || descriptor.Length <= 0 || descriptor.Identity.Generation == 0 || descriptor.Kind != typedcolumn.QueryReadyGenerationBase {
+		return nil, fmt.Errorf("collections: query-ready preparation produced invalid M3 descriptor %+v", descriptor)
+	}
+	files := QueryReadyColumnGenerationFiles{Base: QueryReadyColumnGenerationFile{
+		Path: descriptor.Path, Offset: descriptor.Offset, Length: descriptor.Length,
+		Generation: descriptor.Identity.Generation, Kind: QueryReadyColumnGenerationBase,
+	}}
+	build := prepared.Stats
+	stats.Rows, stats.InputBytes, stats.OutputBytes = build.Rows, build.InputBytes, build.OutputBytes
+	stats.BytesCopied, stats.BytesHashed, stats.BytesChecksummed = build.BytesCopied, build.BytesHashed, build.BytesChecksummed
+	stats.AssetsProduced, stats.PartsProduced = build.AssetsProduced, build.PartsProduced
+	stats.ReservedInFlightBytes, stats.EstimatedPeakInFlightBytes, stats.EncodedBufferPeakBytes = build.ReservedInFlightBytes, stats.SourceBytes+build.EstimatedPeakInFlightBytes, build.EncodedBufferPeakBytes
+	stats.WorkerLimit, stats.QueueCapacity, stats.QueueWaitTime = build.WorkerLimit, build.QueueCapacity, build.QueueWaitTime
+	stats.BuildTime, stats.AssetPreparationTime = build.BaseBuildTime, build.AssetPreparationTime
+	stats.ManagerRegistrationTime, stats.PublicationHandoffTime = build.ManagerRegistrationTime, build.HandoffTime
+	stats.TotalTime = time.Since(started)
+	lifetime := &queryReadyColumnPreparedLifetime{collection: c, identity: identity, prepared: prepared, refs: 1}
+	files.lifetime = lifetime
+	cleanup = false
+	return &QueryReadyColumnPreparedGeneration{files: files, stats: stats, identity: identity, lifetime: lifetime}, nil
+}

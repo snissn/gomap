@@ -111,6 +111,42 @@ func TestQueryReadyBaseDeltaQExprParityWithoutPrecomputedAnswer(t *testing.T) {
 	}
 }
 
+func TestQueryReadyGroupHourNormalizesNegativeTimestamps(t *testing.T) {
+	image := queryReadyJSONBenchImage(t, 9003,
+		[]int64{1, 2, 3, 4},
+		[]string{"event", "event", "event", "event"},
+		[]string{"did", "did", "did", "did"},
+		[]string{"commit", "commit", "commit", "commit"},
+		[]string{"create", "create", "create", "create"},
+		[]int64{-1, -1_000_000, -3_599_000_000, -86_400_000_000})
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, nil, QueryReadyBaseDeltaOptions{SnapshotGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{
+		Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []QueryReadyOperatorGroup{{Key: "event", Hour: 0, Count: 1}, {Key: "event", Hour: 23, Count: 3}}
+	if !slices.Equal(result.Groups, want) {
+		t.Fatalf("groups=%+v want %+v", result.Groups, want)
+	}
+}
+
 func TestQueryReadyExecutionAppliesUpdatesDeletesAndTombstones(t *testing.T) {
 	runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"})
 	if err != nil {
