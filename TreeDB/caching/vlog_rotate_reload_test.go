@@ -346,6 +346,7 @@ func TestRotateWALLockedWithOptions_DoesNotAdvanceSeqOnFailure(t *testing.T) {
 	l.walClosedBytes.Store(17)
 	l.vlogLiveBytes.Store(29)
 	db := &DB{dir: dir}
+	db.nextCommitSeq.Store(41)
 
 	err := db.rotateWALLockedWithOptions(l, true)
 	if !errors.Is(err, errRotateFailed) {
@@ -366,8 +367,11 @@ func TestRotateWALLockedWithOptions_DoesNotAdvanceSeqOnFailure(t *testing.T) {
 	if got := l.walClosedBytes.Load(); got != 17 {
 		t.Fatalf("walClosedBytes=%d want unchanged 17", got)
 	}
-	if got := l.walCoalesceSeq; got != 41 {
-		t.Fatalf("walCoalesceSeq=%d want unchanged 41", got)
+	if got := l.walCoalesceSeq; got != 0 {
+		t.Fatalf("walCoalesceSeq=%d want reset after a possibly flushed rotation failure", got)
+	}
+	if got := db.nextWALCoalesceSeqLocked(l); got != 42 {
+		t.Fatalf("next coalescing sequence=%d want new post-flush fence 42", got)
 	}
 	if l.wal != writer {
 		t.Fatalf("expected original writer to remain installed")

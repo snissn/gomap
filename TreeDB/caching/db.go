@@ -26962,6 +26962,10 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	name := commitLogName(l.id, nextSeq)
 	path := filepath.Join(db.dir, name)
 
+	// RotateToWithSync flushes the current segment before it attempts to open
+	// and install the successor. Even a pre-install failure therefore ends the
+	// current coalescing fence; never reuse its sequence after this call.
+	l.walCoalesceSeq = 0
 	var rotationErr error
 	if l.wal != nil {
 		oldPath := l.walPath
@@ -26992,7 +26996,6 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 		l.walLiveBytes.Store(0)
 	}
 	l.walPath = path
-	l.walCoalesceSeq = 0
 	l.walLiveBytes.Store(0)
 	if rotateValueLog && db.splitValueLogEnabled() {
 		if err := db.rotateValueLogLocked(l); err != nil {
