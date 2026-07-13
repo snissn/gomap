@@ -99,16 +99,22 @@ func TestStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer parent.Close()
+	resource := writeStableResourceFixture(t, dir, "000001.vlog", "original-resource-bytes")
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Parent: parent, ParentGeneration: 1, Operation: NamespaceCreate,
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
 		NewName: "000001.vlog", DiagnosticPath: "maindb/value_vlog/000001.vlog",
 	})
 	if err != nil {
 		t.Fatalf("namespace token: %v", err)
 	}
-	token := stableTokenFixture(t, dir, "000001.vlog", 1, 8, ReachabilityValueLogPointer, "header", func(spec *StableResourceSpec) {
-		spec.Namespace = namespace
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "000001.vlog", Generation: 1,
+		DiagnosticPath: "maindb/value_vlog/000001.vlog", File: resource, Frontier: DurableFrontier{Bytes: 8},
+		Digest: sha256.Sum256([]byte("header")), Reachability: ReachabilityValueLogPointer, Namespace: namespace,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
 	if err := builder.Add(token); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -383,8 +389,8 @@ func TestStableResourceNestedUnionMustResolveEveryRequiredChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent := NewStableResourceSetBuilder(ReachabilityCollectionSystemRoot, ReachabilityColumnManifest, ReachabilityVectorGraphPack)
-	if err := parent.Add(stableTokenFixture(t, dir, "index.db", 1, 4, ReachabilityCollectionSystemRoot, "index", func(spec *StableResourceSpec) {
+	parent := NewStableResourceSetBuilder(ReachabilityIndexFile, ReachabilityColumnManifest, ReachabilityVectorGraphPack)
+	if err := parent.Add(stableTokenFixture(t, dir, "index.db", 1, 4, ReachabilityIndexFile, "index", func(spec *StableResourceSpec) {
 		spec.Kind = ResourceIndex
 	})); err != nil {
 		t.Fatal(err)
@@ -409,7 +415,7 @@ func TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze(t *testin
 		{ReachabilityDictionaryGeneration, ResourceDictionary, "dictionary-7"},
 		{ReachabilityTemplateGeneration, ResourceTemplate, "template-9"},
 		{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "vector-11"},
-		{ReachabilityCollectionTextPosting, ResourceIndex, "text-13"},
+		{ReachabilityColumnManifest, ResourceColumnAsset, "column-13"},
 	}
 	required := make([]ReachabilityField, len(children))
 	for i := range children {
@@ -857,24 +863,22 @@ func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 
 type unsupportedNamespaceAdapter struct{}
 
-func (unsupportedNamespaceAdapter) Identity(*os.File) (StableIdentity, error) {
-	return StableIdentity{Platform: "test", ObjectID: [16]byte{1}}, nil
+func (unsupportedNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
+	return stableIdentityFromFile(file)
 }
 
 func (unsupportedNamespaceAdapter) Sync(*os.File) error {
 	return ErrNamespacePersistenceUnsupported
 }
 
-func (unsupportedNamespaceAdapter) ValidateLink(*os.File, *os.File, string) error {
-	return ErrNamespacePersistenceUnsupported
-}
+func (unsupportedNamespaceAdapter) ValidateLink(*os.File, *os.File, string) error { return nil }
 
 type countingNamespaceAdapter struct {
 	syncs atomic.Uint64
 }
 
-func (*countingNamespaceAdapter) Identity(*os.File) (StableIdentity, error) {
-	return StableIdentity{Platform: "test", ObjectID: [16]byte{1}}, nil
+func (*countingNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
+	return stableIdentityFromFile(file)
 }
 
 func (adapter *countingNamespaceAdapter) Sync(*os.File) error {
@@ -1125,20 +1129,20 @@ func TestStableNamespaceStabilizeIsSingleFlight(t *testing.T) {
 func TestStableNamespaceRegistrationAndReleaseAreSerialized(t *testing.T) {
 	for iteration := range 100 {
 		dir := t.TempDir()
+		resource := writeStableResourceFixture(t, dir, "registered.vlog", "resource")
 		parent, err := os.Open(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		adapter := &countingNamespaceAdapter{}
 		namespace, err := newStableNamespaceToken(StableNamespaceSpec{
-			Parent: parent, ParentGeneration: uint64(iteration + 1), Operation: NamespaceCreate,
+			Parent: parent, LinkedResource: resource, ParentGeneration: uint64(iteration + 1), Operation: NamespaceCreate,
 			NewName: "registered.vlog", DiagnosticPath: "registered.vlog",
 		}, adapter)
 		_ = parent.Close()
 		if err != nil {
 			t.Fatal(err)
 		}
-		resource := writeStableResourceFixture(t, dir, "registered.vlog", "resource")
 		start := make(chan struct{})
 		result := make(chan struct {
 			token *StableResourceToken
@@ -1177,8 +1181,9 @@ func TestUnsupportedNamespaceFailsBeforeCandidateVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer parent.Close()
+	resource := writeStableResourceFixture(t, dir, "new.vlog", "resource")
 	ns, err := newStableNamespaceToken(StableNamespaceSpec{
-		Parent: parent, ParentGeneration: 1, Operation: NamespaceCreate,
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
 		NewName: "new.vlog", DiagnosticPath: "new.vlog",
 	}, unsupportedNamespaceAdapter{})
 	if err != nil {
@@ -1554,13 +1559,14 @@ func TestConflictingCandidateRejectedBeforeVisibleFrontier(t *testing.T) {
 
 func TestStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
 	dir := t.TempDir()
+	resource := writeStableResourceFixture(t, dir, "metrics.vlog", "original-resource-bytes")
 	parent, err := os.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer parent.Close()
 	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
-		Parent: parent, ParentGeneration: 1, Operation: NamespaceCreate,
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
 		NewName: "metrics.vlog", DiagnosticPath: "metrics.vlog",
 	})
 	if err != nil {
@@ -1570,11 +1576,16 @@ func TestStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var flushes, syncs atomic.Uint64
-	token := stableTokenFixture(t, dir, "metrics.vlog", 1, 4, ReachabilityValueLogPointer, "metrics", func(spec *StableResourceSpec) {
-		spec.Namespace = namespace
-		spec.FlushThrough = func(*os.File, DurableFrontier) error { flushes.Add(1); return nil }
-		spec.SyncThrough = func(*os.File, DurableFrontier) error { syncs.Add(1); return nil }
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "metrics", Generation: 1,
+		DiagnosticPath: "metrics.vlog", File: resource, Frontier: DurableFrontier{Bytes: 4},
+		Digest: sha256.Sum256([]byte("metrics")), Reachability: ReachabilityValueLogPointer, Namespace: namespace,
+		FlushThrough: func(*os.File, DurableFrontier) error { flushes.Add(1); return nil },
+		SyncThrough:  func(*os.File, DurableFrontier) error { syncs.Add(1); return nil },
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := token.FlushThrough(); err != nil {
 		t.Fatal(err)
 	}

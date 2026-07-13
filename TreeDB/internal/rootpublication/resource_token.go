@@ -329,6 +329,9 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 		return nil, fmt.Errorf("%w: identity generation %d differs from resource generation %d", ErrResourceConflict, identity.Generation, spec.Generation)
 	}
 	identity.Generation = spec.Generation
+	if err := spec.Namespace.validateLinkedResource(identity); err != nil {
+		return nil, err
+	}
 	flush := spec.FlushThrough
 	if flush == nil {
 		// Concrete producers drain userspace buffers before registration. The
@@ -561,20 +564,22 @@ type StableNamespaceSpec struct {
 }
 
 type StableNamespaceToken struct {
-	parent         *os.File
-	parentIdentity StableIdentity
-	operation      NamespaceOperation
-	oldName        string
-	newName        string
-	diagnosticPath string
-	adapter        namespacePersistenceAdapter
-	state          atomic.Uint32
-	refs           atomic.Int64
-	released       atomic.Bool
-	mu             sync.Mutex
-	stabilizeErr   error
-	syncs          atomic.Uint64
-	syncNanos      atomic.Uint64
+	parent                 *os.File
+	parentIdentity         StableIdentity
+	linkedResourceIdentity StableIdentity
+	hasLinkedResource      bool
+	operation              NamespaceOperation
+	oldName                string
+	newName                string
+	diagnosticPath         string
+	adapter                namespacePersistenceAdapter
+	state                  atomic.Uint32
+	refs                   atomic.Int64
+	released               atomic.Bool
+	mu                     sync.Mutex
+	stabilizeErr           error
+	syncs                  atomic.Uint64
+	syncNanos              atomic.Uint64
 }
 
 const (
@@ -597,10 +602,21 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 	if err := validateDiagnosticPath(spec.DiagnosticPath); err != nil {
 		return nil, err
 	}
-	if spec.LinkedResource != nil {
+	var linkedIdentity StableIdentity
+	hasLinkedResource := spec.LinkedResource != nil
+	if hasLinkedResource {
 		if err := adapter.ValidateLink(spec.Parent, spec.LinkedResource, spec.NewName); err != nil {
 			return nil, err
 		}
+		var err error
+		linkedIdentity, err = adapter.Identity(spec.LinkedResource)
+		if err != nil {
+			return nil, err
+		}
+		if !linkedIdentity.valid() {
+			return nil, fmt.Errorf("%w: linked namespace resource has no stable identity", ErrUnresolvedResource)
+		}
+		linkedIdentity.Generation = 0
 	}
 	pinned, err := duplicateStableFile(spec.Parent)
 	if err != nil {
@@ -613,7 +629,8 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 	}
 	identity.Generation = spec.ParentGeneration
 	return &StableNamespaceToken{
-		parent: pinned, parentIdentity: identity, operation: spec.Operation,
+		parent: pinned, parentIdentity: identity, linkedResourceIdentity: linkedIdentity,
+		hasLinkedResource: hasLinkedResource, operation: spec.Operation,
 		oldName: spec.OldName, newName: spec.NewName,
 		diagnosticPath: filepath.ToSlash(spec.DiagnosticPath), adapter: adapter,
 	}, nil
@@ -706,8 +723,29 @@ func (token *StableNamespaceToken) validateStable() error {
 }
 
 func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool {
-	return token.parentIdentity == other.parentIdentity && token.operation == other.operation &&
-		token.oldName == other.oldName && token.newName == other.newName
+	if token.parentIdentity != other.parentIdentity || token.operation != other.operation ||
+		token.oldName != other.oldName || token.newName != other.newName ||
+		token.hasLinkedResource != other.hasLinkedResource {
+		return false
+	}
+	return !token.hasLinkedResource || sameStableObject(token.linkedResourceIdentity, other.linkedResourceIdentity)
+}
+
+func (token *StableNamespaceToken) validateLinkedResource(identity StableIdentity) error {
+	if token == nil {
+		return nil
+	}
+	if !token.hasLinkedResource {
+		return fmt.Errorf("%w: namespace operation %s for %q has no exact linked child", ErrUnresolvedResource, token.operation, token.newName)
+	}
+	if !sameStableObject(token.linkedResourceIdentity, identity) {
+		return fmt.Errorf("%w: namespace child %q does not match registered resource identity", ErrResourceConflict, token.newName)
+	}
+	return nil
+}
+
+func sameStableObject(left, right StableIdentity) bool {
+	return left.Platform == right.Platform && left.VolumeID == right.VolumeID && left.ObjectID == right.ObjectID
 }
 
 func (token *StableNamespaceToken) retain() error {
