@@ -1529,6 +1529,8 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
 			hook("value-log-rewrite")
 		}
+	}
+	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}

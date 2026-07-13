@@ -395,31 +395,55 @@ func TestStorageMaintenanceRejectsClosingAfterMaintenancePreflight(t *testing.T)
 	}
 }
 
-func TestValueLogRewriteAdmissionPrecedesManagerAccess(t *testing.T) {
+func TestValueLogRewriteRejectsCloseBeforeManagerInspection(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
 
-	manager := db.valueLogManager
-	db.valueLogManager = nil
-	seamReached := false
-	db.testStorageMaintenanceBeforeLockHook = func(operation string) {
-		if operation == "value-log-rewrite" {
-			seamReached = true
+	beforeManagerInspection := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			close(releasePreflight)
+			released = true
 		}
 	}
-	defer func() {
-		db.testStorageMaintenanceBeforeLockHook = nil
-		db.valueLogManager = manager
-	}()
-
-	_, err = db.ValueLogRewriteOnline(nil, ValueLogRewriteOnlineOptions{})
-	if !seamReached {
-		t.Fatal("value-log rewrite accessed the manager before maintenance admission")
+	db.testStorageMaintenanceBeforeLockHook = func(got string) {
+		if got == "value-log-rewrite" {
+			close(beforeManagerInspection)
+			<-releasePreflight
+		}
 	}
-	if err == nil || err.Error() != "value log manager unavailable" {
-		t.Fatalf("ValueLogRewriteOnline error=%v, want manager unavailable", err)
+	t.Cleanup(func() {
+		release()
+		db.testStorageMaintenanceBeforeLockHook = nil
+		_ = db.Close()
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogRewriteOnline(nil, ValueLogRewriteOnlineOptions{})
+		done <- err
+	}()
+	select {
+	case <-beforeManagerInspection:
+	case <-time.After(5 * time.Second):
+		t.Fatal("value-log rewrite did not reach the pre-manager admission seam")
+	}
+
+	if err := db.Close(); err != nil {
+		release()
+		t.Fatalf("Close: %v", err)
+	}
+	release()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("value-log rewrite error=%v, want %v", err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("value-log rewrite remained blocked after Close completed")
 	}
 }
