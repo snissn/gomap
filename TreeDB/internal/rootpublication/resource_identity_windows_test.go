@@ -58,3 +58,25 @@ func TestStableNamespaceRegistrationFailsTypedBeforeCertification(t *testing.T) 
 		t.Fatal("unsupported namespace registration returned a certifying token")
 	}
 }
+
+func TestRenameStableChildFileFailsTypedWithoutVisibilityWindows(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	oldPath := filepath.Join(dir, "old")
+	if err := os.WriteFile(oldPath, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenameStableChildFile(parent, "old", "new"); !errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("RenameStableChildFile error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("unsupported rename changed source: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsupported rename exposed destination: %v", err)
+	}
+}

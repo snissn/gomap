@@ -106,11 +106,23 @@ func TestLeafGenerationManifest_LoadRejectsUnsupportedVersion(t *testing.T) {
 		t.Fatalf("WriteFile(manifest): %v", err)
 	}
 	_, ok, err := loadLeafGenerationManifest(leafDir)
-	if err == nil {
-		t.Fatalf("expected loadLeafGenerationManifest error")
+	if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("load error=%v want ErrLeafGenerationManifestIncompatible", err)
 	}
 	if ok {
 		t.Fatalf("expected ok=false on unsupported version")
+	}
+}
+
+func TestLeafGenerationManifest_LoadRejectsVersionOneWithoutMigration(t *testing.T) {
+	leafDir := t.TempDir()
+	path := leafGenerationManifestPath(leafDir)
+	data := []byte(`{"version":1,"current_generation_id":1,"next_generation_id":2,"generations":[{"generation_id":1,"state":"writable"}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := loadLeafGenerationManifest(leafDir); !errors.Is(err, ErrLeafGenerationManifestIncompatible) || ok {
+		t.Fatalf("load v1 ok=%v error=%v want typed incompatibility", ok, err)
 	}
 }
 

@@ -88,6 +88,64 @@ func TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind(t *testi
 	}
 }
 
+func TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind(t *testing.T) {
+	root := t.TempDir()
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := newLeafGenerationManifest(1)
+	if err := saveLeafGenerationManifest(leafDir, original); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	defer store.Close()
+	retainedDir := filepath.Join(root, "retained_leaf_vlog")
+	if err := os.Rename(leafDir, retainedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rogue := &leafGenerationManifest{
+		Version: leafGenerationManifestVersion, CurrentGenerationID: 9, NextGenerationID: 10,
+		Generations: []leafGenerationRecord{{GenerationID: 9, State: leafGenerationStateWritable}},
+	}
+	if err := saveLeafGenerationManifest(leafDir, rogue); err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok, err := store.Load()
+	if err != nil || !ok {
+		t.Fatalf("Load retained parent: ok=%v err=%v", ok, err)
+	}
+	if got, want := loaded.CurrentGenerationID, uint64(1); got != want {
+		t.Fatalf("CurrentGenerationID=%d want retained original %d", got, want)
+	}
+}
+
+func TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision(t *testing.T) {
+	leafDir := t.TempDir()
+	staleName := leafGenerationManifestFileName + ".tmp.0000000000000001"
+	stalePath := filepath.Join(leafDir, staleName)
+	if err := os.WriteFile(stalePath, []byte("unknown-stale-temp"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	defer store.Close()
+	token, err := store.Replace(newLeafGenerationManifest(1))
+	if err != nil {
+		t.Fatalf("Replace with stale temp collision: %v", err)
+	}
+	token.Release()
+	stale, err := os.ReadFile(stalePath)
+	if err != nil {
+		t.Fatalf("unknown stale temp was removed: %v", err)
+	}
+	if string(stale) != "unknown-stale-temp" {
+		t.Fatalf("unknown stale temp changed: %q", stale)
+	}
+}
+
 func TestStableLeafGenerationManifestReplacementIncrementsSameGenerationRevision(t *testing.T) {
 	leafDir := t.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()
