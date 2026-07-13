@@ -1,6 +1,7 @@
 package freelist
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 )
@@ -63,6 +64,64 @@ func TestFreelistTxn_CandidateReservationsSurviveSupersedeAndFailure(t *testing.
 	id, err := third.Allocate(0)
 	if err != nil || id != 3 {
 		t.Fatalf("failed candidate did not release reservation: %d %v", id, err)
+	}
+}
+
+func TestReservationLedger_VisibleFailureRetainsOwnershipUntilDurablePublish(t *testing.T) {
+	ledger := NewReservationLedger()
+	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 9, []uint64{2}, nil), ledger)
+	if _, err := txn.Allocate(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := txn.Reserve("candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.MarkVisible("candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Fail("candidate"); err == nil {
+		t.Fatal("visible failure released ownership")
+	}
+	if !ledger.Reserved(2) {
+		t.Fatal("visible failure lost reservation")
+	}
+	if err := ledger.Retry("candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Poison("candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Shutdown("candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Publish("candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Reserved(2) {
+		t.Fatal("durable publish retained reservation")
+	}
+}
+
+func TestFreelistTxn_RegionHintIsDeterministic(t *testing.T) {
+	base := MustNewFreelistGenerationV1(1, 30_000, []uint64{10, 8_191, 8_192, 16_383}, nil)
+	for i := 0; i < 20; i++ {
+		id, err := NewFreelistTxn(base, NewReservationLedger()).Allocate(8_200)
+		if err != nil || id != 16_383 {
+			t.Fatalf("run %d: got %d, %v", i, id, err)
+		}
+	}
+}
+
+func TestFreelistGenerationV1_DecodeRejectsCountOverflow(t *testing.T) {
+	g := MustNewFreelistGenerationV1(1, 2, []uint64{1}, nil)
+	b, err := g.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint64(b[24:], ^uint64(0))
+	binary.LittleEndian.PutUint32(b[40:], generationChecksum(b))
+	if _, err := DecodeFreelistGenerationV1(b); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

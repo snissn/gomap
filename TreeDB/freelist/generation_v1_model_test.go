@@ -55,6 +55,43 @@ func TestFreelistGenerationV1_ModelLifecycle(t *testing.T) {
 	}
 }
 
+func TestFreelistGenerationV1_100KChurnConvergesWithoutFullRewrite(t *testing.T) {
+	g := MustNewFreelistGenerationV1(1, 64, nil, nil)
+	ledger := NewReservationLedger()
+	for seq := uint64(1); seq <= 100_000; seq++ {
+		txn := NewFreelistTxn(g, ledger)
+		id, err := txn.Allocate(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		txn.Retire(id, seq)
+		if err := txn.Reserve("candidate"); err != nil {
+			t.Fatal(err)
+		}
+		if err := ledger.MarkVisible("candidate"); err != nil {
+			t.Fatal(err)
+		}
+		if err := ledger.Publish("candidate"); err != nil {
+			t.Fatal(err)
+		}
+		txn.Prune(RecoveryHorizon{OldestRecoverableCommitSeq: seq, MinPinnedSnapshotCommitSeq: seq - 1, HistoryFloorCommitSeq: seq})
+		g, err = txn.Materialize(g.GenerationID() + 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stats := txn.Stats()
+		if stats.COWChunks > 2 {
+			t.Fatalf("seq %d: COW chunks=%d", seq, stats.COWChunks)
+		}
+	}
+	if got := g.HighWater(); got > 67 {
+		t.Fatalf("high-water=%d, want steady state <=67", got)
+	}
+	if got := ledger.Reservations(); got != 0 {
+		t.Fatalf("reservations=%d", got)
+	}
+}
+
 func BenchmarkFreelistGenerationV1_Churn(b *testing.B) {
 	for _, pages := range []int{64, 1024} {
 		b.Run("pages="+itoa(pages), func(b *testing.B) {
