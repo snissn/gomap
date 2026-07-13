@@ -1110,6 +1110,53 @@ func TestUnionDeletionGuardRetainsEveryCoalescedSourcePin(t *testing.T) {
 	}
 }
 
+func TestUnionStableResourceSetsDuplicatePinsHasBoundedAllocationGrowth(t *testing.T) {
+	const sourceCount = 1024
+
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "shared.vlog", "shared-benchmark-resource")
+	digest := sha256.Sum256([]byte("shared-benchmark-header"))
+	sets := make([]*StableResourceSet, sourceCount)
+	for i := range sets {
+		builder := NewStableResourceSetBuilder()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: fmt.Sprintf("lane-%d", i), ResourceID: fmt.Sprintf("alias-%d", i), Generation: 1,
+			DiagnosticPath: "maindb/value_vlog/shared.vlog", File: file,
+			Frontier: DurableFrontier{Bytes: 4}, Digest: digest,
+			Reachability: ReachabilityValueLogPointer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+		sets[i], err = builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() {
+		for _, set := range sets {
+			set.Release()
+		}
+	}()
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	view, err := UnionStableResourceSets(sets...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.KeepAlive(view)
+	runtime.ReadMemStats(&after)
+	allocated := after.TotalAlloc - before.TotalAlloc
+	if allocated > 2<<20 {
+		t.Fatalf("union of %d duplicate pins allocated %d bytes; want <= %d", sourceCount, allocated, 2<<20)
+	}
+}
+
 type unsupportedNamespaceAdapter struct{}
 
 func (unsupportedNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
@@ -1968,6 +2015,47 @@ func BenchmarkStableResourceSetCoalesceDuplicatePhysical(b *testing.B) {
 	b.ReportMetric(float64(len(sets)), "source-owned-descriptor-pins/op")
 	b.ReportMetric(1, "coalesced-durability-obligations/op")
 	b.ReportMetric(float64(len(sets)-1), "durability-obligation-coalesces/op")
+}
+
+func BenchmarkStableResourceSetUnionDuplicatePhysicalScale(b *testing.B) {
+	for _, sourceCount := range []int{8, 64, 256, 1024} {
+		b.Run(fmt.Sprintf("sources=%d", sourceCount), func(b *testing.B) {
+			dir := b.TempDir()
+			file := writeStableResourceFixture(b, dir, "coalesce-shared.vlog", "shared-benchmark-resource")
+			sets := make([]*StableResourceSet, sourceCount)
+			for i := range sets {
+				builder := NewStableResourceSetBuilder()
+				token, err := NewStableResourceToken(StableResourceSpec{
+					Kind: ResourceValueLog, LogicalLane: fmt.Sprintf("lane-%d", i), ResourceID: fmt.Sprintf("alias-%d", i), Generation: 1,
+					DiagnosticPath: "maindb/value_vlog/coalesce-shared.vlog", File: file,
+					Frontier: DurableFrontier{Bytes: 4}, Digest: sha256.Sum256([]byte("shared-benchmark-header")),
+					Reachability: ReachabilityValueLogPointer,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := builder.Add(token); err != nil {
+					b.Fatal(err)
+				}
+				sets[i], err = builder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer sets[i].Release()
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				view, err := UnionStableResourceSets(sets...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if got := view.Len(); got != 1 {
+					b.Fatalf("coalesced durability obligations=%d want 1", got)
+				}
+			}
+		})
+	}
 }
 
 func TestStableResourceTokenPinnedReadRemainsUsable(t *testing.T) {

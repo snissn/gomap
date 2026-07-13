@@ -13,6 +13,7 @@ import (
 type stableResourceEntry struct {
 	token              *StableResourceToken
 	pins               []*StableResourceToken
+	pinIndex           map[*StableResourceToken]struct{}
 	frontier           DurableFrontier
 	reachability       map[ReachabilityField]struct{}
 	logicalObligations map[string]StableLogicalObligation
@@ -37,22 +38,23 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 	return clone
 }
 
-func appendUniquePins(dst []*StableResourceToken, incoming ...*StableResourceToken) []*StableResourceToken {
-	seen := make(map[*StableResourceToken]struct{}, len(dst)+len(incoming))
-	for _, token := range dst {
-		seen[token] = struct{}{}
+func appendUniquePins(entry *stableResourceEntry, incoming ...*StableResourceToken) {
+	if entry.pinIndex == nil {
+		entry.pinIndex = make(map[*StableResourceToken]struct{}, len(entry.pins)+len(incoming))
+		for _, token := range entry.pins {
+			entry.pinIndex[token] = struct{}{}
+		}
 	}
 	for _, token := range incoming {
 		if token == nil {
 			continue
 		}
-		if _, ok := seen[token]; ok {
+		if _, ok := entry.pinIndex[token]; ok {
 			continue
 		}
-		seen[token] = struct{}{}
-		dst = append(dst, token)
+		entry.pinIndex[token] = struct{}{}
+		entry.pins = append(entry.pins, token)
 	}
-	return dst
 }
 
 func activeEntryToken(entry stableResourceEntry) *StableResourceToken {
@@ -164,6 +166,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 			// insertion order by making its exact-handle token representative.
 			entry.token = token
 			entry.pins = nil
+			entry.pinIndex = nil
 			existing.releaseFrom(ResourceOwnerBuilder)
 		} else {
 			token.releaseFrom(ResourceOwnerBuilder)
@@ -245,15 +248,16 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 				entry.pins = []*StableResourceToken{entry.token}
 			}
 			if len(incoming.pins) == 0 {
-				entry.pins = appendUniquePins(entry.pins, incoming.token)
+				appendUniquePins(entry, incoming.token)
 			} else {
-				entry.pins = appendUniquePins(entry.pins, incoming.pins...)
+				appendUniquePins(entry, incoming.pins...)
 			}
 		}
 		if existing.namespace == nil && incoming.token.namespace != nil {
 			entry.token = incoming.token
 			if !retainSourcePins {
 				entry.pins = nil
+				entry.pinIndex = nil
 			}
 		}
 		return nil
