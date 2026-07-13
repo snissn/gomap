@@ -2584,6 +2584,25 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 	})
 }
 
+// ScanRawKVBatchRIDs validates payload and visits only SetRID record IDs.
+// Compact-zero payloads cannot contain SetRID operations, so they are
+// validated without materializing their declared zero-filled values.
+func ScanRawKVBatchRIDs(payload []byte, visit func(rid uint64) error) error {
+	if len(payload) < rawKVBatchHeaderSize {
+		return ErrCorrupt
+	}
+	version := binary.LittleEndian.Uint16(payload[0:2])
+	if version == rawKVZeroBatchPayloadV2 || version == rawKVZeroBatchPayloadV3 {
+		return scanRawKVZeroBatchPayload(payload, nil)
+	}
+	return ScanRawKVBatchPayload(payload, func(op RawKVOp, _ []byte, value []byte) error {
+		if op != RawKVOpSetRID || visit == nil {
+			return nil
+		}
+		return visit(binary.LittleEndian.Uint64(value))
+	})
+}
+
 // ScanRawKVBatchPayloadWithRevision is ScanRawKVBatchPayload plus the optional
 // per-entry revision carried by revision-aware RawKV payloads. Legacy and
 // compact-zero payloads report revision zero for every operation.

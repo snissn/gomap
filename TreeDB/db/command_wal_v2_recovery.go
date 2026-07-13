@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -63,6 +62,16 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 		if err != nil {
 			return nil, err
 		}
+		var previousLSN uint64
+		havePreviousLSN := false
+		acceptPhysicalLSN := func(lsn uint64) error {
+			if havePreviousLSN && lsn <= previousLSN {
+				return fmt.Errorf("%w: segment=%s previous=%d current=%d", commitlog.ErrCommandWALDuplicateLSN, filepath.Base(segment.path), previousLSN, lsn)
+			}
+			previousLSN = lsn
+			havePreviousLSN = true
+			return nil
+		}
 		for {
 			start, offsetErr := reader.Offset()
 			if offsetErr != nil {
@@ -71,6 +80,10 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 			}
 			env, readErr := reader.ReadCommandFrameV2()
 			if readErr == nil {
+				if lsnErr := acceptPhysicalLSN(env.LSN); lsnErr != nil {
+					_ = reader.Close()
+					return nil, lsnErr
+				}
 				end, offsetErr := reader.Offset()
 				if offsetErr != nil {
 					_ = reader.Close()
@@ -100,6 +113,10 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 				if inspectErr != nil {
 					_ = reader.Close()
 					return nil, inspectErr
+				}
+				if lsnErr := acceptPhysicalLSN(tailEnv.LSN); lsnErr != nil {
+					_ = reader.Close()
+					return nil, lsnErr
 				}
 				if tailEnv.LSN > appliedLSN {
 					frames = append(frames, commandWALV2PhysicalFrame{
@@ -293,10 +310,8 @@ func commandWALV2FrameFromEnvelope(env commitlog.CommandEnvelope, coordinate com
 		return commandWALV2PhysicalFrame{}, err
 	}
 	set := make(map[uint64]struct{})
-	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, _ []byte, value []byte) error {
-		if op == commitlog.RawKVOpSetRID {
-			set[binary.LittleEndian.Uint64(value)] = struct{}{}
-		}
+	if err := commitlog.ScanRawKVBatchRIDs(env.Payload, func(rid uint64) error {
+		set[rid] = struct{}{}
 		return nil
 	}); err != nil {
 		return commandWALV2PhysicalFrame{}, err
@@ -504,6 +519,17 @@ func truncateAndSyncCommandWALV2(walDir, path string, offset int64, allowMissing
 			return nil
 		}
 		return errors.Join(err, ErrRecoveryRequired)
+	}
+	info, statErr := f.Stat()
+	if statErr != nil {
+		_ = f.Close()
+		return errors.Join(statErr, ErrRecoveryRequired)
+	}
+	if info.Size() <= offset {
+		if closeErr := f.Close(); closeErr != nil {
+			return errors.Join(closeErr, ErrRecoveryRequired)
+		}
+		return nil
 	}
 	if err = f.Truncate(offset); err == nil {
 		err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)

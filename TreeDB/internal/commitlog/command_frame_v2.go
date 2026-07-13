@@ -392,10 +392,8 @@ func decodeExternalRefFenceV1(ext CommandExtension) (ExternalRefFenceV1, error) 
 // hashes sorted unique little-endian RIDs.
 func ExternalRefFenceV1FromRawKVPayload(payload []byte) (ExternalRefFenceV1, error) {
 	rids := make([]uint64, 0)
-	if err := ScanRawKVBatchPayload(payload, func(op RawKVOp, _ []byte, value []byte) error {
-		if op == RawKVOpSetRID {
-			rids = append(rids, binary.LittleEndian.Uint64(value))
-		}
+	if err := ScanRawKVBatchRIDs(payload, func(rid uint64) error {
+		rids = append(rids, rid)
 		return nil
 	}); err != nil {
 		return ExternalRefFenceV1{}, err
