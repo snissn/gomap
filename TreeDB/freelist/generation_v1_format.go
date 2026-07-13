@@ -344,7 +344,7 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 		}
 		lastSlot = slot
 		entryChecksum := binary.LittleEndian.Uint32(b[o+2 : o+6])
-		if entryChecksum == 0 || !zeroTail(b[o+6:o+8], 0) {
+		if !zeroTail(b[o+6:o+8], 0) {
 			return nil, ErrGenerationFormat
 		}
 		childID := binary.LittleEndian.Uint64(b[o+8 : o+16])

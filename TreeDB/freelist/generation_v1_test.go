@@ -668,6 +668,129 @@ func TestFreelistGenerationV1_ParentChecksumRejectsRecomputedChildCRC(t *testing
 	}
 }
 
+func TestFreelistGenerationV1_LoadStateNodeAcceptsZeroChildChecksum(t *testing.T) {
+	chunk := &stateChunk{}
+	for offset := uint64(32); offset < 64; offset++ {
+		chunk.setFree(offset, true)
+	}
+	swaps := zeroChecksumChunkSwaps(t, chunk)
+	for i := uint(0); i < 32; i++ {
+		if swaps&(uint32(1)<<i) == 0 {
+			continue
+		}
+		chunk.setFree(uint64(32+i), false)
+		chunk.setFree(uint64(64+i), true)
+	}
+	chunkPage := encodeChunkPage(2, 1, chunk)
+	if got := page.DecodeHeader(chunkPage).Checksum; got != 0 {
+		t.Fatalf("forged chunk checksum=%08x want 00000000", got)
+	}
+	chunk.pageID = 2
+	chunk.checksum = 0
+	root := &stateNode{pageID: 3, chunk: chunk, freeCount: chunk.freeCount()}
+	rootPage, err := encodeIndexPage(root.pageID, 1, root, chunkTrieDepth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewMemoryPageStoreV1()
+	store.Pages[chunk.pageID] = chunkPage
+	store.Pages[root.pageID] = rootPage
+	loaded, err := loadStateNode(store, root.pageID, chunkTrieDepth, 0, 1, true, 128, make(map[uint64]struct{}))
+	if err != nil {
+		t.Fatalf("load zero-checksum child: %v", err)
+	}
+	if loaded.freeCount != 32 || loaded.chunk == nil || loaded.chunk.checksum != 0 {
+		t.Fatalf("loaded zero-checksum child=%+v", loaded)
+	}
+}
+
+func TestFreelistGenerationV1_MaterializeAcceptsZeroRootChecksum(t *testing.T) {
+	const generationID = uint64(2)
+	rootPageID := zeroChecksumEmptyRootPageID(t, generationID)
+	base := MustNewFreelistGenerationV1(1, rootPageID, nil, nil)
+	store := NewMemoryPageStoreV1()
+	candidate, err := NewFreelistTxn(base, nil).MaterializeCandidate(generationID, generationID, candidateIDFromString("zero-root-crc"), store)
+	if err != nil {
+		t.Fatalf("materialize zero-checksum root: %v", err)
+	}
+	if got := candidate.Generation().root.checksum; got != 0 {
+		t.Fatalf("root checksum=%08x want 00000000", got)
+	}
+	if _, err := LoadGenerationV1(store, candidate.GenerationRef()); err != nil {
+		t.Fatalf("load zero-checksum root: %v", err)
+	}
+}
+
+func zeroChecksumChunkSwaps(t *testing.T, base *stateChunk) uint32 {
+	t.Helper()
+	baseCRC := page.DecodeHeader(encodeChunkPage(2, 1, base)).Checksum
+	var vectors [32]uint32
+	for i := uint(0); i < 32; i++ {
+		trial := *base
+		trial.setFree(uint64(32+i), false)
+		trial.setFree(uint64(64+i), true)
+		vectors[i] = page.DecodeHeader(encodeChunkPage(2, 1, &trial)).Checksum ^ baseCRC
+	}
+	return solveCRC32Affine(t, baseCRC, vectors)
+}
+
+func zeroChecksumEmptyRootPageID(t *testing.T, generationID uint64) uint64 {
+	t.Helper()
+	const baseID = uint64(1) << 32
+	basePage, err := encodeIndexPage(baseID, generationID, &stateNode{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseCRC := page.DecodeHeader(basePage).Checksum
+	var vectors [32]uint32
+	for i := uint(0); i < 32; i++ {
+		trialPage, err := encodeIndexPage(baseID|(uint64(1)<<i), generationID, &stateNode{}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectors[i] = page.DecodeHeader(trialPage).Checksum ^ baseCRC
+	}
+	return baseID | uint64(solveCRC32Affine(t, baseCRC, vectors))
+}
+
+// CRC32 is affine over equal-length messages. Reduce 32 independent valid
+// mutations to find the combination that maps baseCRC to zero.
+func solveCRC32Affine(t *testing.T, baseCRC uint32, mutations [32]uint32) uint32 {
+	t.Helper()
+	var vectors, combinations [32]uint32
+	for i, mutation := range mutations {
+		vector := mutation
+		combination := uint32(1) << uint(i)
+		for bit := 31; bit >= 0; bit-- {
+			mask := uint32(1) << bit
+			if vector&mask == 0 {
+				continue
+			}
+			if vectors[bit] != 0 {
+				vector ^= vectors[bit]
+				combination ^= combinations[bit]
+				continue
+			}
+			vectors[bit] = vector
+			combinations[bit] = combination
+			break
+		}
+	}
+	target, solution := baseCRC, uint32(0)
+	for bit := 31; bit >= 0; bit-- {
+		mask := uint32(1) << bit
+		if target&mask == 0 {
+			continue
+		}
+		if vectors[bit] == 0 {
+			t.Fatalf("zero-checksum swap system has no pivot for bit %d", bit)
+		}
+		target ^= vectors[bit]
+		solution ^= combinations[bit]
+	}
+	return solution
+}
+
 func TestFreelistGenerationV1_ReplacedMetadataWaitsForExplicitHorizon(t *testing.T) {
 	store := NewMemoryPageStoreV1()
 	first := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, []uint64{4}, nil), 2, store)

@@ -602,9 +602,6 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	for id := metadataStart; id < next; id++ {
 		g.metadataPages = append(g.metadataPages, id)
 	}
-	if g.root.checksum == 0 {
-		return nil, ErrGenerationFormat
-	}
 	header := encodeGenerationPage(headerID, g, g.root.checksum)
 	if err := recorded.write(headerID, header); err != nil {
 		return nil, err
