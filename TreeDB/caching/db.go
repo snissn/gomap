@@ -17125,6 +17125,20 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		l.vlogMu.Unlock()
 		return nil, nil, errWALUnavailable
 	}
+	if capture != nil {
+		stableWriter, ok := w.(stableValueWriter)
+		if !ok {
+			l.vlogMu.Unlock()
+			return nil, nil, fmt.Errorf("%w: outer-leaf writer lacks stable capture", rootpublication.ErrUnresolvedResource)
+		}
+		// Relaxed ordinary rotation intentionally defers its one namespace sync.
+		// Pay that debt before max-segment rotation or any append can mutate the
+		// newly-created segment.
+		if err := stableWriter.CertifyStableCreationNamespace(); err != nil {
+			l.vlogMu.Unlock()
+			return nil, nil, err
+		}
+	}
 	firstPath := l.vlogPath
 	var retainPaths []string
 	noteRotatePath := func(path string) {
@@ -27122,11 +27136,22 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 			if !ok {
 				return fmt.Errorf("%w: outer-leaf writer lacks stable rotation", rootpublication.ErrUnresolvedResource)
 			}
+			if err := capture.bindParentGeneration(stableWriter); err != nil {
+				return err
+			}
 			oldFileID, encodeErr := valuelog.EncodeFileID(uint32(l.id), uint32(oldSeq))
 			if encodeErr != nil {
 				return encodeErr
 			}
-			closed, registrationErr := capture.registration(oldPath, oldFileID, rootpublication.NamespaceNone)
+			closedOperation := rootpublication.NamespaceNone
+			creationPending, pendingErr := stableWriter.StableCreationNamespacePending()
+			if pendingErr != nil {
+				return pendingErr
+			}
+			if creationPending {
+				closedOperation = rootpublication.NamespaceCreate
+			}
+			closed, registrationErr := capture.registration(oldPath, oldFileID, closedOperation)
 			if registrationErr != nil {
 				return registrationErr
 			}

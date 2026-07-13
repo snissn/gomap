@@ -685,6 +685,49 @@ type StableNamespaceSpec struct {
 	DiagnosticPath   string
 }
 
+// StableNamespaceParentGeneration derives a stable, non-zero logical
+// generation from an exact parent namespace handle. The token retains and
+// validates the full platform identity separately; this compact generation is
+// only the logical namespace epoch used by resource registration and changes
+// when the physical parent object changes.
+func StableNamespaceParentGeneration(parent *os.File) (uint64, error) {
+	if parent == nil {
+		return 0, fmt.Errorf("%w: namespace parent generation requires an exact parent handle", ErrUnresolvedResource)
+	}
+	identity, err := stableIdentityFromFile(parent)
+	if err != nil {
+		return 0, err
+	}
+	if !identity.valid() {
+		return 0, fmt.Errorf("%w: namespace parent has no stable identity", ErrUnresolvedResource)
+	}
+	// FNV-1a is sufficient here because the exact identity remains part of the
+	// token and is the authoritative conflict check. Avoid process-random or
+	// caller-invented constants so cloned producers agree on one parent epoch.
+	const (
+		offset64 = uint64(14695981039346656037)
+		prime64  = uint64(1099511628211)
+	)
+	generation := offset64
+	add := func(value byte) {
+		generation ^= uint64(value)
+		generation *= prime64
+	}
+	for i := range identity.Platform {
+		add(identity.Platform[i])
+	}
+	for shift := 0; shift < 64; shift += 8 {
+		add(byte(identity.VolumeID >> shift))
+	}
+	for _, value := range identity.ObjectID {
+		add(value)
+	}
+	if generation == 0 {
+		generation = 1
+	}
+	return generation, nil
+}
+
 type StableNamespaceToken struct {
 	parent                 *os.File
 	parentIdentity         StableIdentity

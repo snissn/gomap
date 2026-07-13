@@ -774,6 +774,48 @@ func (w *Writer) StableCreationNamespacePending() (bool, error) {
 	return w.creationProof != nil || w.creationUnsupported || w.creationUncertified, nil
 }
 
+// StableNamespaceParentGeneration returns the logical epoch derived from the
+// exact retained parent directory handle used by stable creation and rotation.
+func (w *Writer) StableNamespaceParentGeneration() (uint64, error) {
+	if w == nil || w.stableParent == nil {
+		if w != nil && w.stableParentErr != nil {
+			return 0, w.stableParentErr
+		}
+		return 0, fmt.Errorf("%w: stable value-log parent unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	return rootpublication.StableNamespaceParentGeneration(w.stableParent)
+}
+
+// CertifyStableCreationNamespace converts an exact relaxed-rotation successor
+// into stable creation evidence before a stable caller appends bytes to it.
+// The writer and its retained parent remain unchanged on failure, so a caller
+// can retry without publishing an unreachable record.
+func (w *Writer) CertifyStableCreationNamespace() error {
+	if w == nil || w.f == nil {
+		return errors.New("valuelog: stable resource requires file-backed writer")
+	}
+	if !w.creationUncertified {
+		return nil
+	}
+	if w.stableParentErr != nil || w.stableParent == nil {
+		if w.stableParentErr != nil {
+			return fmt.Errorf("valuelog: stable parent unavailable: %w", w.stableParentErr)
+		}
+		return errors.New("valuelog: stable parent unavailable")
+	}
+	if w.creationProof != nil || w.creationUnsupported {
+		return fmt.Errorf("%w: inconsistent uncertified value-log creation state", rootpublication.ErrResourceConflict)
+	}
+	proof, err := w.newStableCreationProof(w.stableParent, w.f, w.f.Name())
+	if proof != nil {
+		// The parent sync may have completed before an injected after-sync cut.
+		// Retain that exact proof so retry does not repeat structural durability.
+		w.creationProof = proof
+		w.creationUncertified = false
+	}
+	return err
+}
+
 // StableResourceToken flushes accepted bytes and captures a duplicate of the
 // current file descriptor. It does not fsync the file; publication owns the
 // later FlushThrough/SyncThrough boundary on the token.
@@ -970,7 +1012,53 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			return nil, err
 		}
 	}
-	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, nil, syncCurrent)
+	creationPending := w.creationProof != nil || w.creationUnsupported || w.creationUncertified
+	if creationPending {
+		// Only the writer knows that this exact current segment still carries
+		// initial-create debt. Upgrade the closed registration so callers cannot
+		// accidentally discard the retained proof during rotation.
+		closed.NamespaceOperation = rootpublication.NamespaceCreate
+		if closed.ParentGeneration == 0 {
+			closed.ParentGeneration, err = w.StableNamespaceParentGeneration()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if closed.NewName == "" {
+			closed.NewName = filepath.Base(w.f.Name())
+		}
+	}
+	var closedNamespace *rootpublication.StableNamespaceToken
+	if closed.NamespaceOperation == rootpublication.NamespaceCreate {
+		if w.creationProof == nil {
+			if w.creationUncertified {
+				return nil, fmt.Errorf("%w: asynchronously created rotating value-log segment has no stable namespace proof", rootpublication.ErrUnresolvedResource)
+			}
+			if w.stableResourcePins != nil && !w.creationUnsupported {
+				return nil, fmt.Errorf("%w: existing rotating value-log segment has no creation namespace proof", rootpublication.ErrUnresolvedResource)
+			}
+			closedNamespace, err = stableValueLogNamespaceToken(w.f, closed)
+		} else {
+			parent := closed.NamespaceParent
+			if parent == nil {
+				parent = w.stableParent
+			}
+			name := closed.NewName
+			if name == "" {
+				name = filepath.Base(w.f.Name())
+			}
+			closedNamespace, err = bindValueLogStableNamespaceCreationProof(
+				w.creationProof, parent, closed.ParentGeneration, name, filepath.Dir(closed.DiagnosticPath),
+			)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, closedNamespace, syncCurrent)
+	if closedNamespace != nil {
+		closedNamespace.Release()
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -9,20 +9,21 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const outerLeafNamespaceGeneration uint64 = 1
-
 type stableValueWriter interface {
 	valueWriter
+	CertifyStableCreationNamespace() error
 	StableResourceToken(valuelog.StableResourceRegistration) (*rootpublication.StableResourceToken, error)
 	RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active valuelog.StableResourceRegistration) (*valuelog.StableResourceRotation, error)
 	StableCreationNamespacePending() (bool, error)
+	StableNamespaceParentGeneration() (uint64, error)
 }
 
 type stableOuterLeafCapture struct {
-	db      *DB
-	lane    *lane
-	builder *rootpublication.StableResourceSetBuilder
-	tokens  []*rootpublication.StableResourceToken
+	db               *DB
+	lane             *lane
+	builder          *rootpublication.StableResourceSetBuilder
+	tokens           []*rootpublication.StableResourceToken
+	parentGeneration uint64
 }
 
 func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
@@ -46,7 +47,7 @@ func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, 
 		Generation:         uint64(fileID),
 		DiagnosticPath:     filepath.ToSlash(diagnosticPath),
 		Reachability:       rootpublication.ReachabilityOuterLeafRawPointer,
-		ParentGeneration:   outerLeafNamespaceGeneration,
+		ParentGeneration:   capture.parentGeneration,
 		NamespaceOperation: namespace,
 		PinRegistry:        capture.db.valueLogIdentityPins,
 	}
@@ -54,6 +55,24 @@ func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, 
 		registration.NewName = filepath.Base(path)
 	}
 	return registration, nil
+}
+
+func (capture *stableOuterLeafCapture) bindParentGeneration(writer stableValueWriter) error {
+	if capture == nil || writer == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	if capture.parentGeneration != 0 {
+		return nil
+	}
+	generation, err := writer.StableNamespaceParentGeneration()
+	if err != nil {
+		return err
+	}
+	if generation == 0 {
+		return fmt.Errorf("%w: outer-leaf namespace parent has zero generation", rootpublication.ErrUnresolvedResource)
+	}
+	capture.parentGeneration = generation
+	return nil
 }
 
 func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableResourceToken) error {
@@ -88,6 +107,9 @@ func (capture *stableOuterLeafCapture) captureCurrent(writer valueWriter, path s
 	stableWriter, ok := writer.(stableValueWriter)
 	if !ok {
 		return fmt.Errorf("%w: outer-leaf writer lacks stable capture", rootpublication.ErrUnresolvedResource)
+	}
+	if err := capture.bindParentGeneration(stableWriter); err != nil {
+		return err
 	}
 	created, err := stableWriter.StableCreationNamespacePending()
 	if err != nil {

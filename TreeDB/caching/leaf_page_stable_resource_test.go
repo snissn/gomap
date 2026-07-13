@@ -12,6 +12,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -175,8 +176,8 @@ func TestCachingLeafPageLogStablePreparedBatchCapturesEveryReferencedSegment(t *
 			namespaceTokens++
 		}
 	}
-	if namespaceTokens != len(descriptors)-1 {
-		t.Fatalf("namespace-bearing tokens=%d descriptors=%d want created segments plus one existing segment", namespaceTokens, len(descriptors))
+	if namespaceTokens != len(descriptors) {
+		t.Fatalf("namespace-bearing tokens=%d descriptors=%d want exact create evidence for every newly created referenced segment", namespaceTokens, len(descriptors))
 	}
 	stats := resources.Stats(time.Now())
 	if len(stats) != 1 || stats[0].NamespaceSyncs != uint64(namespaceTokens) {
@@ -313,6 +314,86 @@ func TestCachingLeafPageLogStableCaptureExcludesFollowingConcurrentRotation(t *t
 	descriptors := stable.resources.Descriptors()
 	if len(descriptors) != 1 || uint32(descriptors[0].Generation()) != stable.ptr.ValueLogFileID() {
 		t.Fatalf("stable descriptors=%v want only file_id=%d", descriptors, stable.ptr.ValueLogFileID())
+	}
+}
+
+func TestCachingLeafPageLogStableCertifiesRelaxedOrdinaryRotationBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	cached, err := Open(dir, backend, Options{
+		IndexOuterLeavesInValueLog: true,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	defer func() { _ = cached.Close() }()
+
+	log := newCachingLeafPageLog(cached, &cached.leafLog)
+	stable := log.(backenddb.LeafPageStableLog)
+	first, firstResources, err := stable.AppendLeafPageWithStableResources(buildSparseLeafPageForLeafLogTestWithTag(t, 'u'))
+	if err != nil {
+		t.Fatalf("first stable append: %v", err)
+	}
+	firstResources.Release()
+
+	cached.leafLog.vlogMu.Lock()
+	err = cached.rotateValueLogMuHeld(&cached.leafLog)
+	rotatedWriter := cached.leafLog.vlog
+	rotatedSize := rotatedWriter.Size()
+	cached.leafLog.vlogMu.Unlock()
+	if err != nil {
+		t.Fatalf("relaxed ordinary rotation: %v", err)
+	}
+	if rotatedSize != 0 {
+		t.Fatalf("relaxed successor size=%d want 0", rotatedSize)
+	}
+
+	fail := errors.New("injected creation certification failure")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceOuterLeaf && event.Point == durabilitycut.BeforeNewFileDirectorySync {
+			return fail
+		}
+		return nil
+	})
+	_, rejectedResources, err := stable.AppendLeafPageWithStableResources(buildSparseLeafPageForLeafLogTestWithTag(t, 'v'))
+	restore()
+	if !errors.Is(err, fail) {
+		t.Fatalf("stable append after relaxed rotation error=%v want injected failure", err)
+	}
+	if rejectedResources != nil {
+		rejectedResources.Release()
+		t.Fatal("failed certification returned stable resources")
+	}
+	if got := rotatedWriter.Size(); got != rotatedSize {
+		t.Fatalf("failed certification mutated successor size: before=%d after=%d", rotatedSize, got)
+	}
+
+	beforeSyncs := rotatedWriter.(interface {
+		DurabilityStats() valuelog.DurabilityStats
+	}).DurabilityStats().DirectorySyncCalls
+	second, secondResources, err := stable.AppendLeafPageWithStableResources(buildSparseLeafPageForLeafLogTestWithTag(t, 'w'))
+	if err != nil {
+		t.Fatalf("retry stable append: %v", err)
+	}
+	defer secondResources.Release()
+	afterSyncs := rotatedWriter.(interface {
+		DurabilityStats() valuelog.DurabilityStats
+	}).DurabilityStats().DirectorySyncCalls
+	if afterSyncs != beforeSyncs+1 {
+		t.Fatalf("retry namespace syncs: before=%d after=%d want +1", beforeSyncs, afterSyncs)
+	}
+	if second.FileID == first.FileID {
+		t.Fatalf("ordinary rotation did not advance leaf segment: first=%d second=%d", first.FileID, second.FileID)
+	}
+	descriptors := secondResources.Descriptors()
+	if len(descriptors) != 1 || descriptors[0].Generation() != uint64(second.ValueLogFileID()) {
+		t.Fatalf("retry resources=%v want exact generation %d", descriptors, second.ValueLogFileID())
 	}
 }
 

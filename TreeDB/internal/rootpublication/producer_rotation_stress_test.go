@@ -49,7 +49,11 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 			return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: err}
 		}
 		stats := resources.Stats(time.Now())
-		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].Flushes != 2 || stats[0].Syncs != 2 || stats[0].NamespaceSyncs != 1 {
+		wantNamespaceSyncs := uint64(1)
+		if seq > 1 && seq%2 == 1 {
+			wantNamespaceSyncs = 2
+		}
+		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].Flushes != 2 || stats[0].Syncs != 2 || stats[0].NamespaceSyncs != wantNamespaceSyncs {
 			return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: fmt.Errorf("unexpected resource operation counts: %+v", stats)}
 		}
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishSucceeded}
@@ -138,7 +142,13 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 			t.Fatalf("rotation %d physical pins=%d want 2", seq, set.Len())
 		}
 		stats := set.Stats(time.Now())
-		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != 1 {
+		wantNamespaceSyncs := uint64(1)
+		if kind == rootpublication.ResourceValueLog && seq > 1 {
+			// Both the newly closed segment and its successor were created by
+			// this writer and retain their distinct one-sync proofs.
+			wantNamespaceSyncs = 2
+		}
+		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != wantNamespaceSyncs {
 			set.Release()
 			t.Fatalf("rotation %d capture stats=%+v", seq, stats)
 		}
@@ -157,7 +167,7 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 			t.Fatalf("rotation %d first publish=%v want injected retry", seq, err)
 		}
 		pending := resourceStatsForKind(t, coordinator.Stats().Resources, kind)
-		if pending.PendingCount != 2 || pending.ActivePins != 2 || pending.Flushes != 2 || pending.Syncs != 0 || pending.NamespaceSyncs != 1 {
+		if pending.PendingCount != 2 || pending.ActivePins != 2 || pending.Flushes != 2 || pending.Syncs != 0 || pending.NamespaceSyncs != wantNamespaceSyncs {
 			t.Fatalf("rotation %d retry stats=%+v", seq, pending)
 		}
 		if err := coordinator.WaitThrough(context.Background(), seq); err != nil {

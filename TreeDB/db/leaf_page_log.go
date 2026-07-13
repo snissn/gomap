@@ -31,13 +31,18 @@ type LeafPageBatchLog interface {
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
-// LeafPageStableLog is the identity-pinned counterpart to LeafPageLog. The
-// returned set is unclaimed builder-owned authority for every raw outer-leaf
-// segment referenced by the returned pointer.
+// LeafPageStableLog is the identity-pinned counterpart to LeafPageLog. On a
+// successful non-empty append, the returned set is non-nil unclaimed
+// builder-owned authority for exactly the raw outer-leaf segments referenced
+// by the returned pointer. Ownership transfers to the caller, which must
+// transfer or release it exactly once. On error, implementations must release
+// acquired authority and return a nil set.
 type LeafPageStableLog interface {
 	AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error)
 }
 
+// LeafPageStableBatchLog has the same success/error ownership contract as
+// LeafPageStableLog, covering every unique segment in the returned batch.
 type LeafPageStableBatchLog interface {
 	AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error)
 }
@@ -49,6 +54,8 @@ type LeafPagePreparedLog interface {
 	AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error)
 }
 
+// LeafPagePreparedStableLog has the same success/error ownership contract as
+// LeafPageStableLog for a caller-prepared payload.
 type LeafPagePreparedStableLog interface {
 	AppendPreparedLeafPageWithStableResources(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error)
 }
@@ -73,6 +80,8 @@ type LeafPagePreparedBatchLog interface {
 	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
 }
 
+// LeafPagePreparedStableBatchLog has the same success/error ownership contract
+// as LeafPageStableLog, covering every unique segment in the returned batch.
 type LeafPagePreparedStableBatchLog interface {
 	AppendPreparedLeafPagesWithStableResources(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error)
 }
@@ -84,8 +93,66 @@ type LeafPagePreparedChildRefBatchLog interface {
 	AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error)
 }
 
+// LeafPagePreparedChildRefStableBatchLog has the same success/error ownership
+// contract as LeafPageStableLog, covering every unique segment referenced by
+// the returned leaf-log child refs.
 type LeafPagePreparedChildRefStableBatchLog interface {
 	AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error)
+}
+
+func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet) error {
+	if len(ptrs) == 0 {
+		if resources != nil && resources.Len() != 0 {
+			return fmt.Errorf("%w: empty leaf append returned stable resources", rootpublication.ErrResourceConflict)
+		}
+		return nil
+	}
+	if resources == nil {
+		return fmt.Errorf("%w: leaf append returned nil stable resources", rootpublication.ErrUnresolvedResource)
+	}
+	if resources.Owner() != rootpublication.ResourceOwnerBuilder {
+		return fmt.Errorf("%w: leaf append returned resources owned by %v", rootpublication.ErrResourceOwnership, resources.Owner())
+	}
+	required := make(map[uint64]uint64, len(ptrs))
+	for i, ptr := range ptrs {
+		if ptr.FileID == 0 {
+			return fmt.Errorf("%w: leaf append returned zero file ID at %d", rootpublication.ErrUnresolvedResource, i)
+		}
+		generation := uint64(ptr.ValueLogFileID())
+		recordLength := uint64(ptr.RecordLength())
+		if recordLength == 0 || ptr.Offset > ^uint64(0)-recordLength {
+			return fmt.Errorf("%w: leaf append returned invalid record frontier at %d", rootpublication.ErrUnresolvedResource, i)
+		}
+		minimumBytes := ptr.Offset + recordLength
+		if minimumBytes > required[generation] {
+			required[generation] = minimumBytes
+		}
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != len(required) {
+		return fmt.Errorf("%w: leaf append returned %d stable descriptors for %d referenced segments", rootpublication.ErrResourceConflict, len(descriptors), len(required))
+	}
+	for _, descriptor := range descriptors {
+		if descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
+			return fmt.Errorf("%w: leaf append returned stable kind %q", rootpublication.ErrResourceConflict, descriptor.Kind())
+		}
+		fields := descriptor.ReachabilityFields()
+		if len(fields) != 1 || fields[0] != rootpublication.ReachabilityOuterLeafRawPointer {
+			return fmt.Errorf("%w: leaf append returned stable reachability %v", rootpublication.ErrResourceConflict, fields)
+		}
+		minimumBytes, ok := required[descriptor.Generation()]
+		if !ok {
+			return fmt.Errorf("%w: leaf append returned unreferenced stable generation %d", rootpublication.ErrResourceConflict, descriptor.Generation())
+		}
+		if descriptor.Frontier().Bytes < minimumBytes {
+			return fmt.Errorf("%w: leaf append stable generation %d frontier %d does not cover pointer end %d", rootpublication.ErrUnresolvedResource, descriptor.Generation(), descriptor.Frontier().Bytes, minimumBytes)
+		}
+		delete(required, descriptor.Generation())
+	}
+	if len(required) != 0 {
+		return fmt.Errorf("%w: leaf append omitted stable generations %v", rootpublication.ErrUnresolvedResource, required)
+	}
+	return nil
 }
 
 type LeafPageLogSegment struct {
@@ -148,6 +215,10 @@ type leafPageLogProtectedRootPairSnapshotProvider interface {
 	ProtectedLeafGenerationRootIDPairSnapshot() (rootIDs []uint64, systemRootIDs []uint64, version uint64)
 }
 
+type leafPageLogStableRegistryBinder interface {
+	bindStableResourcePinRegistry(*rootpublication.IdentityPinRegistry) error
+}
+
 type leafPageLogRecordLengthProvider interface {
 	LastLeafPageRecordLength() uint32
 }
@@ -193,6 +264,15 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPageWithStableResources(lea
 	}
 	ptr, resources, err := stable.AppendLeafPageWithStableResources(leafPage)
 	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return page.LeafLogPtr{}, nil, err
+	}
+	if err := validateLeafPageStableResources([]page.LeafLogPtr{ptr}, resources); err != nil {
+		if resources != nil {
+			resources.Release()
+		}
 		return page.LeafLogPtr{}, nil, err
 	}
 	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptr); err != nil {
@@ -282,7 +362,20 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPagesWithStableResources(le
 	}
 	ptrs, resources, err := stable.AppendLeafPagesWithStableResources(leafPages)
 	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
 		return nil, nil, err
+	}
+	if err := validateLeafPageStableResources(ptrs, resources); err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return nil, nil, err
+	}
+	if len(ptrs) != len(leafPages) {
+		resources.Release()
+		return nil, nil, fmt.Errorf("stable leaf batch returned %d ptrs for %d pages", len(ptrs), len(leafPages))
 	}
 	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
 		resources.Release()
@@ -323,13 +416,22 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageWithStableResou
 	}
 	stable, ok := l.inner.(LeafPagePreparedStableLog)
 	if !ok {
-		return page.LeafLogPtr{}, nil, fmt.Errorf("%w: leaf page log lacks stable prepared append", rootpublication.ErrUnresolvedResource)
+		return l.AppendLeafPageWithStableResources(leafPage)
 	}
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return page.LeafLogPtr{}, nil, err
 	}
 	ptr, resources, err := stable.AppendPreparedLeafPageWithStableResources(leafPage, preparedPayload)
 	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return page.LeafLogPtr{}, nil, err
+	}
+	if err := validateLeafPageStableResources([]page.LeafLogPtr{ptr}, resources); err != nil {
+		if resources != nil {
+			resources.Release()
+		}
 		return page.LeafLogPtr{}, nil, err
 	}
 	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptr); err != nil {
@@ -382,14 +484,27 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPagesWithStableReso
 	}
 	stable, ok := l.inner.(LeafPagePreparedStableBatchLog)
 	if !ok {
-		return nil, nil, fmt.Errorf("%w: leaf page log lacks stable prepared batch append", rootpublication.ErrUnresolvedResource)
+		return l.AppendLeafPagesWithStableResources(leafPages)
 	}
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return nil, nil, err
 	}
 	ptrs, resources, err := stable.AppendPreparedLeafPagesWithStableResources(leafPages, preparedPayloads)
 	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
 		return nil, nil, err
+	}
+	if err := validateLeafPageStableResources(ptrs, resources); err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return nil, nil, err
+	}
+	if len(ptrs) != len(leafPages) {
+		resources.Release()
+		return nil, nil, fmt.Errorf("stable prepared leaf batch returned %d ptrs for %d pages", len(ptrs), len(leafPages))
 	}
 	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
 		resources.Release()
@@ -469,13 +584,28 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefsWithSt
 	}
 	stable, ok := l.inner.(LeafPagePreparedChildRefStableBatchLog)
 	if !ok {
-		return nil, nil, fmt.Errorf("%w: leaf page log lacks stable prepared child-ref append", rootpublication.ErrUnresolvedResource)
+		ptrs, resources, err := l.AppendPreparedLeafPagesWithStableResources(leafPages, preparedPayloads)
+		if err != nil {
+			return nil, nil, err
+		}
+		if cap(refs) < len(ptrs) {
+			refs = make([]page.ChildRef, len(ptrs))
+		} else {
+			refs = refs[:len(ptrs)]
+		}
+		for i, ptr := range ptrs {
+			refs[i] = page.LeafLogChildRef(ptr)
+		}
+		return refs, resources, nil
 	}
 	if err := l.emitDependencyAppend(durabilitycut.BeforeDependencyAppend); err != nil {
 		return nil, nil, err
 	}
 	out, resources, err := stable.AppendPreparedLeafPageChildRefsWithStableResources(leafPages, preparedPayloads, refs)
 	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
 		return nil, nil, err
 	}
 	if len(out) != len(leafPages) {
@@ -490,6 +620,12 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefsWithSt
 		}
 		ptrs[i] = ref.Log
 		l.noteLeafPagePointer(leafPages[i], ref.Log)
+	}
+	if err := validateLeafPageStableResources(ptrs, resources); err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return nil, nil, err
 	}
 	if err := l.emitDependencyAppend(durabilitycut.AfterDependencyAppend, ptrs...); err != nil {
 		resources.Release()
@@ -812,6 +948,12 @@ func (db *DB) setLeafPageLogRaw(log LeafPageLog) {
 func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	if db == nil {
 		return
+	}
+	if binder, ok := log.(leafPageLogStableRegistryBinder); ok {
+		// SetLeafPageLog predates stable capture and cannot return an error. The
+		// producer records a typed late-bind failure so ordinary compatibility
+		// may continue while every stable sibling fails closed.
+		_ = binder.bindStableResourcePinRegistry(db.valueLogIdentityPins)
 	}
 	installed := log
 	if wrap {

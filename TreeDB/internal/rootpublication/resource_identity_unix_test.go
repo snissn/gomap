@@ -9,6 +9,44 @@ import (
 	"testing"
 )
 
+func TestStableNamespaceParentGenerationTracksExactParentIdentity(t *testing.T) {
+	firstDir := t.TempDir()
+	first, err := os.Open(firstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	duplicate, err := duplicateStableFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer duplicate.Close()
+	second, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	firstGeneration, err := StableNamespaceParentGeneration(first)
+	if err != nil || firstGeneration == 0 {
+		t.Fatalf("first generation=%d err=%v", firstGeneration, err)
+	}
+	duplicateGeneration, err := StableNamespaceParentGeneration(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicateGeneration != firstGeneration {
+		t.Fatalf("duplicate generation=%d first=%d", duplicateGeneration, firstGeneration)
+	}
+	secondGeneration, err := StableNamespaceParentGeneration(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondGeneration == firstGeneration {
+		t.Fatalf("distinct parent generations collided: %d", firstGeneration)
+	}
+}
+
 func TestOpenStableChildFileUsesCapturedParentAfterPathReplacement(t *testing.T) {
 	root := t.TempDir()
 	originalDir := filepath.Join(root, "segments")
