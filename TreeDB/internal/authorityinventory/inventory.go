@@ -133,7 +133,7 @@ func buildRows() []Row {
 		add(adjacent("page.MetaPageBody."+entry.field, "meta-page scalar", "page-file publication scalar", entry.issue, "owned by page/meta publication ordering rather than an external resource token"))
 	}
 	for _, field := range []string{"ActiveSlabID", "ActiveSlabTail"} {
-		add(quarantined("page.MetaPageBody."+field, "legacy meta-page scalar", "removed slab namespace", "#3677", "TreeDB no longer has a slab value-store path; the legacy format fields are decoded only for compatibility"))
+		add(quarantined("page.MetaPageBody."+field, "legacy meta-page scalar", "removed legacy value-store namespace", "#3677", "TreeDB no longer has the legacy value-store path; these format fields are decoded only for compatibility"))
 	}
 	add(adjacent("collections.CollectionRoot", "named collection root", "index/value-log transitive closure", "#3679", "named roots are page-index authority, not external resource kinds"))
 	add(adjacent("collections.VectorNativeRoot", "native vector root", "index/value-log transitive closure", "#3679", "native vector state is stored in named roots and value-log closure, not vector sidecar files"))
