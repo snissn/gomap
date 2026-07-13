@@ -8964,6 +8964,11 @@ type DB struct {
 	debugPtrDenied                                               atomic.Int64
 	debugPtrDisabled                                             atomic.Int64
 	checkpointRuns                                               atomic.Uint64
+	iteratorCallsTotal                                           atomic.Uint64
+	iteratorSnapshotRotationsTotal                               atomic.Uint64
+	iteratorSourcesTotal                                         atomic.Uint64
+	iteratorSourcesMax                                           atomic.Uint64
+	iteratorQueueLenMax                                          atomic.Uint64
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
@@ -29982,6 +29987,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.value_log.directory_sync.errors_total"] = fmt.Sprintf("%d", valueLogDirectorySyncErrors)
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
+	stats["treedb.cache.iterator.calls_total"] = fmt.Sprintf("%d", db.iteratorCallsTotal.Load())
+	stats["treedb.cache.iterator.snapshot_rotations_total"] = fmt.Sprintf("%d", db.iteratorSnapshotRotationsTotal.Load())
+	stats["treedb.cache.iterator.sources_total"] = fmt.Sprintf("%d", db.iteratorSourcesTotal.Load())
+	stats["treedb.cache.iterator.sources_max"] = fmt.Sprintf("%d", db.iteratorSourcesMax.Load())
+	stats["treedb.cache.iterator.queue_len_max"] = fmt.Sprintf("%d", db.iteratorQueueLenMax.Load())
 	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
 	stats["treedb.cache.flush_apply.coordinator.active_workers"] = fmt.Sprintf("%d", db.flushCoordinatorActiveWorkers.Load())
 	stats["treedb.cache.flush_apply.coordinator.in_flight_bytes"] = fmt.Sprintf("%d", db.flushCoordinatorInFlightBytes.Load())
@@ -32293,6 +32303,7 @@ func (db *DB) Drain() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
+	db.iteratorCallsTotal.Add(1)
 	db.noteRead()
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
@@ -32329,6 +32340,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			db.mu.Unlock()
 			return nil, err
 		}
+		db.iteratorSnapshotRotationsTotal.Add(1)
 	}
 
 	backendRangeKnown := db.backendRangeKnown
@@ -32354,6 +32366,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			view = nil
 		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+			db.observeIteratorShape(0, sourcesUsed)
 			if iteratorDebugEnabled.Load() {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
@@ -32417,6 +32430,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	queueLen := len(queue)
 	hasMemSource := false
 	decorateIterator := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+		db.observeIteratorShape(queueLen, sourcesUsed)
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
@@ -32525,6 +32539,16 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	out := merging.NewMergingIterator(sources, start, end)
 	return decorateIterator(out, len(sources)), nil
+}
+
+func (db *DB) observeIteratorShape(queueLen, sourcesUsed int) {
+	if queueLen >= 0 {
+		updateAtomicMaxUint64(&db.iteratorQueueLenMax, uint64(queueLen))
+	}
+	if sourcesUsed >= 0 {
+		db.iteratorSourcesTotal.Add(uint64(sourcesUsed))
+		updateAtomicMaxUint64(&db.iteratorSourcesMax, uint64(sourcesUsed))
+	}
 }
 
 type debugIterator struct {

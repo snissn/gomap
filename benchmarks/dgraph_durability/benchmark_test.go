@@ -5,7 +5,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"runtime"
+	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dgraph-io/badger/v4"
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -13,6 +18,13 @@ import (
 )
 
 const benchmarkWarmupCommits = 16
+
+var (
+	fixedMixedOperationCounts      = []int{50_000, 100_000, 250_000, 500_000}
+	concurrentDurableConcurrencies = []int{1, 2, 4, 8, 16}
+	concurrentDurableBatchSizes    = []int{1, 16}
+	concurrentDurableValueSizes    = []int{128, 4096}
+)
 
 type mutation struct {
 	key    []byte
@@ -71,6 +83,46 @@ func BenchmarkDgraphShapedMixed(b *testing.B) {
 	}
 }
 
+// BenchmarkDgraphShapedMixedFixed makes duration-dependent source growth
+// visible without relying on the benchmark driver's adaptive operation count.
+// Run with -benchtime=1x so each row is one fresh, fixed-size trial.
+func BenchmarkDgraphShapedMixedFixed(b *testing.B) {
+	for _, operations := range fixedMixedOperationCounts {
+		operations := operations
+		for _, profile := range benchmarkProfiles {
+			if profile.class != "relaxed" {
+				continue
+			}
+			profile := profile
+			b.Run(fmt.Sprintf("relaxed/%s/operations=%d/seed=1", profile.name, operations), func(b *testing.B) {
+				benchmarkMixedFixed(b, profile, operations)
+			})
+		}
+	}
+}
+
+// BenchmarkDgraphShapedConcurrentDurable measures independently acknowledged
+// durable commits with per-acknowledgement latency and matching sync counters.
+func BenchmarkDgraphShapedConcurrentDurable(b *testing.B) {
+	for _, profile := range benchmarkProfiles {
+		if profile.class != "durable" {
+			continue
+		}
+		profile := profile
+		for _, concurrency := range concurrentDurableConcurrencies {
+			for _, batchSize := range concurrentDurableBatchSizes {
+				for _, valueSize := range concurrentDurableValueSizes {
+					concurrency, batchSize, valueSize := concurrency, batchSize, valueSize
+					name := fmt.Sprintf("durable/%s/concurrency=%d/batch=%d/value=%d", profile.name, concurrency, batchSize, valueSize)
+					b.Run(name, func(b *testing.B) {
+						benchmarkConcurrentDurable(b, profile, concurrency, batchSize, valueSize)
+					})
+				}
+			}
+		}
+	}
+}
+
 func benchmarkCommit(b *testing.B, profile benchmarkProfile, batchSize, valueSize int) {
 	store := profile.open(b, b.TempDir())
 	mutations := benchmarkMutations(batchSize, valueSize)
@@ -89,7 +141,7 @@ func benchmarkCommit(b *testing.B, profile benchmarkProfile, batchSize, valueSiz
 	}
 	b.StopTimer()
 	reportRates(b, batchSize)
-	reportStoreCounters(b, before, store.stats(), b.N)
+	reportStoreCounters(b, before, store.stats(), b.N, 0)
 	if err := store.close(); err != nil {
 		b.Fatalf("close: %v", err)
 	}
@@ -143,9 +195,165 @@ func benchmarkMixed(b *testing.B, profile benchmarkProfile) {
 		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "operations/s")
 		b.ReportMetric(float64(writeCommits)/elapsed.Seconds(), "write_commits/s")
 	}
-	reportStoreCounters(b, before, store.stats(), writeCommits)
+	reportStoreCounters(b, before, store.stats(), writeCommits, b.N-writeCommits)
 	if err := store.close(); err != nil {
 		b.Fatalf("close: %v", err)
+	}
+}
+
+func benchmarkMixedFixed(b *testing.B, profile benchmarkProfile, operations int) {
+	var totalWrites, totalReads int
+	var totalAllocatedBytes, totalMallocs uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for trial := 0; trial < b.N; trial++ {
+		b.StopTimer()
+		store, keys, value := prepareMixedStore(b, profile)
+		before := store.stats()
+		timestamp := uint64(1)
+		var memoryBefore, memoryAfter runtime.MemStats
+		runtime.ReadMemStats(&memoryBefore)
+		b.StartTimer()
+		writes, reads := runMixedOperations(b, store, keys, value, &timestamp, operations)
+		b.StopTimer()
+		runtime.ReadMemStats(&memoryAfter)
+		totalAllocatedBytes += memoryAfter.TotalAlloc - memoryBefore.TotalAlloc
+		totalMallocs += memoryAfter.Mallocs - memoryBefore.Mallocs
+		totalWrites += writes
+		totalReads += reads
+		reportStoreCounters(b, before, store.stats(), writes, reads)
+		if err := store.close(); err != nil {
+			b.Fatalf("close: %v", err)
+		}
+	}
+	if elapsed := b.Elapsed(); elapsed > 0 {
+		b.ReportMetric(float64(b.N*operations)/elapsed.Seconds(), "operations/s")
+		b.ReportMetric(float64(totalWrites)/elapsed.Seconds(), "write_commits/s")
+	}
+	b.ReportMetric(float64(operations), "operations/trial")
+	b.ReportMetric(1, "fixture_seed")
+	totalOperations := uint64(b.N * operations)
+	if totalOperations > 0 {
+		b.ReportMetric(float64(totalAllocatedBytes)/float64(totalOperations), "workload_B/op")
+		b.ReportMetric(float64(totalMallocs)/float64(totalOperations), "workload_allocs/op")
+	}
+}
+
+func prepareMixedStore(tb testing.TB, profile benchmarkProfile) (versionedStore, [][]byte, []byte) {
+	store := profile.open(tb, tb.TempDir())
+	const keyCount = 256
+	keys := make([][]byte, keyCount)
+	seed := make([]mutation, keyCount)
+	for i := range keys {
+		keys[i] = benchmarkKey(i)
+		seed[i] = mutation{key: keys[i], value: benchmarkValue(128)}
+	}
+	if err := store.commitAt(1, seed); err != nil {
+		tb.Fatalf("seed: %v", err)
+	}
+	return store, keys, benchmarkValue(128)
+}
+
+func runMixedOperations(tb testing.TB, store versionedStore, keys [][]byte, value []byte, timestamp *uint64, operations int) (writes, reads int) {
+	for i := 0; i < operations; i++ {
+		key := keys[(i*131)%len(keys)]
+		switch i % 10 {
+		case 0, 1, 2, 3, 4, 5:
+			got, present, err := store.getAt(key, *timestamp)
+			if err != nil {
+				tb.Fatalf("read %d: %v", i, err)
+			}
+			if present && len(got) == 0 {
+				tb.Fatalf("read %d returned an empty present value", i)
+			}
+			reads++
+		case 6, 7:
+			(*timestamp)++
+			if err := store.commitAt(*timestamp, []mutation{{key: key, value: value}}); err != nil {
+				tb.Fatalf("write %d: %v", i, err)
+			}
+			writes++
+		case 8, 9:
+			(*timestamp)++
+			if err := store.commitAt(*timestamp, []mutation{{key: key, delete: true}}); err != nil {
+				tb.Fatalf("delete %d: %v", i, err)
+			}
+			writes++
+		}
+	}
+	return writes, reads
+}
+
+func benchmarkConcurrentDurable(b *testing.B, profile benchmarkProfile, concurrency, batchSize, valueSize int) {
+	store := profile.open(b, b.TempDir())
+	mutations := benchmarkMutations(batchSize, valueSize)
+	for i := 0; i < benchmarkWarmupCommits; i++ {
+		if err := store.commitAt(uint64(i+1), mutations); err != nil {
+			b.Fatalf("warmup commit %d: %v", i+1, err)
+		}
+	}
+	before := store.stats()
+	latencies := make([]time.Duration, b.N)
+	jobs := make(chan int)
+	var nextTimestamp atomic.Uint64
+	nextTimestamp.Store(benchmarkWarmupCommits)
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for worker := 0; worker < concurrency; worker++ {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				started := time.Now()
+				timestamp := nextTimestamp.Add(1)
+				if err := commitConcurrent(store, timestamp, mutations); err != nil {
+					b.Errorf("commit %d: %v", index, err)
+				}
+				latencies[index] = time.Since(started)
+			}
+		}()
+	}
+	for i := 0; i < b.N; i++ {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	b.StopTimer()
+	reportRates(b, batchSize)
+	reportLatencyPercentiles(b, latencies)
+	reportStoreCounters(b, before, store.stats(), b.N, 0)
+	b.ReportMetric(float64(concurrency), "workers")
+	if err := store.close(); err != nil {
+		b.Fatalf("close: %v", err)
+	}
+}
+
+func commitConcurrent(store versionedStore, timestamp uint64, mutations []mutation) error {
+	if tree, ok := store.(*treeDBStore); ok {
+		converted := make([]mvcc.Mutation, len(mutations))
+		for i, mutation := range mutations {
+			converted[i] = mvcc.Mutation{Key: mutation.key, Value: mutation.value, Delete: mutation.delete}
+		}
+		return tree.mvcc.CommitAt(timestamp, converted, tree.mode)
+	}
+	return store.commitAt(timestamp, mutations)
+}
+
+func reportLatencyPercentiles(b *testing.B, latencies []time.Duration) {
+	if len(latencies) == 0 {
+		return
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	for _, percentile := range []struct {
+		name string
+		p    float64
+	}{{"p50_ack_ms", .50}, {"p95_ack_ms", .95}, {"p99_ack_ms", .99}} {
+		index := int(math.Ceil(float64(len(latencies))*percentile.p)) - 1
+		if index < 0 {
+			index = 0
+		}
+		b.ReportMetric(float64(latencies[index])/float64(time.Millisecond), percentile.name)
 	}
 }
 
@@ -295,23 +503,45 @@ func (s *treeDBStore) getAt(key []byte, timestamp uint64) ([]byte, bool, error) 
 func (s *treeDBStore) stats() map[string]string { return s.db.Stats() }
 func (s *treeDBStore) close() error             { return s.db.Close() }
 
-func reportStoreCounters(b *testing.B, before, after map[string]string, writeCommits int) {
+type storeCounterMetric struct {
+	key         string
+	name        string
+	denominator string
+}
+
+var storeCounterMetrics = []storeCounterMetric{
+	{key: "treedb.command_wal.sync.count_total", name: "command_wal_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.command_wal.flush.count_total", name: "command_wal_flushes/write_commit", denominator: "writes"},
+	{key: "treedb.cache.value_log.sync.calls_total", name: "value_log_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.cache.checkpoint.runs", name: "checkpoints/write_commit", denominator: "writes"},
+	{key: "treedb.cache.iterator.snapshot_rotations_total", name: "iterator_snapshot_rotations/lookup", denominator: "lookups"},
+	{key: "treedb.cache.iterator.sources_total", name: "iterator_sources/lookup", denominator: "lookups"},
+	{key: "treedb.cache.iterator.calls_total", name: "iterator_calls/lookup", denominator: "lookups"},
+}
+
+func reportStoreCounters(b *testing.B, before, after map[string]string, writeCommits, lookups int) {
 	b.Helper()
-	if writeCommits == 0 {
-		return
-	}
-	for _, metric := range []struct {
-		key  string
-		name string
-	}{
-		{key: "treedb.command_wal.sync.count_total", name: "command_wal_syncs/write_commit"},
-		{key: "treedb.command_wal.flush.count_total", name: "command_wal_flushes/write_commit"},
-		{key: "treedb.cache.checkpoint.runs", name: "checkpoints/write_commit"},
-	} {
+	for _, metric := range storeCounterMetrics {
+		denominator := writeCommits
+		if metric.denominator == "lookups" {
+			denominator = lookups
+		}
+		if denominator == 0 {
+			continue
+		}
 		start, startOK := parseCounter(before, metric.key)
 		end, endOK := parseCounter(after, metric.key)
 		if startOK && endOK && end >= start {
-			b.ReportMetric(float64(end-start)/float64(writeCommits), metric.name)
+			b.ReportMetric(float64(end-start)/float64(denominator), metric.name)
+		}
+	}
+	for _, metric := range []struct{ key, name string }{
+		{"treedb.cache.iterator.sources_max", "iterator_sources_max"},
+		{"treedb.cache.iterator.queue_len_max", "iterator_queue_len_max"},
+		{"treedb.cache.queue_len", "iterator_queue_len_end"},
+	} {
+		if value, ok := parseCounter(after, metric.key); ok {
+			b.ReportMetric(float64(value), metric.name)
 		}
 	}
 }
@@ -344,6 +574,23 @@ func TestDgraphShapedProfilesRoundTrip(t *testing.T) {
 			}
 			if got, present, err := store.getAt(key, 12); err != nil || present || got != nil {
 				t.Fatalf("get tombstone present=%t got=%x err=%v", present, got, err)
+			}
+			if profile.backend == "treedb" {
+				stats := store.stats()
+				for _, key := range []string{
+					"treedb.cache.iterator.calls_total",
+					"treedb.cache.iterator.snapshot_rotations_total",
+					"treedb.cache.iterator.sources_total",
+					"treedb.cache.iterator.sources_max",
+					"treedb.cache.iterator.queue_len_max",
+				} {
+					if _, ok := stats[key]; !ok {
+						t.Errorf("missing TreeDB attribution stat %q", key)
+					}
+				}
+				if calls, ok := parseCounter(stats, "treedb.cache.iterator.calls_total"); !ok || calls < 2 {
+					t.Errorf("iterator calls=%d ok=%t want >=2", calls, ok)
+				}
 			}
 			if err := store.close(); err != nil {
 				t.Fatalf("close: %v", err)

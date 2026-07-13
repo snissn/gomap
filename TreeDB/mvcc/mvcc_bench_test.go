@@ -91,6 +91,57 @@ func BenchmarkGetAt(b *testing.B) {
 	}
 }
 
+// BenchmarkCommitAtGetAtInterleaved complements the preloaded read-only depth
+// rows above. Each iteration writes a new version and immediately performs a
+// point lookup, exposing snapshot rotations and source accumulation.
+func BenchmarkCommitAtGetAtInterleaved(b *testing.B) {
+	db := openBenchDB(b)
+	store := New(db)
+	key := []byte("benchmark-key")
+	mutation := []Mutation{{Key: key, Value: []byte("value")}}
+	if err := store.CommitAt(1, mutation, CommitRelaxed); err != nil {
+		b.Fatalf("seed CommitAt: %v", err)
+	}
+	before := db.Stats()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		timestamp := uint64(i + 2)
+		if err := store.CommitAt(timestamp, mutation, CommitRelaxed); err != nil {
+			b.Fatalf("CommitAt(%d): %v", timestamp, err)
+		}
+		result, err := store.GetAt(key, timestamp)
+		if err != nil || result.State != Present {
+			b.Fatalf("GetAt(%d) result=%+v err=%v", timestamp, result, err)
+		}
+	}
+	b.StopTimer()
+	after := db.Stats()
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.iterator.snapshot_rotations_total", "iterator_snapshot_rotations/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.iterator.sources_total", "iterator_sources/op")
+	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.sources_max", "iterator_sources_max")
+	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.queue_len_max", "iterator_queue_len_max")
+	reportMVCCBenchGauge(b, after, "treedb.cache.queue_len", "iterator_queue_len_end")
+}
+
+func reportMVCCBenchCounter(b *testing.B, before, after map[string]string, key, name string) {
+	var start, end uint64
+	if _, err := fmt.Sscanf(before[key], "%d", &start); err != nil {
+		return
+	}
+	if _, err := fmt.Sscanf(after[key], "%d", &end); err != nil || end < start || b.N == 0 {
+		return
+	}
+	b.ReportMetric(float64(end-start)/float64(b.N), name)
+}
+
+func reportMVCCBenchGauge(b *testing.B, stats map[string]string, key, name string) {
+	var value uint64
+	if _, err := fmt.Sscanf(stats[key], "%d", &value); err == nil {
+		b.ReportMetric(float64(value), name)
+	}
+}
+
 func prepareGetAtBench(b *testing.B, depth int) (*treedb.DB, []byte) {
 	b.Helper()
 	db := openBenchDB(b)
