@@ -175,8 +175,8 @@ func TestQueryReadyGenerationOpenReusesImmutableStateAcrossReaders(t *testing.T)
 		}
 	}
 	stats := cache.Stats()
-	if stats.ColdOpens != 1 || stats.CacheHits != readers-1 || stats.Waits == 0 {
-		t.Fatalf("stats=%+v want one cold open, cache reuse, and concurrent waits", stats)
+	if stats.ColdOpens != 1 || stats.Published != 1 || stats.CacheHits != readers-1 {
+		t.Fatalf("stats=%+v want one cold open, one publication, and cache reuse", stats)
 	}
 	if stats.State != QueryReadyOpenReady {
 		t.Fatalf("state=%s", stats.State)
