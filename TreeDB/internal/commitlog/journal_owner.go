@@ -554,6 +554,7 @@ type CommandJournalStableRotation struct {
 }
 
 var newCommandWALStableNamespaceToken = rootpublication.NewStableNamespaceToken
+var openStableCommandWALParent = os.Open
 
 func (rotation *CommandJournalStableRotation) TakeClosed() *rootpublication.StableResourceToken {
 	if rotation == nil {
@@ -598,14 +599,30 @@ func NewStableCommandWALResourceToken(spec rootpublication.StableResourceSpec) (
 	}
 }
 
-func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken, contentSynced bool) (*rootpublication.StableResourceToken, error) {
 	digest := sha256.Sum256([]byte(fmt.Sprintf("command-wal/lane=%d/segment=%d", j.lane, seq)))
-	return NewStableCommandWALResourceToken(rootpublication.StableResourceSpec{
+	spec := rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceCommandWAL, LogicalLane: fmt.Sprintf("lane-%d", j.lane),
 		ResourceID: fmt.Sprintf("%d:%d", j.lane, seq), Generation: seq,
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
-	})
+	}
+	if contentSynced {
+		spec.SyncThrough = func(*os.File, rootpublication.DurableFrontier) error { return nil }
+	}
+	return NewStableCommandWALResourceToken(spec)
+}
+
+func openStableCommandWALFile(parent *os.File, path string) (*os.File, error) {
+	created, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
+		_ = created.Close()
+		return nil, observeErr
+	}
+	return created, nil
 }
 
 func (j *CommandJournal) lastReservedLSNLocked() uint64 {
@@ -651,13 +668,19 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 	}
 	closedPath, closedSeq := j.path, j.segmentSeq
 	closedToken, err := j.stableSegmentToken(j.writer.f, closedPath, closedSeq, rootpublication.ReachabilityCommandWALRotated,
-		rootpublication.DurableFrontier{Bytes: uint64(closedInfo.Size()), MaxLSN: j.lastReservedLSNLocked()}, nil)
+		rootpublication.DurableFrontier{Bytes: uint64(closedInfo.Size()), MaxLSN: j.lastReservedLSNLocked()}, nil, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
 	nextSeq := closedSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
-	prepared, err := openLogFile(nextPath, os.O_WRONLY|os.O_APPEND)
+	parent, err := openStableCommandWALParent(j.walDir)
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	defer parent.Close()
+	prepared, err := openStableCommandWALFile(parent, nextPath)
 	if err != nil {
 		closedToken.Release()
 		return nil, err
@@ -673,16 +696,10 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 		closedToken.Release()
 		return nil, err
 	}
-	parent, err := os.Open(j.walDir)
-	if err != nil {
-		closedToken.Release()
-		return nil, err
-	}
 	namespace, err := newCommandWALStableNamespaceToken(rootpublication.StableNamespaceSpec{
-		Parent: parent, ParentGeneration: nextSeq, Operation: rootpublication.NamespaceCreate,
+		Parent: parent, LinkedResource: prepared, ParentGeneration: nextSeq, Operation: rootpublication.NamespaceCreate,
 		NewName: filepath.Base(nextPath), DiagnosticPath: filepath.Join("maindb", "wal"),
 	})
-	_ = parent.Close()
 	if err != nil {
 		closedToken.Release()
 		return nil, err
@@ -693,7 +710,7 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 		return nil, err
 	}
 	activeToken, err := j.stableSegmentToken(prepared, nextPath, nextSeq, rootpublication.ReachabilityCommandWALActive,
-		rootpublication.DurableFrontier{Bytes: uint64(activeInfo.Size())}, namespace)
+		rootpublication.DurableFrontier{Bytes: uint64(activeInfo.Size())}, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()

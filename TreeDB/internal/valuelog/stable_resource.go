@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
+var openStableValueLogParent = os.Open
 
 // NewStableValueLogResourceToken registers an exact already-open persistent
 // value-log handle, including the external-RID fence view used by command WAL.
@@ -49,6 +51,8 @@ type StableResourceRegistration struct {
 	ParentGeneration   uint64
 	NamespaceOperation rootpublication.NamespaceOperation
 	OldName            string
+	NewName            string
+	NamespaceParent    *os.File
 }
 
 // StableResourceRotation retains exact handles for the segment closed by a
@@ -109,10 +113,10 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 		return nil, err
 	}
 	defer namespace.Release()
-	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace)
+	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace, false)
 }
 
-func stableValueLogResourceToken(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+func stableValueLogResourceToken(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken, contentSynced bool) (*rootpublication.StableResourceToken, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -131,6 +135,9 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
+	}
+	if contentSynced {
+		spec.SyncThrough = func(*os.File, rootpublication.DurableFrontier) error { return nil }
 	}
 	switch domain {
 	case rootpublication.StableProducerValueLog:
@@ -163,16 +170,24 @@ func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegi
 	if registration.NamespaceOperation == rootpublication.NamespaceNone {
 		return nil, nil
 	}
-	parent, err := os.Open(filepath.Dir(file.Name()))
-	if err != nil {
-		return nil, err
+	if registration.NamespaceParent == nil {
+		return nil, fmt.Errorf("%w: valuelog namespace operation requires exact parent handle", rootpublication.ErrUnresolvedResource)
+	}
+	newName := registration.NewName
+	if newName == "" {
+		if registration.NamespaceOperation == rootpublication.NamespaceRename {
+			return nil, fmt.Errorf("%w: valuelog rename requires exact new name", rootpublication.ErrUnresolvedResource)
+		}
+		newName = filepath.Base(file.Name())
+	}
+	if filepath.Base(newName) != newName {
+		return nil, fmt.Errorf("%w: valuelog namespace name must be a base name", rootpublication.ErrUnresolvedResource)
 	}
 	namespace, err := newValueLogStableNamespaceToken(rootpublication.StableNamespaceSpec{
-		Parent: parent, ParentGeneration: registration.ParentGeneration,
+		Parent: registration.NamespaceParent, LinkedResource: file, ParentGeneration: registration.ParentGeneration,
 		Operation: registration.NamespaceOperation, OldName: registration.OldName,
-		NewName: filepath.Base(file.Name()), DiagnosticPath: filepath.Dir(registration.DiagnosticPath),
+		NewName: newName, DiagnosticPath: filepath.Dir(registration.DiagnosticPath),
 	})
-	_ = parent.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +196,18 @@ func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegi
 		return nil, err
 	}
 	return namespace, nil
+}
+
+func openStableValueLogFile(parent *os.File, path string) (*os.File, error) {
+	created, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+		_ = created.Close()
+		return nil, observeErr
+	}
+	return created, nil
 }
 
 // RotateToWithStableResources pins the flushed old segment before writer state
@@ -201,11 +228,17 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			return nil, err
 		}
 	}
-	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, nil)
+	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, nil, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := openLogFile(path)
+	parent, err := openStableValueLogParent(filepath.Dir(path))
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	defer parent.Close()
+	prepared, err := openStableValueLogFile(parent, path)
 	if err != nil {
 		closedToken.Release()
 		return nil, err
@@ -221,12 +254,22 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		closedToken.Release()
 		return nil, err
 	}
+	if active.NamespaceParent != nil {
+		closedToken.Release()
+		return nil, fmt.Errorf("%w: valuelog stable rotation owns active parent capture", rootpublication.ErrResourceConflict)
+	}
+	active.NamespaceParent = parent
+	if active.NewName != "" && active.NewName != filepath.Base(path) {
+		closedToken.Release()
+		return nil, fmt.Errorf("%w: valuelog active namespace name %q differs from %q", rootpublication.ErrResourceConflict, active.NewName, filepath.Base(path))
+	}
+	active.NewName = filepath.Base(path)
 	namespace, err := stableValueLogNamespaceToken(prepared, active)
 	if err != nil {
 		closedToken.Release()
 		return nil, err
 	}
-	activeToken, err := stableValueLogResourceToken(prepared, fileID, active, namespace)
+	activeToken, err := stableValueLogResourceToken(prepared, fileID, active, namespace, false)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()

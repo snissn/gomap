@@ -65,6 +65,7 @@ var columnAssetVerifiedChecksumCache = struct {
 var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
 var columnAssetSegmentDirSyncCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentDirSyncCache
 var syncColumnAssetSegmentFileForPublish = syncColumnAssetSegmentFile
+var openStableColumnAssetParent = os.Open
 
 type columnAssetVerifiedChecksumEntry struct {
 	key   columnAssetVerifiedChecksumKey
@@ -369,11 +370,11 @@ func writeColumnAssetToManagerWithStats(rootDir string, cfg ColumnStoreConfig, p
 
 func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, *rootpublication.StableResourceToken, error) {
 	var token *rootpublication.StableResourceToken
-	capture := func(file *os.File, ref ColumnAssetRef, namespace columnAssetManagerNamespace, created bool) (bool, error) {
+	capture := func(file, parent *os.File, ref ColumnAssetRef, namespace columnAssetManagerNamespace, created bool) (bool, error) {
 		var namespaceToken *rootpublication.StableNamespaceToken
 		if created {
 			var err error
-			namespaceToken, err = stableColumnAssetNamespaceToken(namespace.SegmentDir, ref)
+			namespaceToken, err = stableColumnAssetNamespaceToken(parent, file, ref)
 			if err != nil {
 				return false, err
 			}
@@ -408,7 +409,7 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 	return writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, fileID, nil)
 }
 
-type columnAssetStableResourceCapture func(*os.File, ColumnAssetRef, columnAssetManagerNamespace, bool) (bool, error)
+type columnAssetStableResourceCapture func(*os.File, *os.File, ColumnAssetRef, columnAssetManagerNamespace, bool) (bool, error)
 
 func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32, capture columnAssetStableResourceCapture) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
 	if cfg.AssetManager == nil {
@@ -453,7 +454,21 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	file, needsDirSync, created, err := openColumnAssetSegmentAppendFile(assetPath)
+	var stableParent *os.File
+	if capture != nil {
+		stableParent, err = openStableColumnAssetParent(namespace.SegmentDir)
+		if err != nil {
+			return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
+		}
+		defer stableParent.Close()
+	}
+	var file *os.File
+	var needsDirSync, created bool
+	if stableParent != nil {
+		file, needsDirSync, created, err = openColumnAssetSegmentAppendFileAt(stableParent, assetPath)
+	} else {
+		file, needsDirSync, created, err = openColumnAssetSegmentAppendFile(assetPath)
+	}
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
@@ -498,7 +513,7 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	directoryStable := false
 	if capture != nil {
 		start = time.Now()
-		directoryStable, err = capture(file, ref, namespace, created)
+		directoryStable, err = capture(file, stableParent, ref, namespace, created)
 		if created {
 			closeStats.DirSync += time.Since(start)
 		}
@@ -948,6 +963,22 @@ func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, e
 		return nil, false, false, err
 	}
 	file, err = os.OpenFile(assetPath, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, false, false, err
+	}
+	return file, !columnAssetSegmentDirSyncKnown(assetPath), false, nil
+}
+
+func openColumnAssetSegmentAppendFileAt(parent *os.File, assetPath string) (*os.File, bool, bool, error) {
+	name := filepath.Base(assetPath)
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
+	if err == nil {
+		return file, true, true, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, false, false, err
+	}
+	file, err = rootpublication.OpenStableChildFile(parent, name, os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, false, false, err
 	}

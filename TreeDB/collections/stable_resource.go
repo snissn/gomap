@@ -121,17 +121,19 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
+		// The producer synchronizes the segment before it captures the token.
+		// Publication must account for that step without syncing the same file a
+		// second time.
+		SyncThrough: func(*os.File, rootpublication.DurableFrontier) error { return nil },
 	})
 }
 
-func stableColumnAssetNamespaceToken(segmentDir string, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {
-	parent, err := os.Open(segmentDir)
-	if err != nil {
-		return nil, err
+func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {
+	if parent == nil || resource == nil {
+		return nil, fmt.Errorf("%w: column asset namespace requires exact parent and resource handles", rootpublication.ErrUnresolvedResource)
 	}
-	defer parent.Close()
 	return rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
-		Parent: parent, ParentGeneration: uint64(ref.FileID), Operation: rootpublication.NamespaceCreate,
+		Parent: parent, LinkedResource: resource, ParentGeneration: uint64(ref.FileID), Operation: rootpublication.NamespaceCreate,
 		NewName:        filepath.Base(stableColumnAssetDiagnosticPath(ref)),
 		DiagnosticPath: filepath.Dir(stableColumnAssetDiagnosticPath(ref)),
 	})
