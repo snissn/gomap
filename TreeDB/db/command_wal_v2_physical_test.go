@@ -297,6 +297,88 @@ func TestRepairCommandWALV2SuffixRetryNeverExtendsShortenedNonAnchorSegment(t *t
 	}
 }
 
+func TestRepairCommandWALV2SuffixRetryAcceptsRetainedPathAtProvenFloor(t *testing.T) {
+	walDir := t.TempDir()
+	anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	mixed := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	if err := os.WriteFile(anchor, []byte("anchor-v2discard"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mixed, []byte("prefix-v2discard-adiscard-b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	classification := commandWALV2Classification{
+		CompletePrefix: []commandWALV2PhysicalFrame{
+			{Envelope: commitlog.CommandEnvelope{LSN: 1}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 0, EndOffset: 9}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 2}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: mixed, StartOffset: 0, EndOffset: 9}},
+		},
+		DiscardSuffix: []commandWALV2PhysicalFrame{
+			{Envelope: commitlog.CommandEnvelope{LSN: 3}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 9, EndOffset: 16}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 4}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: mixed, StartOffset: 9, EndOffset: 18}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 5}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: mixed, StartOffset: 18, EndOffset: 27}},
+		},
+	}
+
+	crash := errors.New("injected after retained floor truncate sync")
+	mixedAfterSyncs := 0
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Path == mixed && event.Point == durabilitycut.AfterDependencyFileSync {
+			mixedAfterSyncs++
+			if mixedAfterSyncs == 2 {
+				return crash
+			}
+		}
+		return nil
+	})
+	_, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if !errors.Is(err, crash) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("first repair error=%v, want injected retryable crash", err)
+	}
+	if got := mustReadFile(t, mixed); string(got) != "prefix-v2" {
+		t.Fatalf("mixed path after durable floor cut=%q, want retained prefix", got)
+	}
+
+	retryBeforeSyncs := 0
+	retryAfterSyncs := 0
+	retryGrowth := false
+	restore = durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceCommandWAL || event.Path != mixed {
+			return nil
+		}
+		if info, statErr := os.Stat(mixed); statErr != nil {
+			return statErr
+		} else if info.Size() > 9 {
+			retryGrowth = true
+			return fmt.Errorf("retained mixed path grew to %d bytes", info.Size())
+		}
+		switch event.Point {
+		case durabilitycut.BeforeDependencyFileSync:
+			retryBeforeSyncs++
+		case durabilitycut.AfterDependencyFileSync:
+			retryAfterSyncs++
+		}
+		return nil
+	})
+	diagnostic, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if err != nil {
+		t.Fatalf("repair retry from proven retained floor: %v", err)
+	}
+	if retryGrowth || retryBeforeSyncs != 1 || retryAfterSyncs != 1 {
+		t.Fatalf("retry growth=%t mixed sync events before=%d after=%d, want no growth and one floor re-sync", retryGrowth, retryBeforeSyncs, retryAfterSyncs)
+	}
+	if got := mustReadFile(t, mixed); string(got) != "prefix-v2" {
+		t.Fatalf("mixed path after retry=%q, want retained prefix", got)
+	}
+	if got := mustReadFile(t, anchor); string(got) != "anchor-v2" {
+		t.Fatalf("anchor after retry=%q, want retained prefix", got)
+	}
+	if diagnostic.CompletedRepairStages != uint64(len(diagnostic.RepairStages)) {
+		t.Fatalf("retry diagnostic=%+v, want every stage completed", diagnostic)
+	}
+}
+
 func TestRepairCommandWALV2SuffixRetryResyncsExactSizeRetainedAnchor(t *testing.T) {
 	walDir, classification, anchor, _ := commandWALV2RepairFixture(t)
 	preSyncCrash := errors.New("injected after retained-anchor truncate before sync")
