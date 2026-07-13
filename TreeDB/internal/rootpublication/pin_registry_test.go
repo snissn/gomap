@@ -211,3 +211,34 @@ func BenchmarkIdentityPinRegistryPinRelease(b *testing.B) {
 		pin.Release()
 	}
 }
+
+func BenchmarkStableResourceTokenConstructionWithIdentityPinRegistry(b *testing.B) {
+	dir := b.TempDir()
+	file := writeStableResourceFixture(b, dir, "bench-pinned.vlog", "benchmark-resource")
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		b.Fatal(err)
+	}
+	registry := NewIdentityPinRegistry()
+	if err := registry.Observe(identity); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := registry.Unobserve(identity); err != nil {
+			b.Error(err)
+		}
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "bench", Generation: uint64(i + 1),
+			DiagnosticPath: "bench-pinned.vlog", File: file, Frontier: DurableFrontier{Bytes: 4},
+			Reachability: ReachabilityValueLogPointer, PinRegistry: registry,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		token.Release()
+	}
+}
