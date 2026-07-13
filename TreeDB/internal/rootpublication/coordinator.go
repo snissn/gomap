@@ -42,19 +42,20 @@ type Coordinator struct {
 	changed   chan struct{}
 	done      chan struct{}
 
-	pending         []pendingEntry
-	pendingBytes    uint64
-	firstPendingAt  time.Time
-	timer           Timer
-	timerGeneration uint64
-	wakeReason      WakeReason
-	publishNow      bool
-	publishing      bool
-	drains          []*drainRequest
-	stopping        bool
-	stopped         bool
-	stopErr         error
-	poison          error
+	pending             []pendingEntry
+	pendingResourceView *StableResourceSet
+	pendingBytes        uint64
+	firstPendingAt      time.Time
+	timer               Timer
+	timerGeneration     uint64
+	wakeReason          WakeReason
+	publishNow          bool
+	publishing          bool
+	drains              []*drainRequest
+	stopping            bool
+	stopped             bool
+	stopErr             error
+	poison              error
 
 	visible           Frontier
 	durable           Frontier
@@ -62,20 +63,22 @@ type Coordinator struct {
 	waiters           []*durabilityWaiter
 	activeBuilders    uint64
 
-	ewmaService        time.Duration
-	lastService        time.Duration
-	lastGroupSize      uint64
-	admissionWaits     uint64
-	preMetaFailures    uint64
-	retries            uint64
-	publishCalls       uint64
-	failureGeneration  uint64
-	lastRetryableError error
-	lastFailureSeq     uint64
-	nextAttemptID      uint64
-	activeAttempt      PublishAttempt
-	retryAttempt       PublishAttempt
-	reportingAttempt   bool
+	ewmaService           time.Duration
+	lastService           time.Duration
+	lastGroupSize         uint64
+	admissionWaits        uint64
+	preMetaFailures       uint64
+	retries               uint64
+	publishCalls          uint64
+	failureGeneration     uint64
+	lastRetryableError    error
+	lastFailureSeq        uint64
+	nextAttemptID         uint64
+	activeAttempt         PublishAttempt
+	retryAttempt          PublishAttempt
+	reportingAttempt      bool
+	resourceReleaseErrors uint64
+	pendingResourcesTaken bool
 }
 
 // PublishAttempt is an opaque identity for exactly one captured callback.
@@ -147,9 +150,15 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 		c.mu.Unlock()
 		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
 	}
+	nextResourceView, err := extendResourceView(c.pendingResourceView, candidate)
+	if err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: resource union: %w", ErrInvalidCandidate, err)
+	}
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
+	c.pendingResourceView = nextResourceView
 	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
 	c.visible = candidate.frontier
 	if wasEmpty {
@@ -389,8 +398,11 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 			if len(c.pending) != 0 {
 				c.stopErr = ErrPublicationStopped
 			}
-			c.pending = nil
-			c.pendingBytes = 0
+			if !pendingEntriesHaveResources(c.pending) {
+				c.pending = nil
+				c.pendingBytes = 0
+				c.pendingResourceView = nil
+			}
 			c.stopped = true
 		}
 		err := c.stopErr
@@ -399,6 +411,67 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// PendingResourceHandoff is the exactly-once recovery owner returned after a
+// stopped coordinator retained unpublished or ambiguously published debt.
+// ReleaseAfterRecovery is safe only after recovery has reconstructed the
+// durable horizon and installed its own deletion protection.
+type PendingResourceHandoff struct{ resources *StableResourceSet }
+
+func (h *PendingResourceHandoff) Tokens() []*StableResourceToken {
+	if h == nil {
+		return nil
+	}
+	return h.resources.Tokens()
+}
+
+func (h *PendingResourceHandoff) ReleaseAfterRecovery() error {
+	if h == nil {
+		return nil
+	}
+	return h.resources.Release()
+}
+
+// TakePendingResourceOwnership transfers retained pins to recovery. It is
+// intentionally unavailable before Stop and provides no abandonment shortcut.
+func (c *Coordinator) TakePendingResourceOwnership() (*PendingResourceHandoff, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stopped {
+		return nil, fmt.Errorf("%w: coordinator not stopped", ErrInvalidCandidate)
+	}
+	if c.pendingResourcesTaken {
+		return nil, ErrStableResourceOwnershipTransferred
+	}
+	sets := make([]*StableResourceSet, 0, len(c.pending))
+	for _, entry := range c.pending {
+		if set, ok := entry.candidate.extensions.resourceSet.(*StableResourceSet); ok {
+			sets = append(sets, set)
+		}
+	}
+	if len(sets) == 0 {
+		c.pendingResourcesTaken = true
+		return &PendingResourceHandoff{}, nil
+	}
+	resources, err := TransferUnionStableResourceSets(sets...)
+	if err != nil {
+		return nil, err
+	}
+	c.pending = nil
+	c.pendingBytes = 0
+	c.pendingResourceView = nil
+	c.pendingResourcesTaken = true
+	return &PendingResourceHandoff{resources: resources}, nil
+}
+
+func pendingEntriesHaveResources(entries []pendingEntry) bool {
+	for _, entry := range entries {
+		if set, ok := entry.candidate.extensions.resourceSet.(*StableResourceSet); ok && len(set.entries) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) Stats() Stats {
@@ -417,6 +490,7 @@ func (c *Coordinator) Stats() Stats {
 		ActiveBuilders: c.activeBuilders, WaiterCount: uint64(len(c.waiters)),
 		PreMetaFailures: c.preMetaFailures, Retries: c.retries, Poisoned: c.poison != nil,
 		WakeReason: c.wakeReason, PublishCalls: c.publishCalls,
+		ResourceReleaseErrors: c.resourceReleaseErrors,
 	}
 }
 
@@ -512,8 +586,19 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		var removedBytes uint64
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+			if err := entry.candidate.releaseOwnedExtensions(); err != nil {
+				c.resourceReleaseErrors++
+			}
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
+		c.pendingResourceView = nil
+		for _, entry := range c.pending {
+			view, viewErr := extendResourceView(c.pendingResourceView, entry.candidate)
+			if viewErr != nil {
+				panic(viewErr)
+			}
+			c.pendingResourceView = view
+		}
 		if removedBytes <= c.pendingBytes {
 			c.pendingBytes -= removedBytes
 		} else {
