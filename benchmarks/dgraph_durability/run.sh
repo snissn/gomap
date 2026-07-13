@@ -39,12 +39,15 @@ fixed_cmd=(go test ./benchmarks/dgraph_durability -run '^$' -bench '^BenchmarkDg
 concurrent_cmd=(go test ./benchmarks/dgraph_durability -run '^$' -bench '^BenchmarkDgraphShapedConcurrentDurable' -benchmem -benchtime="${concurrent_commits}x" -count="$repeats")
 mvcc_cmd=(go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkCommitAtGetAtInterleaved$' -benchmem -count="$repeats")
 
-printf '%q ' "${fixed_cmd[@]}" >"$out/commands.txt"
-printf '\n' >>"$out/commands.txt"
-printf '%q ' "${concurrent_cmd[@]}" >>"$out/commands.txt"
-printf '\n' >>"$out/commands.txt"
-printf '%q ' "${mvcc_cmd[@]}" >>"$out/commands.txt"
-printf '\n' >>"$out/commands.txt"
+{
+  printf 'GOWORK=off '
+  printf '%q ' "${fixed_cmd[@]}"
+  printf '\nGOWORK=off '
+  printf '%q ' "${concurrent_cmd[@]}"
+  printf '\nGOWORK=off '
+  printf '%q ' "${mvcc_cmd[@]}"
+  printf '\n'
+} >"$out/commands.txt"
 
 GOWORK=off "${fixed_cmd[@]}" | tee "$out/fixed_mixed.txt"
 GOWORK=off "${concurrent_cmd[@]}" | tee "$out/concurrent_durable.txt"

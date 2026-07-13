@@ -1,6 +1,8 @@
 package dgraphdurability
 
 import (
+	"bytes"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -41,5 +43,15 @@ func TestCounterSchemaIncludesAttributionBoundaries(t *testing.T) {
 		if !found {
 			t.Errorf("missing attribution metric %q", name)
 		}
+	}
+}
+
+func TestRunnerRecordsWorkspaceIsolationForEveryCommand(t *testing.T) {
+	script, err := os.ReadFile("run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bytes.Count(script, []byte("GOWORK=off")), 6; got != want {
+		t.Fatalf("run.sh GOWORK=off occurrences=%d want %d (three recorded and three executed commands)", got, want)
 	}
 }
