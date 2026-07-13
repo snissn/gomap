@@ -377,6 +377,30 @@ func TestStableLeafGenerationManifestParentSyncFailurePoisons(t *testing.T) {
 	store.Close()
 }
 
+func TestStableLeafGenerationManifestAmbiguityRejectsLoadAndBootstrapScan(t *testing.T) {
+	leafDir := t.TempDir()
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	manifest := newLeafGenerationManifest(1)
+	first, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+
+	cut := errors.New("parent sync cut")
+	store.hooks.BeforeParentSync = func() error { return cut }
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("parent sync error=%v want cut + ErrRecoveryRequired", err)
+	}
+	if _, _, err := store.Load(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Load after ambiguous replacement error=%v want ErrRecoveryRequired", err)
+	}
+	if _, err := store.listBootstrapFiles(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("listBootstrapFiles after ambiguous replacement error=%v want ErrRecoveryRequired", err)
+	}
+	store.Close()
+}
+
 func TestStableLeafGenerationManifestReleaseReturnsResourcesToBaseline(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("descriptor baseline uses /proc/self/fd")

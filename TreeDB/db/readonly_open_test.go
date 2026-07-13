@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestReadOnlyRejectsWrites(t *testing.T) {
@@ -157,6 +158,63 @@ func TestReadOnlyOpenConfiguresLeafPageReadCacheEntries(t *testing.T) {
 			stats := ro.Stats()
 			if got := stats["treedb.process.read_path.outer_leaf.cache.capacity"]; got != "7" {
 				t.Fatalf("outer leaf cache capacity=%q want 7", got)
+			}
+		})
+	}
+}
+
+func TestReadOnlyOpenOwnsLeafGenerationManifestStore(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetSync([]byte("k"), []byte("value")); err != nil {
+		_ = w.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	wantMode := leafGenerationManifestCompatibility
+	if rootpublication.StableRelativeNamespaceSupported() {
+		wantMode = leafGenerationManifestStable
+	}
+	openers := []struct {
+		name string
+		open func(Options) (*DB, error)
+	}{
+		{name: "shared_lock", open: func(opts Options) (*DB, error) { return Open(opts) }},
+		{name: "no_lock", open: openReadOnlyNoLock},
+	}
+	for _, opener := range openers {
+		t.Run(opener.name, func(t *testing.T) {
+			ro, err := opener.open(Options{Dir: dir, ReadOnly: true, IndexOuterLeavesInValueLog: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := ro.leafGenerationManifestStore
+			if store == nil {
+				_ = ro.Close()
+				t.Fatal("read-only DB did not retain a leaf generation manifest store")
+			}
+			if store.registry != ro.valueLogIdentityPins {
+				_ = ro.Close()
+				t.Fatal("read-only manifest store does not share the value-log identity registry")
+			}
+			if store.mode != wantMode {
+				_ = ro.Close()
+				t.Fatalf("manifest replacement mode=%d want %d", store.mode, wantMode)
+			}
+			if err := ro.Close(); err != nil {
+				t.Fatalf("Close read-only: %v", err)
+			}
+			store.mu.Lock()
+			closed, parent := store.closed, store.parent
+			store.mu.Unlock()
+			if !closed || parent != nil {
+				t.Fatalf("manifest store after Close: closed=%v parent=%v, want true,nil", closed, parent)
 			}
 		})
 	}
