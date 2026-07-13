@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -366,6 +367,34 @@ func writeColumnAssetToManagerWithStats(rootDir string, cfg ColumnStoreConfig, p
 	return writeColumnAssetToManagerSegmentWithStats(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
 }
 
+func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, *rootpublication.StableResourceToken, error) {
+	var token *rootpublication.StableResourceToken
+	capture := func(file *os.File, ref ColumnAssetRef, namespace columnAssetManagerNamespace, created bool) (bool, error) {
+		var namespaceToken *rootpublication.StableNamespaceToken
+		if created {
+			var err error
+			namespaceToken, err = stableColumnAssetNamespaceToken(namespace.SegmentDir, ref)
+			if err != nil {
+				return false, err
+			}
+			if err := namespaceToken.Stabilize(); err != nil {
+				namespaceToken.Release()
+				return false, err
+			}
+			defer namespaceToken.Release()
+		}
+		var err error
+		token, err = stableColumnAssetResourceToken(file, ref, namespaceToken)
+		return created, err
+	}
+	ref, _, err := writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID, capture)
+	if err != nil {
+		token.Release()
+		return ColumnAssetRef{}, nil, err
+	}
+	return ref, token, nil
+}
+
 func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
 	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID, fileID)
 }
@@ -376,6 +405,12 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 }
 
 func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
+	return writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir, cfg, payload, kind, generation, partID, fileID, nil)
+}
+
+type columnAssetStableResourceCapture func(*os.File, ColumnAssetRef, columnAssetManagerNamespace, bool) (bool, error)
+
+func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32, capture columnAssetStableResourceCapture) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
 	if cfg.AssetManager == nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset write requires asset manager")
 	}
@@ -418,7 +453,7 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	file, needsDirSync, _, err := openColumnAssetSegmentAppendFile(assetPath)
+	file, needsDirSync, created, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
@@ -452,6 +487,7 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 	if written != len(payload) {
 		return ColumnAssetRef{}, closeStats, io.ErrShortWrite
 	}
+	ref.Offset = offset
 	start := time.Now()
 	closeStats.FileSyncCount++
 	if err := syncColumnAssetSegmentFileForPublish(file); err != nil {
@@ -459,6 +495,17 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 		return ColumnAssetRef{}, closeStats, err
 	}
 	closeStats.FileSync += time.Since(start)
+	directoryStable := false
+	if capture != nil {
+		start = time.Now()
+		directoryStable, err = capture(file, ref, namespace, created)
+		if created {
+			closeStats.DirSync += time.Since(start)
+		}
+		if err != nil {
+			return ColumnAssetRef{}, closeStats, err
+		}
+	}
 	start = time.Now()
 	if err := file.Close(); err != nil {
 		closeStats.FileClose += time.Since(start)
@@ -467,16 +514,17 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 	closeStats.FileClose += time.Since(start)
 	closeFile = false
 	if needsDirSync {
-		start = time.Now()
-		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
+		if !directoryStable {
+			start = time.Now()
+			if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
+				closeStats.DirSync += time.Since(start)
+				return ColumnAssetRef{}, closeStats, err
+			}
 			closeStats.DirSync += time.Since(start)
-			return ColumnAssetRef{}, closeStats, err
 		}
-		closeStats.DirSync += time.Since(start)
 		markColumnAssetSegmentDirSynced(assetPath)
 	}
 	closeStats.SyncEpochCount = 1
-	ref.Offset = offset
 	return ref, closeStats, nil
 }
 

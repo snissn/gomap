@@ -52,11 +52,11 @@ func stableColumnAssetDiagnosticPath(ref ColumnAssetRef) string {
 		columnAssetManagerSegmentsDirName, columnAssetSegmentFileName(ref.FileID))
 }
 
-// stableColumnAssetResourceToken captures the exact segment identity and the
-// greatest byte required by ref. The manifest remains the authority for the
-// ref's range and checksum; tokens for several refs in one segment therefore
-// coalesce by stable identity and maximum frontier.
-func stableColumnAssetResourceToken(rootDir string, ref ColumnAssetRef) (*rootpublication.StableResourceToken, error) {
+// stableColumnAssetResourceToken captures the exact already-open segment
+// identity and the greatest byte required by ref. The manifest remains the
+// authority for the ref's range and checksum; tokens for several refs in one
+// segment therefore coalesce by stable identity and maximum frontier.
+func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
 	resourceKind, reachability, err := stableColumnAssetResourceClassification(ref.Kind)
 	if err != nil {
 		return nil, err
@@ -64,19 +64,23 @@ func stableColumnAssetResourceToken(rootDir string, ref ColumnAssetRef) (*rootpu
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
-	path, err := columnAssetSegmentPath(rootDir, ref)
-	if err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
 	return rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
 		Kind: resourceKind, LogicalLane: ref.Namespace, ResourceID: fmt.Sprint(ref.FileID),
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
-		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability,
+		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
+	})
+}
+
+func stableColumnAssetNamespaceToken(segmentDir string, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {
+	parent, err := os.Open(segmentDir)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	return rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
+		Parent: parent, ParentGeneration: uint64(ref.FileID), Operation: rootpublication.NamespaceCreate,
+		NewName:        filepath.Base(stableColumnAssetDiagnosticPath(ref)),
+		DiagnosticPath: filepath.Dir(stableColumnAssetDiagnosticPath(ref)),
 	})
 }
