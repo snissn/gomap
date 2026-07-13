@@ -501,6 +501,7 @@ type DB struct {
 	testAfterOptimisticApplyHook                func()
 	testAfterOptimisticPublishPrepareHook       func()
 	testCheckpointAfterPoisonPreflightHook      func()
+	testConditionalReadOnlyAfterClosePreflight  func()
 	testOrderedRootBatchAfterClosePreflightHook func()
 	testCommandWALRecoveryFailAfterLSN          atomic.Uint64
 	commandWALReplayLSN                         atomic.Uint64

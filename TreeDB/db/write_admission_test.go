@@ -251,3 +251,63 @@ func TestOptimisticOrderedRootPublishRejectsClosingAfterAdmissionPreflight(t *te
 		t.Fatal("optimistic ordered-root publish remained blocked after writeMu became available")
 	}
 }
+
+func TestConditionalReadOnlyCommitRejectsClosingAfterAdmissionPreflight(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.SetSync([]byte("guard"), []byte("value")); err != nil {
+		_ = db.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	tx, err := db.NewConditionalTxn()
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		_ = tx.Close()
+		_ = db.Close()
+		t.Fatalf("GetVersioned: %v", err)
+	}
+
+	preflightDone := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	db.testConditionalReadOnlyAfterClosePreflight = func() {
+		close(preflightDone)
+		<-releasePreflight
+	}
+	db.writeMu.Lock()
+	writeLockHeld := true
+	t.Cleanup(func() {
+		db.testConditionalReadOnlyAfterClosePreflight = nil
+		db.closing.Store(false)
+		if writeLockHeld {
+			db.writeMu.Unlock()
+		}
+		_ = tx.Close()
+		_ = db.Close()
+	})
+
+	commitDone := make(chan error, 1)
+	go func() { commitDone <- tx.Commit() }()
+	select {
+	case <-preflightDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("conditional commit did not complete its close preflight")
+	}
+	db.closing.Store(true)
+	close(releasePreflight)
+	db.writeMu.Unlock()
+	writeLockHeld = false
+
+	select {
+	case err := <-commitDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("conditional commit error=%v, want %v", err, ErrClosed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("conditional commit remained blocked after writeMu became available")
+	}
+}
