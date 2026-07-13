@@ -2,6 +2,7 @@ package typedcolumn
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"slices"
 	"testing"
@@ -149,11 +150,44 @@ func TestQueryReadyBaseDeltaQExprParityWithoutPrecomputedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := int64(3_600*3_600 + 21_600*21_600 + 25_200*25_200 + 18_000*18_000 + 28_800*28_800 + 32_400*32_400)
-	if !slices.Equal(result.Groups, []QueryReadyOperatorGroup{{Int64: want}}) {
+	if !slices.Equal(result.Groups, []QueryReadyOperatorGroup{{Count: 6, Int64: want}}) {
 		t.Fatalf("groups=%+v want sum=%d", result.Groups, want)
 	}
 	if result.Stats.PrecomputedAnswers != 0 || result.Stats.RowsMatched != 6 {
 		t.Fatalf("stats=%+v", result.Stats)
+	}
+}
+
+func TestQueryReadySumSecondOfDaySquareOmitsEmptyResult(t *testing.T) {
+	runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), QueryReadyOperatorRequest{
+		Kind:        QueryReadyOperatorSumSecondOfDaySquare,
+		ValueColumn: "time_us",
+		Predicates:  []QueryReadyStringPredicate{{Column: "kind", Values: []string{"no-such-kind"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Groups) != 0 || result.Stats.RowsMatched != 0 {
+		t.Fatalf("empty expression result=%+v", result)
+	}
+}
+
+func TestQueryReadySumSecondOfDaySquareChecksOverflow(t *testing.T) {
+	const secondOfDay = int64(86_399)
+	term := secondOfDay * secondOfDay
+	sum := int64(math.MaxInt64) - term + 1
+	wantSum := sum
+	runner := &QueryReadyOperator{request: QueryReadyOperatorRequest{Kind: QueryReadyOperatorSumSecondOfDaySquare}, valueProjected: 0}
+	part := &queryReadyExecutionPart{values: [][]int64{{secondOfDay * 1_000_000}}}
+	if err := runner.reduceRow(0, part, 0, &sum, &QueryReadyExecutionStats{}); err == nil {
+		t.Fatal("expected expression sum overflow")
+	}
+	if sum != wantSum {
+		t.Fatalf("overflow mutated sum=%d want %d", sum, wantSum)
 	}
 }
 

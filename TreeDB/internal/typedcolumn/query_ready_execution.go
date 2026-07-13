@@ -3,6 +3,7 @@ package typedcolumn
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"time"
@@ -620,7 +621,11 @@ func (r *QueryReadyOperator) reduceRow(partIndex int, part *queryReadyExecutionP
 		if secondOfDay < 0 {
 			secondOfDay += 86_400
 		}
-		*expressionSum += secondOfDay * secondOfDay
+		term := secondOfDay * secondOfDay
+		if *expressionSum > math.MaxInt64-term {
+			return fmt.Errorf("typedcolumn: query-ready second-of-day square sum overflow current=%d value=%d", *expressionSum, term)
+		}
+		*expressionSum += term
 		return nil
 	}
 	group, err := r.globalCodeForRow(r.groupDomain, partIndex, part, r.groupProjected, row, stats)
@@ -719,7 +724,9 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 			}
 		}
 	case QueryReadyOperatorSumSecondOfDaySquare:
-		r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Int64: expressionSum})
+		if stats.RowsMatched > 0 {
+			r.resultGroups = append(r.resultGroups, QueryReadyOperatorGroup{Count: stats.RowsMatched, Int64: expressionSum})
+		}
 	}
 	stats.GroupsConsidered = len(r.resultGroups)
 }
