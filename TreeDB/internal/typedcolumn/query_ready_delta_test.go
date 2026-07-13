@@ -1,6 +1,7 @@
 package typedcolumn
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -52,6 +53,56 @@ func TestQueryReadyDeltaBuildDoesNotRewriteImmutableBase(t *testing.T) {
 	}
 	if deltaBuilt.Stats.Rows != 1 || deltaBuilt.Stats.Parts != 1 || deltaBuilt.Stats.InputBytes != int64(len(deltaImage.Bytes)) {
 		t.Fatalf("delta build stats include unrelated base work: %+v base_bytes=%d delta_image=%d", deltaBuilt.Stats, len(baseBuilt.Bytes), len(deltaImage.Bytes))
+	}
+}
+
+func TestQueryReadyDeltaBuildUsesSingleBoundedOutputBuffer(t *testing.T) {
+	image := queryReadyDeltaTestImage(t, 2201, map[int64]int64{1: 10, 2: 20, 3: 30})
+	identity := queryReadyBaseTestIdentity(2)
+	parts := []QueryReadyBasePartInput{{SourceGeneration: 2, Image: image}}
+	standalone, err := BuildQueryReadyBaseGeneration(identity, parts)
+	if err != nil {
+		t.Fatalf("BuildQueryReadyBaseGeneration: %v", err)
+	}
+	result, err := BuildQueryReadyDeltaGeneration(identity, parts, []Tombstone{{PrimaryID: 9, GenerationID: 2}})
+	if err != nil {
+		t.Fatalf("BuildQueryReadyDeltaGeneration: %v", err)
+	}
+	if got, want := result.Stats.PeakEncodedBufferBytes, result.Stats.OutputBytes; got != want {
+		t.Fatalf("peak encoded buffer bytes=%d want one final output buffer=%d", got, want)
+	}
+	if got, want := result.Stats.BytesCopied, result.Stats.InputBytes; got != want {
+		t.Fatalf("bytes copied=%d want input bytes copied once=%d", got, want)
+	}
+	opened, err := OpenQueryReadyDeltaGeneration(result.Bytes, identity)
+	if err != nil {
+		t.Fatalf("OpenQueryReadyDeltaGeneration: %v", err)
+	}
+	if !bytes.Equal(opened.Base.Parts[0].Image.Bytes, image.Bytes) {
+		t.Fatal("embedded typed-column image changed")
+	}
+	if !bytes.Equal(opened.Base.Bytes(), standalone.Bytes) {
+		t.Fatal("directly encoded embedded QRBG differs from standalone deterministic QRBG")
+	}
+}
+
+func TestQueryReadyDeltaBuildPhaseCountersAreComplete(t *testing.T) {
+	image := queryReadyDeltaTestImage(t, 2202, map[int64]int64{1: 10, 2: 20})
+	result, err := BuildQueryReadyDeltaGeneration(queryReadyBaseTestIdentity(2), []QueryReadyBasePartInput{{SourceGeneration: 2, Image: image}}, nil)
+	if err != nil {
+		t.Fatalf("BuildQueryReadyDeltaGeneration: %v", err)
+	}
+	if result.Stats.ValidationTime <= 0 || result.Stats.BaseBuildTime <= 0 || result.Stats.EnvelopeBuildTime <= 0 {
+		t.Fatalf("missing phase timing: %+v", result.Stats)
+	}
+	if got, want := result.Stats.BytesHashed, int64(len(image.Bytes)); got != want {
+		t.Fatalf("bytes hashed=%d want %d", got, want)
+	}
+	if result.Stats.BytesChecksummed <= int64(queryReadyBaseHeaderBytes+queryReadyDeltaHeaderBytes) {
+		t.Fatalf("bytes checksummed=%d want headers plus metadata tables", result.Stats.BytesChecksummed)
+	}
+	if len(result.Dependencies) != 1 || result.Dependencies[0].PartID != image.PartID {
+		t.Fatalf("dependencies=%+v want complete part dependency", result.Dependencies)
 	}
 }
 
@@ -744,11 +795,15 @@ func BenchmarkQueryReadyBaseDeltaConsolidation(b *testing.B) {
 	b.StopTimer()
 	result := queryReadyDeltaConsolidationSink
 	b.ReportMetric(result.Stats.WriteAmplification, "write_amp/op")
-	b.ReportMetric(float64(result.Stats.PeakWorkingBytes), "peak_working_bytes/op")
+	b.ReportMetric(float64(result.Stats.PeakEncodedBufferBytes), "peak_encoded_buffer_bytes/op")
+	b.ReportMetric(float64(result.Stats.BytesCopied), "copied-bytes/op")
+	b.ReportMetric(float64(result.Stats.BytesHashed), "hashed-bytes/op")
+	b.ReportMetric(float64(result.Stats.BytesChecksummed), "checksummed-bytes/op")
 }
 
 func BenchmarkQueryReadyDeltaGenerationBuild(b *testing.B) {
-	image := queryReadyDeltaBenchmarkImage(b, 6001, 512, 64, 0)
+	rows := queryReadyDeltaBenchmarkRows(b, "QUERY_READY_BENCH_DELTA_ROWS", 512)
+	image := queryReadyDeltaBenchmarkImage(b, 6001, rows, min(rows, 64), 0)
 	parts := []QueryReadyBasePartInput{{SourceGeneration: 2, Image: image}}
 	tombstones := make([]Tombstone, 128)
 	for i := range tombstones {
@@ -766,7 +821,13 @@ func BenchmarkQueryReadyDeltaGenerationBuild(b *testing.B) {
 		}
 	})
 	b.Run("qrdg_derived_envelope_build", func(b *testing.B) {
+		sample, err := BuildQueryReadyDeltaGeneration(identity, parts, tombstones)
+		if err != nil {
+			b.Fatal(err)
+		}
 		b.ReportAllocs()
+		b.SetBytes(int64(len(image.Bytes)))
+		b.ResetTimer()
 		for range b.N {
 			result, err := BuildQueryReadyDeltaGeneration(identity, parts, tombstones)
 			if err != nil {
@@ -774,6 +835,11 @@ func BenchmarkQueryReadyDeltaGenerationBuild(b *testing.B) {
 			}
 			queryReadyDeltaConsolidationSink.Bytes = result.Bytes
 		}
+		b.ReportMetric(float64(sample.Stats.BytesCopied), "copied-bytes/op")
+		b.ReportMetric(float64(sample.Stats.BytesHashed), "hashed-bytes/op")
+		b.ReportMetric(float64(sample.Stats.BytesChecksummed), "checksummed-bytes/op")
+		b.ReportMetric(float64(sample.Stats.PeakEncodedBufferBytes), "peak_encoded_buffer_bytes/op")
+		b.ReportMetric(sample.Stats.WriteAmplification, "write_amp/op")
 	})
 }
 

@@ -68,6 +68,15 @@ const (
 	// ColumnAssetKindTCS1HNSWSearchPack references one durable
 	// hnsw_search_pack_v1 serving artifact owned by vector-index state.
 	ColumnAssetKindTCS1HNSWSearchPack ColumnAssetKind = "tcs1_hnsw_search_pack"
+	// ColumnAssetKindQueryReadyBase references one rebuildable,
+	// non-authoritative QRBG image held in the existing prepared-asset registry.
+	ColumnAssetKindQueryReadyBase ColumnAssetKind = "query_ready_base_v1"
+	// ColumnAssetKindQueryReadyDelta references one rebuildable,
+	// non-authoritative QRDG delta image held before publication handoff.
+	ColumnAssetKindQueryReadyDelta ColumnAssetKind = "query_ready_delta_v1"
+	// ColumnAssetKindQueryReadyConsolidatedBase references one rebuildable QRDG
+	// consolidated-base image. It does not itself publish or select recovery state.
+	ColumnAssetKindQueryReadyConsolidatedBase ColumnAssetKind = "query_ready_consolidated_base_v1"
 )
 
 // ColumnAssetRef is the durable typed address of a column-asset-manager-owned
@@ -1105,7 +1114,7 @@ func validateColumnManifestPartRoleForAsset(role ColumnManifestPartRole, kind Co
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	switch ref.Kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values, ColumnAssetKindTCS1HNSWSearchPack:
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values, ColumnAssetKindTCS1HNSWSearchPack, ColumnAssetKindQueryReadyBase, ColumnAssetKindQueryReadyDelta, ColumnAssetKindQueryReadyConsolidatedBase:
 	default:
 		if ref.Kind == "" {
 			return errors.New("collections: column asset ref kind is required")

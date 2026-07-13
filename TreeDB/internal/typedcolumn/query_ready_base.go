@@ -54,13 +54,15 @@ type QueryReadyBaseDependency struct {
 }
 
 type QueryReadyBaseBuildStats struct {
-	Parts          int
-	Rows           int64
-	InputBytes     int64
-	OutputBytes    int64
-	BytesCopied    int64
-	ValidationTime time.Duration
-	BuildTime      time.Duration
+	Parts            int
+	Rows             int64
+	InputBytes       int64
+	OutputBytes      int64
+	BytesCopied      int64
+	BytesHashed      int64
+	BytesChecksummed int64
+	ValidationTime   time.Duration
+	BuildTime        time.Duration
 }
 
 type QueryReadyBaseBuildResult struct {
@@ -136,33 +138,55 @@ type queryReadyBaseBuildPart struct {
 	dependency QueryReadyBaseDependency
 }
 
+type queryReadyBaseBuildPlan struct {
+	parts          []queryReadyBaseBuildPart
+	payloadOffset  int
+	totalBytes     int
+	validationTime time.Duration
+}
+
 // BuildQueryReadyBaseGeneration validates and embeds an already
 // snapshot-visible set of typed-column images. It is deterministic for the
 // same identity and logical input set.
 func BuildQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []QueryReadyBasePartInput) (QueryReadyBaseBuildResult, error) {
 	started := time.Now()
-	if err := validateQueryReadyBaseIdentity(identity); err != nil {
+	plan, err := prepareQueryReadyBaseGeneration(identity, inputs)
+	if err != nil {
 		return QueryReadyBaseBuildResult{}, err
+	}
+	out := make([]byte, plan.totalBytes)
+	result := encodeQueryReadyBaseGeneration(identity, plan, out)
+	result.Stats.BuildTime = time.Since(started)
+	return result, nil
+}
+
+// prepareQueryReadyBaseGeneration validates the complete logical input set and
+// computes the exact deterministic layout without allocating the output image.
+// Envelope builders use the plan to encode QRBG directly into their final
+// buffer, avoiding a second whole-generation allocation and copy.
+func prepareQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []QueryReadyBasePartInput) (queryReadyBaseBuildPlan, error) {
+	if err := validateQueryReadyBaseIdentity(identity); err != nil {
+		return queryReadyBaseBuildPlan{}, err
 	}
 	parts := make([]queryReadyBaseBuildPart, len(inputs))
 	var validationTime time.Duration
 	for i, input := range inputs {
 		if input.SourceGeneration == 0 {
-			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base part[%d] source generation is zero", i)
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] source generation is zero", i)
 		}
 		if input.SourceGeneration > identity.Generation {
-			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base part[%d] source generation=%d exceeds base generation=%d", i, input.SourceGeneration, identity.Generation)
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] source generation=%d exceeds base generation=%d", i, input.SourceGeneration, identity.Generation)
 		}
 		validationStarted := time.Now()
 		parsed, err := ParseColumnPartImage(input.Image.Bytes)
 		if err != nil {
-			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base part[%d] validate image: %w", i, err)
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] validate image: %w", i, err)
 		}
 		if _, err := ColumnPartFromImageWithOptions(parsed, ColumnPartImageReadOptions{}); err != nil {
-			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base part[%d] validate structures: %w", i, err)
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] validate structures: %w", i, err)
 		}
 		if _, err := CertifyColumnPartLayoutContractFromImage(parsed); err != nil {
-			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base part[%d] certify layout: %w", i, err)
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base part[%d] certify layout: %w", i, err)
 		}
 		validationTime += time.Since(validationStarted)
 		parts[i] = queryReadyBaseBuildPart{
@@ -186,30 +210,40 @@ func BuildQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []Que
 	})
 	for i := 1; i < len(parts); i++ {
 		if parts[i-1].input.SourceGeneration == parts[i].input.SourceGeneration && parts[i-1].parsed.PartID == parts[i].parsed.PartID {
-			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base duplicate dependency generation=%d part_id=%d", parts[i].input.SourceGeneration, parts[i].parsed.PartID)
+			return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base duplicate dependency generation=%d part_id=%d", parts[i].input.SourceGeneration, parts[i].parsed.PartID)
 		}
 	}
 	if len(parts) > math.MaxUint32 || len(parts) > (math.MaxInt-queryReadyBaseHeaderBytes)/queryReadyBasePartEntryBytes {
-		return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready base parts=%d exceed format bounds", len(parts))
+		return queryReadyBaseBuildPlan{}, fmt.Errorf("typedcolumn: query-ready base parts=%d exceed format bounds", len(parts))
 	}
 	tableBytes := len(parts) * queryReadyBasePartEntryBytes
 	payloadOffset, err := queryReadyBaseAlign(queryReadyBaseHeaderBytes+tableBytes, queryReadyBasePayloadAlignment)
 	if err != nil {
-		return QueryReadyBaseBuildResult{}, err
+		return queryReadyBaseBuildPlan{}, err
 	}
 	totalBytes := payloadOffset
 	for i := range parts {
 		totalBytes, err = queryReadyBaseAlign(totalBytes, columnPartImageSectionAlignment)
 		if err != nil {
-			return QueryReadyBaseBuildResult{}, err
+			return queryReadyBaseBuildPlan{}, err
 		}
 		parts[i].offset = totalBytes
 		if len(parts[i].input.Image.Bytes) > math.MaxInt-totalBytes {
-			return QueryReadyBaseBuildResult{}, errors.New("typedcolumn: query-ready base image exceeds host size")
+			return queryReadyBaseBuildPlan{}, errors.New("typedcolumn: query-ready base image exceeds host size")
 		}
 		totalBytes += len(parts[i].input.Image.Bytes)
 	}
-	out := make([]byte, totalBytes)
+	return queryReadyBaseBuildPlan{parts: parts, payloadOffset: payloadOffset, totalBytes: totalBytes, validationTime: validationTime}, nil
+}
+
+func encodeQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, plan queryReadyBaseBuildPlan, out []byte) QueryReadyBaseBuildResult {
+	parts := plan.parts
+	payloadOffset := plan.payloadOffset
+	totalBytes := plan.totalBytes
+	if len(out) != totalBytes {
+		panic("typedcolumn: internal query-ready base output length mismatch")
+	}
+	tableBytes := len(parts) * queryReadyBasePartEntryBytes
 	binary.LittleEndian.PutUint32(out[0:4], queryReadyBaseMagic)
 	binary.LittleEndian.PutUint16(out[4:6], queryReadyBaseVersion)
 	binary.LittleEndian.PutUint64(out[8:16], identity.Generation)
@@ -240,15 +274,16 @@ func BuildQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []Que
 		Bytes:        out,
 		Dependencies: dependencies,
 		Stats: QueryReadyBaseBuildStats{
-			Parts:          len(parts),
-			Rows:           rows,
-			InputBytes:     inputBytes,
-			OutputBytes:    int64(len(out)),
-			BytesCopied:    inputBytes,
-			ValidationTime: validationTime,
-			BuildTime:      time.Since(started),
+			Parts:            len(parts),
+			Rows:             rows,
+			InputBytes:       inputBytes,
+			OutputBytes:      int64(len(out)),
+			BytesCopied:      inputBytes,
+			BytesHashed:      inputBytes,
+			BytesChecksummed: int64(tableBytes + queryReadyBaseHeaderBytes),
+			ValidationTime:   plan.validationTime,
 		},
-	}, nil
+	}
 }
 
 func OpenQueryReadyBaseGeneration(data []byte, expected QueryReadyBaseIdentity) (*QueryReadyBaseGeneration, error) {

@@ -71,7 +71,7 @@ Focused benchmarks separate preparation from warm reused lookup:
   update/delete/reinsert generations;
 - `BenchmarkQueryReadyBaseDeltaWarmLookup` measures lookup after preparation;
 - `BenchmarkQueryReadyBaseDeltaConsolidation` reports write amplification and
-  peak simultaneous inner-plus-outer working bytes;
+  the peak encoded output buffer bytes;
 - `BenchmarkQueryReadyDeltaGenerationBuild` compares validated typed-part
   container production with QRDG envelope production.
 
@@ -79,11 +79,12 @@ Run them on one host with `-benchmem -count=5`. The checked-in default of eight
 accumulated delta-derived parts is the last allowed point on the required
 `N=0..8` curve; `N=9` is the explicit beyond-bound point. The generation limit
 of four triggers earlier for the ordinary default query path. Build/consolidate
-copy counters include typed-column images copied into the inner QRBG, the inner
-QRBG copied into QRDG, and tombstone-table bytes. Peak working bytes account for
-the simultaneously live inner and outer buffers. Process peak RSS remains a
-separate same-host measurement rather than being inferred from Go allocation
-profiles.
+copy counters include typed-column images copied directly into the final QRDG
+buffer and tombstone-table bytes. QRDG construction uses one final encoded
+buffer rather than simultaneously retaining inner and outer generation images.
+The encoded-buffer counter intentionally excludes caller-owned inputs and Go
+metadata; bounded pipeline admission reports a conservative in-flight
+reservation, while process peak RSS remains a separate same-host measurement.
 
 The benchmark fixture defaults remain CI-sized. Same-host production-shape
 captures may set `QUERY_READY_BENCH_BASE_ROWS` and
