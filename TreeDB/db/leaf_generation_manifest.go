@@ -750,7 +750,10 @@ func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest
 }
 
 func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) error {
-	if db == nil || db.leafGenerationManifestStore == nil {
+	if db == nil {
+		return ErrClosed
+	}
+	if db.leafGenerationManifestStore == nil {
 		return saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest)
 	}
 	token, err := db.leafGenerationManifestStore.Replace(manifest)

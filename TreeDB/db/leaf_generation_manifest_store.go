@@ -35,9 +35,8 @@ type leafGenerationManifestStoreHooks struct {
 }
 
 type leafGenerationManifestEvidence struct {
-	parent *os.File
-	old    *os.File
-	new    *os.File
+	old *os.File
+	new *os.File
 }
 
 func (e *leafGenerationManifestEvidence) close() {
@@ -50,9 +49,6 @@ func (e *leafGenerationManifestEvidence) close() {
 	if e.old != nil {
 		_ = e.old.Close()
 	}
-	if e.parent != nil {
-		_ = e.parent.Close()
-	}
 }
 
 type leafGenerationManifestStore struct {
@@ -63,6 +59,9 @@ type leafGenerationManifestStore struct {
 	stableCapability   func() bool
 	durabilityCounters *leafGenerationManifestDurabilityCounters
 	hooks              leafGenerationManifestStoreHooks
+	parent             *os.File
+	parentErr          error
+	tempSeq            uint64
 
 	mu       sync.Mutex
 	poisoned bool
@@ -70,26 +69,16 @@ type leafGenerationManifestStore struct {
 	evidence []*leafGenerationManifestEvidence
 }
 
-var (
-	leafGenerationManifestStoreLocks sync.Map
-	leafGenerationManifestTempSeq    atomic.Uint64
-)
-
 func newLeafGenerationManifestStore(leafDir string, registry *rootpublication.IdentityPinRegistry, mode leafGenerationManifestReplacementMode, poison func()) *leafGenerationManifestStore {
-	return &leafGenerationManifestStore{
+	store := &leafGenerationManifestStore{
 		leafDir: leafDir, registry: registry, mode: mode, poisonOwner: poison,
 		stableCapability:   rootpublication.StableRelativeNamespaceSupported,
 		durabilityCounters: &leafGenerationManifestDurabilityCounters{},
 	}
-}
-
-func leafGenerationManifestStoreLock(leafDir string) *sync.Mutex {
-	key, err := filepath.Abs(leafDir)
-	if err != nil {
-		key = filepath.Clean(leafDir)
+	if mode == leafGenerationManifestStable && rootpublication.StableRelativeNamespaceSupported() {
+		store.parent, store.parentErr = os.Open(leafDir)
 	}
-	value, _ := leafGenerationManifestStoreLocks.LoadOrStore(key, &sync.Mutex{})
-	return value.(*sync.Mutex)
+	return store
 }
 
 func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {
@@ -97,19 +86,13 @@ func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) 
 		return nil, errors.New("missing leaf_vlog manifest store")
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return nil, rootpublication.ErrResourceOwnership
 	}
 	if s.poisoned {
-		s.mu.Unlock()
 		return nil, fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
 	}
-	s.mu.Unlock()
-
-	lock := leafGenerationManifestStoreLock(s.leafDir)
-	lock.Lock()
-	defer lock.Unlock()
 	if s.mode == leafGenerationManifestCompatibility {
 		return s.replaceCompatibility(manifest)
 	}
@@ -120,7 +103,7 @@ func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) 
 }
 
 func (s *leafGenerationManifestStore) replaceCompatibility(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {
-	candidate, data, err := s.prepareReplacement(manifest, nil)
+	candidate, data, err := s.prepareReplacement(manifest, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -138,10 +121,14 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	if s.registry == nil {
 		return nil, fmt.Errorf("%w: stable manifest replacement requires a shared identity registry", rootpublication.ErrUnresolvedResource)
 	}
-	parent, err := os.Open(s.leafDir)
-	if err != nil {
-		return nil, err
+	if s.parentErr != nil {
+		return nil, s.parentErr
 	}
+	if s.parent == nil {
+		return nil, fmt.Errorf("%w: stable manifest store has no retained parent", rootpublication.ErrResourceOwnership)
+	}
+	parent := s.parent
+	var err error
 	var oldFile, tempFile *os.File
 	var oldIdentity rootpublication.StableIdentity
 	var oldObserved bool
@@ -149,17 +136,14 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	renamed := false
 	defer func() {
 		if renamed && retErr != nil {
-			s.retainAmbiguousEvidence(parent, oldFile, tempFile)
-			parent, oldFile, tempFile = nil, nil, nil
+			s.evidence = append(s.evidence, &leafGenerationManifestEvidence{old: oldFile, new: tempFile})
+			oldFile, tempFile = nil, nil
 		}
 		if tempFile != nil {
 			_ = tempFile.Close()
 		}
 		if oldFile != nil {
 			_ = oldFile.Close()
-		}
-		if parent != nil {
-			_ = parent.Close()
 		}
 	}()
 
@@ -170,7 +154,7 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	if os.IsNotExist(err) {
 		oldFile = nil
 	}
-	candidate, data, err := s.prepareReplacement(manifest, oldFile)
+	candidate, data, err := s.prepareReplacement(manifest, oldFile, false)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +193,8 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 			return nil, err
 		}
 	}
-	tempName := fmt.Sprintf("%s.tmp.%016x", leafGenerationManifestFileName, leafGenerationManifestTempSeq.Add(1))
+	s.tempSeq++
+	tempName := fmt.Sprintf("%s.tmp.%016x", leafGenerationManifestFileName, s.tempSeq)
 	tempFile, err = rootpublication.OpenStableChildFile(parent, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -311,13 +296,13 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	return token, nil
 }
 
-func (s *leafGenerationManifestStore) prepareReplacement(manifest *leafGenerationManifest, oldFile *os.File) (*leafGenerationManifest, []byte, error) {
+func (s *leafGenerationManifestStore) prepareReplacement(manifest *leafGenerationManifest, oldFile *os.File, allowPathRead bool) (*leafGenerationManifest, []byte, error) {
 	if manifest == nil {
 		return nil, nil, errors.New("treedb: leaf generation manifest is nil")
 	}
 	candidate := manifest.clone()
 	candidate.Version = leafGenerationManifestVersion
-	oldRevision, err := persistedLeafGenerationManifestRevision(s.leafDir, oldFile)
+	oldRevision, err := persistedLeafGenerationManifestRevision(s.leafDir, oldFile, allowPathRead)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -335,18 +320,20 @@ func (s *leafGenerationManifestStore) prepareReplacement(manifest *leafGeneratio
 	return candidate, data, nil
 }
 
-func persistedLeafGenerationManifestRevision(leafDir string, oldFile *os.File) (uint64, error) {
+func persistedLeafGenerationManifestRevision(leafDir string, oldFile *os.File, allowPathRead bool) (uint64, error) {
 	var data []byte
 	var err error
 	if oldFile != nil {
 		if _, err = oldFile.Seek(0, io.SeekStart); err == nil {
 			data, err = io.ReadAll(oldFile)
 		}
-	} else {
+	} else if allowPathRead {
 		data, err = os.ReadFile(leafGenerationManifestPath(leafDir))
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
+	} else {
+		return 0, nil
 	}
 	if err != nil {
 		return 0, err
@@ -365,19 +352,11 @@ func persistedLeafGenerationManifestRevision(leafDir string, oldFile *os.File) (
 }
 
 func (s *leafGenerationManifestStore) ambiguous(err error) error {
-	s.mu.Lock()
 	s.poisoned = true
-	s.mu.Unlock()
 	if s.poisonOwner != nil {
 		s.poisonOwner()
 	}
 	return errors.Join(err, ErrRecoveryRequired)
-}
-
-func (s *leafGenerationManifestStore) retainAmbiguousEvidence(parent, oldFile, newFile *os.File) {
-	s.mu.Lock()
-	s.evidence = append(s.evidence, &leafGenerationManifestEvidence{parent: parent, old: oldFile, new: newFile})
-	s.mu.Unlock()
 }
 
 func (s *leafGenerationManifestStore) AmbiguousEvidenceCount() int {
@@ -401,8 +380,13 @@ func (s *leafGenerationManifestStore) Close() {
 	s.closed = true
 	evidence := s.evidence
 	s.evidence = nil
+	parent := s.parent
+	s.parent = nil
 	s.mu.Unlock()
 	for _, item := range evidence {
 		item.close()
+	}
+	if parent != nil {
+		_ = parent.Close()
 	}
 }
