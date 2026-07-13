@@ -1,0 +1,550 @@
+package typedcolumn
+
+import (
+	"fmt"
+	"math/rand"
+	"slices"
+	"sort"
+	"testing"
+)
+
+func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
+	reader := queryReadyJSONBenchReader(t)
+	base, delta := queryReadyJSONBenchBase(t), queryReadyJSONBenchDelta(t)
+	consolidatedBuild, err := ConsolidateQueryReadyBaseDelta(base, []*QueryReadyDeltaGeneration{delta}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consolidated, err := OpenQueryReadyConsolidatedBaseGeneration(consolidatedBuild.Bytes, queryReadyBaseTestIdentity(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consolidatedReader, err := NewQueryReadyConsolidatedBaseDeltaReader(consolidated, nil, QueryReadyBaseDeltaOptions{
+		SnapshotGeneration: 2,
+		Bound:              QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 4, MaxAccumulatedDeltaParts: 4, MaxRows: 64, MaxBytes: 1 << 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		req  QueryReadyOperatorRequest
+		want []QueryReadyOperatorGroup
+	}{
+		{
+			name: "q1",
+			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"},
+			want: []QueryReadyOperatorGroup{{Key: "app.bsky.feed.post", Count: 4}, {Key: "app.bsky.feed.follow", Count: 1}, {Key: "app.bsky.feed.repost", Count: 1}},
+		},
+		{
+			name: "q2",
+			req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{
+				{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}},
+			}},
+			want: []QueryReadyOperatorGroup{{Key: "app.bsky.feed.post", Count: 4, DistinctCount: 2}, {Key: "app.bsky.feed.repost", Count: 1, DistinctCount: 1}},
+		},
+		{
+			name: "q3",
+			req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: []QueryReadyStringPredicate{
+				{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}},
+				{Column: "event", Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}},
+			}},
+			want: []QueryReadyOperatorGroup{
+				{Key: "app.bsky.feed.post", Hour: 1, Count: 1},
+				{Key: "app.bsky.feed.repost", Hour: 6, Count: 1},
+				{Key: "app.bsky.feed.post", Hour: 7, Count: 1},
+				{Key: "app.bsky.feed.post", Hour: 8, Count: 1},
+				{Key: "app.bsky.feed.post", Hour: 9, Count: 1},
+			},
+		},
+		{
+			name: "q4",
+			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Asc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+			want: []QueryReadyOperatorGroup{{Key: "alice", Int64: 3_600_000_000}, {Key: "dave", Int64: 28_800_000_000}},
+		},
+		{
+			name: "q5",
+			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+			want: []QueryReadyOperatorGroup{{Key: "alice", Int64: 28_800_000_000}, {Key: "dave", Int64: 0}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, prepared := range []struct {
+				name   string
+				reader *QueryReadyBaseDeltaReader
+			}{{"base-plus-delta", reader}, {"post-consolidation", consolidatedReader}} {
+				runner, err := PrepareQueryReadyOperator(prepared.reader, tc.req)
+				if err != nil {
+					t.Fatalf("%s prepare: %v", prepared.name, err)
+				}
+				got, err := runner.Run()
+				if err != nil {
+					t.Fatalf("%s run: %v", prepared.name, err)
+				}
+				if !slices.Equal(got.Groups, tc.want) {
+					t.Fatalf("%s groups=%+v want %+v", prepared.name, got.Groups, tc.want)
+				}
+				if got.Stats.EncodedBaseDeltaExecutions != 1 || got.Stats.DocumentMaterializations != 0 || got.Stats.LegacyScanFallbacks != 0 || got.Stats.RowsVisible != 6 {
+					t.Fatalf("%s stats=%+v", prepared.name, got.Stats)
+				}
+			}
+		})
+	}
+}
+
+func TestQueryReadyBaseDeltaQExprParityWithoutPrecomputedAnswer(t *testing.T) {
+	runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), QueryReadyOperatorRequest{Kind: QueryReadyOperatorSumSecondOfDaySquare, ValueColumn: "time_us"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(3_600*3_600 + 21_600*21_600 + 25_200*25_200 + 18_000*18_000 + 28_800*28_800 + 32_400*32_400)
+	if !slices.Equal(result.Groups, []QueryReadyOperatorGroup{{Int64: want}}) {
+		t.Fatalf("groups=%+v want sum=%d", result.Groups, want)
+	}
+	if result.Stats.PrecomputedAnswers != 0 || result.Stats.RowsMatched != 6 {
+		t.Fatalf("stats=%+v", result.Stats)
+	}
+}
+
+func TestQueryReadyExecutionAppliesUpdatesDeletesAndTombstones(t *testing.T) {
+	runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stats.RowsCandidate != 9 || result.Stats.RowsVisible != 6 || result.Stats.RowsSuperseded != 2 || result.Stats.RowsDeleted != 1 {
+		t.Fatalf("visibility stats=%+v", result.Stats)
+	}
+}
+
+func TestQueryReadyExecutionUsesNoDocumentOrLegacyScanFallback(t *testing.T) {
+	runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stats.DocumentMaterializations != 0 || result.Stats.LegacyScanFallbacks != 0 || result.Stats.Fallbacks != 0 {
+		t.Fatalf("fallback stats=%+v", result.Stats)
+	}
+}
+
+func TestQueryReadyHotExecutionAllocationBound(t *testing.T) {
+	runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), QueryReadyOperatorRequest{
+		Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did",
+		Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		result, runErr := runner.Run()
+		if runErr != nil || len(result.Groups) == 0 {
+			panic("query-ready allocation probe failed")
+		}
+	})
+	if allocs > 1 {
+		t.Fatalf("hot execution allocations/run=%f want <=1", allocs)
+	}
+}
+
+func TestQueryReadyNullableStringsPreserveEmptyNullAndMissingSemantics(t *testing.T) {
+	opts := Options{SchemaVersion: 1, SchemaMode: ColumnSchemaFixed, Columns: []ColumnDefinition{
+		{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone},
+		{Name: "event", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: 2},
+		{Name: "did", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: 2},
+		{Name: "kind", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone, Cardinality: 1},
+		{Name: "operation", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone, Cardinality: 1},
+	}, LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}}, SortKey: SortKey{Columns: []SortKeyColumn{{Column: "id"}}}, PartPolicy: ColumnPartPolicy{RowsPerGranule: 2}}
+	part, err := BuildColumnPart(9301, opts, Batch{Rows: 4,
+		Columns:  map[string][]int64{"id": {1, 2, 3, 4}, "event": {0, 0, 0, 1}, "did": {0, 0, 0, 1}, "kind": {0, 0, 0, 0}, "operation": {0, 0, 0, 0}},
+		Nulls:    map[string][]bool{"event": {false, false, true, false}, "did": {false, false, true, false}},
+		Defaults: map[string][]bool{"event": {false, true, false, false}, "did": {false, true, false, false}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: map[string]map[string]int64{
+		"event": {"post": 0, "": 1}, "did": {"alice": 0, "": 1}, "kind": {"commit": 0}, "operation": {"create": 0},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, nil, QueryReadyBaseDeltaOptions{SnapshotGeneration: 1, Bound: QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 1, MaxAccumulatedDeltaParts: 1, MaxRows: 4, MaxBytes: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q1, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q1Result, err := q1.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []QueryReadyOperatorGroup{{Key: "", Count: 3}, {Key: "post", Count: 1}}; !slices.Equal(q1Result.Groups, want) {
+		t.Fatalf("q1 groups=%+v want %+v", q1Result.Groups, want)
+	}
+	q2, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q2Result, err := q2.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []QueryReadyOperatorGroup{{Key: "", Count: 3, DistinctCount: 1}, {Key: "post", Count: 1, DistinctCount: 1}}; !slices.Equal(q2Result.Groups, want) {
+		t.Fatalf("q2 groups=%+v want %+v", q2Result.Groups, want)
+	}
+}
+
+func TestQueryReadyEncodedPredicatesGroupingRandomizedDifferential(t *testing.T) {
+	type row struct {
+		event, did, kind, operation string
+		timeUS                      int64
+	}
+	rng := rand.New(rand.NewSource(3699))
+	events := []string{"", "post", "like", "repost", "follow"}
+	dids := []string{"", "alice", "bob", "carol", "dave", "eve"}
+	kinds := []string{"commit", "identity"}
+	operations := []string{"create", "delete"}
+	baseRows := make(map[int64]row)
+	for id := int64(1); id <= 40; id++ {
+		baseRows[id] = row{events[rng.Intn(len(events))], dids[rng.Intn(len(dids))], kinds[rng.Intn(len(kinds))], operations[rng.Intn(len(operations))], int64(rng.Intn(86_400)) * 1_000_000}
+	}
+	deltaRows := make(map[int64]row)
+	for id := int64(1); id <= 10; id++ {
+		deltaRows[id] = row{events[rng.Intn(len(events))], dids[rng.Intn(len(dids))], kinds[rng.Intn(len(kinds))], operations[rng.Intn(len(operations))], int64(rng.Intn(86_400)) * 1_000_000}
+	}
+	for id := int64(41); id <= 50; id++ {
+		deltaRows[id] = row{events[rng.Intn(len(events))], dids[rng.Intn(len(dids))], kinds[rng.Intn(len(kinds))], operations[rng.Intn(len(operations))], int64(rng.Intn(86_400)) * 1_000_000}
+	}
+	buildImage := func(partID uint64, rows map[int64]row) ColumnPartImage {
+		ids := make([]int64, 0, len(rows))
+		for id := range rows {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		event, did, kind, operation := make([]string, len(ids)), make([]string, len(ids)), make([]string, len(ids)), make([]string, len(ids))
+		times := make([]int64, len(ids))
+		for i, id := range ids {
+			current := rows[id]
+			event[i], did[i], kind[i], operation[i], times[i] = current.event, current.did, current.kind, current.operation, current.timeUS
+		}
+		return queryReadyJSONBenchImage(t, partID, ids, event, did, kind, operation, times)
+	}
+	baseBuilt, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: buildImage(9101, baseRows)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(baseBuilt.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tombstones := []Tombstone{{PrimaryID: 11, GenerationID: 2}, {PrimaryID: 12, GenerationID: 2}, {PrimaryID: 13, GenerationID: 2}, {PrimaryID: 14, GenerationID: 2}, {PrimaryID: 15, GenerationID: 2}}
+	deltaBuilt, err := BuildQueryReadyDeltaGeneration(queryReadyBaseTestIdentity(2), []QueryReadyBasePartInput{{SourceGeneration: 2, Image: buildImage(9102, deltaRows)}}, tombstones)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := OpenQueryReadyDeltaGeneration(deltaBuilt.Bytes, queryReadyBaseTestIdentity(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, []*QueryReadyDeltaGeneration{delta}, QueryReadyBaseDeltaOptions{SnapshotGeneration: 2, Bound: QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 4, MaxAccumulatedDeltaParts: 4, MaxRows: 100, MaxBytes: 1 << 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := make(map[int64]row, len(baseRows)+len(deltaRows))
+	for id, current := range baseRows {
+		latest[id] = current
+	}
+	for id, current := range deltaRows {
+		latest[id] = current
+	}
+	for _, tombstone := range tombstones {
+		delete(latest, tombstone.PrimaryID)
+	}
+	type aggregate struct {
+		count    int
+		distinct map[string]struct{}
+	}
+	aggregates := map[string]*aggregate{}
+	for _, current := range latest {
+		if current.kind != "commit" || current.operation != "create" {
+			continue
+		}
+		agg := aggregates[current.event]
+		if agg == nil {
+			agg = &aggregate{distinct: map[string]struct{}{}}
+			aggregates[current.event] = agg
+		}
+		agg.count++
+		agg.distinct[current.did] = struct{}{}
+	}
+	want := make([]QueryReadyOperatorGroup, 0, len(aggregates))
+	for key, aggregate := range aggregates {
+		want = append(want, QueryReadyOperatorGroup{Key: key, Count: aggregate.count, DistinctCount: len(aggregate.distinct)})
+	}
+	sort.Slice(want, func(i, j int) bool {
+		if want[i].Count != want[j].Count {
+			return want[i].Count > want[j].Count
+		}
+		return want[i].Key < want[j].Key
+	})
+	if !slices.Equal(result.Groups, want) {
+		t.Fatalf("groups=%+v want %+v", result.Groups, want)
+	}
+}
+
+func queryReadyPostPredicates() []QueryReadyStringPredicate {
+	return []QueryReadyStringPredicate{
+		{Column: "kind", Values: []string{"commit"}},
+		{Column: "operation", Values: []string{"create"}},
+		{Column: "event", Values: []string{"app.bsky.feed.post"}},
+	}
+}
+
+func queryReadyJSONBenchReader(t testing.TB) *QueryReadyBaseDeltaReader {
+	t.Helper()
+	base := queryReadyJSONBenchBase(t)
+	delta := queryReadyJSONBenchDelta(t)
+	reader, err := NewQueryReadyBaseDeltaReader(base, []*QueryReadyDeltaGeneration{delta}, QueryReadyBaseDeltaOptions{
+		SnapshotGeneration: 2,
+		Bound:              QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 4, MaxAccumulatedDeltaParts: 4, MaxRows: 64, MaxBytes: 1 << 20},
+	})
+	if err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	return reader
+}
+
+func queryReadyJSONBenchBase(t testing.TB) *QueryReadyBaseGeneration {
+	t.Helper()
+	image := queryReadyJSONBenchImage(t, 9001,
+		[]int64{1, 2, 3, 4, 5},
+		[]string{"app.bsky.feed.post", "app.bsky.feed.like", "app.bsky.feed.post", "app.bsky.feed.post", "app.bsky.feed.follow"},
+		[]string{"alice", "bob", "alice", "", "carol"},
+		[]string{"commit", "commit", "commit", "commit", "identity"},
+		[]string{"create", "create", "delete", "create", "create"},
+		[]int64{3_600_000_000, 7_200_000_000, 10_800_000_000, 14_400_000_000, 18_000_000_000})
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
+
+func queryReadyJSONBenchDelta(t testing.TB) *QueryReadyDeltaGeneration {
+	t.Helper()
+	image := queryReadyJSONBenchImage(t, 9002,
+		[]int64{2, 3, 6, 7},
+		[]string{"app.bsky.feed.repost", "app.bsky.feed.post", "app.bsky.feed.post", "app.bsky.feed.post"},
+		[]string{"bob", "alice", "dave", "alice"},
+		[]string{"commit", "commit", "commit", "commit"},
+		[]string{"create", "create", "create", "create"},
+		[]int64{21_600_000_000, 25_200_000_000, 28_800_000_000, 32_400_000_000})
+	built, err := BuildQueryReadyDeltaGeneration(queryReadyBaseTestIdentity(2), []QueryReadyBasePartInput{{SourceGeneration: 2, Image: image}}, []Tombstone{{PrimaryID: 4, GenerationID: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := OpenQueryReadyDeltaGeneration(built.Bytes, queryReadyBaseTestIdentity(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return delta
+}
+
+func queryReadyJSONBenchImage(t testing.TB, partID uint64, ids []int64, event, did, kind, operation []string, timeUS []int64) ColumnPartImage {
+	return queryReadyJSONBenchImageWithGranules(t, partID, ids, event, did, kind, operation, timeUS, 3)
+}
+
+func queryReadyJSONBenchImageWithGranules(t testing.TB, partID uint64, ids []int64, event, did, kind, operation []string, timeUS []int64, rowsPerGranule int) ColumnPartImage {
+	t.Helper()
+	dictionaries := map[string]map[string]int64{}
+	columns := map[string][]int64{"id": ids, "time_us": timeUS}
+	nulls, defaults := map[string][]bool{}, map[string][]bool{}
+	for name, values := range map[string][]string{"event": event, "did": did, "kind": kind, "operation": operation} {
+		dict := map[string]int64{}
+		codes := make([]int64, len(values))
+		for i, value := range values {
+			code, ok := dict[value]
+			if !ok {
+				code = int64(len(dict))
+				dict[value] = code
+			}
+			codes[i] = code
+		}
+		dictionaries[name] = dict
+		columns[name] = codes
+		nulls[name], defaults[name] = make([]bool, len(values)), make([]bool, len(values))
+	}
+	opts := Options{SchemaVersion: 1, SchemaMode: ColumnSchemaFixed, Columns: []ColumnDefinition{
+		{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone},
+		{Name: "event", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: uint32(len(dictionaries["event"]))},
+		{Name: "did", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: uint32(len(dictionaries["did"]))},
+		{Name: "kind", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: uint32(len(dictionaries["kind"]))},
+		{Name: "operation", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: uint32(len(dictionaries["operation"]))},
+		{Name: "time_us", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone},
+	}, LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}}, SortKey: SortKey{Columns: []SortKeyColumn{{Column: "id"}}}, PartPolicy: ColumnPartPolicy{RowsPerGranule: rowsPerGranule}}
+	part, err := BuildColumnPart(partID, opts, Batch{Rows: len(ids), Columns: columns, Nulls: nulls, Defaults: defaults})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: dictionaries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return image
+}
+
+var queryReadyBenchmarkResult QueryReadyOperatorResult
+
+func BenchmarkQueryReadyEncodedJSONBenchOperators(b *testing.B) {
+	reader := queryReadyJSONBenchBenchmarkReader(b, 100_000, 20_000)
+	requests := map[string]QueryReadyOperatorRequest{
+		"q2": {Kind: QueryReadyOperatorGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}}},
+		"q3": {Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: []QueryReadyStringPredicate{{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}}, {Column: "event", Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}}}},
+		"q5": {Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+	}
+	for _, name := range []string{"q2", "q3", "q5"} {
+		b.Run(name, func(b *testing.B) {
+			runner, err := PrepareQueryReadyOperator(reader, requests[name])
+			if err != nil {
+				b.Fatal(err)
+			}
+			warm, err := runner.Run()
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(warm.Stats.RowsScanned))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				queryReadyBenchmarkResult, err = runner.Run()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(warm.Stats.ScratchBytes), "scratch_B")
+		})
+	}
+}
+
+func BenchmarkQueryReadyEncodedDeltaDepthCurve(b *testing.B) {
+	base, deltas := queryReadyDeltaBenchmarkFixture(b, 4, "low_cardinality")
+	for _, depth := range []int{0, 1, 2, 4} {
+		b.Run(fmt.Sprintf("N=%d", depth), func(b *testing.B) {
+			reader, err := NewQueryReadyBaseDeltaReader(base, deltas[:depth], QueryReadyBaseDeltaOptions{
+				SnapshotGeneration: uint64(depth + 1),
+				Bound:              QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 4, MaxAccumulatedDeltaParts: 8},
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			runner, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "kind_code"})
+			if err != nil {
+				b.Fatal(err)
+			}
+			warm, err := runner.Run()
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(warm.Stats.DecodedBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				queryReadyBenchmarkResult, err = runner.Run()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(warm.Stats.RowsScanned), "rows/op")
+			b.ReportMetric(float64(warm.Stats.ScratchBytes), "scratch_B")
+		})
+	}
+}
+
+func queryReadyJSONBenchBenchmarkReader(b testing.TB, baseRows, deltaRows int) *QueryReadyBaseDeltaReader {
+	b.Helper()
+	buildRows := func(firstID int64, rows int) ([]int64, []string, []string, []string, []string, []int64) {
+		ids := make([]int64, rows)
+		event, did, kind, operation := make([]string, rows), make([]string, rows), make([]string, rows), make([]string, rows)
+		times := make([]int64, rows)
+		events := [...]string{"app.bsky.feed.post", "app.bsky.feed.like", "app.bsky.feed.repost", "app.bsky.feed.follow", "app.bsky.graph.block"}
+		for i := 0; i < rows; i++ {
+			ids[i] = firstID + int64(i)
+			event[i] = events[i%len(events)]
+			did[i] = "did:plc:" + string(rune(0x1000+i%2048))
+			if i%5 == 0 {
+				kind[i] = "identity"
+			} else {
+				kind[i] = "commit"
+			}
+			if i%7 == 0 {
+				operation[i] = "delete"
+			} else {
+				operation[i] = "create"
+			}
+			times[i] = int64(i%86_400) * 1_000_000
+		}
+		return ids, event, did, kind, operation, times
+	}
+	ids, event, did, kind, operation, times := buildRows(1, baseRows)
+	baseImage := queryReadyJSONBenchImageWithGranules(b, 9201, ids, event, did, kind, operation, times, 8_192)
+	baseBuilt, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: baseImage}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(baseBuilt.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		b.Fatal(err)
+	}
+	updates := deltaRows / 2
+	ids, event, did, kind, operation, times = buildRows(1, updates)
+	newIDs, newEvent, newDid, newKind, newOperation, newTimes := buildRows(int64(baseRows)+1, deltaRows-updates)
+	ids, event, did, kind, operation, times = append(ids, newIDs...), append(event, newEvent...), append(did, newDid...), append(kind, newKind...), append(operation, newOperation...), append(times, newTimes...)
+	deltaImage := queryReadyJSONBenchImageWithGranules(b, 9202, ids, event, did, kind, operation, times, 8_192)
+	deltaBuilt, err := BuildQueryReadyDeltaGeneration(queryReadyBaseTestIdentity(2), []QueryReadyBasePartInput{{SourceGeneration: 2, Image: deltaImage}}, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	delta, err := OpenQueryReadyDeltaGeneration(deltaBuilt.Bytes, queryReadyBaseTestIdentity(2))
+	if err != nil {
+		b.Fatal(err)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, []*QueryReadyDeltaGeneration{delta}, QueryReadyBaseDeltaOptions{SnapshotGeneration: 2, Bound: QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 4, MaxAccumulatedDeltaParts: 4, MaxRows: int64(baseRows + deltaRows), MaxBytes: 1 << 30}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return reader
+}

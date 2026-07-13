@@ -51,6 +51,7 @@ const (
 	ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset ColumnPhysicalQueryStorageSource = "compatibility_dictionary_code_int64_asset"
 	ColumnPhysicalQueryStorageSourceTypedColumnPartSection                ColumnPhysicalQueryStorageSource = "typed_column_part_section"
 	ColumnPhysicalQueryStorageSourceAggregateMetadata                     ColumnPhysicalQueryStorageSource = "aggregate_metadata"
+	ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta                   ColumnPhysicalQueryStorageSource = "query_ready_base_delta"
 	ColumnPhysicalQueryStorageSourceFallback                              ColumnPhysicalQueryStorageSource = "fallback"
 	ColumnPhysicalQueryStorageSourceMixed                                 ColumnPhysicalQueryStorageSource = "mixed"
 )
@@ -225,14 +226,32 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareQ2GroupGlobalCodeRemapNanos         int64
 	TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos      int64
 
-	ColumnAssetReadIntegrity string
-	StorageSource            ColumnPhysicalQueryStorageSource
-	FallbackReason           ColumnPhysicalQueryFallbackReason
-	ScanNanos                int64
-	VisibilityNanos          int64
-	ReduceNanos              int64
-	ResultShapeNanos         int64
-	ReconstructionNanos      int64
+	ColumnAssetReadIntegrity     string
+	StorageSource                ColumnPhysicalQueryStorageSource
+	FallbackReason               ColumnPhysicalQueryFallbackReason
+	ScanNanos                    int64
+	VisibilityNanos              int64
+	ReduceNanos                  int64
+	ResultShapeNanos             int64
+	ReconstructionNanos          int64
+	QueryReadyEncodedExecutions  int
+	QueryReadyPreparedParts      int
+	QueryReadyBaseParts          int
+	QueryReadyDeltaParts         int
+	QueryReadyRowsCandidate      int
+	QueryReadyRowsVisible        int
+	QueryReadyRowsSuperseded     int
+	QueryReadyCodeTranslations   int
+	QueryReadyDictionaryDomains  int
+	QueryReadyScratchBytes       int64
+	QueryReadyPreparationNanos   int64
+	QueryReadyBaseScanNanos      int64
+	QueryReadyDeltaMergeNanos    int64
+	QueryReadyPredicateNanos     int64
+	QueryReadyGroupingNanos      int64
+	QueryReadyOrderingTopKNanos  int64
+	QueryReadyLegacyFallbacks    int
+	QueryReadyPrecomputedAnswers int
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -1518,6 +1537,34 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
 	left.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += right.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos
 	left.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos += right.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
+	left.QueryReadyEncodedExecutions += right.QueryReadyEncodedExecutions
+	if right.QueryReadyPreparedParts > left.QueryReadyPreparedParts {
+		left.QueryReadyPreparedParts = right.QueryReadyPreparedParts
+	}
+	if right.QueryReadyBaseParts > left.QueryReadyBaseParts {
+		left.QueryReadyBaseParts = right.QueryReadyBaseParts
+	}
+	if right.QueryReadyDeltaParts > left.QueryReadyDeltaParts {
+		left.QueryReadyDeltaParts = right.QueryReadyDeltaParts
+	}
+	left.QueryReadyRowsCandidate += right.QueryReadyRowsCandidate
+	left.QueryReadyRowsVisible += right.QueryReadyRowsVisible
+	left.QueryReadyRowsSuperseded += right.QueryReadyRowsSuperseded
+	left.QueryReadyCodeTranslations += right.QueryReadyCodeTranslations
+	if right.QueryReadyDictionaryDomains > left.QueryReadyDictionaryDomains {
+		left.QueryReadyDictionaryDomains = right.QueryReadyDictionaryDomains
+	}
+	if right.QueryReadyScratchBytes > left.QueryReadyScratchBytes {
+		left.QueryReadyScratchBytes = right.QueryReadyScratchBytes
+	}
+	left.QueryReadyPreparationNanos += right.QueryReadyPreparationNanos
+	left.QueryReadyBaseScanNanos += right.QueryReadyBaseScanNanos
+	left.QueryReadyDeltaMergeNanos += right.QueryReadyDeltaMergeNanos
+	left.QueryReadyPredicateNanos += right.QueryReadyPredicateNanos
+	left.QueryReadyGroupingNanos += right.QueryReadyGroupingNanos
+	left.QueryReadyOrderingTopKNanos += right.QueryReadyOrderingTopKNanos
+	left.QueryReadyLegacyFallbacks += right.QueryReadyLegacyFallbacks
+	left.QueryReadyPrecomputedAnswers += right.QueryReadyPrecomputedAnswers
 	return left
 }
 

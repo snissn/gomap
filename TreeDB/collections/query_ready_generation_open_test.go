@@ -4,11 +4,51 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
+
+func TestQueryReadyExecutionColdReopenParity(t *testing.T) {
+	identity := queryReadyCollectionTestIdentity()
+	opened := queryReadyCollectionValidFiles(t, identity, 8401)
+	files := QueryReadyColumnGenerationFiles{Base: QueryReadyColumnGenerationFile{
+		Path: opened.Base.Path, Offset: opened.Base.Offset, Length: opened.Base.Length,
+		Generation: opened.Base.Identity.Generation, Kind: QueryReadyColumnGenerationBase,
+	}}
+	request := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQuerySumSecondOfDaySquare, ValueColumn: "value"}
+	collection := &Collection{}
+	run := func() ColumnPhysicalQueryResult {
+		runner, err := collection.prepareQueryReadyColumnPhysicalQueryForIdentity(identity, files, request)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		result, err := runner.Run()
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if err := runner.Close(); err != nil {
+			t.Fatalf("close runner: %v", err)
+		}
+		if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta || result.Diagnostics.QueryReadyEncodedExecutions != 1 || result.Diagnostics.DocumentMaterializations != 0 || result.Diagnostics.QueryReadyLegacyFallbacks != 0 {
+			t.Fatalf("diagnostics=%+v", result.Diagnostics)
+		}
+		return result
+	}
+	first := run()
+	if err := collection.closeCollectionQueryReadyGenerationCache(); err != nil {
+		t.Fatal(err)
+	}
+	second := run()
+	if !slices.Equal(first.Groups, second.Groups) {
+		t.Fatalf("cold reopen groups first=%+v second=%+v", first.Groups, second.Groups)
+	}
+	if err := collection.closeCollectionQueryReadyGenerationCache(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCollectionQueryReadyGenerationKeyIsQueryIndependentAndInvalidatesPhysicalIdentity(t *testing.T) {
 	identity := queryReadyCollectionTestIdentity()
