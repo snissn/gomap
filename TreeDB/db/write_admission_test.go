@@ -93,15 +93,13 @@ func TestExclusiveWritersRejectCloseAfterQueuingForWriteMu(t *testing.T) {
 		}},
 		{name: "ordered-root-delta-group", call: func() error {
 			_, _, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
-				t.Fatal("system builder ran after Close won write admission")
-				return nil, nil
+				return nil, errors.New("system builder ran after Close won write admission")
 			})
 			return err
 		}},
 		{name: "ordered-root-delta-batch-group", call: func() error {
 			_, _, err := db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(nil, nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
-				t.Fatal("system builder ran after Close won write admission")
-				return nil, nil
+				return nil, errors.New("system builder ran after Close won write admission")
 			}, orderedRootCommandWALPublishOptions{})
 			return err
 		}},
@@ -114,20 +112,43 @@ func TestExclusiveWritersRejectCloseAfterQueuingForWriteMu(t *testing.T) {
 	}
 }
 
-func TestCommandWALNoopDoesNotAppendAfterCloseWinsWriteAdmission(t *testing.T) {
+func TestCommandWALPublishDoesNotAppendAfterCloseWinsWriteAdmission(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
 	db := openCommandWALDB(t, dir)
 	defer func() { _ = db.Close() }()
 
-	intent := mustRawKVCommandWALIntent(t, db, "close-race", "value")
-	runAfterCloseWinsWriteAdmission(t, db, func() error {
-		return db.PublishStagedCommandWALNoop(intent, false)
-	})
-	if got := intent.AssignedLSN(); got != 0 {
-		t.Fatalf("AssignedLSN=%d after rejected publish, want 0", got)
+	tests := []struct {
+		name string
+		call func(*CommandWALIntent) error
+	}{
+		{name: "noop", call: func(intent *CommandWALIntent) error {
+			return db.PublishStagedCommandWALNoop(intent, false)
+		}},
+		{name: "ordered-root-context", call: func(intent *CommandWALIntent) error {
+			_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(nil, intent, func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+				return nil, errors.New("system builder ran after Close won write admission")
+			})
+			return err
+		}},
+		{name: "ordered-root-batch-context", call: func(intent *CommandWALIntent) error {
+			_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(nil, intent, func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+				return nil, errors.New("system builder ran after Close won write admission")
+			})
+			return err
+		}},
 	}
-	if got := db.State().AppliedCommandLSN; got != 0 {
-		t.Fatalf("AppliedCommandLSN=%d after rejected publish, want 0", got)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			intent := mustRawKVCommandWALIntent(t, db, "close-race/"+test.name, "value")
+			runAfterCloseWinsWriteAdmission(t, db, func() error { return test.call(intent) })
+			if got := intent.AssignedLSN(); got != 0 {
+				t.Fatalf("AssignedLSN=%d after rejected publish, want 0", got)
+			}
+			if got := db.State().AppliedCommandLSN; got != 0 {
+				t.Fatalf("AppliedCommandLSN=%d after rejected publish, want 0", got)
+			}
+		})
 	}
 }

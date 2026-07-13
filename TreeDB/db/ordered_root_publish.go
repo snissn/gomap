@@ -1494,6 +1494,9 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return 0, err
+	}
 
 	if db.readOnly {
 		return 0, ErrReadOnly
@@ -1591,6 +1594,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		finishPublish()
 		cleanupIterators()
 	}()
+	if err = db.checkWriteAdmissionLocked(); err != nil {
+		return 0, nil, err
+	}
 
 	if db.readOnly {
 		err = ErrReadOnly
@@ -2043,6 +2049,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	defer finishPublish()
+	if !storageMaintenance {
+		if err = db.checkWriteAdmissionLocked(); err != nil {
+			return 0, nil, preApplyErr(err)
+		}
+	}
 
 	if db.readOnly {
 		err = ErrReadOnly
@@ -2223,6 +2234,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		closeUnconsumedOrderedRootDeltaPublishIterators(allOrdered, orderedConsumed)
 	}()
 	defer finishPublish()
+	if err = db.checkWriteAdmissionLocked(); err != nil {
+		return 0, nil, err
+	}
 
 	if db.readOnly {
 		err = ErrReadOnly
@@ -2859,6 +2873,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	defer finishPublish()
+	if err = db.checkWriteAdmissionLocked(); err != nil {
+		return 0, nil, err
+	}
 
 	if db.readOnly {
 		err = ErrReadOnly
@@ -3031,6 +3048,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	defer finishPublish()
+	if err = db.checkWriteAdmissionLocked(); err != nil {
+		return 0, nil, err
+	}
 
 	if db.readOnly {
 		err = ErrReadOnly
@@ -3258,6 +3278,9 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return 0, nil, err
+	}
 
 	if db.readOnly {
 		return 0, nil, ErrReadOnly

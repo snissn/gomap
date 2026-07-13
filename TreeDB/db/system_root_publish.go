@@ -67,6 +67,9 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return 0, err
+	}
 
 	if db.readOnly {
 		return 0, ErrReadOnly

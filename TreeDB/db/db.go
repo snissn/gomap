@@ -2843,12 +2843,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
-	// Close sets closing before draining writeMu. Recheck at the common publish
-	// boundary so callers that queued before observing Close cannot publish after
-	// teardown has won the lock.
-	if db.closing.Load() {
-		return post, ErrClosed
-	}
 	prePublishErr := func(err error) error {
 		return wrapFinalizeCommitError(err, true)
 	}
@@ -3256,6 +3250,9 @@ func (db *DB) Commit(newRootID uint64) error {
 	// We need to serialize with other writers.
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 
 	// Since we are committing a root provided by caller, we assume they based it on current state?
 	// If caller is external, they might have read old state.
@@ -3291,6 +3288,9 @@ func (db *DB) Checkpoint() error {
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
@@ -3579,6 +3579,16 @@ func (db *DB) IsClosing() bool {
 	return db == nil || db.closing.Load()
 }
 
+// checkWriteAdmissionLocked rejects writers that lost the race with Close.
+// Callers must hold writeMu exclusively so a successful admission remains
+// valid until their write-critical section completes.
+func (db *DB) checkWriteAdmissionLocked() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	return nil
+}
+
 func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager) {
 	if db == nil {
 		return
@@ -3723,6 +3733,9 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 func (db *DB) CompactIndex() error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.checkWriteAdmissionLocked(); err != nil {
+		return err
+	}
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
