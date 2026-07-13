@@ -29,6 +29,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -3388,12 +3389,14 @@ type rewriteWriter struct {
 	ridAlloc         *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
-	currentPath       string
-	currentFileID     uint32
-	leafCurrentPath   string
-	leafCurrentFileID uint32
-	leafStaging       bool
-	lastLeafRecordLen uint32
+	currentPath        string
+	currentFileID      uint32
+	leafCurrentPath    string
+	leafCurrentFileID  uint32
+	stableResourcePins *rootpublication.IdentityPinRegistry
+	stableRegistryErr  error
+	leafStaging        bool
+	lastLeafRecordLen  uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -3478,6 +3481,21 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafSeq = startSeq
 }
 
+func (w *rewriteWriter) bindStableResourcePinRegistry(registry *rootpublication.IdentityPinRegistry) error {
+	if w == nil || registry == nil {
+		return fmt.Errorf("%w: standalone leaf writer requires the DB-scoped pin registry", rootpublication.ErrUnresolvedResource)
+	}
+	if w.stableResourcePins == registry && w.stableRegistryErr == nil {
+		return nil
+	}
+	if w.leafW != nil || w.stableResourcePins != nil {
+		w.stableRegistryErr = fmt.Errorf("%w: stable leaf registry installed after writer open or differs from its original registry", rootpublication.ErrUnresolvedResource)
+		return w.stableRegistryErr
+	}
+	w.stableResourcePins = registry
+	return nil
+}
+
 func (w *rewriteWriter) configureLeafStaging() {
 	if w != nil {
 		w.leafStaging = true
@@ -3529,6 +3547,8 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.leafStaging = w.leafStaging
 	clone.leafSeqAllocator = seqAlloc
 	clone.ridAlloc = ridAlloc
+	clone.stableResourcePins = w.stableResourcePins
+	clone.stableRegistryErr = w.stableRegistryErr
 	clone.blockCompression = w.blockCompression
 	clone.blockCodec = w.blockCodec
 	clone.leafBlockCodec = w.leafBlockCodec
@@ -3739,6 +3759,35 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	return w.appendLeafPageWithRID(rid, leafPage)
 }
 
+func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if w == nil {
+		return page.LeafLogPtr{}, nil, errors.New("vlog-rewrite: nil writer")
+	}
+	capture, err := newRewriteStableOuterLeafCapture(w)
+	if err != nil {
+		return page.LeafLogPtr{}, nil, err
+	}
+	rid, err := w.nextRecordRID()
+	if err != nil {
+		capture.abandon()
+		return page.LeafLogPtr{}, nil, err
+	}
+	ptr, err := w.appendLeafPageWithRIDCapture(rid, leafPage, capture)
+	if err == nil {
+		err = capture.captureCurrent()
+	}
+	if err != nil {
+		capture.abandon()
+		return page.LeafLogPtr{}, nil, err
+	}
+	resources, err := capture.freeze([]page.LeafLogPtr{ptr})
+	if err != nil {
+		capture.abandon()
+		return page.LeafLogPtr{}, nil, err
+	}
+	return ptr, resources, nil
+}
+
 func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
 	if w == nil {
 		return nil, errors.New("vlog-rewrite: nil writer")
@@ -3751,6 +3800,38 @@ func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, 
 		return nil, err
 	}
 	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+}
+
+func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if w == nil {
+		return nil, nil, errors.New("vlog-rewrite: nil writer")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil, nil
+	}
+	capture, err := newRewriteStableOuterLeafCapture(w)
+	if err != nil {
+		return nil, nil, err
+	}
+	startRID, err := w.reserveRecordRIDs(len(leafPages))
+	if err != nil {
+		capture.abandon()
+		return nil, nil, err
+	}
+	ptrs, err := w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, capture)
+	if err == nil {
+		err = capture.captureCurrent()
+	}
+	if err != nil {
+		capture.abandon()
+		return nil, nil, err
+	}
+	resources, err := capture.freeze(ptrs)
+	if err != nil {
+		capture.abandon()
+		return nil, nil, err
+	}
+	return ptrs, resources, nil
 }
 
 func (w *rewriteWriter) nextRecordRID() (uint64, error) {
@@ -3798,6 +3879,10 @@ func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {
 }
 
 func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
+	return w.appendLeafPageWithRIDCapture(rid, leafPage, nil)
+}
+
+func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture) (page.LeafLogPtr, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
@@ -3821,7 +3906,10 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 		}
 	}
 	if w.leafDir != "" {
-		return w.appendLeafPageSplit(rid, encodedLeafPage)
+		return w.appendLeafPageSplitCapture(rid, encodedLeafPage, capture)
+	}
+	if capture != nil {
+		return page.LeafLogPtr{}, fmt.Errorf("%w: raw outer-leaf stable capture requires a split leaf log", rootpublication.ErrUnresolvedResource)
 	}
 	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, encodedLeafPage)
@@ -3850,6 +3938,10 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 }
 
 func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, nil)
+}
+
+func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture) ([]page.LeafLogPtr, error) {
 	if w == nil {
 		return nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -3857,7 +3949,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 		return nil, nil
 	}
 	if len(leafPages) == 1 {
-		ptr, err := w.appendLeafPageWithRID(startRID, leafPages[0])
+		ptr, err := w.appendLeafPageWithRIDCapture(startRID, leafPages[0], capture)
 		if err != nil {
 			return nil, err
 		}
@@ -3870,7 +3962,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 			if end > len(leafPages) {
 				end = len(leafPages)
 			}
-			chunkPtrs, err := w.appendLeafPagesWithRIDStart(startRID+uint64(start), leafPages[start:end])
+			chunkPtrs, err := w.appendLeafPagesWithRIDStartCapture(startRID+uint64(start), leafPages[start:end], capture)
 			if err != nil {
 				return nil, err
 			}
@@ -3879,6 +3971,9 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 		return ptrs, nil
 	}
 	if w.leafDir == "" {
+		if capture != nil {
+			return nil, fmt.Errorf("%w: raw outer-leaf stable capture requires a split leaf log", rootpublication.ErrUnresolvedResource)
+		}
 		ptrs := make([]page.LeafLogPtr, len(leafPages))
 		for i, leafPage := range leafPages {
 			ptr, err := w.appendLeafPageWithRID(startRID+uint64(i), leafPage)
@@ -3889,7 +3984,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 		}
 		return ptrs, nil
 	}
-	if err := w.ensureLeafWriter(); err != nil {
+	if err := w.ensureLeafWriterCapture(capture); err != nil {
 		return nil, err
 	}
 	if cap(w.leafBatchRecords) < len(leafPages) {
@@ -3948,7 +4043,7 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 			rawPayloadBytes += len(records[i].Value)
 		}
 	}
-	if err := w.maybeRotateLeafForEstimate(rewriteDictFrameRecordLen(rawPayloadBytes, len(records))); err != nil {
+	if err := w.maybeRotateLeafForEstimateCapture(rewriteDictFrameRecordLen(rawPayloadBytes, len(records)), capture); err != nil {
 		return nil, err
 	}
 	if cap(w.leafBatchValuePtrs) < len(records) {
@@ -3983,14 +4078,18 @@ func (w *rewriteWriter) leafPagesUseCompactPayload() bool {
 }
 
 func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
-	if err := w.ensureLeafWriter(); err != nil {
+	return w.appendLeafPageSplitCapture(rid, leafPage, nil)
+}
+
+func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture) (page.LeafLogPtr, error) {
+	if err := w.ensureLeafWriterCapture(capture); err != nil {
 		return page.LeafLogPtr{}, err
 	}
 	dictID := w.leafDictID
 	dict := w.leafDict
 	if w.blockCompression && dictID != 0 && len(dict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
-		if err := w.maybeRotateLeafForEstimate(rewriteDictFrameRecordLen(len(leafPage), 1)); err != nil {
+		if err := w.maybeRotateLeafForEstimateCapture(rewriteDictFrameRecordLen(len(leafPage), 1), capture); err != nil {
 			return page.LeafLogPtr{}, err
 		}
 		ptr, err := w.leafW.Append(dictID, dict, rid, leafPage)
@@ -4005,7 +4104,7 @@ func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.L
 	if dictID != 0 || len(dict) != 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
 	}
-	if err := w.maybeRotateLeafForEstimate(int64(valuelog.HeaderSize + len(leafPage))); err != nil {
+	if err := w.maybeRotateLeafForEstimateCapture(int64(valuelog.HeaderSize+len(leafPage)), capture); err != nil {
 		return page.LeafLogPtr{}, err
 	}
 	ptr, err := w.leafW.Append(0, nil, rid, leafPage)
@@ -4100,6 +4199,10 @@ func (w *rewriteWriter) rotate() error {
 }
 
 func (w *rewriteWriter) ensureLeafWriter() error {
+	return w.ensureLeafWriterCapture(nil)
+}
+
+func (w *rewriteWriter) ensureLeafWriterCapture(capture *rewriteStableOuterLeafCapture) error {
 	if w == nil {
 		return errors.New("vlog-rewrite: nil writer")
 	}
@@ -4107,12 +4210,27 @@ func (w *rewriteWriter) ensureLeafWriter() error {
 		return w.ensureWriter()
 	}
 	if w.leafW != nil {
+		if capture != nil {
+			if w.stableRegistryErr != nil {
+				return w.stableRegistryErr
+			}
+			if w.stableResourcePins == nil {
+				return fmt.Errorf("%w: raw outer-leaf writer lacks the DB-scoped pin registry", rootpublication.ErrUnresolvedResource)
+			}
+			if err := w.leafW.CertifyStableCreationNamespace(); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	return w.rotateLeaf()
+	return w.rotateLeafCapture(capture)
 }
 
 func (w *rewriteWriter) maybeRotateLeafForEstimate(estimate int64) error {
+	return w.maybeRotateLeafForEstimateCapture(estimate, nil)
+}
+
+func (w *rewriteWriter) maybeRotateLeafForEstimateCapture(estimate int64, capture *rewriteStableOuterLeafCapture) error {
 	if w == nil || w.leafW == nil {
 		return nil
 	}
@@ -4128,7 +4246,7 @@ func (w *rewriteWriter) maybeRotateLeafForEstimate(estimate int64) error {
 	if w.leafW.Size()+estimate <= w.maxSize {
 		return nil
 	}
-	return w.rotateLeaf()
+	return w.rotateLeafCapture(capture)
 }
 
 func (w *rewriteWriter) nextLeafSeq() (uint32, error) {
@@ -4152,6 +4270,11 @@ func (w *rewriteWriter) nextLeafSeq() (uint32, error) {
 }
 
 func (w *rewriteWriter) rotateLeaf() error {
+	return w.rotateLeafCapture(nil)
+}
+
+func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture) error {
+	var rotationErr error
 	nextSeq, err := w.nextLeafSeq()
 	if err != nil {
 		return err
@@ -4164,7 +4287,12 @@ func (w *rewriteWriter) rotateLeaf() error {
 	if w.leafW == nil {
 		var writer *valuelog.Writer
 		if w.leafStaging {
+			if capture != nil {
+				return fmt.Errorf("%w: staging leaf writer cannot certify raw outer-leaf authority", rootpublication.ErrUnresolvedResource)
+			}
 			writer, err = valuelog.NewStagingWriter(path, fileID)
+		} else if w.stableResourcePins != nil {
+			writer, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, w.stableResourcePins)
 		} else {
 			writer, err = valuelog.NewWriter(path, fileID)
 		}
@@ -4184,8 +4312,16 @@ func (w *rewriteWriter) rotateLeaf() error {
 		w.leafCurrentFileID = fileID
 		return nil
 	}
-	if err := w.leafW.RotateTo(path, fileID); err != nil {
-		return err
+	if capture == nil {
+		if err := w.leafW.RotateTo(path, fileID); err != nil {
+			return err
+		}
+	} else {
+		installed, err := capture.captureRotation(w.leafW, path, fileID, true)
+		if err != nil && !installed {
+			return err
+		}
+		rotationErr = err
 	}
 	leafCodec := w.leafBlockCodec
 	if leafCodec == 0 {
@@ -4197,7 +4333,7 @@ func (w *rewriteWriter) rotateLeaf() error {
 	w.noteCreatedSegment(path, fileID)
 	w.leafCurrentPath = path
 	w.leafCurrentFileID = fileID
-	return nil
+	return rotationErr
 }
 
 func (w *rewriteWriter) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -13,9 +14,14 @@ type cachingLeafPageLogGroup struct {
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageStableLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageStableBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPagePreparedStableLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedBatchLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPagePreparedStableBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedChildRefBatchLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPagePreparedChildRefStableBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageConcurrentAppendLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCreatedSegmentProvider = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCurrentSegmentProvider = (*cachingLeafPageLogGroup)(nil)
@@ -69,12 +75,36 @@ func (g *cachingLeafPageLogGroup) AppendLeafPages(leafPages [][]byte) ([]page.Le
 	return log.AppendLeafPages(leafPages)
 }
 
+func (g *cachingLeafPageLogGroup) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return page.LeafLogPtr{}, nil, errors.New("cachingdb: leaf page log unavailable")
+	}
+	return log.AppendLeafPageWithStableResources(leafPage)
+}
+
+func (g *cachingLeafPageLogGroup) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return nil, nil, errors.New("cachingdb: leaf page log unavailable")
+	}
+	return log.AppendLeafPagesWithStableResources(leafPages)
+}
+
 func (g *cachingLeafPageLogGroup) AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error) {
 	log := g.defaultLog()
 	if log == nil {
 		return page.LeafLogPtr{}, errors.New("cachingdb: leaf page log unavailable")
 	}
 	return log.AppendPreparedLeafPage(leafPage, preparedPayload)
+}
+
+func (g *cachingLeafPageLogGroup) AppendPreparedLeafPageWithStableResources(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return page.LeafLogPtr{}, nil, errors.New("cachingdb: leaf page log unavailable")
+	}
+	return log.AppendPreparedLeafPageWithStableResources(leafPage, preparedPayload)
 }
 
 func (g *cachingLeafPageLogGroup) AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error) {
@@ -85,12 +115,28 @@ func (g *cachingLeafPageLogGroup) AppendPreparedLeafPages(leafPages [][]byte, pr
 	return log.AppendPreparedLeafPages(leafPages, preparedPayloads)
 }
 
+func (g *cachingLeafPageLogGroup) AppendPreparedLeafPagesWithStableResources(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return nil, nil, errors.New("cachingdb: leaf page log unavailable")
+	}
+	return log.AppendPreparedLeafPagesWithStableResources(leafPages, preparedPayloads)
+}
+
 func (g *cachingLeafPageLogGroup) AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
 	log := g.defaultLog()
 	if log == nil {
 		return nil, errors.New("cachingdb: leaf page log unavailable")
 	}
 	return log.AppendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs)
+}
+
+func (g *cachingLeafPageLogGroup) AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return nil, nil, errors.New("cachingdb: leaf page log unavailable")
+	}
+	return log.AppendPreparedLeafPageChildRefsWithStableResources(leafPages, preparedPayloads, refs)
 }
 
 func (g *cachingLeafPageLogGroup) ConcurrentLeafPageAppends() bool { return true }

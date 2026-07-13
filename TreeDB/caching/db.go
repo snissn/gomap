@@ -16794,18 +16794,36 @@ func (db *DB) prepareAppendFrames(
 }
 
 func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+	ptrs, _, err := db.appendValueLogInternal(l, dictID, dict, records, durability, nil)
+	return ptrs, err
+}
+
+func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+	capture := newStableOuterLeafCapture(db, l)
+	ptrs, resources, err := db.appendValueLogInternal(l, dictID, dict, records, durability, capture)
+	if err != nil {
+		capture.abandon()
+	}
+	return ptrs, resources, err
+}
+
+func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
 	if !db.splitValueLogEnabled() {
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	if len(records) == 0 {
-		return nil, nil
+		if capture == nil {
+			return nil, nil, nil
+		}
+		resources, err := capture.freeze(nil)
+		return nil, resources, err
 	}
 	if l == nil {
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	select {
 	case <-db.closeCh:
-		return nil, errWALClosed
+		return nil, nil, errWALClosed
 	default:
 	}
 	wallStart := time.Time{}
@@ -17068,7 +17086,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		wallStart,
 	)
 	if prepareErr != nil {
-		return nil, prepareErr
+		return nil, nil, prepareErr
 	}
 	if prepEncodeWallNs > 0 && leafLogAppend {
 		db.observeFlushApplyLeafLogEncodeCompress(time.Duration(prepEncodeWallNs))
@@ -17100,12 +17118,26 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
-		return nil, err
+		return nil, nil, err
 	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
+	}
+	if capture != nil {
+		stableWriter, ok := w.(stableValueWriter)
+		if !ok {
+			l.vlogMu.Unlock()
+			return nil, nil, fmt.Errorf("%w: outer-leaf writer lacks stable capture", rootpublication.ErrUnresolvedResource)
+		}
+		// Relaxed ordinary rotation intentionally defers its one namespace sync.
+		// Pay that debt before max-segment rotation or any append can mutate the
+		// newly-created segment.
+		if err := stableWriter.CertifyStableCreationNamespace(); err != nil {
+			l.vlogMu.Unlock()
+			return nil, nil, err
+		}
 	}
 	firstPath := l.vlogPath
 	var retainPaths []string
@@ -17124,9 +17156,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			retainPaths = append(retainPaths, path)
 		}
 	}
-	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+	if rotateErr := db.rotateValueLogForMaxSegmentMuHeldCapture(l, w, capture); rotateErr != nil {
 		l.vlogMu.Unlock()
-		return nil, rotateErr
+		return nil, nil, rotateErr
 	}
 	if l.vlogPath != firstPath {
 		noteRotatePath(l.vlogPath)
@@ -17135,7 +17167,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	w = l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	if l.vlogCaps.writer != w {
 		l.vlogCaps = computeVlogWriterCaps(w)
@@ -17185,9 +17217,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				est = 0
 			}
 			if est > 0 && w.Size() > maxBytes-est {
-				if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+				if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
 					l.vlogMu.Unlock()
-					return nil, rotateErr
+					return nil, nil, rotateErr
 				}
 				noteRotatePath(l.vlogPath)
 				// Reload writer after rotation so subsequent appends go to the new
@@ -17195,7 +17227,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				w = l.vlog
 				if w == nil {
 					l.vlogMu.Unlock()
-					return nil, errWALUnavailable
+					return nil, nil, errWALUnavailable
 				}
 				if l.vlogCaps.writer != w {
 					l.vlogCaps = computeVlogWriterCaps(w)
@@ -17224,7 +17256,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				if delta := w.Size() - segmentStartSize; delta > 0 {
 					bytesWrittenTotal += delta
 				}
-				if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+				if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
 					err = rotateErr
 					break
 				}
@@ -17302,7 +17334,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
-			if i > 0 && i%4096 == 0 {
+			if capture == nil && i > 0 && i%4096 == 0 {
 				if leafLogAppend {
 					appendHold += time.Since(lockHoldStart)
 				}
@@ -17329,7 +17361,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				if w == nil {
 					l.vlogMu.Unlock()
 					putValueLogPtrs(ptrs)
-					return nil, errWALUnavailable
+					return nil, nil, errWALUnavailable
 				}
 				if l.vlogCaps.writer != w {
 					l.vlogCaps = computeVlogWriterCaps(w)
@@ -17346,7 +17378,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					if delta := w.Size() - segmentStartSize; delta > 0 {
 						bytesWrittenTotal += delta
 					}
-					if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+					if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
 						err = rotateErr
 						break
 					}
@@ -17474,6 +17506,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			retainPath = l.vlogPath
 		}
 	}
+	if err == nil && capture != nil {
+		fileID, encodeErr := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if encodeErr != nil {
+			err = encodeErr
+		} else {
+			err = capture.captureCurrent(w, l.vlogPath, fileID)
+		}
+	}
 	if db.testBeforeVlogUnlock != nil {
 		db.testBeforeVlogUnlock(int(l.id))
 	}
@@ -17491,12 +17531,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	if err != nil {
 		putValueLogPtrs(ptrs)
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range ptrs {
 		if !page.IsValueLogFileID(ptrs[i].FileID) {
 			putValueLogPtrs(ptrs)
-			return nil, fmt.Errorf("cachingdb: appendValueLog produced invalid pointer idx=%d ptr=%+v", i, ptrs[i])
+			return nil, nil, fmt.Errorf("cachingdb: appendValueLog produced invalid pointer idx=%d ptr=%+v", i, ptrs[i])
 		}
 	}
 	if framesTotal > 0 {
@@ -17614,7 +17654,15 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 		db.valueLogAutotuneMetrics.observe(wallStart, rawPayloadBytes, storedForMetrics, encodeNsTotal, encodeRawBytes)
 	}
-	return ptrs, nil
+	if capture == nil {
+		return ptrs, nil, nil
+	}
+	resources, err := capture.freeze(ptrs)
+	if err != nil {
+		putValueLogPtrs(ptrs)
+		return nil, nil, err
+	}
+	return ptrs, resources, nil
 }
 
 func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
@@ -27021,14 +27069,18 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 }
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
+	return db.rotateValueLogMuHeldCapture(l, nil)
+}
+
+func (db *DB) rotateValueLogMuHeldCapture(l *lane, capture *stableOuterLeafCapture) error {
 	if db.isLeafLogAppendLane(l) {
 		nextSeq, err := db.nextLeafLogAppendSeq()
 		if err != nil {
 			return err
 		}
-		return db.rotateValueLogMuHeldToSeq(l, nextSeq)
+		return db.rotateValueLogMuHeldToSeqCapture(l, nextSeq, capture)
 	}
-	return db.rotateValueLogMuHeldToSeq(l, l.vlogSeq+1)
+	return db.rotateValueLogMuHeldToSeqCapture(l, l.vlogSeq+1, capture)
 }
 
 func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
@@ -27045,6 +27097,10 @@ func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
 }
 
 func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
+	return db.rotateValueLogMuHeldToSeqCapture(l, nextSeq, nil)
+}
+
+func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *stableOuterLeafCapture) error {
 	if l == nil {
 		return errWALUnavailable
 	}
@@ -27058,9 +27114,10 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 	oldPath := l.vlogPath
 	oldLiveBytes := l.vlogLiveBytes.Load()
 	var (
-		closedPrev    int64
-		hadClosedPrev bool
-		rotationErr   error
+		closedPrev      int64
+		hadClosedPrev   bool
+		rotationErr     error
+		stableInstalled bool
 	)
 	name := valueLogName(l.id, nextSeq)
 	path := filepath.Join(db.valueLogDirForLane(l), name)
@@ -27071,8 +27128,48 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 
 	if l.vlog != nil {
 		oldSize := l.vlog.Size()
-		if err := l.vlog.RotateToWithSync(path, fileID, !db.relaxedSync); err != nil {
-			if !valuelog.RotationInstalled(err) {
+		var rotateErr error
+		if capture == nil {
+			rotateErr = l.vlog.RotateToWithSync(path, fileID, !db.relaxedSync)
+		} else {
+			stableWriter, ok := l.vlog.(stableValueWriter)
+			if !ok {
+				return fmt.Errorf("%w: outer-leaf writer lacks stable rotation", rootpublication.ErrUnresolvedResource)
+			}
+			if err := capture.bindParentGeneration(stableWriter); err != nil {
+				return err
+			}
+			oldFileID, encodeErr := valuelog.EncodeFileID(uint32(l.id), uint32(oldSeq))
+			if encodeErr != nil {
+				return encodeErr
+			}
+			closedOperation := rootpublication.NamespaceNone
+			creationPending, pendingErr := stableWriter.StableCreationNamespacePending()
+			if pendingErr != nil {
+				return pendingErr
+			}
+			if creationPending {
+				closedOperation = rootpublication.NamespaceCreate
+			}
+			closed, registrationErr := capture.registration(oldPath, oldFileID, closedOperation)
+			if registrationErr != nil {
+				return registrationErr
+			}
+			active, registrationErr := capture.registration(path, fileID, rootpublication.NamespaceCreate)
+			if registrationErr != nil {
+				return registrationErr
+			}
+			rotation, stableErr := stableWriter.RotateToWithStableResources(path, fileID, !db.relaxedSync, closed, active)
+			if stableErr == nil {
+				stableInstalled = true
+				stableErr = capture.addRotation(rotation)
+			} else if rotation != nil {
+				rotation.Release()
+			}
+			rotateErr = stableErr
+		}
+		if err := rotateErr; err != nil {
+			if !stableInstalled && !valuelog.RotationInstalled(err) {
 				return err
 			}
 			rotationErr = err
@@ -27106,7 +27203,12 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 			}
 		}
 	} else {
-		w, err := valuelog.NewWriter(path, fileID)
+		var w *valuelog.Writer
+		if db.isLeafLogAppendLane(l) {
+			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+		} else {
+			w, err = valuelog.NewWriter(path, fileID)
+		}
 		if err != nil {
 			return err
 		}
@@ -27182,7 +27284,12 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 	if err != nil {
 		return err
 	}
-	w, err := valuelog.NewWriter(path, fileID)
+	var w *valuelog.Writer
+	if db.isLeafLogAppendLane(l) {
+		w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+	} else {
+		w, err = valuelog.NewWriter(path, fileID)
+	}
 	if err != nil {
 		return err
 	}
@@ -27239,6 +27346,10 @@ func (db *DB) registerValueLogSegmentReplacing(path string, fileID, previousFile
 }
 
 func (db *DB) rotateValueLogForMaxSegmentMuHeld(l *lane, w valueWriter) error {
+	return db.rotateValueLogForMaxSegmentMuHeldCapture(l, w, nil)
+}
+
+func (db *DB) rotateValueLogForMaxSegmentMuHeldCapture(l *lane, w valueWriter, capture *stableOuterLeafCapture) error {
 	if db == nil || l == nil || w == nil {
 		return nil
 	}
@@ -27249,7 +27360,7 @@ func (db *DB) rotateValueLogForMaxSegmentMuHeld(l *lane, w valueWriter) error {
 	if w.Size() <= maxBytes {
 		return nil
 	}
-	return db.rotateValueLogMuHeld(l)
+	return db.rotateValueLogMuHeldCapture(l, capture)
 }
 
 func (db *DB) untrackWALSegmentLocked(path string) {

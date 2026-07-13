@@ -245,11 +245,11 @@ func TestCompactLeafLogPayloadScratchPtrRefClearedForPooling(t *testing.T) {
 	putCompactLeafLogPayloadScratchPtrRef(got, got.ptrs)
 }
 
-func buildSparseLeafPageForLeafLogTest(t *testing.T) []byte {
+func buildSparseLeafPageForLeafLogTest(t testing.TB) []byte {
 	return buildSparseLeafPageForLeafLogTestWithTag(t, 'x')
 }
 
-func buildSparseLeafPageForLeafLogTestWithTag(t *testing.T, tag byte) []byte {
+func buildSparseLeafPageForLeafLogTestWithTag(t testing.TB, tag byte) []byte {
 	t.Helper()
 	buf := make([]byte, page.PageSize)
 	b := node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{

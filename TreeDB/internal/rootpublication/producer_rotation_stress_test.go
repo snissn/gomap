@@ -35,6 +35,15 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 
 	retryErr := errors.New("injected pre-meta retry")
 	attempts := make(map[uint64]uint8, iterations)
+	expectedNamespaceSyncs := func(seq uint64) uint64 {
+		// The first value-log segment and every command-WAL segment contribute
+		// one creation witness. Later value-log rotations retain the closed
+		// segment's creation witness and add the newly active segment's witness.
+		if seq > 1 && seq%2 == 1 {
+			return 2
+		}
+		return 1
+	}
 	coordinator, err := rootpublication.New(rootpublication.Options{Publisher: rootpublication.PublisherFunc(func(_ context.Context, candidate *rootpublication.PreparedRootCandidate) rootpublication.PublishResult {
 		seq := candidate.Frontier().CommitSeq()
 		attempts[seq]++
@@ -49,7 +58,7 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 			return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: err}
 		}
 		stats := resources.Stats(time.Now())
-		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].Flushes != 2 || stats[0].Syncs != 2 || stats[0].NamespaceSyncs != 1 {
+		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].Flushes != 2 || stats[0].Syncs != 2 || stats[0].NamespaceSyncs != expectedNamespaceSyncs(seq) {
 			return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: fmt.Errorf("unexpected resource operation counts: %+v", stats)}
 		}
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishSucceeded}
@@ -138,7 +147,7 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 			t.Fatalf("rotation %d physical pins=%d want 2", seq, set.Len())
 		}
 		stats := set.Stats(time.Now())
-		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != 1 {
+		if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != expectedNamespaceSyncs(seq) {
 			set.Release()
 			t.Fatalf("rotation %d capture stats=%+v", seq, stats)
 		}
@@ -157,7 +166,7 @@ func stableProducerRotationRetryResourcePlateau(t *testing.T) {
 			t.Fatalf("rotation %d first publish=%v want injected retry", seq, err)
 		}
 		pending := resourceStatsForKind(t, coordinator.Stats().Resources, kind)
-		if pending.PendingCount != 2 || pending.ActivePins != 2 || pending.Flushes != 2 || pending.Syncs != 0 || pending.NamespaceSyncs != 1 {
+		if pending.PendingCount != 2 || pending.ActivePins != 2 || pending.Flushes != 2 || pending.Syncs != 0 || pending.NamespaceSyncs != expectedNamespaceSyncs(seq) {
 			t.Fatalf("rotation %d retry stats=%+v", seq, pending)
 		}
 		if err := coordinator.WaitThrough(context.Background(), seq); err != nil {

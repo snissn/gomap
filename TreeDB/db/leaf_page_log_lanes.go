@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -186,6 +187,14 @@ func (g *leafPageLogLaneGroup) AppendLeafPages(leafPages [][]byte) ([]page.LeafL
 	return g.appendLeafPagesAt(0, leafPages)
 }
 
+func (g *leafPageLogLaneGroup) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return g.appendLeafPageStableAt(0, leafPage)
+}
+
+func (g *leafPageLogLaneGroup) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return g.appendLeafPagesStableAt(0, leafPages)
+}
+
 func (g *leafPageLogLaneGroup) Flush() error {
 	return g.forEachLane(func(lane LeafPageLog) error { return lane.Flush() })
 }
@@ -320,6 +329,20 @@ func (h *leafPageLogLaneHandle) AppendLeafPages(leafPages [][]byte) ([]page.Leaf
 	return h.group.appendLeafPagesAt(h.index, leafPages)
 }
 
+func (h *leafPageLogLaneHandle) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if h == nil || h.group == nil {
+		return page.LeafLogPtr{}, nil, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPageStableAt(h.index, leafPage)
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if h == nil || h.group == nil {
+		return nil, nil, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPagesStableAt(h.index, leafPages)
+}
+
 func (h *leafPageLogLaneHandle) Flush() error {
 	if h == nil || h.group == nil {
 		return nil
@@ -393,6 +416,73 @@ func (g *leafPageLogLaneGroup) appendLeafPagesAt(index int, leafPages [][]byte) 
 		g.noteAppendedLeafPtr(ptr)
 	}
 	return ptrs, nil
+}
+
+func (g *leafPageLogLaneGroup) appendLeafPageStableAt(index int, leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	var ptr page.LeafLogPtr
+	var resources *rootpublication.StableResourceSet
+	err := g.withLane(index, func(lane LeafPageLog) error {
+		stable, ok := lane.(LeafPageStableLog)
+		if !ok {
+			return fmt.Errorf("%w: leaf page lane lacks stable append", rootpublication.ErrUnresolvedResource)
+		}
+		var err error
+		ptr, resources, err = stable.AppendLeafPageWithStableResources(leafPage)
+		return err
+	})
+	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return page.LeafLogPtr{}, nil, err
+	}
+	if resources == nil {
+		return page.LeafLogPtr{}, nil, fmt.Errorf("%w: stable leaf lane returned no resource authority", rootpublication.ErrUnresolvedResource)
+	}
+	if err := validateLeafPageStableResources([]page.LeafLogPtr{ptr}, resources); err != nil {
+		resources.Release()
+		return page.LeafLogPtr{}, nil, err
+	}
+	g.noteAppendedLeafPtr(ptr)
+	return ptr, resources, nil
+}
+
+func (g *leafPageLogLaneGroup) appendLeafPagesStableAt(index int, leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if len(leafPages) == 0 {
+		return nil, nil, nil
+	}
+	var ptrs []page.LeafLogPtr
+	var resources *rootpublication.StableResourceSet
+	err := g.withLane(index, func(lane LeafPageLog) error {
+		stable, ok := lane.(LeafPageStableBatchLog)
+		if !ok {
+			return fmt.Errorf("%w: leaf page lane lacks stable batch append", rootpublication.ErrUnresolvedResource)
+		}
+		var err error
+		ptrs, resources, err = stable.AppendLeafPagesWithStableResources(leafPages)
+		return err
+	})
+	if err != nil {
+		if resources != nil {
+			resources.Release()
+		}
+		return nil, nil, err
+	}
+	if resources == nil {
+		return nil, nil, fmt.Errorf("%w: stable leaf lane batch returned no resource authority", rootpublication.ErrUnresolvedResource)
+	}
+	if len(ptrs) != len(leafPages) {
+		resources.Release()
+		return nil, nil, fmt.Errorf("leaf page stable batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
+	}
+	if err := validateLeafPageStableResources(ptrs, resources); err != nil {
+		resources.Release()
+		return nil, nil, err
+	}
+	for _, ptr := range ptrs {
+		g.noteAppendedLeafPtr(ptr)
+	}
+	return ptrs, resources, nil
 }
 
 func (g *leafPageLogLaneGroup) withLane(index int, fn func(LeafPageLog) error) error {

@@ -59,6 +59,28 @@ func TestStableNamespaceRegistrationFailsTypedBeforeCertification(t *testing.T) 
 	}
 }
 
+func TestStableNamespaceCreationProofFailsTypedOnWindows(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := os.OpenFile(filepath.Join(dir, "child-proof"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	proof, err := NewStableNamespaceCreationProof(parent, child, "child-proof")
+	if proof != nil {
+		proof.Release()
+		t.Fatal("unsupported namespace creation returned a proof")
+	}
+	if !errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("NewStableNamespaceCreationProof error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+}
+
 func TestRenameStableChildFileFailsTypedWithoutVisibilityWindows(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)

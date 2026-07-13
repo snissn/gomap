@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -17,6 +18,11 @@ type cachingLeafPageLog struct {
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageStableLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageStableBatchLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPagePreparedStableLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPagePreparedStableBatchLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPagePreparedChildRefStableBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
@@ -197,24 +203,45 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	return leafPtr, nil
 }
 
+func (l *cachingLeafPageLog) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	ptrs, resources, err := l.appendLeafPages([][]byte{leafPage}, true)
+	if err != nil {
+		return page.LeafLogPtr{}, nil, err
+	}
+	if len(ptrs) != 1 {
+		resources.Release()
+		return page.LeafLogPtr{}, nil, fmt.Errorf("cachingdb: stable leaf append returned %d pointers", len(ptrs))
+	}
+	return ptrs[0], resources, nil
+}
+
 func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	ptrs, _, err := l.appendLeafPages(leafPages, false)
+	return ptrs, err
+}
+
+func (l *cachingLeafPageLog) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendLeafPages(leafPages, true)
+}
+
+func (l *cachingLeafPageLog) appendLeafPages(leafPages [][]byte, stable bool) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if l == nil || l.db == nil || l.lane == nil {
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	if len(leafPages) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	if len(leafPages) == 1 {
+	if len(leafPages) == 1 && !stable {
 		ptr, err := l.AppendLeafPage(leafPages[0])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []page.LeafLogPtr{ptr}, nil
+		return []page.LeafLogPtr{ptr}, nil, nil
 	}
 
 	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	records := getValueLogRecordsCap(len(leafPages))
 	records = records[:len(leafPages)]
@@ -246,7 +273,7 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 		if err != nil {
 			putCompactLeafLogPayloadScratch(scratch)
 			observeEncode()
-			return nil, err
+			return nil, nil, err
 		}
 		if compacted {
 			if scratchRef == nil {
@@ -265,25 +292,38 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 	}
 	observeEncode()
 
-	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	var resources *rootpublication.StableResourceSet
+	var valuePtrs []page.ValuePtr
+	if stable {
+		valuePtrs, resources, err = l.db.appendValueLogWithStableResources(l.lane, 0, nil, records, journalDurabilityNone)
+	} else {
+		valuePtrs, err = l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	}
 	if err != nil {
 		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
-		return nil, err
+		return nil, nil, err
 	}
+	releaseResources := true
+	defer func() {
+		if releaseResources {
+			resources.Release()
+		}
+	}()
 	defer putValueLogPtrs(valuePtrs)
 	if len(valuePtrs) != len(leafPages) {
-		return nil, fmt.Errorf("cachingdb: leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+		return nil, nil, fmt.Errorf("cachingdb: leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
 	}
 	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
 	for i, ptr := range valuePtrs {
 		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 		if convErr != nil {
-			return nil, convErr
+			return nil, nil, convErr
 		}
 		leafPtrs[i] = leafPtr
 		l.db.noteLeafGenerationRecordLength(ptr)
 	}
-	return leafPtrs, nil
+	releaseResources = false
+	return leafPtrs, resources, nil
 }
 
 func (l *cachingLeafPageLog) AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error) {
@@ -310,26 +350,47 @@ func (l *cachingLeafPageLog) AppendPreparedLeafPage(leafPage []byte, preparedPay
 	return leafPtr, nil
 }
 
+func (l *cachingLeafPageLog) AppendPreparedLeafPageWithStableResources(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	ptrs, resources, err := l.appendPreparedLeafPages([][]byte{leafPage}, [][]byte{preparedPayload}, true)
+	if err != nil {
+		return page.LeafLogPtr{}, nil, err
+	}
+	if len(ptrs) != 1 {
+		resources.Release()
+		return page.LeafLogPtr{}, nil, fmt.Errorf("cachingdb: stable prepared leaf append returned %d pointers", len(ptrs))
+	}
+	return ptrs[0], resources, nil
+}
+
 func (l *cachingLeafPageLog) AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error) {
+	ptrs, _, err := l.appendPreparedLeafPages(leafPages, preparedPayloads, false)
+	return ptrs, err
+}
+
+func (l *cachingLeafPageLog) AppendPreparedLeafPagesWithStableResources(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendPreparedLeafPages(leafPages, preparedPayloads, true)
+}
+
+func (l *cachingLeafPageLog) appendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte, stable bool) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if l == nil || l.db == nil || l.lane == nil {
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	if len(leafPages) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if len(preparedPayloads) != len(leafPages) {
-		return nil, fmt.Errorf("cachingdb: prepared leaf page batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+		return nil, nil, fmt.Errorf("cachingdb: prepared leaf page batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
 	}
-	if len(leafPages) == 1 {
+	if len(leafPages) == 1 && !stable {
 		ptr, err := l.AppendPreparedLeafPage(leafPages[0], preparedPayloads[0])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []page.LeafLogPtr{ptr}, nil
+		return []page.LeafLogPtr{ptr}, nil, nil
 	}
 	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	records := getValueLogRecordsCap(len(leafPages))
 	records = records[:len(leafPages)]
@@ -341,32 +402,45 @@ func (l *cachingLeafPageLog) AppendPreparedLeafPages(leafPages [][]byte, prepare
 	}()
 	for i := range leafPages {
 		if len(leafPages[i]) != page.PageSize {
-			return nil, fmt.Errorf("cachingdb: prepared leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPages[i]), page.PageSize)
+			return nil, nil, fmt.Errorf("cachingdb: prepared leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPages[i]), page.PageSize)
 		}
 		records[i] = valuelog.Record{
 			RID:   startRID + uint64(i),
 			Value: preparedPayloads[i],
 		}
 	}
-	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	var resources *rootpublication.StableResourceSet
+	var valuePtrs []page.ValuePtr
+	if stable {
+		valuePtrs, resources, err = l.db.appendValueLogWithStableResources(l.lane, 0, nil, records, journalDurabilityNone)
+	} else {
+		valuePtrs, err = l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	}
 	if err != nil {
 		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
-		return nil, err
+		return nil, nil, err
 	}
+	releaseResources := true
+	defer func() {
+		if releaseResources {
+			resources.Release()
+		}
+	}()
 	defer putValueLogPtrs(valuePtrs)
 	if len(valuePtrs) != len(leafPages) {
-		return nil, fmt.Errorf("cachingdb: prepared leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+		return nil, nil, fmt.Errorf("cachingdb: prepared leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
 	}
 	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
 	for i, ptr := range valuePtrs {
 		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 		if convErr != nil {
-			return nil, convErr
+			return nil, nil, convErr
 		}
 		leafPtrs[i] = leafPtr
 		l.db.noteLeafGenerationRecordLength(ptr)
 	}
-	return leafPtrs, nil
+	releaseResources = false
+	return leafPtrs, resources, nil
 }
 
 func (l *cachingLeafPageLog) AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
@@ -431,6 +505,70 @@ func (l *cachingLeafPageLog) AppendPreparedLeafPageChildRefs(leafPages [][]byte,
 		l.db.noteLeafGenerationRecordLength(ptr)
 	}
 	return refs, nil
+}
+
+func (l *cachingLeafPageLog) AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error) {
+	refs = refs[:0]
+	if l == nil || l.db == nil || l.lane == nil {
+		return nil, nil, errWALUnavailable
+	}
+	if len(leafPages) == 0 {
+		return refs, nil, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, nil, fmt.Errorf("cachingdb: prepared leaf page child-ref batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
+	if err != nil {
+		return nil, nil, err
+	}
+	records := getValueLogRecordsCap(len(leafPages))
+	records = records[:len(leafPages)]
+	defer func() {
+		for i := range records {
+			records[i] = valuelog.Record{}
+		}
+		putValueLogRecordsNoClear(records)
+	}()
+	for i := range leafPages {
+		if len(leafPages[i]) != page.PageSize {
+			return nil, nil, fmt.Errorf("cachingdb: prepared leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPages[i]), page.PageSize)
+		}
+		records[i] = valuelog.Record{
+			RID:   startRID + uint64(i),
+			Value: preparedPayloads[i],
+		}
+	}
+	valuePtrs, resources, err := l.db.appendValueLogWithStableResources(l.lane, 0, nil, records, journalDurabilityNone)
+	if err != nil {
+		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
+		return nil, nil, err
+	}
+	releaseResources := true
+	defer func() {
+		if releaseResources && resources != nil {
+			resources.Release()
+		}
+	}()
+	defer putValueLogPtrs(valuePtrs)
+	if len(valuePtrs) != len(leafPages) {
+		return nil, nil, fmt.Errorf("cachingdb: prepared leaf page child-ref batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+	}
+	if cap(refs) < len(valuePtrs) {
+		refs = make([]page.ChildRef, len(valuePtrs))
+	} else {
+		refs = refs[:len(valuePtrs)]
+	}
+	for i, ptr := range valuePtrs {
+		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+		if convErr != nil {
+			return nil, nil, convErr
+		}
+		refs[i] = page.LeafLogChildRef(leafPtr)
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	releaseResources = false
+	return refs, resources, nil
 }
 
 func getCompactLeafLogPayloadScratch() *compactLeafLogPayloadScratch {

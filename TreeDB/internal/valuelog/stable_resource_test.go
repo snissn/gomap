@@ -9,8 +9,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestOrdinaryOuterLeafCreationClassifiesFallbackDirectorySync(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "leaf_vlog")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "000001.vlog")
+	var outerCreates, valueSyncs, outerBeforeSyncs, outerAfterSyncs int
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Namespace == durabilitycut.NamespaceCreate && event.NewPath == path && event.Resource == durabilitycut.ResourceOuterLeaf:
+			outerCreates++
+		case event.Point == durabilitycut.BeforeNewFileDirectorySync && event.Resource == durabilitycut.ResourceOuterLeaf:
+			outerBeforeSyncs++
+		case event.Point == durabilitycut.AfterNewFileDirectorySync && event.Resource == durabilitycut.ResourceOuterLeaf:
+			outerAfterSyncs++
+		case (event.Point == durabilitycut.BeforeNewFileDirectorySync || event.Point == durabilitycut.AfterNewFileDirectorySync) && event.Resource == durabilitycut.ResourceValueLog:
+			valueSyncs++
+		}
+		return nil
+	})
+	defer restore()
+
+	writer, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if outerCreates != 1 || outerBeforeSyncs != 1 || outerAfterSyncs != 1 || valueSyncs != 0 {
+		t.Fatalf("ordinary outer-leaf creation cuts create=%d directory(before/after)=%d/%d value-sync=%d want 1, 1/1, 0",
+			outerCreates, outerBeforeSyncs, outerAfterSyncs, valueSyncs)
+	}
+}
 
 func testStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
 	root := t.TempDir()
@@ -202,6 +238,57 @@ func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
 	}
 }
 
+func TestStableRegistryRelaxedOrdinaryRotationDoesNotSyncOrClaimCreate(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	before := writer.DurabilityStats().DirectorySyncCalls
+	if err := writer.RotateToWithSync(filepath.Join(dir, "000002.vlog"), 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("relaxed ordinary rotation namespace syncs: before=%d after=%d", before, after)
+	}
+	if writer.creationProof != nil || !writer.creationUncertified {
+		t.Fatalf("relaxed successor proof=%v uncertified=%t, want nil/true", writer.creationProof, writer.creationUncertified)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+		Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 2,
+		NamespaceOperation: rootpublication.NamespaceCreate,
+	})
+	if token != nil {
+		token.Release()
+		t.Fatal("uncertified relaxed successor returned a create token")
+	}
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("uncertified relaxed successor error=%v want ErrUnresolvedResource", err)
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("failed late certification added namespace syncs: before=%d after=%d", before, after)
+	}
+	rotation, rotateErr := writer.RotateToWithStableResources(filepath.Join(dir, "000003.vlog"), 3, false,
+		StableResourceRegistration{LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog", Reachability: rootpublication.ReachabilityValueLogPointer},
+		StableResourceRegistration{LogicalLane: "main", Generation: 3, DiagnosticPath: "maindb/value_vlog/000003.vlog", Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 3, NamespaceOperation: rootpublication.NamespaceCreate})
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("uncertified relaxed successor entered a stable rotation")
+	}
+	if !errors.Is(rotateErr, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("uncertified stable rotation error=%v want ErrUnresolvedResource", rotateErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "000003.vlog")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("uncertified stable rotation exposed successor: %v", statErr)
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("failed stable rotation added namespace syncs: before=%d after=%d", before, after)
+	}
+}
+
 func testRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.T) {
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "000001.vlog")
@@ -276,6 +363,7 @@ func testRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
 	if _, err := writer.Append(0, nil, 1, []byte("first")); err != nil {
 		t.Fatal(err)
 	}
+	beforeDirectorySyncs := writer.DurabilityStats().DirectorySyncCalls
 	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, true,
 		StableResourceRegistration{
 			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
@@ -292,6 +380,15 @@ func testRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
 	}
 	if got := registry.ActivePins(); got != 2 {
 		t.Fatalf("rotation active pins=%d want 2", got)
+	}
+	if rotation.Closed.Namespace() == nil || rotation.Closed.Namespace().Operation() != rootpublication.NamespaceCreate {
+		t.Fatal("freshly-created closed segment lost its retained creation proof")
+	}
+	if rotation.Active.Namespace() == nil || rotation.Active.Namespace().Operation() != rootpublication.NamespaceCreate {
+		t.Fatal("freshly-created active segment lost its creation proof")
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != beforeDirectorySyncs+1 {
+		t.Fatalf("stable rotation directory syncs=%d want %d; binding the closed proof must not resync", got, beforeDirectorySyncs+1)
 	}
 	rotation.Release()
 	if got := registry.ActivePins(); got != 0 {
@@ -334,11 +431,11 @@ func testStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T
 		t.Fatal(err)
 	}
 	injected := errors.New("injected namespace failure")
-	originalFactory := newValueLogStableNamespaceToken
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindValueLogStableNamespaceCreationProof
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		return nil, injected
 	}
-	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	defer func() { bindValueLogStableNamespaceCreationProof = originalFactory }()
 	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, true,
 		StableResourceRegistration{
 			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
@@ -375,8 +472,8 @@ func testStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
 	}
 	defer writer.Close()
 	injected := errors.New("injected namespace failure after replacement")
-	originalFactory := newValueLogStableNamespaceToken
-	newValueLogStableNamespaceToken = func(rootpublication.StableNamespaceSpec) (*rootpublication.StableNamespaceToken, error) {
+	originalFactory := bindValueLogStableNamespaceCreationProof
+	bindValueLogStableNamespaceCreationProof = func(*rootpublication.StableNamespaceCreationProof, *os.File, uint64, string, string) (*rootpublication.StableNamespaceToken, error) {
 		if err := os.Rename(failedPath, displacedPath); err != nil {
 			t.Fatal(err)
 		}
@@ -385,7 +482,7 @@ func testStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
 		}
 		return nil, injected
 	}
-	defer func() { newValueLogStableNamespaceToken = originalFactory }()
+	defer func() { bindValueLogStableNamespaceCreationProof = originalFactory }()
 
 	rotation, err := writer.RotateToWithStableResources(failedPath, 2, false,
 		StableResourceRegistration{
@@ -507,6 +604,7 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 					}
 					b.Cleanup(func() { _ = writer.Close() })
 					beforeContentSyncs := writer.DurabilityStats().FileSyncCalls
+					beforeDirectorySyncs := writer.DurabilityStats().DirectorySyncCalls
 					var namespaceSyncs uint64
 					b.ReportAllocs()
 					b.ResetTimer()
@@ -549,7 +647,16 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 						}
 						rotation.Release()
 						stats := set.Stats(time.Now())
-						if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != 1 {
+						// A writer opened without stable capture has no creation witness for
+						// its initial segment. Every later closed segment was created by the
+						// preceding stable rotation, so it retains that witness alongside the
+						// newly active segment. Registry-backed construction captures the
+						// initial segment as well.
+						wantNamespaceSyncs := uint64(2)
+						if !withRegistry && i == 0 {
+							wantNamespaceSyncs = 1
+						}
+						if len(stats) != 1 || stats[0].PendingCount != 2 || stats[0].NamespaceSyncs != wantNamespaceSyncs {
 							set.Release()
 							b.Fatalf("stable rotation operation counts=%+v", stats)
 						}
@@ -558,17 +665,23 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 						b.StartTimer()
 					}
 					contentSyncs := writer.DurabilityStats().FileSyncCalls - beforeContentSyncs
+					physicalNamespaceSyncs := writer.DurabilityStats().DirectorySyncCalls - beforeDirectorySyncs
 					wantContentSyncs := uint64(0)
 					if syncCurrent {
 						wantContentSyncs = uint64(b.N)
 					}
-					if namespaceSyncs != uint64(b.N) || contentSyncs != wantContentSyncs {
-						b.Fatalf("rotation counters namespace=%d content=%d want namespace=%d content=%d", namespaceSyncs, contentSyncs, b.N, wantContentSyncs)
+					wantNamespaceSyncs := uint64(2 * b.N)
+					if !withRegistry {
+						wantNamespaceSyncs--
+					}
+					if namespaceSyncs != wantNamespaceSyncs || physicalNamespaceSyncs != uint64(b.N) || contentSyncs != wantContentSyncs {
+						b.Fatalf("rotation counters witnesses=%d physical_namespace=%d content=%d want witnesses=%d physical_namespace=%d content=%d", namespaceSyncs, physicalNamespaceSyncs, contentSyncs, wantNamespaceSyncs, b.N, wantContentSyncs)
 					}
 					if registry != nil && (registry.ActivePins() != 0 || registry.ActiveIdentities() != 1) {
 						b.Fatalf("rotation registry pins=%d identities=%d, want 0 pins and one active writer", registry.ActivePins(), registry.ActiveIdentities())
 					}
 					b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "stable-token-namespace-sync/op")
+					b.ReportMetric(float64(physicalNamespaceSyncs)/float64(b.N), "producer-namespace-sync/op")
 					b.ReportMetric(float64(contentSyncs)/float64(b.N), "producer-content-sync/op")
 				})
 			}

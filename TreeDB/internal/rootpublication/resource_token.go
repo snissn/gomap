@@ -685,6 +685,49 @@ type StableNamespaceSpec struct {
 	DiagnosticPath   string
 }
 
+// StableNamespaceParentGeneration derives a stable, non-zero logical
+// generation from an exact parent namespace handle. The token retains and
+// validates the full platform identity separately; this compact generation is
+// only the logical namespace epoch used by resource registration and changes
+// when the physical parent object changes.
+func StableNamespaceParentGeneration(parent *os.File) (uint64, error) {
+	if parent == nil {
+		return 0, fmt.Errorf("%w: namespace parent generation requires an exact parent handle", ErrUnresolvedResource)
+	}
+	identity, err := stableIdentityFromFile(parent)
+	if err != nil {
+		return 0, err
+	}
+	if !identity.valid() {
+		return 0, fmt.Errorf("%w: namespace parent has no stable identity", ErrUnresolvedResource)
+	}
+	// FNV-1a is sufficient here because the exact identity remains part of the
+	// token and is the authoritative conflict check. Avoid process-random or
+	// caller-invented constants so cloned producers agree on one parent epoch.
+	const (
+		offset64 = uint64(14695981039346656037)
+		prime64  = uint64(1099511628211)
+	)
+	generation := offset64
+	add := func(value byte) {
+		generation ^= uint64(value)
+		generation *= prime64
+	}
+	for i := range identity.Platform {
+		add(identity.Platform[i])
+	}
+	for shift := 0; shift < 64; shift += 8 {
+		add(byte(identity.VolumeID >> shift))
+	}
+	for _, value := range identity.ObjectID {
+		add(value)
+	}
+	if generation == 0 {
+		generation = 1
+	}
+	return generation, nil
+}
+
 type StableNamespaceToken struct {
 	parent                 *os.File
 	parentIdentity         StableIdentity
@@ -702,6 +745,125 @@ type StableNamespaceToken struct {
 	stabilizeErr           error
 	syncs                  atomic.Uint64
 	syncNanos              atomic.Uint64
+}
+
+// StableNamespaceCreationProof is an opaque, exact-handle witness that a
+// newly-created child was linked from and durably synced through its retained
+// parent. It exists solely to carry that one creation sync to later resource
+// registration, where the logical parent generation is finally known.
+type StableNamespaceCreationProof struct {
+	parent    *os.File
+	parentID  StableIdentity
+	childID   StableIdentity
+	name      string
+	adapter   namespacePersistenceAdapter
+	released  atomic.Bool
+	syncs     atomic.Uint64
+	syncNanos atomic.Uint64
+	mu        sync.Mutex
+}
+
+// NewStableNamespaceCreationProof validates the exact parent/child link and
+// performs the sole namespace sync for a just-created child.
+func NewStableNamespaceCreationProof(parent, child *os.File, name string) (*StableNamespaceCreationProof, error) {
+	return newStableNamespaceCreationProof(parent, child, name, nativeNamespaceAdapter{})
+}
+
+func newStableNamespaceCreationProof(parent, child *os.File, name string, adapter namespacePersistenceAdapter) (*StableNamespaceCreationProof, error) {
+	if parent == nil || child == nil || !stableChildBaseName(name) {
+		return nil, fmt.Errorf("%w: incomplete namespace creation proof", ErrUnresolvedResource)
+	}
+	if adapter == nil {
+		return nil, fmt.Errorf("%w: missing namespace persistence adapter", ErrUnresolvedResource)
+	}
+	if err := adapter.ValidateLink(parent, child, name); err != nil {
+		return nil, err
+	}
+	parentID, err := adapter.Identity(parent)
+	if err != nil {
+		return nil, err
+	}
+	childID, err := adapter.Identity(child)
+	if err != nil {
+		return nil, err
+	}
+	pinned, err := duplicateStableFile(parent)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate namespace proof parent: %w", err)
+	}
+	started := time.Now()
+	err = adapter.Sync(pinned)
+	syncNanos := uint64(time.Since(started))
+	if err != nil {
+		_ = pinned.Close()
+		return nil, err
+	}
+	proof := &StableNamespaceCreationProof{parent: pinned, parentID: parentID, childID: childID, name: name, adapter: adapter}
+	proof.syncs.Store(1)
+	proof.syncNanos.Store(syncNanos)
+	return proof, nil
+}
+
+// Bind returns an already-stable normal namespace token after proving the
+// retained parent still links the original child. It never syncs again.
+func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*StableNamespaceToken, error) {
+	if proof == nil || proof.released.Load() {
+		return nil, ErrResourceOwnership
+	}
+	if parentGeneration == 0 {
+		return nil, fmt.Errorf("%w: namespace creation proof binding requires a parent generation", ErrUnresolvedResource)
+	}
+	if parent == nil || name != proof.name || !stableChildBaseName(name) {
+		return nil, fmt.Errorf("%w: namespace creation proof binding differs from the exact parent or child name", ErrResourceConflict)
+	}
+	if err := validateDiagnosticPath(diagnosticPath); err != nil {
+		return nil, err
+	}
+	proof.mu.Lock()
+	defer proof.mu.Unlock()
+	if proof.released.Load() {
+		return nil, ErrResourceOwnership
+	}
+	parentID, err := proof.adapter.Identity(parent)
+	if err != nil {
+		return nil, err
+	}
+	if !sameStableObject(parentID, proof.parentID) {
+		return nil, fmt.Errorf("%w: namespace creation proof binding names a different parent", ErrResourceConflict)
+	}
+	if err := proof.adapter.ValidateIdentity(proof.parent, proof.childID, proof.name); err != nil {
+		return nil, err
+	}
+	pinned, err := duplicateStableFile(proof.parent)
+	if err != nil {
+		return nil, err
+	}
+	parentID, err = proof.adapter.Identity(pinned)
+	if err != nil {
+		_ = pinned.Close()
+		return nil, err
+	}
+	parentID.Generation = parentGeneration
+	token := &StableNamespaceToken{parent: pinned, parentIdentity: parentID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: proof.name, diagnosticPath: filepath.ToSlash(diagnosticPath), adapter: proof.adapter}
+	token.state.Store(namespaceStable)
+	token.syncs.Store(proof.syncs.Load())
+	token.syncNanos.Store(proof.syncNanos.Load())
+	return token, nil
+}
+
+func (proof *StableNamespaceCreationProof) Release() {
+	if proof == nil {
+		return
+	}
+	proof.mu.Lock()
+	defer proof.mu.Unlock()
+	if proof.released.Swap(true) {
+		return
+	}
+	if proof.parent != nil {
+		_ = proof.parent.Close()
+		proof.parent = nil
+	}
 }
 
 const (

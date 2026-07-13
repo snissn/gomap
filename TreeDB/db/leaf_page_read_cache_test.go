@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1527,6 +1529,64 @@ func TestLeafPageLogRejectsBatchPtrCountMismatch(t *testing.T) {
 	}
 	if stats := db.leafPageReadCache.stats(); stats.Stores != 0 {
 		t.Fatalf("cache stores=%d, want 0 after rejected batch", stats.Stores)
+	}
+}
+
+type leafPageCacheStableChildRefTestLog struct {
+	ptr       page.LeafLogPtr
+	resources *rootpublication.StableResourceSet
+}
+
+func (l *leafPageCacheStableChildRefTestLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return l.ptr, nil
+}
+
+func (l *leafPageCacheStableChildRefTestLog) AppendPreparedLeafPageChildRefsWithStableResources(_ [][]byte, _ [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error) {
+	return append(refs[:0], page.LeafLogChildRef(l.ptr)), l.resources, nil
+}
+
+func (*leafPageCacheStableChildRefTestLog) Flush() error { return nil }
+func (*leafPageCacheStableChildRefTestLog) Sync() error  { return nil }
+
+func TestLeafPageLogStableChildRefsDoNotCacheBeforeDependencyAppendSucceeds(t *testing.T) {
+	ptr := page.LeafLogPtr{FileID: 11, Offset: 256, RecordLengthHint: 1024}
+	resources := stableContractResourceSet(t, stableContractDescriptor{
+		generation: uint64(ptr.ValueLogFileID()), kind: rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer, frontier: 4096,
+	})
+	db := &DB{dir: t.TempDir(), leafPageReadCache: newLeafPageReadCache(8)}
+	inner := &leafPageCacheStableChildRefTestLog{ptr: ptr, resources: resources}
+	log := &leafPageLogWithRecordLengthHints{db: db, inner: inner}
+	wantErr := errors.New("reject dependency append")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceOuterLeaf && event.Point == durabilitycut.AfterDependencyAppend {
+			return wantErr
+		}
+		return nil
+	})
+	_, gotResources, err := log.AppendPreparedLeafPageChildRefsWithStableResources(
+		[][]byte{bytes.Repeat([]byte{0x7a}, page.PageSize)},
+		[][]byte{{0x01}},
+		nil,
+	)
+	restore()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("append error=%v want %v", err, wantErr)
+	}
+	if gotResources != nil {
+		t.Fatalf("resources=%v want nil after rejected append", gotResources)
+	}
+	if owner := resources.Owner(); owner != rootpublication.ResourceOwnerReleased {
+		t.Fatalf("resource owner=%v want released", owner)
+	}
+	if stats := db.leafPageReadCache.stats(); stats.Stores != 0 {
+		t.Fatalf("cache stores=%d want 0 after rejected dependency append", stats.Stores)
+	}
+	db.leafGenerationRecordLengthMu.Lock()
+	indexedFiles := len(db.leafGenerationRecordLengthByFile)
+	db.leafGenerationRecordLengthMu.Unlock()
+	if indexedFiles != 0 {
+		t.Fatalf("record-length indexes=%d want 0 after rejected dependency append", indexedFiles)
 	}
 }
 

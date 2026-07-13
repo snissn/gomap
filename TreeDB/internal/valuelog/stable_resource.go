@@ -10,12 +10,23 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
+var newValueLogStableNamespaceCreationProof = rootpublication.NewStableNamespaceCreationProof
+var bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
+	return proof.Bind(parent, parentGeneration, name, diagnosticPath)
+}
+
+// Keep retained-current and pending-successor binding as separate seams so
+// failure tests can target either ownership phase without perturbing the other.
+var bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
+	return proof.Bind(parent, parentGeneration, name, diagnosticPath)
+}
 var openStableValueLogParent = os.Open
 
 type pendingValueLogSuccessor struct {
@@ -27,7 +38,47 @@ type pendingValueLogSuccessor struct {
 	stableIdentity  rootpublication.StableIdentity
 	stableObserved  bool
 	observerEmitted bool
+	creationProof   *rootpublication.StableNamespaceCreationProof
 	failStop        bool
+}
+
+func (w *Writer) newStableCreationProof(parent, child *os.File, path string) (*rootpublication.StableNamespaceCreationProof, error) {
+	resource := segmentNamespaceResource(path)
+	dir := filepath.Dir(path)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, resource, "", dir); err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	proof, err := newValueLogStableNamespaceCreationProof(parent, child, filepath.Base(path))
+	w.directorySyncCalls.Add(1)
+	if ns := time.Since(started).Nanoseconds(); ns > 0 {
+		w.directorySyncNs.Add(uint64(ns))
+	}
+	if err != nil {
+		w.directorySyncErrors.Add(1)
+		return nil, err
+	}
+	return proof, durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, resource, "", dir)
+}
+
+func (w *Writer) prepareStableCreationProof(parent, child *os.File, path string, created, syncDirectory, retainProof bool) (*rootpublication.StableNamespaceCreationProof, bool, bool, error) {
+	if created && retainProof && syncDirectory {
+		if rootpublication.StableRelativeNamespaceSupported() {
+			proof, err := w.newStableCreationProof(parent, child, path)
+			return proof, false, false, err
+		}
+		if err := syncNewFileDirectory(w, path); err != nil {
+			return nil, true, false, err
+		}
+		return nil, true, false, nil
+	}
+	if created && retainProof && !syncDirectory {
+		return nil, false, true, nil
+	}
+	if syncDirectory {
+		return nil, false, false, syncNewFileDirectory(w, path)
+	}
+	return nil, false, false, nil
 }
 
 func cloneStableResourceRegistration(registration StableResourceRegistration) StableResourceRegistration {
@@ -717,6 +768,60 @@ func (rotation *StableResourceRotation) Release() {
 	rotation.Active = nil
 }
 
+// StableCreationNamespacePending reports whether the current segment was
+// created by this writer and therefore requires NamespaceCreate evidence when
+// it is captured. Existing-file opens return false; the subsequent token
+// registration remains responsible for typed unsupported or uncertified
+// failures.
+func (w *Writer) StableCreationNamespacePending() (bool, error) {
+	if w == nil || w.f == nil {
+		return false, errors.New("valuelog: stable resource requires file-backed writer")
+	}
+	return w.creationProof != nil || w.creationUnsupported || w.creationUncertified, nil
+}
+
+// StableNamespaceParentGeneration returns the logical epoch derived from the
+// exact retained parent directory handle used by stable creation and rotation.
+func (w *Writer) StableNamespaceParentGeneration() (uint64, error) {
+	if w == nil || w.stableParent == nil {
+		if w != nil && w.stableParentErr != nil {
+			return 0, w.stableParentErr
+		}
+		return 0, fmt.Errorf("%w: stable value-log parent unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	return rootpublication.StableNamespaceParentGeneration(w.stableParent)
+}
+
+// CertifyStableCreationNamespace converts an exact relaxed-rotation successor
+// into stable creation evidence before a stable caller appends bytes to it.
+// The writer and its retained parent remain unchanged on failure, so a caller
+// can retry without publishing an unreachable record.
+func (w *Writer) CertifyStableCreationNamespace() error {
+	if w == nil || w.f == nil {
+		return errors.New("valuelog: stable resource requires file-backed writer")
+	}
+	if !w.creationUncertified {
+		return nil
+	}
+	if w.stableParentErr != nil || w.stableParent == nil {
+		if w.stableParentErr != nil {
+			return fmt.Errorf("valuelog: stable parent unavailable: %w", w.stableParentErr)
+		}
+		return errors.New("valuelog: stable parent unavailable")
+	}
+	if w.creationProof != nil || w.creationUnsupported {
+		return fmt.Errorf("%w: inconsistent uncertified value-log creation state", rootpublication.ErrResourceConflict)
+	}
+	proof, err := w.newStableCreationProof(w.stableParent, w.f, w.f.Name())
+	if proof != nil {
+		// The parent sync may have completed before an injected after-sync cut.
+		// Retain that exact proof so retry does not repeat structural durability.
+		w.creationProof = proof
+		w.creationUncertified = false
+	}
+	return err
+}
+
 // StableResourceToken flushes accepted bytes and captures a duplicate of the
 // current file descriptor. It does not fsync the file; publication owns the
 // later FlushThrough/SyncThrough boundary on the token.
@@ -734,15 +839,53 @@ func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*
 }
 
 func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	return w.stableResourceTokenAfterFlushWithContentState(registration, false)
+}
+
+func (w *Writer) stableResourceTokenAfterFlushWithContentState(registration StableResourceRegistration, contentSynced bool) (*rootpublication.StableResourceToken, error) {
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
-	namespace, err := stableValueLogNamespaceToken(w.f, registration)
+	creationPending := w.creationProof != nil || w.creationUnsupported || w.creationUncertified
+	if creationPending && registration.NamespaceOperation != rootpublication.NamespaceCreate {
+		return nil, fmt.Errorf("%w: current value-log segment requires NamespaceCreate evidence", rootpublication.ErrNamespaceUnstable)
+	}
+	if registration.NamespaceOperation == rootpublication.NamespaceCreate && registration.NamespaceParent == nil {
+		registration.NamespaceParent = w.stableParent
+	}
+	if registration.NamespaceOperation == rootpublication.NamespaceCreate && w.creationUnsupported {
+		return nil, fmt.Errorf("%w: current value-log segment creation cannot be certified on this platform", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	var namespace *rootpublication.StableNamespaceToken
+	var err error
+	if registration.NamespaceOperation == rootpublication.NamespaceCreate {
+		if w.creationProof == nil {
+			if w.stableResourcePins != nil && !w.creationUnsupported {
+				if w.creationUncertified {
+					return nil, fmt.Errorf("%w: asynchronously created value-log segment has no stable namespace proof", rootpublication.ErrUnresolvedResource)
+				}
+				return nil, fmt.Errorf("%w: existing value-log segment has no creation namespace proof", rootpublication.ErrUnresolvedResource)
+			}
+			namespace, err = stableValueLogNamespaceToken(w.f, registration)
+		} else {
+			parent := registration.NamespaceParent
+			if parent == nil {
+				parent = w.stableParent
+			}
+			name := registration.NewName
+			if name == "" {
+				name = filepath.Base(w.f.Name())
+			}
+			namespace, err = bindRetainedValueLogStableNamespaceCreationProof(w.creationProof, parent, registration.ParentGeneration, name, filepath.Dir(registration.DiagnosticPath))
+		}
+	} else {
+		namespace, err = stableValueLogNamespaceToken(w.f, registration)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer namespace.Release()
-	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace, false)
+	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace, contentSynced)
 }
 
 func stableValueLogResourceToken(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken, contentSynced bool) (*rootpublication.StableResourceToken, error) {
@@ -834,8 +977,9 @@ func pendingValueLogFailure(parent, file *os.File, path string, err error) error
 }
 
 // RotateToWithStableResources pins the flushed old segment before writer state
-// switches and then pins the newly-created active segment after its namespace
-// operation has been made persistent.
+// switches, attaching any retained proof from its original creation without a
+// second directory sync. It then pins the newly-created active segment after
+// that segment's namespace operation has been made persistent.
 func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {
 	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
 		return nil, fmt.Errorf("%w: value-log stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
@@ -843,8 +987,12 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable rotation requires file-backed writer")
 	}
-	if active.NamespaceOperation == rootpublication.NamespaceNone {
-		return nil, errors.New("valuelog: stable rotation requires active namespace operation")
+	if w.creationUncertified {
+		return nil, fmt.Errorf("%w: asynchronously created current segment cannot enter a stable rotation", rootpublication.ErrUnresolvedResource)
+	}
+	if active.NamespaceOperation != rootpublication.NamespaceCreate {
+		return nil, fmt.Errorf("%w: stable rotation creates its successor and requires active namespace operation %q, got %q",
+			rootpublication.ErrNamespaceUnstable, rootpublication.NamespaceCreate, active.NamespaceOperation)
 	}
 	if w.stableParentErr != nil || w.stableParent == nil {
 		if w.stableParentErr != nil {
@@ -864,6 +1012,18 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if err != nil {
 		return nil, err
 	}
+	if w.creationProof != nil || w.creationUnsupported || w.creationUncertified {
+		switch closed.NamespaceOperation {
+		case rootpublication.NamespaceNone:
+			closed.NamespaceOperation = rootpublication.NamespaceCreate
+		case rootpublication.NamespaceCreate:
+		default:
+			return nil, fmt.Errorf("%w: current value-log segment creation requires NamespaceCreate evidence", rootpublication.ErrNamespaceUnstable)
+		}
+		if closed.ParentGeneration == 0 {
+			closed.ParentGeneration = normalizedActive.ParentGeneration
+		}
+	}
 	if pending := w.pendingStableSuccessor; pending != nil {
 		if pending.parent != w.stableParent || pending.path != path || pending.fileID != fileID ||
 			!sameStableResourceRegistration(pending.active, normalizedActive) {
@@ -879,7 +1039,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			return nil, err
 		}
 	}
-	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, nil, syncCurrent)
+	closedToken, err := w.stableResourceTokenAfterFlushWithContentState(closed, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
@@ -912,9 +1072,17 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	prepared := pending.file
 	if !pending.observerEmitted {
 		pending.observerEmitted = true
-		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(path), filepath.Dir(path), "", path); observeErr != nil {
 			closedToken.Release()
 			return nil, pendingValueLogFailure(w.stableParent, prepared, path, observeErr)
+		}
+	}
+	if pending.creationProof == nil {
+		proof, proofErr := w.newStableCreationProof(w.stableParent, prepared, path)
+		pending.creationProof = proof
+		if proofErr != nil {
+			closedToken.Release()
+			return nil, pendingValueLogFailure(w.stableParent, prepared, path, proofErr)
 		}
 	}
 	preparedInfo, err := prepared.Stat()
@@ -922,7 +1090,8 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		closedToken.Release()
 		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
-	namespace, err := stableValueLogNamespaceToken(prepared, normalizedActive)
+	namespace, err := bindValueLogStableNamespaceCreationProof(pending.creationProof, normalizedActive.NamespaceParent, normalizedActive.ParentGeneration,
+		normalizedActive.NewName, filepath.Dir(normalizedActive.DiagnosticPath))
 	if err != nil {
 		closedToken.Release()
 		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
@@ -934,6 +1103,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		return nil, err
 	}
 	old := w.f
+	oldCreationProof := w.creationProof
 	closeErr := w.closeRotatedResource(old)
 	observeErr := w.releaseStableResourceObservation()
 	if err := errors.Join(closeErr, observeErr); err != nil {
@@ -946,6 +1116,10 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	}
 	pending.file = nil
 	w.f = prepared
+	w.creationProof = pending.creationProof
+	w.creationUnsupported = false
+	w.creationUncertified = false
+	pending.creationProof = nil
 	w.bw = nil
 	w.size = preparedInfo.Size()
 	w.fileID = fileID
@@ -956,6 +1130,9 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		w.stableResourceIdentity = pending.stableIdentity
 		w.stableResourceObserved = true
 		pending.stableObserved = false
+	}
+	if oldCreationProof != nil {
+		oldCreationProof.Release()
 	}
 	w.pendingStableSuccessor = nil
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
