@@ -1161,6 +1161,35 @@ Encoding rules:
 - if compact encoding is not smaller than the raw page, TreeDB stores the raw
   page payload instead.
 
+#### Split-leaf generation manifest
+
+`leaf_vlog/manifest.json` is a version-2 JSON document. In addition to the
+current/next generation IDs and generation records, it contains the required
+non-zero `manifest_revision`. The revision identifies the immutable physical
+manifest replacement, not merely the logical current generation: every
+successful rewrite increments it, including GC, reconcile, and offline-vacuum
+rewrites that leave `current_generation_id` unchanged.
+
+Version 1 and version-2 documents with a zero revision are deliberately
+incompatible in this pre-alpha format. Open fails with the typed incompatible
+manifest error; TreeDB does not infer a revision or migrate the file in place.
+Empty, truncated, malformed, or structurally invalid documents also fail open.
+
+On platforms with retained-directory relative operations, stable replacement
+writes and syncs one temporary file through its exact handle, renames it
+relative to the retained `leaf_vlog` directory, verifies the destination is
+the same physical object, then syncs that exact directory once. The returned
+stable resource token binds the SHA-256 digest of the exact version-2 bytes and
+uses `manifest_revision` as its immutable generation. Current root publication
+does not yet consume that token; issue #3679 owns adding the dependency without
+changing the replacement format or its physical identity.
+
+Platforms without a retained-parent relative rename capability fail the
+strict stable operation before creating a temporary file. Ordinary pre-#3679
+TreeDB operation remains on an explicit compatibility replacement path there;
+that path returns no stable token and must not be interpreted as certifying the
+strict namespace durability contract.
+
 ### 7.3 Typed Asset Manager, TCPA Typed-Row Assets, and Typed-Column Parts
 
 Production typed-storage physical data is stored in typed asset manager segments
