@@ -216,7 +216,15 @@ func TestSeekGE_ConcurrentCommitSnapshotIsCoherent(t *testing.T) {
 
 func TestSeekGE_AfterCloseFailsClosed(t *testing.T) {
 	backend := NewMockBackend()
-	db := openPointSuccessorTestDB(t, backend)
+	db, err := Open(t.TempDir(), backend, Options{
+		FlushThreshold:     1 << 30,
+		MemtableShards:     4,
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

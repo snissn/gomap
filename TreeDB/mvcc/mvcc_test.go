@@ -112,8 +112,10 @@ func TestGetAtPointSuccessorValueLogCheckpointAndReopen(t *testing.T) {
 			Durability:                   treedb.DurabilityWALOffRelaxed,
 			DisableSideStores:            true,
 			BackgroundCheckpointInterval: -1,
-			ForceValueLogPointers:        true,
-			ValueLogPointerThreshold:     1,
+			ValueLog: treedb.ValueLogOptions{
+				ForcePointers:    true,
+				PointerThreshold: 1,
+			},
 		})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
@@ -157,7 +159,9 @@ func TestGetAtPointSuccessorDiscardFloorAndPruneBoundary(t *testing.T) {
 	if _, err := store.PruneVersions(PruneOptions{BatchSize: 1, Mode: CommitRelaxed}); err != nil {
 		t.Fatalf("PruneVersions: %v", err)
 	}
-	requireResult(t, store, []byte("k"), 4, Present, 4, []byte("4"))
+	if _, err := store.GetAt([]byte("k"), 4); !errors.Is(err, ErrReadBeforeDiscardFloor) {
+		t.Fatalf("GetAt at floor error = %v", err)
+	}
 	requireResult(t, store, []byte("k"), 5, Present, 5, []byte("5"))
 }
 

@@ -23,15 +23,19 @@ func TestTableSeekGE_ModeMatrix(t *testing.T) {
 			revisioned.SetEntryWithRevision([]byte("d"), nil, page.ValuePtr{}, node.FlagTombstone, 9)
 			mt.Freeze()
 
-			key, val, ptr, flags, revision, found := mt.SeekGE([]byte("c"), []byte("e"))
+			seeker, ok := mt.(SuccessorTable)
+			if !ok {
+				t.Fatal("memtable does not implement SuccessorTable")
+			}
+			key, val, ptr, flags, revision, found := seeker.SeekGE([]byte("c"), []byte("e"))
 			if !found || !bytes.Equal(key, []byte("d")) || val != nil || ptr != (page.ValuePtr{}) || flags&node.FlagTombstone == 0 || revision != 9 {
 				t.Fatalf("SeekGE(c,e) = (%q,%q,%+v,%#x,%d,%t), want tombstone d@9", key, val, ptr, flags, revision, found)
 			}
 
-			if _, _, _, _, _, found := mt.SeekGE([]byte("d"), []byte("d")); found {
+			if _, _, _, _, _, found := seeker.SeekGE([]byte("d"), []byte("d")); found {
 				t.Fatal("SeekGE accepted an empty range")
 			}
-			if _, _, _, _, _, found := mt.SeekGE([]byte("e"), nil); found {
+			if _, _, _, _, _, found := seeker.SeekGE([]byte("e"), nil); found {
 				t.Fatal("SeekGE returned a key past the table maximum")
 			}
 		})
