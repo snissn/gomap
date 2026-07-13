@@ -110,6 +110,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #3245 publication/readability map for collection catalog metadata and
     root descriptors, ordered/system-root publication, value-log pointer
     publication, snapshot acquisition, and `AppliedCommandLSN` visibility.
+- `TreeDB/docs/spec/authority-inventory.md`
+  - generated issue #3677 authority map for external resource fields, producers,
+    identity/frontier evidence, namespace operations, recovery validation,
+    deletion ownership, quarantines, and adjacent issue boundaries.
 - `TreeDB/docs/spec/recovery.md`
   - open-time recovery pipeline, replay ordering, truncated tail behavior, failure modes.
 - `TreeDB/docs/spec/user-command-wal.md`
