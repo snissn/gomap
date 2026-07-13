@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -150,6 +151,136 @@ func TestStableResourceSetRetainsRotatedIdentitiesAndGreatestFrontier(t *testing
 	}
 	if got := set.FrontierFor(first.Identity(), 1).Bytes; got != 16 {
 		t.Fatalf("coalesced frontier=%d want 16", got)
+	}
+}
+
+func TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "000001.vlog", "original-resource-bytes")
+	digest := sha256.Sum256([]byte("segment-header"))
+	newToken := func(lane, resourceID string, frontier DurableFrontier) *StableResourceToken {
+		t.Helper()
+		frontier.Bytes += uint64(len(lane))
+		frontier.MaxLSN += uint64(len(resourceID))
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceCommandWALExternalRID, LogicalLane: lane, ResourceID: resourceID, Generation: 1,
+			DiagnosticPath: "maindb/value_vlog/000001.vlog", File: file, Frontier: frontier,
+			Digest: digest, Reachability: ReachabilityCommandWALExternalRIDFence,
+		})
+		if err != nil {
+			t.Fatalf("NewStableResourceToken: %v", err)
+		}
+		return token
+	}
+
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reverse=%t", reverse), func(t *testing.T) {
+			first := newToken("first", "segment-a", NewRIDFrontier([]uint64{9, 2, 9, 20}))
+			second := newToken("second-lane", "segment-bb", NewRIDFrontier([]uint64{4, 9, 20, 30}))
+			tokens := []*StableResourceToken{first, second}
+			if reverse {
+				tokens[0], tokens[1] = tokens[1], tokens[0]
+			}
+			builder := NewStableResourceSetBuilder(ReachabilityCommandWALExternalRIDFence)
+			for _, token := range tokens {
+				if err := builder.Add(token); err != nil {
+					t.Fatalf("Add: %v", err)
+				}
+			}
+			set, err := builder.Freeze()
+			if err != nil {
+				t.Fatalf("Freeze: %v", err)
+			}
+			defer set.Release()
+			if got := set.Len(); got != 1 {
+				t.Fatalf("set.Len()=%d want one physical segment", got)
+			}
+
+			descriptors := set.Descriptors()
+			if len(descriptors) != 1 {
+				t.Fatalf("descriptor count=%d want 1", len(descriptors))
+			}
+			descriptor := descriptors[0]
+			wantRIDs := []uint64{2, 4, 9, 20, 30}
+			if got := descriptor.RIDs(); !slices.Equal(got, wantRIDs) {
+				t.Fatalf("descriptor RIDs=%v want %v", got, wantRIDs)
+			}
+			frontier := descriptor.Frontier()
+			if frontier.Bytes != uint64(len("second-lane")) || frontier.MaxLSN != uint64(len("segment-bb")) {
+				t.Fatalf("coalesced scalar frontier=%+v", frontier)
+			}
+			wantRIDFrontier := NewRIDFrontier(wantRIDs)
+			if frontier.RIDCount != wantRIDFrontier.RIDCount || frontier.RIDMin != wantRIDFrontier.RIDMin ||
+				frontier.RIDMax != wantRIDFrontier.RIDMax || frontier.MaxRID != wantRIDFrontier.MaxRID ||
+				frontier.RIDSetDigest != wantRIDFrontier.RIDSetDigest {
+				t.Fatalf("coalesced RID summary=%+v want %+v", frontier, wantRIDFrontier)
+			}
+			if descriptor.Kind() != ResourceCommandWALExternalRID || descriptor.Identity() != first.Identity() ||
+				descriptor.Generation() != 1 || descriptor.Digest() != digest {
+				t.Fatalf("descriptor identity metadata changed: kind=%q identity=%+v generation=%d digest=%x",
+					descriptor.Kind(), descriptor.Identity(), descriptor.Generation(), descriptor.Digest())
+			}
+			if got := descriptor.ReachabilityFields(); !slices.Equal(got, []ReachabilityField{ReachabilityCommandWALExternalRIDFence}) {
+				t.Fatalf("descriptor reachability=%v", got)
+			}
+
+			returned := descriptor.RIDs()
+			returned[0] = 999
+			fields := descriptor.ReachabilityFields()
+			fields[0] = ReachabilityValueLogPointer
+			if got := set.Descriptors()[0].RIDs(); !slices.Equal(got, wantRIDs) {
+				t.Fatalf("descriptor returned-slice mutation changed set RIDs: %v", got)
+			}
+			if got := set.Descriptors()[0].ReachabilityFields(); !slices.Equal(got, []ReachabilityField{ReachabilityCommandWALExternalRIDFence}) {
+				t.Fatalf("descriptor returned-slice mutation changed fields: %v", got)
+			}
+			fromLookup := set.FrontierFor(first.Identity(), 1).RIDs()
+			fromLookup[0] = 777
+			if got := set.FrontierFor(first.Identity(), 1).RIDs(); !slices.Equal(got, wantRIDs) {
+				t.Fatalf("FrontierFor returned-slice mutation changed set RIDs: %v", got)
+			}
+		})
+	}
+}
+
+func TestStableResourceTokenCapturesExactRIDMembershipByValue(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "capture.vlog", "original-resource-bytes")
+	rids := []uint64{9, 2, 4}
+	frontier := NewRIDFrontier(rids)
+	rids[0] = 900 // Mutation after frontier construction, before registration.
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceCommandWALExternalRID, LogicalLane: "main", ResourceID: "capture", Generation: 1,
+		DiagnosticPath: "maindb/value_vlog/capture.vlog", File: file, Frontier: frontier,
+		Digest: sha256.Sum256([]byte("segment-header")), Reachability: ReachabilityCommandWALExternalRIDFence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	rids[1] = 200 // Mutation after registration.
+	returned := token.Frontier().RIDs()
+	returned[0] = 100
+	if got, want := token.Frontier().RIDs(), []uint64{2, 4, 9}; !slices.Equal(got, want) {
+		t.Fatalf("captured RIDs=%v want %v", got, want)
+	}
+}
+
+func TestStableResourceTokenRejectsRIDSummaryWithoutExactMembership(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "summary-only.vlog", "original-resource-bytes")
+	exact := NewRIDFrontier([]uint64{2, 4, 9})
+	summaryOnly := DurableFrontier{
+		MaxRID: exact.MaxRID, RIDSetDigest: exact.RIDSetDigest, RIDCount: exact.RIDCount,
+		RIDMin: exact.RIDMin, RIDMax: exact.RIDMax,
+	}
+	_, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceCommandWALExternalRID, LogicalLane: "main", ResourceID: "summary-only", Generation: 1,
+		DiagnosticPath: "maindb/value_vlog/summary-only.vlog", File: file, Frontier: summaryOnly,
+		Digest: sha256.Sum256([]byte("segment-header")), Reachability: ReachabilityCommandWALExternalRIDFence,
+	})
+	if !errors.Is(err, ErrUnresolvedResource) {
+		t.Fatalf("NewStableResourceToken error=%v want ErrUnresolvedResource", err)
 	}
 }
 
