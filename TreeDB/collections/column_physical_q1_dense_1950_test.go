@@ -206,6 +206,18 @@ func TestColumnPhysicalQ1DenseTypedColumnOneShotSetupDiagnostics1950(t *testing.
 	assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(t, "q1 one-shot setup", diag)
 }
 
+func TestColumnPhysicalQ1DenseOneShotSetupDiagnosticsToleratesCoarseClock1950(t *testing.T) {
+	diag := ColumnPhysicalQueryDiagnostics{TypedColumnOneShotBuildNanos: 753_200}
+	if columnPhysicalQ1DenseOneShotSetupMissingSplitDiagnostics1950(diag, false) {
+		t.Fatal("outer-only timing must be accepted when the clock cannot resolve any nested phase")
+	}
+
+	diag.TypedColumnPreparePartDecodeNanos = 1
+	if !columnPhysicalQ1DenseOneShotSetupMissingSplitDiagnostics1950(diag, false) {
+		t.Fatal("a resolved nested phase must retain the missing-split diagnostic gate")
+	}
+}
+
 func TestColumnPhysicalQ1DenseTypedColumnOneShotReusesPlannedQuery1950(t *testing.T) {
 	batches := columnPhysicalQ1DenseEventBatches1950([][]string{
 		{"app.m", "app.z", "app.m", "app.z"},
@@ -565,10 +577,6 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if diag.TypedColumnPrepareDenseGroupNanos < 0 {
 		tb.Fatalf("%s setup negative dense group diagnostics=%d diagnostics=%+v", label, diag.TypedColumnPrepareDenseGroupNanos, diag)
 	}
-	rawSetupNanos := diag.TypedColumnPrepareReadImageNanos +
-		diag.TypedColumnPrepareStateBuildNanos +
-		diag.TypedColumnPrepareDictionaryNanos +
-		diag.TypedColumnPrepareAdapterNanos
 	targetedRanges := typedColumnStringUseTargetedRanges(ColumnAssetReadIntegrity(diag.ColumnAssetReadIntegrity))
 	if !targetedRanges && (diag.TypedColumnPrepareRangeReadNanos != 0 || diag.TypedColumnPrepareRangeReadBytes != 0) {
 		tb.Fatalf("%s setup range-read diagnostics=%d/%d want 0 for raw q1 setup diagnostics=%+v",
@@ -581,10 +589,7 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 		tb.Fatalf("%s setup missing targeted range-read bytes diagnostics=%+v", label, diag)
 	}
 	unexplainedSetupNanos := diag.TypedColumnOneShotBuildNanos - diag.TypedColumnPreparePartDecodeNanos
-	if unexplainedSetupNanos > 0 &&
-		rawSetupNanos == 0 &&
-		diag.TypedColumnPrepareDenseGroupNanos == 0 &&
-		!targetedRanges {
+	if columnPhysicalQ1DenseOneShotSetupMissingSplitDiagnostics1950(diag, targetedRanges) {
 		tb.Fatalf("%s setup missing split diagnostics unexplained_setup=%d read_image=%d state_build=%d dictionary=%d adapter=%d dense_group=%d diagnostics=%+v",
 			label,
 			unexplainedSetupNanos,
@@ -595,6 +600,19 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 			diag.TypedColumnPrepareDenseGroupNanos,
 			diag)
 	}
+}
+
+func columnPhysicalQ1DenseOneShotSetupMissingSplitDiagnostics1950(diag ColumnPhysicalQueryDiagnostics, targetedRanges bool) bool {
+	rawSetupNanos := diag.TypedColumnPrepareReadImageNanos +
+		diag.TypedColumnPrepareStateBuildNanos +
+		diag.TypedColumnPrepareDictionaryNanos +
+		diag.TypedColumnPrepareAdapterNanos
+	unexplainedSetupNanos := diag.TypedColumnOneShotBuildNanos - diag.TypedColumnPreparePartDecodeNanos
+	return unexplainedSetupNanos > 0 &&
+		diag.TypedColumnPreparePartDecodeNanos > 0 &&
+		rawSetupNanos == 0 &&
+		diag.TypedColumnPrepareDenseGroupNanos == 0 &&
+		!targetedRanges
 }
 
 func reportColumnPhysicalQ1DenseBenchMetrics1950(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
