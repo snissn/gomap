@@ -729,17 +729,25 @@ func loadLeafGenerationManifest(leafDir string) (*leafGenerationManifest, bool, 
 		}
 		return nil, false, err
 	}
+	manifest, err := decodeLeafGenerationManifest(data, filepath.Base(path))
+	if err != nil {
+		return nil, false, err
+	}
+	return manifest, true, nil
+}
+
+func decodeLeafGenerationManifest(data []byte, diagnosticName string) (*leafGenerationManifest, error) {
 	if len(data) == 0 {
-		return nil, false, fmt.Errorf("treedb: decode %s: empty file", filepath.Base(path))
+		return nil, fmt.Errorf("treedb: decode %s: empty file", diagnosticName)
 	}
 	var manifest leafGenerationManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("treedb: decode %s: %w", diagnosticName, err)
 	}
 	if err := validatePersistedLeafGenerationManifest(&manifest); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return manifest.clone(), true, nil
+	return manifest.clone(), nil
 }
 
 func saveLeafGenerationManifest(leafDir string, manifest *leafGenerationManifest) error {
@@ -800,6 +808,10 @@ func listLeafGenerationBootstrapFiles(leafDir string) ([]leafGenerationBootstrap
 		}
 		return nil, err
 	}
+	return leafGenerationBootstrapFilesFromEntries(entries)
+}
+
+func leafGenerationBootstrapFilesFromEntries(entries []os.DirEntry) ([]leafGenerationBootstrapFile, error) {
 	files := make([]leafGenerationBootstrapFile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -835,6 +847,10 @@ func bootstrapLeafGenerationManifestFromDir(leafDir string, commitSeq uint64) (*
 	if err != nil {
 		return nil, err
 	}
+	return bootstrapLeafGenerationManifestFromFiles(files, commitSeq)
+}
+
+func bootstrapLeafGenerationManifestFromFiles(files []leafGenerationBootstrapFile, commitSeq uint64) (*leafGenerationManifest, error) {
 	if len(files) == 0 {
 		return newLeafGenerationManifest(commitSeq), nil
 	}
@@ -975,6 +991,13 @@ func reconcileLeafGenerationManifestWithDir(leafDir string, manifest *leafGenera
 	if err != nil {
 		return nil, false, err
 	}
+	return reconcileLeafGenerationManifestWithFiles(manifest, files, commitSeq)
+}
+
+func reconcileLeafGenerationManifestWithFiles(manifest *leafGenerationManifest, files []leafGenerationBootstrapFile, commitSeq uint64) (*leafGenerationManifest, bool, error) {
+	if manifest == nil {
+		return nil, false, nil
+	}
 	diskFiles := make(map[uint32]struct{}, len(files))
 	for _, file := range files {
 		if file.rawFileID != 0 {
@@ -1044,12 +1067,29 @@ func loadOrCreateLeafGenerationManifest(leafDir string, commitSeq uint64, readOn
 }
 
 func loadOrCreateLeafGenerationManifestWithStore(leafDir string, commitSeq uint64, readOnly bool, store *leafGenerationManifestStore) (*leafGenerationManifest, error) {
-	manifest, ok, err := loadLeafGenerationManifest(leafDir)
+	var manifest *leafGenerationManifest
+	var ok bool
+	var err error
+	if store == nil {
+		manifest, ok, err = loadLeafGenerationManifest(leafDir)
+	} else {
+		manifest, ok, err = store.Load()
+	}
 	if err != nil {
 		return nil, err
 	}
 	if ok {
-		reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, manifest, commitSeq)
+		var reconciled *leafGenerationManifest
+		var changed bool
+		if store == nil {
+			reconciled, changed, err = reconcileLeafGenerationManifestWithDir(leafDir, manifest, commitSeq)
+		} else {
+			var files []leafGenerationBootstrapFile
+			files, err = store.listBootstrapFiles()
+			if err == nil {
+				reconciled, changed, err = reconcileLeafGenerationManifestWithFiles(manifest, files, commitSeq)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1063,7 +1103,15 @@ func loadOrCreateLeafGenerationManifestWithStore(leafDir string, commitSeq uint6
 		}
 		return manifest, nil
 	}
-	manifest, err = bootstrapLeafGenerationManifestFromDir(leafDir, commitSeq)
+	if store == nil {
+		manifest, err = bootstrapLeafGenerationManifestFromDir(leafDir, commitSeq)
+	} else {
+		var files []leafGenerationBootstrapFile
+		files, err = store.listBootstrapFiles()
+		if err == nil {
+			manifest, err = bootstrapLeafGenerationManifestFromFiles(files, commitSeq)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1101,7 +1149,18 @@ func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bo
 		return false, nil
 	}
 	leafDir := LeafLogDirPath(db.dir)
-	reconciled, changed, err := reconcileLeafGenerationManifestWithDir(leafDir, db.leafGenerationManifest, commitSeq)
+	var reconciled *leafGenerationManifest
+	var changed bool
+	var err error
+	if db.leafGenerationManifestStore == nil {
+		reconciled, changed, err = reconcileLeafGenerationManifestWithDir(leafDir, db.leafGenerationManifest, commitSeq)
+	} else {
+		var files []leafGenerationBootstrapFile
+		files, err = db.leafGenerationManifestStore.listBootstrapFiles()
+		if err == nil {
+			reconciled, changed, err = reconcileLeafGenerationManifestWithFiles(db.leafGenerationManifest, files, commitSeq)
+		}
+	}
 	if err != nil || !changed {
 		return false, err
 	}

@@ -102,6 +102,69 @@ func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) 
 	return s.replaceStable(manifest)
 }
 
+func (s *leafGenerationManifestStore) Load() (*leafGenerationManifest, bool, error) {
+	if s == nil || s.leafDir == "" {
+		return nil, false, errors.New("missing leaf_vlog manifest store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, false, rootpublication.ErrResourceOwnership
+	}
+	if s.mode == leafGenerationManifestCompatibility {
+		return loadLeafGenerationManifest(s.leafDir)
+	}
+	if s.stableCapability == nil || !s.stableCapability() {
+		return nil, false, fmt.Errorf("%w: retained-parent manifest load unavailable", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	if s.parentErr != nil {
+		return nil, false, s.parentErr
+	}
+	file, err := rootpublication.OpenStableChildFile(s.parent, leafGenerationManifestFileName, os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, false, err
+	}
+	manifest, err := decodeLeafGenerationManifest(data, leafGenerationManifestFileName)
+	if err != nil {
+		return nil, false, err
+	}
+	return manifest, true, nil
+}
+
+func (s *leafGenerationManifestStore) listBootstrapFiles() ([]leafGenerationBootstrapFile, error) {
+	if s == nil || s.mode == leafGenerationManifestCompatibility {
+		return listLeafGenerationBootstrapFiles(s.leafDir)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	if s.stableCapability == nil || !s.stableCapability() {
+		return nil, fmt.Errorf("%w: retained-parent manifest scan unavailable", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	if s.parentErr != nil {
+		return nil, s.parentErr
+	}
+	if _, err := s.parent.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	entries, err := s.parent.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = s.parent.Seek(0, io.SeekStart)
+	return leafGenerationBootstrapFilesFromEntries(entries)
+}
+
 func (s *leafGenerationManifestStore) replaceCompatibility(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {
 	candidate, data, err := s.prepareReplacement(manifest, nil, true)
 	if err != nil {
@@ -193,11 +256,21 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 			return nil, err
 		}
 	}
-	s.tempSeq++
-	tempName := fmt.Sprintf("%s.tmp.%016x", leafGenerationManifestFileName, s.tempSeq)
-	tempFile, err = rootpublication.OpenStableChildFile(parent, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
+	const maxTempCreateAttempts = 64
+	var tempName string
+	for attempt := 0; attempt < maxTempCreateAttempts; attempt++ {
+		s.tempSeq++
+		tempName = fmt.Sprintf("%s.tmp.%016x", leafGenerationManifestFileName, s.tempSeq)
+		tempFile, err = rootpublication.OpenStableChildFile(parent, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+	}
+	if tempFile == nil {
+		return nil, fmt.Errorf("create stable manifest temp: exhausted %d exact-parent names", maxTempCreateAttempts)
 	}
 	tempLinked := true
 	defer func() {
