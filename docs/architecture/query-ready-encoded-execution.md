@@ -21,18 +21,22 @@ run on the same base-plus-delta visibility view. Updates, deletes, tombstones,
 and part-local dictionary additions therefore have the same semantics for all
 six production cells.
 
-The collection adapter accepts caller-selected generation files and the
-existing `ColumnPhysicalQueryRequest`. It derives the recovery-authoritative
-schema identity from the collection, holds the existing generation lease, and
-returns the existing physical-query result shape. It deliberately does not
-select, publish, retain, reclaim, or rewrite assets; those responsibilities
-remain with later graph milestones and the existing lifecycle owners.
+The collection adapter accepts selected generation files and the existing
+`ColumnPhysicalQueryRequest`. It derives the recovery-authoritative schema
+identity from the collection, holds the existing generation lease, and returns
+the existing physical-query result shape. `PrepareQueryReadyColumnGeneration`
+selects the exact insert-only typed-column inventory pinned by a DB snapshot
+and uses M5's bounded build/handoff path to create a rebuildable QRBG. The
+returned owner supplies the exact M3 byte range and reclaims the unpublished
+asset after all runners close. It does not publish a root, assume GC ownership,
+or change WAL, document, or recovery authority.
 
-The existing `RunColumnPhysicalQuery` and `PrepareColumnPhysicalQuery` entry
-points do not auto-route to this adapter yet. Canonical JSONBench routing must
-follow M5's generation publication/handoff so those entry points can obtain an
-authoritatively selected file set; M6 owns the resulting end-to-end counter and
-matrix evidence.
+The generic `RunColumnPhysicalQuery` and `PrepareColumnPhysicalQuery` entry
+points continue to preserve their existing behavior. The canonical JSONBench
+`column-store-full-prepared` lane explicitly reopens the collection, prepares
+one query-independent generation outside timed query attempts, and routes
+q1-q5 and qexpr through the query-ready adapter. M6 owns the final integrated
+counter and matrix evidence.
 
 ## Guardrails and observability
 
