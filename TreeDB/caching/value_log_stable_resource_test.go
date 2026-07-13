@@ -84,8 +84,8 @@ func TestCachingValueLogStableResource_RotationPinsCapturedWriterUntilDurableRel
 	if err != nil {
 		t.Fatalf("ValueLogGC while stable-pinned: %v", err)
 	}
-	if stats.SegmentsDeleted == 0 {
-		t.Fatalf("expected an unpinned rotated segment to be deleted: %+v", stats)
+	if stats.SegmentsDeleted == 0 && (runtime.GOOS != "windows" || stats.SegmentsPending == 0) {
+		t.Fatalf("expected an unpinned rotated segment to be deleted or pending Windows handle release: %+v", stats)
 	}
 	if _, err := os.Stat(capturedPath); err != nil {
 		t.Fatalf("captured segment removed while pinned: %v", err)

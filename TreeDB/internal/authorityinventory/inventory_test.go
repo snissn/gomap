@@ -166,6 +166,9 @@ func TestGeneratedMarkdownIsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Git for Windows may materialize tracked Markdown with CRLF even though the
+	// generator deliberately emits repository-canonical LF output.
+	got = bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n"))
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is stale; run go generate ./TreeDB/internal/authorityinventory", path)
 	}
