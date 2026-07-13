@@ -163,6 +163,24 @@ func TestLeafGenerationManifest_LoadClassifiesPersistedDocumentCorruption(t *tes
 	}
 }
 
+func TestCompatibleLeafGenerationManifestReplacementPreservesPersistedSyntaxError(t *testing.T) {
+	leafDir := t.TempDir()
+	if err := os.WriteFile(leafGenerationManifestPath(leafDir), []byte(`{"version":2,"manifest_revision":1,`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+
+	_, err := store.Replace(newLeafGenerationManifest(1))
+	if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("Replace error=%v want ErrLeafGenerationManifestIncompatible", err)
+	}
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("Replace error=%v does not preserve json.SyntaxError", err)
+	}
+}
+
 func TestLeafGenerationManifest_LoadDoesNotClassifyFilesystemIOErrorAsIncompatible(t *testing.T) {
 	leafDir := t.TempDir()
 	if err := os.Mkdir(leafGenerationManifestPath(leafDir), 0o700); err != nil {
