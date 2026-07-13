@@ -179,8 +179,8 @@ func TestCachingLeafPageLogStablePreparedBatchCapturesEveryReferencedSegment(t *
 			namespaceTokens++
 		}
 	}
-	if namespaceTokens != len(descriptors)-1 {
-		t.Fatalf("namespace-bearing tokens=%d descriptors=%d want created segments plus one existing segment", namespaceTokens, len(descriptors))
+	if namespaceTokens != len(descriptors) {
+		t.Fatalf("namespace-bearing tokens=%d descriptors=%d want one exact creation witness per fresh segment", namespaceTokens, len(descriptors))
 	}
 	stats := resources.Stats(time.Now())
 	if len(stats) != 1 || stats[0].NamespaceSyncs != uint64(namespaceTokens) {

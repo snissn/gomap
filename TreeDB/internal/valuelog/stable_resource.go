@@ -21,6 +21,12 @@ var newValueLogStableNamespaceCreationProof = rootpublication.NewStableNamespace
 var bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
 	return proof.Bind(parent, parentGeneration, name, diagnosticPath)
 }
+
+// Keep retained-current and pending-successor binding as separate seams so
+// failure tests can target either ownership phase without perturbing the other.
+var bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
+	return proof.Bind(parent, parentGeneration, name, diagnosticPath)
+}
 var openStableValueLogParent = os.Open
 
 type pendingValueLogSuccessor struct {
@@ -791,6 +797,10 @@ func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*
 }
 
 func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	return w.stableResourceTokenAfterFlushWithContentState(registration, false)
+}
+
+func (w *Writer) stableResourceTokenAfterFlushWithContentState(registration StableResourceRegistration, contentSynced bool) (*rootpublication.StableResourceToken, error) {
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
@@ -824,7 +834,7 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 			if name == "" {
 				name = filepath.Base(w.f.Name())
 			}
-			namespace, err = bindValueLogStableNamespaceCreationProof(w.creationProof, parent, registration.ParentGeneration, name, filepath.Dir(registration.DiagnosticPath))
+			namespace, err = bindRetainedValueLogStableNamespaceCreationProof(w.creationProof, parent, registration.ParentGeneration, name, filepath.Dir(registration.DiagnosticPath))
 		}
 	} else {
 		namespace, err = stableValueLogNamespaceToken(w.f, registration)
@@ -833,7 +843,7 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 		return nil, err
 	}
 	defer namespace.Release()
-	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace, false)
+	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace, contentSynced)
 }
 
 func stableValueLogResourceToken(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken, contentSynced bool) (*rootpublication.StableResourceToken, error) {
@@ -925,8 +935,9 @@ func pendingValueLogFailure(parent, file *os.File, path string, err error) error
 }
 
 // RotateToWithStableResources pins the flushed old segment before writer state
-// switches and then pins the newly-created active segment after its namespace
-// operation has been made persistent.
+// switches, attaching any retained proof from its original creation without a
+// second directory sync. It then pins the newly-created active segment after
+// that segment's namespace operation has been made persistent.
 func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {
 	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
 		return nil, fmt.Errorf("%w: value-log stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
@@ -958,6 +969,18 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if err != nil {
 		return nil, err
 	}
+	if w.creationProof != nil || w.creationUnsupported || w.creationUncertified {
+		switch closed.NamespaceOperation {
+		case rootpublication.NamespaceNone:
+			closed.NamespaceOperation = rootpublication.NamespaceCreate
+		case rootpublication.NamespaceCreate:
+		default:
+			return nil, fmt.Errorf("%w: current value-log segment creation requires NamespaceCreate evidence", rootpublication.ErrNamespaceUnstable)
+		}
+		if closed.ParentGeneration == 0 {
+			closed.ParentGeneration = normalizedActive.ParentGeneration
+		}
+	}
 	if pending := w.pendingStableSuccessor; pending != nil {
 		if pending.parent != w.stableParent || pending.path != path || pending.fileID != fileID ||
 			!sameStableResourceRegistration(pending.active, normalizedActive) {
@@ -973,7 +996,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			return nil, err
 		}
 	}
-	closedToken, err := stableValueLogResourceToken(w.f, w.fileID, closed, nil, syncCurrent)
+	closedToken, err := w.stableResourceTokenAfterFlushWithContentState(closed, syncCurrent)
 	if err != nil {
 		return nil, err
 	}
