@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -18,6 +19,7 @@ type cachingValueLogAppender struct {
 
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
 var _ backenddb.ValueLogExternalRefFlusher = (*cachingValueLogAppender)(nil)
+var _ backenddb.ValueLogStableResourceProvider = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}
@@ -109,6 +111,36 @@ func (a *cachingValueLogAppender) Sync() error {
 		return nil
 	}
 	return a.db.syncValueLogLane(a.lane)
+}
+
+func (a *cachingValueLogAppender) CaptureValueLogStableSnapshot() (*valuelog.StableWriterSnapshot, rootpublication.StableNamespaceToken, error) {
+	if a == nil || a.db == nil || a.lane == nil {
+		return nil, rootpublication.StableNamespaceToken{}, errWALUnavailable
+	}
+	l := a.lane
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	provider, ok := l.vlog.(interface {
+		CaptureStableSnapshot(string) (*valuelog.StableWriterSnapshot, error)
+	})
+	if !ok || l.vlogPath == "" || l.vlogSeq <= 0 {
+		return nil, rootpublication.StableNamespaceToken{}, backenddb.ErrValueLogStableSnapshotUnavailable
+	}
+	snapshot, err := provider.CaptureStableSnapshot(l.vlogPath)
+	if err != nil {
+		return nil, rootpublication.StableNamespaceToken{}, err
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+	if err != nil || snapshot.FileID() != fileID {
+		snapshot.Release()
+		if err != nil {
+			return nil, rootpublication.StableNamespaceToken{}, err
+		}
+		return nil, rootpublication.StableNamespaceToken{}, fmt.Errorf("cachingdb: captured value-log file ID %d does not match lane identity %d", snapshot.FileID(), fileID)
+	}
+	// NewWriter/RotateTo establish the segment namespace before the writer is
+	// installed. Ordinary append snapshots therefore carry no namespace debt.
+	return snapshot, rootpublication.StableNamespaceToken{}, nil
 }
 
 func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error {

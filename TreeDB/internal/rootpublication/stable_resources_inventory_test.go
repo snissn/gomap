@@ -17,7 +17,7 @@ func TestStableResourceInventoryCoverage(t *testing.T) {
 		producer, validator, deleter string
 	}
 	rows := []row{
-		{StableResourceValueLog, "db/value_log_appender.go", "db/value_log_appender.go", "db/vlog_gc.go"},
+		{StableResourceValueLog, "caching/value_log_appender.go", "db/stable_value_log_resources.go", "db/vlog_gc.go"},
 		{StableResourceOuterLeaf, "db/leaf_page_log.go", "db/leaf_generation_manifest.go", "db/leaf_generation_gc.go"},
 		{StableResourceDictionary, "collections/template_v1.go", "collections/template_v1.go", "db/vacuum_collection_roots.go"},
 		{StableResourceTemplate, "collections/template_v1.go", "collections/template_v1.go", "db/vacuum_collection_roots.go"},

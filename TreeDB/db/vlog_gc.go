@@ -252,6 +252,10 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	for id := range pendingAppendIDs {
 		keptIDs[id] = struct{}{}
 	}
+	stablePinnedIDs := db.stableValueLogPinnedFileIDs()
+	for id := range stablePinnedIDs {
+		keptIDs[id] = struct{}{}
+	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
 	for _, path := range opts.ProtectedPaths {
 		if path == "" {
@@ -303,6 +307,17 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			stats.BytesTotal += size
 
 			if _, ok := pendingAppendIDs[id]; ok {
+				stats.SegmentsProtected++
+				stats.BytesProtected += size
+				stats.SegmentsProtectedOther++
+				stats.BytesProtectedOther += size
+				stats.ObservedSourceSegmentsProtected++
+				stats.ObservedSourceBytesProtected += size
+				stats.ObservedSourceSegmentsProtectedOther++
+				stats.ObservedSourceBytesProtectedOther += size
+				continue
+			}
+			if _, ok := stablePinnedIDs[id]; ok {
 				stats.SegmentsProtected++
 				stats.BytesProtected += size
 				stats.SegmentsProtectedOther++

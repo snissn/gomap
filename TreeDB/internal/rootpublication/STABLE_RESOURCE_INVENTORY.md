@@ -7,7 +7,7 @@ deleting owner are named. The implementation remains dormant until #3679 and
 
 | Root/catalog/frame field | Producer | Kind | Stable identity and frontier/digest | Namespace operation | Registrar | Recovery validator | Deleting owner |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ValuePtr.FileID` | `db/value_log_appender.go:AppendValueLogValues` | value_log | file ID + generation; appended byte frontier | value-log lane create/rotate | value-log producer | `db/value_log_appender.go` | `db/vlog_gc.go` / rewrite |
+| `ValuePtr.FileID` | `caching/value_log_appender.go:CaptureValueLogStableSnapshot` via `db/value_log_appender.go:CaptureValueLogStableResourceToken` | value_log | captured writer descriptor + file ID generation; exact appended byte frontier | none for ordinary append; writer create/rotate already established | `db.ValueLogStableResourceProvider` | `db.ValidateValueLogStableResource` | `db.ValueLogStableDeletionOwner`, consulted by `db/vlog_gc.go` / rewrite |
 | raw leaf root generation | `db/leaf_page_log.go:AppendLeafPage` | outer_leaf | generation ID + sealed digest | lane create/rotate | leaf builder | `db/leaf_generation_manifest.go` | `db/leaf_generation_gc.go` |
 | packed leaf generation | `db/leaf_generation_pack.go` | outer_leaf | generation ID + sealed digest | pack/create/rename | pack writer | `db/leaf_generation_manifest.go` | `db/leaf_generation_gc.go` |
 | leaf manifest | leaf generation pack writer | outer_leaf | manifest generation + digest | rename into leaf namespace | pack writer | manifest loader | leaf generation GC |

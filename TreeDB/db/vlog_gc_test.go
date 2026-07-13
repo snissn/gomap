@@ -355,6 +355,53 @@ func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_StableResourcePinBlocksDeletionUntilRelease(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, dir, 0, 1, 500, 1, func(int) []byte {
+		return bytes.Repeat([]byte("old-unreferenced|"), 32)
+	})
+	pinnedID := appendPointersInNewSegment(t, dir, 0, 2, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("stable-pinned|"), 32)
+	})[0].FileID
+	appendPointersInNewSegment(t, dir, 0, 3, 2_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active|"), 32)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	pin := db.pinStableValueLogResource(pinnedID)
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC while pinned: %v", err)
+	}
+	if stats.SegmentsDeleted != 1 {
+		t.Fatalf("segments deleted while pinned=%d want 1: %+v", stats.SegmentsDeleted, stats)
+	}
+	pinnedPath := filepath.Join(dir, "value_vlog", "value-l0-000002.log")
+	if _, err := os.Stat(pinnedPath); err != nil {
+		t.Fatalf("pinned segment removed: %v", err)
+	}
+
+	pin.Release()
+	stats, err = db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC after release: %v", err)
+	}
+	if stats.SegmentsDeleted != 1 {
+		t.Fatalf("segments deleted after release=%d want 1: %+v", stats.SegmentsDeleted, stats)
+	}
+	if _, err := os.Stat(pinnedPath); !os.IsNotExist(err) {
+		t.Fatalf("released segment still exists: %v", err)
+	}
+}
+
 func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

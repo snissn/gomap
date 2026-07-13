@@ -175,6 +175,8 @@ type DB struct {
 	pendingValueLogAppendMu         sync.Mutex
 	pendingValueLogAppendFileIDRefs map[uint32]int
 	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
+	stableValueLogPinMu             sync.Mutex
+	stableValueLogPinRefs           map[uint32]int
 	updateLocks                     keyupdate.Locks
 	maintenanceMu                   sync.Mutex
 	combineMu                       sync.RWMutex

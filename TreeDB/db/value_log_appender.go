@@ -7,11 +7,14 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 var ErrValueLogAppenderUnavailable = errors.New("value-log appender unavailable")
+var ErrValueLogStableSnapshotUnavailable = errors.New("value-log stable snapshot unavailable")
 
 // ValueLogAppender appends user values to the persistent value log and returns
 // stable ValuePtr references that may be stored by native-root callers.
@@ -35,6 +38,12 @@ type ValueLogAppender interface {
 // flushing unrelated lanes.
 type ValueLogExternalRefFlusher interface {
 	FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error
+}
+
+// ValueLogStableResourceProvider captures the current writer identity and
+// frontier while holding the producer's append/rotation lock.
+type ValueLogStableResourceProvider interface {
+	CaptureValueLogStableSnapshot() (*valuelog.StableWriterSnapshot, rootpublication.StableNamespaceToken, error)
 }
 
 type valueLogAppenderHolder struct {
@@ -86,6 +95,45 @@ func (db *DB) currentValueLogRIDReserver() valueLogRIDReserver {
 // values to the persistent value log.
 func (db *DB) HasValueLogAppender() bool {
 	return db.currentValueLogAppender() != nil
+}
+
+// CaptureValueLogStableResourceToken returns dormant resource debt for the
+// current persistent value-log writer. Publication activation is owned by
+// #3679/#3718; this method only captures and pins the producer dependency.
+func (db *DB) CaptureValueLogStableResourceToken(reachableBy string) (rootpublication.StableResourceToken, error) {
+	if db == nil {
+		return rootpublication.StableResourceToken{}, ErrClosed
+	}
+	provider, ok := db.currentValueLogAppender().(ValueLogStableResourceProvider)
+	if !ok {
+		return rootpublication.StableResourceToken{}, ErrValueLogStableSnapshotUnavailable
+	}
+
+	// GC takes this lock exclusively before it can mark/delete candidates. Keep
+	// it through descriptor capture and registry insertion so a just-rotated
+	// segment cannot pass through an unpinned interval.
+	db.publishPrepareMu.RLock()
+	defer db.publishPrepareMu.RUnlock()
+	snapshot, namespaceToken, err := provider.CaptureValueLogStableSnapshot()
+	if err != nil {
+		return rootpublication.StableResourceToken{}, err
+	}
+	if snapshot == nil {
+		return rootpublication.StableResourceToken{}, ErrValueLogStableSnapshotUnavailable
+	}
+	pin := db.pinStableValueLogResource(snapshot.FileID())
+	release := func() {
+		snapshot.Release()
+		pin.Release()
+	}
+	return rootpublication.NewMutableAppendToken(
+		rootpublication.StableResourceValueLog,
+		"value_vlog",
+		reachableBy,
+		snapshot,
+		namespaceToken,
+		release,
+	)
 }
 
 // AppendValueLogValues appends values through the configured persistent value
