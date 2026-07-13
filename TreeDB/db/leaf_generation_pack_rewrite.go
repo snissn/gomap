@@ -114,33 +114,43 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 		if seg.fileID == 0 || seg.path == "" {
 			continue
 		}
+		pathMissing := false
 		if seg.identity != (rootpublication.StableIdentity{}) {
 			file, err := os.Open(seg.path)
 			if err != nil {
 				if os.IsNotExist(err) {
+					pathMissing = true
+				} else {
+					errs = append(errs, err)
 					continue
 				}
-				errs = append(errs, err)
-				continue
-			}
-			identity, identityErr := rootpublication.StableIdentityFromFile(file)
-			closeErr := file.Close()
-			if identityErr != nil || closeErr != nil {
-				errs = append(errs, errors.Join(identityErr, closeErr))
-				continue
-			}
-			if !rootpublication.SamePhysicalIdentity(identity, seg.identity) {
-				errs = append(errs, errors.Join(
-					fmt.Errorf("%w: rewrite-created segment %d path was rebound", rootpublication.ErrResourceConflict, seg.fileID),
-					ErrRecoveryRequired,
-				))
-				continue
+			} else {
+				identity, identityErr := rootpublication.StableIdentityFromFile(file)
+				closeErr := file.Close()
+				if identityErr != nil || closeErr != nil {
+					errs = append(errs, errors.Join(identityErr, closeErr))
+					continue
+				}
+				if !rootpublication.SamePhysicalIdentity(identity, seg.identity) {
+					errs = append(errs, errors.Join(
+						fmt.Errorf("%w: rewrite-created segment %d path was rebound", rootpublication.ErrResourceConflict, seg.fileID),
+						ErrRecoveryRequired,
+					))
+					continue
+				}
 			}
 		}
 		if db != nil && db.valueLogManager != nil {
-			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
-				errs = append(errs, fmt.Errorf("register rewrite-created segment %d for removal: %w", seg.fileID, err))
-				continue
+			_, managerHasStableSegment := db.valueLogManager.StableSegmentIdentity(seg.fileID)
+			managerHasSegment := managerHasStableSegment || db.valueLogManager.HasSegment(seg.fileID)
+			if !managerHasSegment {
+				if pathMissing {
+					continue
+				}
+				if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
+					errs = append(errs, fmt.Errorf("register rewrite-created segment %d for removal: %w", seg.fileID, err))
+					continue
+				}
 			}
 			var removeErr error
 			if seg.identity != (rootpublication.StableIdentity{}) {
@@ -151,6 +161,9 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 			if removeErr != nil {
 				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, errors.Join(removeErr, ErrRecoveryRequired)))
 			}
+			continue
+		}
+		if pathMissing {
 			continue
 		}
 		if _, err := removePersistentFile(filepath.Dir(seg.path), seg.path, valueLogResourceForPath(seg.path)); err != nil {

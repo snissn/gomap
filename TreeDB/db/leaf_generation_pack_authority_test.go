@@ -326,3 +326,45 @@ func TestCleanupRewriteCreatedSegmentRejectsReboundPath(t *testing.T) {
 		t.Fatalf("rebound path was deleted data=%q err=%v", data, readErr)
 	}
 }
+
+func TestCleanupRewriteCreatedSegmentDropsRegisteredMissingPath(t *testing.T) {
+	fixture := newLeafPackAuthorityFixture(t)
+	defer fixture.close(t)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.release()
+	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.close(t)
+	promoted, _, err := authority.promote()
+	if err != nil || len(promoted) != 1 {
+		t.Fatalf("promote segments=%v err=%v", promoted, err)
+	}
+	manager, err := valuelog.NewManagerWithStableResourcePinRegistry(fixture.destination, fixture.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	fixture.db.valueLogManager = manager
+	if err := authority.verifyManagerRegistration(); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(promoted[0].path); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.db.cleanupRewriteCreatedSegments(promoted); err != nil {
+		t.Fatalf("cleanup missing registered segment: %v", err)
+	}
+	if manager.HasSegment(fixture.fileID) {
+		t.Fatalf("manager retained missing rewrite-created segment %d", fixture.fileID)
+	}
+	if pins, identities := fixture.registry.ActivePins(), fixture.registry.ActiveIdentities(); pins != 0 || identities != 0 {
+		t.Fatalf("cleanup leaked registry state pins=%d identities=%d", pins, identities)
+	}
+}
