@@ -405,7 +405,7 @@ func TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC
 		}
 		corrupt.Pages[corruptID][offset] = 1
 		finishPage(corrupt.Pages[corruptID])
-		if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationFormat) {
+		if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationFormat) && !errors.Is(err, ErrGenerationDigest) {
 			t.Fatalf("type=%#x canonical err=%v", typ, err)
 		}
 		delete(reservedOffset, typ)
@@ -424,7 +424,7 @@ func TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC
 		}
 		corrupt.Pages[corruptID][80] ^= 1 // first child free-count summary
 		finishPage(corrupt.Pages[corruptID])
-		if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationFormat) {
+		if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationFormat) && !errors.Is(err, ErrGenerationDigest) {
 			t.Fatalf("forged child summary err=%v", err)
 		}
 		return
@@ -590,43 +590,81 @@ func TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages(t *testing.T) {
 	if !foundSharedChunk {
 		t.Fatal("shared ancestor chunk page not found")
 	}
-	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationFormat) {
-		t.Fatalf("newer child under ancestor page error=%v want %v", err, ErrGenerationFormat)
+	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationDigest) {
+		t.Fatalf("newer child under ancestor page error=%v want %v", err, ErrGenerationDigest)
 	}
 }
 
-func TestFreelistGenerationV1_AppendOnlyEmptySuccessorRewritesRoot(t *testing.T) {
+func TestFreelistGenerationV1_AppendOnlySuccessorRewritesRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		retired map[uint64]uint64
+	}{
+		{name: "empty"},
+		{name: "retired-only", retired: map[uint64]uint64{4: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemoryPageStoreV1()
+			base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, nil, tc.retired), 2, store)
+			oldRootID := base.root.pageID
+			txn := NewFreelistTxn(base, NewReservationLedger())
+			allocated, err := txn.Allocate(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("append-only-root"), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if candidate.Generation().root.pageID == oldRootID {
+				t.Fatalf("append-only generation reused parent root page %d", oldRootID)
+			}
+			loaded, err := LoadGenerationV1(store, candidate.GenerationRef())
+			if err != nil {
+				t.Fatalf("LoadGenerationV1 append-only successor: %v", err)
+			}
+			if loaded.Allocatable(allocated) {
+				t.Fatalf("reopen returned appended page %d to the freelist", allocated)
+			}
+			var retiredOldRoot bool
+			for _, pending := range loaded.ReservationRecord().pendingMetadata() {
+				if pending.id == oldRootID {
+					retiredOldRoot = true
+					break
+				}
+			}
+			if !retiredOldRoot {
+				t.Fatalf("append-only successor did not retain parent root %d for deferred retirement", oldRootID)
+			}
+		})
+	}
+}
+
+func TestFreelistGenerationV1_ParentChecksumRejectsRecomputedChildCRC(t *testing.T) {
 	store := NewMemoryPageStoreV1()
-	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, nil, nil), 2, store)
-	oldRootID := base.root.pageID
-	txn := NewFreelistTxn(base, NewReservationLedger())
-	allocated, err := txn.Allocate(0)
-	if err != nil {
-		t.Fatal(err)
+	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, []uint64{2}, nil), 2, store)
+	corrupt := NewMemoryPageStoreV1()
+	for id, data := range store.Pages {
+		corrupt.Pages[id] = append([]byte(nil), data...)
 	}
-	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("append-only-empty-root"), store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate.Generation().root.pageID == oldRootID {
-		t.Fatalf("append-only generation reused parent root page %d", oldRootID)
-	}
-	loaded, err := LoadGenerationV1(store, candidate.GenerationRef())
-	if err != nil {
-		t.Fatalf("LoadGenerationV1 append-only empty successor: %v", err)
-	}
-	if loaded.Allocatable(allocated) {
-		t.Fatalf("reopen returned appended page %d to the freelist", allocated)
-	}
-	var retiredOldRoot bool
-	for _, pending := range loaded.ReservationRecord().pendingMetadata() {
-		if pending.id == oldRootID {
-			retiredOldRoot = true
-			break
+	var changed bool
+	for _, data := range corrupt.Pages {
+		if page.PageType(page.DecodeHeader(data).Flags&0xff) != page.PageTypeFreelistChunk {
+			continue
 		}
+		word := binary.LittleEndian.Uint64(data[64:72])
+		word &^= uint64(1) << 2
+		word |= uint64(1) << 3
+		binary.LittleEndian.PutUint64(data[64:72], word)
+		page.UpdateChecksum(data)
+		changed = true
+		break
 	}
-	if !retiredOldRoot {
-		t.Fatalf("append-only successor did not retain parent root %d for deferred retirement", oldRootID)
+	if !changed {
+		t.Fatal("freelist chunk page not found")
+	}
+	if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationDigest) {
+		t.Fatalf("recomputed child CRC error=%v want %v", err, ErrGenerationDigest)
 	}
 }
 

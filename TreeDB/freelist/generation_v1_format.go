@@ -152,7 +152,8 @@ func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk
 	if chunkNo != expectedChunk || !zeroTail(b, chunkHeaderSize+freelistChunkSize*8) {
 		return nil, ErrGenerationFormat
 	}
-	c := &stateChunk{pageID: page.DecodeHeader(b).PageID, chunkNo: chunkNo}
+	h := page.DecodeHeader(b)
+	c := &stateChunk{pageID: h.PageID, checksum: h.Checksum, chunkNo: chunkNo}
 	for i := range c.free {
 		c.free[i] = binary.LittleEndian.Uint64(b[64+i*8:])
 	}
@@ -198,8 +199,9 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 	binary.LittleEndian.PutUint64(b[48:56], n.retiredCount)
 	binary.LittleEndian.PutUint64(b[56:64], n.minRetiredSeq)
 	o := indexHeaderSize
-	write := func(slot byte, kind byte, childID, freeCount, retiredCount, minSeq uint64) {
+	write := func(slot byte, kind byte, childChecksum uint32, childID, freeCount, retiredCount, minSeq uint64) {
 		b[o], b[o+1] = slot, kind
+		binary.LittleEndian.PutUint32(b[o+2:o+6], childChecksum)
 		binary.LittleEndian.PutUint64(b[o+8:o+16], childID)
 		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(freeCount))
 		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(retiredCount))
@@ -208,11 +210,11 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 	}
 	if depth == chunkTrieDepth {
 		retiredCount, minSeq := n.chunk.retiredSummary()
-		write(0, 1, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq)
+		write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq)
 	} else {
 		for slot, child := range n.child {
 			if child != nil && child.freeCount+child.retiredCount != 0 {
-				write(byte(slot), 0, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq)
+				write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq)
 			}
 		}
 	}
@@ -341,7 +343,8 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 			return nil, ErrGenerationFormat
 		}
 		lastSlot = slot
-		if !zeroTail(b[o+2:o+8], 0) {
+		entryChecksum := binary.LittleEndian.Uint32(b[o+2 : o+6])
+		if entryChecksum == 0 || !zeroTail(b[o+6:o+8], 0) {
 			return nil, ErrGenerationFormat
 		}
 		childID := binary.LittleEndian.Uint64(b[o+8 : o+16])
@@ -361,6 +364,9 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 				return nil, ErrGenerationFormat
 			}
 			seen[childID] = struct{}{}
+			if page.DecodeHeader(chunkPage).Checksum != entryChecksum {
+				return nil, ErrGenerationDigest
+			}
 			n.chunk, err = decodeChunkPage(chunkPage, pageGeneration, prefix)
 			if err != nil {
 				return nil, err
@@ -378,6 +384,9 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 				return nil, err
 			}
 			n.child[slot] = child
+			if child.checksum != entryChecksum {
+				return nil, ErrGenerationDigest
+			}
 			if child.freeCount != entryFree || child.retiredCount != entryRetired || child.minRetiredSeq != entryMinSeq {
 				return nil, ErrGenerationFormat
 			}

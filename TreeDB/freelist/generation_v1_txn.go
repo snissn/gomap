@@ -425,7 +425,9 @@ func emitStatePages(n *stateNode, depth int, generationID uint64, next *uint64, 
 		if n.chunk.pageID == 0 {
 			n.chunk.pageID = *next
 			*next++
-			if err := sink.write(n.chunk.pageID, encodeChunkPage(n.chunk.pageID, generationID, n.chunk)); err != nil {
+			b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
+			n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
+			if err := sink.write(n.chunk.pageID, b); err != nil {
 				return err
 			}
 		}
@@ -498,12 +500,10 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	// base so a partial sink failure cannot retain unwritten page identities.
 	t.consumed = true
 	t.root = detachUnmaterialized(t.root, 0)
-	if t.root.freeCount+t.root.retiredCount == 0 {
-		if t.root.pageID != 0 {
-			t.replacedMetadata[t.root.pageID] = struct{}{}
-		}
-		// The selected generation's root is exact-generation authority. Even an
-		// otherwise unchanged empty tree must publish a root for this generation.
+	if t.root.pageID != 0 {
+		t.replacedMetadata[t.root.pageID] = struct{}{}
+		// The selected generation's root is exact-generation authority. A
+		// no-COW transaction may share descendants, but must publish a new root.
 		t.root = cloneStateNode(t.root)
 	}
 	var reused, appended []uint64

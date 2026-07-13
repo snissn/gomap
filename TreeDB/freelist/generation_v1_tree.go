@@ -29,10 +29,11 @@ type retiredPage struct {
 }
 
 type stateChunk struct {
-	pageID  uint64
-	chunkNo uint64
-	free    [4]uint64
-	retired [freelistChunkSize]uint64
+	pageID   uint64
+	checksum uint32
+	chunkNo  uint64
+	free     [4]uint64
+	retired  [freelistChunkSize]uint64
 }
 
 func (c *stateChunk) clone() *stateChunk {
@@ -41,6 +42,7 @@ func (c *stateChunk) clone() *stateChunk {
 	}
 	out := *c
 	out.pageID = 0
+	out.checksum = 0
 	return &out
 }
 

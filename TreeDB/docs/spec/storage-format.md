@@ -2183,18 +2183,19 @@ chunk, and candidate reservation record. They are not referenced by production
 metas until the atomic activation owned by #3679.
 
 The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
-index page contains up to 16 ordered child summaries: page identity, free and
-retired counts, and the minimum `lastReachableCommitSeq`. A chunk contains a
-256-bit free bitmap and 256 retirement sequences. Free means bitmap bit 1 and
-sequence 0; retired means bit 0 and sequence non-zero; live or reserved means
-both zero. A one-chunk mutation therefore emits one chunk, one immutable index
-path, one or more reservation pages, and one generation header. Reservation
-pages form a contiguous, ordered chain so fragmented transactions are not
-bounded by one page. Unchanged paths retain their existing page identities and
-bytes.
+index page contains up to 16 ordered child summaries: page identity, child CRC,
+free and retired counts, and the minimum `lastReachableCommitSeq`. A chunk
+contains a 256-bit free bitmap and 256 retirement sequences. Free means bitmap
+bit 1 and sequence 0; retired means bit 0 and sequence non-zero; live or
+reserved means both zero. A one-chunk mutation therefore emits one chunk, one
+immutable index path, one or more reservation pages, and one generation header.
+Reservation pages form a contiguous, ordered chain so fragmented transactions
+are not bounded by one page. Unchanged paths retain their existing page
+identities and bytes.
 
-The generation header binds its exact root page identity and CRC, reservation
-chain digest, generation/parent identity, commit sequences, high-water
+The generation header binds its exact root page identity and CRC; every index
+entry recursively binds its child page CRC. The header also binds the
+reservation chain digest, generation/parent identity, commit sequences, high-water
 boundary, and free/retired summaries with SHA-256. The reservation chain binds
 a 128-bit candidate identity and canonical extents for reused data pages,
 appended data pages, target metadata pages, and replaced metadata pending
