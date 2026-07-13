@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
-	"sort"
 	"testing"
 )
 
@@ -34,7 +33,7 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 		{
 			name: "q1",
 			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"},
-			want: []QueryReadyOperatorGroup{{Key: "app.bsky.feed.post", Count: 4}, {Key: "app.bsky.feed.follow", Count: 1}, {Key: "app.bsky.feed.repost", Count: 1}},
+			want: []QueryReadyOperatorGroup{{Key: "app.bsky.feed.follow", Count: 1}, {Key: "app.bsky.feed.post", Count: 4}, {Key: "app.bsky.feed.repost", Count: 1}},
 		},
 		{
 			name: "q2",
@@ -51,10 +50,10 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 			}},
 			want: []QueryReadyOperatorGroup{
 				{Key: "app.bsky.feed.post", Hour: 1, Count: 1},
-				{Key: "app.bsky.feed.repost", Hour: 6, Count: 1},
 				{Key: "app.bsky.feed.post", Hour: 7, Count: 1},
 				{Key: "app.bsky.feed.post", Hour: 8, Count: 1},
 				{Key: "app.bsky.feed.post", Hour: 9, Count: 1},
+				{Key: "app.bsky.feed.repost", Hour: 6, Count: 1},
 			},
 		},
 		{
@@ -88,6 +87,53 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 				if got.Stats.EncodedBaseDeltaExecutions != 1 || got.Stats.DocumentMaterializations != 0 || got.Stats.LegacyScanFallbacks != 0 || got.Stats.RowsVisible != 6 {
 					t.Fatalf("%s stats=%+v", prepared.name, got.Stats)
 				}
+			}
+		})
+	}
+}
+
+func TestQueryReadyExecutionPreservesPhysicalOrderingWithoutTopK(t *testing.T) {
+	tests := []struct {
+		name string
+		req  QueryReadyOperatorRequest
+		want []QueryReadyOperatorGroup
+	}{
+		{
+			name: "group count by key",
+			req:  QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "event"},
+			want: []QueryReadyOperatorGroup{
+				{Key: "app.bsky.feed.follow", Count: 1},
+				{Key: "app.bsky.feed.post", Count: 4},
+				{Key: "app.bsky.feed.repost", Count: 1},
+			},
+		},
+		{
+			name: "group hour by key then hour",
+			req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: []QueryReadyStringPredicate{
+				{Column: "kind", Values: []string{"commit"}}, {Column: "operation", Values: []string{"create"}},
+				{Column: "event", Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}},
+			}},
+			want: []QueryReadyOperatorGroup{
+				{Key: "app.bsky.feed.post", Hour: 1, Count: 1},
+				{Key: "app.bsky.feed.post", Hour: 7, Count: 1},
+				{Key: "app.bsky.feed.post", Hour: 8, Count: 1},
+				{Key: "app.bsky.feed.post", Hour: 9, Count: 1},
+				{Key: "app.bsky.feed.repost", Hour: 6, Count: 1},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runner, err := PrepareQueryReadyOperator(queryReadyJSONBenchReader(t), tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runner.Run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(result.Groups, tc.want) {
+				t.Fatalf("groups=%+v want %+v", result.Groups, tc.want)
 			}
 		})
 	}
@@ -347,11 +393,14 @@ func TestQueryReadyEncodedPredicatesGroupingRandomizedDifferential(t *testing.T)
 	for key, aggregate := range aggregates {
 		want = append(want, QueryReadyOperatorGroup{Key: key, Count: aggregate.count, DistinctCount: len(aggregate.distinct)})
 	}
-	sort.Slice(want, func(i, j int) bool {
-		if want[i].Count != want[j].Count {
-			return want[i].Count > want[j].Count
+	slices.SortFunc(want, func(left, right QueryReadyOperatorGroup) int {
+		if left.Key < right.Key {
+			return -1
 		}
-		return want[i].Key < want[j].Key
+		if left.Key > right.Key {
+			return 1
+		}
+		return 0
 	})
 	if !slices.Equal(result.Groups, want) {
 		t.Fatalf("groups=%+v want %+v", result.Groups, want)

@@ -725,6 +725,21 @@ func (r *QueryReadyOperator) shapeGroups(expressionSum int64, stats *QueryReadyE
 }
 
 func (r *QueryReadyOperator) orderAndLimit() {
+	if r.request.TopK == 0 {
+		slices.SortFunc(r.resultGroups, func(left, right QueryReadyOperatorGroup) int {
+			if left.Key < right.Key {
+				return -1
+			}
+			if left.Key > right.Key {
+				return 1
+			}
+			if r.request.Kind == QueryReadyOperatorGroupHourCount {
+				return left.Hour - right.Hour
+			}
+			return 0
+		})
+		return
+	}
 	slices.SortFunc(r.resultGroups, func(left, right QueryReadyOperatorGroup) int {
 		switch r.request.Kind {
 		case QueryReadyOperatorGroupCount, QueryReadyOperatorGroupCountAndDistinct:
@@ -760,7 +775,7 @@ func (r *QueryReadyOperator) orderAndLimit() {
 		}
 		return 0
 	})
-	if r.request.TopK > 0 && len(r.resultGroups) > r.request.TopK {
+	if len(r.resultGroups) > r.request.TopK {
 		r.resultGroups = r.resultGroups[:r.request.TopK]
 	}
 }
