@@ -354,7 +354,11 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 		if frame.Coordinate.SourceSegment == anchor.Coordinate.SourceSegment {
 			continue
 		}
-		if err := truncateAndSyncCommandWALV2(walDir, frame.Coordinate.SourceSegment, frame.Coordinate.StartOffset, true); err != nil {
+		pathMode := commandWALV2TruncateDisposable
+		if completeByPath[frame.Coordinate.SourceSegment] {
+			pathMode = commandWALV2TruncateRetained
+		}
+		if err := truncateAndSyncCommandWALV2(walDir, frame.Coordinate.SourceSegment, frame.Coordinate.StartOffset, pathMode); err != nil {
 			return diagnostic, err
 		}
 		completeStage()
@@ -379,7 +383,7 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 	}
 	diagnostic.DirectorySyncCompleted = true
 	completeStage()
-	if err := truncateAndSyncCommandWALV2(walDir, anchor.Coordinate.SourceSegment, anchor.Coordinate.StartOffset, false); err != nil {
+	if err := truncateAndSyncCommandWALV2(walDir, anchor.Coordinate.SourceSegment, anchor.Coordinate.StartOffset, commandWALV2TruncateRetained); err != nil {
 		return diagnostic, err
 	}
 	completeStage()
@@ -512,11 +516,32 @@ func commandWALV2EmptyRepairSegments(walDir string, classification commandWALV2C
 	return empty, nil
 }
 
-func truncateAndSyncCommandWALV2(walDir, path string, offset int64, allowMissing bool) error {
+type commandWALV2TruncatePathMode uint8
+
+const (
+	// Retained paths contain prefix bytes or the repair anchor. Exact-size
+	// retries must re-sync; missing or undersized paths fail closed.
+	commandWALV2TruncateRetained commandWALV2TruncatePathMode = iota + 1
+	// Disposable paths contain suffix bytes only. Missing or already-shorter
+	// retries are complete monotonic stages and must never regrow the file.
+	commandWALV2TruncateDisposable
+)
+
+func truncateAndSyncCommandWALV2(walDir, path string, offset int64, pathMode commandWALV2TruncatePathMode) error {
+	if pathMode != commandWALV2TruncateRetained && pathMode != commandWALV2TruncateDisposable {
+		return errors.Join(commitlog.ErrCorrupt, ErrRecoveryRequired)
+	}
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
-		if allowMissing && os.IsNotExist(err) {
+		if pathMode == commandWALV2TruncateDisposable && os.IsNotExist(err) {
 			return nil
+		}
+		if pathMode == commandWALV2TruncateRetained {
+			return errors.Join(
+				fmt.Errorf("%w: retained repair path %s is unavailable", commitlog.ErrCorrupt, filepath.Base(path)),
+				err,
+				ErrRecoveryRequired,
+			)
 		}
 		return errors.Join(err, ErrRecoveryRequired)
 	}
@@ -525,13 +550,24 @@ func truncateAndSyncCommandWALV2(walDir, path string, offset int64, allowMissing
 		_ = f.Close()
 		return errors.Join(statErr, ErrRecoveryRequired)
 	}
-	if info.Size() <= offset {
+	if pathMode == commandWALV2TruncateRetained && info.Size() < offset {
+		closeErr := f.Close()
+		return errors.Join(
+			fmt.Errorf("%w: retained repair path %s size=%d is below offset=%d", commitlog.ErrCorrupt, filepath.Base(path), info.Size(), offset),
+			closeErr,
+			ErrRecoveryRequired,
+		)
+	}
+	if pathMode == commandWALV2TruncateDisposable && info.Size() <= offset {
 		if closeErr := f.Close(); closeErr != nil {
 			return errors.Join(closeErr, ErrRecoveryRequired)
 		}
 		return nil
 	}
-	if err = f.Truncate(offset); err == nil {
+	if info.Size() > offset {
+		err = f.Truncate(offset)
+	}
+	if err == nil {
 		err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)
 	}
 	if err == nil {
