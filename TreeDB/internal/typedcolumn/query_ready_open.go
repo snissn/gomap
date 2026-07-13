@@ -210,6 +210,7 @@ type QueryReadyGenerationOpenCache struct {
 	prepared     *QueryReadyPreparedGeneration
 	lastErr      error
 	stats        QueryReadyGenerationOpenStats
+	bound        QueryReadyDeltaBoundPolicy
 	needsRebuild bool
 	closed       bool
 }
@@ -239,6 +240,23 @@ func (c *QueryReadyGenerationOpenCache) Open(files QueryReadyGenerationOpenFiles
 		}
 		switch c.state {
 		case QueryReadyOpenReady:
+			if files.Key != c.key || files.SnapshotGeneration != c.key.Identity.Generation {
+				err := &QueryReadyGenerationOpenError{State: QueryReadyOpenUnsupportedOrStale, Err: errors.New("query-ready warm open identity is stale")}
+				c.mu.Unlock()
+				return nil, err
+			}
+			if files.Bound != c.bound {
+				if err := validateQueryReadyGenerationOpenFiles(c.key, files); err != nil {
+					wrapped := &QueryReadyGenerationOpenError{State: classifyQueryReadyGenerationOpenError(err), Err: err}
+					c.mu.Unlock()
+					return nil, wrapped
+				}
+				if err := validateQueryReadyPreparedGenerationBound(c.prepared, files.SnapshotGeneration, files.Bound); err != nil {
+					wrapped := &QueryReadyGenerationOpenError{State: classifyQueryReadyGenerationOpenError(err), Err: err}
+					c.mu.Unlock()
+					return nil, wrapped
+				}
+			}
 			c.stats.CacheHits++
 			prepared := c.prepared
 			c.mu.Unlock()
@@ -287,6 +305,7 @@ func (c *QueryReadyGenerationOpenCache) Open(files QueryReadyGenerationOpenFiles
 		return nil, wrapped
 	}
 	c.prepared = prepared
+	c.bound = files.Bound
 	c.state, c.stats.State = QueryReadyOpenReady, QueryReadyOpenReady
 	c.stats.ColdOpens++
 	c.stats.Published++
@@ -438,6 +457,30 @@ func accumulateQueryReadyOpenBaseStats(stats *QueryReadyGenerationOpenStats, bas
 	stats.BytesValidated += base.Stats.BytesValidated
 }
 
+func validateQueryReadyPreparedGenerationBound(prepared *QueryReadyPreparedGeneration, snapshot uint64, bound QueryReadyDeltaBoundPolicy) error {
+	if prepared == nil {
+		return errors.New("typedcolumn: nil query-ready prepared generation")
+	}
+	base := prepared.base
+	baseTombstones := []Tombstone(nil)
+	baseOriginParts, baseAccumulatedDeltaParts := 0, 0
+	if prepared.consolidated != nil {
+		base = prepared.consolidated.Base
+		baseTombstones = prepared.consolidated.Tombstones
+		baseOriginParts = prepared.consolidated.OriginBaseParts
+		baseAccumulatedDeltaParts = prepared.consolidated.AccumulatedDeltaParts
+	}
+	selected, err := validateAndSelectQueryReadyOpenDeltas(base, prepared.deltas, snapshot)
+	if err != nil {
+		return err
+	}
+	decision := evaluateQueryReadyBaseDeltaBound(base, baseTombstones, baseOriginParts, baseAccumulatedDeltaParts, selected, snapshot, bound)
+	if decision.Triggered {
+		return &QueryReadyDeltaBoundError{Phase: "open", Decision: decision}
+	}
+	return nil
+}
+
 func validateAndSelectQueryReadyOpenDeltas(base *QueryReadyBaseGeneration, deltas []*QueryReadyDeltaGeneration, snapshot uint64) ([]*QueryReadyDeltaGeneration, error) {
 	if base == nil {
 		return nil, errors.New("typedcolumn: nil query-ready open base")
@@ -534,6 +577,10 @@ func classifyQueryReadyGenerationOpenError(err error) QueryReadyOpenState {
 	}
 	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "path is absent") {
 		return QueryReadyOpenAbsentRebuildable
+	}
+	var boundErr *QueryReadyDeltaBoundError
+	if errors.As(err, &boundErr) {
+		return QueryReadyOpenUnsupportedOrStale
 	}
 	message := err.Error()
 	if strings.Contains(message, "unsupported") || strings.Contains(message, "stale") || strings.Contains(message, "schema") || strings.Contains(message, "generation=") && strings.Contains(message, " want ") {

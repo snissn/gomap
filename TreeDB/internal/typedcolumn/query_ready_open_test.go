@@ -183,6 +183,39 @@ func TestQueryReadyGenerationOpenReusesImmutableStateAcrossReaders(t *testing.T)
 	}
 }
 
+func TestQueryReadyGenerationWarmOpenEnforcesStricterBound(t *testing.T) {
+	requireQueryReadyGenerationFileOpen(t)
+	files := queryReadyOpenTestFiles(t)
+	cache := NewQueryReadyGenerationOpenCache(files.Key)
+	t.Cleanup(func() { _ = cache.Close() })
+	prepared, err := cache.Open(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	strict := files
+	strict.Bound = QueryReadyDeltaBoundPolicy{MaxRows: 1}
+	if got, err := cache.Open(strict); err == nil || got != nil {
+		t.Fatalf("warm strict open prepared=%p err=%v want bound rejection", got, err)
+	} else {
+		var boundErr *QueryReadyDeltaBoundError
+		if !errors.As(err, &boundErr) || boundErr.Phase != "open" || !boundErr.Decision.Triggered {
+			t.Fatalf("err=%v want open bound decision", err)
+		}
+		var openErr *QueryReadyGenerationOpenError
+		if !errors.As(err, &openErr) || openErr.State != QueryReadyOpenUnsupportedOrStale {
+			t.Fatalf("err=%v want unsupported/stale request", err)
+		}
+	}
+	if cache.Stats().State != QueryReadyOpenReady {
+		t.Fatalf("valid cached generation was poisoned: %+v", cache.Stats())
+	}
+	got, err := cache.Open(files)
+	if err != nil || got != prepared {
+		t.Fatalf("permissive reopen prepared=%p want=%p err=%v", got, prepared, err)
+	}
+}
+
 func TestQueryReadyGenerationOpenRejectsStaleSchemaOrGeneration(t *testing.T) {
 	files := queryReadyOpenTestFiles(t)
 	for _, mutate := range []func(*QueryReadyGenerationOpenFiles){
