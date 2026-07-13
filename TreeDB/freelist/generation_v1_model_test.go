@@ -102,6 +102,7 @@ func BenchmarkFreelistGenerationV1_Churn(b *testing.B) {
 			g := MustNewFreelistGenerationV1(1, uint64(pages+1), free, nil)
 			ledger := NewReservationLedger()
 			var stats FreelistTxnStats
+			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				txn := NewFreelistTxn(g, ledger)
