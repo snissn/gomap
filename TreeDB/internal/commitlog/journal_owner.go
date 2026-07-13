@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 type JournalOwner struct {
@@ -542,6 +544,141 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.rotateActiveSegmentLocked(syncCurrent)
+}
+
+// CommandJournalStableRotation retains exact handles for the segment closed by
+// a rotation and its newly-created successor.
+type CommandJournalStableRotation struct {
+	Closed *rootpublication.StableResourceToken
+	Active *rootpublication.StableResourceToken
+}
+
+func (rotation *CommandJournalStableRotation) TakeClosed() *rootpublication.StableResourceToken {
+	if rotation == nil {
+		return nil
+	}
+	token := rotation.Closed
+	rotation.Closed = nil
+	return token
+}
+
+func (rotation *CommandJournalStableRotation) TakeActive() *rootpublication.StableResourceToken {
+	if rotation == nil {
+		return nil
+	}
+	token := rotation.Active
+	rotation.Active = nil
+	return token
+}
+
+func (rotation *CommandJournalStableRotation) Release() {
+	if rotation == nil {
+		return
+	}
+	rotation.Closed.Release()
+	rotation.Active.Release()
+	rotation.Closed = nil
+	rotation.Active = nil
+}
+
+func commandWALDiagnosticPath(path string) string {
+	return filepath.Join("maindb", "wal", filepath.Base(path))
+}
+
+func (j *CommandJournal) stableSegmentToken(path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+	digest := sha256.Sum256([]byte(fmt.Sprintf("command-wal/lane=%d/segment=%d", j.lane, seq)))
+	return rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+		Kind: rootpublication.ResourceCommandWAL, LogicalLane: fmt.Sprintf("lane-%d", j.lane),
+		ResourceID: fmt.Sprintf("%d:%d", j.lane, seq), Generation: seq,
+		DiagnosticPath: commandWALDiagnosticPath(path), File: j.writer.f, Frontier: frontier,
+		Digest: digest, Reachability: field, Namespace: namespace,
+	})
+}
+
+func (j *CommandJournal) lastReservedLSNLocked() uint64 {
+	if j == nil || j.owner == nil {
+		return 0
+	}
+	j.owner.mu.Lock()
+	defer j.owner.mu.Unlock()
+	if j.owner.exhausted {
+		return ^uint64(0)
+	}
+	if j.owner.nextLSN == 0 {
+		return 0
+	}
+	return j.owner.nextLSN - 1
+}
+
+// RotateActiveSegmentWithStableResources flushes and optionally syncs the old
+// segment, pins it before the writer closes it, rotates, persists the successor
+// namespace entry, and pins the new active file before returning.
+func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool) (*CommandJournalStableRotation, error) {
+	if j == nil {
+		return nil, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.writer.f == nil {
+		return nil, errors.New("commitlog: command journal is closed")
+	}
+	if j.segmentSeq == ^uint64(0) {
+		return nil, ErrCommandWALSegmentSeqExhausted
+	}
+	if syncCurrent {
+		if err := j.writer.Sync(); err != nil {
+			return nil, err
+		}
+	} else if err := j.writer.Flush(); err != nil {
+		return nil, err
+	}
+	closedInfo, err := j.writer.f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	closedPath, closedSeq := j.path, j.segmentSeq
+	closedToken, err := j.stableSegmentToken(closedPath, closedSeq, rootpublication.ReachabilityCommandWALRotated,
+		rootpublication.DurableFrontier{Bytes: uint64(closedInfo.Size()), MaxLSN: j.lastReservedLSNLocked()}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := j.rotateActiveSegmentLocked(false); err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	parent, err := os.Open(j.walDir)
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	namespace, err := rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
+		Parent: parent, ParentGeneration: j.segmentSeq, Operation: rootpublication.NamespaceCreate,
+		NewName: filepath.Base(j.path), DiagnosticPath: filepath.Join("maindb", "wal"),
+	})
+	_ = parent.Close()
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	if err := namespace.Stabilize(); err != nil {
+		namespace.Release()
+		closedToken.Release()
+		return nil, err
+	}
+	activeInfo, err := j.writer.f.Stat()
+	if err != nil {
+		namespace.Release()
+		closedToken.Release()
+		return nil, err
+	}
+	activeToken, err := j.stableSegmentToken(j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive,
+		rootpublication.DurableFrontier{Bytes: uint64(activeInfo.Size())}, namespace)
+	namespace.Release()
+	if err != nil {
+		closedToken.Release()
+		return nil, err
+	}
+	return &CommandJournalStableRotation{Closed: closedToken, Active: activeToken}, nil
 }
 
 func (j *CommandJournal) ActiveBytes() int64 {

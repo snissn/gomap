@@ -136,6 +136,7 @@ func (identity StableIdentity) valid() bool {
 // sparse set.
 type DurableFrontier struct {
 	Bytes        uint64
+	MaxLSN       uint64
 	MaxRID       uint64
 	RIDSetDigest [32]byte
 	RIDCount     uint64
@@ -416,6 +417,9 @@ func maxFrontier(older, newer DurableFrontier) DurableFrontier {
 	}
 	if newer.MaxRID > out.MaxRID {
 		out.MaxRID = newer.MaxRID
+	}
+	if newer.MaxLSN > out.MaxLSN {
+		out.MaxLSN = newer.MaxLSN
 	}
 	if out.RIDCount == 0 && newer.RIDCount != 0 {
 		out.RIDSetDigest, out.RIDCount, out.RIDMin, out.RIDMax = newer.RIDSetDigest, newer.RIDCount, newer.RIDMin, newer.RIDMax
