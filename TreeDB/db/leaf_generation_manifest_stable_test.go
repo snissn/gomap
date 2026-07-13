@@ -8,6 +8,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -55,6 +57,34 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	}
 	if got := registry.PinCount(token.Identity()); got != 1 {
 		t.Fatalf("pin count=%d want 1", got)
+	}
+}
+
+func TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind(t *testing.T) {
+	root := t.TempDir()
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	defer store.Close()
+	retainedDir := filepath.Join(root, "retained_leaf_vlog")
+	if err := os.Rename(leafDir, retainedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.Replace(newLeafGenerationManifest(1))
+	if err != nil {
+		t.Fatalf("Replace after path rebind: %v", err)
+	}
+	token.Release()
+	if _, err := os.Stat(filepath.Join(retainedDir, leafGenerationManifestFileName)); err != nil {
+		t.Fatalf("retained exact parent manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(leafDir, leafGenerationManifestFileName)); !os.IsNotExist(err) {
+		t.Fatalf("diagnostic replacement path became authoritative: %v", err)
 	}
 }
 
@@ -234,8 +264,153 @@ func TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence(
 		t.Fatalf("poisoned retry error=%v want ErrRecoveryRequired", err)
 	}
 	store.Close()
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil || !ok {
+		t.Fatalf("reopen coherent post-rename manifest: ok=%v err=%v", ok, err)
+	}
+	if loaded.ManifestRevision != 2 {
+		t.Fatalf("reopened ManifestRevision=%d want complete new revision 2", loaded.ManifestRevision)
+	}
 	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
 		t.Fatalf("close leak pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
+func TestStableLeafGenerationManifestDestinationRebindFailsClosed(t *testing.T) {
+	leafDir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	manifest := newLeafGenerationManifest(1)
+	first, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+	store.hooks.BeforeDestinationValidation = func() error {
+		path := leafGenerationManifestPath(leafDir)
+		if err := os.Rename(path, path+".displaced"); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte("rogue"), 0o600)
+	}
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, rootpublication.ErrResourceConflict) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("destination rebind error=%v want ErrResourceConflict + ErrRecoveryRequired", err)
+	}
+	if store.AmbiguousEvidenceCount() != 1 {
+		t.Fatalf("evidence=%d want 1", store.AmbiguousEvidenceCount())
+	}
+	store.Close()
+}
+
+func TestStableLeafGenerationManifestParentSyncFailurePoisons(t *testing.T) {
+	leafDir := t.TempDir()
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	manifest := newLeafGenerationManifest(1)
+	first, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+	cut := errors.New("parent sync cut")
+	store.hooks.BeforeParentSync = func() error { return cut }
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("parent sync error=%v want cut + ErrRecoveryRequired", err)
+	}
+	store.Close()
+}
+
+func TestStableLeafGenerationManifestReleaseReturnsResourcesToBaseline(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("descriptor baseline uses /proc/self/fd")
+	}
+	leafDir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	baseline := countLeafManifestTestFDs(t)
+	manifest := newLeafGenerationManifest(1)
+	for i := 0; i < 128; i++ {
+		token, err := store.Replace(manifest)
+		if err != nil {
+			t.Fatalf("replace %d: %v", i, err)
+		}
+		token.Release()
+		if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+			t.Fatalf("iteration %d leaked pins=%d identities=%d", i, registry.ActivePins(), registry.ActiveIdentities())
+		}
+	}
+	store.Close()
+	if got := countLeafManifestTestFDs(t); got > baseline+2 {
+		t.Fatalf("descriptor count=%d baseline=%d", got, baseline)
+	}
+}
+
+func countLeafManifestTestFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+func TestCompatibleLeafGenerationManifestConcurrentCallsAllocateUniqueRevisions(t *testing.T) {
+	leafDir := t.TempDir()
+	base := newLeafGenerationManifest(1)
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+	if _, err := store.Replace(base); err != nil {
+		t.Fatal(err)
+	}
+	const writers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.Replace(base.clone())
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if got, want := loaded.ManifestRevision, uint64(writers+1); got != want {
+		t.Fatalf("ManifestRevision=%d want %d", got, want)
+	}
+}
+
+func BenchmarkStableLeafGenerationManifestReplacement(b *testing.B) {
+	leafDir := b.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	counters := &leafGenerationManifestDurabilityCounters{}
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	store.durabilityCounters = counters
+	manifest := newLeafGenerationManifest(1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		token, err := store.Replace(manifest)
+		if err != nil {
+			b.Fatal(err)
+		}
+		token.Release()
+	}
+	b.StopTimer()
+	store.Close()
+	if got := counters.ContentSyncs.Load(); got != uint64(b.N) {
+		b.Fatalf("content syncs=%d want %d", got, b.N)
+	}
+	if got := counters.NamespaceSyncs.Load(); got != uint64(b.N) {
+		b.Fatalf("namespace syncs=%d want %d", got, b.N)
 	}
 }
 
