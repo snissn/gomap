@@ -67,7 +67,7 @@ func Write(path string, data []byte, perm os.FileMode) error {
 	for i := 0; i < attempts; i++ {
 		if err := os.Rename(tmp, path); err == nil {
 			if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceRename, durabilitycut.ResourceAuxiliary, dir, tmp, path); err != nil {
-				return err
+				return &replacementMayHaveCommittedError{err: err}
 			}
 			return nil
 		}
