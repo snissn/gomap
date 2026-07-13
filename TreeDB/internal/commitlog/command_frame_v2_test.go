@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -191,6 +192,57 @@ func TestCommandFrameV2RejectsCompressedSegmentStorage(t *testing.T) {
 	if _, _, err := InspectCommandFrameV2TerminalTail(path, 0); !errors.Is(err, ErrCommandWALV2CompressedRecordUnsupported) {
 		t.Fatalf("InspectCommandFrameV2TerminalTail error=%v, want ErrCommandWALV2CompressedRecordUnsupported", err)
 	}
+}
+
+func TestInspectCommandFrameV2TerminalTailRequiresCompleteLSNAndClass(t *testing.T) {
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             2,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, available := range []int64{27, 28, 54, 55} {
+		t.Run(fmt.Sprintf("available_%d", available), func(t *testing.T) {
+			path := writeTruncatedCommandFrameV2ForInspection(t, frame, available)
+			_, _, err := InspectCommandFrameV2TerminalTail(path, 0)
+			if !errors.Is(err, ErrCommandWALV2TailIdentityUnavailable) || !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("inspection error=%v, want identity-unavailable corruption", err)
+			}
+		})
+	}
+
+	path := writeTruncatedCommandFrameV2ForInspection(t, frame, 56)
+	env, end, err := InspectCommandFrameV2TerminalTail(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.LSN != 2 || env.DurabilityClass != CommandDurabilityRelaxed || end != segmentHeaderSize+56 {
+		t.Fatalf("shortest classifiable tail env=%+v end=%d, want relaxed LSN 2 end %d", env, end, segmentHeaderSize+56)
+	}
+}
+
+func writeTruncatedCommandFrameV2ForInspection(t *testing.T, frame []byte, available int64) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.writeSegment(frame); err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, segmentHeaderSize+available); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestCommandFrameV2RejectsV1AndFenceCorruption(t *testing.T) {

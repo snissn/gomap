@@ -45,6 +45,7 @@ var (
 	ErrCommandWALUnsupportedVersion            = errors.New("commitlog: command wal unsupported version")
 	ErrCommandWALV1RebuildRequired             = fmt.Errorf("%w: command WAL V1 requires rebuilding this pre-alpha database for V2", ErrCommandWALUnsupportedVersion)
 	ErrCommandWALV2CompressedRecordUnsupported = errors.New("commitlog: command wal V2 compressed segment record unsupported")
+	ErrCommandWALV2TailIdentityUnavailable     = errors.New("commitlog: command wal V2 terminal tail identity unavailable")
 	ErrCommandWALUnsupportedKind               = errors.New("commitlog: command wal unsupported kind")
 	ErrCommandWALUnsupportedCriticalFlag       = errors.New("commitlog: command wal unsupported critical flag")
 	ErrCommandWALDuplicateLSN                  = errors.New("commitlog: command wal duplicate lsn")

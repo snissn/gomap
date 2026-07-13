@@ -84,6 +84,51 @@ func TestReadCommandWALV2IncompleteRelaxedTailFailsBelowLaterBarrier(t *testing.
 	}
 }
 
+func TestReadCommandWALV2ShortestClassifiableRelaxedTailCanRepair(t *testing.T) {
+	walDir := t.TempDir()
+	lane0 := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	lane1 := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	writeCommandWALV2Segment(t, lane0, mustCommandWALV2Frame(t, 1, commitlog.CommandDurabilityDurable, nil))
+	writeCommandWALV2Segment(t, lane1, mustCommandWALV2Frame(t, 2, commitlog.CommandDurabilityRelaxed, nil))
+	if err := os.Truncate(lane1, 8+56); err != nil {
+		t.Fatal(err)
+	}
+
+	classification := classifyCommandWALV2Directory(t, walDir)
+	if len(classification.CompletePrefix) != 1 || len(classification.DiscardSuffix) != 1 || !classification.DiscardSuffix[0].Incomplete || classification.DiscardSuffix[0].Envelope.LSN != 2 {
+		t.Fatalf("classification=%+v, want durable LSN 1 plus incomplete relaxed LSN 2 suffix", classification)
+	}
+	if _, err := repairCommandWALV2Suffix(walDir, classification, false); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(lane1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("repaired active tail size=%d, want 0", info.Size())
+	}
+}
+
+func TestReadCommandWALV2TailWithoutCompleteClassFailsClosed(t *testing.T) {
+	walDir := t.TempDir()
+	lane0 := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	lane1 := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	writeCommandWALV2Segment(t, lane0, mustCommandWALV2Frame(t, 1, commitlog.CommandDurabilityDurable, nil))
+	writeCommandWALV2Segment(t, lane1, mustCommandWALV2Frame(t, 2, commitlog.CommandDurabilityRelaxed, nil))
+	if err := os.Truncate(lane1, 8+55); err != nil {
+		t.Fatal(err)
+	}
+	segments, err := listSegmentsInDir(walDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = readCommandWALV2PhysicalFrames(segments, 0, 0)
+	if !errors.Is(err, commitlog.ErrCommandWALV2TailIdentityUnavailable) || !errors.Is(err, commitlog.ErrCorrupt) {
+		t.Fatalf("short tail error=%v, want identity-unavailable corruption", err)
+	}
+}
+
 func TestRepairCommandWALV2SuffixReadOnlyParityAndRetryableCuts(t *testing.T) {
 	cuts := []struct {
 		point      durabilitycut.Point
