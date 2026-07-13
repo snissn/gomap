@@ -1756,8 +1756,8 @@ field at bytes `[54,56)` to a little-endian durability class:
 
 | Value | Durability class | Recovery meaning |
 |---:|---|---|
-| 1 | `Durable` | this complete valid frame raises the durable frontier |
-| 2 | `Relaxed` | eligible for suffix discard only above the durable frontier |
+| 1 | Durable V2 frame class | this complete valid frame raises the durable frontier |
+| 2 | Relaxed V2 frame class | eligible for suffix discard only above the durable frontier |
 
 Zero and unknown classes are corruption. Encoders validate the class and all
 semantic fields before mutating caller-owned destination storage.

@@ -205,11 +205,13 @@ func TestRepairCommandWALV2SuffixDefersRetainedAnchorUntilAfterDirectorySync(t *
 
 func TestRepairCommandWALV2SuffixPowerLossVariantsDriveFreshRescanRetry(t *testing.T) {
 	walDir, classification, _, tail := commandWALV2PhysicalRepairFixture(t)
+	tailBefore := mustReadFile(t, tail)
 	model, err := powerlossoracle.Capture(walDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	injected := errors.New("injected before non-anchor sync")
+	var beforeSync, afterSync *powerlossoracle.Model
+	injected := errors.New("injected after non-anchor sync")
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Resource != durabilitycut.ResourceCommandWAL {
 			return nil
@@ -217,10 +219,17 @@ func TestRepairCommandWALV2SuffixPowerLossVariantsDriveFreshRescanRetry(t *testi
 		if err := model.Observe(walDir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.BeforeDependencyFileSync {
+		switch event.Point {
+		case durabilitycut.BeforeDependencyFileSync:
 			if event.Path != tail {
 				return fmt.Errorf("first non-anchor sync path=%s, want %s", event.Path, tail)
 			}
+			beforeSync = model.Clone()
+		case durabilitycut.AfterDependencyFileSync:
+			if event.Path != tail {
+				return fmt.Errorf("first completed non-anchor sync path=%s, want %s", event.Path, tail)
+			}
+			afterSync = model.Clone()
 			return injected
 		}
 		return nil
@@ -230,34 +239,58 @@ func TestRepairCommandWALV2SuffixPowerLossVariantsDriveFreshRescanRetry(t *testi
 		t.Fatalf("repair cut error=%v, want injected cut", err)
 	}
 	restore()
-
-	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
-		ID:         "command-wal-v2-physical-suffix-repair",
-		Point:      powerlossoracle.BeforeDependencyFileSync,
-		Occurrence: 1,
-		Model:      model,
-		Dependencies: []powerlossoracle.DirtyResource{{
-			Kind: powerlossoracle.ResourceCommandWAL,
-			ID:   "relaxed-suffix-segment",
-			Path: filepath.Base(tail),
-		}},
-		RequiredFamilies: []powerlossoracle.VariantFamily{
-			powerlossoracle.VariantSyncedOnly,
-			powerlossoracle.VariantFullWriteback,
-		},
-		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
-			powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedSuffixDiscard,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if coverage.Generated != len(variants) || len(variants) != 2 {
-		t.Fatalf("repair variant coverage=%+v variants=%d", coverage, len(variants))
+	if beforeSync == nil || afterSync == nil {
+		t.Fatalf("repair sync models before=%v after=%v, want both", beforeSync != nil, afterSync != nil)
 	}
 
-	for _, variant := range variants {
+	type repairCrashVariant struct {
+		variant  powerlossoracle.Variant
+		wantSize int64
+	}
+	var crashVariants []repairCrashVariant
+	for _, cut := range []struct {
+		id       string
+		point    powerlossoracle.CutPoint
+		model    *powerlossoracle.Model
+		expected powerlossoracle.ExpectedResult
+		wantSize int64
+	}{
+		{
+			id:       "command-wal-v2-physical-suffix-repair-before-sync",
+			point:    powerlossoracle.BeforeDependencyFileSync,
+			model:    beforeSync,
+			expected: powerlossoracle.ExpectedOldRoot,
+			wantSize: int64(len(tailBefore)),
+		},
+		{
+			id:       "command-wal-v2-physical-suffix-repair-after-sync",
+			point:    powerlossoracle.AfterDependencyFileSync,
+			model:    afterSync,
+			expected: powerlossoracle.ExpectedSuffixDiscard,
+			wantSize: 0,
+		},
+	} {
+		variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+			ID:               cut.id,
+			Point:            cut.point,
+			Occurrence:       1,
+			Model:            cut.model,
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly: cut.expected,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if coverage.Generated != 1 || len(variants) != 1 {
+			t.Fatalf("repair variant coverage=%+v variants=%d", coverage, len(variants))
+		}
+		crashVariants = append(crashVariants, repairCrashVariant{variant: variants[0], wantSize: cut.wantSize})
+	}
+
+	for _, crashVariant := range crashVariants {
+		variant := crashVariant.variant
 		t.Run(variant.ID, func(t *testing.T) {
 			crashDir := t.TempDir()
 			if err := variant.Model.MaterializeStable(crashDir); err != nil {
@@ -268,11 +301,8 @@ func TestRepairCommandWALV2SuffixPowerLossVariantsDriveFreshRescanRetry(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if variant.Family == powerlossoracle.VariantSyncedOnly && info.Size() == 0 {
-				t.Fatal("synced-only variant did not retain the pre-truncation segment")
-			}
-			if variant.Family == powerlossoracle.VariantFullWriteback && info.Size() != 0 {
-				t.Fatalf("full-writeback tail size=%d, want truncated zero-byte image", info.Size())
+			if info.Size() != crashVariant.wantSize {
+				t.Fatalf("stable tail size=%d, want %d for %s", info.Size(), crashVariant.wantSize, variant.CutID)
 			}
 
 			fresh := classifyCommandWALV2Directory(t, crashDir)

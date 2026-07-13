@@ -165,7 +165,8 @@ func (e *CommandWALV2RecoveryRequiredError) Unwrap() error { return ErrRecoveryR
 // supplied separately so all frames through the durable horizon can be
 // validated before any replay handler mutates the DB.
 func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint64, hasRID func(uint64) bool) (commandWALV2Classification, error) {
-	var result commandWALV2Classification
+	result := commandWALV2Classification{DurableFrontier: applied}
+	result.Diagnostic.DurableFrontier = applied
 	if len(frames) == 0 {
 		return result, nil
 	}
@@ -198,8 +199,7 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 
 	expected := applied + 1
 	discardAt := -1
-	missingAtDiscard := 0
-	firstDiscardLSN := uint64(0)
+	missingByFrame := make([][]uint64, len(ordered))
 	for i := range ordered {
 		frame := &ordered[i]
 		lsn := frame.Envelope.LSN
@@ -209,6 +209,7 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 		contiguous := lsn == expected
 		duplicate := i > 0 && ordered[i-1].Envelope.LSN == lsn
 		missing := commandWALV2MissingRIDs(frame.RequiredRIDs, hasRID)
+		missingByFrame[i] = missing
 		atOrBelowFrontier := lsn <= result.DurableFrontier || expected <= result.DurableFrontier
 		if frame.Incomplete {
 			if atOrBelowFrontier || frame.Envelope.DurabilityClass == commitlog.CommandDurabilityDurable {
@@ -216,7 +217,6 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 			}
 			if discardAt < 0 {
 				discardAt = i
-				firstDiscardLSN = lsn
 			}
 		}
 		if duplicate || !contiguous {
@@ -225,7 +225,6 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 			}
 			if discardAt < 0 {
 				discardAt = i
-				firstDiscardLSN = expected
 			}
 		}
 		if len(missing) != 0 {
@@ -234,8 +233,6 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 			}
 			if discardAt < 0 {
 				discardAt = i
-				firstDiscardLSN = lsn
-				missingAtDiscard = len(missing)
 			}
 		}
 		if discardAt < 0 {
@@ -250,10 +247,16 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 	result.CompletePrefix = ordered[:discardAt]
 	result.DiscardSuffix = ordered[discardAt:]
 	first := result.DiscardSuffix[0]
-	result.Diagnostic.FirstDiscardedLSN = firstDiscardLSN
+	result.Diagnostic.FirstDiscardedLSN = first.Envelope.LSN
 	result.Diagnostic.DiscardedFrameCount = uint64(len(result.DiscardSuffix))
-	result.Diagnostic.MissingRIDCount = uint64(missingAtDiscard)
 	result.Diagnostic.SourceSegment = filepath.Base(first.Coordinate.SourceSegment)
+	missingInSuffix := make(map[uint64]struct{})
+	for i := discardAt; i < len(missingByFrame); i++ {
+		for _, rid := range missingByFrame[i] {
+			missingInSuffix[rid] = struct{}{}
+		}
+	}
+	result.Diagnostic.MissingRIDCount = uint64(len(missingInSuffix))
 	for i := range result.DiscardSuffix {
 		coordinate := result.DiscardSuffix[i].Coordinate
 		if coordinate.EndOffset > coordinate.StartOffset {
@@ -313,7 +316,11 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 	if len(classification.DiscardSuffix) == 0 {
 		return diagnostic, nil
 	}
-	stages, removable := planCommandWALV2RepairStages(classification)
+	emptySegments, err := commandWALV2EmptyRepairSegments(walDir, classification)
+	if err != nil {
+		return diagnostic, errors.Join(err, ErrRecoveryRequired)
+	}
+	stages, removable := planCommandWALV2RepairStagesWithEmptySegments(classification, emptySegments)
 	diagnostic.RepairStages = stages
 	if readOnly {
 		return diagnostic, &CommandWALV2RecoveryRequiredError{Diagnostic: diagnostic}
@@ -328,6 +335,9 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 	completeStage := func() { diagnostic.CompletedRepairStages++ }
 	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
 		frame := classification.DiscardSuffix[i]
+		if frame.Coordinate.SourceSegment == anchor.Coordinate.SourceSegment {
+			continue
+		}
 		if err := truncateAndSyncCommandWALV2(walDir, frame.Coordinate.SourceSegment, frame.Coordinate.StartOffset, true); err != nil {
 			return diagnostic, err
 		}
@@ -361,36 +371,129 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 }
 
 func planCommandWALV2RepairStages(classification commandWALV2Classification) ([]string, []string) {
+	return planCommandWALV2RepairStagesWithEmptySegments(classification, nil)
+}
+
+type commandWALV2RemovableSegment struct {
+	path                string
+	highestDiscardedLSN uint64
+	coordinate          commandWALV2Coordinate
+}
+
+func planCommandWALV2RepairStagesWithEmptySegments(classification commandWALV2Classification, emptySegments []logSegment) ([]string, []string) {
 	if len(classification.DiscardSuffix) == 0 {
 		return nil, nil
 	}
 	stages := make([]string, 0, len(classification.DiscardSuffix)+2)
-	removableSet := make(map[string]struct{})
+	removableByPath := make(map[string]commandWALV2RemovableSegment)
 	completeByPath := make(map[string]bool)
 	for i := range classification.CompletePrefix {
 		completeByPath[classification.CompletePrefix[i].Coordinate.SourceSegment] = true
 	}
 	anchorPath := classification.DiscardSuffix[0].Coordinate.SourceSegment
 	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
-		coordinate := classification.DiscardSuffix[i].Coordinate
+		frame := classification.DiscardSuffix[i]
+		coordinate := frame.Coordinate
 		path := coordinate.SourceSegment
+		if path == anchorPath {
+			continue
+		}
 		stages = append(stages, fmt.Sprintf("truncate-sync:%s@%d", filepath.Base(path), coordinate.StartOffset))
-		if !completeByPath[path] && path != anchorPath {
-			removableSet[path] = struct{}{}
+		if !completeByPath[path] {
+			candidate, exists := removableByPath[path]
+			if !exists || frame.Envelope.LSN > candidate.highestDiscardedLSN ||
+				(frame.Envelope.LSN == candidate.highestDiscardedLSN && commandWALV2CoordinateLater(coordinate, candidate.coordinate)) {
+				removableByPath[path] = commandWALV2RemovableSegment{path: path, highestDiscardedLSN: frame.Envelope.LSN, coordinate: coordinate}
+			}
 		}
 	}
-	removable := make([]string, 0, len(removableSet))
-	for path := range removableSet {
-		removable = append(removable, path)
+	for _, segment := range emptySegments {
+		if completeByPath[segment.path] || segment.path == anchorPath {
+			continue
+		}
+		if _, exists := removableByPath[segment.path]; !exists {
+			removableByPath[segment.path] = commandWALV2RemovableSegment{
+				path: segment.path,
+				coordinate: commandWALV2Coordinate{
+					Lane:            segment.lane,
+					SegmentSequence: segment.seq,
+					SourceSegment:   segment.path,
+				},
+			}
+		}
 	}
-	sort.Slice(removable, func(i, j int) bool { return removable[i] > removable[j] })
-	for _, path := range removable {
+	candidates := make([]commandWALV2RemovableSegment, 0, len(removableByPath))
+	for _, candidate := range removableByPath {
+		candidates = append(candidates, candidate)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].highestDiscardedLSN != candidates[j].highestDiscardedLSN {
+			return candidates[i].highestDiscardedLSN > candidates[j].highestDiscardedLSN
+		}
+		if commandWALV2CoordinateLater(candidates[i].coordinate, candidates[j].coordinate) {
+			return true
+		}
+		if commandWALV2CoordinateLater(candidates[j].coordinate, candidates[i].coordinate) {
+			return false
+		}
+		return candidates[i].path > candidates[j].path
+	})
+	removable := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		path := candidate.path
+		removable = append(removable, path)
 		stages = append(stages, "unlink:"+filepath.Base(path))
 	}
 	stages = append(stages, "directory-sync")
 	anchor := classification.DiscardSuffix[0].Coordinate
 	stages = append(stages, fmt.Sprintf("anchor-truncate-sync:%s@%d", filepath.Base(anchor.SourceSegment), anchor.StartOffset))
 	return stages, removable
+}
+
+func commandWALV2CoordinateLater(a, b commandWALV2Coordinate) bool {
+	if a.Lane != b.Lane {
+		return a.Lane > b.Lane
+	}
+	if a.SegmentSequence != b.SegmentSequence {
+		return a.SegmentSequence > b.SegmentSequence
+	}
+	if a.StartOffset != b.StartOffset {
+		return a.StartOffset > b.StartOffset
+	}
+	if a.EndOffset != b.EndOffset {
+		return a.EndOffset > b.EndOffset
+	}
+	return a.SourceSegment > b.SourceSegment
+}
+
+// commandWALV2EmptyRepairSegments recovers the identity of suffix-only files
+// whose bytes may have reached stable storage before their unlink. A fresh V2
+// frame scan necessarily skips these zero-byte files, so the retained anchor
+// remains the logical repair marker while the canonical segment names remain
+// deterministic namespace-cleanup candidates.
+func commandWALV2EmptyRepairSegments(walDir string, classification commandWALV2Classification) ([]logSegment, error) {
+	knownPaths := make(map[string]struct{}, len(classification.CompletePrefix)+len(classification.DiscardSuffix))
+	for i := range classification.CompletePrefix {
+		knownPaths[classification.CompletePrefix[i].Coordinate.SourceSegment] = struct{}{}
+	}
+	for i := range classification.DiscardSuffix {
+		knownPaths[classification.DiscardSuffix[i].Coordinate.SourceSegment] = struct{}{}
+	}
+	segments, err := listSegmentsInDir(walDir)
+	if err != nil {
+		return nil, err
+	}
+	empty := make([]logSegment, 0)
+	for _, segment := range segments {
+		if segment.valueLog || segment.size != 0 || !commitlog.IsCommandSegmentName(filepath.Base(segment.path)) {
+			continue
+		}
+		if _, known := knownPaths[segment.path]; known {
+			continue
+		}
+		empty = append(empty, segment)
+	}
+	return empty, nil
 }
 
 func truncateAndSyncCommandWALV2(walDir, path string, offset int64, allowMissing bool) error {

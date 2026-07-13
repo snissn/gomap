@@ -187,10 +187,13 @@ Coverage:
 - `TreeDB/db/command_wal_v2_classification_test.go`
 - `TreeDB/db/command_wal_v2_physical_test.go`
 
-The physical suffix-repair test uses #3717 `powerlossoracle.CutSpec` variants
-and stable variant IDs at dependency-file sync, unlink, deletion-directory
-sync, and final anchor sync cuts. This is deterministic crash-model unit
-evidence for the inert repair boundary, not public-`Open` activation evidence.
+The physical suffix-repair test captures real stable models immediately before
+and after the first non-anchor dependency-file sync, then materializes both
+through #3717 `powerlossoracle.CutSpec` stable variant IDs and retries from a
+fresh directory scan. Separate deterministic cuts cover non-anchor sync,
+unlink, deletion-directory sync, and final anchor sync. This is crash-model
+unit evidence for the inert repair boundary, not public-`Open` activation
+evidence.
 
 ## 2.2 Publication Readability
 
