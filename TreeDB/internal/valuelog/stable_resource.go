@@ -1072,7 +1072,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	prepared := pending.file
 	if !pending.observerEmitted {
 		pending.observerEmitted = true
-		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {
+		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(path), filepath.Dir(path), "", path); observeErr != nil {
 			closedToken.Release()
 			return nil, pendingValueLogFailure(w.stableParent, prepared, path, observeErr)
 		}

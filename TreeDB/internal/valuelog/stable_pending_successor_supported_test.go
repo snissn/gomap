@@ -105,6 +105,59 @@ func TestStableValueLogObserverFailureRetriesExactPendingSuccessor(t *testing.T)
 	}
 }
 
+func TestStableOuterLeafRotationClassifiesNamespaceCreateWithDirectorySync(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "leaf_vlog")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	firstPath := filepath.Join(dir, "000001.vlog")
+	secondPath := filepath.Join(dir, "000002.vlog")
+	writer, err := NewWriter(firstPath, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	appendStablePendingValue(t, writer, 1)
+	closed := StableResourceRegistration{
+		Kind: rootpublication.ResourceOuterLeafLog, LogicalLane: "outer-leaf", Generation: 1,
+		DiagnosticPath: "maindb/leaf_vlog/000001.vlog", Reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+	}
+	active := StableResourceRegistration{
+		Kind: rootpublication.ResourceOuterLeafLog, LogicalLane: "outer-leaf", Generation: 2,
+		DiagnosticPath: "maindb/leaf_vlog/000002.vlog", Reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+		ParentGeneration: 2, NamespaceOperation: rootpublication.NamespaceCreate,
+	}
+
+	var outerCreates, valueCreates, outerBeforeSyncs, outerAfterSyncs int
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Namespace == durabilitycut.NamespaceCreate && event.NewPath == secondPath:
+			if event.Resource == durabilitycut.ResourceOuterLeaf {
+				outerCreates++
+			}
+			if event.Resource == durabilitycut.ResourceValueLog {
+				valueCreates++
+			}
+		case event.Resource == durabilitycut.ResourceOuterLeaf && event.Point == durabilitycut.BeforeNewFileDirectorySync:
+			outerBeforeSyncs++
+		case event.Resource == durabilitycut.ResourceOuterLeaf && event.Point == durabilitycut.AfterNewFileDirectorySync:
+			outerAfterSyncs++
+		}
+		return nil
+	})
+	defer restore()
+
+	rotation, err := writer.RotateToWithStableResources(secondPath, 2, false, closed, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	if outerCreates != 1 || valueCreates != 0 || outerBeforeSyncs != 1 || outerAfterSyncs != 1 {
+		t.Fatalf("outer-leaf creation cuts create(value/outer)=%d/%d directory(before/after)=%d/%d want 0/1 and 1/1",
+			valueCreates, outerCreates, outerBeforeSyncs, outerAfterSyncs)
+	}
+}
+
 func TestStableValueLogPendingSuccessorRejectsOrdinaryAndMismatchedRotation(t *testing.T) {
 	for _, tc := range []struct {
 		name string
