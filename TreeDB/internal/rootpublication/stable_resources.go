@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -110,7 +111,11 @@ type StableResourceToken struct {
 	DiagnosticPath string
 	Frontier       uint64
 	Digest         string
-	ReachableBy    string
+	// ReachableBy is the canonical, record-separator-delimited set of root,
+	// catalog, or frame fields that make this physical obligation reachable.
+	// Callers normally provide one field; normalization preserves the union
+	// when the same identity is referenced by several authoritative fields.
+	ReachableBy string
 	// Provider is the opaque captured handle/generation owner. It is compared
 	// by pointer, so a caller cannot claim two replaced handles are identical.
 	Provider       *StableResourceLease
@@ -126,8 +131,11 @@ func (t StableResourceToken) key() string {
 }
 
 func (t StableResourceToken) validate() error {
-	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.ReachableBy == "" || t.Provider == nil {
+	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.Provider == nil {
 		return fmt.Errorf("%w: incomplete stable resource token kind=%q identity=%q", ErrInvalidCandidate, t.Kind, t.Identity)
+	}
+	if _, err := canonicalReachability(t.ReachableBy); err != nil {
+		return err
 	}
 	if err := t.NamespaceToken.validate(); err != nil {
 		return err
@@ -158,6 +166,16 @@ func NewStableResourceSet(tokens []StableResourceToken) (StableResourceSet, erro
 // at the only authority that can classify them, without a process-global sink.
 func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *StableResourceMetricsRecorder) (StableResourceSet, error) {
 	copyTokens := append([]StableResourceToken(nil), tokens...)
+	for i := range copyTokens {
+		reachableBy, err := canonicalReachability(copyTokens[i].ReachableBy)
+		if err != nil {
+			if metrics != nil {
+				metrics.ObserveRejected()
+			}
+			return StableResourceSet{}, err
+		}
+		copyTokens[i].ReachableBy = reachableBy
+	}
 	sort.Slice(copyTokens, func(i, j int) bool { return copyTokens[i].key() < copyTokens[j].key() })
 	out := copyTokens[:0]
 	for _, token := range copyTokens {
@@ -188,7 +206,6 @@ func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *Stab
 
 func mergeStableResourceToken(left, right StableResourceToken) (StableResourceToken, error) {
 	if left.Digest != right.Digest ||
-		left.ReachableBy != right.ReachableBy ||
 		left.MutableAppend != right.MutableAppend ||
 		left.Provider != right.Provider ||
 		left.NamespaceToken.Identity != right.NamespaceToken.Identity ||
@@ -202,7 +219,47 @@ func mergeStableResourceToken(left, right StableResourceToken) (StableResourceTo
 	if right.Frontier > left.Frontier {
 		left.Frontier, left.FlushThrough, left.SyncThrough = right.Frontier, right.FlushThrough, right.SyncThrough
 	}
+	reachableBy, err := mergeReachability(left.ReachableBy, right.ReachableBy)
+	if err != nil {
+		return StableResourceToken{}, err
+	}
+	left.ReachableBy = reachableBy
 	return left, nil
+}
+
+const stableReachabilitySeparator = "\x1e"
+
+func canonicalReachability(value string) (string, error) {
+	parts := strings.Split(value, stableReachabilitySeparator)
+	fields := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		field := strings.TrimSpace(part)
+		if field == "" || strings.ContainsAny(field, "\x00\x1e") {
+			return "", fmt.Errorf("%w: invalid resource reachability field %q", ErrInvalidCandidate, part)
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return strings.Join(fields, stableReachabilitySeparator), nil
+}
+
+func mergeReachability(left, right string) (string, error) {
+	return canonicalReachability(left + stableReachabilitySeparator + right)
+}
+
+// ReachabilityFields returns a defensive, sorted copy of the authoritative
+// fields whose union is carried by the token.
+func (t StableResourceToken) ReachabilityFields() []string {
+	canonical, err := canonicalReachability(t.ReachableBy)
+	if err != nil {
+		return nil
+	}
+	return strings.Split(canonical, stableReachabilitySeparator)
 }
 
 func (s StableResourceSet) Tokens() []StableResourceToken {

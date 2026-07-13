@@ -264,8 +264,20 @@ func TestStableWriterSnapshot_NewRotationNamespaceEstablishedExactlyOnce(t *test
 	}
 
 	before := w.DurabilityStats().DirectorySyncCalls
+	if err := snapshot.EstablishNamespace(context.Background()); err == nil {
+		t.Fatal("EstablishNamespace accepted a same-path replacement")
+	}
+	if got := w.DurabilityStats().DirectorySyncCalls - before; got != 0 {
+		t.Fatalf("namespace sync calls after conflict=%d want 0", got)
+	}
+	if err := os.Remove(path2); err != nil {
+		t.Fatalf("Remove replacement namespace target: %v", err)
+	}
+	if err := os.Rename(archived, path2); err != nil {
+		t.Fatalf("Restore captured namespace target: %v", err)
+	}
 	if err := snapshot.EstablishNamespace(context.Background()); err != nil {
-		t.Fatalf("EstablishNamespace first: %v", err)
+		t.Fatalf("EstablishNamespace restored target: %v", err)
 	}
 	if err := snapshot.EstablishNamespace(context.Background()); err != nil {
 		t.Fatalf("EstablishNamespace second: %v", err)

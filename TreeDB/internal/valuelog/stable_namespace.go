@@ -101,6 +101,23 @@ func (s *stableNamespaceState) establish(ctx context.Context) error {
 	if s.err != nil || s.directory == nil || s.syncDirectory == nil {
 		return fmt.Errorf("%w: %v", ErrStableNamespaceUnsupported, s.err)
 	}
+	// A retained parent-directory descriptor is not enough: after a
+	// rename/recreate race, syncing that directory would certify the replacement
+	// name while the resource token still syncs the original file descriptor.
+	// Revalidate that the target entry names the captured child identity before
+	// establishing the namespace boundary.
+	target, err := os.Open(s.targetPath)
+	if err != nil {
+		return fmt.Errorf("valuelog: reopen stable namespace target for identity validation: %w", err)
+	}
+	identity, identityErr := StableFileIdentityFromFile(target)
+	closeErr := target.Close()
+	if identityErr != nil || closeErr != nil {
+		return errors.Join(identityErr, closeErr)
+	}
+	if identity != s.targetIdentity {
+		return fmt.Errorf("valuelog: namespace target identity changed")
+	}
 	if err := s.syncDirectory(s.directory, s.targetPath); err != nil {
 		return err
 	}

@@ -100,14 +100,30 @@ func TestStableResourceTokenRejectsDigestAndNamespaceConflicts(t *testing.T) {
 		t.Fatalf("generation err=%v", err)
 	}
 	two = one
-	two.ReachableBy = "other.root"
-	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
-		t.Fatalf("reachable err=%v", err)
-	}
-	two = one
 	two.Provider = NewStableResourceLease(nil)
 	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
 		t.Fatalf("operation err=%v", err)
+	}
+}
+
+func TestStableResourceTokenCoalescingPreservesReachabilityUnion(t *testing.T) {
+	one := stableToken("inode", 1, 3, func(context.Context, uint64) error { return nil })
+	two := one
+	two.Frontier = 7
+	two.ReachableBy = "collection_root.asset_ref"
+	set, err := NewStableResourceSet([]StableResourceToken{two, one})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := set.Tokens()
+	if len(tokens) != 1 {
+		t.Fatalf("tokens=%d want 1", len(tokens))
+	}
+	if got, want := fmt.Sprint(tokens[0].ReachabilityFields()), "[collection_root.asset_ref system_root.value_log]"; got != want {
+		t.Fatalf("reachability=%s want %s", got, want)
+	}
+	if tokens[0].Frontier != 7 {
+		t.Fatalf("frontier=%d want 7", tokens[0].Frontier)
 	}
 }
 
