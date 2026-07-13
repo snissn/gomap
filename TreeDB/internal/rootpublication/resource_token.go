@@ -148,6 +148,11 @@ type DurableFrontier struct {
 	RIDCount     uint64
 	RIDMin       uint64
 	RIDMax       uint64
+	exactRIDs    *exactRIDMembership
+}
+
+type exactRIDMembership struct {
+	values []uint64
 }
 
 func NewRIDFrontier(rids []uint64) DurableFrontier {
@@ -159,19 +164,61 @@ func NewRIDFrontier(rids []uint64) DurableFrontier {
 			unique = append(unique, rid)
 		}
 	}
-	frontier := DurableFrontier{RIDCount: uint64(len(unique))}
-	if len(unique) == 0 {
+	return newExactRIDFrontier(unique)
+}
+
+// RIDs returns a sorted, unique copy of the exact external-RID membership.
+// Digest/count/min/max fields summarize this set but never substitute for it.
+func (frontier DurableFrontier) RIDs() []uint64 {
+	if frontier.exactRIDs == nil {
+		return nil
+	}
+	return append([]uint64(nil), frontier.exactRIDs.values...)
+}
+
+func newExactRIDFrontier(sortedUnique []uint64) DurableFrontier {
+	frontier := DurableFrontier{RIDCount: uint64(len(sortedUnique))}
+	if len(sortedUnique) == 0 {
 		return frontier
 	}
-	frontier.RIDMin = unique[0]
-	frontier.RIDMax = unique[len(unique)-1]
+	frontier.exactRIDs = &exactRIDMembership{values: append([]uint64(nil), sortedUnique...)}
+	frontier.RIDMin = sortedUnique[0]
+	frontier.RIDMax = sortedUnique[len(sortedUnique)-1]
 	frontier.MaxRID = frontier.RIDMax
-	raw := make([]byte, 8*len(unique))
-	for i, rid := range unique {
+	raw := make([]byte, 8*len(sortedUnique))
+	for i, rid := range sortedUnique {
 		binary.LittleEndian.PutUint64(raw[8*i:], rid)
 	}
 	frontier.RIDSetDigest = sha256.Sum256(raw)
 	return frontier
+}
+
+func cloneDurableFrontier(frontier DurableFrontier) DurableFrontier {
+	if frontier.exactRIDs != nil {
+		frontier.exactRIDs = &exactRIDMembership{values: append([]uint64(nil), frontier.exactRIDs.values...)}
+	}
+	return frontier
+}
+
+func validateDurableFrontier(frontier DurableFrontier) error {
+	if frontier.exactRIDs == nil {
+		if frontier.MaxRID != 0 || frontier.RIDCount != 0 || frontier.RIDMin != 0 || frontier.RIDMax != 0 ||
+			frontier.RIDSetDigest != [32]byte{} {
+			return fmt.Errorf("%w: RID summary has no exact membership", ErrUnresolvedResource)
+		}
+		return nil
+	}
+	want := newExactRIDFrontier(frontier.exactRIDs.values)
+	if want.RIDCount != frontier.RIDCount || want.RIDMin != frontier.RIDMin || want.RIDMax != frontier.RIDMax ||
+		want.MaxRID != frontier.MaxRID || want.RIDSetDigest != frontier.RIDSetDigest {
+		return fmt.Errorf("%w: exact RID membership disagrees with summary", ErrUnresolvedResource)
+	}
+	for i, rid := range frontier.exactRIDs.values {
+		if i > 0 && frontier.exactRIDs.values[i-1] >= rid {
+			return fmt.Errorf("%w: exact RID membership is not sorted and unique", ErrUnresolvedResource)
+		}
+	}
+	return nil
 }
 
 type ResourceOwnerState uint8
@@ -247,6 +294,9 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	if err := validateDiagnosticPath(spec.DiagnosticPath); err != nil {
 		return nil, err
 	}
+	if err := validateDurableFrontier(spec.Frontier); err != nil {
+		return nil, err
+	}
 	stability, ok := stableResourceStabilityForField(spec.Reachability)
 	if !ok {
 		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
@@ -290,7 +340,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	token := &StableResourceToken{
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
 		generation: spec.Generation, diagnosticPath: filepath.ToSlash(spec.DiagnosticPath),
-		identity: identity, frontier: spec.Frontier, digest: spec.Digest,
+		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, stability: stability, namespace: spec.Namespace, pinned: pinned,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease,
 	}
@@ -316,13 +366,15 @@ func validateDiagnosticPath(path string) error {
 	return nil
 }
 
-func (token *StableResourceToken) Kind() ResourceKind               { return token.kind }
-func (token *StableResourceToken) LogicalLane() string              { return token.logicalLane }
-func (token *StableResourceToken) ResourceID() string               { return token.resourceID }
-func (token *StableResourceToken) Generation() uint64               { return token.generation }
-func (token *StableResourceToken) DiagnosticPath() string           { return token.diagnosticPath }
-func (token *StableResourceToken) Identity() StableIdentity         { return token.identity }
-func (token *StableResourceToken) Frontier() DurableFrontier        { return token.frontier }
+func (token *StableResourceToken) Kind() ResourceKind       { return token.kind }
+func (token *StableResourceToken) LogicalLane() string      { return token.logicalLane }
+func (token *StableResourceToken) ResourceID() string       { return token.resourceID }
+func (token *StableResourceToken) Generation() uint64       { return token.generation }
+func (token *StableResourceToken) DiagnosticPath() string   { return token.diagnosticPath }
+func (token *StableResourceToken) Identity() StableIdentity { return token.identity }
+func (token *StableResourceToken) Frontier() DurableFrontier {
+	return cloneDurableFrontier(token.frontier)
+}
 func (token *StableResourceToken) Digest() [32]byte                 { return token.digest }
 func (token *StableResourceToken) Reachability() ReachabilityField  { return token.reachability }
 func (token *StableResourceToken) Namespace() *StableNamespaceToken { return token.namespace }
@@ -435,26 +487,42 @@ func (token *StableResourceToken) namespaceCompatible(other *StableResourceToken
 }
 
 func frontierCompatible(older, newer DurableFrontier) bool {
-	if older.RIDCount == 0 && newer.RIDCount == 0 {
-		return true
-	}
-	return older.RIDCount == newer.RIDCount && older.RIDMin == newer.RIDMin && older.RIDMax == newer.RIDMax &&
-		older.RIDSetDigest == newer.RIDSetDigest
+	return validateDurableFrontier(older) == nil && validateDurableFrontier(newer) == nil
 }
 
 func maxFrontier(older, newer DurableFrontier) DurableFrontier {
-	out := older
+	out := cloneDurableFrontier(older)
 	if newer.Bytes > out.Bytes {
 		out.Bytes = newer.Bytes
-	}
-	if newer.MaxRID > out.MaxRID {
-		out.MaxRID = newer.MaxRID
 	}
 	if newer.MaxLSN > out.MaxLSN {
 		out.MaxLSN = newer.MaxLSN
 	}
-	if out.RIDCount == 0 && newer.RIDCount != 0 {
-		out.RIDSetDigest, out.RIDCount, out.RIDMin, out.RIDMax = newer.RIDSetDigest, newer.RIDCount, newer.RIDMin, newer.RIDMax
+	olderRIDs, newerRIDs := older.RIDs(), newer.RIDs()
+	if len(olderRIDs) != 0 || len(newerRIDs) != 0 {
+		union := make([]uint64, 0, len(olderRIDs)+len(newerRIDs))
+		i, j := 0, 0
+		for i < len(olderRIDs) || j < len(newerRIDs) {
+			var next uint64
+			switch {
+			case j == len(newerRIDs) || (i < len(olderRIDs) && olderRIDs[i] < newerRIDs[j]):
+				next = olderRIDs[i]
+				i++
+			case i == len(olderRIDs) || newerRIDs[j] < olderRIDs[i]:
+				next = newerRIDs[j]
+				j++
+			default:
+				next = olderRIDs[i]
+				i++
+				j++
+			}
+			if len(union) == 0 || union[len(union)-1] != next {
+				union = append(union, next)
+			}
+		}
+		ridFrontier := newExactRIDFrontier(union)
+		out.MaxRID, out.RIDSetDigest, out.RIDCount = ridFrontier.MaxRID, ridFrontier.RIDSetDigest, ridFrontier.RIDCount
+		out.RIDMin, out.RIDMax, out.exactRIDs = ridFrontier.RIDMin, ridFrontier.RIDMax, ridFrontier.exactRIDs
 	}
 	return out
 }

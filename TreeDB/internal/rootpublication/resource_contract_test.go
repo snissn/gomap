@@ -535,6 +535,11 @@ func TestMutableIndexAliasesCoalesceByPhysicalIdentity(t *testing.T) {
 	if got := set.FrontierFor(identity, 9).Bytes; got != uint64(len(fields)) {
 		t.Fatalf("same-index DB frontier=%d want %d", got, len(fields))
 	}
+	wantFields := append([]ReachabilityField(nil), fields...)
+	slices.Sort(wantFields)
+	if got := set.Descriptors()[0].ReachabilityFields(); !slices.Equal(got, wantFields) {
+		t.Fatalf("same-index DB descriptor fields=%v want %v", got, wantFields)
+	}
 }
 
 func TestMutableCollectionAndTextRootAliasesCoalesceByPhysicalIdentity(t *testing.T) {

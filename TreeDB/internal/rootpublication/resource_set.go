@@ -21,7 +21,7 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 	for field := range entry.reachability {
 		reachability[field] = struct{}{}
 	}
-	return stableResourceEntry{token: entry.token, frontier: entry.frontier, reachability: reachability}
+	return stableResourceEntry{token: entry.token, frontier: cloneDurableFrontier(entry.frontier), reachability: reachability}
 }
 
 type StableResourceSetBuilder struct {
@@ -102,7 +102,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		return nil
 	}
 	*entries = append(*entries, stableResourceEntry{
-		token: token, frontier: token.frontier,
+		token: token, frontier: cloneDurableFrontier(token.frontier),
 		reachability: map[ReachabilityField]struct{}{token.reachability: {}},
 	})
 	return nil
@@ -321,6 +321,35 @@ type StableResourceSet struct {
 	createdAt    time.Time
 }
 
+// StableResourceDescriptor is an immutable-by-copy view of one coalesced
+// physical resource obligation. Unlike Tokens, it reports the unioned frontier
+// and every reachability field retained by the frozen set.
+type StableResourceDescriptor struct {
+	kind         ResourceKind
+	identity     StableIdentity
+	generation   uint64
+	digest       [32]byte
+	frontier     DurableFrontier
+	reachability []ReachabilityField
+}
+
+func (descriptor StableResourceDescriptor) Kind() ResourceKind       { return descriptor.kind }
+func (descriptor StableResourceDescriptor) Identity() StableIdentity { return descriptor.identity }
+func (descriptor StableResourceDescriptor) Generation() uint64       { return descriptor.generation }
+func (descriptor StableResourceDescriptor) Digest() [32]byte         { return descriptor.digest }
+
+func (descriptor StableResourceDescriptor) Frontier() DurableFrontier {
+	return cloneDurableFrontier(descriptor.frontier)
+}
+
+func (descriptor StableResourceDescriptor) RIDs() []uint64 {
+	return descriptor.frontier.RIDs()
+}
+
+func (descriptor StableResourceDescriptor) ReachabilityFields() []ReachabilityField {
+	return append([]ReachabilityField(nil), descriptor.reachability...)
+}
+
 func stableResourcePinCounts(entries []stableResourceEntry) map[ResourceKind]uint64 {
 	counts := make(map[ResourceKind]uint64)
 	for _, entry := range entries {
@@ -351,6 +380,30 @@ func (set *StableResourceSet) Tokens() []*StableResourceToken {
 	return tokens
 }
 
+// Descriptors returns immutable-by-copy views of the coalesced physical
+// obligations. Callers that need publication or recovery metadata should use
+// these views rather than representative Tokens.
+func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
+	if set == nil {
+		return nil
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	descriptors := make([]StableResourceDescriptor, len(set.entries))
+	for i, entry := range set.entries {
+		fields := make([]ReachabilityField, 0, len(entry.reachability))
+		for field := range entry.reachability {
+			fields = append(fields, field)
+		}
+		sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
+		descriptors[i] = StableResourceDescriptor{
+			kind: entry.token.kind, identity: entry.token.identity, generation: entry.token.generation,
+			digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
+		}
+	}
+	return descriptors
+}
+
 func (set *StableResourceSet) covers(field ReachabilityField) bool {
 	if set == nil || field == "" {
 		return false
@@ -376,7 +429,7 @@ func (set *StableResourceSet) FrontierFor(identity StableIdentity, generation ui
 	defer set.mu.Unlock()
 	for _, entry := range set.entries {
 		if entry.token.identity == identity && entry.token.generation == generation {
-			return entry.frontier
+			return cloneDurableFrontier(entry.frontier)
 		}
 	}
 	return DurableFrontier{}
