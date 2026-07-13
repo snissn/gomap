@@ -54,6 +54,39 @@ func renameStableChildFile(parent *os.File, oldName, newName string) error {
 	}
 }
 
+func moveStableChildFileNoReplace(sourceParent *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+	if sourceParent == nil || destinationParent == nil {
+		return false, os.ErrInvalid
+	}
+	// linkat is the portable Unix no-replace primitive. It preserves the exact
+	// inode and fails with EEXIST before mutating either namespace. Both parent
+	// handles are retained by the caller, so neither side is resolved by path.
+	for {
+		err := unix.Linkat(int(sourceParent.Fd()), oldName, int(destinationParent.Fd()), newName, 0)
+		if err == nil {
+			break
+		}
+		if err == unix.EINTR {
+			continue
+		}
+		if err == unix.EEXIST {
+			return false, fmt.Errorf("%w: destination child %q already exists", ErrResourceConflict, newName)
+		}
+		return false, err
+	}
+	for {
+		err := unix.Unlinkat(int(sourceParent.Fd()), oldName, 0)
+		if err == nil || err == unix.ENOENT {
+			return true, nil
+		}
+		if err != unix.EINTR {
+			// The destination link is installed. Report that mutation explicitly so
+			// callers can poison/retain instead of attempting pathname cleanup.
+			return true, err
+		}
+	}
+}
+
 func duplicateStableFile(file *os.File) (*os.File, error) {
 	if file == nil {
 		return nil, os.ErrInvalid

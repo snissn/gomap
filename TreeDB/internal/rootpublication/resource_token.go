@@ -685,6 +685,110 @@ type StableNamespaceSpec struct {
 	DiagnosticPath   string
 }
 
+// StableNamespaceBatchSpec binds several already-linked children to stable
+// namespace tokens while syncing each distinct exact parent once. Additional
+// parents carry source-side obligations for cross-parent moves.
+type StableNamespaceBatchSpec struct {
+	Registrations     []StableNamespaceSpec
+	AdditionalParents []*os.File
+}
+
+// NewStableNamespaceBatchTokens validates every exact child link, syncs each
+// distinct retained parent once, and returns already-stable tokens in input
+// order. No token becomes stable when any validation or parent sync fails.
+func NewStableNamespaceBatchTokens(spec StableNamespaceBatchSpec) ([]*StableNamespaceToken, error) {
+	return newStableNamespaceBatchTokens(spec, nativeNamespaceAdapter{})
+}
+
+func newStableNamespaceBatchTokens(spec StableNamespaceBatchSpec, adapter namespacePersistenceAdapter) ([]*StableNamespaceToken, error) {
+	if len(spec.Registrations) == 0 || adapter == nil {
+		return nil, fmt.Errorf("%w: empty stable namespace batch", ErrUnresolvedResource)
+	}
+	tokens := make([]*StableNamespaceToken, 0, len(spec.Registrations))
+	releaseTokens := func() {
+		for _, token := range tokens {
+			token.Release()
+		}
+	}
+	for _, registration := range spec.Registrations {
+		token, err := newStableNamespaceToken(registration, adapter)
+		if err != nil {
+			releaseTokens()
+			return nil, err
+		}
+		tokens = append(tokens, token)
+	}
+	type stableBatchParent struct {
+		identity StableIdentity
+		file     *os.File
+	}
+	parents := make([]stableBatchParent, 0, len(tokens)+len(spec.AdditionalParents))
+	seen := make(map[StableIdentity]struct{}, cap(parents))
+	addParent := func(parent *os.File) error {
+		if parent == nil {
+			return fmt.Errorf("%w: nil stable namespace batch parent", ErrUnresolvedResource)
+		}
+		identity, err := adapter.Identity(parent)
+		if err != nil {
+			return err
+		}
+		identity.Generation = 0
+		if _, ok := seen[identity]; ok {
+			return nil
+		}
+		pinned, err := duplicateStableFile(parent)
+		if err != nil {
+			return err
+		}
+		seen[identity] = struct{}{}
+		parents = append(parents, stableBatchParent{identity: identity, file: pinned})
+		return nil
+	}
+	for _, registration := range spec.Registrations {
+		if err := addParent(registration.Parent); err != nil {
+			releaseTokens()
+			for _, parent := range parents {
+				_ = parent.file.Close()
+			}
+			return nil, err
+		}
+	}
+	for _, parent := range spec.AdditionalParents {
+		if err := addParent(parent); err != nil {
+			releaseTokens()
+			for _, retained := range parents {
+				_ = retained.file.Close()
+			}
+			return nil, err
+		}
+	}
+	var syncCounts = make(map[StableIdentity]uint64, len(parents))
+	var syncNanos = make(map[StableIdentity]uint64, len(parents))
+	for _, parent := range parents {
+		started := time.Now()
+		err := adapter.Sync(parent.file)
+		elapsed := uint64(time.Since(started))
+		_ = parent.file.Close()
+		if err != nil {
+			releaseTokens()
+			return nil, err
+		}
+		syncCounts[parent.identity] = 1
+		syncNanos[parent.identity] = elapsed
+	}
+	for _, token := range tokens {
+		identity := token.parentIdentity
+		identity.Generation = 0
+		token.state.Store(namespaceStable)
+		if syncCounts[identity] != 0 {
+			token.syncs.Store(syncCounts[identity])
+			token.syncNanos.Store(syncNanos[identity])
+			delete(syncCounts, identity)
+		}
+	}
+	return tokens, nil
+}
+
 // StableNamespaceParentGeneration derives a stable, non-zero logical
 // generation from an exact parent namespace handle. The token retains and
 // validates the full platform identity separately; this compact generation is
@@ -948,6 +1052,17 @@ func RenameStableChildFile(parent *os.File, oldName, newName string) error {
 		return fmt.Errorf("%w: stable child rename requires distinct base names and an exact parent handle", ErrUnresolvedResource)
 	}
 	return renameStableChildFile(parent, oldName, newName)
+}
+
+// MoveStableChildFileNoReplace moves oldName between two exact retained parent
+// handles without replacing an existing destination. The boolean reports that
+// the destination link was installed even when removing the source link then
+// failed; callers must treat that outcome as namespace-ambiguous.
+func MoveStableChildFileNoReplace(sourceParent *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+	if sourceParent == nil || destinationParent == nil || !stableChildBaseName(oldName) || !stableChildBaseName(newName) {
+		return false, fmt.Errorf("%w: stable cross-parent move requires base names and exact parent handles", ErrUnresolvedResource)
+	}
+	return moveStableChildFileNoReplace(sourceParent, oldName, destinationParent, newName)
 }
 
 func stableChildBaseName(name string) bool {
