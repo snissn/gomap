@@ -34,6 +34,7 @@ const (
 // StableNamespaceToken binds a token to the namespace operation that made the
 // resource reachable. Identity, not DiagnosticPath, is the durable key.
 type StableNamespaceToken struct {
+	Required       bool
 	ParentIdentity string
 	Identity       string
 	Generation     uint64
@@ -41,6 +42,9 @@ type StableNamespaceToken struct {
 }
 
 func (n StableNamespaceToken) validate() error {
+	if !n.Required {
+		return nil
+	}
 	if n.Identity == "" || n.ParentIdentity == "" {
 		return fmt.Errorf("%w: missing parent or namespace identity", ErrNamespacePersistenceUnsupported)
 	}
@@ -51,6 +55,9 @@ func (n StableNamespaceToken) validate() error {
 }
 
 func (n StableNamespaceToken) establish(ctx context.Context) error {
+	if !n.Required {
+		return nil
+	}
 	if err := n.validate(); err != nil {
 		return err
 	}
@@ -104,15 +111,14 @@ type StableResourceToken struct {
 	Frontier       uint64
 	Digest         string
 	ReachableBy    string
-	// PinnedOperationID identifies the captured handle/generation operation.
-	// Duplicate tokens with different operations are rejected rather than
-	// accidentally selecting one callback and leaking the other producer pin.
-	PinnedOperationID string
-	MutableAppend     bool
-	NamespaceToken    StableNamespaceToken
-	FlushThrough      func(context.Context, uint64) error
-	SyncThrough       func(context.Context, uint64) error
-	Lease             *StableResourceLease
+	// Provider is the opaque captured handle/generation owner. It is compared
+	// by pointer, so a caller cannot claim two replaced handles are identical.
+	Provider       *StableResourceLease
+	MutableAppend  bool
+	NamespaceToken StableNamespaceToken
+	FlushThrough   func(context.Context, uint64) error
+	SyncThrough    func(context.Context, uint64) error
+	Lease          *StableResourceLease
 }
 
 func (t StableResourceToken) key() string {
@@ -120,7 +126,7 @@ func (t StableResourceToken) key() string {
 }
 
 func (t StableResourceToken) validate() error {
-	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.ReachableBy == "" || t.PinnedOperationID == "" {
+	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.ReachableBy == "" || t.Provider == nil {
 		return fmt.Errorf("%w: incomplete stable resource token kind=%q identity=%q", ErrInvalidCandidate, t.Kind, t.Identity)
 	}
 	if err := t.NamespaceToken.validate(); err != nil {
@@ -145,11 +151,20 @@ func (t StableResourceToken) validate() error {
 type StableResourceSet struct{ tokens []StableResourceToken }
 
 func NewStableResourceSet(tokens []StableResourceToken) (StableResourceSet, error) {
+	return NewStableResourceSetWithMetrics(tokens, nil)
+}
+
+// NewStableResourceSetWithMetrics records validation and coalescing outcomes
+// at the only authority that can classify them, without a process-global sink.
+func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *StableResourceMetricsRecorder) (StableResourceSet, error) {
 	copyTokens := append([]StableResourceToken(nil), tokens...)
 	sort.Slice(copyTokens, func(i, j int) bool { return copyTokens[i].key() < copyTokens[j].key() })
 	out := copyTokens[:0]
 	for _, token := range copyTokens {
 		if err := token.validate(); err != nil {
+			if metrics != nil {
+				metrics.ObserveRejected()
+			}
 			return StableResourceSet{}, err
 		}
 		if len(out) == 0 || out[len(out)-1].key() != token.key() {
@@ -158,7 +173,13 @@ func NewStableResourceSet(tokens []StableResourceToken) (StableResourceSet, erro
 		}
 		merged, err := mergeStableResourceToken(out[len(out)-1], token)
 		if err != nil {
+			if metrics != nil {
+				metrics.ObserveConflict()
+			}
 			return StableResourceSet{}, err
+		}
+		if metrics != nil {
+			metrics.ObserveCoalesced(1)
 		}
 		out[len(out)-1] = merged
 	}
@@ -169,13 +190,15 @@ func mergeStableResourceToken(left, right StableResourceToken) (StableResourceTo
 	if left.Digest != right.Digest ||
 		left.ReachableBy != right.ReachableBy ||
 		left.MutableAppend != right.MutableAppend ||
-		left.PinnedOperationID != right.PinnedOperationID ||
+		left.Provider != right.Provider ||
 		left.NamespaceToken.Identity != right.NamespaceToken.Identity ||
 		left.NamespaceToken.ParentIdentity != right.NamespaceToken.ParentIdentity ||
 		left.NamespaceToken.Generation != right.NamespaceToken.Generation {
 		return StableResourceToken{}, fmt.Errorf("%w: conflicting stable resource identity %q", ErrInvalidCandidate, left.Identity)
 	}
-	left.Lease = joinStableResourceLeases(left.Lease, right.Lease)
+	if left.Lease != right.Lease {
+		return StableResourceToken{}, fmt.Errorf("%w: duplicate resource %q has distinct ownership leases", ErrInvalidCandidate, left.Identity)
+	}
 	if right.Frontier > left.Frontier {
 		left.Frontier, left.FlushThrough, left.SyncThrough = right.Frontier, right.FlushThrough, right.SyncThrough
 	}
@@ -227,15 +250,17 @@ func (s StableResourceSet) FlushAndSyncWithMetrics(ctx context.Context, metrics 
 		if metrics != nil {
 			metrics.record(token.Kind, stableResourceSync, time.Since(syncStarted))
 		}
-		namespaceStarted := time.Now()
-		if err := token.NamespaceToken.establish(ctx); err != nil {
-			if metrics != nil {
-				metrics.reject()
+		if token.NamespaceToken.Required {
+			namespaceStarted := time.Now()
+			if err := token.NamespaceToken.establish(ctx); err != nil {
+				if metrics != nil {
+					metrics.reject()
+				}
+				return err
 			}
-			return err
-		}
-		if metrics != nil {
-			metrics.record(token.Kind, stableResourceNamespace, time.Since(namespaceStarted))
+			if metrics != nil {
+				metrics.record(token.Kind, stableResourceNamespace, time.Since(namespaceStarted))
+			}
 		}
 	}
 	return nil
@@ -251,22 +276,61 @@ func (s StableResourceSet) Release() {
 // Retry and partial durable failure retain pins; all terminal paths release
 // exactly once. #3679/#3718 choose the production transition point.
 type StableResourceDebt struct {
-	set  StableResourceSet
-	once sync.Once
+	set   StableResourceSet
+	mu    sync.Mutex
+	state stableResourceDebtState
+	once  sync.Once
 }
+type stableResourceDebtState uint8
+
+const (
+	stableResourceDebtOwned stableResourceDebtState = iota
+	stableResourceDebtRetained
+	stableResourceDebtTransferred
+	stableResourceDebtReleased
+)
 
 func NewStableResourceDebt(set StableResourceSet) *StableResourceDebt {
 	return &StableResourceDebt{set: set}
 }
-func (d *StableResourceDebt) Retry()      {}
-func (d *StableResourceDebt) Success()    { d.release() }
-func (d *StableResourceDebt) Superseded() { d.release() }
-func (d *StableResourceDebt) Abandon()    { d.release() }
-func (d *StableResourceDebt) Poison()     { d.release() }
-func (d *StableResourceDebt) release() {
+func (d *StableResourceDebt) Retry()    { d.retain() }
+func (d *StableResourceDebt) Poison()   { d.retain() }
+func (d *StableResourceDebt) Shutdown() { d.retain() }
+func (d *StableResourceDebt) retain() {
 	if d != nil {
-		d.once.Do(d.set.Release)
+		d.mu.Lock()
+		if d.state == stableResourceDebtOwned {
+			d.state = stableResourceDebtRetained
+		}
+		d.mu.Unlock()
 	}
+}
+func (d *StableResourceDebt) Supersede() StableResourceSet {
+	if d == nil {
+		return StableResourceSet{}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state == stableResourceDebtReleased || d.state == stableResourceDebtTransferred {
+		return StableResourceSet{}
+	}
+	d.state = stableResourceDebtTransferred
+	return d.set
+}
+func (d *StableResourceDebt) DurableCoverage()      { d.release() }
+func (d *StableResourceDebt) AbandonPreVisibility() { d.release() }
+func (d *StableResourceDebt) release() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.state == stableResourceDebtTransferred || d.state == stableResourceDebtReleased {
+		d.mu.Unlock()
+		return
+	}
+	d.state = stableResourceDebtReleased
+	d.mu.Unlock()
+	d.once.Do(d.set.Release)
 }
 
 type stableResourceExtension struct {

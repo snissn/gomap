@@ -9,20 +9,21 @@ import (
 )
 
 func stableToken(identity string, generation, frontier uint64, sync func(context.Context, uint64) error) StableResourceToken {
-	return StableResourceToken{
+	token := StableResourceToken{
 		Kind: StableResourceValueLog, Namespace: "main", Identity: identity, Generation: generation,
 		DiagnosticPath: "value_vlog/current", Frontier: frontier, Digest: "header-a", ReachableBy: "system_root.value_log",
-		PinnedOperationID: identity + "-handle",
-		NamespaceToken:    StableNamespaceToken{ParentIdentity: "db-dir", Identity: "value-vlog-dir", Generation: 1, Establish: func(context.Context) error { return nil }},
-		FlushThrough:      func(context.Context, uint64) error { return nil }, SyncThrough: sync, Lease: NewStableResourceLease(nil),
+		NamespaceToken: StableNamespaceToken{},
+		FlushThrough:   func(context.Context, uint64) error { return nil }, SyncThrough: sync, Lease: NewStableResourceLease(nil),
 	}
+	token.Provider = token.Lease
+	return token
 }
 
 func TestStableResourceTokenOrdersDataBeforeNamespace(t *testing.T) {
 	var events []string
 	token := stableToken("inode", 1, 1, func(context.Context, uint64) error { events = append(events, "sync"); return nil })
 	token.FlushThrough = func(context.Context, uint64) error { events = append(events, "flush"); return nil }
-	token.NamespaceToken.Establish = func(context.Context) error { events = append(events, "namespace"); return nil }
+	token.NamespaceToken = StableNamespaceToken{Required: true, ParentIdentity: "db-dir", Identity: "value-vlog-dir", Generation: 1, Establish: func(context.Context) error { events = append(events, "namespace"); return nil }}
 	set, err := NewStableResourceSet([]StableResourceToken{token})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +54,7 @@ func TestStableResourceTokenPathReplacementUsesPinnedSync(t *testing.T) {
 
 func TestStableResourceTokenNamespaceFailsClosed(t *testing.T) {
 	token := stableToken("inode-a", 1, 1, func(context.Context, uint64) error { return nil })
-	token.NamespaceToken.Establish = nil
+	token.NamespaceToken = StableNamespaceToken{Required: true, ParentIdentity: "db-dir", Identity: "value-vlog-dir"}
 	_, err := NewStableResourceSet([]StableResourceToken{token})
 	if !errors.Is(err, ErrNamespacePersistenceUnsupported) {
 		t.Fatalf("err=%v", err)
@@ -64,6 +65,7 @@ func TestStableResourceTokenCoalescesRotatedFilesAndGreatestFrontier(t *testing.
 	var first, latest uint64
 	one := stableToken("inode-one", 1, 2, func(_ context.Context, n uint64) error { first = n; return nil })
 	two := stableToken("inode-one", 1, 9, func(_ context.Context, n uint64) error { latest = n; return nil })
+	two.Provider, two.Lease = one.Provider, one.Lease
 	rotated := stableToken("inode-two", 2, 4, func(context.Context, uint64) error { return nil })
 	set, err := NewStableResourceSet([]StableResourceToken{one, two, rotated})
 	if err != nil {
@@ -103,33 +105,62 @@ func TestStableResourceTokenRejectsDigestAndNamespaceConflicts(t *testing.T) {
 		t.Fatalf("reachable err=%v", err)
 	}
 	two = one
-	two.PinnedOperationID = "other-handle"
+	two.Provider = NewStableResourceLease(nil)
 	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
 		t.Fatalf("operation err=%v", err)
 	}
 }
 
-func TestStableResourceTokenDuplicateCombinesLeasesAndLifecycle(t *testing.T) {
+func TestStableResourceTokenDuplicateRejectsDistinctProviders(t *testing.T) {
 	var left, right atomic.Uint64
 	one := stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil })
 	one.Lease = NewStableResourceLease(func() { left.Add(1) })
+	one.Provider = one.Lease
 	two := one
 	two.Lease = NewStableResourceLease(func() { right.Add(1) })
+	two.Provider = two.Lease
+	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("err=%v", err)
+	}
+	two = one
 	set, err := NewStableResourceSet([]StableResourceToken{one, two})
 	if err != nil {
 		t.Fatal(err)
 	}
 	debt := NewStableResourceDebt(set)
 	debt.Retry()
+	debt.Poison()
+	debt.Shutdown()
 	if left.Load() != 0 || right.Load() != 0 {
 		t.Fatal("retry released pin")
 	}
-	debt.Success()
-	debt.Superseded()
-	debt.Abandon()
-	debt.Poison()
-	if left.Load() != 1 || right.Load() != 1 {
+	if transferred := debt.Supersede(); transferred.Len() != 1 {
+		t.Fatalf("transfer=%d", transferred.Len())
+	}
+	debt.DurableCoverage()
+	if left.Load() != 0 || right.Load() != 0 {
+		t.Fatal("transferred debt released")
+	}
+	NewStableResourceDebt(set).AbandonPreVisibility()
+	if left.Load() != 1 || right.Load() != 0 {
 		t.Fatalf("left=%d right=%d", left.Load(), right.Load())
+	}
+}
+
+func TestStableResourceTokenExistingAppendDoesNotSyncNamespace(t *testing.T) {
+	var namespaceSyncs atomic.Uint64
+	token := stableToken("existing", 1, 1, func(context.Context, uint64) error { return nil })
+	token.NamespaceToken = StableNamespaceToken{Establish: func(context.Context) error { namespaceSyncs.Add(1); return nil }}
+	set, err := NewStableResourceSet([]StableResourceToken{token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metrics StableResourceMetricsRecorder
+	if err := set.FlushAndSyncWithMetrics(context.Background(), &metrics); err != nil {
+		t.Fatal(err)
+	}
+	if namespaceSyncs.Load() != 0 || metrics.Snapshot().NamespaceSyncs != 0 {
+		t.Fatalf("namespace syncs=%d metrics=%+v", namespaceSyncs.Load(), metrics.Snapshot())
 	}
 }
 
@@ -213,26 +244,29 @@ func TestStableResourceTokenStressReleasesEveryPin(t *testing.T) {
 
 func TestStableResourceTokenMetricsExposeExactOperationCounts(t *testing.T) {
 	token := stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil })
-	set, err := NewStableResourceSet([]StableResourceToken{token})
+	duplicate := token
+	var metrics StableResourceMetricsRecorder
+	set, err := NewStableResourceSetWithMetrics([]StableResourceToken{token, duplicate}, &metrics)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var metrics StableResourceMetricsRecorder
 	metrics.ObservePending(2, 64, 2, 2)
-	metrics.ObserveCoalesced(1)
 	metrics.ObserveConflict()
 	metrics.ObserveRejected()
 	if err := set.FlushAndSyncWithMetrics(context.Background(), &metrics); err != nil {
 		t.Fatal(err)
 	}
 	metrics.ObservePending(0, 0, 0, 0)
-	if got := metrics.Snapshot(); got.Flushes != 1 || got.Syncs != 1 || got.NamespaceSyncs != 1 || got.PendingTokensHighWater != 2 || got.PendingBytesHighWater != 64 || got.DescriptorHighWater != 2 || got.PinHighWater != 2 || got.Coalesced != 1 || got.Conflicts != 1 || got.Rejected != 1 || got.ByKind[StableResourceValueLog].Syncs != 1 {
+	if got := metrics.Snapshot(); got.Flushes != 1 || got.Syncs != 1 || got.NamespaceSyncs != 0 || got.PendingTokensHighWater != 2 || got.PendingBytesHighWater != 64 || got.DescriptorHighWater != 2 || got.PinHighWater != 2 || got.Coalesced != 1 || got.Conflicts != 1 || got.Rejected != 1 || got.ByKind[StableResourceValueLog].Syncs != 1 {
 		t.Fatalf("metrics=%+v", got)
 	}
 }
 
 func BenchmarkStableResourceTokenConstructionAndCoalescing(b *testing.B) {
-	tokens := []StableResourceToken{stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil }), stableToken("inode", 1, 2, func(context.Context, uint64) error { return nil })}
+	one := stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil })
+	two := stableToken("inode", 1, 2, func(context.Context, uint64) error { return nil })
+	two.Provider, two.Lease = one.Provider, one.Lease
+	tokens := []StableResourceToken{one, two}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		set, err := NewStableResourceSet(tokens)
