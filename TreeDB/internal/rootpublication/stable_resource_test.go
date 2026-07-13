@@ -63,12 +63,20 @@ func (h *testStableHandle) TryUnlink() error {
 }
 
 type testNamespaceHandle struct {
-	identity StableIdentity
-	syncs    int
+	identity  StableIdentity
+	validates int
+	syncs     int
 	supported bool
 }
 
 func (h *testNamespaceHandle) StableIdentity() (StableIdentity, error) { return h.identity, nil }
+func (h *testNamespaceHandle) ValidateNamespacePersistence() error {
+	h.validates++
+	if !h.supported {
+		return ErrNamespacePersistenceUnsupported
+	}
+	return nil
+}
 func (h *testNamespaceHandle) SyncNamespace() error {
 	if !h.supported {
 		return ErrNamespacePersistenceUnsupported
@@ -78,12 +86,16 @@ func (h *testNamespaceHandle) SyncNamespace() error {
 }
 
 func testResourceToken(t testing.TB, handle StableResourceHandle, kind ResourceKind, generation, frontier uint64, digest byte, namespace *StableNamespaceToken) *StableResourceToken {
+	return testResourceTokenForField(t, handle, kind, generation, frontier, digest, namespace, "meta.user_root_page_id")
+}
+
+func testResourceTokenForField(t testing.TB, handle StableResourceHandle, kind ResourceKind, generation, frontier uint64, digest byte, namespace *StableNamespaceToken, reachabilityField string) *StableResourceToken {
 	t.Helper()
 	token, err := NewStableResourceToken(StableResourceSpec{
 		Kind: kind, LogicalNamespace: "primary", ResourceID: fmt.Sprintf("%d", generation),
 		DiagnosticPath: "lane/current.data", Generation: generation, Handle: handle,
 		RequiredFrontier: frontier, Digest: []byte{digest}, Namespace: namespace,
-		ReachabilityField: "meta.user_root_page_id",
+		ReachabilityField: reachabilityField,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,10 +109,13 @@ func TestStableResourceTokenPinsIdentityInsteadOfReopeningDiagnosticPath(t *test
 	token := testResourceToken(t, original, ResourceValueLogSegment, 7, 96, 1, nil)
 
 	// The path now names a different file. The token remains bound to the open
-	// identity captured at registration and never consults the path.
-	token.diagnosticPathLookupForTest = func(string) StableResourceHandle { return recreated }
+	// identity captured at registration. There is deliberately no path resolver
+	// in StableResourceSpec or StableResourceToken.
 	if err := token.SyncThrough(); err != nil {
 		t.Fatal(err)
+	}
+	if got := token.Identity(); got != original.identity || got == recreated.identity {
+		t.Fatalf("token identity=%+v original=%+v recreated=%+v", got, original.identity, recreated.identity)
 	}
 	if len(original.syncs) != 1 || len(recreated.syncs) != 0 {
 		t.Fatalf("syncs original=%v recreated=%v", original.syncs, recreated.syncs)
@@ -114,6 +129,9 @@ func TestStableNamespaceTokenSeparatesFileDataFromNameDurability(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if dir.validates != 1 || dir.syncs != 0 {
+		t.Fatalf("namespace registration validates=%d syncs=%d", dir.validates, dir.syncs)
 	}
 	file := newTestStableHandle(3, 64)
 	token := testResourceToken(t, file, ResourceValueLogSegment, 8, 64, 2, namespace)
@@ -149,13 +167,69 @@ func TestStableResourceSetRetainsRotatedLaneObligation(t *testing.T) {
 }
 
 func TestStableResourceSetRejectsMissingNestedAsset(t *testing.T) {
-	child := testResourceToken(t, newTestStableHandle(6, 10), ResourceVectorGraphPack, 1, 10, 5, nil)
-	set, err := NewStableResourceSet(child)
+	present := testResourceTokenForField(t, newTestStableHandle(6, 10), ResourceVectorGraphPack, 1, 10, 5, nil, "meta.vector_catalog_id")
+	set, err := NewStableResourceSet(present)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := set.ValidateReachabilityFields([]string{"meta.vector_catalog_id", "meta.vector_graph_pack_id"}); !errors.Is(err, ErrMissingResourceDependency) {
 		t.Fatalf("validate missing nested dependency=%v", err)
+	}
+}
+
+func TestStableResourceSetCoalescesSameIdentityToGreatestFrontier(t *testing.T) {
+	handle := newTestStableHandle(9, 128)
+	low := testResourceToken(t, handle, ResourceValueLogSegment, 4, 32, 1, nil)
+	high := testResourceToken(t, handle, ResourceValueLogSegment, 4, 96, 1, nil)
+	set, err := NewStableResourceSet(low, high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := set.Tokens()
+	if len(entries) != 1 || entries[0].RequiredFrontier() != 96 {
+		t.Fatalf("coalesced tokens=%v", entries)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := handle.syncs; len(got) != 1 || got[0] != 96 {
+		t.Fatalf("sync frontiers=%v", got)
+	}
+}
+
+func TestStableResourceSetTransferAndSupersessionReleaseEveryPinExactlyOnce(t *testing.T) {
+	oldHandle := newTestStableHandle(10, 64)
+	newHandle := newTestStableHandle(11, 64)
+	oldSet, err := NewStableResourceSet(testResourceToken(t, oldHandle, ResourceOuterLeafSegment, 1, 64, 1, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSet, err := NewStableResourceSet(testResourceToken(t, newHandle, ResourceOuterLeafSegment, 2, 64, 2, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coalesced, err := TransferUnionStableResourceSets(oldSet, newSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Superseded owners are inert after transfer; only the union releases pins.
+	if err := oldSet.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newSet.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if oldHandle.releases != 0 || newHandle.releases != 0 {
+		t.Fatalf("transferred source released pins old/new=%d/%d", oldHandle.releases, newHandle.releases)
+	}
+	if err := coalesced.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := coalesced.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if oldHandle.releases != 1 || newHandle.releases != 1 || oldHandle.pins != 0 || newHandle.pins != 0 {
+		t.Fatalf("release/pins old=%d/%d new=%d/%d", oldHandle.releases, oldHandle.pins, newHandle.releases, newHandle.pins)
 	}
 }
 
