@@ -2187,20 +2187,23 @@ retired counts, and the minimum `lastReachableCommitSeq`. A chunk contains a
 256-bit free bitmap and 256 retirement sequences. Free means bitmap bit 1 and
 sequence 0; retired means bit 0 and sequence non-zero; live or reserved means
 both zero. A one-chunk mutation therefore emits one chunk, one immutable index
-path, one reservation page, and one generation header. Unchanged paths retain
-their existing page identities and bytes.
+path, one or more reservation pages, and one generation header. Reservation
+pages form a contiguous, ordered chain so fragmented transactions are not
+bounded by one page. Unchanged paths retain their existing page identities and
+bytes.
 
 The generation header binds its exact root page identity and CRC, reservation
-digest, generation/parent identity, commit sequences, high-water boundary, and
-free/retired summaries with SHA-256. The reservation record binds a 128-bit
-candidate identity and canonical extents for reused data pages, appended data
-pages, target metadata pages, and replaced metadata pending retirement. Every
-decoder validates the pager ID/type/CRC, magic/version, canonical zero tail,
-sorted entries, acyclic page graph, bounds below high-water, summary counts,
-and semantic digest.
+chain digest, generation/parent identity, commit sequences, high-water
+boundary, and free/retired summaries with SHA-256. The reservation chain binds
+a 128-bit candidate identity and canonical extents for reused data pages,
+appended data pages, target metadata pages, and replaced metadata pending
+retirement. Its SHA-256 covers every ordered chain page, including page IDs and
+successor links. Every decoder validates the pager ID/type/CRC, magic/version,
+canonical zero tail, chain order and cardinality, sorted entries, acyclic page
+graph, bounds below high-water, summary counts, and semantic digest.
 
 Freelist metadata pages are allocated only from the candidate-owned high-water
-tail. Replaced parent header, reservation, chunk, and index pages are recorded
+tail. Replaced parent header, reservation-chain, chunk, and index pages are recorded
 with the parent's commit sequence and imported as retired state by the next
 candidate; they are not recursively inserted into the generation that replaces
 them. Physical file-length convergence is consequently a #3681 vacuum/rewrite

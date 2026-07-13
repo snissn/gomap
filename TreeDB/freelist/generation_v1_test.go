@@ -3,6 +3,8 @@ package freelist
 import (
 	"errors"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestFreelistGenerationV1_OlderGenerationAndPagesRemainImmutable(t *testing.T) {
@@ -89,6 +91,30 @@ func TestFreelistTxn_CandidateReservationsSurviveSupersedeAndFailure(t *testing.
 	}
 	if id, err := NewFreelistTxn(base, ledger).Allocate(0); err != nil || id != 3 {
 		t.Fatalf("released reservation: %d %v", id, err)
+	}
+}
+
+func TestFreelistTxn_AllocateSkipsAnotherCandidateReservation(t *testing.T) {
+	ledger := NewReservationLedger()
+	base := MustNewFreelistGenerationV1(1, 8, []uint64{2, 3}, nil)
+	first := NewFreelistTxn(base, ledger)
+	if id, err := first.Allocate(0); err != nil || id != 3 {
+		t.Fatalf("first allocation=(%d,%v), want page 3", id, err)
+	}
+	if err := first.Reserve(candidateIDFromString("first")); err != nil {
+		t.Fatal(err)
+	}
+	second := NewFreelistTxn(base, ledger)
+	if id, err := second.Allocate(0); err != nil || id != 2 {
+		t.Fatalf("second allocation=(%d,%v), want unreserved page 2", id, err)
+	}
+
+	if err := second.Reserve(candidateIDFromString("second")); err != nil {
+		t.Fatal(err)
+	}
+	third := NewFreelistTxn(base, ledger)
+	if id, err := third.Allocate(0); err != nil || id != 8 {
+		t.Fatalf("all-free-pages-reserved allocation=(%d,%v), want append page 8", id, err)
 	}
 }
 
@@ -262,6 +288,47 @@ func TestFreelistGenerationV1_ReopenReconstructsReservationOwnership(t *testing.
 	}
 	if !sawAllocation || !sawMetadata {
 		t.Fatalf("record=%+v", loaded.ReservationRecord().Entries())
+	}
+}
+
+func TestFreelistGenerationV1_MultiPageReservationRecordRoundTripAndDigest(t *testing.T) {
+	const allocations = 220
+	free := make([]uint64, 0, allocations)
+	for id := uint64(2); len(free) < allocations; id += 2 {
+		free = append(free, id)
+	}
+	store := NewMemoryPageStoreV1()
+	base := MustNewFreelistGenerationV1(1, 1024, free, nil)
+	txn := NewFreelistTxn(base, NewReservationLedger())
+	for range allocations {
+		if _, err := txn.Allocate(0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("multi-page-record"), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageIDs := candidate.ReservationRecord().PageIDs()
+	if len(pageIDs) < 2 || txn.Stats().ReservationRecords != uint64(len(pageIDs)) {
+		t.Fatalf("reservation pages=%v stats=%+v", pageIDs, txn.Stats())
+	}
+	loaded, err := LoadGenerationV1(store, candidate.GenerationRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(loaded.ReservationRecord().Entries()), len(candidate.ReservationRecord().Entries()); got != want {
+		t.Fatalf("loaded extents=%d want %d", got, want)
+	}
+
+	corrupt := NewMemoryPageStoreV1()
+	for id, data := range store.Pages {
+		corrupt.Pages[id] = append([]byte(nil), data...)
+	}
+	corrupt.Pages[pageIDs[1]][reservationHeaderSize] ^= 1
+	page.UpdateChecksum(corrupt.Pages[pageIDs[1]])
+	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationDigest) {
+		t.Fatalf("second-page corruption error=%v want %v", err, ErrGenerationDigest)
 	}
 }
 

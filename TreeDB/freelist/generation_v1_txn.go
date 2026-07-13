@@ -192,8 +192,8 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
 	if base.ref.HeaderPageID != 0 {
 		t.replacedMetadata[base.ref.HeaderPageID] = struct{}{}
 	}
-	if base.record.pageID != 0 {
-		t.replacedMetadata[base.record.pageID] = struct{}{}
+	for _, id := range base.record.pageIDs {
+		t.replacedMetadata[id] = struct{}{}
 	}
 	for _, pending := range base.record.pendingMetadata() {
 		t.retire(pending.id, pending.lastReachableCommitSeq)
@@ -244,17 +244,9 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 	if err := t.valid(); err != nil {
 		return 0, err
 	}
-	chunk := chooseFreeChunk(t.root, regionHint, &t.stats.PageVisits)
-	if chunk != nil {
-		offset, ok := chunk.highestFree()
-		if !ok {
-			return 0, ErrNoAllocatablePage
-		}
-		id := chunk.chunkNo<<freelistChunkShift | offset
-		if t.ledger.Reserved(id) {
-			return 0, ErrPageReserved
-		}
-		t.mutate(chunk.chunkNo, func(c *stateChunk) { c.setFree(offset, false) })
+	if id, ok := chooseUnreservedFreePage(t.root, regionHint, t.ledger, &t.stats.PageVisits); ok {
+		offset := id & (freelistChunkSize - 1)
+		t.mutate(id>>freelistChunkShift, func(c *stateChunk) { c.setFree(offset, false) })
 		t.allocated = append(t.allocated, allocatedPage{id, ReservationReusedData})
 		t.stats.ReuseAllocations++
 		return id, nil
@@ -474,9 +466,6 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	}
 	metadataStart := t.highWater
 	reservationID := next
-	next++
-	headerID := next
-	next++
 	var reused, appended []uint64
 	for _, allocation := range t.allocated {
 		if allocation.kind == ReservationReusedData {
@@ -488,19 +477,40 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	var extents []ReservationExtentV1
 	extents = appendIDExtents(extents, reused, ReservationReusedData, 0)
 	extents = appendIDExtents(extents, appended, ReservationAppendedData, 0)
-	extents = append(extents, ReservationExtentV1{StartPageID: metadataStart, Count: uint32(next - metadataStart), Kind: ReservationTargetMetadata})
+	// The target metadata extent includes the COW pages, the reservation chain,
+	// and the generation header. Its count does not change the number of
+	// normalized reservation extents, so compute the chain length first.
+	extents = append(extents, ReservationExtentV1{StartPageID: metadataStart, Count: 1, Kind: ReservationTargetMetadata})
 	replaced := make([]uint64, 0, len(t.replacedMetadata))
 	for id := range t.replacedMetadata {
 		replaced = append(replaced, id)
 	}
 	extents = appendIDExtents(extents, replaced, ReservationPendingMetadataRetirement, t.base.commitSeq)
-	record := ReservationRecordV1{CandidateID: candidateID, GenerationID: generationID, BaseID: t.base.generationID, BaseDigest: t.base.ref.Digest, Extents: extents}
-	recordPage, record, err := encodeReservationPage(reservationID, record)
+	extents, err := normalizeExtents(extents)
 	if err != nil {
 		return nil, err
 	}
-	if err := recorded.write(reservationID, recordPage); err != nil {
+	pageCount := (len(extents) + reservationEntriesPerPage - 1) / reservationEntriesPerPage
+	if pageCount == 0 {
+		pageCount = 1
+	}
+	headerID := reservationID + uint64(pageCount)
+	next = headerID + 1
+	for i := range extents {
+		if extents[i].Kind == ReservationTargetMetadata {
+			extents[i].Count = uint32(next - metadataStart)
+			break
+		}
+	}
+	record := ReservationRecordV1{CandidateID: candidateID, GenerationID: generationID, BaseID: t.base.generationID, BaseDigest: t.base.ref.Digest, Extents: extents}
+	recordPages, record, err := encodeNormalizedReservationPages(reservationID, record)
+	if err != nil {
 		return nil, err
+	}
+	for i, recordPage := range recordPages {
+		if err := recorded.write(reservationID+uint64(i), recordPage); err != nil {
+			return nil, err
+		}
 	}
 	g := &FreelistGenerationV1{generationID: generationID, commitSeq: commitSeq, parentGenerationID: t.base.generationID, parentCommitSeq: t.base.commitSeq, highWater: next, root: t.root, record: record}
 	g.metadataPages = make([]uint64, 0, next-metadataStart)
@@ -522,7 +532,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	t.stats.COWBytes = t.stats.COWPages * page.PageSize
 	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount, g.root.retiredCount
 	t.stats.GenerationID = generationID
-	t.stats.ReservationRecords = 1
+	t.stats.ReservationRecords = uint64(len(record.pageIDs))
 	t.stats.PendingMetadataRetirements = uint64(len(record.pendingMetadata()))
 	dirty := make([]uint64, len(recorded.pages))
 	for i := range recorded.pages {

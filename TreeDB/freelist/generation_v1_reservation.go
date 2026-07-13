@@ -32,6 +32,7 @@ type ReservationExtentV1 struct {
 
 type ReservationRecordV1 struct {
 	pageID       uint64
+	pageIDs      []uint64
 	CandidateID  CandidateIDV1
 	GenerationID uint64
 	BaseID       uint64
@@ -40,8 +41,9 @@ type ReservationRecordV1 struct {
 	digest       [32]byte
 }
 
-func (r ReservationRecordV1) PageID() uint64   { return r.pageID }
-func (r ReservationRecordV1) Digest() [32]byte { return r.digest }
+func (r ReservationRecordV1) PageID() uint64    { return r.pageID }
+func (r ReservationRecordV1) PageIDs() []uint64 { return append([]uint64(nil), r.pageIDs...) }
+func (r ReservationRecordV1) Digest() [32]byte  { return r.digest }
 func (r ReservationRecordV1) Entries() []ReservationExtentV1 {
 	return append([]ReservationExtentV1(nil), r.Extents...)
 }
@@ -82,80 +84,144 @@ func normalizeExtents(extents []ReservationExtentV1) ([]ReservationExtentV1, err
 	return merged, nil
 }
 
-func encodeReservationPage(id uint64, record ReservationRecordV1) ([]byte, ReservationRecordV1, error) {
+const reservationEntriesPerPage = (page.PageSize - reservationHeaderSize) / reservationEntrySize
+
+func encodeReservationPages(id uint64, record ReservationRecordV1) ([][]byte, ReservationRecordV1, error) {
 	extents, err := normalizeExtents(record.Extents)
 	if err != nil {
 		return nil, ReservationRecordV1{}, err
 	}
-	if len(extents) > (page.PageSize-reservationHeaderSize)/reservationEntrySize {
-		return nil, ReservationRecordV1{}, fmt.Errorf("%w: reservation record needs multiple pages", ErrGenerationFormat)
-	}
-	record.pageID, record.Extents = id, extents
-	b := make([]byte, page.PageSize)
-	encodePageHeader(b, id, page.PageTypeFreelistReservation, uint16(len(extents)))
-	copy(b[16:24], reservationMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 1)
-	binary.LittleEndian.PutUint16(b[26:28], reservationHeaderSize)
-	binary.LittleEndian.PutUint16(b[28:30], reservationEntrySize)
-	copy(b[32:48], record.CandidateID[:])
-	binary.LittleEndian.PutUint64(b[48:56], record.GenerationID)
-	binary.LittleEndian.PutUint64(b[56:64], record.BaseID)
-	binary.LittleEndian.PutUint32(b[72:76], uint32(len(extents)))
-	binary.LittleEndian.PutUint16(b[76:78], 1)
-	copy(b[80:112], record.BaseDigest[:])
-	o := reservationHeaderSize
-	for _, extent := range extents {
-		binary.LittleEndian.PutUint64(b[o:o+8], extent.StartPageID)
-		binary.LittleEndian.PutUint32(b[o+8:o+12], extent.Count)
-		b[o+12] = byte(extent.Kind)
-		binary.LittleEndian.PutUint64(b[o+16:o+24], extent.LastReachableCommitSeq)
-		o += reservationEntrySize
-	}
-	record.digest = reservationDigest(b)
-	copy(b[112:144], record.digest[:])
-	finishPage(b)
-	return b, record, nil
+	record.Extents = extents
+	return encodeNormalizedReservationPages(id, record)
 }
 
-func reservationDigest(b []byte) [32]byte {
-	canonical := append([]byte(nil), b...)
-	for i := 8; i < 12; i++ {
-		canonical[i] = 0
+func encodeNormalizedReservationPages(id uint64, record ReservationRecordV1) ([][]byte, ReservationRecordV1, error) {
+	extents := record.Extents
+	pageCount := (len(extents) + reservationEntriesPerPage - 1) / reservationEntriesPerPage
+	if pageCount == 0 {
+		pageCount = 1
 	}
-	for i := 112; i < 144; i++ {
-		canonical[i] = 0
+	if pageCount > int(^uint16(0)) || id > ^uint64(0)-uint64(pageCount) {
+		return nil, ReservationRecordV1{}, fmt.Errorf("%w: reservation record page count %d", ErrGenerationFormat, pageCount)
 	}
-	return sha256.Sum256(canonical)
+	record.pageID = id
+	record.pageIDs = make([]uint64, pageCount)
+	pages := make([][]byte, pageCount)
+	for pageIndex := range pages {
+		pageID := id + uint64(pageIndex)
+		record.pageIDs[pageIndex] = pageID
+		start := pageIndex * reservationEntriesPerPage
+		end := min(start+reservationEntriesPerPage, len(extents))
+		entries := extents[start:end]
+		b := make([]byte, page.PageSize)
+		encodePageHeader(b, pageID, page.PageTypeFreelistReservation, uint16(len(entries)))
+		copy(b[16:24], reservationMagic[:])
+		binary.LittleEndian.PutUint16(b[24:26], 1)
+		binary.LittleEndian.PutUint16(b[26:28], reservationHeaderSize)
+		binary.LittleEndian.PutUint16(b[28:30], reservationEntrySize)
+		copy(b[32:48], record.CandidateID[:])
+		binary.LittleEndian.PutUint64(b[48:56], record.GenerationID)
+		binary.LittleEndian.PutUint64(b[56:64], record.BaseID)
+		if pageIndex+1 < pageCount {
+			binary.LittleEndian.PutUint64(b[64:72], pageID+1)
+		}
+		binary.LittleEndian.PutUint32(b[72:76], uint32(len(entries)))
+		binary.LittleEndian.PutUint16(b[76:78], 1)
+		binary.LittleEndian.PutUint16(b[78:80], uint16(pageCount))
+		copy(b[80:112], record.BaseDigest[:])
+		binary.LittleEndian.PutUint32(b[144:148], uint32(pageIndex))
+		binary.LittleEndian.PutUint32(b[148:152], uint32(len(extents)))
+		o := reservationHeaderSize
+		for _, extent := range entries {
+			binary.LittleEndian.PutUint64(b[o:o+8], extent.StartPageID)
+			binary.LittleEndian.PutUint32(b[o+8:o+12], extent.Count)
+			b[o+12] = byte(extent.Kind)
+			binary.LittleEndian.PutUint64(b[o+16:o+24], extent.LastReachableCommitSeq)
+			o += reservationEntrySize
+		}
+		pages[pageIndex] = b
+	}
+	record.digest = reservationDigest(pages)
+	for _, b := range pages {
+		copy(b[112:144], record.digest[:])
+		finishPage(b)
+	}
+	return pages, record, nil
+}
+
+func reservationDigest(pages [][]byte) [32]byte {
+	h := sha256.New()
+	for _, b := range pages {
+		canonical := append([]byte(nil), b...)
+		for i := 8; i < 12; i++ {
+			canonical[i] = 0
+		}
+		for i := 112; i < 144; i++ {
+			canonical[i] = 0
+		}
+		_, _ = h.Write(canonical)
+	}
+	var digest [32]byte
+	copy(digest[:], h.Sum(nil))
+	return digest
 }
 
 func loadReservationRecord(src PageSource, id, highWater uint64) (ReservationRecordV1, error) {
-	b, err := readTypedPage(src, id, page.PageTypeFreelistReservation, highWater)
-	if err != nil {
-		return ReservationRecordV1{}, err
-	}
-	h := page.DecodeHeader(b)
-	if !bytes.Equal(b[16:24], reservationMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != reservationHeaderSize || binary.LittleEndian.Uint16(b[28:30]) != reservationEntrySize || !zeroTail(b[30:32], 0) || !zeroTail(b[64:72], 0) || binary.LittleEndian.Uint16(b[76:78]) != 1 || !zeroTail(b[78:80], 0) || !zeroTail(b[144:176], 0) || int(h.Count) != int(binary.LittleEndian.Uint32(b[72:76])) || !zeroTail(b, reservationHeaderSize+int(h.Count)*reservationEntrySize) {
-		return ReservationRecordV1{}, ErrGenerationFormat
-	}
-	digest := reservationDigest(b)
-	if !bytes.Equal(digest[:], b[112:144]) {
-		return ReservationRecordV1{}, ErrGenerationDigest
-	}
-	record := ReservationRecordV1{pageID: id, GenerationID: binary.LittleEndian.Uint64(b[48:56]), BaseID: binary.LittleEndian.Uint64(b[56:64]), digest: digest}
-	copy(record.CandidateID[:], b[32:48])
-	copy(record.BaseDigest[:], b[80:112])
-	for i := 0; i < int(h.Count); i++ {
-		o := reservationHeaderSize + i*reservationEntrySize
-		if !zeroTail(b[o+13:o+16], 0) {
+	var pages [][]byte
+	var record ReservationRecordV1
+	nextID := id
+	var pageCount uint16
+	for pageIndex := 0; ; pageIndex++ {
+		b, err := readTypedPage(src, nextID, page.PageTypeFreelistReservation, highWater)
+		if err != nil {
+			return ReservationRecordV1{}, err
+		}
+		h := page.DecodeHeader(b)
+		if !bytes.Equal(b[16:24], reservationMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != reservationHeaderSize || binary.LittleEndian.Uint16(b[28:30]) != reservationEntrySize || !zeroTail(b[30:32], 0) || binary.LittleEndian.Uint16(b[76:78]) != 1 || !zeroTail(b[152:176], 0) || int(h.Count) != int(binary.LittleEndian.Uint32(b[72:76])) || int(h.Count) > reservationEntriesPerPage || binary.LittleEndian.Uint32(b[144:148]) != uint32(pageIndex) || !zeroTail(b, reservationHeaderSize+int(h.Count)*reservationEntrySize) {
 			return ReservationRecordV1{}, ErrGenerationFormat
 		}
-		record.Extents = append(record.Extents, ReservationExtentV1{
-			StartPageID:            binary.LittleEndian.Uint64(b[o : o+8]),
-			Count:                  binary.LittleEndian.Uint32(b[o+8 : o+12]),
-			Kind:                   ReservationKindV1(b[o+12]),
-			LastReachableCommitSeq: binary.LittleEndian.Uint64(b[o+16 : o+24]),
-		})
+		if pageIndex == 0 {
+			pageCount = binary.LittleEndian.Uint16(b[78:80])
+			if pageCount == 0 {
+				return ReservationRecordV1{}, ErrGenerationFormat
+			}
+			record = ReservationRecordV1{pageID: id, GenerationID: binary.LittleEndian.Uint64(b[48:56]), BaseID: binary.LittleEndian.Uint64(b[56:64])}
+			copy(record.CandidateID[:], b[32:48])
+			copy(record.BaseDigest[:], b[80:112])
+		} else if binary.LittleEndian.Uint16(b[78:80]) != pageCount || binary.LittleEndian.Uint64(b[48:56]) != record.GenerationID || binary.LittleEndian.Uint64(b[56:64]) != record.BaseID || !bytes.Equal(b[32:48], record.CandidateID[:]) || !bytes.Equal(b[80:112], record.BaseDigest[:]) {
+			return ReservationRecordV1{}, ErrGenerationFormat
+		}
+		if pageIndex > 0 && (binary.LittleEndian.Uint32(b[148:152]) != binary.LittleEndian.Uint32(pages[0][148:152]) || !bytes.Equal(b[112:144], pages[0][112:144])) {
+			return ReservationRecordV1{}, ErrGenerationDigest
+		}
+		pages = append(pages, b)
+		record.pageIDs = append(record.pageIDs, nextID)
+		for i := 0; i < int(h.Count); i++ {
+			o := reservationHeaderSize + i*reservationEntrySize
+			if !zeroTail(b[o+13:o+16], 0) {
+				return ReservationRecordV1{}, ErrGenerationFormat
+			}
+			record.Extents = append(record.Extents, ReservationExtentV1{
+				StartPageID: binary.LittleEndian.Uint64(b[o : o+8]), Count: binary.LittleEndian.Uint32(b[o+8 : o+12]), Kind: ReservationKindV1(b[o+12]), LastReachableCommitSeq: binary.LittleEndian.Uint64(b[o+16 : o+24]),
+			})
+		}
+		next := binary.LittleEndian.Uint64(b[64:72])
+		if pageIndex+1 == int(pageCount) {
+			if next != 0 {
+				return ReservationRecordV1{}, ErrGenerationFormat
+			}
+			break
+		}
+		if next != nextID+1 {
+			return ReservationRecordV1{}, ErrGenerationFormat
+		}
+		nextID = next
 	}
+	digest := reservationDigest(pages)
+	if !bytes.Equal(digest[:], pages[0][112:144]) || len(record.Extents) != int(binary.LittleEndian.Uint32(pages[0][148:152])) {
+		return ReservationRecordV1{}, ErrGenerationDigest
+	}
+	record.digest = digest
 	normalized, err := normalizeExtents(record.Extents)
 	if err != nil || len(normalized) != len(record.Extents) {
 		return ReservationRecordV1{}, ErrGenerationFormat

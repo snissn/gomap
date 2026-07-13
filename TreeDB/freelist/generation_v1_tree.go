@@ -91,6 +91,24 @@ func (c *stateChunk) highestFree() (uint64, bool) {
 	return 0, false
 }
 
+func (c *stateChunk) highestFreeUnreserved(ledger *ReservationLedger) (uint64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	for word := len(c.free) - 1; word >= 0; word-- {
+		bitsLeft := c.free[word]
+		for bitsLeft != 0 {
+			offset := uint64(word*64 + 63 - bits.LeadingZeros64(bitsLeft))
+			id := c.chunkNo<<freelistChunkShift | offset
+			if ledger == nil || !ledger.Reserved(id) {
+				return offset, true
+			}
+			bitsLeft &^= uint64(1) << (offset % 64)
+		}
+	}
+	return 0, false
+}
+
 type stateNode struct {
 	pageID                            uint64
 	checksum                          uint32
@@ -285,6 +303,36 @@ func chooseFreeChunk(root *stateNode, pageHint uint64, visits *uint64) *stateChu
 		return hi
 	}
 	return lo
+}
+
+func chooseUnreservedFreePage(root *stateNode, pageHint uint64, ledger *ReservationLedger, visits *uint64) (uint64, bool) {
+	preferred := chooseFreeChunk(root, pageHint, visits)
+	if offset, ok := preferred.highestFreeUnreserved(ledger); ok {
+		return preferred.chunkNo<<freelistChunkShift | offset, true
+	}
+
+	hintRegion := pageHint / freelistRegionSize
+	var best *stateChunk
+	var bestOffset, bestDistance uint64
+	_ = walkState(root, 0, func(chunk *stateChunk) error {
+		if chunk == preferred {
+			return nil
+		}
+		offset, ok := chunk.highestFreeUnreserved(ledger)
+		if !ok {
+			return nil
+		}
+		*visits++
+		distance := absDiff((chunk.chunkNo<<freelistChunkShift)/freelistRegionSize, hintRegion)
+		if best == nil || distance < bestDistance || (distance == bestDistance && chunk.chunkNo > best.chunkNo) {
+			best, bestOffset, bestDistance = chunk, offset, distance
+		}
+		return nil
+	})
+	if best == nil {
+		return 0, false
+	}
+	return best.chunkNo<<freelistChunkShift | bestOffset, true
 }
 
 func walkState(n *stateNode, depth int, f func(*stateChunk) error) error {
