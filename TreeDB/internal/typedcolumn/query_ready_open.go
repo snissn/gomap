@@ -290,6 +290,15 @@ func (c *QueryReadyGenerationOpenCache) Open(files QueryReadyGenerationOpenFiles
 	if err != nil {
 		state := classifyQueryReadyGenerationOpenError(err)
 		wrapped := &QueryReadyGenerationOpenError{State: state, Err: err}
+		var boundErr *QueryReadyDeltaBoundError
+		if errors.As(err, &boundErr) {
+			// Bounds belong to the caller, not the physical generation. Keep
+			// the cache retryable so a concurrent or later permissive request
+			// can validate and publish the same otherwise valid assets.
+			c.state, c.stats.State, c.lastErr = QueryReadyOpenAbsentRebuildable, QueryReadyOpenAbsentRebuildable, nil
+			c.cond.Broadcast()
+			return nil, wrapped
+		}
 		c.state, c.stats.State, c.lastErr = state, state, wrapped
 		if state == QueryReadyOpenAbsentRebuildable {
 			c.needsRebuild = true

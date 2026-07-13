@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
@@ -159,6 +160,68 @@ func TestCollectionQueryReadyGenerationCloseDefersUnmapUntilActiveLeaseRelease(t
 	}
 	if !prepared.Closed() {
 		t.Fatal("final detached lease release did not close mapping")
+	}
+}
+
+func TestCollectionQueryReadyGenerationCacheKeepsManagerRegistrationAcrossVectorCleanup(t *testing.T) {
+	for _, cleanup := range []struct {
+		name string
+		run  func(*Collection) error
+	}{
+		{name: "unregister", run: func(c *Collection) error {
+			index, err := newVectorIndex(c, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
+			if err != nil {
+				return err
+			}
+			c.RegisterVectorIndex(index)
+			c.UnregisterVectorIndex(index.name)
+			return nil
+		}},
+		{name: "persist-clean", run: func(c *Collection) error { return c.persistDirtyNativeVectorIndexes() }},
+	} {
+		t.Run(cleanup.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = d.Close() })
+			manager := NewCollectionManager(d)
+			if _, err := manager.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+				t.Fatal(err)
+			}
+			collection, err := manager.OpenCollection("events")
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity := queryReadyCollectionTestIdentity()
+			files := queryReadyCollectionValidFiles(t, identity, 8301)
+			lease, err := collection.openCollectionQueryReadyGenerationForIdentity(identity, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared := lease.Prepared()
+			if got := collectionManagerHandleCount(manager); got != 1 {
+				t.Fatalf("registered handles=%d want 1", got)
+			}
+			if err := cleanup.run(collection); err != nil {
+				t.Fatal(err)
+			}
+			if got := collectionManagerHandleCount(manager); got != 1 {
+				t.Fatalf("vector cleanup dropped query-ready owner handle count=%d want 1", got)
+			}
+			if err := collection.closeCollectionQueryReadyGenerationCache(); err != nil {
+				t.Fatal(err)
+			}
+			if prepared.Closed() {
+				t.Fatal("cache cleanup unmapped active lease")
+			}
+			if err := lease.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !prepared.Closed() {
+				t.Fatal("final lease release did not close mapping")
+			}
+		})
 	}
 }
 

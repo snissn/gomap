@@ -216,6 +216,35 @@ func TestQueryReadyGenerationWarmOpenEnforcesStricterBound(t *testing.T) {
 	}
 }
 
+func TestQueryReadyGenerationColdBoundMissDoesNotPoisonPermissiveReopen(t *testing.T) {
+	requireQueryReadyGenerationFileOpen(t)
+	files := queryReadyOpenTestFiles(t)
+	cache := NewQueryReadyGenerationOpenCache(files.Key)
+	t.Cleanup(func() { _ = cache.Close() })
+
+	strict := files
+	strict.Bound = QueryReadyDeltaBoundPolicy{MaxRows: 1}
+	if got, err := cache.Open(strict); err == nil || got != nil {
+		t.Fatalf("cold strict open prepared=%p err=%v want bound rejection", got, err)
+	} else {
+		var boundErr *QueryReadyDeltaBoundError
+		if !errors.As(err, &boundErr) || boundErr.Phase != "open" || !boundErr.Decision.Triggered {
+			t.Fatalf("err=%v want open bound decision", err)
+		}
+	}
+	if state := cache.Stats().State; state != QueryReadyOpenAbsentRebuildable {
+		t.Fatalf("cold caller-local bound miss poisoned cache state=%s", state)
+	}
+	prepared, err := cache.Open(files)
+	if err != nil || prepared == nil {
+		t.Fatalf("permissive reopen prepared=%p err=%v", prepared, err)
+	}
+	stats := cache.Stats()
+	if stats.State != QueryReadyOpenReady || stats.OpenAttempts != 2 || stats.ColdOpens != 1 || stats.Published != 1 {
+		t.Fatalf("stats=%+v want retried cold open and one publication", stats)
+	}
+}
+
 func TestQueryReadyGenerationOpenRejectsStaleSchemaOrGeneration(t *testing.T) {
 	files := queryReadyOpenTestFiles(t)
 	for _, mutate := range []func(*QueryReadyGenerationOpenFiles){
