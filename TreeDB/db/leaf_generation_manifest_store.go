@@ -197,6 +197,10 @@ func (s *leafGenerationManifestStore) replaceCompatibility(manifest *leafGenerat
 		return nil, err
 	}
 	if err := atomicfile.Write(leafGenerationManifestPath(s.leafDir), data, 0o600); err != nil {
+		if atomicfile.ReplacementMayHaveCommitted(err) {
+			manifest.ManifestRevision = candidate.ManifestRevision
+			return nil, s.ambiguous(err)
+		}
 		return nil, err
 	}
 	manifest.ManifestRevision = candidate.ManifestRevision

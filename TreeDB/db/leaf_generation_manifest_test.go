@@ -11,9 +11,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestCompatibleLeafGenerationManifestPostRenameFailurePoisonsAndAdvancesRevision(t *testing.T) {
+	leafDir := t.TempDir()
+	store := newLeafGenerationManifestStore(leafDir, nil, leafGenerationManifestCompatibility, nil)
+	defer store.Close()
+	manifest := newLeafGenerationManifest(1)
+	cut := errors.New("post-rename observation cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == durabilitycut.NamespaceRename && event.NewPath == leafGenerationManifestPath(leafDir) {
+			return cut
+		}
+		return nil
+	})
+	_, err := store.Replace(manifest)
+	restore()
+	if !errors.Is(err, cut) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Replace error=%v, want cut + ErrRecoveryRequired", err)
+	}
+	if manifest.ManifestRevision != 1 {
+		t.Fatalf("ManifestRevision=%d, want committed revision 1", manifest.ManifestRevision)
+	}
+	loaded, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil || !ok || loaded.ManifestRevision != 1 {
+		t.Fatalf("persisted manifest: revision=%v ok=%v err=%v", func() uint64 {
+			if loaded == nil {
+				return 0
+			}
+			return loaded.ManifestRevision
+		}(), ok, err)
+	}
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("poisoned retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
 
 type manifestTestLeafPageLog struct {
 	path   string
