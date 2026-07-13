@@ -2994,7 +2994,7 @@ func TestColumnAssetSegmentAppenderDirSyncErrorRetainsSegmentM15C(t *testing.T) 
 		},
 		assetPath:      assetPath,
 		syncDirOnClose: true,
-		removeOnClose:  true,
+		created:        true,
 	}
 	if err := appender.close(); err == nil {
 		t.Fatalf("close err=nil want dir sync error")
