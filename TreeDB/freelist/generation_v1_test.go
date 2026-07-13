@@ -24,6 +24,32 @@ func TestFreelistGenerationV1_OlderGenerationRemainsImmutable(t *testing.T) {
 	}
 }
 
+func TestFreeMutate_DoesNotWriteSharedLeafCapacity(t *testing.T) {
+	ids := make([]uint64, 1, 8)
+	ids[0] = 4
+	old := &freeNode{ids: ids}
+	next := freeMutate(old, 8, true, trieDepth)
+	if got := old.ids; len(got) != 1 || got[0] != 4 {
+		t.Fatalf("old leaf mutated: %v", got)
+	}
+	if got := next.ids; len(got) != 2 || got[1] != 8 {
+		t.Fatalf("next leaf: %v", got)
+	}
+}
+
+func TestFreelistTxn_ReservePageRejectsArbitraryAndDuplicateIDs(t *testing.T) {
+	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 10, []uint64{2}, nil), NewReservationLedger())
+	if err := txn.ReservePage(7); err == nil {
+		t.Fatal("reserved arbitrary live page")
+	}
+	if err := txn.ReservePage(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := txn.ReservePage(2); err == nil {
+		t.Fatal("reserved duplicate page")
+	}
+}
+
 func TestFreelistGenerationV1_HorizonPreventsPrematureReuse(t *testing.T) {
 	base := MustNewFreelistGenerationV1(1, 10, nil, map[uint64]uint64{5: 9})
 	txn := NewFreelistTxn(base, NewReservationLedger())
