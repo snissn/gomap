@@ -1,10 +1,13 @@
 package commitlog
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -126,6 +129,67 @@ func TestCommandFrameV2RejectsCriticalFeatureFlagsBeforeDestinationMutation(t *t
 	}
 	if !reflect.DeepEqual(backing, want) {
 		t.Fatal("critical feature flag mutated destination backing storage")
+	}
+}
+
+func TestCommandFrameV2RejectsCompressedSegmentStorage(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{
+		Op:    RawKVOpSet,
+		Key:   []byte("compressible"),
+		Value: bytes.Repeat([]byte("v2-compression-must-stay-disabled"), 1024),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{Compress: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.writeSegment(frame); err != nil {
+		_ = w.Close()
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.LittleEndian.Uint32(data[:4]); got&segmentFlagCompressed == 0 {
+		t.Fatalf("segment length field=%#x, want compressed flag", got)
+	}
+
+	r, err := NewReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReadCommandFrameV2(); !errors.Is(err, ErrCommandWALV2CompressedRecordUnsupported) {
+		_ = r.Close()
+		t.Fatalf("ReadCommandFrameV2 error=%v, want ErrCommandWALV2CompressedRecordUnsupported", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Truncate(path, int64(len(data)-1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := InspectCommandFrameV2TerminalTail(path, 0); !errors.Is(err, ErrCommandWALV2CompressedRecordUnsupported) {
+		t.Fatalf("InspectCommandFrameV2TerminalTail error=%v, want ErrCommandWALV2CompressedRecordUnsupported", err)
 	}
 }
 
