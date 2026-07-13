@@ -1,13 +1,94 @@
 package collections
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T) {
+	dir := t.TempDir()
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "captured_parent",
+		},
+	}
+	var fileSyncs atomic.Uint64
+	originalFileSync := syncColumnAssetSegmentFileForPublish
+	syncColumnAssetSegmentFileForPublish = func(file *os.File) error {
+		if file == nil {
+			t.Fatal("nil column segment sync handle")
+		}
+		fileSyncs.Add(1)
+		return nil
+	}
+	defer func() { syncColumnAssetSegmentFileForPublish = originalFileSync }()
+	var movedDir, replacementDir string
+	originalOpenParent := openStableColumnAssetParent
+	openStableColumnAssetParent = func(path string) (*os.File, error) {
+		parent, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		movedDir, replacementDir = path+"-moved", path
+		if err := os.Rename(path, movedDir); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		return parent, nil
+	}
+	defer func() { openStableColumnAssetParent = originalOpenParent }()
+	ref, token, err := writeColumnAssetToManagerWithStableResource(dir, cfg, []byte("stable-column-payload"), ColumnAssetKindQueryReadyBase, 7, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	segmentPath, err := columnAssetSegmentPath(dir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(movedDir, filepath.Base(segmentPath))); err != nil {
+		t.Fatalf("captured-parent column segment: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(replacementDir, filepath.Base(segmentPath))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement path unexpectedly received column segment: %v", err)
+	}
+	if got := fileSyncs.Load(); got != 1 {
+		t.Fatalf("column creation file syncs=%d want exactly 1", got)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityQueryReadyBase)
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := set.FlushThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileSyncs.Load(); got != 1 {
+		t.Fatalf("already-synced column token added content sync: %d", got)
+	}
+	stats := set.Stats(time.Now())
+	if len(stats) != 1 || stats[0].NamespaceSyncs != 1 || stats[0].Flushes != 1 || stats[0].Syncs != 1 {
+		t.Fatalf("column stable operation counts=%+v", stats)
+	}
+}
 
 func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 	type expectedPolicy struct {

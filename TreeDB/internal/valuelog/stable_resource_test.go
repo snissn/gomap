@@ -3,11 +3,142 @@ package valuelog
 import (
 	"crypto/sha256"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestStableValueLogRenameUsesCallerCapturedParent(t *testing.T) {
+	root := t.TempDir()
+	segmentDir := filepath.Join(root, "segments")
+	if err := os.Mkdir(segmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(segmentDir, "000001.vlog")
+	writer, err := NewWriter(oldPath, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	parent, err := os.Open(segmentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	newName := "renamed.vlog"
+	if err := os.Rename(oldPath, filepath.Join(segmentDir, newName)); err != nil {
+		t.Fatal(err)
+	}
+	movedDir := filepath.Join(root, "segments-moved")
+	if err := os.Rename(segmentDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(segmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(segmentDir, newName), []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/renamed.vlog",
+		Reachability:    rootpublication.ReachabilityValueLogPointer,
+		NamespaceParent: parent, ParentGeneration: 1, NamespaceOperation: rootpublication.NamespaceRename,
+		OldName: "000001.vlog", NewName: newName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	if token.Namespace() == nil || token.Namespace().Operation() != rootpublication.NamespaceRename {
+		t.Fatalf("namespace=%v want exact rename token", token.Namespace())
+	}
+	replacementParent, err := os.Open(segmentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacementParent.Close()
+	replacementNamespace, err := rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
+		Parent: replacementParent, ParentGeneration: 1, Operation: rootpublication.NamespaceCreate,
+		NewName: "probe", DiagnosticPath: "segments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacementNamespace.Release()
+	if token.Namespace().ParentIdentity() == replacementNamespace.ParentIdentity() {
+		t.Fatal("rename token rebound to replacement parent path")
+	}
+}
+
+func TestStableValueLogRotationCreatesThroughCapturedParent(t *testing.T) {
+	root := t.TempDir()
+	segmentDir := filepath.Join(root, "segments")
+	if err := os.Mkdir(segmentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := NewWriter(filepath.Join(segmentDir, "000001.vlog"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Append(0, nil, 1, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	movedDir := filepath.Join(root, "segments-moved")
+	originalOpenParent := openStableValueLogParent
+	openStableValueLogParent = func(path string) (*os.File, error) {
+		parent, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Rename(segmentDir, movedDir); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		if err := os.Mkdir(segmentDir, 0o700); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		return parent, nil
+	}
+	defer func() { openStableValueLogParent = originalOpenParent }()
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(segmentDir, "000002.vlog"), 2, false,
+		StableResourceRegistration{LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog", Reachability: rootpublication.ReachabilityValueLogPointer},
+		StableResourceRegistration{LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog", Reachability: rootpublication.ReachabilityValueLogPointer,
+			ParentGeneration: 1, NamespaceOperation: rootpublication.NamespaceCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	if _, err := os.Stat(filepath.Join(movedDir, "000002.vlog")); err != nil {
+		t.Fatalf("captured-parent active segment: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(segmentDir, "000002.vlog")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement path unexpectedly received active segment: %v", err)
+	}
+	if stats := writer.DurabilityStats(); stats.FileSyncCalls != 0 {
+		t.Fatalf("rotation with syncCurrent=false content syncs=%d want 0 before publication", stats.FileSyncCalls)
+	}
+}
+
+func TestStableValueLogOrdinaryAppendDoesNotSyncNamespace(t *testing.T) {
+	writer, err := NewWriter(filepath.Join(t.TempDir(), "000001.vlog"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	before := writer.DurabilityStats().DirectorySyncCalls
+	for rid := uint64(1); rid <= 32; rid++ {
+		if _, err := writer.Append(0, nil, rid, []byte("record")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after := writer.DurabilityStats().DirectorySyncCalls; after != before {
+		t.Fatalf("ordinary appends added namespace syncs: before=%d after=%d", before, after)
+	}
+}
 
 func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.T) {
 	dir := t.TempDir()
