@@ -2172,3 +2172,20 @@ value-log paths, reserve rewrite RIDs from the live cached allocator, and
 reconcile cached split value-log writers after backend maintenance so later
 writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
 reusing segment file names.
+# Freelist Generation V1 (standalone, not yet an active DB meta format)
+
+`TreeDB/freelist.FreelistGenerationV1` encodes an immutable allocator view for
+the upcoming two-meta recovery path. Its byte format starts with `FLGV1`, then
+little-endian generation ID, high-water page ID, free/retired counts, CRC32,
+sorted free page IDs, and `(pageID,lastReachableCommitSeq)` retired pairs.
+The CRC covers every byte except its own four-byte field. Decoders reject bad
+magic, length/count inconsistencies, CRC mismatch, duplicate IDs, and overlap
+between free and retired sets.
+
+This is deliberately a model/codec-only format in this change. It is not
+written into TreeDB metas until the atomic activation owned by #3679.
+
+Pages enter the free set only through an explicit recovery horizon: their
+`lastReachableCommitSeq` must be strictly before the oldest recoverable root,
+every snapshot pin, and the retained history floor. Candidate reservations are
+kept outside the encoded generation until publication resolves ownership.
