@@ -311,6 +311,54 @@ func TestStableNamespaceStabilizeIsSingleFlight(t *testing.T) {
 	}
 }
 
+func TestStableNamespaceRegistrationAndReleaseAreSerialized(t *testing.T) {
+	for iteration := range 100 {
+		dir := t.TempDir()
+		parent, err := os.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		adapter := &countingNamespaceAdapter{}
+		namespace, err := newStableNamespaceToken(StableNamespaceSpec{
+			Parent: parent, ParentGeneration: uint64(iteration + 1), Operation: NamespaceCreate,
+			NewName: "registered.vlog", DiagnosticPath: "registered.vlog",
+		}, adapter)
+		_ = parent.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		resource := writeStableResourceFixture(t, dir, "registered.vlog", "resource")
+		start := make(chan struct{})
+		result := make(chan struct {
+			token *StableResourceToken
+			err   error
+		}, 1)
+		go func() {
+			<-start
+			token, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "registered", Generation: 1,
+				DiagnosticPath: "registered.vlog", File: resource, Frontier: DurableFrontier{Bytes: 1},
+				Reachability: ReachabilityValueLogPointer, Namespace: namespace,
+			})
+			result <- struct {
+				token *StableResourceToken
+				err   error
+			}{token: token, err: err}
+		}()
+		close(start)
+		namespace.Release()
+		registration := <-result
+		if registration.err == nil {
+			if err := namespace.Stabilize(); err != nil {
+				t.Fatalf("iteration %d successful registration retained closed namespace: %v", iteration, err)
+			}
+			registration.token.Release()
+		} else if !errors.Is(registration.err, ErrResourceOwnership) {
+			t.Fatalf("iteration %d registration error=%v", iteration, registration.err)
+		}
+	}
+}
+
 func TestUnsupportedNamespaceFailsBeforeCandidateVisibility(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
@@ -585,6 +633,55 @@ func TestCoordinatorResourcePinHighWaterSurvivesRiseAndRelease(t *testing.T) {
 	stats = coordinator.Stats().Resources
 	if len(stats) != 1 || stats[0].ActivePins != 0 || stats[0].PinHighWater != 3 {
 		t.Fatalf("released resource stats=%+v", stats)
+	}
+	if err := coordinator.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorPinMetricsCountDuplicateDescriptorsForCoalescedIdentity(t *testing.T) {
+	releasePublish := make(chan struct{})
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		<-releasePublish
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for seq := uint64(1); seq <= 2; seq++ {
+		token := stableTokenFixture(t, dir, fmt.Sprintf("duplicate-%d.vlog", seq), 1, 4, ReachabilityValueLogPointer, "same", func(spec *StableResourceSpec) {
+			spec.ResourceID = "same-segment"
+			spec.StableIdentityOverride = StableIdentity{Platform: "test", ObjectID: [16]byte{9}, Generation: 1}
+		})
+		builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidate(CandidateSpec{Frontier: NewFrontier(seq, seq, seq, seq, seq), ResourceSet: set})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats := coordinator.Stats()
+	if stats.ResourceCoalesces != 1 || len(stats.Resources) != 1 ||
+		stats.Resources[0].PendingCount != 1 || stats.Resources[0].ActivePins != 2 || stats.Resources[0].PinHighWater != 2 {
+		t.Fatalf("coalesced duplicate descriptor stats=%+v", stats)
+	}
+	close(releasePublish)
+	if err := coordinator.WaitThrough(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	stats = coordinator.Stats()
+	if len(stats.Resources) != 1 || stats.Resources[0].ActivePins != 0 || stats.Resources[0].PinHighWater != 2 {
+		t.Fatalf("released duplicate descriptor stats=%+v", stats.Resources)
 	}
 	if err := coordinator.Stop(context.Background()); err != nil {
 		t.Fatal(err)
