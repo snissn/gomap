@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
-	"sort"
+	"slices"
 )
 
 const (
@@ -389,7 +389,7 @@ func ExternalRefFenceV1FromRawKVPayload(payload []byte) (ExternalRefFenceV1, err
 	if len(rids) == 0 {
 		return ExternalRefFenceV1{}, nil
 	}
-	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
+	slices.Sort(rids)
 	unique := rids[:0]
 	for _, rid := range rids {
 		if len(unique) == 0 || unique[len(unique)-1] != rid {
