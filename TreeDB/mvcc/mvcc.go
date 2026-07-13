@@ -77,6 +77,10 @@ type treeDB interface {
 	DurabilityMode() string
 }
 
+type pointSuccessorDB interface {
+	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
+}
+
 // Store owns the external-version namespace of one TreeDB handle.
 type Store struct {
 	db treeDB
@@ -227,6 +231,17 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		s.mu.RUnlock()
 		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
 	}
+	if seeker, ok := s.db.(pointSuccessorDB); ok {
+		physical, record, found, seekErr := seeker.SeekGE(lower, upper)
+		s.mu.RUnlock()
+		if seekErr != nil {
+			return Result{}, storageError("seek version", seekErr)
+		}
+		if !found {
+			return Result{State: Absent}, nil
+		}
+		return decodePointResult(logical, timestamp, physical, record)
+	}
 	it, err := s.db.Iterator(lower, upper)
 	s.mu.RUnlock()
 	if err != nil {
@@ -246,16 +261,20 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 	}
 
 	physical := it.Key()
+	record := it.Value()
+	if iterErr := it.Error(); iterErr != nil {
+		return Result{}, storageError("read value", iterErr)
+	}
+	return decodePointResult(logical, timestamp, physical, record)
+}
+
+func decodePointResult(logical []byte, timestamp uint64, physical, record []byte) (Result, error) {
 	decoded, version, decodeErr := mvcckey.Decode(physical)
 	if decodeErr != nil || !bytes.Equal(decoded, logical) || version > timestamp {
 		if decodeErr == nil {
 			decodeErr = errors.New("decoded key or timestamp is outside requested bound")
 		}
 		return Result{}, fmt.Errorf("%w: %w", ErrMalformedRecord, decodeErr)
-	}
-	record := it.Value()
-	if iterErr := it.Error(); iterErr != nil {
-		return Result{}, storageError("read value", iterErr)
 	}
 	if len(record) == 0 {
 		return Result{}, fmt.Errorf("%w: empty value envelope", ErrMalformedRecord)

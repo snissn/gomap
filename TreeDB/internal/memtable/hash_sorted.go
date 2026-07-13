@@ -559,6 +559,57 @@ func (m *HashSorted) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, by
 	return ent.value, page.ValuePtr{}, ent.flags, ent.revision, true
 }
 
+func (m *HashSorted) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if end != nil && bytes.Compare(start, end) >= 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	m.mu.RLock()
+	frozen := m.frozen
+	finalizeDone := m.finalizeDone
+	m.mu.RUnlock()
+	if frozen && finalizeDone != nil {
+		<-finalizeDone
+		m.ensureIndexFrozen()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// CommitAt/GetAt commonly seeks the physical key it just wrote. Resolve that
+	// exact hit from the hash index before rebuilding sortedKeys: every new key
+	// invalidates the sorted index, so sorting here would turn an interleaved
+	// write/read workload into an O(n log n) rebuild per read.
+	if ent, ok := m.entryForReadLocked(bytesToStringNoCopy(start)); ok {
+		return hashSortedSeekResult(start, ent)
+	}
+	if !m.sortedValid {
+		m.ensureSortedLocked()
+	}
+	idx := sort.SearchStrings(m.sortedKeys, bytesToStringNoCopy(start))
+	if idx >= len(m.sortedKeys) {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	keyString := m.sortedKeys[idx]
+	key := stringToBytesNoCopy(keyString)
+	if end != nil && bytes.Compare(key, end) >= 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	ent, ok := m.entryForReadLocked(keyString)
+	if !ok {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	return hashSortedSeekResult(key, ent)
+}
+
+func hashSortedSeekResult(key []byte, ent hashEntry) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if ent.flags&node.FlagTombstone != 0 {
+		return key, nil, page.ValuePtr{}, ent.flags, ent.revision, true
+	}
+	if ent.flags&node.FlagPointer != 0 {
+		return key, ent.value, ent.ptr, ent.flags, ent.revision, true
+	}
+	return key, ent.value, page.ValuePtr{}, ent.flags, ent.revision, true
+}
+
 func (m *HashSorted) Size() int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

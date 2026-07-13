@@ -8970,6 +8970,14 @@ type DB struct {
 	iteratorSourcesTotal                                         atomic.Uint64
 	iteratorSourcesMax                                           atomic.Uint64
 	iteratorQueueLenMax                                          atomic.Uint64
+	pointSuccessorCallsTotal                                     atomic.Uint64
+	pointSuccessorHitsTotal                                      atomic.Uint64
+	pointSuccessorMutableProbesTotal                             atomic.Uint64
+	pointSuccessorQueueProbesTotal                               atomic.Uint64
+	pointSuccessorBackendProbesTotal                             atomic.Uint64
+	pointSuccessorSourcesTotal                                   atomic.Uint64
+	pointSuccessorSourcesMax                                     atomic.Uint64
+	pointSuccessorGeneralMergeIteratorsTotal                     atomic.Uint64
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
@@ -29993,6 +30001,18 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.iterator.sources_total"] = fmt.Sprintf("%d", db.iteratorSourcesTotal.Load())
 	stats["treedb.cache.iterator.sources_max"] = fmt.Sprintf("%d", db.iteratorSourcesMax.Load())
 	stats["treedb.cache.iterator.queue_len_max"] = fmt.Sprintf("%d", db.iteratorQueueLenMax.Load())
+	stats["treedb.cache.point_successor.calls_total"] = fmt.Sprintf("%d", db.pointSuccessorCallsTotal.Load())
+	stats["treedb.cache.point_successor.hits_total"] = fmt.Sprintf("%d", db.pointSuccessorHitsTotal.Load())
+	stats["treedb.cache.point_successor.mutable_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorMutableProbesTotal.Load())
+	stats["treedb.cache.point_successor.queue_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorQueueProbesTotal.Load())
+	stats["treedb.cache.point_successor.backend_probes_total"] = fmt.Sprintf("%d", db.pointSuccessorBackendProbesTotal.Load())
+	stats["treedb.cache.point_successor.sources_total"] = fmt.Sprintf("%d", db.pointSuccessorSourcesTotal.Load())
+	stats["treedb.cache.point_successor.sources_max"] = fmt.Sprintf("%d", db.pointSuccessorSourcesMax.Load())
+	// This metric is an invariant sentinel for SeekGE, not a global iterator
+	// construction counter. It must stay zero because the point-successor path
+	// has no general-merge fallback; any future fallback must increment it at
+	// the construction site.
+	stats["treedb.cache.point_successor.general_merge_iterators_total"] = fmt.Sprintf("%d", db.pointSuccessorGeneralMergeIteratorsTotal.Load())
 	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
 	stats["treedb.cache.flush_apply.coordinator.active_workers"] = fmt.Sprintf("%d", db.flushCoordinatorActiveWorkers.Load())
 	stats["treedb.cache.flush_apply.coordinator.in_flight_bytes"] = fmt.Sprintf("%d", db.flushCoordinatorInFlightBytes.Load())

@@ -2131,6 +2131,26 @@ func (db *DB) Iterator(start, end []byte) (Iterator, error) {
 	return db.backend.Iterator(start, end)
 }
 
+// SeekGE returns owned copies of the first visible physical key and value in
+// [start,end). A miss returns nil, nil, false, nil.
+func (db *DB) SeekGE(start, end []byte) ([]byte, []byte, bool, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, nil, false, err
+	}
+	if db.cached != nil {
+		return db.cached.SeekGE(start, end)
+	}
+	it, err := db.backend.Iterator(start, end)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer it.Close()
+	if !it.Valid() {
+		return nil, nil, false, it.Error()
+	}
+	return it.KeyCopy(nil), it.ValueCopy(nil), true, it.Error()
+}
+
 // ReverseIterator returns a reverse iterator over the range [start, end).
 func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 	if err := db.ensureOpen(); err != nil {

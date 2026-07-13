@@ -525,6 +525,10 @@ var storeCounterMetrics = []storeCounterMetric{
 	{key: "treedb.cache.iterator.snapshot_rotations_total", name: "iterator_snapshot_rotations/lookup", denominator: "lookups"},
 	{key: "treedb.cache.iterator.sources_total", name: "iterator_sources/lookup", denominator: "lookups"},
 	{key: "treedb.cache.iterator.calls_total", name: "iterator_calls/lookup", denominator: "lookups"},
+	{key: "treedb.cache.point_successor.calls_total", name: "point_successor_calls/lookup", denominator: "lookups"},
+	{key: "treedb.cache.point_successor.hits_total", name: "point_successor_hits/lookup", denominator: "lookups"},
+	{key: "treedb.cache.point_successor.sources_total", name: "point_successor_sources/lookup", denominator: "lookups"},
+	{key: "treedb.cache.point_successor.general_merge_iterators_total", name: "point_successor_general_merges/lookup", denominator: "lookups"},
 }
 
 func reportStoreCounters(b *testing.B, before, after map[string]string, writeCommits, lookups int) {
@@ -547,6 +551,7 @@ func reportStoreCounters(b *testing.B, before, after map[string]string, writeCom
 		{"treedb.cache.iterator.sources_max", "iterator_sources_max"},
 		{"treedb.cache.iterator.queue_len_max", "iterator_queue_len_max"},
 		{"treedb.cache.queue_len", "iterator_queue_len_end"},
+		{"treedb.cache.point_successor.sources_max", "point_successor_sources_max"},
 	} {
 		if value, ok := parseCounter(after, metric.key); ok {
 			b.ReportMetric(float64(value), metric.name)
@@ -591,13 +596,31 @@ func TestDgraphShapedProfilesRoundTrip(t *testing.T) {
 					"treedb.cache.iterator.sources_total",
 					"treedb.cache.iterator.sources_max",
 					"treedb.cache.iterator.queue_len_max",
+					"treedb.cache.point_successor.calls_total",
+					"treedb.cache.point_successor.hits_total",
+					"treedb.cache.point_successor.sources_total",
+					"treedb.cache.point_successor.sources_max",
+					"treedb.cache.point_successor.general_merge_iterators_total",
 				} {
 					if _, ok := stats[key]; !ok {
 						t.Errorf("missing TreeDB attribution stat %q", key)
 					}
 				}
-				if calls, ok := parseCounter(stats, "treedb.cache.iterator.calls_total"); !ok || calls < 2 {
-					t.Errorf("iterator calls=%d ok=%t want >=2", calls, ok)
+				for _, want := range []struct {
+					key   string
+					value uint64
+				}{
+					{key: "treedb.cache.iterator.calls_total", value: 1},
+					{key: "treedb.cache.iterator.snapshot_rotations_total", value: 0},
+					{key: "treedb.cache.point_successor.calls_total", value: 2},
+					{key: "treedb.cache.point_successor.hits_total", value: 2},
+					{key: "treedb.cache.point_successor.sources_total", value: 2},
+					{key: "treedb.cache.point_successor.sources_max", value: 1},
+					{key: "treedb.cache.point_successor.general_merge_iterators_total", value: 0},
+				} {
+					if got, ok := parseCounter(stats, want.key); !ok || got != want.value {
+						t.Errorf("%s=%d ok=%t want %d", want.key, got, ok, want.value)
+					}
 				}
 			}
 			if err := store.close(); err != nil {
