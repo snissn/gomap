@@ -2,11 +2,15 @@ package db
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 // commandWALV2Coordinate identifies the exact physical bytes occupied by a
@@ -24,6 +28,7 @@ type commandWALV2PhysicalFrame struct {
 	Envelope     commitlog.CommandEnvelope
 	Coordinate   commandWALV2Coordinate
 	RequiredRIDs []uint64
+	Incomplete   bool
 }
 
 // CommandWALV2RecoveryDiagnostic is stable structured evidence for recovery
@@ -36,7 +41,92 @@ type CommandWALV2RecoveryDiagnostic struct {
 	MissingRIDCount        uint64
 	SourceSegment          string
 	RepairStages           []string
+	CompletedRepairStages  uint64
 	DirectorySyncCompleted bool
+}
+
+// readCommandWALV2PhysicalFrames decodes every complete unapplied V2 frame
+// across lanes and retains exact record boundaries for deterministic repair.
+// A terminal partial record is tolerated only in the active segment for its
+// lane; any resulting LSN hole is decided later against the durable horizon.
+func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALV2PhysicalFrame, error) {
+	activeByLane := commandWALActiveSeqByLane(segments)
+	frames := make([]commandWALV2PhysicalFrame, 0, 64)
+	for _, segment := range segments {
+		if segment.valueLog || segment.size == 0 {
+			continue
+		}
+		if !isCommandWALLaneSegment(segment) {
+			return nil, commitlog.ErrCommandWALLegacyPayload
+		}
+		reader, err := commitlog.NewReaderWithOptions(segment.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return nil, err
+		}
+		for {
+			start, offsetErr := reader.Offset()
+			if offsetErr != nil {
+				_ = reader.Close()
+				return nil, offsetErr
+			}
+			env, readErr := reader.ReadCommandFrameV2()
+			if readErr == nil {
+				end, offsetErr := reader.Offset()
+				if offsetErr != nil {
+					_ = reader.Close()
+					return nil, offsetErr
+				}
+				if env.LSN > appliedLSN {
+					frame, frameErr := commandWALV2FrameFromEnvelope(env, commandWALV2Coordinate{
+						Lane:            segment.lane,
+						SegmentSequence: segment.seq,
+						StartOffset:     start,
+						EndOffset:       end,
+						SourceSegment:   segment.path,
+					})
+					if frameErr != nil {
+						_ = reader.Close()
+						return nil, frameErr
+					}
+					frames = append(frames, frame)
+				}
+				continue
+			}
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if errors.Is(readErr, commitlog.ErrCommandWALTerminalTail) && segment.seq == activeByLane[segment.lane] {
+				tailEnv, end, inspectErr := commitlog.InspectCommandFrameV2TerminalTail(segment.path, start)
+				if inspectErr != nil {
+					_ = reader.Close()
+					return nil, inspectErr
+				}
+				if tailEnv.LSN > appliedLSN {
+					frames = append(frames, commandWALV2PhysicalFrame{
+						Envelope: tailEnv,
+						Coordinate: commandWALV2Coordinate{
+							Lane:            segment.lane,
+							SegmentSequence: segment.seq,
+							StartOffset:     start,
+							EndOffset:       end,
+							SourceSegment:   segment.path,
+						},
+						Incomplete: true,
+					})
+				}
+				break
+			}
+			_ = reader.Close()
+			return nil, readErr
+		}
+		if err := reader.Close(); err != nil {
+			return nil, err
+		}
+	}
+	sort.SliceStable(frames, func(i, j int) bool {
+		return frames[i].Envelope.LSN < frames[j].Envelope.LSN
+	})
+	return frames, nil
 }
 
 type commandWALV2Classification struct {
@@ -97,10 +187,10 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 		if env.Version != commitlog.CommandFrameVersionV2 || (env.DurabilityClass != commitlog.CommandDurabilityDurable && env.DurabilityClass != commitlog.CommandDurabilityRelaxed) {
 			return result, commitlog.ErrCorrupt
 		}
-		if env.Kind == commitlog.CommandKindDurablePrefixBarrier && (env.DurabilityClass != commitlog.CommandDurabilityDurable || len(ordered[i].RequiredRIDs) != 0) {
+		if !ordered[i].Incomplete && env.Kind == commitlog.CommandKindDurablePrefixBarrier && (env.DurabilityClass != commitlog.CommandDurabilityDurable || len(ordered[i].RequiredRIDs) != 0) {
 			return result, commitlog.ErrCorrupt
 		}
-		if env.DurabilityClass == commitlog.CommandDurabilityDurable && env.LSN > result.DurableFrontier {
+		if !ordered[i].Incomplete && env.DurabilityClass == commitlog.CommandDurabilityDurable && env.LSN > result.DurableFrontier {
 			result.DurableFrontier = env.LSN
 		}
 	}
@@ -120,6 +210,15 @@ func classifyCommandWALV2Frames(frames []commandWALV2PhysicalFrame, applied uint
 		duplicate := i > 0 && ordered[i-1].Envelope.LSN == lsn
 		missing := commandWALV2MissingRIDs(frame.RequiredRIDs, hasRID)
 		atOrBelowFrontier := lsn <= result.DurableFrontier || expected <= result.DurableFrontier
+		if frame.Incomplete {
+			if atOrBelowFrontier || frame.Envelope.DurabilityClass == commitlog.CommandDurabilityDurable {
+				return result, fmt.Errorf("%w: incomplete command frame lsn=%d durable_frontier=%d", commitlog.ErrCorrupt, lsn, result.DurableFrontier)
+			}
+			if discardAt < 0 {
+				discardAt = i
+				firstDiscardLSN = lsn
+			}
+		}
 		if duplicate || !contiguous {
 			if atOrBelowFrontier {
 				return result, fmt.Errorf("%w: current=%d next=%d durable_frontier=%d", ErrCommandWALAppliedLSNNonContig, expected-1, lsn, result.DurableFrontier)
@@ -204,4 +303,119 @@ func commandWALV2FrameFromEnvelope(env commitlog.CommandEnvelope, coordinate com
 	}
 	sort.Slice(frame.RequiredRIDs, func(i, j int) bool { return frame.RequiredRIDs[i] < frame.RequiredRIDs[j] })
 	return frame, nil
+}
+
+// repairCommandWALV2Suffix durably removes exactly the classified suffix. It
+// is an explicit inert entry point: production Open does not call it until the
+// #3718 activation boundary.
+func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classification, readOnly bool) (CommandWALV2RecoveryDiagnostic, error) {
+	diagnostic := classification.Diagnostic
+	if len(classification.DiscardSuffix) == 0 {
+		return diagnostic, nil
+	}
+	stages, removable := planCommandWALV2RepairStages(classification)
+	diagnostic.RepairStages = stages
+	if readOnly {
+		return diagnostic, &CommandWALV2RecoveryRequiredError{Diagnostic: diagnostic}
+	}
+
+	anchor := classification.DiscardSuffix[0]
+	completeByPath := make(map[string]bool)
+	for i := range classification.CompletePrefix {
+		completeByPath[classification.CompletePrefix[i].Coordinate.SourceSegment] = true
+	}
+
+	completeStage := func() { diagnostic.CompletedRepairStages++ }
+	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
+		frame := classification.DiscardSuffix[i]
+		if err := truncateAndSyncCommandWALV2(walDir, frame.Coordinate.SourceSegment, frame.Coordinate.StartOffset, true); err != nil {
+			return diagnostic, err
+		}
+		completeStage()
+	}
+	for _, path := range removable {
+		if completeByPath[path] || path == anchor.Coordinate.SourceSegment {
+			continue
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, walDir, path); err != nil {
+			return diagnostic, errors.Join(err, ErrRecoveryRequired)
+		}
+		if _, err := removePersistentFile(walDir, path, durabilitycut.ResourceCommandWAL); err != nil {
+			return diagnostic, errors.Join(err, ErrRecoveryRequired)
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.AfterWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, walDir, path); err != nil {
+			return diagnostic, errors.Join(err, ErrRecoveryRequired)
+		}
+		completeStage()
+	}
+	if err := syncDeletionNamespaceDirectory(walDir, durabilitycut.ResourceCommandWAL); err != nil {
+		return diagnostic, err
+	}
+	diagnostic.DirectorySyncCompleted = true
+	completeStage()
+	if err := truncateAndSyncCommandWALV2(walDir, anchor.Coordinate.SourceSegment, anchor.Coordinate.StartOffset, false); err != nil {
+		return diagnostic, err
+	}
+	completeStage()
+	return diagnostic, nil
+}
+
+func planCommandWALV2RepairStages(classification commandWALV2Classification) ([]string, []string) {
+	if len(classification.DiscardSuffix) == 0 {
+		return nil, nil
+	}
+	stages := make([]string, 0, len(classification.DiscardSuffix)+2)
+	removableSet := make(map[string]struct{})
+	completeByPath := make(map[string]bool)
+	for i := range classification.CompletePrefix {
+		completeByPath[classification.CompletePrefix[i].Coordinate.SourceSegment] = true
+	}
+	anchorPath := classification.DiscardSuffix[0].Coordinate.SourceSegment
+	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
+		coordinate := classification.DiscardSuffix[i].Coordinate
+		path := coordinate.SourceSegment
+		stages = append(stages, fmt.Sprintf("truncate-sync:%s@%d", filepath.Base(path), coordinate.StartOffset))
+		if !completeByPath[path] && path != anchorPath {
+			removableSet[path] = struct{}{}
+		}
+	}
+	removable := make([]string, 0, len(removableSet))
+	for path := range removableSet {
+		removable = append(removable, path)
+	}
+	sort.Slice(removable, func(i, j int) bool { return removable[i] > removable[j] })
+	for _, path := range removable {
+		stages = append(stages, "unlink:"+filepath.Base(path))
+	}
+	stages = append(stages, "directory-sync")
+	anchor := classification.DiscardSuffix[0].Coordinate
+	stages = append(stages, fmt.Sprintf("anchor-truncate-sync:%s@%d", filepath.Base(anchor.SourceSegment), anchor.StartOffset))
+	return stages, removable
+}
+
+func truncateAndSyncCommandWALV2(walDir, path string, offset int64, allowMissing bool) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		if allowMissing && os.IsNotExist(err) {
+			return nil
+		}
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if err = f.Truncate(offset); err == nil {
+		err = durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if err == nil {
+		err = durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, walDir, path)
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if closeErr != nil {
+		return errors.Join(closeErr, ErrRecoveryRequired)
+	}
+	return nil
 }

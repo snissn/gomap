@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
+	"io"
+	"os"
 )
 
 const (
@@ -194,10 +197,101 @@ func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 	if err := validateCommandEnvelopePayloadV2(env); err != nil {
 		return env, err
 	}
-	if _, err := canonicalCommandPreconditionsV2(env); err != nil {
-		return env, err
+	if env.Kind == CommandKindRawKVBatch {
+		if _, _, err := RawKVExternalRefFenceV1(env); err != nil {
+			return env, err
+		}
 	}
 	return env, nil
+}
+
+// ReadCommandFrameV2 reads one length/CRC-bounded segment payload and applies
+// the strict V2 decoder. It never falls back to the production V1 codec.
+func (r *Reader) ReadCommandFrameV2() (CommandEnvelope, error) {
+	payload, err := r.readSegmentPayload(true)
+	if err != nil {
+		return CommandEnvelope{}, err
+	}
+	return DecodeCommandFrameV2(payload)
+}
+
+// ScanCommandFramesV2 scans one strict-V2 segment without enabling it for the
+// production journal owner.
+func ScanCommandFramesV2(path string, opts Options) ([]CommandEnvelope, error) {
+	r, err := NewReaderWithOptions(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	var frames []CommandEnvelope
+	seen := make(map[uint64]struct{})
+	for {
+		env, err := r.ReadCommandFrameV2()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return frames, nil
+			}
+			return frames, err
+		}
+		if _, duplicate := seen[env.LSN]; duplicate {
+			return frames, ErrCommandWALDuplicateLSN
+		}
+		seen[env.LSN] = struct{}{}
+		frames = append(frames, env)
+	}
+}
+
+// InspectCommandFrameV2TerminalTail reads the stable identity fields that fit
+// before a terminal partial frame. It never treats the tail as valid; recovery
+// uses the identity only to decide whether a relaxed tail is strictly above a
+// separately established durable horizon.
+func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (CommandEnvelope, int64, error) {
+	var env CommandEnvelope
+	f, err := os.Open(path)
+	if err != nil {
+		return env, 0, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return env, 0, err
+	}
+	if segmentStart < 0 || segmentStart+segmentHeaderSize > info.Size() {
+		return env, info.Size(), ErrCorrupt
+	}
+	available := info.Size() - segmentStart - segmentHeaderSize
+	if available < 56 {
+		return env, info.Size(), ErrCorrupt
+	}
+	readLen := int64(commandFrameHeaderSize)
+	if available < readLen {
+		readLen = available
+	}
+	header := make([]byte, readLen)
+	if _, err := f.ReadAt(header, segmentStart+segmentHeaderSize); err != nil && !errors.Is(err, io.EOF) {
+		return env, info.Size(), err
+	}
+	if !bytes.Equal(header[0:4], commandFrameMagic[:]) {
+		return env, info.Size(), ErrCorrupt
+	}
+	version := binary.LittleEndian.Uint16(header[4:6])
+	if version == CommandFrameVersion {
+		return env, info.Size(), ErrCommandWALV1RebuildRequired
+	}
+	if version != CommandFrameVersionV2 || binary.LittleEndian.Uint16(header[6:8]) > CommandFrameVersionV2 {
+		return env, info.Size(), ErrCommandWALUnsupportedVersion
+	}
+	env.Version = version
+	env.Kind = CommandKind(binary.LittleEndian.Uint16(header[8:10]))
+	env.Scope = CommandScope(binary.LittleEndian.Uint16(header[10:12]))
+	env.LSN = binary.LittleEndian.Uint64(header[20:28])
+	env.BaseAppliedLSN = binary.LittleEndian.Uint64(header[44:52])
+	env.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(header[52:54]))
+	env.DurabilityClass = CommandDurabilityClass(binary.LittleEndian.Uint16(header[54:56]))
+	if env.LSN == 0 || !validCommandDurabilityClass(env.DurabilityClass) {
+		return CommandEnvelope{}, info.Size(), ErrCorrupt
+	}
+	return env, info.Size(), nil
 }
 
 func validateCommandEnvelopeV2Identity(env CommandEnvelope) error {
