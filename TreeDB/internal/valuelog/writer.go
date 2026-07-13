@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -85,6 +86,9 @@ type Writer struct {
 	f                      *os.File
 	stableParent           *os.File
 	stableParentErr        error
+	stableResourcePins     *rootpublication.IdentityPinRegistry
+	stableResourceIdentity rootpublication.StableIdentity
+	stableResourceObserved bool
 	bw                     *bufio.Writer
 	size                   int64
 	fileID                 uint32
@@ -621,7 +625,17 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 }
 
 func NewWriter(path string, fileID uint32) (*Writer, error) {
-	return newFileWriter(path, fileID, true, func(file *os.File) error { return file.Sync() })
+	return newFileWriter(path, fileID, true, func(file *os.File) error { return file.Sync() }, nil)
+}
+
+// NewWriterWithStableResourcePinRegistry observes the writer's exact file
+// identity before it can race a registry-gated deletion owner. The observation
+// follows ordinary and stable rotations and is released when the writer closes.
+func NewWriterWithStableResourcePinRegistry(path string, fileID uint32, registry *rootpublication.IdentityPinRegistry) (*Writer, error) {
+	if registry == nil {
+		return nil, errors.New("valuelog: nil stable resource pin registry")
+	}
+	return newFileWriter(path, fileID, true, func(file *os.File) error { return file.Sync() }, registry)
 }
 
 // NewStagingWriter creates a writer for an unreferenced temporary file whose
@@ -629,10 +643,10 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 // directory; callers must sync the file, rename it into its durable namespace,
 // and sync the destination directory before publishing a reference.
 func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
-	return newFileWriter(path, fileID, false, syncStagingFileData)
+	return newFileWriter(path, fileID, false, syncStagingFileData, nil)
 }
 
-func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error) (*Writer, error) {
+func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry) (*Writer, error) {
 	f, err := openLogFile(path)
 	if err != nil {
 		return nil, err
@@ -673,6 +687,14 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 	w.blockCodec = BlockCodecSnappy
 	w.clock = RealClock{}
 	w.keepSafetyMargin = DefaultKeepSafetyMargin
+	if err := w.observeStableResourceFile(f, registry); err != nil {
+		_ = f.Close()
+		if w.stableParent != nil {
+			_ = w.stableParent.Close()
+			w.stableParent = nil
+		}
+		return nil, err
+	}
 	return w, nil
 }
 
@@ -974,8 +996,15 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			_ = f.Close()
 			return err
 		}
+		newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		newObserved := w.stableResourcePins != nil
 		stableParent, stableParentErr := captureStableValueLogParent(path, f)
 		oldStableParent := w.stableParent
+		oldObserveErr := w.releaseStableResourceObservation()
 		w.f = f
 		w.stableParent = stableParent
 		w.stableParentErr = stableParentErr
@@ -986,10 +1015,17 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		w.appendMax = defaultBufferSize
 		w.appendBuf = w.appendBuf[:0]
 		w.trimTransientScratchBuffers()
+		if newObserved {
+			w.stableResourceIdentity = newIdentity
+			w.stableResourceObserved = true
+		}
 		if oldStableParent != nil {
 			if err := w.closeRotatedResource(oldStableParent); err != nil {
-				return rotationInstalledError{err: err}
+				return rotationInstalledError{err: errors.Join(oldObserveErr, err)}
 			}
+		}
+		if oldObserveErr != nil {
+			return rotationInstalledError{err: oldObserveErr}
 		}
 		return nil
 	}
@@ -1018,6 +1054,12 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			return err
 		}
 	}
+	newIdentity, err := observeStableWriterFile(f, w.stableResourcePins)
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	newObserved := w.stableResourcePins != nil
 	old := w.f
 	oldStableParent := w.stableParent
 	if w.bw != nil {
@@ -1037,12 +1079,17 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
 	closeErr := w.closeRotatedResource(old)
+	observeErr := w.releaseStableResourceObservation()
+	if newObserved {
+		w.stableResourceIdentity = newIdentity
+		w.stableResourceObserved = true
+	}
 	var closeParentErr error
 	if oldStableParent != nil {
 		closeParentErr = w.closeRotatedResource(oldStableParent)
 	}
 	w.trimTransientScratchBuffers()
-	if err := errors.Join(closeErr, closeParentErr); err != nil {
+	if err := errors.Join(closeErr, closeParentErr, observeErr); err != nil {
 		return rotationInstalledError{err: err}
 	}
 	return nil
@@ -2505,10 +2552,11 @@ func (w *Writer) Sync() error {
 	return nil
 }
 
-func (w *Writer) Close() error {
+func (w *Writer) Close() (retErr error) {
 	if w == nil {
 		return nil
 	}
+	defer func() { retErr = errors.Join(retErr, w.releaseStableResourceObservation()) }()
 	defer w.releaseDictEncoder()
 	defer w.releaseAppendBuf()
 	defer w.releaseTransientScratchBuffers()

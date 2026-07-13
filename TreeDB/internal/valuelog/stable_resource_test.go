@@ -290,6 +290,63 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	}
 }
 
+func TestRotateToWithStableResourcesOwnsRegistryObservations(t *testing.T) {
+	requireStableValueLogNamespace(t)
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, true,
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, PinRegistry: registry,
+		},
+		StableResourceRegistration{
+			LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
+			Reachability: rootpublication.ReachabilityValueLogPointer, PinRegistry: registry,
+			ParentGeneration: 1, NamespaceOperation: rootpublication.NamespaceCreate,
+		})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != 2 {
+		t.Fatalf("rotation active pins=%d want 2", got)
+	}
+	rotation.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("rotation active pins after release=%d want 0", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("writer registry retained %d identities after close", got)
+	}
+}
+
+func TestWriterRejectsLateRegistryInjection(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewWriter(filepath.Join(dir, "000001.vlog"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	_, err = writer.StableResourceToken(StableResourceRegistration{
+		LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+		Reachability: rootpublication.ReachabilityValueLogPointer,
+		PinRegistry:  rootpublication.NewIdentityPinRegistry(),
+	})
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("late registry injection error=%v want ErrUnresolvedResource", err)
+	}
+}
+
 func TestStableValueLogRotationNamespaceFailureKeepsOldWriterActive(t *testing.T) {
 	requireStableValueLogNamespace(t)
 	dir := t.TempDir()
