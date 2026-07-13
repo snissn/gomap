@@ -865,6 +865,10 @@ func (unsupportedNamespaceAdapter) Sync(*os.File) error {
 	return ErrNamespacePersistenceUnsupported
 }
 
+func (unsupportedNamespaceAdapter) ValidateLink(*os.File, *os.File, string) error {
+	return ErrNamespacePersistenceUnsupported
+}
+
 type countingNamespaceAdapter struct {
 	syncs atomic.Uint64
 }
@@ -877,6 +881,137 @@ func (adapter *countingNamespaceAdapter) Sync(*os.File) error {
 	adapter.syncs.Add(1)
 	time.Sleep(time.Millisecond)
 	return nil
+}
+
+func (*countingNamespaceAdapter) ValidateLink(*os.File, *os.File, string) error { return nil }
+
+type exactParentNamespaceAdapter struct {
+	syncedIdentity StableIdentity
+	links          atomic.Uint64
+}
+
+func (*exactParentNamespaceAdapter) Identity(file *os.File) (StableIdentity, error) {
+	return stableIdentityFromFile(file)
+}
+
+func (adapter *exactParentNamespaceAdapter) ValidateLink(parent, resource *os.File, name string) error {
+	adapter.links.Add(1)
+	return validateStableChildLink(parent, resource, name)
+}
+
+func (adapter *exactParentNamespaceAdapter) Sync(parent *os.File) error {
+	identity, err := stableIdentityFromFile(parent)
+	if err == nil {
+		adapter.syncedIdentity = identity
+	}
+	return err
+}
+
+func TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate(t *testing.T) {
+	root := t.TempDir()
+	originalDir := filepath.Join(root, "segments")
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resource := writeStableResourceFixture(t, originalDir, "000001.vlog", "resource")
+	parent, err := os.Open(originalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &exactParentNamespaceAdapter{}
+	namespace, err := newStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "000001.vlog", DiagnosticPath: "segments",
+	}, adapter)
+	_ = parent.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer namespace.Release()
+	if got := adapter.links.Load(); got != 1 {
+		t.Fatalf("link validations=%d want 1", got)
+	}
+
+	movedDir := filepath.Join(root, "segments-moved")
+	if err := os.Rename(originalDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacementParent, err := os.Open(originalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacementParent.Close()
+	replacementIdentity, err := stableIdentityFromFile(replacementParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementIdentity == namespace.ParentIdentity() {
+		t.Fatal("replacement directory unexpectedly reused captured stable identity")
+	}
+	if err := namespace.Stabilize(); err != nil {
+		t.Fatal(err)
+	}
+	wantIdentity := namespace.ParentIdentity()
+	wantIdentity.Generation = 0
+	if adapter.syncedIdentity != wantIdentity {
+		t.Fatalf("synced identity=%+v want captured parent %+v", adapter.syncedIdentity, wantIdentity)
+	}
+}
+
+func TestStableNamespaceRejectsResourceOutsideExactParent(t *testing.T) {
+	root := t.TempDir()
+	leftDir, rightDir := filepath.Join(root, "left"), filepath.Join(root, "right")
+	if err := os.Mkdir(leftDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(rightDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := os.Open(leftDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	resource := writeStableResourceFixture(t, rightDir, "foreign.vlog", "resource")
+	_, err = newStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "foreign.vlog", DiagnosticPath: "left",
+	}, &exactParentNamespaceAdapter{})
+	if !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("newStableNamespaceToken error=%v want ErrResourceConflict", err)
+	}
+}
+
+func TestStableResourceDefaultFlushDoesNotFsync(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	var syncs atomic.Uint64
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "pipe", Generation: 1,
+		DiagnosticPath: "pipe.vlog", File: writer, Reachability: ReachabilityValueLogPointer,
+		StableIdentityOverride: StableIdentity{Platform: "test", ObjectID: [16]byte{1}},
+		SyncThrough:            func(*os.File, DurableFrontier) error { syncs.Add(1); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	if err := token.FlushThrough(); err != nil {
+		t.Fatalf("default FlushThrough attempted file sync: %v", err)
+	}
+	if err := token.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := syncs.Load(); got != 1 {
+		t.Fatalf("content sync calls=%d want exactly 1", got)
+	}
 }
 
 func TestStableNamespaceStabilizeIsSingleFlight(t *testing.T) {
