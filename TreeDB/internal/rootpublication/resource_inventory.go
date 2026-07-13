@@ -227,6 +227,9 @@ func NewStableProducerResourceTokenForDomain(domain StableProducerDomain, spec S
 // producers use. NewStableResourceToken remains the low-level primitive for
 // platform adapters and contract tests.
 func NewStableProducerResourceToken(spec StableResourceSpec, classification string) (*StableResourceToken, error) {
+	if spec.StableIdentityOverride != (StableIdentity{}) {
+		return nil, fmt.Errorf("%w: production resource identity must come from the exact open handle", ErrResourceConflict)
+	}
 	policy, ok := StableResourcePolicyFor(spec.Reachability)
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown reachability field %q", ErrUnresolvedResource, spec.Reachability)
