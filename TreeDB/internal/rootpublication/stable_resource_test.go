@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type testStableHandle struct {
@@ -658,6 +659,77 @@ func TestCoordinatorRetrySupersessionRetainsAdditiveNamespaceDebt(t *testing.T) 
 		t.Fatalf("resource releases/pins=%d/%d", handle.releases, handle.pins)
 	}
 	stopClean(t, coordinator)
+}
+
+func TestCoordinatorRejectedResourceUnionReleasesOnlyUnacceptedCandidate(t *testing.T) {
+	firstHandle := newTestStableHandle(29, 64)
+	firstToken := testResourceToken(t, firstHandle, ResourceValueLogSegment, 1, 32, 0, nil)
+	firstSet, err := NewStableResourceSet(firstToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := NewPreparedRootCandidateWithResources(
+		CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, firstSet,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	coordinator, err := New(Options{
+		Clock: NewFakeClock(time.Unix(295, 0)),
+		Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishSucceeded}
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Enqueue(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+
+	secondHandle := newTestStableHandle(30, 64)
+	secondToken := testResourceToken(t, secondHandle, ResourceValueLogSegment, 1, 32, 0, nil)
+	secondSet, err := NewStableResourceSet(secondToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewPreparedRootCandidateWithResources(
+		CandidateSpec{Frontier: NewFrontier(2, 2, 2, 2, 2)}, secondSet,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Enqueue(context.Background(), second); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("conflicting enqueue error=%v, want ErrInvalidCandidate", err)
+	}
+	if secondHandle.pins != 0 || secondHandle.releases != 1 {
+		t.Fatalf("rejected ownership pins/releases=%d/%d, want 0/1", secondHandle.pins, secondHandle.releases)
+	}
+
+	// Reusing an already accepted candidate is invalid, but that rejection must
+	// not release the coordinator's still-pending resources.
+	if err := coordinator.Enqueue(context.Background(), first); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("duplicate enqueue error=%v, want ErrInvalidCandidate", err)
+	}
+	if firstHandle.pins != 1 || firstHandle.releases != 0 {
+		t.Fatalf("accepted ownership pins/releases=%d/%d, want 1/0", firstHandle.pins, firstHandle.releases)
+	}
+	if err := first.Abandon(); !errors.Is(err, ErrStableResourceOwnershipTransferred) {
+		t.Fatalf("accepted candidate Abandon error=%v, want ownership transferred", err)
+	}
+
+	stopClean(t, coordinator)
+	handoff, err := coordinator.TakePendingResourceOwnership()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handoff.ReleaseAfterRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if firstHandle.pins != 0 || firstHandle.releases != 1 {
+		t.Fatalf("coordinator release pins/releases=%d/%d, want 0/1", firstHandle.pins, firstHandle.releases)
+	}
 }
 
 func TestCoordinatorActiveSnapshotExcludesLaterEnqueueAndRetainsSuffixOwnership(t *testing.T) {

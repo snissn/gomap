@@ -135,7 +135,7 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 	c.mu.Lock()
 	if err := c.terminalErrorLocked(); err != nil {
 		c.mu.Unlock()
-		return err
+		return rejectCandidate(candidate, err)
 	}
 	if candidate == nil {
 		c.mu.Unlock()
@@ -144,16 +144,20 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 	if candidate.frontier.commitSeq <= c.visible.commitSeq ||
 		(c.visible.commitSeq != 0 && !candidate.frontier.Dominates(c.visible)) {
 		c.mu.Unlock()
-		return fmt.Errorf("%w: frontier %d does not dominate visible %d", ErrInvalidCandidate, candidate.frontier.commitSeq, c.visible.commitSeq)
+		return rejectCandidate(candidate, fmt.Errorf("%w: frontier %d does not dominate visible %d", ErrInvalidCandidate, candidate.frontier.commitSeq, c.visible.commitSeq))
 	}
 	if supersede && len(c.pending) == 0 {
 		c.mu.Unlock()
-		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
+		return rejectCandidate(candidate, fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate))
+	}
+	if !candidate.acceptOwnership() {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: candidate ownership already transferred", ErrInvalidCandidate)
 	}
 	resources, _ := candidate.extensions.resourceSet.(*StableResourceSet)
 	if err := c.pendingResources.add(resources); err != nil {
 		c.mu.Unlock()
-		return fmt.Errorf("%w: resource union: %w", ErrInvalidCandidate, err)
+		return errors.Join(fmt.Errorf("%w: resource union: %w", ErrInvalidCandidate, err), candidate.releaseOwnedExtensions())
 	}
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
@@ -180,6 +184,13 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 		return nil
 	}
 	return c.waitForAdmission(ctx, seq, failureGeneration)
+}
+
+func rejectCandidate(candidate *PreparedRootCandidate, err error) error {
+	if candidate == nil {
+		return err
+	}
+	return errors.Join(err, candidate.abandonIfCallerOwned())
 }
 
 func (c *Coordinator) waitForAdmission(ctx context.Context, seq, failureGeneration uint64) error {

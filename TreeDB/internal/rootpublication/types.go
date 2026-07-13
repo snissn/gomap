@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 )
 
@@ -104,7 +105,14 @@ type PreparedRootCandidate struct {
 	indexBytes      uint64
 	obligations     []ObligationID
 	extensions      extensionSlots
+	ownership       *atomic.Uint32
 }
+
+const (
+	candidateOwnedByCaller uint32 = iota
+	candidateOwnedByCoordinator
+	candidateResourcesReleased
+)
 
 func NewPreparedRootCandidate(spec CandidateSpec) (*PreparedRootCandidate, error) {
 	return newPreparedRootCandidateWithExtensions(spec, extensionSlots{})
@@ -137,6 +145,7 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 		frontier: spec.Frontier, freelistHeadID: spec.FreelistHeadID,
 		totalPages: spec.TotalPages, dependencyBytes: spec.DependencyBytes,
 		indexBytes: spec.IndexBytes, obligations: normalizeObligations(spec.Obligations), extensions: extensions,
+		ownership: new(atomic.Uint32),
 	}, nil
 }
 
@@ -158,8 +167,40 @@ func (c *PreparedRootCandidate) Resources() []*StableResourceToken {
 }
 
 func (c *PreparedRootCandidate) releaseOwnedExtensions() error {
+	if c == nil || c.ownership == nil || c.ownership.Swap(candidateResourcesReleased) == candidateResourcesReleased {
+		return nil
+	}
 	set, _ := c.extensions.resourceSet.(*StableResourceSet)
 	return set.Release()
+}
+
+func (c *PreparedRootCandidate) acceptOwnership() bool {
+	return c != nil && c.ownership != nil && c.ownership.CompareAndSwap(candidateOwnedByCaller, candidateOwnedByCoordinator)
+}
+
+func (c *PreparedRootCandidate) abandonIfCallerOwned() error {
+	if c == nil || c.ownership == nil || !c.ownership.CompareAndSwap(candidateOwnedByCaller, candidateResourcesReleased) {
+		return nil
+	}
+	set, _ := c.extensions.resourceSet.(*StableResourceSet)
+	return set.Release()
+}
+
+// Abandon releases resource ownership for a candidate that was never accepted
+// by a Coordinator. Once Enqueue or Supersede accepts the candidate, the
+// coordinator is its sole release owner and Abandon fails closed.
+func (c *PreparedRootCandidate) Abandon() error {
+	if c == nil || c.ownership == nil {
+		return nil
+	}
+	if c.ownership.CompareAndSwap(candidateOwnedByCaller, candidateResourcesReleased) {
+		set, _ := c.extensions.resourceSet.(*StableResourceSet)
+		return set.Release()
+	}
+	if c.ownership.Load() == candidateOwnedByCoordinator {
+		return ErrStableResourceOwnershipTransferred
+	}
+	return nil
 }
 
 func coalesceCandidates(candidates []*PreparedRootCandidate) *PreparedRootCandidate {
