@@ -85,8 +85,24 @@ func TestCleanupOrphanedRetainedValueLogRejectsReboundPathAfterEvict(t *testing.
 	if err := os.WriteFile(path, []byte(replacement), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	replacementFile, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementIdentity, err := rootpublication.StableIdentityFromFile(replacementFile)
+	closeErr := replacementFile.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("capture replacement identity: identity=%v close=%v", err, closeErr)
+	}
 	if database.cleanupOrphanedRetainedValueLogExpected(path, expected) {
 		t.Fatal("cleanup removed a rebound pathname")
+	}
+	registered, ok := database.valueLogReader.StableSegmentIdentity(fileID)
+	if !ok {
+		t.Fatal("cleanup did not register the rebound segment")
+	}
+	if !rootpublication.SamePhysicalIdentity(registered, replacementIdentity) {
+		t.Fatal("cleanup registered an unexpected replacement identity")
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != replacement {
