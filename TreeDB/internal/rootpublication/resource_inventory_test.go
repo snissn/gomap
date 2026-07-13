@@ -47,8 +47,53 @@ func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 }
 
 func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T) {
+	domains := map[ReachabilityField]StableProducerDomain{
+		ReachabilityIndexFile:                  StableProducerDB,
+		ReachabilityMetaPage:                   StableProducerDB,
+		ReachabilityUserRoot:                   StableProducerDB,
+		ReachabilitySystemRoot:                 StableProducerDB,
+		ReachabilityFreelist:                   StableProducerDB,
+		ReachabilityValueLogPointer:            StableProducerValueLog,
+		ReachabilityOuterLeafRawPointer:        StableProducerOuterLeaf,
+		ReachabilityOuterLeafPackedPointer:     StableProducerOuterLeaf,
+		ReachabilityOuterLeafGeneration:        StableProducerOuterLeaf,
+		ReachabilityDictionaryGeneration:       StableProducerDictionary,
+		ReachabilityTemplateGeneration:         StableProducerTemplate,
+		ReachabilityCollectionSystemRoot:       StableProducerCollection,
+		ReachabilityCollectionPrimaryRoot:      StableProducerCollection,
+		ReachabilityCollectionTemplateRoot:     StableProducerCollection,
+		ReachabilityCollectionIndexStateRoot:   StableProducerCollection,
+		ReachabilityCollectionColumnRoot:       StableProducerCollection,
+		ReachabilityCollectionSecondaryRoot:    StableProducerCollection,
+		ReachabilityCollectionVectorRoot:       StableProducerCollection,
+		ReachabilityCollectionTextDictionary:   StableProducerCollection,
+		ReachabilityCollectionTextPosting:      StableProducerCollection,
+		ReachabilityCollectionTextPosition:     StableProducerCollection,
+		ReachabilityColumnManifest:             StableProducerColumnAsset,
+		ReachabilityTypedColumnMultipart:       StableProducerColumnAsset,
+		ReachabilityTypedColumnValue:           StableProducerColumnAsset,
+		ReachabilityTypedColumnCode:            StableProducerColumnAsset,
+		ReachabilityHNSWSearchPack:             StableProducerColumnAsset,
+		ReachabilityVectorGraphPack:            StableProducerColumnAsset,
+		ReachabilityLegacyVectorSnapshot:       StableProducerLegacyVector,
+		ReachabilityCommandWALActive:           StableProducerCommandWAL,
+		ReachabilityCommandWALRotated:          StableProducerCommandWAL,
+		ReachabilityCommandWALExternalRIDFence: StableProducerValueLog,
+		ReachabilityQueryReadyBase:             StableProducerColumnAsset,
+		ReachabilityQueryReadyDelta:            StableProducerColumnAsset,
+		ReachabilityQueryReadyConsolidatedBase: StableProducerColumnAsset,
+		ReachabilityLegacyActiveSlab:           StableProducerLegacyExcluded,
+		ReachabilityRaftSnapshot:               StableProducerRaftSnapshot,
+	}
+	if len(domains) != len(canonicalReachabilityRequirements) {
+		t.Fatalf("producer domain fields=%d canonical=%d", len(domains), len(canonicalReachabilityRequirements))
+	}
 	for i, requirement := range canonicalReachabilityRequirements {
 		t.Run(string(requirement.Field), func(t *testing.T) {
+			domain, ok := domains[requirement.Field]
+			if !ok {
+				t.Fatalf("canonical field %q has no producer entry point", requirement.Field)
+			}
 			dir := t.TempDir()
 			name := string(requirement.Field) + ".resource"
 			file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o600)
@@ -64,7 +109,7 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 				DiagnosticPath: name, File: file, Frontier: DurableFrontier{Bytes: 1},
 				Digest: sha256.Sum256([]byte(name)), Reachability: requirement.Field,
 			}
-			token, err := NewStableProducerResourceToken(spec, requirement.Classification)
+			token, err := NewStableProducerResourceTokenForDomain(domain, spec, requirement.Classification)
 			excluded := requirement.Classification == "explicit-legacy-exclusion" || requirement.Classification == "explicit-separate-domain"
 			if excluded {
 				if !errors.Is(err, ErrResourceExcluded) {
@@ -77,12 +122,19 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 			}
 			token.Release()
 			spec.Kind = ResourceLegacyTreeDBField
-			if _, err := NewStableProducerResourceToken(spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
+			if _, err := NewStableProducerResourceTokenForDomain(domain, spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
 				t.Fatalf("wrong-kind registration error=%v want ErrResourceConflict", err)
 			}
 			spec.Kind = requirement.Kind
-			if _, err := NewStableProducerResourceToken(spec, "wrong-classification"); !errors.Is(err, ErrResourceConflict) {
+			if _, err := NewStableProducerResourceTokenForDomain(domain, spec, "wrong-classification"); !errors.Is(err, ErrResourceConflict) {
 				t.Fatalf("wrong-classification registration error=%v want ErrResourceConflict", err)
+			}
+			foreign := StableProducerDB
+			if domain == foreign {
+				foreign = StableProducerCommandWAL
+			}
+			if _, err := NewStableProducerResourceTokenForDomain(foreign, spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("foreign-domain registration error=%v want ErrResourceConflict", err)
 			}
 		})
 	}
