@@ -4,12 +4,16 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -64,6 +68,13 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 	if descriptor.Frontier().Bytes == 0 {
 		t.Fatal("captured frontier is empty")
 	}
+	if _, err := cached.valueLogIdentityPins.BeginDelete(descriptor.Identity()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("delete pinned raw segment error=%v want ErrResourcePinned", err)
+	}
+	stats := resources.Stats(time.Now())
+	if len(stats) != 1 || stats[0].NamespaceSyncs != 1 {
+		t.Fatalf("stable resource stats=%+v want one creation namespace sync", stats)
+	}
 
 	segmentPath, _, ok := newCachingLeafPageLog(cached, &cached.leafLog).(interface {
 		CurrentValueLogSegment() (string, uint32, bool)
@@ -88,5 +99,219 @@ func TestCachingLeafPageLogStableBatchPinsExactRawSegment(t *testing.T) {
 	}
 	if filepath.Clean(token.DiagnosticPath()) == filepath.Clean(segmentPath) {
 		t.Fatal("diagnostic path must be DB-relative")
+	}
+	if got, want := filepath.Dir(filepath.FromSlash(token.DiagnosticPath())), "leaf_vlog"; got != want {
+		t.Fatalf("diagnostic directory=%q want %q", got, want)
+	}
+}
+
+func TestCachingLeafPageLogStablePreparedBatchCapturesEveryReferencedSegment(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	cached, err := Open(dir, backend, Options{
+		IndexOuterLeavesInValueLog: true,
+		FlushApplyConcurrency:      4,
+		ValueLogCompression:        uint8(vlogCompressionBlock),
+		ValueLogMaxSegmentBytes:    512,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	defer func() { _ = cached.Close() }()
+
+	const count = valuelog.MaxFrameK*2 + 8
+	pages := make([][]byte, count)
+	prepared := make([][]byte, count)
+	for i := range pages {
+		pages[i] = buildSparseLeafPageForLeafLogTestWithTag(t, byte(i))
+		encoded, _, encodeErr := valuelog.MaybeCompactLeafLogPayloadTo(nil, pages[i])
+		if encodeErr != nil {
+			t.Fatalf("prepare leaf %d: %v", i, encodeErr)
+		}
+		prepared[i] = encoded
+	}
+	stable := newCachingLeafPageLog(cached, &cached.leafLog).(backenddb.LeafPagePreparedStableBatchLog)
+	ptrs, resources, err := stable.AppendPreparedLeafPagesWithStableResources(pages, prepared)
+	if err != nil {
+		t.Fatalf("stable prepared append: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable prepared append returned nil resources")
+	}
+	defer resources.Release()
+	if len(ptrs) != count {
+		t.Fatalf("pointer count=%d want %d", len(ptrs), count)
+	}
+	referenced := make(map[uint32]struct{})
+	for _, ptr := range ptrs {
+		referenced[ptr.ValueLogFileID()] = struct{}{}
+	}
+	if len(referenced) < 2 {
+		t.Fatalf("batch referenced %d segments; test did not exercise rotation", len(referenced))
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != len(referenced) {
+		t.Fatalf("captured descriptors=%d referenced segments=%d", len(descriptors), len(referenced))
+	}
+	for _, descriptor := range descriptors {
+		fileID := uint32(descriptor.Generation())
+		if _, ok := referenced[fileID]; !ok {
+			t.Fatalf("captured unrelated segment file_id=%d referenced=%v", fileID, referenced)
+		}
+		delete(referenced, fileID)
+	}
+	if len(referenced) != 0 {
+		t.Fatalf("missing captured segment IDs: %v", referenced)
+	}
+	namespaceTokens := 0
+	for _, token := range resources.Tokens() {
+		if token.Namespace() != nil {
+			namespaceTokens++
+		}
+	}
+	if namespaceTokens != len(descriptors)-1 {
+		t.Fatalf("namespace-bearing tokens=%d descriptors=%d want created segments plus one existing segment", namespaceTokens, len(descriptors))
+	}
+	stats := resources.Stats(time.Now())
+	if len(stats) != 1 || stats[0].NamespaceSyncs != uint64(namespaceTokens) {
+		t.Fatalf("stable multi-segment stats=%+v want %d namespace syncs", stats, namespaceTokens)
+	}
+}
+
+func TestCachingLeafPageLogStablePreparedChildRefsReturnOwnedResources(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	cached, err := Open(dir, backend, Options{IndexOuterLeavesInValueLog: true, RelaxedSync: true, AllowUnsafe: true})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	defer func() { _ = cached.Close() }()
+
+	pages := [][]byte{
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'c'),
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'd'),
+	}
+	prepared := make([][]byte, len(pages))
+	for i := range pages {
+		encoded, _, encodeErr := valuelog.MaybeCompactLeafLogPayloadTo(nil, pages[i])
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		prepared[i] = encoded
+	}
+	stable := newCachingLeafPageLog(cached, &cached.leafLog).(backenddb.LeafPagePreparedChildRefStableBatchLog)
+	refs, resources, err := stable.AppendPreparedLeafPageChildRefsWithStableResources(pages, prepared, make([]page.ChildRef, 0, len(pages)))
+	if err != nil {
+		t.Fatalf("stable prepared child refs: %v", err)
+	}
+	if resources == nil || resources.Len() == 0 {
+		t.Fatal("stable prepared child refs returned no resources")
+	}
+	defer resources.Release()
+	if len(refs) != len(pages) {
+		t.Fatalf("ref count=%d want %d", len(refs), len(pages))
+	}
+	for i, ref := range refs {
+		if !ref.IsLeafLog() || ref.Log.FileID == 0 {
+			t.Fatalf("ref %d=%+v is not a leaf-log reference", i, ref)
+		}
+	}
+}
+
+func TestCachingLeafPageLogStableCaptureExcludesFollowingConcurrentRotation(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	cached, err := Open(dir, backend, Options{
+		IndexOuterLeavesInValueLog: true,
+		ValueLogMaxSegmentBytes:    1,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cache: %v", err)
+	}
+	defer func() { _ = cached.Close() }()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var first atomic.Bool
+	cached.testBeforeVlogUnlock = func(laneID int) {
+		if laneID != leafLogLaneID || !first.CompareAndSwap(false, true) {
+			return
+		}
+		close(entered)
+		<-release
+	}
+	stableResult := make(chan struct {
+		ptr       page.LeafLogPtr
+		resources *rootpublication.StableResourceSet
+		err       error
+	}, 1)
+	log := newCachingLeafPageLog(cached, &cached.leafLog)
+	stablePage := buildSparseLeafPageForLeafLogTestWithTag(t, 'q')
+	ordinaryPage := buildSparseLeafPageForLeafLogTestWithTag(t, 'r')
+	go func() {
+		ptr, resources, appendErr := log.(backenddb.LeafPageStableLog).AppendLeafPageWithStableResources(stablePage)
+		stableResult <- struct {
+			ptr       page.LeafLogPtr
+			resources *rootpublication.StableResourceSet
+			err       error
+		}{ptr: ptr, resources: resources, err: appendErr}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stable append did not reach capture boundary")
+	}
+	ordinaryResult := make(chan struct {
+		ptr page.LeafLogPtr
+		err error
+	}, 1)
+	go func() {
+		ptr, appendErr := log.AppendLeafPage(ordinaryPage)
+		ordinaryResult <- struct {
+			ptr page.LeafLogPtr
+			err error
+		}{ptr: ptr, err: appendErr}
+	}()
+	select {
+	case result := <-ordinaryResult:
+		close(release)
+		t.Fatalf("ordinary append crossed stable capture mutex: ptr=%+v err=%v", result.ptr, result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	stable := <-stableResult
+	if stable.err != nil {
+		t.Fatalf("stable append: %v", stable.err)
+	}
+	if stable.resources == nil {
+		t.Fatal("stable append returned nil resources")
+	}
+	defer stable.resources.Release()
+	ordinary := <-ordinaryResult
+	if ordinary.err != nil {
+		t.Fatalf("ordinary append: %v", ordinary.err)
+	}
+	if ordinary.ptr.FileID == stable.ptr.FileID {
+		t.Fatalf("ordinary append did not rotate: stable=%d ordinary=%d", stable.ptr.FileID, ordinary.ptr.FileID)
+	}
+	descriptors := stable.resources.Descriptors()
+	if len(descriptors) != 1 || uint32(descriptors[0].Generation()) != stable.ptr.ValueLogFileID() {
+		t.Fatalf("stable descriptors=%v want only file_id=%d", descriptors, stable.ptr.ValueLogFileID())
 	}
 }

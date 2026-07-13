@@ -36,7 +36,7 @@ func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, 
 	if capture == nil || capture.db == nil || capture.lane == nil || path == "" || fileID == 0 {
 		return valuelog.StableResourceRegistration{}, fmt.Errorf("%w: incomplete outer-leaf stable registration", rootpublication.ErrUnresolvedResource)
 	}
-	diagnosticPath, err := filepath.Rel(capture.db.dir, path)
+	diagnosticPath, err := filepath.Rel(filepath.Dir(capture.db.dir), path)
 	if err != nil || diagnosticPath == "." || filepath.IsAbs(diagnosticPath) {
 		return valuelog.StableResourceRegistration{}, fmt.Errorf("%w: outer-leaf diagnostic path: %v", rootpublication.ErrUnresolvedResource, err)
 	}
