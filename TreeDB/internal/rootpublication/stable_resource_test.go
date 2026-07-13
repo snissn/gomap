@@ -19,6 +19,7 @@ type testStableHandle struct {
 	releases         int
 	unlinked         bool
 	identityAfterPin StableIdentity
+	onSync           func(uint64)
 }
 
 func newTestStableHandle(identity byte, length uint64) *testStableHandle {
@@ -44,6 +45,9 @@ func (h *testStableHandle) SyncThrough(frontier uint64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.syncs = append(h.syncs, frontier)
+	if h.onSync != nil {
+		h.onSync(frontier)
+	}
 	return nil
 }
 func (h *testStableHandle) Pin() error {
@@ -82,6 +86,7 @@ type testNamespaceHandle struct {
 	releases   int
 	supported  bool
 	syncErr    error
+	onSync     func()
 }
 
 func (h *testNamespaceHandle) StableIdentity() (StableIdentity, error) { return h.identity, nil }
@@ -102,6 +107,9 @@ func (h *testNamespaceHandle) SyncNamespace() error {
 		return ErrNamespacePersistenceUnsupported
 	}
 	h.syncs++
+	if h.onSync != nil {
+		h.onSync()
+	}
 	if h.syncErr != nil {
 		return h.syncErr
 	}
@@ -203,7 +211,7 @@ func TestStableResourceSetRetainsRotatedLaneObligation(t *testing.T) {
 }
 
 func TestStableResourceSetRejectsMissingNestedAsset(t *testing.T) {
-	present := testResourceTokenForField(t, newTestStableHandle(6, 10), ResourceVectorGraphPack, 1, 10, 5, nil, "meta.vector_catalog_id")
+	present := testResourceTokenForField(t, newTestStableHandle(6, 10), ResourceOuterLeafManifest, 1, 10, 5, nil, "meta.vector_catalog_id")
 	set, err := NewStableResourceSet(present)
 	if err != nil {
 		t.Fatal(err)
@@ -273,12 +281,12 @@ func TestStableResourceTokenRejectsFrontierAndSetRejectsConflicts(t *testing.T) 
 	handle := newTestStableHandle(7, 32)
 	if _, err := NewStableResourceToken(StableResourceSpec{
 		Kind: ResourceValueLogSegment, LogicalNamespace: "primary", ResourceID: "7",
-		Generation: 7, Handle: handle, RequiredFrontier: 33, ReachabilityField: "meta.value_log_id",
+		DiagnosticPath: "vlog/7.data", Generation: 7, Handle: handle, RequiredFrontier: 33, ReachabilityField: "meta.value_log_id",
 	}); !errors.Is(err, ErrResourceFrontierBeyondLength) {
 		t.Fatalf("frontier beyond length=%v", err)
 	}
-	a := testResourceToken(t, handle, ResourceDictionaryGeneration, 7, 32, 1, nil)
-	b := testResourceToken(t, handle, ResourceDictionaryGeneration, 7, 32, 2, nil)
+	a := testResourceToken(t, handle, ResourceOuterLeafManifest, 7, 32, 1, nil)
+	b := testResourceToken(t, handle, ResourceOuterLeafManifest, 7, 32, 2, nil)
 	if _, err := NewStableResourceSet(a, b); !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("digest conflict=%v", err)
 	}
@@ -289,7 +297,7 @@ func TestStableResourceTokenUnpinsWhenIdentityChangesDuringRegistration(t *testi
 	handle.identityAfterPin = StableIdentity{Device: 1, File: 13}
 	if _, err := NewStableResourceToken(StableResourceSpec{
 		Kind: ResourceValueLogSegment, LogicalNamespace: "primary", ResourceID: "12",
-		Generation: 12, Handle: handle, RequiredFrontier: 32, ReachabilityField: "meta.value_log_id",
+		DiagnosticPath: "vlog/12.data", Generation: 12, Handle: handle, RequiredFrontier: 32, ReachabilityField: "meta.value_log_id",
 	}); !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("identity changed during registration=%v", err)
 	}
@@ -301,8 +309,8 @@ func TestStableResourceTokenUnpinsWhenIdentityChangesDuringRegistration(t *testi
 func TestImmutableAssetRequiresDigest(t *testing.T) {
 	handle := newTestStableHandle(14, 32)
 	if _, err := NewStableResourceToken(StableResourceSpec{
-		Kind: ResourceVectorGraphPack, LogicalNamespace: "vectors", ResourceID: "14",
-		Generation: 14, Handle: handle, RequiredFrontier: 32, ReachabilityField: "meta.vector_graph_pack_id",
+		Kind: ResourceOuterLeafManifest, LogicalNamespace: "leaves", ResourceID: "14",
+		DiagnosticPath: "assets/14.pack", Generation: 14, Handle: handle, RequiredFrontier: 32, ReachabilityField: "meta.vector_graph_pack_id",
 	}); !errors.Is(err, ErrInvalidStableResource) {
 		t.Fatalf("immutable asset without digest=%v", err)
 	}
@@ -340,7 +348,7 @@ func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
 		stopClean(t, coordinator)
 	})
 
-	t.Run("retry retains and stop safely abandons", func(t *testing.T) {
+	t.Run("retry and stop retain until explicit safe abandonment", func(t *testing.T) {
 		handle := newTestStableHandle(16, 32)
 		set, err := NewStableResourceSet(testResourceToken(t, handle, ResourceValueLogSegment, 1, 32, 1, nil))
 		if err != nil {
@@ -359,6 +367,9 @@ func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
 		if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := coordinator.TakePendingResourceOwnership(); !errors.Is(err, ErrInvalidCandidate) {
+			t.Fatalf("take before stop=%v", err)
+		}
 		if err := coordinator.WaitThrough(context.Background(), 1); err == nil {
 			t.Fatal("retry unexpectedly succeeded")
 		}
@@ -368,8 +379,67 @@ func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
 		if err := coordinator.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
 			t.Fatalf("stop=%v", err)
 		}
+		if handle.releases != 0 || handle.pins != 1 {
+			t.Fatalf("stop lost recovery debt releases=%d pins=%d", handle.releases, handle.pins)
+		}
+		handoff, err := coordinator.TakePendingResourceOwnership()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := handoff.Tokens(); len(got) != 1 || got[0].Identity() != handle.identity || got[0].RequiredFrontier() != 32 {
+			t.Fatalf("handoff tokens=%v", got)
+		}
+		if err := handoff.ReleaseAfterRecovery(); err != nil {
+			t.Fatal(err)
+		}
+		if err := handoff.ReleaseAfterRecovery(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := coordinator.TakePendingResourceOwnership(); !errors.Is(err, ErrStableResourceOwnershipTransferred) {
+			t.Fatalf("second take=%v", err)
+		}
 		if handle.releases != 1 || handle.pins != 0 {
 			t.Fatalf("stop abandonment releases=%d pins=%d", handle.releases, handle.pins)
+		}
+	})
+
+	t.Run("ambiguous result retains until explicit recovery abandonment", func(t *testing.T) {
+		handle := newTestStableHandle(23, 32)
+		set, err := NewStableResourceSet(testResourceToken(t, handle, ResourceValueLogSegment, 1, 32, 1, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidateWithResources(CandidateSpec{Frontier: NewFrontier(1, 1, 1, 1, 1)}, set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+			return PublishResult{Outcome: PublishAmbiguous, Err: errors.New("injected ambiguous meta")}
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.Enqueue(context.Background(), candidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := coordinator.WaitThrough(context.Background(), 1); !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("wait=%v", err)
+		}
+		if err := coordinator.Stop(context.Background()); !errors.Is(err, ErrPublicationStopped) {
+			t.Fatalf("stop=%v", err)
+		}
+		if handle.releases != 0 || handle.pins != 1 {
+			t.Fatalf("ambiguous stop releases=%d pins=%d", handle.releases, handle.pins)
+		}
+		handoff, err := coordinator.TakePendingResourceOwnership()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := handoff.ReleaseAfterRecovery(); err != nil {
+			t.Fatal(err)
+		}
+		if handle.releases != 1 || handle.pins != 0 {
+			t.Fatalf("abandon releases=%d pins=%d", handle.releases, handle.pins)
 		}
 	})
 
@@ -424,9 +494,166 @@ func TestCoordinatorStableResourceOwnershipLifecycle(t *testing.T) {
 	})
 }
 
+func TestStableResourceSetPreservesLogicalRangesAndSyncsSharedSegmentOnce(t *testing.T) {
+	handle := newTestStableHandle(24, 128)
+	segment := testResourceToken(t, handle, ResourceColumnAssetSegment, 3, 96, 0, nil)
+	part, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceTypedColumnValueAsset, LogicalNamespace: "collection/7", ResourceID: "part/1",
+		DiagnosticPath: "columns/3.tca", Generation: 3, Handle: handle, RangeStart: 8,
+		RequiredFrontier: 40, BackingKind: ResourceColumnAssetSegment, Digest: []byte{1}, ReachabilityField: "column.parts[1].values",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceVectorGraphPack, LogicalNamespace: "collection/7", ResourceID: "hnsw/2",
+		DiagnosticPath: "columns/3.tca", Generation: 3, Handle: handle, RangeStart: 40,
+		RequiredFrontier: 96, BackingKind: ResourceColumnAssetSegment, Digest: []byte{2}, ReachabilityField: "column.parts[2].hnsw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := NewStableResourceSet(segment, part, graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Tokens(); len(got) != 3 {
+		t.Fatalf("logical obligations collapsed: %v", got)
+	}
+	if err := set.ValidateReachabilityFields([]string{"meta.user_root_page_id", "column.parts[1].values", "column.parts[2].hnsw"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if got := handle.syncs; len(got) != 1 || got[0] != 96 {
+		t.Fatalf("shared segment syncs=%v", got)
+	}
+	if err := set.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if handle.releases != 3 || handle.pins != 0 {
+		t.Fatalf("range owners releases=%d pins=%d", handle.releases, handle.pins)
+	}
+}
+
+func TestStableResourceSetRequiresMatchingPhysicalBacking(t *testing.T) {
+	handle := newTestStableHandle(25, 64)
+	logical, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceCommandWALExternalRID, LogicalNamespace: "commands", ResourceID: "rid/1",
+		DiagnosticPath: "vlog/25.data", Generation: 2, Handle: handle, RangeStart: 8,
+		RequiredFrontier: 40, BackingKind: ResourceValueLogSegment, Digest: []byte{1},
+		ReachabilityField: "command.external_refs[0]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStableResourceSet(logical); !errors.Is(err, ErrMissingResourceDependency) {
+		t.Fatalf("logical token without backing=%v", err)
+	}
+	if err := logical.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStableResourceSetRejectsChangedLogicalRangeContract(t *testing.T) {
+	tests := []struct {
+		name          string
+		secondStart   uint64
+		secondDigest  byte
+		secondBacking ResourceKind
+	}{
+		{name: "range", secondStart: 9, secondDigest: 1, secondBacking: ResourceValueLogSegment},
+		{name: "digest", secondStart: 8, secondDigest: 2, secondBacking: ResourceValueLogSegment},
+		{name: "backing kind", secondStart: 8, secondDigest: 1, secondBacking: ResourceOuterLeafSegment},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handle := newTestStableHandle(26, 64)
+			valueBacking := testResourceToken(t, handle, ResourceValueLogSegment, 2, 40, 0, nil)
+			leafBacking := testResourceToken(t, handle, ResourceOuterLeafSegment, 2, 40, 0, nil)
+			first, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceCommandWALExternalRID, LogicalNamespace: "commands", ResourceID: "rid/1",
+				DiagnosticPath: "segments/26.data", Generation: 2, Handle: handle, RangeStart: 8,
+				RequiredFrontier: 40, BackingKind: ResourceValueLogSegment, Digest: []byte{1},
+				ReachabilityField: "command.external_refs[0]",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceCommandWALExternalRID, LogicalNamespace: "commands", ResourceID: "rid/1",
+				DiagnosticPath: "segments/26.data", Generation: 2, Handle: handle, RangeStart: tt.secondStart,
+				RequiredFrontier: 40, BackingKind: tt.secondBacking, Digest: []byte{tt.secondDigest},
+				ReachabilityField: "command.external_refs[0]",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewStableResourceSet(valueBacking, leafBacking, first, second); !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("changed logical contract=%v", err)
+			}
+			for _, token := range []*StableResourceToken{valueBacking, leafBacking, first, second} {
+				if err := token.Release(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestStableResourceSetUsesDeterministicPhysicalAndNamespaceOrder(t *testing.T) {
+	var orderMu sync.Mutex
+	physicalOrder := make([]uint64, 0, 3)
+	namespaceOrder := make([]uint64, 0, 3)
+	tokens := make([]*StableResourceToken, 0, 3)
+	for _, file := range []uint64{3, 1, 2} {
+		handle := newTestStableHandle(byte(file), 32)
+		handle.onSync = func(uint64) {
+			orderMu.Lock()
+			defer orderMu.Unlock()
+			physicalOrder = append(physicalOrder, file)
+		}
+		dir := &testNamespaceHandle{
+			identity: StableIdentity{Device: 1, File: file * 10}, generation: 1, supported: true,
+		}
+		dir.onSync = func() {
+			orderMu.Lock()
+			defer orderMu.Unlock()
+			namespaceOrder = append(namespaceOrder, file*10)
+		}
+		namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+			Operation: NamespaceCreate, ParentDiagnosticPath: "segments", ParentGeneration: 1, Parent: dir,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens = append(tokens, testResourceToken(t, handle, ResourceValueLogSegment, file, 32, 0, namespace))
+	}
+	set, err := NewStableResourceSet(tokens...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncNamespaces(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(physicalOrder), "[1 2 3]"; got != want {
+		t.Fatalf("physical order=%s want=%s", got, want)
+	}
+	if got, want := fmt.Sprint(namespaceOrder), "[10 20 30]"; got != want {
+		t.Fatalf("namespace order=%s want=%s", got, want)
+	}
+	if err := set.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStableResourcePinBlocksConcurrentUnlinkAndReleasesExactlyOnce(t *testing.T) {
 	handle := newTestStableHandle(8, 32)
-	token := testResourceToken(t, handle, ResourceTypedColumnValueAsset, 1, 32, 1, nil)
+	token := testResourceToken(t, handle, ResourceOuterLeafManifest, 1, 32, 1, nil)
 	if err := handle.TryUnlink(); !errors.Is(err, ErrResourcePinned) {
 		t.Fatalf("unlink pinned identity=%v", err)
 	}
@@ -534,7 +761,7 @@ func TestStableResourceKindIsClosedAndInventoryChecked(t *testing.T) {
 	handle := newTestStableHandle(20, 32)
 	if _, err := NewStableResourceToken(StableResourceSpec{
 		Kind: ResourceKind("future_unregistered_kind"), LogicalNamespace: "future", ResourceID: "1",
-		Generation: 1, Handle: handle, RequiredFrontier: 32, Digest: []byte{1}, ReachabilityField: "meta.future",
+		DiagnosticPath: "future/1.data", Generation: 1, Handle: handle, RequiredFrontier: 32, Digest: []byte{1}, ReachabilityField: "meta.future",
 	}); !errors.Is(err, ErrInvalidStableResource) {
 		t.Fatalf("unregistered kind=%v", err)
 	}

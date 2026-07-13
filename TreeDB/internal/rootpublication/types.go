@@ -110,6 +110,25 @@ func NewPreparedRootCandidate(spec CandidateSpec) (*PreparedRootCandidate, error
 	return newPreparedRootCandidateWithExtensions(spec, extensionSlots{})
 }
 
+// NewPreparedRootCandidateWithResources transfers the immutable resource set
+// into the candidate. A validation failure before transfer leaves caller
+// ownership unchanged.
+func NewPreparedRootCandidateWithResources(spec CandidateSpec, resources *StableResourceSet) (*PreparedRootCandidate, error) {
+	candidate, err := newPreparedRootCandidateWithExtensions(spec, extensionSlots{})
+	if err != nil {
+		return nil, err
+	}
+	if resources == nil {
+		return candidate, nil
+	}
+	owned, err := TransferUnionStableResourceSets(resources)
+	if err != nil {
+		return nil, err
+	}
+	candidate.extensions.resourceSet = owned
+	return candidate, nil
+}
+
 func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions extensionSlots) (*PreparedRootCandidate, error) {
 	if spec.Frontier.commitSeq == 0 {
 		return nil, fmt.Errorf("%w: commit sequence is zero", ErrInvalidCandidate)
@@ -131,6 +150,30 @@ func (c *PreparedRootCandidate) Obligations() []ObligationID {
 }
 func (c *PreparedRootCandidate) OwnedBytes() uint64 {
 	return saturatingAdd(c.dependencyBytes, c.indexBytes)
+}
+
+func (c *PreparedRootCandidate) Resources() []*StableResourceToken {
+	set, _ := c.extensions.resourceSet.(*StableResourceSet)
+	return set.Tokens()
+}
+
+func (c *PreparedRootCandidate) releaseOwnedExtensions() error {
+	set, _ := c.extensions.resourceSet.(*StableResourceSet)
+	return set.Release()
+}
+
+func extendResourceView(current *StableResourceSet, candidate *PreparedRootCandidate) (*StableResourceSet, error) {
+	sets := make([]*StableResourceSet, 0, 2)
+	if current != nil {
+		sets = append(sets, current)
+	}
+	if set, ok := candidate.extensions.resourceSet.(*StableResourceSet); ok {
+		sets = append(sets, set)
+	}
+	if len(sets) == 0 {
+		return nil, nil
+	}
+	return borrowUnionStableResourceSets(sets...)
 }
 
 func coalesceCandidates(candidates []*PreparedRootCandidate) *PreparedRootCandidate {
@@ -256,4 +299,5 @@ type Stats struct {
 	Poisoned                   bool
 	WakeReason                 WakeReason
 	PublishCalls               uint64
+	ResourceReleaseErrors      uint64
 }
