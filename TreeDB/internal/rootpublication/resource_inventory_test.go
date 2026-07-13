@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -44,8 +45,32 @@ func declaredStringConstants(t *testing.T, typeName string) map[string]string {
 	return declared
 }
 
+func declaredConstantNamesWithPrefix(t *testing.T, prefix string) map[string]struct{} {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "resource_token.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse resource_token.go: %v", err)
+	}
+	declared := make(map[string]struct{})
+	for _, declaration := range parsed.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.CONST {
+			continue
+		}
+		for _, rawSpec := range general.Specs {
+			for _, name := range rawSpec.(*ast.ValueSpec).Names {
+				if strings.HasPrefix(name.Name, prefix) {
+					declared[name.Name] = struct{}{}
+				}
+			}
+		}
+	}
+	return declared
+}
+
 func TestEveryDeclaredResourceConstantHasCanonicalPolicy(t *testing.T) {
 	declaredFields := declaredStringConstants(t, "ReachabilityField")
+	declaredFieldNames := declaredConstantNamesWithPrefix(t, "Reachability")
 	declaredKinds := declaredStringConstants(t, "ResourceKind")
 	canonicalFields := make(map[string]struct{}, len(canonicalReachabilityRequirements))
 	canonicalKinds := make(map[string]struct{}, len(canonicalReachabilityRequirements))
@@ -58,6 +83,14 @@ func TestEveryDeclaredResourceConstantHasCanonicalPolicy(t *testing.T) {
 			t.Errorf("declared reachability constant %s=%q has no canonical policy", name, value)
 		}
 	}
+	for name := range declaredFieldNames {
+		if _, ok := declaredFields[name]; !ok {
+			t.Errorf("reachability constant %s evades the explicit typed-string inventory scan", name)
+		}
+	}
+	if len(declaredFieldNames) != len(declaredFields) {
+		t.Errorf("reachability constant names=%d explicit typed constants=%d", len(declaredFieldNames), len(declaredFields))
+	}
 	for name, value := range declaredKinds {
 		if _, ok := canonicalKinds[value]; !ok {
 			t.Errorf("declared resource kind %s=%q has no canonical policy", name, value)
@@ -65,6 +98,39 @@ func TestEveryDeclaredResourceConstantHasCanonicalPolicy(t *testing.T) {
 	}
 	if len(declaredFields) != len(canonicalFields) {
 		t.Errorf("declared reachability constants=%d canonical fields=%d", len(declaredFields), len(canonicalFields))
+	}
+}
+
+func TestPageAndNamedRootPoliciesRemainAdjacent(t *testing.T) {
+	want := map[ReachabilityField]string{
+		ReachabilityMetaPage:                 "adjacent-root-publication",
+		ReachabilityUserRoot:                 "adjacent-root-publication",
+		ReachabilitySystemRoot:               "adjacent-root-publication",
+		ReachabilityFreelist:                 "adjacent-freelist-publication",
+		ReachabilityCollectionSystemRoot:     "adjacent-root-publication",
+		ReachabilityCollectionPrimaryRoot:    "adjacent-root-publication",
+		ReachabilityCollectionTemplateRoot:   "adjacent-root-publication",
+		ReachabilityCollectionIndexStateRoot: "adjacent-root-publication",
+		ReachabilityCollectionColumnRoot:     "adjacent-root-publication",
+		ReachabilityCollectionSecondaryRoot:  "adjacent-root-publication",
+		ReachabilityCollectionVectorRoot:     "adjacent-root-publication",
+		ReachabilityCollectionTextDictionary: "adjacent-root-publication",
+		ReachabilityCollectionTextPosting:    "adjacent-root-publication",
+		ReachabilityCollectionTextPosition:   "adjacent-root-publication",
+	}
+	for field, classification := range want {
+		policy, ok := StableResourcePolicyFor(field)
+		if !ok {
+			t.Errorf("adjacent field %q missing canonical policy", field)
+			continue
+		}
+		if policy.Registerable || policy.Classification != classification {
+			t.Errorf("adjacent field %q policy=%+v want non-registerable %q", field, policy, classification)
+		}
+	}
+	indexPolicy, ok := StableResourcePolicyFor(ReachabilityIndexFile)
+	if !ok || !indexPolicy.Registerable {
+		t.Fatalf("external index identity policy=%+v want registerable", indexPolicy)
 	}
 }
 
@@ -110,53 +176,12 @@ func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 	}
 }
 
-func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T) {
-	domains := map[ReachabilityField]StableProducerDomain{
-		ReachabilityIndexFile:                  StableProducerDB,
-		ReachabilityMetaPage:                   StableProducerDB,
-		ReachabilityUserRoot:                   StableProducerDB,
-		ReachabilitySystemRoot:                 StableProducerDB,
-		ReachabilityFreelist:                   StableProducerDB,
-		ReachabilityValueLogPointer:            StableProducerValueLog,
-		ReachabilityOuterLeafRawPointer:        StableProducerOuterLeaf,
-		ReachabilityOuterLeafPackedPointer:     StableProducerOuterLeaf,
-		ReachabilityOuterLeafGeneration:        StableProducerOuterLeaf,
-		ReachabilityDictionaryGeneration:       StableProducerDictionary,
-		ReachabilityTemplateGeneration:         StableProducerTemplate,
-		ReachabilityCollectionSystemRoot:       StableProducerCollection,
-		ReachabilityCollectionPrimaryRoot:      StableProducerCollection,
-		ReachabilityCollectionTemplateRoot:     StableProducerCollection,
-		ReachabilityCollectionIndexStateRoot:   StableProducerCollection,
-		ReachabilityCollectionColumnRoot:       StableProducerCollection,
-		ReachabilityCollectionSecondaryRoot:    StableProducerCollection,
-		ReachabilityCollectionVectorRoot:       StableProducerCollection,
-		ReachabilityCollectionTextDictionary:   StableProducerCollection,
-		ReachabilityCollectionTextPosting:      StableProducerCollection,
-		ReachabilityCollectionTextPosition:     StableProducerCollection,
-		ReachabilityColumnManifest:             StableProducerColumnAsset,
-		ReachabilityTypedColumnMultipart:       StableProducerColumnAsset,
-		ReachabilityTypedColumnValue:           StableProducerColumnAsset,
-		ReachabilityTypedColumnCode:            StableProducerColumnAsset,
-		ReachabilityHNSWSearchPack:             StableProducerColumnAsset,
-		ReachabilityVectorGraphPack:            StableProducerColumnAsset,
-		ReachabilityLegacyVectorSnapshot:       StableProducerLegacyVector,
-		ReachabilityCommandWALActive:           StableProducerCommandWAL,
-		ReachabilityCommandWALRotated:          StableProducerCommandWAL,
-		ReachabilityCommandWALExternalRIDFence: StableProducerValueLog,
-		ReachabilityQueryReadyBase:             StableProducerColumnAsset,
-		ReachabilityQueryReadyDelta:            StableProducerColumnAsset,
-		ReachabilityQueryReadyConsolidatedBase: StableProducerColumnAsset,
-		ReachabilityLegacyActiveSlab:           StableProducerLegacyExcluded,
-		ReachabilityRaftSnapshot:               StableProducerRaftSnapshot,
-	}
-	if len(domains) != len(canonicalReachabilityRequirements) {
-		t.Fatalf("producer domain fields=%d canonical=%d", len(domains), len(canonicalReachabilityRequirements))
-	}
+func TestCanonicalProducerPolicyRejectsExcludedFields(t *testing.T) {
 	for i, requirement := range canonicalReachabilityRequirements {
 		t.Run(string(requirement.Field), func(t *testing.T) {
-			domain, ok := domains[requirement.Field]
+			policy, ok := StableResourcePolicyFor(requirement.Field)
 			if !ok {
-				t.Fatalf("canonical field %q has no producer entry point", requirement.Field)
+				t.Fatalf("canonical field %q has no policy", requirement.Field)
 			}
 			dir := t.TempDir()
 			name := string(requirement.Field) + ".resource"
@@ -173,9 +198,8 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 				DiagnosticPath: name, File: file, Frontier: DurableFrontier{Bytes: 1},
 				Digest: sha256.Sum256([]byte(name)), Reachability: requirement.Field,
 			}
-			token, err := NewStableProducerResourceTokenForDomain(domain, spec, requirement.Classification)
-			excluded := requirement.Classification == "explicit-legacy-exclusion" || requirement.Classification == "explicit-separate-domain"
-			if excluded {
+			token, err := NewStableProducerResourceTokenForDomain(requirement.Producer, spec, requirement.Classification)
+			if !policy.Registerable {
 				if !errors.Is(err, ErrResourceExcluded) {
 					t.Fatalf("excluded registration error=%v want ErrResourceExcluded", err)
 				}
@@ -186,15 +210,15 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 			}
 			token.Release()
 			spec.Kind = ResourceLegacyTreeDBField
-			if _, err := NewStableProducerResourceTokenForDomain(domain, spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
+			if _, err := NewStableProducerResourceTokenForDomain(requirement.Producer, spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
 				t.Fatalf("wrong-kind registration error=%v want ErrResourceConflict", err)
 			}
 			spec.Kind = requirement.Kind
-			if _, err := NewStableProducerResourceTokenForDomain(domain, spec, "wrong-classification"); !errors.Is(err, ErrResourceConflict) {
+			if _, err := NewStableProducerResourceTokenForDomain(requirement.Producer, spec, "wrong-classification"); !errors.Is(err, ErrResourceConflict) {
 				t.Fatalf("wrong-classification registration error=%v want ErrResourceConflict", err)
 			}
 			foreign := StableProducerDB
-			if domain == foreign {
+			if requirement.Producer == foreign {
 				foreign = StableProducerCommandWAL
 			}
 			if _, err := NewStableProducerResourceTokenForDomain(foreign, spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
@@ -205,15 +229,18 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 }
 
 func TestEveryInventoryFieldFailsAllButOneClosure(t *testing.T) {
-	rows := StableResourceInventory()
-	for omitted := range rows {
-		t.Run(string(rows[omitted].Field), func(t *testing.T) {
+	for _, omitted := range RequiredReachabilityFields() {
+		t.Run(string(omitted), func(t *testing.T) {
 			dir := t.TempDir()
 			required := RequiredReachabilityFields()
 			builder := NewStableResourceSetBuilder(required...)
-			for i, row := range rows {
-				if i == omitted {
+			for i, field := range required {
+				if field == omitted {
 					continue
+				}
+				row, ok := stableResourceInventoryRow(field)
+				if !ok {
+					t.Fatalf("required field %q missing inventory row", field)
 				}
 				name := string(row.Field) + ".resource"
 				path := filepath.Join(dir, name)
@@ -238,7 +265,7 @@ func TestEveryInventoryFieldFailsAllButOneClosure(t *testing.T) {
 				}
 			}
 			if _, err := builder.Freeze(); err == nil {
-				t.Fatalf("all-but-one closure unexpectedly succeeded without %q", rows[omitted].Field)
+				t.Fatalf("all-but-one closure unexpectedly succeeded without %q", omitted)
 			}
 			builder.Abandon()
 		})

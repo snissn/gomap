@@ -2,12 +2,18 @@ package collections
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/authorityinventory"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -106,7 +112,23 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 		ColumnAssetKindQueryReadyDelta:            {rootpublication.ReachabilityQueryReadyDelta, "rebuildable-non-authoritative"},
 		ColumnAssetKindQueryReadyConsolidatedBase: {rootpublication.ReachabilityQueryReadyConsolidatedBase, "rebuildable-non-authoritative"},
 	}
-	for kind, expected := range want {
+	declared := declaredColumnAssetKinds(t)
+	generated := make(map[string]authorityinventory.Row)
+	for _, row := range authorityinventory.Rows {
+		const prefix = "collections.ColumnAssetKind."
+		if strings.HasPrefix(row.Field, prefix) {
+			generated[strings.TrimPrefix(row.Field, prefix)] = row
+		}
+	}
+	if len(declared) != len(want) || len(generated) != len(declared) {
+		t.Fatalf("column asset closure source=%d reviewed=%d generated=%d", len(declared), len(want), len(generated))
+	}
+	for name, kind := range declared {
+		expected, ok := want[kind]
+		if !ok {
+			t.Errorf("source constant %s=%q has no reviewed stable-resource policy", name, kind)
+			continue
+		}
 		gotKind, gotField, gotClassification, err := stableColumnAssetResourceClassification(kind)
 		if err != nil {
 			t.Errorf("classify %q: %v", kind, err)
@@ -121,10 +143,63 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 		if gotClassification != expected.classification {
 			t.Errorf("kind %q classification=%q want literal %q", kind, gotClassification, expected.classification)
 		}
+		policy, ok := rootpublication.StableResourcePolicyFor(gotField)
+		if !ok || policy.Kind != gotKind || policy.Classification != gotClassification || policy.Producer != rootpublication.StableProducerColumnAsset {
+			t.Errorf("kind %q collection policy=(%q,%q,%q) canonical=%+v", kind, gotKind, gotField, gotClassification, policy)
+		}
+		row, ok := generated[name]
+		if !ok {
+			t.Errorf("source constant %s missing generated authority row", name)
+			continue
+		}
+		wantState := authorityinventory.ActivationActive
+		if gotClassification == "rebuildable-non-authoritative" {
+			wantState = authorityinventory.ActivationNonAuthoritative
+		}
+		if row.ActivationState != wantState {
+			t.Errorf("generated row %s state=%q want %q for canonical classification %q", row.Field, row.ActivationState, wantState, gotClassification)
+		}
 	}
 	if _, _, _, err := stableColumnAssetResourceClassification(ColumnAssetKind("future-authoritative-kind")); err == nil {
 		t.Fatal("unknown column asset kind did not fail inventory coverage")
 	}
+}
+
+func declaredColumnAssetKinds(t *testing.T) map[string]ColumnAssetKind {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), "column_publish_plan.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := make(map[string]ColumnAssetKind)
+	for _, declaration := range parsed.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.CONST {
+			continue
+		}
+		for _, rawSpec := range general.Specs {
+			spec := rawSpec.(*ast.ValueSpec)
+			for i, name := range spec.Names {
+				if !strings.HasPrefix(name.Name, "ColumnAssetKind") {
+					continue
+				}
+				typeName, typed := spec.Type.(*ast.Ident)
+				if !typed || typeName.Name != "ColumnAssetKind" || len(spec.Values) != len(spec.Names) {
+					t.Fatalf("%s must use an explicit ColumnAssetKind string declaration for inventory closure", name.Name)
+				}
+				literal, ok := spec.Values[i].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("%s must use an explicit string literal", name.Name)
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				declared[name.Name] = ColumnAssetKind(value)
+			}
+		}
+	}
+	return declared
 }
 
 func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testing.T) {

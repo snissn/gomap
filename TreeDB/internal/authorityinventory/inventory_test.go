@@ -49,15 +49,18 @@ func TestAuthoritativeStructFamiliesAreExhaustive(t *testing.T) {
 
 func TestAuthorityEnumsAreExhaustive(t *testing.T) {
 	tests := []struct {
-		file, typeName, prefix string
+		file, typeName, inventoryPrefix, constantPrefix string
 	}{
-		{"collections/column_publish_plan.go", "ColumnAssetKind", "collections.ColumnAssetKind."},
-		{"internal/commitlog/command_frame.go", "ExternalRefClass", "commitlog.ExternalRefClass."},
+		{"collections/column_publish_plan.go", "ColumnAssetKind", "collections.ColumnAssetKind.", "ColumnAssetKind"},
+		{"internal/commitlog/command_frame.go", "ExternalRefClass", "commitlog.ExternalRefClass.", "ExternalRef"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.typeName, func(t *testing.T) {
-			want := typedConstantNames(t, treeDBRoot(t, tt.file), tt.typeName)
-			got := inventorySuffixes(tt.prefix)
+			// Enumerate the public constant family by its mandatory name prefix,
+			// rather than carrying type state between const specs. The latter can
+			// miss a separately-declared converted or aliased enum constant.
+			want := constantNamesWithPrefix(t, treeDBRoot(t, tt.file), tt.constantPrefix)
+			got := inventorySuffixes(tt.inventoryPrefix)
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("inventory constants = %v, source constants = %v", got, want)
 			}
@@ -219,6 +222,9 @@ func structFieldNames(t *testing.T, path, typeName string) []string {
 			}
 			var out []string
 			for _, field := range st.Fields.List {
+				if len(field.Names) == 0 {
+					t.Fatalf("%s contains anonymous field %T; authority inventory requires an explicit reviewed field name", typeName, field.Type)
+				}
 				for _, name := range field.Names {
 					out = append(out, name.Name)
 				}
@@ -231,25 +237,19 @@ func structFieldNames(t *testing.T, path, typeName string) []string {
 	return nil
 }
 
-func typedConstantNames(t *testing.T, path, typeName string) []string {
+func constantNamesWithPrefix(t *testing.T, path, prefix string) []string {
 	t.Helper()
 	f := parseFile(t, path)
 	var out []string
-	active := false
 	for _, decl := range f.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
 			continue
 		}
-		active = false
 		for _, spec := range gen.Specs {
 			value := spec.(*ast.ValueSpec)
-			if value.Type != nil {
-				id, ok := value.Type.(*ast.Ident)
-				active = ok && id.Name == typeName
-			}
-			if active {
-				for _, name := range value.Names {
+			for _, name := range value.Names {
+				if strings.HasPrefix(name.Name, prefix) {
 					out = append(out, name.Name)
 				}
 			}
