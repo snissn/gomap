@@ -64,7 +64,7 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 				DiagnosticPath: name, File: file, Frontier: DurableFrontier{Bytes: 1},
 				Digest: sha256.Sum256([]byte(name)), Reachability: requirement.Field,
 			}
-			token, err := NewStableProducerResourceToken(spec)
+			token, err := NewStableProducerResourceToken(spec, requirement.Classification)
 			excluded := requirement.Classification == "explicit-legacy-exclusion" || requirement.Classification == "explicit-separate-domain"
 			if excluded {
 				if !errors.Is(err, ErrResourceExcluded) {
@@ -77,8 +77,12 @@ func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T
 			}
 			token.Release()
 			spec.Kind = ResourceLegacyTreeDBField
-			if _, err := NewStableProducerResourceToken(spec); !errors.Is(err, ErrResourceConflict) {
+			if _, err := NewStableProducerResourceToken(spec, requirement.Classification); !errors.Is(err, ErrResourceConflict) {
 				t.Fatalf("wrong-kind registration error=%v want ErrResourceConflict", err)
+			}
+			spec.Kind = requirement.Kind
+			if _, err := NewStableProducerResourceToken(spec, "wrong-classification"); !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("wrong-classification registration error=%v want ErrResourceConflict", err)
 			}
 		})
 	}

@@ -25,6 +25,7 @@ var (
 	ErrUnresolvedResource              = errors.New("stable resource dependency unresolved")
 	ErrResourceOwnership               = errors.New("stable resource ownership violation")
 	ErrRecoveryHandoffUnavailable      = errors.New("stable resource recovery handoff unavailable")
+	ErrResourceExcluded                = errors.New("stable resource field excluded from candidate ownership")
 )
 
 // ResourceKind identifies the physical durability domain of a token. The

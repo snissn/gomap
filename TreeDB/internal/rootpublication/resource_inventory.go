@@ -1,5 +1,7 @@
 package rootpublication
 
+import "fmt"
+
 // StableResourceInventoryRow is the reviewed ownership table for every root,
 // catalog, and command-frame field in the #3677 closure. Paths are source file
 // paths, not durable resource identities.
@@ -101,6 +103,49 @@ var stableResourceInventory = []StableResourceInventoryRow{
 	{ReachabilityQueryReadyConsolidatedBase, ResourceQueryReadyAsset, "TreeDB/collections/query_ready_build.go; TreeDB/collections/column_asset_manager.go", "pinned query_ready_consolidated_base_v1 segment identity", "asset checksum + consolidated base identity", "column segment create/rotation token", "query-ready consolidation before manifest ref", "TreeDB/internal/typedcolumn/query_ready_open.go; TreeDB/collections/query_ready_generation_open.go", "column asset GC/rewrite/reachability/lifecycle", "rebuildable-non-authoritative"},
 	{ReachabilityLegacyActiveSlab, ResourceLegacyTreeDBField, "TreeDB/page/meta.go legacy decode only", "N/A: TreeDB no longer owns slab storage", "must remain zero/unreachable", "N/A", "explicit exclusion registrar", "TreeDB/page/meta.go compatibility validation", "N/A: HashDB owns its separate slab path", "explicit-legacy-exclusion"},
 	{ReachabilityRaftSnapshot, ResourceSeparateDurability, "TreeDB/internal/raftcluster/snapshot_manifest.go; TreeDB/internal/raftfsm/raft_snapshot_side_stores.go", "snapshot-manifest-owned identities", "snapshot manifest checksums/frontiers", "snapshot protocol namespace operations", "separate raft snapshot builder", "TreeDB/internal/raftcluster snapshot recovery", "raft snapshot retention owner", "explicit-separate-domain"},
+}
+
+// StableResourcePolicy is the executable producer policy for one inventory
+// field. Registerable is false only when another durability domain owns the
+// field or TreeDB has explicitly retired it.
+type StableResourcePolicy struct {
+	Kind           ResourceKind
+	Classification string
+	Registerable   bool
+}
+
+func StableResourcePolicyFor(field ReachabilityField) (StableResourcePolicy, bool) {
+	for _, requirement := range canonicalReachabilityRequirements {
+		if requirement.Field != field {
+			continue
+		}
+		registerable := requirement.Classification != "explicit-legacy-exclusion" &&
+			requirement.Classification != "explicit-separate-domain"
+		return StableResourcePolicy{
+			Kind: requirement.Kind, Classification: requirement.Classification, Registerable: registerable,
+		}, true
+	}
+	return StableResourcePolicy{}, false
+}
+
+// NewStableProducerResourceToken is the only constructor production resource
+// producers use. NewStableResourceToken remains the low-level primitive for
+// platform adapters and contract tests.
+func NewStableProducerResourceToken(spec StableResourceSpec, classification string) (*StableResourceToken, error) {
+	policy, ok := StableResourcePolicyFor(spec.Reachability)
+	if !ok {
+		return nil, fmt.Errorf("%w: unknown reachability field %q", ErrUnresolvedResource, spec.Reachability)
+	}
+	if !policy.Registerable {
+		return nil, fmt.Errorf("%w: %s is %s", ErrResourceExcluded, spec.Reachability, policy.Classification)
+	}
+	if classification != policy.Classification {
+		return nil, fmt.Errorf("%w: field %q requires classification %q, got %q", ErrResourceConflict, spec.Reachability, policy.Classification, classification)
+	}
+	if spec.Kind != policy.Kind {
+		return nil, fmt.Errorf("%w: field %q requires kind %q, got %q", ErrResourceConflict, spec.Reachability, policy.Kind, spec.Kind)
+	}
+	return NewStableResourceToken(spec)
 }
 
 func StableResourceInventory() []StableResourceInventoryRow {

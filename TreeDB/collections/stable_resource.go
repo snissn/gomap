@@ -64,12 +64,16 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
-	return rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+	policy, ok := rootpublication.StableResourcePolicyFor(reachability)
+	if !ok {
+		return nil, fmt.Errorf("collections: stable resource policy missing field %q", reachability)
+	}
+	return rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
 		Kind: resourceKind, LogicalLane: ref.Namespace, ResourceID: fmt.Sprint(ref.FileID),
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
-	})
+	}, policy.Classification)
 }
 
 func stableColumnAssetNamespaceToken(segmentDir string, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {

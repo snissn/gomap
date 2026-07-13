@@ -1,10 +1,11 @@
 // Package rootpublication provides the dormant scheduling primitive for
 // coalescing prepared TreeDB roots before stable publication.
 //
-// The package deliberately has no connection to TreeDB's current commit,
-// pager, meta, recovery, maintenance, or public-profile paths. Later durability
-// tickets add exact resource ownership and stable-root publication before the
-// coordinator is activated.
+// The package now owns exact stable resource and namespace dependencies plus
+// their candidate-to-coordinator transfer contract. It deliberately has no
+// connection to TreeDB's current commit, pager, meta, recovery, maintenance,
+// or public-profile paths; later durability tickets activate publication and
+// deletion consumers.
 package rootpublication
 
 import (

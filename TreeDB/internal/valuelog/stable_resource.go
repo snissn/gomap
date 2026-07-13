@@ -17,6 +17,7 @@ var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
 // informational and must be relative to the DB root; identity is always read
 // from the pinned file handle.
 type StableResourceRegistration struct {
+	Kind               rootpublication.ResourceKind
 	LogicalLane        string
 	Generation         uint64
 	DiagnosticPath     string
@@ -96,12 +97,20 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 	}
 	frontier := rootpublication.NewRIDFrontier(registration.ExternalRIDs)
 	frontier.Bytes = uint64(info.Size())
-	return rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
-		Kind: rootpublication.ResourceValueLog, LogicalLane: registration.LogicalLane,
+	policy, ok := rootpublication.StableResourcePolicyFor(registration.Reachability)
+	if !ok {
+		return nil, fmt.Errorf("valuelog: unknown stable resource reachability %q", registration.Reachability)
+	}
+	kind := registration.Kind
+	if kind == "" {
+		kind = policy.Kind
+	}
+	return rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
+		Kind: kind, LogicalLane: registration.LogicalLane,
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-	})
+	}, policy.Classification)
 }
 
 func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegistration) (*rootpublication.StableNamespaceToken, error) {

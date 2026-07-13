@@ -589,12 +589,12 @@ func commandWALDiagnosticPath(path string) string {
 
 func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
 	digest := sha256.Sum256([]byte(fmt.Sprintf("command-wal/lane=%d/segment=%d", j.lane, seq)))
-	return rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+	return rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceCommandWAL, LogicalLane: fmt.Sprintf("lane-%d", j.lane),
 		ResourceID: fmt.Sprintf("%d:%d", j.lane, seq), Generation: seq,
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
-	})
+	}, "authoritative")
 }
 
 func (j *CommandJournal) lastReservedLSNLocked() uint64 {
