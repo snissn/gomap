@@ -317,22 +317,30 @@ func (token *StableResourceToken) Reachability() ReachabilityField  { return tok
 func (token *StableResourceToken) Namespace() *StableNamespaceToken { return token.namespace }
 
 func (token *StableResourceToken) FlushThrough() error {
+	return token.flushThrough(token.frontier)
+}
+
+func (token *StableResourceToken) flushThrough(frontier DurableFrontier) error {
 	if token == nil || token.released.Load() {
 		return ErrResourceOwnership
 	}
 	started := time.Now()
-	err := token.flush(token.pinned, token.frontier)
+	err := token.flush(token.pinned, frontier)
 	token.metrics.flushes.Add(1)
 	token.metrics.flushNanos.Add(uint64(time.Since(started)))
 	return err
 }
 
 func (token *StableResourceToken) SyncThrough() error {
+	return token.syncThrough(token.frontier)
+}
+
+func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
 	if token == nil || token.released.Load() {
 		return ErrResourceOwnership
 	}
 	started := time.Now()
-	err := token.sync(token.pinned, token.frontier)
+	err := token.sync(token.pinned, frontier)
 	token.metrics.syncs.Add(1)
 	token.metrics.syncNanos.Add(uint64(time.Since(started)))
 	return err

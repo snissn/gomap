@@ -291,6 +291,48 @@ func (set *StableResourceSet) FrontierFor(identity StableIdentity, generation ui
 	return DurableFrontier{}
 }
 
+// FlushThrough flushes every pinned resource through the greatest frontier
+// retained by this set. Coalescing can advance that frontier beyond the
+// representative token's original registration, so callers must operate on
+// the set rather than iterating Tokens().
+func (set *StableResourceSet) FlushThrough() error {
+	if set == nil {
+		return nil
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if ResourceOwnerState(set.owner.Load()) == ResourceOwnerReleased {
+		return ErrResourceOwnership
+	}
+	var errs []error
+	for _, entry := range set.entries {
+		if err := entry.token.flushThrough(entry.frontier); err != nil {
+			errs = append(errs, fmt.Errorf("flush stable resource %q: %w", entry.token.logicalKey(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SyncThrough persists every pinned resource through the greatest frontier
+// retained by this set.
+func (set *StableResourceSet) SyncThrough() error {
+	if set == nil {
+		return nil
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if ResourceOwnerState(set.owner.Load()) == ResourceOwnerReleased {
+		return ErrResourceOwnership
+	}
+	var errs []error
+	for _, entry := range set.entries {
+		if err := entry.token.syncThrough(entry.frontier); err != nil {
+			errs = append(errs, fmt.Errorf("sync stable resource %q: %w", entry.token.logicalKey(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (set *StableResourceSet) Owner() ResourceOwnerState {
 	if set == nil {
 		return ResourceOwnerReleased
