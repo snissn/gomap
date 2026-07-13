@@ -25,8 +25,12 @@ func TestRemoveSegmentFileOnceEmitsUnlink(t *testing.T) {
 	})
 	defer restore()
 
-	if err := removeSegmentFileOnce(path); err != nil {
+	removed, err := removeSegmentFileOnce(path)
+	if err != nil {
 		t.Fatalf("removeSegmentFileOnce: %v", err)
+	}
+	if !removed {
+		t.Fatal("removeSegmentFileOnce reported no removal")
 	}
 	want := []durabilitycut.Event{{
 		Resource:  durabilitycut.ResourceValueLog,

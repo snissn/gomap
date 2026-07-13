@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -201,6 +202,52 @@ func TestManagerStableIdentityPinBlocksSecondManagerDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("segment remains after delete: %v", err)
+	}
+}
+
+func TestManagerStableDeleteCommitsUnlinkBeforePostUnlinkCut(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	registry := rootpublication.NewIdentityPinRegistry()
+	producer, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+	deleter, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deleter.Close()
+
+	wantErr := errors.New("injected post-unlink cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == durabilitycut.NamespaceUnlink &&
+			event.Resource == durabilitycut.ResourceValueLog &&
+			filepath.Clean(event.OldPath) == filepath.Clean(path) {
+			return wantErr
+		}
+		return nil
+	})
+	err = deleter.RemoveSegment(fileID)
+	restore()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("RemoveSegment error=%v, want post-unlink cut", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("post-unlink cut path stat=%v, want removed", statErr)
+	}
+
+	token, pinErr := producer.StableResourceToken(fileID, StableResourceRegistration{
+		Kind: rootpublication.ResourceValueLog, LogicalLane: "main", Generation: 2,
+		DiagnosticPath: "value_vlog/" + filepath.Base(path),
+		Digest:         [32]byte{2}, Reachability: rootpublication.ReachabilityValueLogPointer,
+	})
+	if token != nil {
+		token.Release()
+	}
+	if !errors.Is(pinErr, rootpublication.ErrResourceConflict) {
+		t.Fatalf("late pin after committed unlink error=%v, want ErrResourceConflict", pinErr)
 	}
 }
 

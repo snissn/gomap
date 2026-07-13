@@ -2542,25 +2542,28 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 
 var removeSegmentPath = os.Remove
 
-func removeSegmentFileOnce(path string) error {
+func removeSegmentFileOnce(path string) (bool, error) {
 	err := removeSegmentPath(path)
 	if err == nil {
-		return durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceValueLog, filepath.Dir(path), path, "")
+		return true, durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceValueLog, filepath.Dir(path), path, "")
 	}
 	if os.IsNotExist(err) {
-		return nil
+		return true, nil
 	}
-	return err
+	return false, err
 }
 
-func removeSegmentFileWithRetry(path string) error {
+func removeSegmentFileWithRetry(path string) (bool, error) {
 	const attempts = 40
 	backoff := 25 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		err := removeSegmentFileOnce(path)
+		removed, err := removeSegmentFileOnce(path)
+		if removed {
+			return true, err
+		}
 		if err == nil {
-			return nil
+			return false, nil
 		}
 		lastErr = err
 		// On non-Windows, or on the final retry attempt, stop retrying.
@@ -2575,26 +2578,29 @@ func removeSegmentFileWithRetry(path string) error {
 			backoff *= 2
 		}
 	}
-	return lastErr
+	return false, lastErr
 }
 
-func removeSegmentFileOnceStable(path string, identity rootpublication.StableIdentity, stable bool) error {
+func removeSegmentFileOnceStable(path string, identity rootpublication.StableIdentity, stable bool) (bool, error) {
 	if stable {
 		if err := validateStableDeletePathIdentity(path, identity); err != nil {
-			return err
+			return false, err
 		}
 	}
 	return removeSegmentFileOnce(path)
 }
 
-func removeSegmentFileWithRetryStable(path string, identity rootpublication.StableIdentity) error {
+func removeSegmentFileWithRetryStable(path string, identity rootpublication.StableIdentity) (bool, error) {
 	const attempts = 40
 	backoff := 25 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		err := removeSegmentFileOnceStable(path, identity, true)
+		removed, err := removeSegmentFileOnceStable(path, identity, true)
+		if removed {
+			return true, err
+		}
 		if err == nil {
-			return nil
+			return false, nil
 		}
 		lastErr = err
 		if runtime.GOOS != "windows" || i >= attempts-1 || !isWindowsSharingViolationError(err) {
@@ -2605,7 +2611,7 @@ func removeSegmentFileWithRetryStable(path string, identity rootpublication.Stab
 			backoff *= 2
 		}
 	}
-	return lastErr
+	return false, lastErr
 }
 
 func isWindowsSharingViolationError(err error) bool {

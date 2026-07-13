@@ -246,13 +246,14 @@ func closeAndRemoveStableSegmentFileResult(file *File, validateIdentity bool) (b
 		}
 	}
 	closeErr := file.Close()
+	var removed bool
 	var removeErr error
 	if validateIdentity {
-		removeErr = removeSegmentFileWithRetryStable(file.Path, identity)
+		removed, removeErr = removeSegmentFileWithRetryStable(file.Path, identity)
 	} else {
-		removeErr = removeSegmentFileWithRetry(file.Path)
+		removed, removeErr = removeSegmentFileWithRetry(file.Path)
 	}
-	return removeErr == nil, errors.Join(closeErr, removeErr)
+	return removed, errors.Join(closeErr, removeErr)
 }
 
 func (m *Manager) deleteZombieFile(file *File) error {
