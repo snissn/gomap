@@ -116,6 +116,7 @@ func TestStableValueLogTokenCarriesCanonicalExternalRIDFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	token, err := writer.StableResourceToken(StableResourceRegistration{
+		Kind:        rootpublication.ResourceCommandWALExternalRID,
 		LogicalLane: "main", Generation: 7, DiagnosticPath: "maindb/value_vlog/000007.vlog",
 		Reachability: rootpublication.ReachabilityCommandWALExternalRIDFence,
 		ExternalRIDs: []uint64{9, 2, 9, 4}, Digest: sha256.Sum256([]byte("segment-header")),
@@ -127,5 +128,31 @@ func TestStableValueLogTokenCarriesCanonicalExternalRIDFence(t *testing.T) {
 	frontier := token.Frontier()
 	if frontier.RIDCount != 3 || frontier.RIDMin != 2 || frontier.RIDMax != 9 || frontier.RIDSetDigest == [32]byte{} {
 		t.Fatalf("RID frontier=%+v", frontier)
+	}
+	if token.Kind() != rootpublication.ResourceCommandWALExternalRID {
+		t.Fatalf("token kind=%q want command WAL external RID", token.Kind())
+	}
+}
+
+func TestStableValueLogRegistrationSupportsOuterLeafProducerKinds(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewWriter(filepath.Join(dir, "outer-leaf.log"), 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Append(0, nil, 1, []byte("outer-leaf")); err != nil {
+		t.Fatal(err)
+	}
+	token, err := writer.StableResourceToken(StableResourceRegistration{
+		Kind: rootpublication.ResourceOuterLeafLog, LogicalLane: "outer-leaf", Generation: 9,
+		DiagnosticPath: "maindb/outer_leaf/raw/000009.log", Reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	if token.Kind() != rootpublication.ResourceOuterLeafLog {
+		t.Fatalf("token kind=%q", token.Kind())
 	}
 }

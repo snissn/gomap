@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,6 +43,44 @@ func TestStableResourceInventoryHasNoUnknownOwnerCells(t *testing.T) {
 			t.Errorf("canonical field %q inventory kind/classification=(%q,%q) want (%q,%q)",
 				requirement.Field, row.Kind, row.Classification, requirement.Kind, requirement.Classification)
 		}
+	}
+}
+
+func TestCheckedProducerRegistrarCoversEveryCandidateInventoryField(t *testing.T) {
+	for i, requirement := range canonicalReachabilityRequirements {
+		t.Run(string(requirement.Field), func(t *testing.T) {
+			dir := t.TempDir()
+			name := string(requirement.Field) + ".resource"
+			file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if _, err := file.Write([]byte("producer-resource")); err != nil {
+				t.Fatal(err)
+			}
+			spec := StableResourceSpec{
+				Kind: requirement.Kind, LogicalLane: "inventory", ResourceID: name, Generation: uint64(i + 1),
+				DiagnosticPath: name, File: file, Frontier: DurableFrontier{Bytes: 1},
+				Digest: sha256.Sum256([]byte(name)), Reachability: requirement.Field,
+			}
+			token, err := NewStableProducerResourceToken(spec)
+			excluded := requirement.Classification == "explicit-legacy-exclusion" || requirement.Classification == "explicit-separate-domain"
+			if excluded {
+				if !errors.Is(err, ErrResourceExcluded) {
+					t.Fatalf("excluded registration error=%v want ErrResourceExcluded", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			token.Release()
+			spec.Kind = ResourceLegacyTreeDBField
+			if _, err := NewStableProducerResourceToken(spec); !errors.Is(err, ErrResourceConflict) {
+				t.Fatalf("wrong-kind registration error=%v want ErrResourceConflict", err)
+			}
+		})
 	}
 }
 
