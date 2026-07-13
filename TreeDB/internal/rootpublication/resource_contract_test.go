@@ -653,6 +653,51 @@ func TestBuilderMergeDuplicateChildPinStressDoesNotGrowDescriptors(t *testing.T)
 	}
 }
 
+func TestBuilderMergeConflictRetainsBothOwnersTransactionally(t *testing.T) {
+	dir := t.TempDir()
+	first := writeStableResourceFixture(t, dir, "first.vlog", "first-resource")
+	second := writeStableResourceFixture(t, dir, "second.vlog", "second-resource")
+	var releases atomic.Uint64
+	makeToken := func(file *os.File) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "7", Generation: 7,
+			DiagnosticPath: "maindb/value_vlog/000007.vlog", File: file,
+			Frontier: DurableFrontier{Bytes: 1}, Digest: sha256.Sum256([]byte("header")),
+			Reachability: ReachabilityValueLogPointer, OnRelease: func() { releases.Add(1) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	parent := NewStableResourceSetBuilder()
+	if err := parent.Add(makeToken(first)); err != nil {
+		t.Fatal(err)
+	}
+	childBuilder := NewStableResourceSetBuilder()
+	if err := childBuilder.Add(makeToken(second)); err != nil {
+		t.Fatal(err)
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Merge(child); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("Merge conflict=%v want ErrResourceConflict", err)
+	}
+	if got := releases.Load(); got != 0 {
+		t.Fatalf("failed merge released %d pins before owner cleanup", got)
+	}
+	if child.Owner() != ResourceOwnerBuilder {
+		t.Fatalf("failed merge child owner=%v want builder", child.Owner())
+	}
+	parent.Abandon()
+	child.Release()
+	if got := releases.Load(); got != 2 {
+		t.Fatalf("explicit cleanup releases=%d want 2", got)
+	}
+}
+
 func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 	dir := t.TempDir()
 	token := stableTokenFixture(t, dir, "pinned.vlog", 1, 4, ReachabilityValueLogPointer, "pinned")

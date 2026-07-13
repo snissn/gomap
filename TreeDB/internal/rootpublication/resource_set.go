@@ -173,29 +173,63 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 		return ErrResourceOwnership
 	}
 	builder.mu.Lock()
-	defer builder.mu.Unlock()
 	if builder.closed || builder.abandoned {
+		builder.mu.Unlock()
 		return ErrResourceOwnership
 	}
 	child.mu.Lock()
-	defer child.mu.Unlock()
 	if ResourceOwnerState(child.owner.Load()) != ResourceOwnerBuilder {
+		child.mu.Unlock()
+		builder.mu.Unlock()
 		return ErrResourceOwnership
 	}
 	merged := cloneStableResourceEntries(builder.entries)
 	for _, entry := range child.entries {
 		if err := mergeViewEntry(&merged, entry); err != nil {
+			child.mu.Unlock()
+			builder.mu.Unlock()
 			return err
 		}
 	}
 	if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
+		child.mu.Unlock()
+		builder.mu.Unlock()
 		return ErrResourceOwnership
 	}
-	// No token owner transition is necessary: both child and parent are in the
-	// builder ownership phase, and only the parent can release them now.
+	dropped := droppedStableResourceTokens(merged, builder.entries, child.entries)
+	// Kept tokens remain in the builder ownership phase. Only duplicates omitted
+	// from the committed merged view are released, and only after the child CAS
+	// makes the ownership transfer irreversible.
 	builder.entries = merged
 	child.entries = nil
+	child.mu.Unlock()
+	builder.mu.Unlock()
+	for _, token := range dropped {
+		token.releaseFrom(ResourceOwnerBuilder)
+	}
 	return nil
+}
+
+func droppedStableResourceTokens(kept []stableResourceEntry, sources ...[]stableResourceEntry) []*StableResourceToken {
+	retained := make(map[*StableResourceToken]struct{}, len(kept))
+	for _, entry := range kept {
+		retained[entry.token] = struct{}{}
+	}
+	var dropped []*StableResourceToken
+	seen := make(map[*StableResourceToken]struct{})
+	for _, entries := range sources {
+		for _, entry := range entries {
+			if _, ok := retained[entry.token]; ok {
+				continue
+			}
+			if _, ok := seen[entry.token]; ok {
+				continue
+			}
+			seen[entry.token] = struct{}{}
+			dropped = append(dropped, entry.token)
+		}
+	}
+	return dropped
 }
 
 func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
