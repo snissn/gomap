@@ -394,7 +394,11 @@ func buildQueryReadyExecutionDomain(reader *QueryReadyBaseDeltaReader, column st
 		}
 		values, ok := dictionaries[column]
 		if !ok {
-			return queryReadyExecutionDomain{}, fmt.Errorf("typedcolumn: query-ready part %d missing dictionary for %s", partIndex, column)
+			definition := partColumn.Definition
+			if definition.Type != ColumnTypeLowCardinalityCode || definition.Encoding != EncodingNullableInt64 || definition.Cardinality != 0 {
+				return queryReadyExecutionDomain{}, fmt.Errorf("typedcolumn: query-ready part %d missing dictionary for %s", partIndex, column)
+			}
+			values = map[int64]string{}
 		}
 		for _, value := range values {
 			set[value] = struct{}{}

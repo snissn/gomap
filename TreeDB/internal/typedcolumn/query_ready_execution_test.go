@@ -114,6 +114,67 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 	}
 }
 
+func TestQueryReadyExecutionTreatsMissingDictionaryAsEmptyForAllNullNullableColumn(t *testing.T) {
+	opts := Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone},
+			{Name: "group", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Compression: CompressionNone, Cardinality: 0},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+	}
+	part, err := BuildColumnPart(9051, opts, Batch{
+		Rows:     2,
+		Columns:  map[string][]int64{"id": {1, 2}, "group": {0, 0}},
+		Nulls:    map[string][]bool{"group": {true, true}},
+		Defaults: map[string][]bool{"group": {false, false}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: map[string]map[string]int64{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: image}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := OpenQueryReadyBaseGeneration(built.Bytes, queryReadyBaseTestIdentity(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewQueryReadyBaseDeltaReader(base, nil, QueryReadyBaseDeltaOptions{SnapshotGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		req  QueryReadyOperatorRequest
+	}{
+		{name: "group", req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "group"}},
+		{name: "predicate", req: QueryReadyOperatorRequest{Kind: QueryReadyOperatorGroupCount, GroupColumn: "group", Predicates: []QueryReadyStringPredicate{{Column: "group", Values: []string{""}}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner, err := PrepareQueryReadyOperator(reader, test.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runner.Run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []QueryReadyOperatorGroup{{Key: "", Count: 2}}
+			if !slices.Equal(result.Groups, want) {
+				t.Fatalf("groups=%+v want %+v", result.Groups, want)
+			}
+		})
+	}
+}
+
 func TestQueryReadyExecutionPreservesPhysicalOrderingWithoutTopK(t *testing.T) {
 	tests := []struct {
 		name string
