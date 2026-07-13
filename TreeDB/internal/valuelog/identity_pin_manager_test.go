@@ -33,6 +33,221 @@ func writeIdentityPinTestSegment(t *testing.T, dir string) (uint32, string) {
 	return fileID, path
 }
 
+func identityPinTestIdentity(t *testing.T, path string) rootpublication.StableIdentity {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
+}
+
+func TestManagerStartupCompletesMatchingStableDeleteQuarantine(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	identity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if manager.HasSegment(fileID) {
+		t.Fatal("manager registered a segment whose stable deletion had committed")
+	}
+	if _, err := os.Stat(quarantineDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matching quarantine remains after startup recovery: %v", err)
+	}
+}
+
+func TestManagerStartupRestoresUnexpectedStableDeleteQuarantineIdentity(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	intendedIdentity := identityPinTestIdentity(t, path)
+	replacementDir := filepath.Join(dir, "replacement")
+	if err := os.Mkdir(replacementDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, replacementPath := writeIdentityPinTestSegment(t, replacementDir)
+	replacementIdentity := identityPinTestIdentity(t, replacementPath)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if rootpublication.SamePhysicalIdentity(intendedIdentity, replacementIdentity) {
+		t.Fatal("replacement unexpectedly reused the intended physical identity")
+	}
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, intendedIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if !manager.HasSegment(fileID) {
+		t.Fatal("manager did not register the conservatively restored segment")
+	}
+	gotIdentity := identityPinTestIdentity(t, path)
+	if !rootpublication.SamePhysicalIdentity(gotIdentity, replacementIdentity) {
+		t.Fatal("startup recovery restored the wrong physical identity")
+	}
+	if _, err := os.Stat(quarantineDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected-identity quarantine remains after restore: %v", err)
+	}
+}
+
+func TestManagerStartupRollsBackPartialStableDeleteRestore(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	identity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(path, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if !manager.HasSegment(fileID) {
+		t.Fatal("manager lost the canonical segment after partial restore recovery")
+	}
+	if _, err := os.Stat(quarantineDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial-restore quarantine remains after startup recovery: %v", err)
+	}
+}
+
+func TestManagerStartupCompletesQuarantineAndPreservesReplacement(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	identity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+	replacementDir := filepath.Join(dir, "replacement")
+	if err := os.Mkdir(replacementDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, replacementPath := writeIdentityPinTestSegment(t, replacementDir)
+	replacementIdentity := identityPinTestIdentity(t, replacementPath)
+	if err := os.Rename(replacementPath, path); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if !manager.HasSegment(fileID) {
+		t.Fatal("manager did not register the replacement segment")
+	}
+	if got := identityPinTestIdentity(t, path); !rootpublication.SamePhysicalIdentity(got, replacementIdentity) {
+		t.Fatal("startup recovery changed the replacement identity")
+	}
+	if _, err := os.Stat(quarantineDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matching quarantine remains after replacement recovery: %v", err)
+	}
+}
+
+func TestManagerStartupRejectsAmbiguousStableDeleteQuarantine(t *testing.T) {
+	dir := t.TempDir()
+	_, path := writeIdentityPinTestSegment(t, dir)
+	intendedIdentity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, intendedIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacementDir := filepath.Join(dir, "replacement")
+	if err := os.Mkdir(replacementDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, replacementPath := writeIdentityPinTestSegment(t, replacementDir)
+	if err := os.Rename(replacementPath, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if manager != nil || !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("NewManager ambiguous quarantine=(%v, %v), want (nil, ErrResourceConflict)", manager, err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("canonical segment changed after fail-closed recovery: %v", err)
+	}
+	if _, err := os.Stat(quarantinePath); err != nil {
+		t.Fatalf("ambiguous quarantine changed after fail-closed recovery: %v", err)
+	}
+}
+
+func TestStableDeleteRetryPreservesReplacementBesideCommittedQuarantine(t *testing.T) {
+	dir := t.TempDir()
+	_, path := writeIdentityPinTestSegment(t, dir)
+	identity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+	const replacement = "replacement after committed canonical unlink"
+	if err := os.WriteFile(path, []byte(replacement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := removeStableSegmentFileOnce(path, identity)
+	if err != nil || !removed {
+		t.Fatalf("stable delete retry = (%v, %v), want (true, nil)", removed, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != replacement {
+		t.Fatalf("replacement changed during stable delete retry: got=%q err=%v", got, err)
+	}
+}
+
 func TestManagerZombieDeleteWaitsForStableIdentityPin(t *testing.T) {
 	dir := t.TempDir()
 	fileID, path := writeIdentityPinTestSegment(t, dir)

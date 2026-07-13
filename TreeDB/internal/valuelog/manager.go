@@ -1274,6 +1274,7 @@ type Manager struct {
 	currentWritableMmap        atomic.Bool
 	currentWritableReadBarrier atomic.Value
 	stableResourcePins         *rootpublication.IdentityPinRegistry
+	recoveredStableDeleteDirs  map[string]bool
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -1292,6 +1293,7 @@ func NewManagerWithStableResourcePinRegistry(dir string, registry *rootpublicati
 		groupedFrameCacheMaxRaw:   defaultGroupedFrameCacheMaxRawBytes,
 		groupedFrameCacheMaxBytes: defaultGroupedFrameCacheMaxBytes,
 		stableResourcePins:        registry,
+		recoveredStableDeleteDirs: make(map[string]bool),
 	}
 	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
 	if err := m.Refresh(); err != nil {
@@ -1579,6 +1581,9 @@ func (m *Manager) Refresh() error {
 	}
 	m.mu.RUnlock()
 	for _, dir := range dirs {
+		if err := m.recoverStableDeleteDirOnce(dir); err != nil {
+			return err
+		}
 		segments, err := currentScanSegmentPaths()(dir)
 		if err != nil {
 			return err
@@ -1598,6 +1603,26 @@ func (m *Manager) Refresh() error {
 		}
 		m.mu.Unlock()
 	}
+	return nil
+}
+
+func (m *Manager) recoverStableDeleteDirOnce(dir string) error {
+	if m == nil {
+		return nil
+	}
+	dir = filepath.Clean(dir)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recoveredStableDeleteDirs == nil {
+		m.recoveredStableDeleteDirs = make(map[string]bool)
+	}
+	if m.recoveredStableDeleteDirs[dir] {
+		return nil
+	}
+	if err := recoverStableDeleteQuarantines(dir); err != nil {
+		return err
+	}
+	m.recoveredStableDeleteDirs[dir] = true
 	return nil
 }
 
