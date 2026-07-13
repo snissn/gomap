@@ -1110,11 +1110,10 @@ func TestUnionDeletionGuardRetainsEveryCoalescedSourcePin(t *testing.T) {
 	}
 }
 
-func TestUnionStableResourceSetsDuplicatePinsHasBoundedAllocationGrowth(t *testing.T) {
-	const sourceCount = 1024
-
-	dir := t.TempDir()
-	file := writeStableResourceFixture(t, dir, "shared.vlog", "shared-benchmark-resource")
+func duplicatePhysicalStableResourceSets(tb testing.TB, sourceCount int) []*StableResourceSet {
+	tb.Helper()
+	dir := tb.TempDir()
+	file := writeStableResourceFixture(tb, dir, "shared.vlog", "shared-benchmark-resource")
 	digest := sha256.Sum256([]byte("shared-benchmark-header"))
 	sets := make([]*StableResourceSet, sourceCount)
 	for i := range sets {
@@ -1126,21 +1125,27 @@ func TestUnionStableResourceSetsDuplicatePinsHasBoundedAllocationGrowth(t *testi
 			Reachability: ReachabilityValueLogPointer,
 		})
 		if err != nil {
-			t.Fatal(err)
+			tb.Fatal(err)
 		}
 		if err := builder.Add(token); err != nil {
-			t.Fatal(err)
+			tb.Fatal(err)
 		}
 		sets[i], err = builder.Freeze()
 		if err != nil {
-			t.Fatal(err)
+			tb.Fatal(err)
 		}
 	}
-	defer func() {
+	tb.Cleanup(func() {
 		for _, set := range sets {
 			set.Release()
 		}
-	}()
+	})
+	return sets
+}
+
+func TestUnionStableResourceSetsDuplicatePinsHasBoundedAllocationGrowth(t *testing.T) {
+	const sourceCount = 1024
+	sets := duplicatePhysicalStableResourceSets(t, sourceCount)
 
 	runtime.GC()
 	var before, after runtime.MemStats
@@ -2020,29 +2025,7 @@ func BenchmarkStableResourceSetCoalesceDuplicatePhysical(b *testing.B) {
 func BenchmarkStableResourceSetUnionDuplicatePhysicalScale(b *testing.B) {
 	for _, sourceCount := range []int{8, 64, 256, 1024} {
 		b.Run(fmt.Sprintf("sources=%d", sourceCount), func(b *testing.B) {
-			dir := b.TempDir()
-			file := writeStableResourceFixture(b, dir, "coalesce-shared.vlog", "shared-benchmark-resource")
-			sets := make([]*StableResourceSet, sourceCount)
-			for i := range sets {
-				builder := NewStableResourceSetBuilder()
-				token, err := NewStableResourceToken(StableResourceSpec{
-					Kind: ResourceValueLog, LogicalLane: fmt.Sprintf("lane-%d", i), ResourceID: fmt.Sprintf("alias-%d", i), Generation: 1,
-					DiagnosticPath: "maindb/value_vlog/coalesce-shared.vlog", File: file,
-					Frontier: DurableFrontier{Bytes: 4}, Digest: sha256.Sum256([]byte("shared-benchmark-header")),
-					Reachability: ReachabilityValueLogPointer,
-				})
-				if err != nil {
-					b.Fatal(err)
-				}
-				if err := builder.Add(token); err != nil {
-					b.Fatal(err)
-				}
-				sets[i], err = builder.Freeze()
-				if err != nil {
-					b.Fatal(err)
-				}
-				defer sets[i].Release()
-			}
+			sets := duplicatePhysicalStableResourceSets(b, sourceCount)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {

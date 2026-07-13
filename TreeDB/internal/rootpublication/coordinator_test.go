@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -101,6 +102,67 @@ func TestCoalescingUnionsEveryReservedExtensionSlot(t *testing.T) {
 	got := coalesced.extensions
 	if got.resourceSet != testExtension(9) || got.cowFreelist != testExtension(18) || got.durableRootRecord != testExtension(36) {
 		t.Fatalf("extension union=%+v", got)
+	}
+}
+
+func duplicatePhysicalCandidates(tb testing.TB, sourceCount int) []*PreparedRootCandidate {
+	tb.Helper()
+	sets := duplicatePhysicalStableResourceSets(tb, sourceCount)
+	candidates := make([]*PreparedRootCandidate, sourceCount)
+	for i, set := range sets {
+		candidate, err := NewPreparedRootCandidate(CandidateSpec{
+			Frontier:    NewFrontier(uint64(i+1), uint64(i+1), uint64(i+1), uint64(i+1), uint64(i+1)),
+			ResourceSet: set,
+		})
+		if err != nil {
+			tb.Fatal(err)
+		}
+		candidates[i] = candidate
+	}
+	tb.Cleanup(func() {
+		for _, candidate := range candidates {
+			candidate.AbandonResources()
+		}
+	})
+	return candidates
+}
+
+func TestCoalesceCandidatesDuplicatePinsHasBoundedAllocationGrowth(t *testing.T) {
+	const sourceCount = 1024
+	candidates := duplicatePhysicalCandidates(t, sourceCount)
+	result := testing.Benchmark(func(b *testing.B) {
+		for range b.N {
+			coalesced, err := coalesceCandidates(candidates)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if got := coalesced.Resources().Len(); got != 1 {
+				b.Fatalf("coalesced durability obligations=%d want 1", got)
+			}
+			runtime.KeepAlive(coalesced)
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 2<<20 {
+		t.Fatalf("coalescing %d duplicate-resource candidates allocated %d bytes/op; want <= %d", sourceCount, allocated, 2<<20)
+	}
+}
+
+func BenchmarkCoalesceCandidatesDuplicatePhysicalScale(b *testing.B) {
+	for _, sourceCount := range []int{8, 64, 256, 1024} {
+		b.Run(fmt.Sprintf("sources=%d", sourceCount), func(b *testing.B) {
+			candidates := duplicatePhysicalCandidates(b, sourceCount)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				coalesced, err := coalesceCandidates(candidates)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if got := coalesced.Resources().Len(); got != 1 {
+					b.Fatalf("coalesced durability obligations=%d want 1", got)
+				}
+			}
+		})
 	}
 }
 

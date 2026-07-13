@@ -177,34 +177,57 @@ func coalesceCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandi
 	coalesced.indexBytes = 0
 	coalesced.obligations = nil
 	coalesced.extensions = extensionSlots{}
+	resourceExtensions := make([]immutableExtension, 0, len(candidates))
 	for _, candidate := range candidates {
 		coalesced.dependencyBytes = saturatingAdd(coalesced.dependencyBytes, candidate.dependencyBytes)
 		coalesced.indexBytes = saturatingAdd(coalesced.indexBytes, candidate.indexBytes)
 		coalesced.obligations = append(coalesced.obligations, candidate.obligations...)
+		if candidate.extensions.resourceSet != nil {
+			resourceExtensions = append(resourceExtensions, candidate.extensions.resourceSet)
+		}
 		var err error
-		coalesced.extensions, err = unionExtensionSlots(coalesced.extensions, candidate.extensions)
+		coalesced.extensions.cowFreelist, err = unionExtensionValue(coalesced.extensions.cowFreelist, candidate.extensions.cowFreelist)
 		if err != nil {
 			return nil, err
 		}
+		coalesced.extensions.durableRootRecord, err = unionExtensionValue(coalesced.extensions.durableRootRecord, candidate.extensions.durableRootRecord)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	coalesced.extensions.resourceSet, err = unionResourceExtensions(resourceExtensions)
+	if err != nil {
+		return nil, err
 	}
 	coalesced.obligations = normalizeObligations(coalesced.obligations)
 	return &coalesced, nil
 }
 
-func unionExtensionSlots(older, newer extensionSlots) (extensionSlots, error) {
-	resourceSet, err := unionExtensionValue(older.resourceSet, newer.resourceSet)
-	if err != nil {
-		return extensionSlots{}, err
+func unionResourceExtensions(extensions []immutableExtension) (immutableExtension, error) {
+	if len(extensions) == 0 {
+		return nil, nil
 	}
-	cowFreelist, err := unionExtensionValue(older.cowFreelist, newer.cowFreelist)
-	if err != nil {
-		return extensionSlots{}, err
+	sets := make([]*StableResourceSet, len(extensions))
+	for i, extension := range extensions {
+		set, ok := extension.(*StableResourceSet)
+		if !ok {
+			// Reserved-slot tests and future extension implementations retain the
+			// generic pairwise contract. Production resource sets use the batched
+			// path below so a growing pin union is never repeatedly cloned.
+			result := extensions[0]
+			var err error
+			for _, next := range extensions[1:] {
+				result, err = result.union(next)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return result, nil
+		}
+		sets[i] = set
 	}
-	durableRootRecord, err := unionExtensionValue(older.durableRootRecord, newer.durableRootRecord)
-	if err != nil {
-		return extensionSlots{}, err
-	}
-	return extensionSlots{resourceSet: resourceSet, cowFreelist: cowFreelist, durableRootRecord: durableRootRecord}, nil
+	return UnionStableResourceSets(sets...)
 }
 
 func unionExtensionValue(older, newer immutableExtension) (immutableExtension, error) {
