@@ -651,6 +651,7 @@ func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 	store := db.leafGenerationManifestStore
 	if store == nil {
 		t.Fatal("leaf generation manifest store is nil")
