@@ -34,7 +34,10 @@ func TestLeafGenerationPack_ApplyStageAccounting(t *testing.T) {
 	if publishAttributed > stats.PublishHoldNanos {
 		t.Fatalf("exclusive publish stages=%d exceed publish hold=%d: %+v", publishAttributed, stats.PublishHoldNanos, stages)
 	}
-	if stages.DirectorySyncWaitTimeNanos > stages.DirectorySyncTimeNanos {
+	// Windows can quantize a sub-tick directory-sync operation wall to zero
+	// while the overlapping channel wait crosses a clock tick. Preserve the
+	// subset invariant whenever the operation wall is observable.
+	if stages.DirectorySyncTimeNanos > 0 && stages.DirectorySyncWaitTimeNanos > stages.DirectorySyncTimeNanos {
 		t.Fatalf("directory sync wait=%d exceeds operation wall=%d", stages.DirectorySyncWaitTimeNanos, stages.DirectorySyncTimeNanos)
 	}
 	if stats.RetryApplyStages != (LeafGenerationPackApplyStageStats{}) {
