@@ -24,6 +24,43 @@ external refs, replays complete commands with `LSN > AppliedLSN` through the
 deterministic command executor, then checkpoints the recovered `AppliedLSN`
 before cleaning replayed WAL.
 
+The command-frame V2 scanner, durable-frontier classifier, and physical suffix
+repair are currently explicit inert entry points. Production `Open`, public
+append, and reopen remain V1 until #3718 activates the complete dependency and
+publication protocol. This boundary prevents a binary from partially enabling
+V2 recovery while still appending V1 frames.
+
+V2 command segments are currently required to be uncompressed at the outer
+commit-log segment layer. A terminal compressed record cannot expose a trusted
+LSN/class prefix, so both complete and torn compressed V2 records fail closed
+with `ErrCommandWALV2CompressedRecordUnsupported`. #3718 must keep segment
+compression disabled when it activates V2 unless a later format change makes
+that identity prefix independently readable and authenticated.
+
+For V2 recovery, scan every unapplied physical frame across all lanes and retain
+its lane, segment sequence, byte start/end offsets, and source path. After
+strict envelope, class, segment CRC, canonical external-RID fence, and dependency
+validation, the highest complete durable command or
+`DurablePrefixBarrierV1` establishes the durable frontier `H`.
+
+- LSNs through `H` must be unique and contiguous from `AppliedLSN + 1`, and all
+  referenced RIDs must exist. Any gap, duplicate, incomplete frame, corrupt
+  fence, or missing dependency at or below `H` is corruption before mutation.
+- Above `H`, only a complete, dependency-closed, contiguous relaxed prefix may
+  be applied. The first incomplete, non-contiguous, duplicate, or
+  dependency-incomplete relaxed frame starts one discarded physical suffix.
+- A later complete durable command or barrier raises `H`; therefore an earlier
+  defect that otherwise looked discardable becomes corruption.
+
+After the complete prefix is durably published, physical repair processes the
+discarded frames in reverse global-LSN order. It truncates and syncs later
+segments, removes now-empty suffix segments, syncs the WAL directory, and
+truncates and syncs the anchor segment last. Each stage is retryable. Read-only
+recovery performs no mutation and returns structured `ErrRecoveryRequired`
+diagnostics containing the durable frontier, first discarded LSN, discarded
+frame/byte counts, missing-RID count, source segment, repair stages, completed
+stage count, and directory-sync completion.
+
 Target entry revisions are part of the same recovered command effect as the raw
 KV value or tombstone. Recovery must not reconstruct revisions from a
 post-commit sidecar whose durability can diverge from the selected root tuple.
@@ -128,6 +165,11 @@ Otherwise:
 - Command frame ordering uses `LSN`; duplicate LSN is corruption.
 - Old raw `commitlog.Record` batches in a command WAL directory fail closed.
 - Truncated tail in commit log stops replay at partial tail safely.
+
+The V2 rule is narrower: an incomplete terminal relaxed frame is discardable
+only when it is strictly above `H`. An incomplete durable frame, a non-terminal
+short read, or any incomplete frame at or below a later-established `H` fails
+closed.
 
 ### 4.3 Apply batches or command frames to backend
 

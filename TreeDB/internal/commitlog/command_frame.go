@@ -13,6 +13,9 @@ import (
 
 const (
 	CommandFrameVersion uint16 = 1
+	// CommandFrameVersionV2 is intentionally separate from CommandFrameVersion.
+	// Production activation remains owned by #3718.
+	CommandFrameVersionV2 uint16 = 2
 
 	CommandWALNonCriticalFlagStart uint64 = 1 << 32
 
@@ -75,6 +78,7 @@ const (
 	CommandKindCollectionRebuildVectorIndex CommandKind = 103
 	CommandKindCatalogCreateCollection      CommandKind = 200
 	CommandKindCatalogMutationPlaceholder   CommandKind = CommandKindCatalogCreateCollection
+	CommandKindDurablePrefixBarrier         CommandKind = 300
 )
 
 // CommandScope identifies which logical TreeDB surface a command mutates.
@@ -84,6 +88,7 @@ const (
 	CommandScopeRawKV CommandScope = iota + 1
 	CommandScopeCollection
 	CommandScopeCatalog
+	CommandScopeSystem
 )
 
 // PayloadFormat identifies the canonical payload encoding inside the envelope.
@@ -97,6 +102,7 @@ const (
 	PayloadFormatCollectionUpdateBatchByIDV1    PayloadFormat = 5
 	PayloadFormatCatalogCreateCollectionV1      PayloadFormat = 6
 	PayloadFormatCollectionRebuildVectorIndexV1 PayloadFormat = 7
+	PayloadFormatDurablePrefixBarrierV1         PayloadFormat = 8
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -1718,6 +1724,7 @@ type CommandExtension struct {
 
 type CommandEnvelope struct {
 	Version          uint16
+	DurabilityClass  CommandDurabilityClass
 	LSN              uint64
 	Kind             CommandKind
 	Scope            CommandScope
@@ -2574,6 +2581,25 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 	}
 	return ScanRawKVBatchPayloadWithRevision(payload, func(op RawKVOp, key, value []byte, _ uint64) error {
 		return visit(op, key, value)
+	})
+}
+
+// ScanRawKVBatchRIDs validates payload and visits only SetRID record IDs.
+// Compact-zero payloads cannot contain SetRID operations, so they are
+// validated without materializing their declared zero-filled values.
+func ScanRawKVBatchRIDs(payload []byte, visit func(rid uint64) error) error {
+	if len(payload) < rawKVBatchHeaderSize {
+		return ErrCorrupt
+	}
+	version := binary.LittleEndian.Uint16(payload[0:2])
+	if version == rawKVZeroBatchPayloadV2 || version == rawKVZeroBatchPayloadV3 {
+		return scanRawKVZeroBatchPayload(payload, nil)
+	}
+	return ScanRawKVBatchPayload(payload, func(op RawKVOp, _ []byte, value []byte) error {
+		if op != RawKVOpSetRID || visit == nil {
+			return nil
+		}
+		return visit(binary.LittleEndian.Uint64(value))
 	})
 }
 

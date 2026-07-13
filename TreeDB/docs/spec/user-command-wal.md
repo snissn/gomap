@@ -182,6 +182,7 @@ The target envelope is:
 ```go
 type CommandEnvelope struct {
     Version          uint16
+    DurabilityClass  CommandDurabilityClass
     LSN              uint64
     Kind             CommandKind
     Scope            CommandScope
@@ -254,6 +255,41 @@ Required integration points:
 - make raw KV entry revision metadata part of the `RawKVBatch` command effect
   instead of a physical sidecar record with a separate durability boundary;
 - fail closed on unknown required frame versions or command kinds.
+
+### 5.3.1 Inert Command-Frame V2 Boundary
+
+The V2 codec and recovery classifier may land before production activation so
+their bytes and failure rules can be reviewed independently. During that phase:
+
+- `CommandFrameVersion` remains 1 for the public journal owner and public
+  append/reopen path;
+- V2 encode, strict decode, physical scan, classification, and suffix-repair
+  functions are explicit entry points that production `Open` does not call;
+- strict V2 scan rejects commit-log segment compression with the typed
+  `ErrCommandWALV2CompressedRecordUnsupported`, because a torn compressed
+  record does not expose an authenticated LSN or durability class; #3718 must
+  disable segment compression at activation or first add an uncompressed
+  identity prefix;
+- a production append rejects a caller-supplied V2 envelope without consuming
+  an LSN or mixing versions in the active segment; and
+- #3718 owns the one-time activation of append, dependency preparation, replay,
+  publication, and cleanup.
+
+V2 persists `CommandDurabilityClass` in header bytes `[54,56)` (`Durable=1`,
+`Relaxed=2`). It adds the empty durable `DurablePrefixBarrierV1` and requires
+one canonical `ExternalRefFenceV1` precondition on every raw-KV frame containing
+`SetRID`; a frame without `SetRID` has no RID fence. The fence is the unique RID
+count plus SHA-256 over sorted unique little-endian RIDs and is verified from
+decoded payload bytes before external dependency lookup.
+
+Recovery first derives the highest valid durable frontier and validates the
+entire prefix through it without mutation. Only a complete contiguous
+dependency-closed relaxed prefix above that frontier is replayable. The first
+incomplete relaxed frame begins a single physical suffix that is repaired in
+reverse global-LSN order, with later file sync/removal and WAL-directory sync
+completed before the anchor truncate/sync. Read-only inspection returns the
+same planned stages in structured `ErrRecoveryRequired` diagnostics without
+changing files.
 
 ### 5.4 Single Journal Owner
 
