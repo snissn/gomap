@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
@@ -360,7 +361,7 @@ func TestLeafGenerationPack_PostPublicationCleanupFailureIsReportedOutOfBand(t *
 	}
 }
 
-func TestLeafGenerationPack_PromotedDirectorySyncFailureCleansCandidates(t *testing.T) {
+func TestLeafGenerationPack_PromotedDirectorySyncCutPoisonsAndRetainsCandidates(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
@@ -368,27 +369,26 @@ func TestLeafGenerationPack_PromotedDirectorySyncFailureCleansCandidates(t *test
 	beforePages := db.idx.Load().pager.PageCount()
 	testErr := errors.New("leaf pack directory sync failpoint")
 
-	originalSyncDir := syncDirFn
-	defer func() { syncDirFn = originalSyncDir }()
 	var failOnce atomic.Bool
 	failOnce.Store(true)
 	leafDir := filepath.Clean(LeafLogDirPath(dir))
-	syncDirFn = func(path string) error {
-		if filepath.Clean(path) == leafDir && failOnce.CompareAndSwap(true, false) {
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeNewFileDirectorySync && filepath.Clean(event.Path) == leafDir && failOnce.CompareAndSwap(true, false) {
 			return testErr
 		}
-		return originalSyncDir(path)
-	}
+		return nil
+	})
+	defer restore()
 
 	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{candidate.generation.GenerationID},
 		Force:         true,
 	})
-	if !errors.Is(err, testErr) {
-		t.Fatalf("LeafGenerationPack error=%v want directory sync failpoint", err)
+	if !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack error=%v want directory sync cut and recovery-required", err)
 	}
-	if db.publicationPoisoned.Load() {
-		t.Fatal("pre-meta directory sync failure poisoned DB")
+	if !db.publicationPoisoned.Load() {
+		t.Fatal("post-mutation directory sync cut did not poison DB")
 	}
 	if got := db.idx.Load().pager.PageCount(); got != beforePages {
 		t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
@@ -396,14 +396,60 @@ func TestLeafGenerationPack_PromotedDirectorySyncFailureCleansCandidates(t *test
 	if _, err := os.Stat(candidate.sourcePath); err != nil {
 		t.Fatalf("source removed after directory sync failure: %v", err)
 	}
-	if err := db.SetSync([]byte("after-directory-sync-failure"), []byte("ok")); err != nil {
-		t.Fatalf("SetSync after directory sync failure: %v", err)
+	if err := db.SetSync([]byte("after-directory-sync-failure"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("SetSync after ambiguous directory sync error=%v want recovery-required", err)
+	}
+}
+
+func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+	baselinePins := db.valueLogIdentityPins.ActivePins()
+	seen := make(map[leafGenerationPackPublishPhase]bool)
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		switch event.Phase {
+		case leafGenerationPackAfterPromotion, leafGenerationPackAfterRegistration, leafGenerationPackBeforeMetaWrite:
+			seen[event.Phase] = true
+			if got := db.valueLogIdentityPins.ActivePins(); got <= baselinePins {
+				return fmt.Errorf("packed authority pins=%d baseline=%d at phase=%d", got, baselinePins, event.Phase)
+			}
+		}
+		if event.Phase == leafGenerationPackAfterRegistration {
+			for _, id := range event.FileIDs {
+				identity, ok := db.valueLogManager.StableSegmentIdentity(id)
+				if !ok {
+					return fmt.Errorf("manager missing stable identity %d", id)
+				}
+				if _, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+					return fmt.Errorf("delete race for %d error=%v want pinned", id, err)
+				}
+			}
+		}
+		return nil
+	})
+	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
+	})
+	unregister()
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	for _, phase := range []leafGenerationPackPublishPhase{leafGenerationPackAfterPromotion, leafGenerationPackAfterRegistration, leafGenerationPackBeforeMetaWrite} {
+		if !seen[phase] {
+			t.Fatalf("publication phase %d was not observed", phase)
+		}
+	}
+	if got := db.valueLogIdentityPins.ActivePins(); got != baselinePins {
+		t.Fatalf("packed pins after metadata handoff=%d want baseline %d", got, baselinePins)
 	}
 }
 
 func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	registry := db.valueLogIdentityPins
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 768)
 	beforeSeq := db.State().CommitSeq
 	var promotedIDs []uint32
@@ -426,6 +472,9 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 	}
 	if !db.publicationPoisoned.Load() {
 		t.Fatal("meta-sync ambiguity did not poison DB")
+	}
+	if got := registry.ActivePins(); got == 0 {
+		t.Fatal("ambiguous publish released packed authority before close")
 	}
 	if _, err := os.Stat(candidate.sourcePath); err != nil {
 		t.Fatalf("source removed after ambiguous publish: %v", err)
@@ -466,6 +515,12 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 		t.Fatalf("later raw pager sync: %v", err)
 	}
 	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("packed authority pins after close=%d want 0", got)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("packed authority identities after close=%d want 0", got)
+	}
 
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
