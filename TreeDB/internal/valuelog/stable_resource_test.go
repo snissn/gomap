@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +13,14 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func requireReadableStableValueLogToken(t testing.TB, token *rootpublication.StableResourceToken) {
+	t.Helper()
+	buf := make([]byte, 1)
+	if _, err := token.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("stable value-log token is not read-capable: %v", err)
+	}
+}
 
 func requireStableValueLogNamespace(t testing.TB) {
 	t.Helper()
@@ -179,6 +188,8 @@ func TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities(t *testing.
 	if rotation.Closed.ResourceID() != "1" || rotation.Active.ResourceID() != "2" {
 		t.Fatalf("resource IDs closed=%s active=%s", rotation.Closed.ResourceID(), rotation.Active.ResourceID())
 	}
+	requireReadableStableValueLogToken(t, rotation.Closed)
+	requireReadableStableValueLogToken(t, rotation.Active)
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
 	if err := builder.Add(rotation.TakeClosed()); err != nil {
 		t.Fatal(err)

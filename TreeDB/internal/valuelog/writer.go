@@ -43,7 +43,11 @@ var syncDirFn = syncDir
 var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
 func openLogFile(path string) (*os.File, error) {
-	const flags = os.O_WRONLY | os.O_APPEND
+	// Stable-resource publication retains this exact descriptor for both
+	// durability operations and recovery validation. Keep writer descriptors
+	// read-capable so a duplicated pin can serve ReadAt without reopening by
+	// pathname and losing physical-identity authority.
+	const flags = os.O_RDWR | os.O_APPEND
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceValueLog, filepath.Dir(path), "", path); observeErr != nil {

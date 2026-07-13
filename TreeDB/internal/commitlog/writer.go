@@ -508,7 +508,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 	}
 
 	if w.f == nil {
-		f, err := openLogFile(path, os.O_WRONLY|os.O_APPEND)
+		f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
 		if err != nil {
 			return err
 		}
@@ -562,7 +562,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 		}
 	}
 
-	f, err := openLogFile(path, os.O_WRONLY|os.O_APPEND)
+	f, err := openLogFile(path, os.O_RDWR|os.O_APPEND)
 	if err != nil {
 		return err
 	}

@@ -209,7 +209,7 @@ func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegi
 }
 
 func openStableValueLogFile(parent *os.File, path string) (*os.File, error) {
-	created, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
+	created, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
 	}

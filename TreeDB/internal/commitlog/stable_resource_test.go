@@ -3,6 +3,7 @@ package commitlog
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,14 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func requireReadableStableCommandWALToken(t testing.TB, token *rootpublication.StableResourceToken) {
+	t.Helper()
+	buf := make([]byte, 1)
+	if _, err := token.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("stable command-WAL token is not read-capable: %v", err)
+	}
+}
 
 func requireStableCommandWALNamespace(t testing.TB) {
 	t.Helper()
@@ -112,6 +121,8 @@ func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	if rotation.Closed.Frontier().Bytes == 0 {
 		t.Fatal("closed command WAL frontier is zero")
 	}
+	requireReadableStableCommandWALToken(t, rotation.Closed)
+	requireReadableStableCommandWALToken(t, rotation.Active)
 	wantActive := filepath.ToSlash(filepath.Join("maindb", "wal", CommandSegmentName(3, 2)))
 	if rotation.Active.DiagnosticPath() != wantActive {
 		t.Fatalf("active diagnostic path=%q want %q", rotation.Active.DiagnosticPath(), wantActive)
