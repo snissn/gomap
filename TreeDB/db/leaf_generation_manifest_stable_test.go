@@ -199,6 +199,24 @@ func TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen(t *t
 	}
 }
 
+func TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError(t *testing.T) {
+	leafDir := t.TempDir()
+	if err := os.WriteFile(leafGenerationManifestPath(leafDir), []byte(`{"version":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	defer store.Close()
+
+	_, err := store.Replace(newLeafGenerationManifest(10))
+	if !errors.Is(err, ErrLeafGenerationManifestIncompatible) {
+		t.Fatalf("Replace error=%v want ErrLeafGenerationManifestIncompatible", err)
+	}
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("Replace error=%v does not preserve json.SyntaxError", err)
+	}
+}
+
 func TestStableLeafGenerationManifestReplacementPinnedOldIdentityBlocksOverwrite(t *testing.T) {
 	leafDir := t.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()

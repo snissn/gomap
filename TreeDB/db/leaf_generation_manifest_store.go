@@ -448,7 +448,7 @@ func persistedLeafGenerationManifestRevision(leafDir string, oldFile *os.File, a
 	}
 	var persisted leafGenerationManifest
 	if err := json.Unmarshal(data, &persisted); err != nil {
-		return 0, fmt.Errorf("%w: decode persisted leaf generation manifest: %v", ErrLeafGenerationManifestIncompatible, err)
+		return 0, fmt.Errorf("%w: decode persisted leaf generation manifest: %w", ErrLeafGenerationManifestIncompatible, err)
 	}
 	if err := validatePersistedLeafGenerationManifest(&persisted); err != nil {
 		return 0, err
