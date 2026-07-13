@@ -387,6 +387,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		db.maintenanceMu.Lock()
 		maintenanceLocked = true
 		defer db.maintenanceMu.Unlock()
+		if err := db.CheckStorageMaintenanceReady(); err != nil {
+			return stats, err
+		}
 		if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
 			if err := hook("compact-storage"); err != nil {
 				return stats, err

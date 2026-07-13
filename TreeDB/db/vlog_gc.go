@@ -155,6 +155,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		defer db.maintenanceMu.Unlock()
 	}
 	if !opts.DryRun {
+		if err := db.CheckStorageMaintenanceReady(); err != nil {
+			return stats, err
+		}
 		if hook := db.testStorageMaintenanceAfterLockHook; hook != nil {
 			if err := hook("value-log-gc"); err != nil {
 				return stats, err
