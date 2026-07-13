@@ -332,6 +332,80 @@ func TestQueryReadyConsolidationBuildMatchesSnapshot(t *testing.T) {
 	}
 }
 
+func TestQueryReadyConsolidationPreservesInheritedTombstones(t *testing.T) {
+	d, col, baseIdentity, baseParts := queryReadyBuildFixture(t, 14)
+	defer func() { _ = d.Close() }()
+	baseBuilt, err := typedcolumn.BuildQueryReadyBaseGeneration(baseIdentity, baseParts)
+	if err != nil {
+		t.Fatalf("build base: %v", err)
+	}
+	base, err := typedcolumn.OpenQueryReadyBaseGeneration(baseBuilt.Bytes, baseIdentity)
+	if err != nil {
+		t.Fatalf("open base: %v", err)
+	}
+	secondIdentity := baseIdentity
+	secondIdentity.Generation++
+	secondBuilt, err := typedcolumn.BuildQueryReadyDeltaGeneration(secondIdentity, nil, []typedcolumn.Tombstone{{PrimaryID: 2, GenerationID: secondIdentity.Generation}})
+	if err != nil {
+		t.Fatalf("build second generation: %v", err)
+	}
+	second, err := typedcolumn.OpenQueryReadyDeltaGeneration(secondBuilt.Bytes, secondIdentity)
+	if err != nil {
+		t.Fatalf("open second generation: %v", err)
+	}
+	firstConsolidation, err := typedcolumn.ConsolidateQueryReadyBaseDelta(base, []*typedcolumn.QueryReadyDeltaGeneration{second}, secondIdentity.Generation)
+	if err != nil {
+		t.Fatalf("first consolidation: %v", err)
+	}
+	consolidated, err := typedcolumn.OpenQueryReadyConsolidatedBaseGeneration(firstConsolidation.Bytes, secondIdentity)
+	if err != nil {
+		t.Fatalf("open first consolidation: %v", err)
+	}
+	thirdIdentity := secondIdentity
+	thirdIdentity.Generation++
+	thirdImage := queryReadyBuildImage(t, thirdIdentity.Generation, []int64{1}, []int64{100})
+	thirdBuilt, err := typedcolumn.BuildQueryReadyDeltaGeneration(thirdIdentity, []typedcolumn.QueryReadyBasePartInput{{SourceGeneration: thirdIdentity.Generation, Image: thirdImage}}, nil)
+	if err != nil {
+		t.Fatalf("build third generation: %v", err)
+	}
+	third, err := typedcolumn.OpenQueryReadyDeltaGeneration(thirdBuilt.Bytes, thirdIdentity)
+	if err != nil {
+		t.Fatalf("open third generation: %v", err)
+	}
+	coordinator, err := newQueryReadyBuildCoordinator(col, queryReadyBuildLimits{MaxWorkers: 1, MaxInFlightBytes: 16 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := coordinator.prepare(context.Background(), queryReadyBuildRequest{
+		Kind: queryReadyBuildConsolidatedBase, Identity: thirdIdentity,
+		ConsolidatedBase: consolidated,
+		Deltas:           []*typedcolumn.QueryReadyDeltaGeneration{third}, ThroughGeneration: thirdIdentity.Generation,
+	})
+	if err != nil {
+		t.Fatalf("prepare reconsolidation: %v", err)
+	}
+	defer func() { _ = prepared.Abort() }()
+	raw, err := os.ReadFile(prepared.AssetPath)
+	if err != nil {
+		t.Fatalf("read prepared reconsolidation: %v", err)
+	}
+	start, end := prepared.Asset.Ref.Offset, prepared.Asset.Ref.Offset+prepared.Asset.Ref.Length
+	reconsolidated, err := typedcolumn.OpenQueryReadyConsolidatedBaseGeneration(raw[start:end], thirdIdentity)
+	if err != nil {
+		t.Fatalf("open prepared reconsolidation: %v", err)
+	}
+	if reconsolidated.OriginBaseParts != consolidated.OriginBaseParts || reconsolidated.AccumulatedDeltaParts != consolidated.AccumulatedDeltaParts+len(third.Base.Parts) || len(reconsolidated.Tombstones) != 1 {
+		t.Fatalf("reconsolidated lineage/tombstones=%d/%d/%v", reconsolidated.OriginBaseParts, reconsolidated.AccumulatedDeltaParts, reconsolidated.Tombstones)
+	}
+	reader, err := typedcolumn.NewQueryReadyConsolidatedBaseDeltaReader(reconsolidated, nil, typedcolumn.QueryReadyBaseDeltaOptions{SnapshotGeneration: thirdIdentity.Generation, Bound: typedcolumn.QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 4, MaxAccumulatedDeltaParts: 8}})
+	if err != nil {
+		t.Fatalf("prepare reconsolidated reader: %v", err)
+	}
+	if value, ok, err := reader.ValueAtLatest(2, "value"); err != nil || ok {
+		t.Fatalf("inherited deletion resurrected: value=%d ok=%v err=%v tombstones=%v", value, ok, err, reconsolidated.Tombstones)
+	}
+}
+
 func TestQueryReadyConsolidationRejectsDescriptorIdentityMismatchBeforeAdmission(t *testing.T) {
 	d, col, identity, parts := queryReadyBuildFixture(t, 13)
 	defer func() { _ = d.Close() }()

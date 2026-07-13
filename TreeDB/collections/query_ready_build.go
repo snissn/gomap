@@ -35,6 +35,7 @@ type queryReadyBuildRequest struct {
 	Parts             []typedcolumn.QueryReadyBasePartInput
 	Tombstones        []typedcolumn.Tombstone
 	Base              *typedcolumn.QueryReadyBaseGeneration
+	ConsolidatedBase  *typedcolumn.QueryReadyDeltaGeneration
 	Deltas            []*typedcolumn.QueryReadyDeltaGeneration
 	ThroughGeneration uint64
 	Bound             typedcolumn.QueryReadyDeltaBoundPolicy
@@ -218,7 +219,11 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 		return nil, err
 	}
 	if request.Kind == queryReadyBuildConsolidatedBase {
-		expected := typedcolumn.QueryReadyBaseIdentity{Generation: request.ThroughGeneration, SchemaHash: request.Base.Identity.SchemaHash}
+		base, _, err := queryReadyConsolidationBase(request)
+		if err != nil {
+			return nil, err
+		}
+		expected := typedcolumn.QueryReadyBaseIdentity{Generation: request.ThroughGeneration, SchemaHash: base.Identity.SchemaHash}
 		if request.Identity != expected {
 			return nil, fmt.Errorf("collections: query-ready consolidation identity=%+v want %+v", request.Identity, expected)
 		}
@@ -295,7 +300,13 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 		if policy == (typedcolumn.QueryReadyDeltaBoundPolicy{}) {
 			policy = typedcolumn.DefaultQueryReadyDeltaBoundPolicy()
 		}
-		built, err := typedcolumn.ConsolidateQueryReadyBaseDeltaWithPolicy(request.Base, request.Deltas, request.ThroughGeneration, policy)
+		var built typedcolumn.QueryReadyConsolidationResult
+		var err error
+		if request.ConsolidatedBase != nil {
+			built, err = typedcolumn.ConsolidateQueryReadyConsolidatedBaseDeltaWithPolicy(request.ConsolidatedBase, request.Deltas, request.ThroughGeneration, policy)
+		} else {
+			built, err = typedcolumn.ConsolidateQueryReadyBaseDeltaWithPolicy(request.Base, request.Deltas, request.ThroughGeneration, policy)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -385,10 +396,12 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 	}
 	tombstones := int64(len(request.Tombstones))
 	if request.Kind == queryReadyBuildConsolidatedBase {
-		if request.Base == nil {
-			return 0, errors.New("collections: query-ready consolidation requires base")
+		base, inheritedTombstones, err := queryReadyConsolidationBase(request)
+		if err != nil {
+			return 0, err
 		}
-		for _, view := range request.Base.Parts {
+		tombstones = int64(len(inheritedTombstones))
+		for _, view := range base.Parts {
 			if err := addPart(len(view.Image.Bytes)); err != nil {
 				return 0, err
 			}
@@ -436,6 +449,28 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 		}
 	}
 	return total, nil
+}
+
+func queryReadyConsolidationBase(request queryReadyBuildRequest) (*typedcolumn.QueryReadyBaseGeneration, []typedcolumn.Tombstone, error) {
+	if request.Base != nil && request.ConsolidatedBase != nil {
+		return nil, nil, errors.New("collections: query-ready consolidation requires exactly one base kind")
+	}
+	if request.ConsolidatedBase != nil {
+		if request.ConsolidatedBase.Kind != typedcolumn.QueryReadyGenerationConsolidatedBase || request.ConsolidatedBase.Base == nil {
+			return nil, nil, errors.New("collections: query-ready consolidation has invalid consolidated base")
+		}
+		if len(request.Tombstones) != 0 {
+			return nil, nil, errors.New("collections: query-ready consolidation tombstones must come from consolidated base")
+		}
+		return request.ConsolidatedBase.Base, request.ConsolidatedBase.Tombstones, nil
+	}
+	if request.Base == nil {
+		return nil, nil, errors.New("collections: query-ready consolidation requires base")
+	}
+	if len(request.Tombstones) != 0 {
+		return nil, nil, errors.New("collections: inherited tombstones require consolidated base")
+	}
+	return request.Base, nil, nil
 }
 
 func queryReadyRowsAsInt(rows int64) int {
