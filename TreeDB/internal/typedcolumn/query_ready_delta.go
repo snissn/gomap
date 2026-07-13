@@ -32,22 +32,30 @@ const (
 )
 
 type QueryReadyDeltaBuildStats struct {
-	Parts                 int
-	Rows                  int64
-	Tombstones            int
-	OriginBaseParts       int
-	AccumulatedDeltaParts int
-	InputBytes            int64
-	OutputBytes           int64
-	BytesCopied           int64
-	PeakWorkingBytes      int64
-	WriteAmplification    float64
-	BuildTime             time.Duration
+	Parts                  int
+	Rows                   int64
+	Tombstones             int
+	OriginBaseParts        int
+	AccumulatedDeltaParts  int
+	InputBytes             int64
+	OutputBytes            int64
+	BytesCopied            int64
+	BytesHashed            int64
+	BytesChecksummed       int64
+	BytesCompressed        int64
+	PeakEncodedBufferBytes int64
+	WriteAmplification     float64
+	ValidationTime         time.Duration
+	BaseBuildTime          time.Duration
+	TombstonePrepareTime   time.Duration
+	EnvelopeBuildTime      time.Duration
+	BuildTime              time.Duration
 }
 
 type QueryReadyDeltaBuildResult struct {
-	Bytes []byte
-	Stats QueryReadyDeltaBuildStats
+	Bytes        []byte
+	Dependencies []QueryReadyBaseDependency
+	Stats        QueryReadyDeltaBuildStats
 }
 
 type QueryReadyDeltaOpenStats struct {
@@ -139,14 +147,16 @@ func buildQueryReadyDeltaEnvelope(kind QueryReadyGenerationKind, identity QueryR
 	if kind == QueryReadyGenerationConsolidatedBase && lineage.OriginBaseParts+lineage.AccumulatedDeltaParts != len(parts) {
 		return QueryReadyDeltaBuildResult{}, fmt.Errorf("typedcolumn: query-ready consolidated lineage parts=%d+%d want embedded=%d", lineage.OriginBaseParts, lineage.AccumulatedDeltaParts, len(parts))
 	}
-	inner, err := BuildQueryReadyBaseGeneration(identity, parts)
+	basePlan, err := prepareQueryReadyBaseGeneration(identity, parts)
 	if err != nil {
 		return QueryReadyDeltaBuildResult{}, fmt.Errorf("typedcolumn: build query-ready generation parts: %w", err)
 	}
+	tombstoneStarted := time.Now()
 	normalized, err := normalizeQueryReadyTombstones(tombstones, identity.Generation)
 	if err != nil {
 		return QueryReadyDeltaBuildResult{}, err
 	}
+	tombstonePrepareTime := time.Since(tombstoneStarted)
 	if len(normalized) > (math.MaxInt-queryReadyDeltaHeaderBytes)/queryReadyDeltaTombstoneBytes || len(normalized) > math.MaxUint32 {
 		return QueryReadyDeltaBuildResult{}, fmt.Errorf("typedcolumn: query-ready tombstones=%d exceed format bounds", len(normalized))
 	}
@@ -155,10 +165,11 @@ func buildQueryReadyDeltaEnvelope(kind QueryReadyGenerationKind, identity QueryR
 	if err != nil {
 		return QueryReadyDeltaBuildResult{}, err
 	}
-	if len(inner.Bytes) > math.MaxInt-payloadOffset {
+	if basePlan.totalBytes > math.MaxInt-payloadOffset {
 		return QueryReadyDeltaBuildResult{}, errors.New("typedcolumn: query-ready delta image exceeds host size")
 	}
-	totalBytes := payloadOffset + len(inner.Bytes)
+	totalBytes := payloadOffset + basePlan.totalBytes
+	envelopeStarted := time.Now()
 	out := make([]byte, totalBytes)
 	binary.LittleEndian.PutUint32(out[0:4], queryReadyDeltaMagic)
 	binary.LittleEndian.PutUint16(out[4:6], queryReadyDeltaVersion)
@@ -168,7 +179,7 @@ func buildQueryReadyDeltaEnvelope(kind QueryReadyGenerationKind, identity QueryR
 	binary.LittleEndian.PutUint32(out[48:52], uint32(len(normalized)))
 	binary.LittleEndian.PutUint64(out[64:72], uint64(payloadOffset))
 	binary.LittleEndian.PutUint64(out[72:80], uint64(totalBytes))
-	binary.LittleEndian.PutUint64(out[80:88], uint64(len(inner.Bytes)))
+	binary.LittleEndian.PutUint64(out[80:88], uint64(basePlan.totalBytes))
 	binary.LittleEndian.PutUint32(out[88:92], uint32(lineage.OriginBaseParts))
 	binary.LittleEndian.PutUint32(out[92:96], uint32(lineage.AccumulatedDeltaParts))
 	table := out[queryReadyDeltaHeaderBytes : queryReadyDeltaHeaderBytes+tableBytes]
@@ -178,20 +189,29 @@ func buildQueryReadyDeltaEnvelope(kind QueryReadyGenerationKind, identity QueryR
 		binary.LittleEndian.PutUint64(entry[8:16], tombstone.GenerationID)
 	}
 	binary.LittleEndian.PutUint32(out[56:60], crc32.Checksum(table, queryReadyBaseCRCTable))
-	copy(out[payloadOffset:], inner.Bytes)
+	baseEncodeStarted := time.Now()
+	inner := encodeQueryReadyBaseGeneration(identity, basePlan, out[payloadOffset:])
+	baseEncodeTime := time.Since(baseEncodeStarted)
 	binary.LittleEndian.PutUint32(out[52:56], queryReadyDeltaHeaderChecksum(out[:queryReadyDeltaHeaderBytes]))
 	inputBytes := inner.Stats.InputBytes + int64(len(normalized)*queryReadyDeltaTombstoneBytes)
 	writeAmplification := float64(0)
 	if inputBytes > 0 {
 		writeAmplification = float64(len(out)) / float64(inputBytes)
 	}
-	return QueryReadyDeltaBuildResult{Bytes: out, Stats: QueryReadyDeltaBuildStats{
+	return QueryReadyDeltaBuildResult{Bytes: out, Dependencies: inner.Dependencies, Stats: QueryReadyDeltaBuildStats{
 		Parts: len(parts), Rows: inner.Stats.Rows, Tombstones: len(normalized),
 		OriginBaseParts: lineage.OriginBaseParts, AccumulatedDeltaParts: lineage.AccumulatedDeltaParts,
 		InputBytes: inputBytes, OutputBytes: int64(len(out)),
-		BytesCopied:        inner.Stats.BytesCopied + int64(len(inner.Bytes)+len(table)),
-		PeakWorkingBytes:   int64(len(inner.Bytes) + len(out)),
-		WriteAmplification: writeAmplification, BuildTime: time.Since(started),
+		BytesCopied:            inner.Stats.BytesCopied + int64(len(table)),
+		BytesHashed:            inner.Stats.InputBytes,
+		BytesChecksummed:       inner.Stats.BytesChecksummed + int64(len(table)+queryReadyDeltaHeaderBytes),
+		PeakEncodedBufferBytes: int64(len(out)),
+		WriteAmplification:     writeAmplification,
+		ValidationTime:         basePlan.validationTime,
+		BaseBuildTime:          basePlan.validationTime + baseEncodeTime,
+		TombstonePrepareTime:   tombstonePrepareTime,
+		EnvelopeBuildTime:      time.Since(envelopeStarted),
+		BuildTime:              time.Since(started),
 	}}, nil
 }
 
@@ -733,8 +753,10 @@ type QueryReadyConsolidationStats struct {
 	InputBytes               int64
 	OutputBytes              int64
 	BytesCopied              int64
+	BytesHashed              int64
+	BytesChecksummed         int64
 	WriteAmplification       float64
-	PeakWorkingBytes         int64
+	PeakEncodedBufferBytes   int64
 	CodeTranslations         int
 	DocumentMaterializations int
 	Fallbacks                int
@@ -742,8 +764,9 @@ type QueryReadyConsolidationStats struct {
 }
 
 type QueryReadyConsolidationResult struct {
-	Bytes []byte
-	Stats QueryReadyConsolidationStats
+	Bytes        []byte
+	Dependencies []QueryReadyBaseDependency
+	Stats        QueryReadyConsolidationStats
 }
 
 // ConsolidateQueryReadyBaseDelta deterministically folds the selected delta
@@ -838,10 +861,11 @@ func consolidateQueryReadyBaseDelta(base *QueryReadyBaseGeneration, baseTombston
 	if inputBytes > 0 {
 		writeAmplification = float64(len(built.Bytes)) / float64(inputBytes)
 	}
-	return QueryReadyConsolidationResult{Bytes: built.Bytes, Stats: QueryReadyConsolidationStats{
+	return QueryReadyConsolidationResult{Bytes: built.Bytes, Dependencies: built.Dependencies, Stats: QueryReadyConsolidationStats{
 		SelectedDeltaGenerations: len(selected), InputGenerations: 1 + len(selected), OutputGenerations: 1,
 		PartsMerged: len(parts), RowsMerged: built.Stats.Rows, TombstonesMerged: built.Stats.Tombstones,
 		InputBytes: inputBytes, OutputBytes: int64(len(built.Bytes)), BytesCopied: built.Stats.BytesCopied,
-		WriteAmplification: writeAmplification, PeakWorkingBytes: built.Stats.PeakWorkingBytes, BuildTime: time.Since(started),
+		BytesHashed: built.Stats.BytesHashed, BytesChecksummed: built.Stats.BytesChecksummed,
+		WriteAmplification: writeAmplification, PeakEncodedBufferBytes: built.Stats.PeakEncodedBufferBytes, BuildTime: time.Since(started),
 	}}, nil
 }

@@ -333,6 +333,9 @@ func BenchmarkQueryReadyBaseGenerationBuild(b *testing.B) {
 	}
 	b.ReportMetric(float64(len(sample.Bytes)), "asset-bytes")
 	b.ReportMetric(float64(len(sample.Bytes)-len(image.Bytes)), "overhead-bytes")
+	b.ReportMetric(float64(sample.Stats.BytesCopied), "copied-bytes/op")
+	b.ReportMetric(float64(sample.Stats.BytesHashed), "hashed-bytes/op")
+	b.ReportMetric(float64(sample.Stats.BytesChecksummed), "checksummed-bytes/op")
 }
 
 func BenchmarkQueryReadyBaseGenerationOpen(b *testing.B) {
