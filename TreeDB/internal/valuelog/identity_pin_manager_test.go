@@ -75,6 +75,72 @@ func TestManagerStartupCompletesMatchingStableDeleteQuarantine(t *testing.T) {
 	}
 }
 
+func TestReadOnlyManagerRejectsStableDeleteQuarantineWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	_, path := writeIdentityPinTestSegment(t, dir)
+	identity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewReadOnlyManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if manager != nil || !errors.Is(err, ErrStableDeleteRecoveryRequired) || !errors.Is(err, rootpublication.ErrRecoveryRequired) {
+		t.Fatalf("NewReadOnlyManager=(%v, %v), want specific and shared recovery errors", manager, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only open restored canonical path: %v", err)
+	}
+	if _, err := os.Stat(quarantinePath); err != nil {
+		t.Fatalf("read-only open changed quarantine inode: %v", err)
+	}
+	if _, err := os.Stat(quarantineDir); err != nil {
+		t.Fatalf("read-only open changed quarantine directory: %v", err)
+	}
+}
+
+func TestReadOnlyManagerRefreshRejectsNewStableDeleteQuarantineWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := NewReadOnlyManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	_, path := writeIdentityPinTestSegment(t, dir)
+	identity := identityPinTestIdentity(t, path)
+	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, quarantinePath); err != nil {
+		t.Fatal(err)
+	}
+
+	err = manager.Refresh()
+	if !errors.Is(err, ErrStableDeleteRecoveryRequired) || !errors.Is(err, rootpublication.ErrRecoveryRequired) {
+		t.Fatalf("Refresh() error = %v, want specific and shared recovery errors", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only refresh restored canonical path: %v", err)
+	}
+	if _, err := os.Stat(quarantinePath); err != nil {
+		t.Fatalf("read-only refresh changed quarantine inode: %v", err)
+	}
+	if _, err := os.Stat(quarantineDir); err != nil {
+		t.Fatalf("read-only refresh changed quarantine directory: %v", err)
+	}
+}
+
 func TestManagerStartupRestoresUnexpectedStableDeleteQuarantineIdentity(t *testing.T) {
 	dir := t.TempDir()
 	fileID, path := writeIdentityPinTestSegment(t, dir)

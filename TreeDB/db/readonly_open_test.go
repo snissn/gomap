@@ -39,6 +39,42 @@ func TestReadOnlyRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestReadOnlyOpenRejectsStableDeleteQuarantineWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	valueLogDir := resolveStorageLayout(dir).valueVLogDir
+	quarantineDir := filepath.Join(valueLogDir, ".value-l0-000001.log.delete-0000000000000001-00000000000000000000000000000001")
+	if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	openers := []struct {
+		name string
+		open func(Options) (*DB, error)
+	}{
+		{name: "shared_lock", open: func(opts Options) (*DB, error) { return Open(opts) }},
+		{name: "no_lock", open: openReadOnlyNoLock},
+	}
+	for _, opener := range openers {
+		t.Run(opener.name, func(t *testing.T) {
+			got, err := opener.open(Options{Dir: dir, ReadOnly: true})
+			if got != nil || !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("read-only open with pending stable delete=(%v, %v), want (nil, ErrRecoveryRequired)", got, err)
+			}
+			if _, err := os.Stat(quarantineDir); err != nil {
+				t.Fatalf("read-only open changed quarantine: %v", err)
+			}
+		})
+	}
+}
+
 func TestReadOnlyOpenDoesNotAcquireCommandJournalOwner(t *testing.T) {
 	dir := t.TempDir()
 

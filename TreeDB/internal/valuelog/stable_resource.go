@@ -388,6 +388,22 @@ func recoverStableDeleteQuarantines(parent string) error {
 	return nil
 }
 
+func requireNoStableDeleteQuarantines(parent string) error {
+	entries, err := os.ReadDir(parent)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if _, _, ok := parseStableDeleteQuarantineName(entry.Name()); ok && entry.IsDir() {
+			return fmt.Errorf("%w: %w: pending quarantine %q", ErrStableDeleteRecoveryRequired, rootpublication.ErrRecoveryRequired, filepath.Join(parent, entry.Name()))
+		}
+	}
+	return nil
+}
+
 func recoverStableDeleteQuarantine(parent, quarantineName, base string, expected rootpublication.StableIdentity) (bool, error) {
 	quarantineDir := filepath.Join(parent, quarantineName)
 	entries, err := os.ReadDir(quarantineDir)

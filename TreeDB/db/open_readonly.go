@@ -15,6 +15,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
+func wrapReadOnlyValueLogRecoveryError(err error) error {
+	if errors.Is(err, rootpublication.ErrRecoveryRequired) {
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	return err
+}
+
 func openReadOnly(opts Options) (*DB, error) {
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
@@ -53,17 +60,17 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
-	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
+	vm, err := valuelog.NewReadOnlyManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
 		_ = lock.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		_ = p.Close()
 		_ = lock.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
@@ -206,15 +213,15 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
-	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
+	vm, err := valuelog.NewReadOnlyManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		_ = p.Close()
-		return nil, err
+		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)

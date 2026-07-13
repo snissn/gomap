@@ -11,6 +11,10 @@ var ErrFileNotFound = errors.New("valuelog: file not found")
 // snapshot and cannot be removed yet.
 var ErrFilePinned = errors.New("valuelog: file pinned")
 
+// ErrStableDeleteRecoveryRequired reports an interrupted identity-gated
+// segment deletion that must be reconciled by a read-write manager.
+var ErrStableDeleteRecoveryRequired = errors.New("valuelog: stable delete recovery required")
+
 type fileNotFoundError struct {
 	id         uint32
 	inSnapshot bool

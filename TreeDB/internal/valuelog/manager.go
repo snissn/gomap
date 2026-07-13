@@ -1262,19 +1262,20 @@ type Manager struct {
 
 	refreshScans atomic.Uint64
 
-	disableReadChecksum        bool
-	dictLookup                 DictLookup
-	templateLookup             TemplateLookup
-	templateDecodeOpts         templ.DecodeOptions
-	templateDefCache           *templateDefCache
-	groupedFrameCacheEntries   int
-	groupedFrameCacheMaxRaw    int
-	groupedFrameCacheMaxBytes  int64
-	groupedFrameCacheBudget    *groupedFrameCacheBudget
-	currentWritableMmap        atomic.Bool
-	currentWritableReadBarrier atomic.Value
-	stableResourcePins         *rootpublication.IdentityPinRegistry
-	recoveredStableDeleteDirs  map[string]bool
+	disableReadChecksum         bool
+	dictLookup                  DictLookup
+	templateLookup              TemplateLookup
+	templateDecodeOpts          templ.DecodeOptions
+	templateDefCache            *templateDefCache
+	groupedFrameCacheEntries    int
+	groupedFrameCacheMaxRaw     int
+	groupedFrameCacheMaxBytes   int64
+	groupedFrameCacheBudget     *groupedFrameCacheBudget
+	currentWritableMmap         atomic.Bool
+	currentWritableReadBarrier  atomic.Value
+	stableResourcePins          *rootpublication.IdentityPinRegistry
+	recoveredStableDeleteDirs   map[string]bool
+	stableDeleteRecoveryEnabled bool
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -1285,15 +1286,27 @@ func NewManager(dir string) (*Manager, error) {
 // identity gate before the initial directory scan, so every tracked handle is
 // observed from the moment it becomes deletable.
 func NewManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
+	return newManagerWithStableResourcePinRegistry(dir, registry, true)
+}
+
+// NewReadOnlyManagerWithStableResourcePinRegistry opens segment handles
+// without reconciling interrupted stable deletions. Pending quarantine intents
+// fail with ErrStableDeleteRecoveryRequired and are left untouched.
+func NewReadOnlyManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
+	return newManagerWithStableResourcePinRegistry(dir, registry, false)
+}
+
+func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry, recoverStableDeletes bool) (*Manager, error) {
 	m := &Manager{
-		dir:                       dir,
-		files:                     make(map[uint32]*File),
-		currentWritableByLane:     make(map[uint32]uint32),
-		groupedFrameCacheEntries:  defaultGroupedFrameCacheEntries,
-		groupedFrameCacheMaxRaw:   defaultGroupedFrameCacheMaxRawBytes,
-		groupedFrameCacheMaxBytes: defaultGroupedFrameCacheMaxBytes,
-		stableResourcePins:        registry,
-		recoveredStableDeleteDirs: make(map[string]bool),
+		dir:                         dir,
+		files:                       make(map[uint32]*File),
+		currentWritableByLane:       make(map[uint32]uint32),
+		groupedFrameCacheEntries:    defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:     defaultGroupedFrameCacheMaxRawBytes,
+		groupedFrameCacheMaxBytes:   defaultGroupedFrameCacheMaxBytes,
+		stableResourcePins:          registry,
+		recoveredStableDeleteDirs:   make(map[string]bool),
+		stableDeleteRecoveryEnabled: recoverStableDeletes,
 	}
 	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
 	if err := m.Refresh(); err != nil {
@@ -1581,7 +1594,11 @@ func (m *Manager) Refresh() error {
 	}
 	m.mu.RUnlock()
 	for _, dir := range dirs {
-		if err := m.recoverStableDeleteDirOnce(dir); err != nil {
+		if m.stableDeleteRecoveryEnabled {
+			if err := m.recoverStableDeleteDirOnce(dir); err != nil {
+				return err
+			}
+		} else if err := requireNoStableDeleteQuarantines(dir); err != nil {
 			return err
 		}
 		segments, err := currentScanSegmentPaths()(dir)
