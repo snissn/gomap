@@ -126,10 +126,6 @@ type StableResourceToken struct {
 	Lease          *StableResourceLease
 }
 
-func (t StableResourceToken) key() string {
-	return string(t.Kind) + "\x00" + t.Namespace + "\x00" + t.Identity + "\x00" + fmt.Sprintf("%020d", t.Generation)
-}
-
 func (t StableResourceToken) validate() error {
 	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.Provider == nil {
 		return fmt.Errorf("%w: incomplete stable resource token kind=%q identity=%q", ErrInvalidCandidate, t.Kind, t.Identity)
@@ -166,6 +162,11 @@ func NewStableResourceSet(tokens []StableResourceToken) (StableResourceSet, erro
 // at the only authority that can classify them, without a process-global sink.
 func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *StableResourceMetricsRecorder) (StableResourceSet, error) {
 	copyTokens := append([]StableResourceToken(nil), tokens...)
+	type orderEntry struct {
+		token *StableResourceToken
+		hash  uint64
+	}
+	ordered := make([]orderEntry, len(copyTokens))
 	for i := range copyTokens {
 		reachableBy, err := canonicalReachability(copyTokens[i].ReachableBy)
 		if err != nil {
@@ -175,17 +176,24 @@ func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *Stab
 			return StableResourceSet{}, err
 		}
 		copyTokens[i].ReachableBy = reachableBy
+		ordered[i] = orderEntry{token: &copyTokens[i], hash: stableResourceKeyHash(copyTokens[i])}
 	}
-	sort.Slice(copyTokens, func(i, j int) bool { return copyTokens[i].key() < copyTokens[j].key() })
-	out := copyTokens[:0]
-	for _, token := range copyTokens {
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].hash != ordered[j].hash {
+			return ordered[i].hash < ordered[j].hash
+		}
+		return stableResourceTokenLess(*ordered[i].token, *ordered[j].token)
+	})
+	out := make([]StableResourceToken, 0, len(copyTokens))
+	for _, source := range ordered {
+		token := *source.token
 		if err := token.validate(); err != nil {
 			if metrics != nil {
 				metrics.ObserveRejected()
 			}
 			return StableResourceSet{}, err
 		}
-		if len(out) == 0 || out[len(out)-1].key() != token.key() {
+		if len(out) == 0 || !sameStableResourceKey(out[len(out)-1], token) {
 			out = append(out, token)
 			continue
 		}
@@ -201,7 +209,54 @@ func NewStableResourceSetWithMetrics(tokens []StableResourceToken, metrics *Stab
 		}
 		out[len(out)-1] = merged
 	}
-	return StableResourceSet{tokens: append([]StableResourceToken(nil), out...)}, nil
+	return StableResourceSet{tokens: out}, nil
+}
+
+// stableResourceKeyHash provides a deterministic primary order so large sets
+// do not repeatedly compare or allocate opaque identity strings during sort.
+// Full fields break the extraordinarily rare FNV collision.
+func stableResourceKeyHash(token StableResourceToken) uint64 {
+	const (
+		offset64 = uint64(14695981039346656037)
+		prime64  = uint64(1099511628211)
+	)
+	hash := offset64
+	add := func(value string) {
+		for i := 0; i < len(value); i++ {
+			hash ^= uint64(value[i])
+			hash *= prime64
+		}
+		hash ^= 0xff
+		hash *= prime64
+	}
+	add(string(token.Kind))
+	add(token.Namespace)
+	add(token.Identity)
+	for shift := uint(0); shift < 64; shift += 8 {
+		hash ^= uint64(byte(token.Generation >> shift))
+		hash *= prime64
+	}
+	return hash
+}
+
+func stableResourceTokenLess(left, right StableResourceToken) bool {
+	if left.Kind != right.Kind {
+		return left.Kind < right.Kind
+	}
+	if left.Namespace != right.Namespace {
+		return left.Namespace < right.Namespace
+	}
+	if left.Identity != right.Identity {
+		return left.Identity < right.Identity
+	}
+	return left.Generation < right.Generation
+}
+
+func sameStableResourceKey(left, right StableResourceToken) bool {
+	return left.Kind == right.Kind &&
+		left.Namespace == right.Namespace &&
+		left.Identity == right.Identity &&
+		left.Generation == right.Generation
 }
 
 func mergeStableResourceToken(left, right StableResourceToken) (StableResourceToken, error) {
@@ -250,6 +305,9 @@ func mergeStableNamespaceToken(left, right StableNamespaceToken) (StableNamespac
 const stableReachabilitySeparator = "\x1e"
 
 func canonicalReachability(value string) (string, error) {
+	if value != "" && !strings.ContainsAny(value, "\x00\x1e") && strings.TrimSpace(value) == value {
+		return value, nil
+	}
 	parts := strings.Split(value, stableReachabilitySeparator)
 	fields := make([]string, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))

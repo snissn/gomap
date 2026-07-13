@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"testing"
 )
@@ -120,6 +121,32 @@ func TestStableResourceTokenCoalescingPreservesReachabilityUnion(t *testing.T) {
 	}
 	if tokens[0].Frontier != 7 {
 		t.Fatalf("frontier=%d want 7", tokens[0].Frontier)
+	}
+}
+
+func TestStableResourceTokenNormalizationOrderIsInputIndependent(t *testing.T) {
+	tokens := []StableResourceToken{
+		stableToken("inode-c", 1, 1, func(context.Context, uint64) error { return nil }),
+		stableToken("inode-a", 1, 1, func(context.Context, uint64) error { return nil }),
+		stableToken("inode-b", 1, 1, func(context.Context, uint64) error { return nil }),
+	}
+	forward, err := NewStableResourceSet(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed, err := NewStableResourceSet([]StableResourceToken{tokens[2], tokens[1], tokens[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities := func(set StableResourceSet) []string {
+		out := make([]string, 0, set.Len())
+		for _, token := range set.Tokens() {
+			out = append(out, token.Identity)
+		}
+		return out
+	}
+	if got, want := fmt.Sprint(identities(reversed)), fmt.Sprint(identities(forward)); got != want {
+		t.Fatalf("reversed order=%s want %s", got, want)
 	}
 }
 
@@ -314,5 +341,27 @@ func BenchmarkStableResourceTokenConstructionAndCoalescing(b *testing.B) {
 		}
 		b.ReportMetric(float64(set.Len()), "descriptors/op")
 		b.ReportMetric(float64(set.Len()), "pins/op")
+	}
+}
+
+func BenchmarkStableResourceTokenNormalizationScale(b *testing.B) {
+	for _, count := range []int{1_000, 10_000, 65_000} {
+		b.Run("tokens="+strconv.Itoa(count), func(b *testing.B) {
+			tokens := make([]StableResourceToken, count)
+			for i := range tokens {
+				tokens[i] = stableToken("inode-"+strconv.Itoa(i), 1, uint64(i+1), func(context.Context, uint64) error { return nil })
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				set, err := NewStableResourceSet(tokens)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if set.Len() != count {
+					b.Fatalf("tokens=%d want %d", set.Len(), count)
+				}
+			}
+		})
 	}
 }
