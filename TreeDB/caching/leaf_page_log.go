@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -19,6 +20,7 @@ var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
 var _ backenddb.StableOuterLeafSegmentRegistrar = (*cachingLeafPageLog)(nil)
+var _ backenddb.StableOuterLeafAppender = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
 var compactLeafLogPayloadScratchPtrRefPool sync.Pool
@@ -199,23 +201,42 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 }
 
 func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	ptrs, _, err := l.appendLeafPages(leafPages, rootpublication.StableResourceSpec{}, false)
+	return ptrs, err
+}
+
+// AppendLeafPagesAndRegisterStableResources preserves the ordinary raw
+// outer-leaf encoding and append path while capturing every exact segment
+// before the lane can rotate away from it.
+func (l *cachingLeafPageLog) AppendLeafPagesAndRegisterStableResources(
+	leafPages [][]byte,
+	spec rootpublication.StableResourceSpec,
+) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return l.appendLeafPages(leafPages, spec, true)
+}
+
+func (l *cachingLeafPageLog) appendLeafPages(
+	leafPages [][]byte,
+	spec rootpublication.StableResourceSpec,
+	captureStable bool,
+) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if l == nil || l.db == nil || l.lane == nil {
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	if len(leafPages) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	if len(leafPages) == 1 {
+	if len(leafPages) == 1 && !captureStable {
 		ptr, err := l.AppendLeafPage(leafPages[0])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []page.LeafLogPtr{ptr}, nil
+		return []page.LeafLogPtr{ptr}, nil, nil
 	}
 
 	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	records := getValueLogRecordsCap(len(leafPages))
 	records = records[:len(leafPages)]
@@ -247,7 +268,7 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 		if err != nil {
 			putCompactLeafLogPayloadScratch(scratch)
 			observeEncode()
-			return nil, err
+			return nil, nil, err
 		}
 		if compacted {
 			if scratchRef == nil {
@@ -266,25 +287,57 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 	}
 	observeEncode()
 
-	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	var tokens []*rootpublication.StableResourceToken
+	releaseTokens := func() {
+		for _, token := range tokens {
+			_ = token.Release()
+		}
+	}
+	var capture valueLogAppendCapture
+	if captureStable {
+		capture = func(segmentPtrs []page.ValuePtr) error {
+			fileID, frontier, captureErr := exactValuePtrFrontier(segmentPtrs)
+			if captureErr != nil {
+				return captureErr
+			}
+			token, captureErr := l.db.registerStableLaneResourceMuHeld(l.lane, fileID, frontier, rootpublication.ResourceOuterLeafSegment, spec)
+			if captureErr != nil {
+				return captureErr
+			}
+			tokens = append(tokens, token)
+			return nil
+		}
+	}
+	valuePtrs, err := l.db.appendValueLogWithCapture(l.lane, 0, nil, records, journalDurabilityNone, capture)
 	if err != nil {
 		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
-		return nil, err
+		releaseTokens()
+		return nil, nil, err
 	}
 	defer putValueLogPtrs(valuePtrs)
 	if len(valuePtrs) != len(leafPages) {
-		return nil, fmt.Errorf("cachingdb: leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+		releaseTokens()
+		return nil, nil, fmt.Errorf("cachingdb: leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
 	}
 	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
 	for i, ptr := range valuePtrs {
 		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 		if convErr != nil {
-			return nil, convErr
+			releaseTokens()
+			return nil, nil, convErr
 		}
 		leafPtrs[i] = leafPtr
 		l.db.noteLeafGenerationRecordLength(ptr)
 	}
-	return leafPtrs, nil
+	if !captureStable {
+		return leafPtrs, nil, nil
+	}
+	set, err := rootpublication.NewStableResourceSet(tokens...)
+	if err != nil {
+		releaseTokens()
+		return nil, nil, err
+	}
+	return leafPtrs, set, nil
 }
 
 func (l *cachingLeafPageLog) AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error) {

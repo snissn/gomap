@@ -20,6 +20,19 @@ type StableOuterLeafSegmentRegistrar interface {
 	RegisterStableOuterLeafSegment([]page.LogRecordRef, rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)
 }
 
+// StableValueLogAppender is the atomic producer boundary used by root
+// candidate construction. The returned set owns every segment referenced by
+// the returned pointers, including batches split by rotation.
+type StableValueLogAppender interface {
+	AppendValuesAndRegisterStableResources([][]byte, rootpublication.StableResourceSpec) ([]page.ValuePtr, *rootpublication.StableResourceSet, error)
+}
+
+// StableOuterLeafAppender is the raw outer-leaf counterpart of
+// StableValueLogAppender.
+type StableOuterLeafAppender interface {
+	AppendLeafPagesAndRegisterStableResources([][]byte, rootpublication.StableResourceSpec) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error)
+}
+
 // SetValueLogStableResourcePinRegistry injects the DB-scoped physical-identity
 // gate shared with every cached-mode value-log manager. The registry is
 // intentionally explicit: two managers that can delete the same segment must
@@ -73,4 +86,31 @@ func (db *DB) RegisterStableOuterLeafSegment(refs []page.LogRecordRef, spec root
 		return nil, fmt.Errorf("treedb: outer-leaf producer does not support stable resource capture")
 	}
 	return registrar.RegisterStableOuterLeafSegment(refs, spec)
+}
+
+// AppendValuesAndRegisterStableResources appends through the installed value
+// producer and returns ownership of every exact segment needed by the result.
+// #3679 owns attaching the set to a prepared root and publishing visibility.
+func (db *DB) AppendValuesAndRegisterStableResources(values [][]byte, spec rootpublication.StableResourceSpec) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+	if db == nil {
+		return nil, nil, fmt.Errorf("treedb: stable value-log producer unavailable")
+	}
+	appender, ok := db.currentValueLogAppender().(StableValueLogAppender)
+	if !ok || appender == nil {
+		return nil, nil, fmt.Errorf("treedb: value-log producer does not support atomic stable resource capture")
+	}
+	return appender.AppendValuesAndRegisterStableResources(values, spec)
+}
+
+// AppendLeafPagesAndRegisterStableResources appends raw outer-leaf pages and
+// returns ownership of every exact segment needed by the result.
+func (db *DB) AppendLeafPagesAndRegisterStableResources(leafPages [][]byte, spec rootpublication.StableResourceSpec) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	if db == nil || db.leafPageLog == nil {
+		return nil, nil, fmt.Errorf("treedb: stable outer-leaf producer unavailable")
+	}
+	appender, ok := db.leafPageLog.(StableOuterLeafAppender)
+	if !ok || appender == nil {
+		return nil, nil, fmt.Errorf("treedb: outer-leaf producer does not support atomic stable resource capture")
+	}
+	return appender.AppendLeafPagesAndRegisterStableResources(leafPages, spec)
 }

@@ -2976,12 +2976,18 @@ func (db *DB) valueLogDictClassRangesForRecords(records []valuelog.Record) []val
 	return ranges
 }
 
+type valueLogAppendCapture func([]page.ValuePtr) error
+
 func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+	return db.appendValueLogForRecordsWithCapture(l, records, durability, nil)
+}
+
+func (db *DB) appendValueLogForRecordsWithCapture(l *lane, records []valuelog.Record, durability journalDurability, capture valueLogAppendCapture) ([]page.ValuePtr, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
 	if db != nil && db.dictStore == nil {
-		return db.appendValueLog(l, 0, nil, records, durability)
+		return db.appendValueLogWithCapture(l, 0, nil, records, durability, capture)
 	}
 	ranges := db.valueLogDictClassRangesForRecords(records)
 	if len(ranges) == 0 {
@@ -3017,7 +3023,7 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 		if err != nil {
 			return nil, err
 		}
-		return db.appendValueLog(l, dictID, nil, records, durability)
+		return db.appendValueLogWithCapture(l, dictID, nil, records, durability, capture)
 	}
 	// Highly alternating class layouts can explode contiguous ranges and
 	// degrade batching. Re-pack by class to bound append calls.
@@ -3051,7 +3057,7 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 				putValueLogPtrs(ptrs)
 				return nil, err
 			}
-			segPtrs, err := db.appendValueLog(l, dictID, nil, recs, durability)
+			segPtrs, err := db.appendValueLogWithCapture(l, dictID, nil, recs, durability, capture)
 			if err != nil {
 				putValueLogPtrs(ptrs)
 				return nil, err
@@ -3079,7 +3085,7 @@ func (db *DB) appendValueLogForRecords(l *lane, records []valuelog.Record, durab
 			putValueLogPtrs(ptrs)
 			return nil, err
 		}
-		segPtrs, err := db.appendValueLog(l, dictID, nil, records[r.start:r.end], durability)
+		segPtrs, err := db.appendValueLogWithCapture(l, dictID, nil, records[r.start:r.end], durability, capture)
 		if err != nil {
 			putValueLogPtrs(ptrs)
 			return nil, err
@@ -16793,6 +16799,10 @@ func (db *DB) prepareAppendFrames(
 }
 
 func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+	return db.appendValueLogWithCapture(l, dictID, dict, records, durability, nil)
+}
+
+func (db *DB) appendValueLogWithCapture(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture valueLogAppendCapture) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
 	}
@@ -17174,6 +17184,22 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	rawBatchUsed := false
 	flushedBoundary := false
 	syncedBoundary := false
+	captureStart := 0
+	capturePending := func(end int) error {
+		if capture == nil || end <= captureStart {
+			captureStart = end
+			return nil
+		}
+		if err := capture(ptrs[captureStart:end]); err != nil {
+			return err
+		}
+		// Stable-resource construction flushes the exact current writer before
+		// duplicating its descriptor. Treat that as an ordinary materialization
+		// boundary for lane accounting.
+		flushedBoundary = true
+		captureStart = end
+		return nil
+	}
 	if dictID == 0 && (hasRawInto || hasRawBufferedInto) && finalWriteMode != vlogWriteBlock && len(records) > 1 {
 		if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
@@ -17220,6 +17246,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		for fi := range preparedDictFrames {
 			pf := &preparedDictFrames[fi]
 			if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 && len(pf.body) > 0 && w.Size() > maxBytes-int64(len(pf.body)) {
+				if captureErr := capturePending(pf.start); captureErr != nil {
+					err = captureErr
+					break
+				}
 				if delta := w.Size() - segmentStartSize; delta > 0 {
 					bytesWrittenTotal += delta
 				}
@@ -17302,6 +17332,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
 			if i > 0 && i%4096 == 0 {
+				if captureErr := capturePending(i); captureErr != nil {
+					err = captureErr
+					break
+				}
 				if leafLogAppend {
 					appendHold += time.Since(lockHoldStart)
 				}
@@ -17342,6 +17376,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 			if err == nil {
 				if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 && w.Size() > maxBytes {
+					if captureErr := capturePending(i); captureErr != nil {
+						err = captureErr
+						break
+					}
 					if delta := w.Size() - segmentStartSize; delta > 0 {
 						bytesWrittenTotal += delta
 					}
@@ -17456,6 +17494,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				flushedBoundary = err == nil
 			}
 		}
+	}
+	if err == nil {
+		err = capturePending(len(ptrs))
 	}
 	if err == nil {
 		bytesWrittenLive = w.Size() - segmentStartSize

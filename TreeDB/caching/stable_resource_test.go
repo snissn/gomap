@@ -3,16 +3,280 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication/osadapter"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type blockingStableValueWriter struct {
+	*valuelog.Writer
+	entered chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingStableValueWriter) Flush() error {
+	w.once.Do(func() { close(w.entered) })
+	<-w.release
+	return w.Writer.Flush()
+}
+
+func TestAppendValuesAndRegisterStableResourcesCapturesBeforeCompetingRotation(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, valueLogName(1, 1))
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseFlush := make(chan struct{})
+	blocking := &blockingStableValueWriter{
+		Writer:  writer,
+		entered: make(chan struct{}),
+		release: releaseFlush,
+	}
+	db := &DB{
+		dir:                     dir,
+		valueLogDir:             dir,
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+		stableResourcePins:      rootpublication.NewIdentityPinRegistry(),
+	}
+	lane := &lane{id: 1, vlog: blocking, vlogPath: path, vlogSeq: 1}
+	appender := &cachingValueLogAppender{db: db, lane: lane}
+
+	type appendResult struct {
+		ptrs []page.ValuePtr
+		set  *rootpublication.StableResourceSet
+		err  error
+	}
+	appendDone := make(chan appendResult, 1)
+	go func() {
+		ptrs, set, appendErr := appender.AppendValuesAndRegisterStableResources(
+			[][]byte{[]byte("stable-before-rotation")},
+			rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.value_ptr"},
+		)
+		appendDone <- appendResult{ptrs: ptrs, set: set, err: appendErr}
+	}()
+	<-blocking.entered
+
+	rotateAttempted := make(chan struct{})
+	rotateDone := make(chan error, 1)
+	go func() {
+		close(rotateAttempted)
+		rotateDone <- db.rotateValueLogLocked(lane)
+	}()
+	<-rotateAttempted
+	close(releaseFlush)
+
+	result := <-appendDone
+	if result.err != nil {
+		t.Fatalf("AppendValuesAndRegisterStableResources: %v", result.err)
+	}
+	if err := <-rotateDone; err != nil {
+		t.Fatalf("competing rotation: %v", err)
+	}
+	defer func() { _ = result.set.Release() }()
+	defer func() { _ = writer.Close() }()
+	if len(result.ptrs) != 1 || result.ptrs[0].FileID != fileID {
+		t.Fatalf("returned pointers = %+v, want original file id %d", result.ptrs, fileID)
+	}
+	tokens := result.set.Tokens()
+	if len(tokens) != 1 {
+		t.Fatalf("stable token count = %d, want 1", len(tokens))
+	}
+	oldFile, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIdentity, err := osadapter.ResourceIdentity(oldFile)
+	_ = oldFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens[0].Identity() != oldIdentity {
+		t.Fatalf("captured identity = %+v, want original inode %+v", tokens[0].Identity(), oldIdentity)
+	}
+	if got := blocking.FileID(); got == fileID {
+		t.Fatalf("competing rotation did not replace writer file id %d", got)
+	}
+}
+
+func TestAppendValuesAndRegisterStableResourcesPreservesMaxSegmentRotation(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, valueLogName(2, 1))
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Append(0, nil, 1, bytes.Repeat([]byte("s"), 192)); err != nil {
+		t.Fatal(err)
+	}
+	db := &DB{
+		dir:                     dir,
+		valueLogDir:             dir,
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+		valueLogMaxSegmentBytes: 256,
+		stableResourcePins:      rootpublication.NewIdentityPinRegistry(),
+	}
+	lane := &lane{id: 2, vlog: writer, vlogPath: path, vlogSeq: 1}
+	ptrs, set, err := (&cachingValueLogAppender{db: db, lane: lane}).AppendValuesAndRegisterStableResources(
+		[][]byte{bytes.Repeat([]byte("a"), 32), bytes.Repeat([]byte("b"), 32)},
+		rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.value_ptr"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if lane.vlogSeq != 2 {
+		t.Fatalf("value-log sequence = %d, want preflight rotation to 2", lane.vlogSeq)
+	}
+	if len(ptrs) != 2 || ptrs[0].FileID == fileID || ptrs[1].FileID != ptrs[0].FileID {
+		t.Fatalf("rotated pointers = %+v, want one new segment", ptrs)
+	}
+	tokens := set.Tokens()
+	if len(tokens) != 1 || tokens[0].Kind() != rootpublication.ResourceValueLogSegment {
+		t.Fatalf("rotated stable tokens = %+v", tokens)
+	}
+}
+
+func TestAppendValuesAndRegisterStableResourcesReturnsSetAcrossInternalRotation(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := valuelog.EncodeFileID(3, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, valueLogName(3, 1))
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	db := &DB{
+		dir:                     dir,
+		valueLogDir:             dir,
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionBlock),
+		valueLogMaxSegmentBytes: 256,
+		relaxedSync:             true,
+		stableResourcePins:      rootpublication.NewIdentityPinRegistry(),
+	}
+	lane := &lane{id: 3, vlog: writer, vlogPath: path, vlogSeq: 1}
+	values := make([][]byte, 512)
+	for i := range values {
+		value := make([]byte, 128)
+		for j := range value {
+			value[j] = byte(i*31 + j*17 + i*j)
+		}
+		values[i] = value
+	}
+	ptrs, set, err := (&cachingValueLogAppender{db: db, lane: lane}).AppendValuesAndRegisterStableResources(
+		values,
+		rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.value_ptr"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	fileIDs := make(map[uint32]struct{})
+	for _, ptr := range ptrs {
+		fileIDs[ptr.FileID] = struct{}{}
+	}
+	if len(fileIDs) < 2 {
+		t.Fatalf("internal max-segment rotation produced %d segment(s), want at least 2", len(fileIDs))
+	}
+	if got := len(set.Tokens()); got != len(fileIDs) {
+		t.Fatalf("stable token count = %d, want one for each of %d referenced segments", got, len(fileIDs))
+	}
+}
+
+func TestAppendLeafPagesAndRegisterStableResourcesPreservesCompaction(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := filepath.Join(dir, "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(leafLogLaneID), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(leafDir, valueLogName(leafLogLaneID, 1))
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	db := &DB{
+		dir:                        dir,
+		leafLogDir:                 leafDir,
+		closeCh:                    make(chan struct{}),
+		indexOuterLeavesInValueLog: true,
+		valueLogCompressionMode:    uint8(vlogCompressionOff),
+		stableResourcePins:         rootpublication.NewIdentityPinRegistry(),
+	}
+	db.leafLog = lane{id: leafLogLaneID, vlog: writer, vlogPath: path, vlogSeq: 1}
+	leafLog := &cachingLeafPageLog{db: db, lane: &db.leafLog}
+	pages := [][]byte{
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'x'),
+		buildSparseLeafPageForLeafLogTestWithTag(t, 'y'),
+	}
+	for i, leafPage := range pages {
+		if _, compacted, err := valuelog.MaybeCompactLeafLogPayload(leafPage); err != nil || !compacted {
+			t.Fatalf("leaf page %d compactability = %v, %v", i, compacted, err)
+		}
+	}
+	refs, set, err := leafLog.AppendLeafPagesAndRegisterStableResources(
+		pages,
+		rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.outer_leaf"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := valuelog.NewReader(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for i, want := range pages {
+		_, got, gotPtr, err := reader.ReadNext()
+		if err != nil {
+			t.Fatalf("ReadNext(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("compacted outer leaf %d did not round-trip", i)
+		}
+		gotRef, err := page.LeafLogPtrFromValuePtr(gotPtr)
+		if err != nil || gotRef != refs[i] {
+			t.Fatalf("outer leaf ref %d = %+v, %v; want %+v", i, gotRef, err, refs[i])
+		}
+	}
+	tokens := set.Tokens()
+	if len(tokens) != 1 || tokens[0].Kind() != rootpublication.ResourceOuterLeafSegment {
+		t.Fatalf("outer-leaf stable tokens = %+v", tokens)
+	}
+}
 
 func TestStableValueLogRegistrationRetainsExactWriterAcrossRotation(t *testing.T) {
 	dir := t.TempDir()
@@ -256,6 +520,19 @@ func TestBackendCandidateBoundaryReachesExactCachingProducer(t *testing.T) {
 		t.Fatalf("backend token kind = %s", token.Kind())
 	}
 	if err := token.Release(); err != nil {
+		t.Fatal(err)
+	}
+	atomicPtrs, set, err := backend.AppendValuesAndRegisterStableResources(
+		[][]byte{[]byte("atomic-candidate-bound value")},
+		rootpublication.StableResourceSpec{ReachabilityField: "prepared_root.atomic_value_ptr"},
+	)
+	if err != nil {
+		t.Fatalf("backend AppendValuesAndRegisterStableResources: %v", err)
+	}
+	if len(atomicPtrs) != 1 || set == nil || len(set.Tokens()) != 1 {
+		t.Fatalf("backend atomic producer returned ptrs=%+v set=%v", atomicPtrs, set)
+	}
+	if err := set.Release(); err != nil {
 		t.Fatal(err)
 	}
 }

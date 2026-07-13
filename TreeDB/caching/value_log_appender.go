@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -19,24 +20,44 @@ type cachingValueLogAppender struct {
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
 var _ backenddb.ValueLogExternalRefFlusher = (*cachingValueLogAppender)(nil)
 var _ backenddb.StableValueLogSegmentRegistrar = (*cachingValueLogAppender)(nil)
+var _ backenddb.StableValueLogAppender = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}
 }
 
 func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	ptrs, _, err := a.appendValues(values, rootpublication.StableResourceSpec{}, false)
+	return ptrs, err
+}
+
+// AppendValuesAndRegisterStableResources appends through the ordinary
+// production path and captures every exact segment before the lane lock can be
+// released or rotation can replace its writer.
+func (a *cachingValueLogAppender) AppendValuesAndRegisterStableResources(
+	values [][]byte,
+	spec rootpublication.StableResourceSpec,
+) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+	return a.appendValues(values, spec, true)
+}
+
+func (a *cachingValueLogAppender) appendValues(
+	values [][]byte,
+	spec rootpublication.StableResourceSpec,
+	captureStable bool,
+) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
 	if a == nil || a.db == nil || a.lane == nil {
-		return nil, errWALUnavailable
+		return nil, nil, errWALUnavailable
 	}
 	if len(values) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceValueLog, a.db.dir); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	startRID, err := a.db.ReserveValueLogRIDs(len(values))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	records := getValueLogRecords(len(values))
 	defer putValueLogRecordsNoClear(records)
@@ -46,21 +67,53 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 			Value: values[i],
 		}
 	}
-	ptrs, err := a.db.appendValueLogForRecords(a.lane, records, journalDurabilityNone)
+	var tokens []*rootpublication.StableResourceToken
+	releaseTokens := func() {
+		for _, token := range tokens {
+			_ = token.Release()
+		}
+	}
+	var capture valueLogAppendCapture
+	if captureStable {
+		capture = func(segmentPtrs []page.ValuePtr) error {
+			fileID, frontier, captureErr := exactValuePtrFrontier(segmentPtrs)
+			if captureErr != nil {
+				return captureErr
+			}
+			token, captureErr := a.db.registerStableLaneResourceMuHeld(a.lane, fileID, frontier, rootpublication.ResourceValueLogSegment, spec)
+			if captureErr != nil {
+				return captureErr
+			}
+			tokens = append(tokens, token)
+			return nil
+		}
+	}
+	ptrs, err := a.db.appendValueLogForRecordsWithCapture(a.lane, records, journalDurabilityNone, capture)
 	if err != nil {
-		return nil, err
+		releaseTokens()
+		return nil, nil, err
 	}
 	if err := a.emitDependencyAppend(ptrs); err != nil {
 		putValueLogPtrs(ptrs)
-		return nil, err
+		releaseTokens()
+		return nil, nil, err
 	}
 	if len(ptrs) != len(values) {
 		putValueLogPtrs(ptrs)
-		return nil, fmt.Errorf("cachingdb: value-log appender returned %d ptrs for %d values", len(ptrs), len(values))
+		releaseTokens()
+		return nil, nil, fmt.Errorf("cachingdb: value-log appender returned %d ptrs for %d values", len(ptrs), len(values))
 	}
 	out := append([]page.ValuePtr(nil), ptrs...)
 	putValueLogPtrs(ptrs)
-	return out, nil
+	if !captureStable {
+		return out, nil, nil
+	}
+	set, err := rootpublication.NewStableResourceSet(tokens...)
+	if err != nil {
+		releaseTokens()
+		return nil, nil, err
+	}
+	return out, set, nil
 }
 
 func (a *cachingValueLogAppender) emitDependencyAppend(ptrs []page.ValuePtr) error {
