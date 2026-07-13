@@ -2044,6 +2044,38 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	return val, ptr, flags, found
 }
 
+func (m *AppendOnly) lookupEntryLocked(key []byte) *appendOnlyEntry {
+	if ent := m.orderedLookupEntryLocked(key); ent != nil {
+		return ent
+	}
+	if m.ordered {
+		return nil
+	}
+	if len(m.sortedRuns) > 0 {
+		return m.lookupSortedRunsEntryLocked(key)
+	}
+	if m.latestDirty {
+		return nil
+	}
+	if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
+		if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+			ent := &m.entries[idx]
+			if bytes.Equal(appendOnlyEntryKey(ent), key) {
+				return ent
+			}
+		}
+	}
+	if m.latest != nil {
+		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+			ent := &m.entries[idx]
+			if bytes.Equal(appendOnlyEntryKey(ent), key) {
+				return ent
+			}
+		}
+	}
+	return nil
+}
+
 func (m *AppendOnly) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	if m.frozenFast.Load() {
 		val, ptr, flags, revision, found, ok := m.getEntryFrozen(key)
@@ -2053,7 +2085,7 @@ func (m *AppendOnly) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, by
 	}
 	for {
 		m.mu.RLock()
-		if ent := m.orderedLookupEntryLocked(key); ent != nil {
+		if ent := m.lookupEntryLocked(key); ent != nil {
 			val := ent.value
 			ptr := ent.ptr
 			flags := ent.flags
@@ -2061,51 +2093,7 @@ func (m *AppendOnly) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, by
 			m.mu.RUnlock()
 			return val, ptr, flags, revision, true
 		}
-		if m.ordered {
-			m.mu.RUnlock()
-			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
-		}
-
-		if len(m.sortedRuns) > 0 {
-			if ent := m.lookupSortedRunsEntryLocked(key); ent != nil {
-				val := ent.value
-				ptr := ent.ptr
-				flags := ent.flags
-				revision := ent.revision
-				m.mu.RUnlock()
-				return val, ptr, flags, revision, true
-			}
-			m.mu.RUnlock()
-			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
-		}
-
-		if !m.latestDirty {
-			if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
-				if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
-					ent := &m.entries[idx]
-					if bytes.Equal(appendOnlyEntryKey(ent), key) {
-						val := ent.value
-						ptr := ent.ptr
-						flags := ent.flags
-						revision := ent.revision
-						m.mu.RUnlock()
-						return val, ptr, flags, revision, true
-					}
-				}
-			}
-			if m.latest != nil {
-				if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
-					ent := &m.entries[idx]
-					if bytes.Equal(appendOnlyEntryKey(ent), key) {
-						val := ent.value
-						ptr := ent.ptr
-						flags := ent.flags
-						revision := ent.revision
-						m.mu.RUnlock()
-						return val, ptr, flags, revision, true
-					}
-				}
-			}
+		if m.ordered || len(m.sortedRuns) > 0 || !m.latestDirty {
 			m.mu.RUnlock()
 			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
@@ -2195,8 +2183,10 @@ func (m *AppendOnly) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, b
 	if end != nil && bytes.Compare(start, end) >= 0 {
 		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
-	if val, ptr, flags, revision, found := m.GetEntryWithRevision(start); found {
-		return start, val, ptr, flags, revision, true
+	if m.frozenFast.Load() {
+		if val, ptr, flags, revision, found, _ := m.getEntryFrozen(start); found {
+			return start, val, ptr, flags, revision, true
+		}
 	}
 	for {
 		m.mu.RLock()
@@ -2209,7 +2199,10 @@ func (m *AppendOnly) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, b
 			m.mu.Unlock()
 			continue
 		}
-		ent := m.seekGEEntryLocked(start, end)
+		ent := m.lookupEntryLocked(start)
+		if ent == nil {
+			ent = m.seekGEEntryLocked(start, end)
+		}
 		if ent == nil {
 			m.mu.RUnlock()
 			return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false

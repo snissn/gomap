@@ -117,6 +117,16 @@ func (db *DB) pointSuccessorDiskIterator(view *memtableView, start, end []byte) 
 		}
 		return it, func() { _ = it.Close() }, nil
 	}
+	if err := db.ensureBackendRange(); err != nil {
+		return nil, func() {}, err
+	}
+	db.mu.RLock()
+	backendRangeKnown := db.backendRangeKnown
+	backendRange := db.backendRange
+	db.mu.RUnlock()
+	if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
+		return nil, func() {}, nil
+	}
 	if provider, ok := db.backend.(backendSnapshotProvider); ok {
 		snap := provider.AcquireSnapshot()
 		if snap == nil {
@@ -177,15 +187,17 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 	// CommitAt/GetAt normally asks for the exact physical version just written.
 	// Its mutable shard has absolute precedence and no key can sort before an
 	// exact lower-bound hit, so avoid acquiring a backend cursor in this case.
+	initialTarget := -1
+	initialCandidate := pointSuccessorCandidate{}
 	if len(mutables) > 0 {
-		target := db.shardIndex(start)
-		if target >= 0 && target < len(mutables) {
-			candidate := seekPointSuccessorTable(mutables[target], start, end, nil, 0, 0)
+		initialTarget = db.shardIndex(start)
+		if initialTarget >= 0 && initialTarget < len(mutables) {
+			initialCandidate = seekPointSuccessorTable(mutables[initialTarget], start, end, nil, 0, 0)
 			db.pointSuccessorMutableProbesTotal.Add(1)
-			if candidate.found && bytes.Equal(candidate.key, start) && candidate.flags&node.FlagTombstone == 0 {
+			if initialCandidate.found && bytes.Equal(initialCandidate.key, start) && initialCandidate.flags&node.FlagTombstone == 0 {
 				db.pointSuccessorSourcesTotal.Add(1)
 				updateAtomicMaxUint64(&db.pointSuccessorSourcesMax, 1)
-				return db.materializePointSuccessor(candidate)
+				return db.materializePointSuccessor(initialCandidate)
 			}
 		}
 	}
@@ -204,8 +216,11 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 		if len(mutables) > 0 {
 			target := db.shardIndex(lower)
 			if target >= 0 && target < len(mutables) {
-				candidate := seekPointSuccessorTable(mutables[target], lower, end, nil, 0, priority)
-				db.pointSuccessorMutableProbesTotal.Add(1)
+				candidate := initialCandidate
+				if target != initialTarget || !bytes.Equal(lower, start) {
+					candidate = seekPointSuccessorTable(mutables[target], lower, end, nil, 0, priority)
+					db.pointSuccessorMutableProbesTotal.Add(1)
+				}
 				probes++
 				best = choosePointSuccessor(best, candidate)
 				priority++
