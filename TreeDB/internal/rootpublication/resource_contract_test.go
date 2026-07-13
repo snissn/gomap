@@ -1731,8 +1731,11 @@ func BenchmarkStableResourceSetCoalesceDuplicatePhysical(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	if got := stableSetPhysicalCount(sets); got != len(sets) {
+		b.Fatalf("source-owned descriptor pins=%d want %d", got, len(sets))
+	}
 	if got := view.Len(); got != 1 {
-		b.Fatalf("duplicate physical union len=%d want 1", got)
+		b.Fatalf("coalesced durability obligations=%d want 1", got)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -1742,12 +1745,16 @@ func BenchmarkStableResourceSetCoalesceDuplicatePhysical(b *testing.B) {
 			b.Fatal(err)
 		}
 		if got := view.Len(); got != 1 {
-			b.Fatalf("duplicate physical union len=%d want 1", got)
+			b.Fatalf("coalesced durability obligations=%d want 1", got)
 		}
 	}
-	b.ReportMetric(float64(len(sets)), "physical-inputs/op")
-	b.ReportMetric(1, "physical-pins/op")
-	b.ReportMetric(float64(len(sets)-1), "coalesces/op")
+	b.StopTimer()
+	if got := stableSetPhysicalCount(sets); got != len(sets) {
+		b.Fatalf("source-owned descriptor pins after union=%d want %d", got, len(sets))
+	}
+	b.ReportMetric(float64(len(sets)), "source-owned-descriptor-pins/op")
+	b.ReportMetric(1, "coalesced-durability-obligations/op")
+	b.ReportMetric(float64(len(sets)-1), "durability-obligation-coalesces/op")
 }
 
 func TestStableResourceTokenPinnedReadRemainsUsable(t *testing.T) {
