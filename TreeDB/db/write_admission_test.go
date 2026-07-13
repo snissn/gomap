@@ -185,3 +185,22 @@ func TestCommandWALPublishDoesNotAppendAfterCloseWinsWriteAdmission(t *testing.T
 		})
 	}
 }
+
+func TestCloseClearsCommandWALLeafPageLogAfterWriteAdmissionCloses(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if db.leafPageLog == nil {
+		t.Fatal("command-WAL open did not install a leaf page log")
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	db.writeMu.RLock()
+	leafPageLog := db.leafPageLog
+	db.writeMu.RUnlock()
+	if leafPageLog != nil {
+		t.Fatalf("leaf page log retained after Close: %T", leafPageLog)
+	}
+}

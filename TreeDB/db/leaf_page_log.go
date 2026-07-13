@@ -646,7 +646,7 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	}
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
-	if db.closing.Load() {
+	if db.closing.Load() && installed != nil {
 		return
 	}
 	db.leafPageLog = installed
