@@ -295,6 +295,10 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 	env.Version = version
 	env.Kind = CommandKind(binary.LittleEndian.Uint16(header[8:10]))
 	env.Scope = CommandScope(binary.LittleEndian.Uint16(header[10:12]))
+	env.FeatureFlags = binary.LittleEndian.Uint64(header[12:20])
+	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+		return env, info.Size(), ErrCommandWALUnsupportedCriticalFlag
+	}
 	env.LSN = binary.LittleEndian.Uint64(header[20:28])
 	env.BaseAppliedLSN = binary.LittleEndian.Uint64(header[44:52])
 	env.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(header[52:54]))
