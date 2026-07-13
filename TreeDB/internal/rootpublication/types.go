@@ -162,20 +162,6 @@ func (c *PreparedRootCandidate) releaseOwnedExtensions() error {
 	return set.Release()
 }
 
-func extendResourceView(current *StableResourceSet, candidate *PreparedRootCandidate) (*StableResourceSet, error) {
-	sets := make([]*StableResourceSet, 0, 2)
-	if current != nil {
-		sets = append(sets, current)
-	}
-	if set, ok := candidate.extensions.resourceSet.(*StableResourceSet); ok {
-		sets = append(sets, set)
-	}
-	if len(sets) == 0 {
-		return nil, nil
-	}
-	return borrowUnionStableResourceSets(sets...)
-}
-
 func coalesceCandidates(candidates []*PreparedRootCandidate) *PreparedRootCandidate {
 	if len(candidates) == 1 {
 		return candidates[0]
@@ -191,6 +177,27 @@ func coalesceCandidates(candidates []*PreparedRootCandidate) *PreparedRootCandid
 		coalesced.indexBytes = saturatingAdd(coalesced.indexBytes, candidate.indexBytes)
 		coalesced.obligations = append(coalesced.obligations, candidate.obligations...)
 		coalesced.extensions = unionExtensionSlots(coalesced.extensions, candidate.extensions)
+	}
+	coalesced.obligations = normalizeObligations(coalesced.obligations)
+	return &coalesced
+}
+
+func coalesceCandidatesWithResourceSnapshot(candidates []*PreparedRootCandidate, resources *StableResourceSet) *PreparedRootCandidate {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	latest := candidates[len(candidates)-1]
+	coalesced := *latest
+	coalesced.dependencyBytes = 0
+	coalesced.indexBytes = 0
+	coalesced.obligations = nil
+	coalesced.extensions = extensionSlots{resourceSet: resources}
+	for _, candidate := range candidates {
+		coalesced.dependencyBytes = saturatingAdd(coalesced.dependencyBytes, candidate.dependencyBytes)
+		coalesced.indexBytes = saturatingAdd(coalesced.indexBytes, candidate.indexBytes)
+		coalesced.obligations = append(coalesced.obligations, candidate.obligations...)
+		coalesced.extensions.cowFreelist = unionExtensionValue(coalesced.extensions.cowFreelist, candidate.extensions.cowFreelist)
+		coalesced.extensions.durableRootRecord = unionExtensionValue(coalesced.extensions.durableRootRecord, candidate.extensions.durableRootRecord)
 	}
 	coalesced.obligations = normalizeObligations(coalesced.obligations)
 	return &coalesced

@@ -42,20 +42,20 @@ type Coordinator struct {
 	changed   chan struct{}
 	done      chan struct{}
 
-	pending             []pendingEntry
-	pendingResourceView *StableResourceSet
-	pendingBytes        uint64
-	firstPendingAt      time.Time
-	timer               Timer
-	timerGeneration     uint64
-	wakeReason          WakeReason
-	publishNow          bool
-	publishing          bool
-	drains              []*drainRequest
-	stopping            bool
-	stopped             bool
-	stopErr             error
-	poison              error
+	pending          []pendingEntry
+	pendingResources pendingResourceIndex
+	pendingBytes     uint64
+	firstPendingAt   time.Time
+	timer            Timer
+	timerGeneration  uint64
+	wakeReason       WakeReason
+	publishNow       bool
+	publishing       bool
+	drains           []*drainRequest
+	stopping         bool
+	stopped          bool
+	stopErr          error
+	poison           error
 
 	visible           Frontier
 	durable           Frontier
@@ -150,15 +150,14 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 		c.mu.Unlock()
 		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
 	}
-	nextResourceView, err := extendResourceView(c.pendingResourceView, candidate)
-	if err != nil {
+	resources, _ := candidate.extensions.resourceSet.(*StableResourceSet)
+	if err := c.pendingResources.add(resources); err != nil {
 		c.mu.Unlock()
 		return fmt.Errorf("%w: resource union: %w", ErrInvalidCandidate, err)
 	}
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
-	c.pendingResourceView = nextResourceView
 	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
 	c.visible = candidate.frontier
 	if wasEmpty {
@@ -401,7 +400,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 			if !pendingEntriesHaveResources(c.pending) {
 				c.pending = nil
 				c.pendingBytes = 0
-				c.pendingResourceView = nil
+				c.pendingResources.reset()
 			}
 			c.stopped = true
 		}
@@ -460,7 +459,7 @@ func (c *Coordinator) TakePendingResourceOwnership() (*PendingResourceHandoff, e
 	}
 	c.pending = nil
 	c.pendingBytes = 0
-	c.pendingResourceView = nil
+	c.pendingResources.reset()
 	c.pendingResourcesTaken = true
 	return &PendingResourceHandoff{resources: resources}, nil
 }
@@ -515,7 +514,7 @@ func (c *Coordinator) run() {
 			for i := range group {
 				group[i] = c.pending[i].candidate
 			}
-			candidate := coalesceCandidates(group)
+			candidate := coalesceCandidatesWithResourceSnapshot(group, c.pendingResources.borrowedSnapshot())
 			c.publishNow = false
 			c.wakeReason = WakeNone
 			c.publishing = true
@@ -586,19 +585,13 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		var removedBytes uint64
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+			resources, _ := entry.candidate.extensions.resourceSet.(*StableResourceSet)
+			c.pendingResources.remove(resources)
 			if err := entry.candidate.releaseOwnedExtensions(); err != nil {
 				c.resourceReleaseErrors++
 			}
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
-		c.pendingResourceView = nil
-		for _, entry := range c.pending {
-			view, viewErr := extendResourceView(c.pendingResourceView, entry.candidate)
-			if viewErr != nil {
-				panic(viewErr)
-			}
-			c.pendingResourceView = view
-		}
 		if removedBytes <= c.pendingBytes {
 			c.pendingBytes -= removedBytes
 		} else {
