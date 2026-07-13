@@ -142,7 +142,7 @@ func (f *File) appendMaybeDecodeLeafLogPayload(dst, payload []byte) ([]byte, err
 }
 
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
-	f, err := os.Open(path)
+	f, err := openSegmentReadHandle(path)
 	if err != nil {
 		return nil, err
 	}
