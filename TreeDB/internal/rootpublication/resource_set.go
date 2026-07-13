@@ -287,6 +287,23 @@ func (set *StableResourceSet) Tokens() []*StableResourceToken {
 	return tokens
 }
 
+func (set *StableResourceSet) covers(field ReachabilityField) bool {
+	if set == nil || field == "" {
+		return false
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if ResourceOwnerState(set.owner.Load()) != ResourceOwnerBuilder {
+		return false
+	}
+	for _, entry := range set.entries {
+		if _, ok := entry.reachability[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (set *StableResourceSet) FrontierFor(identity StableIdentity, generation uint64) DurableFrontier {
 	if set == nil {
 		return DurableFrontier{}
