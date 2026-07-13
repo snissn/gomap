@@ -165,6 +165,52 @@ func TestQueryReadyConsolidationBoundRejectionDoesNotAllocatePlanningSlice(t *te
 	}
 }
 
+func TestQueryReadyConsolidationAdmissionIgnoresFutureDeltaPayloads(t *testing.T) {
+	d, col, identity, parts := queryReadyBuildFixture(t, 92)
+	defer func() { _ = d.Close() }()
+	built, err := typedcolumn.BuildQueryReadyBaseGeneration(identity, parts)
+	if err != nil {
+		t.Fatalf("build base: %v", err)
+	}
+	base, err := typedcolumn.OpenQueryReadyBaseGeneration(built.Bytes, identity)
+	if err != nil {
+		t.Fatalf("open base: %v", err)
+	}
+	largeViews := make([]typedcolumn.QueryReadyBasePartView, 4096)
+	for i := range largeViews {
+		largeViews[i] = base.Parts[0]
+	}
+	futureIdentity := identity
+	futureIdentity.Generation++
+	future := &typedcolumn.QueryReadyDeltaGeneration{
+		Kind:     typedcolumn.QueryReadyGenerationDelta,
+		Identity: futureIdentity,
+		Base:     &typedcolumn.QueryReadyBaseGeneration{Identity: futureIdentity, Parts: largeViews},
+	}
+	request := queryReadyBuildRequest{
+		Kind: queryReadyBuildConsolidatedBase, Identity: identity, Base: base,
+		Deltas: []*typedcolumn.QueryReadyDeltaGeneration{future}, ThroughGeneration: identity.Generation,
+	}
+	baseOnlyRequired, err := estimateQueryReadyBuildWorkingBytes(queryReadyBuildRequest{
+		Kind: queryReadyBuildConsolidatedBase, Identity: identity, Base: base, ThroughGeneration: identity.Generation,
+	})
+	if err != nil {
+		t.Fatalf("estimate base-only consolidation: %v", err)
+	}
+	coordinator, err := newQueryReadyBuildCoordinator(col, queryReadyBuildLimits{MaxWorkers: 1, MaxInFlightBytes: baseOnlyRequired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := coordinator.prepare(context.Background(), request)
+	if err != nil {
+		t.Fatalf("future delta payload rejected selected-prefix consolidation: %v", err)
+	}
+	defer func() { _ = prepared.Abort() }()
+	if prepared.Stats.ReservedInFlightBytes != baseOnlyRequired || len(prepared.Dependencies) != len(base.Parts) {
+		t.Fatalf("prepared future-filtered consolidation stats=%+v dependencies=%d", prepared.Stats, len(prepared.Dependencies))
+	}
+}
+
 func TestQueryReadyBuildZeroQueueBackpressureBoundsConcurrentWorkers(t *testing.T) {
 	d, col, identity, parts := queryReadyBuildFixture(t, 11)
 	defer func() { _ = d.Close() }()

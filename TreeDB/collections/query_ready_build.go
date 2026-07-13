@@ -397,6 +397,12 @@ func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64,
 			if delta == nil || delta.Base == nil {
 				return 0, errors.New("collections: query-ready consolidation has nil delta")
 			}
+			// Consolidation validates the full inventory but only builds the
+			// prefix visible through ThroughGeneration. Future payloads must not
+			// consume admission capacity for an older selected prefix.
+			if delta.Identity.Generation > request.ThroughGeneration {
+				continue
+			}
 			var err error
 			total, err = add(total, perDeltaMetadataBytes)
 			if err != nil {
