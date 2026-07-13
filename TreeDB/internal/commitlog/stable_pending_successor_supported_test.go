@@ -302,6 +302,90 @@ func TestCommandJournalStableRotationOldCloseFailureIsFailStop(t *testing.T) {
 	}
 }
 
+func TestCommandJournalStableRotationFailStopIsStickyAcrossDurabilityAPIs(t *testing.T) {
+	dir := t.TempDir()
+	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 18})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	appendStablePendingTestCommand(t, journal)
+
+	injected := errors.New("injected command-WAL old close failure for sticky APIs")
+	journal.writer.closeRotateFn = func(file *os.File) error {
+		journal.writer.closeRotateFn = nil
+		return errors.Join(file.Close(), injected)
+	}
+	rotation, err := journal.RotateActiveSegmentWithStableResources(false)
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("old-close failure returned owned resources")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("rotation error=%v want old-close failure", err)
+	}
+
+	rotation, stickyErr := journal.RotateActiveSegmentWithStableResources(false)
+	if rotation != nil {
+		rotation.Release()
+		t.Fatal("fail-stop retry returned owned resources")
+	}
+	if !errors.Is(stickyErr, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("sticky retry error=%v want ErrResourceOwnership", stickyErr)
+	}
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL {
+			events = append(events, event)
+		}
+		return nil
+	})
+	defer restore()
+
+	command := CommandEnvelope{
+		Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+	}
+	checks := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "flush", run: journal.Flush},
+		{name: "sync", run: journal.Sync},
+		{name: "flush-observed", run: func() error { return journal.FlushObserved(false) }},
+		{name: "sync-observed", run: func() error { return journal.FlushObserved(true) }},
+		{name: "append", run: func() error {
+			_, err := journal.AppendCommand(command)
+			return err
+		}},
+		{name: "append-observed", run: func() error {
+			_, err := journal.AppendCommandObserved(command)
+			return err
+		}},
+		{name: "ordinary-rotation", run: func() error { return journal.RotateActiveSegment(false) }},
+		{name: "stable-rotation", run: func() error {
+			rotation, err := journal.RotateActiveSegmentWithStableResources(false)
+			if rotation != nil {
+				rotation.Release()
+			}
+			return err
+		}},
+	}
+	for _, check := range checks {
+		beforeEvents := len(events)
+		err := check.run()
+		if err != stickyErr {
+			t.Errorf("%s error=%v (%p) want exact sticky error=%v (%p)", check.name, err, err, stickyErr, stickyErr)
+		}
+		if !errors.Is(err, rootpublication.ErrResourceOwnership) {
+			t.Errorf("%s error=%v want ErrResourceOwnership", check.name, err)
+		}
+		if len(events) != beforeEvents {
+			t.Errorf("%s emitted durability callbacks after fail-stop: before=%d after=%d events=%+v", check.name, beforeEvents, len(events), events[beforeEvents:])
+		}
+	}
+}
+
 func TestCommandJournalStableRotationRetryDescriptorPlateau(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 17})
