@@ -1029,6 +1029,10 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if err := validateColumnAssetRefForPlan(asset.Ref); err != nil {
 		return err
 	}
+	switch asset.Ref.Kind {
+	case ColumnAssetKindQueryReadyBase, ColumnAssetKindQueryReadyDelta, ColumnAssetKindQueryReadyConsolidatedBase:
+		return fmt.Errorf("collections: non-authoritative query-ready asset kind %s cannot enter a manifest publish plan", asset.Ref.Kind)
+	}
 	if asset.Rows < 0 {
 		return fmt.Errorf("collections: column prepared asset rows=%d cannot be negative", asset.Rows)
 	}

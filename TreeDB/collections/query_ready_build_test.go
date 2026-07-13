@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -64,6 +65,34 @@ func TestQueryReadyBuildProducesDeterministicCompleteAssetSet(t *testing.T) {
 	}
 	if first.Stats.AssetsProduced != 1 || first.Stats.PartsProduced != len(parts) || first.Stats.Rows == 0 || first.Stats.ManagerRegistrationTime <= 0 || first.Stats.HandoffTime <= 0 {
 		t.Fatalf("incomplete build/handoff stats: %+v", first.Stats)
+	}
+}
+
+func TestQueryReadyPreparedAssetCannotEnterAuthoritativePublishPlan(t *testing.T) {
+	for _, kind := range []ColumnAssetKind{ColumnAssetKindQueryReadyBase, ColumnAssetKindQueryReadyDelta, ColumnAssetKindQueryReadyConsolidatedBase} {
+		t.Run(string(kind), func(t *testing.T) {
+			asset := ColumnPreparedAsset{
+				Ref: ColumnAssetRef{
+					Kind:       kind,
+					Namespace:  "query-ready-test",
+					Generation: 7,
+					PartID:     queryReadyBaseAssetPartID,
+					FileID:     1,
+					Offset:     64,
+					Length:     128,
+				},
+				Rows:         1,
+				Bytes:        128,
+				GenerationID: 7,
+				Reason:       "query_ready_build",
+			}
+			if err := validateColumnAssetRefForPlan(asset.Ref); err != nil {
+				t.Fatalf("query-ready ref must remain valid for prepared-asset lifecycle registration: %v", err)
+			}
+			if err := validateColumnPreparedAssetForPlan(asset); err == nil || !strings.Contains(err.Error(), "non-authoritative") {
+				t.Fatalf("validateColumnPreparedAssetForPlan err=%v want non-authoritative rejection", err)
+			}
+		})
 	}
 }
 
