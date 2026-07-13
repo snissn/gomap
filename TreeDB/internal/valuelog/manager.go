@@ -1295,7 +1295,7 @@ func NewManagerWithStableResourcePinRegistry(dir string, registry *rootpublicati
 	}
 	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
 	if err := m.Refresh(); err != nil {
-		return nil, err
+		return nil, errors.Join(err, m.Close())
 	}
 	return m, nil
 }
@@ -2583,9 +2583,7 @@ func removeSegmentFileWithRetry(path string) (bool, error) {
 
 func removeSegmentFileOnceStable(path string, identity rootpublication.StableIdentity, stable bool) (bool, error) {
 	if stable {
-		if err := validateStableDeletePathIdentity(path, identity); err != nil {
-			return false, err
-		}
+		return removeStableSegmentFileOnce(path, identity)
 	}
 	return removeSegmentFileOnce(path)
 }

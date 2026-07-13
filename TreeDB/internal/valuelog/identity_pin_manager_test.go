@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 func writeIdentityPinTestSegment(t *testing.T, dir string) (uint32, string) {
@@ -102,6 +103,46 @@ func TestManagerRetryZombieDeleteClosesOwnHandleBeforeUnlink(t *testing.T) {
 	}
 	if manager.HasSegment(fileID) {
 		t.Fatal("manager retained deleted zombie")
+	}
+}
+
+func TestManagerStableDeletePreservesReplacementCreatedAtUnlink(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	const replacement = "replacement created after quarantine rename"
+	originalRemove := removeSegmentPath
+	removeSegmentPath = func(quarantinePath string) error {
+		if filepath.Clean(quarantinePath) == filepath.Clean(path) {
+			t.Fatal("stable delete passed the original pathname to unlink")
+		}
+		if err := os.WriteFile(path, []byte(replacement), 0o600); err != nil {
+			return err
+		}
+		return os.Remove(quarantinePath)
+	}
+	t.Cleanup(func() { removeSegmentPath = originalRemove })
+
+	if err := manager.RemoveSegment(fileID); err != nil {
+		t.Fatalf("RemoveSegment: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != replacement {
+		t.Fatalf("replacement changed: got=%q err=%v", got, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			t.Fatalf("stable delete left quarantine directory %q", entry.Name())
+		}
 	}
 }
 
@@ -342,5 +383,58 @@ func TestManagerRegisterSegmentRejectsSameIDReboundPath(t *testing.T) {
 	}
 	if err := manager.RegisterSegment(path, fileID); !errors.Is(err, rootpublication.ErrResourceConflict) {
 		t.Fatalf("RegisterSegment rebound path = %v, want ErrResourceConflict", err)
+	}
+}
+
+func TestNewManagerRefreshFailureReleasesObservedIdentities(t *testing.T) {
+	dir := t.TempDir()
+	for seq := uint32(1); seq <= 2; seq++ {
+		fileID, err := EncodeFileID(1, seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer, err := NewWriter(SegmentPath(dir, fileID), fileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Append(0, nil, uint64(seq), []byte("constructor cleanup")); err != nil {
+			writer.Close()
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	originalOpen := currentOpenSegmentFile()
+	openCalls := 0
+	var firstOpened *File
+	wantErr := errors.New("injected second segment open failure")
+	swapOpenSegmentFileForTest(func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+		openCalls++
+		if openCalls == 2 {
+			return nil, wantErr
+		}
+		file, err := originalOpen(path, id, dictLookup, templateLookup, templateOpts, templateCache)
+		if err == nil {
+			firstOpened = file
+		}
+		return file, err
+	})
+	t.Cleanup(func() { swapOpenSegmentFileForTest(originalOpen) })
+
+	registry := rootpublication.NewIdentityPinRegistry()
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if manager != nil || !errors.Is(err, wantErr) {
+		t.Fatalf("NewManager = (%v, %v), want (nil, injected error)", manager, err)
+	}
+	if firstOpened == nil {
+		t.Fatal("constructor did not open the first segment")
+	}
+	if _, err := firstOpened.File.Stat(); err == nil {
+		t.Fatal("partially initialized manager left its first handle open")
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("registry retained %d constructor observers", got)
 	}
 }

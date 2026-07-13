@@ -93,9 +93,15 @@ func (registry *IdentityPinRegistry) Pin(identity StableIdentity) (*IdentityPin,
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	state := registry.stateLocked(identity)
+	state := registry.states[identity]
+	if state == nil {
+		return nil, ErrResourceConflict
+	}
 	if state.deleting {
 		return nil, ErrResourceDeletionInProgress
+	}
+	if state.observers == 0 {
+		return nil, ErrResourceConflict
 	}
 	if state.retired {
 		return nil, ErrResourceConflict

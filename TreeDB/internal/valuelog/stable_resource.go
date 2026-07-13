@@ -256,6 +256,50 @@ func closeAndRemoveStableSegmentFileResult(file *File, validateIdentity bool) (b
 	return removed, errors.Join(closeErr, removeErr)
 }
 
+// removeStableSegmentFileOnce first moves the linked name into a private
+// same-directory quarantine, then validates and unlinks that renamed object.
+// A replacement created at the original name after the rename is never passed
+// to the unlink syscall.
+func removeStableSegmentFileOnce(path string, identity rootpublication.StableIdentity) (bool, error) {
+	parent := filepath.Dir(path)
+	quarantineDir, err := os.MkdirTemp(parent, "."+filepath.Base(path)+".delete-")
+	if err != nil {
+		return false, err
+	}
+	quarantinePath := filepath.Join(quarantineDir, filepath.Base(path))
+	if err := os.Rename(path, quarantinePath); err != nil {
+		_ = os.Remove(quarantineDir)
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	restore := func() error {
+		if err := os.Link(quarantinePath, path); err != nil {
+			return err
+		}
+		return os.Remove(quarantinePath)
+	}
+	if err := validateStableDeletePathIdentity(quarantinePath, identity); err != nil {
+		restoreErr := restore()
+		if restoreErr == nil {
+			restoreErr = os.Remove(quarantineDir)
+		}
+		return false, errors.Join(err, restoreErr)
+	}
+	removeErr := removeSegmentPath(quarantinePath)
+	if removeErr != nil && !os.IsNotExist(removeErr) {
+		if restoreErr := restore(); restoreErr != nil {
+			return false, fmt.Errorf("%w: stable delete failed (%v) and quarantine restore failed: %v", rootpublication.ErrResourceConflict, removeErr, restoreErr)
+		}
+		_ = os.Remove(quarantineDir)
+		return false, removeErr
+	}
+	cleanupErr := os.Remove(quarantineDir)
+	cutErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, durabilitycut.ResourceValueLog, parent, path, "")
+	return true, errors.Join(cleanupErr, cutErr)
+}
+
 func (m *Manager) deleteZombieFile(file *File) error {
 	if m == nil || file == nil {
 		return nil

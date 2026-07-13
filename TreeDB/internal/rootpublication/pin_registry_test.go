@@ -57,6 +57,10 @@ func TestIdentityPinRegistryCoalescesLogicalGenerations(t *testing.T) {
 	registry := NewIdentityPinRegistry()
 	first := testStableIdentity(1)
 	second := testStableIdentity(2)
+	if err := registry.Observe(first); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	defer registry.Unobserve(first)
 	pin, err := registry.Pin(first)
 	if err != nil {
 		t.Fatalf("Pin generation 1: %v", err)
@@ -68,6 +72,35 @@ func TestIdentityPinRegistryCoalescesLogicalGenerations(t *testing.T) {
 		t.Fatalf("BeginDelete generation 2 = %v, want physical ErrResourcePinned", err)
 	}
 	pin.Release()
+}
+
+func TestIdentityPinRegistryRejectsUnobservedPin(t *testing.T) {
+	registry := NewIdentityPinRegistry()
+	if _, err := registry.Pin(testStableIdentity(1)); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("Pin without producer observation = %v, want ErrResourceConflict", err)
+	}
+}
+
+func TestIdentityPinRegistryRejectsLatePinAfterFinalObserverRetires(t *testing.T) {
+	registry := NewIdentityPinRegistry()
+	identity := testStableIdentity(1)
+	if err := registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := registry.BeginDelete(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Unobserve(identity); err != nil {
+		t.Fatal(err)
+	}
+	lease.Commit()
+	if _, err := registry.Pin(identity); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("Pin after final observer retired = %v, want ErrResourceConflict", err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("active identities after retirement = %d, want 0", got)
+	}
 }
 
 func TestIdentityPinRegistrySerializesDeleteNamespace(t *testing.T) {
@@ -157,6 +190,14 @@ func TestStableResourceTokenPinsIdentityRegistryUntilExactRelease(t *testing.T) 
 	}
 
 	registry := NewIdentityPinRegistry()
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Unobserve(identity)
 	var userReleases atomic.Uint64
 	token, err := NewStableResourceToken(StableResourceSpec{
 		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "1", Generation: 1,
