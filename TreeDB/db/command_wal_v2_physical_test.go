@@ -297,6 +297,173 @@ func TestRepairCommandWALV2SuffixRetryNeverExtendsShortenedNonAnchorSegment(t *t
 	}
 }
 
+func TestRepairCommandWALV2SuffixRetryResyncsExactSizeRetainedAnchor(t *testing.T) {
+	walDir, classification, anchor, _ := commandWALV2RepairFixture(t)
+	preSyncCrash := errors.New("injected after retained-anchor truncate before sync")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Path == anchor && event.Point == durabilitycut.BeforeDependencyFileSync {
+			return preSyncCrash
+		}
+		return nil
+	})
+	_, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if !errors.Is(err, preSyncCrash) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("first repair error=%v, want retained-anchor pre-sync crash", err)
+	}
+	if got := mustReadFile(t, anchor); string(got) != "prefix-v2" {
+		t.Fatalf("anchor after failed pre-sync=%q, want exact retained prefix", got)
+	}
+
+	retryBeforeSync := false
+	retryAfterSync := false
+	restore = durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceCommandWAL || event.Path != anchor {
+			return nil
+		}
+		switch event.Point {
+		case durabilitycut.BeforeDependencyFileSync:
+			retryBeforeSync = true
+		case durabilitycut.AfterDependencyFileSync:
+			retryAfterSync = true
+		}
+		return nil
+	})
+	diagnostic, err := repairCommandWALV2Suffix(walDir, classification, false)
+	restore()
+	if err != nil {
+		t.Fatalf("repair retry: %v", err)
+	}
+	if !retryBeforeSync || !retryAfterSync {
+		t.Fatalf("exact-size retained anchor retry sync events before=%t after=%t, want both", retryBeforeSync, retryAfterSync)
+	}
+	if diagnostic.CompletedRepairStages != uint64(len(diagnostic.RepairStages)) {
+		t.Fatalf("retry diagnostic=%+v, want every stage completed", diagnostic)
+	}
+}
+
+func TestRepairCommandWALV2SuffixRejectsUndersizedRetainedPaths(t *testing.T) {
+	t.Run("anchor", func(t *testing.T) {
+		walDir := t.TempDir()
+		anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+		if err := os.WriteFile(anchor, []byte("short"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		classification := commandWALV2Classification{
+			DiscardSuffix: []commandWALV2PhysicalFrame{{
+				Envelope:   commitlog.CommandEnvelope{LSN: 2},
+				Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 9, EndOffset: 18},
+			}},
+		}
+		_, err := repairCommandWALV2Suffix(walDir, classification, false)
+		if !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, commitlog.ErrCorrupt) {
+			t.Fatalf("undersized retained anchor error=%v, want recovery-required corruption", err)
+		}
+		if got := mustReadFile(t, anchor); string(got) != "short" {
+			t.Fatalf("undersized retained anchor mutated to %q", got)
+		}
+	})
+
+	t.Run("mixed_non_anchor", func(t *testing.T) {
+		walDir := t.TempDir()
+		anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+		mixed := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+		if err := os.WriteFile(anchor, []byte("prefix-v2discard"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mixed, []byte("short"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		classification := commandWALV2RetainedMixedClassification(anchor, mixed)
+		_, err := repairCommandWALV2Suffix(walDir, classification, false)
+		if !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, commitlog.ErrCorrupt) {
+			t.Fatalf("undersized retained mixed path error=%v, want recovery-required corruption", err)
+		}
+		if got := mustReadFile(t, mixed); string(got) != "short" {
+			t.Fatalf("undersized retained mixed path mutated to %q", got)
+		}
+		if got := mustReadFile(t, anchor); string(got) != "prefix-v2discard" {
+			t.Fatalf("anchor mutated before retained mixed-path rejection: %q", got)
+		}
+	})
+}
+
+func TestRepairCommandWALV2SuffixRejectsMissingRetainedNonAnchor(t *testing.T) {
+	walDir := t.TempDir()
+	anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	mixed := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+	if err := os.WriteFile(anchor, []byte("prefix-v2discard"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	classification := commandWALV2RetainedMixedClassification(anchor, mixed)
+	_, err := repairCommandWALV2Suffix(walDir, classification, false)
+	if !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, commitlog.ErrCorrupt) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing retained mixed path error=%v, want not-exist recovery-required corruption", err)
+	}
+	if got := mustReadFile(t, anchor); string(got) != "prefix-v2discard" {
+		t.Fatalf("anchor mutated before missing retained-path rejection: %q", got)
+	}
+}
+
+func TestRepairCommandWALV2SuffixDisposablePathMissingOrShortIsIdempotent(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "missing"},
+		{name: "short", data: []byte("abc")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			walDir := t.TempDir()
+			anchor := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+			tail := filepath.Join(walDir, commitlog.CommandSegmentName(1, 1))
+			if err := os.WriteFile(anchor, []byte("prefix-v2discard"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if testCase.data != nil {
+				if err := os.WriteFile(tail, testCase.data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			classification := commandWALV2Classification{
+				CompletePrefix: []commandWALV2PhysicalFrame{{
+					Envelope:   commitlog.CommandEnvelope{LSN: 1},
+					Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 0, EndOffset: 9},
+				}},
+				DiscardSuffix: []commandWALV2PhysicalFrame{
+					{Envelope: commitlog.CommandEnvelope{LSN: 2}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 9, EndOffset: 16}},
+					{Envelope: commitlog.CommandEnvelope{LSN: 3}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: tail, StartOffset: 0, EndOffset: 5}},
+					{Envelope: commitlog.CommandEnvelope{LSN: 4}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: tail, StartOffset: 5, EndOffset: 10}},
+				},
+			}
+			maxTailSize := int64(len(testCase.data))
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Resource != durabilitycut.ResourceCommandWAL || event.Path != tail {
+					return nil
+				}
+				if info, err := os.Stat(tail); err == nil && info.Size() > maxTailSize {
+					return fmt.Errorf("disposable tail grew from %d to %d bytes", maxTailSize, info.Size())
+				}
+				return nil
+			})
+			_, err := repairCommandWALV2Suffix(walDir, classification, false)
+			restore()
+			if err != nil {
+				t.Fatalf("first disposable repair: %v", err)
+			}
+			if _, err := repairCommandWALV2Suffix(walDir, classification, false); err != nil {
+				t.Fatalf("idempotent disposable repair: %v", err)
+			}
+			if _, err := os.Stat(tail); !os.IsNotExist(err) {
+				t.Fatalf("disposable tail stat=%v, want absent", err)
+			}
+			if got := mustReadFile(t, anchor); string(got) != "prefix-v2" {
+				t.Fatalf("retained anchor after disposable repair=%q, want prefix-v2", got)
+			}
+		})
+	}
+}
+
 func TestRepairCommandWALV2SuffixDefersRetainedAnchorUntilAfterDirectorySync(t *testing.T) {
 	walDir, classification, anchor, _ := commandWALV2RepairFixture(t)
 	anchorBefore := mustReadFile(t, anchor)
@@ -542,6 +709,19 @@ func commandWALV2PhysicalRepairFixture(t *testing.T) (string, commandWALV2Classi
 	)
 	writeCommandWALV2Segment(t, tail, mustCommandWALV2Frame(t, 3, commitlog.CommandDurabilityRelaxed, nil))
 	return walDir, classifyCommandWALV2Directory(t, walDir), anchor, tail
+}
+
+func commandWALV2RetainedMixedClassification(anchor, mixed string) commandWALV2Classification {
+	return commandWALV2Classification{
+		CompletePrefix: []commandWALV2PhysicalFrame{
+			{Envelope: commitlog.CommandEnvelope{LSN: 1}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 0, EndOffset: 9}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 2}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: mixed, StartOffset: 0, EndOffset: 9}},
+		},
+		DiscardSuffix: []commandWALV2PhysicalFrame{
+			{Envelope: commitlog.CommandEnvelope{LSN: 3}, Coordinate: commandWALV2Coordinate{SourceSegment: anchor, StartOffset: 9, EndOffset: 16}},
+			{Envelope: commitlog.CommandEnvelope{LSN: 4}, Coordinate: commandWALV2Coordinate{Lane: 1, SegmentSequence: 1, SourceSegment: mixed, StartOffset: 9, EndOffset: 18}},
+		},
+	}
 }
 
 func classifyCommandWALV2Directory(t *testing.T, walDir string) commandWALV2Classification {
