@@ -234,6 +234,11 @@ type pendingCommandWALSuccessor struct {
 	failStop        bool
 }
 
+var errCommandJournalStableRotationFailStop = fmt.Errorf(
+	"%w: command-WAL journal stopped after old-writer close failure",
+	rootpublication.ErrResourceOwnership,
+)
+
 type CommandJournalAppendFlushTiming struct {
 	Append time.Duration
 	Flush  time.Duration
@@ -521,8 +526,8 @@ func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 	if j == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
-	if j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
-		return 0, fmt.Errorf("%w: command-WAL journal stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return 0, err
 	}
 	j.owner.mu.Lock()
 	defer j.owner.mu.Unlock()
@@ -558,11 +563,21 @@ func (j *CommandJournal) maybeRotateForFrameLockedObserved(frameSize int, syncCu
 }
 
 func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if len(j.pendingStableRotations) != 0 {
 		return fmt.Errorf("%w: drain pending stable command-WAL rotation before rotating again", rootpublication.ErrResourceOwnership)
 	}
 	if j.pendingStableSuccessor != nil {
 		return fmt.Errorf("%w: resolve pending stable command-WAL successor before rotating again", rootpublication.ErrResourceOwnership)
+	}
+	return nil
+}
+
+func (j *CommandJournal) stableRotationFailStopErrorLocked() error {
+	if j != nil && j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
+		return errCommandJournalStableRotationFailStop
 	}
 	return nil
 }
@@ -726,8 +741,8 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 }
 
 func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent bool) (*CommandJournalStableRotation, error) {
-	if j.pendingStableSuccessor != nil && j.pendingStableSuccessor.failStop {
-		return nil, fmt.Errorf("%w: command-WAL stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return nil, err
 	}
 	if j.writer == nil || j.writer.f == nil {
 		return nil, errors.New("commitlog: command journal is closed")
@@ -1445,6 +1460,9 @@ func (j *CommandJournal) appendCommandPayloadTrusted(kind CommandKind, scope Com
 }
 
 func (j *CommandJournal) flushLocked(sync bool) error {
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if j == nil || j.writer == nil {
 		return errors.New("commitlog: command journal is closed")
 	}
@@ -1455,6 +1473,9 @@ func (j *CommandJournal) flushLocked(sync bool) error {
 }
 
 func (j *CommandJournal) emitDirectCommandWALAppendBeforeLocked(observe bool) error {
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if !observe {
 		return nil
 	}
@@ -1469,6 +1490,9 @@ func (j *CommandJournal) emitDirectCommandWALAppendAfterLocked(observe bool, lsn
 }
 
 func (j *CommandJournal) flushDirectCommandWALLocked(sync, observe bool) error {
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if !observe {
 		return j.flushLocked(sync)
 	}
@@ -1614,6 +1638,9 @@ func (j *CommandJournal) Flush() error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if j.writer == nil {
 		return nil
 	}
@@ -1626,6 +1653,9 @@ func (j *CommandJournal) Sync() error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if j.writer == nil {
 		return nil
 	}
@@ -1640,6 +1670,9 @@ func (j *CommandJournal) FlushObserved(sync bool) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return err
+	}
 	if j.writer == nil {
 		return nil
 	}
