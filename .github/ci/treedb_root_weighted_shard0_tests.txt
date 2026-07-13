@@ -1,7 +1,3 @@
 # Pinned to shard 0 because this root-package test dominated the previous
 # line-count shard on Windows and race runs.
 TestProfileFast_BulkRestoreMaintainsKeyValueParity
-# This oracle takes about 188s on windows-core-2 while shard 0 otherwise
-# finishes in seconds. Keep full coverage but move it off the deadline-bound
-# shard.
-TestPowerLossOracleEnumerateCutPoints
