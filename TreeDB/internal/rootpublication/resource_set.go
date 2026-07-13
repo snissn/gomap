@@ -482,7 +482,7 @@ func (set *StableResourceSet) FrontierFor(identity StableIdentity, generation ui
 	set.mu.Lock()
 	defer set.mu.Unlock()
 	for _, entry := range set.entries {
-		if entry.token.identity == identity && entry.token.generation == generation {
+		if sameStableObject(entry.token.identity, identity) && entry.token.generation == generation {
 			return cloneDurableFrontier(entry.frontier)
 		}
 	}

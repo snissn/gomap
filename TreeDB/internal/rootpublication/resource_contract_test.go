@@ -988,6 +988,9 @@ func TestPinnedResourceBlocksExplicitDeletionUntilRelease(t *testing.T) {
 	if err := guard.Check(physicalIdentity, token.Generation()); !errors.Is(err, ErrResourcePinned) {
 		t.Fatalf("Check with handle-derived physical identity=%v want ErrResourcePinned", err)
 	}
+	if got, want := set.FrontierFor(physicalIdentity, token.Generation()), token.Frontier(); got.Bytes != want.Bytes {
+		t.Fatalf("FrontierFor with handle-derived physical identity=%+v want %+v", got, want)
+	}
 	if err := guard.Check(physicalIdentity, token.Generation()+1); err != nil {
 		t.Fatalf("Check for unpinned logical generation: %v", err)
 	}
