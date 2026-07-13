@@ -77,8 +77,8 @@ func TestPreparedCandidateCopiesAndNormalizesObligations(t *testing.T) {
 
 type testExtension uint64
 
-func (e testExtension) union(other immutableExtension) immutableExtension {
-	return e | other.(testExtension)
+func (e testExtension) union(other immutableExtension) (immutableExtension, error) {
+	return e | other.(testExtension), nil
 }
 
 func TestCoalescingUnionsEveryReservedExtensionSlot(t *testing.T) {
@@ -94,7 +94,11 @@ func TestCoalescingUnionsEveryReservedExtensionSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := coalesceCandidates([]*PreparedRootCandidate{one, two}).extensions
+	coalesced, err := coalesceCandidates([]*PreparedRootCandidate{one, two})
+	if err != nil {
+		t.Fatalf("coalesce candidates: %v", err)
+	}
+	got := coalesced.extensions
 	if got.resourceSet != testExtension(9) || got.cowFreelist != testExtension(18) || got.durableRootRecord != testExtension(36) {
 		t.Fatalf("extension union=%+v", got)
 	}

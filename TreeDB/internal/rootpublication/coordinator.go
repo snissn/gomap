@@ -76,6 +76,11 @@ type Coordinator struct {
 	activeAttempt      PublishAttempt
 	retryAttempt       PublishAttempt
 	reportingAttempt   bool
+
+	resourceCoalesces  uint64
+	resourceConflicts  uint64
+	rejectedCandidates uint64
+	recoverySets       []*StableResourceSet
 }
 
 // PublishAttempt is an opaque identity for exactly one captured callback.
@@ -146,6 +151,32 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 	if supersede && len(c.pending) == 0 {
 		c.mu.Unlock()
 		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
+	}
+	if candidateSet := candidate.resourceSet(); candidateSet != nil {
+		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
+		for _, entry := range c.pending {
+			if set := entry.candidate.resourceSet(); set != nil {
+				sets = append(sets, set)
+			}
+		}
+		sets = append(sets, candidateSet)
+		union, err := UnionStableResourceSets(sets...)
+		if err != nil {
+			c.rejectedCandidates++
+			if resourceSetConflict(err) {
+				c.resourceConflicts++
+			}
+			c.mu.Unlock()
+			return err
+		}
+		if physical := stableSetPhysicalCount(sets); physical > union.Len() {
+			c.resourceCoalesces = saturatingAdd(c.resourceCoalesces, uint64(physical-union.Len()))
+		}
+		if err := candidateSet.transfer(ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
+			c.rejectedCandidates++
+			c.mu.Unlock()
+			return fmt.Errorf("%w: enqueue resource transfer: %w", ErrInvalidCandidate, err)
+		}
 	}
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
@@ -389,8 +420,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 			if len(c.pending) != 0 {
 				c.stopErr = ErrPublicationStopped
 			}
-			c.pending = nil
-			c.pendingBytes = 0
+			c.captureRecoveryResourcesLocked()
 			c.stopped = true
 		}
 		err := c.stopErr
@@ -417,6 +447,8 @@ func (c *Coordinator) Stats() Stats {
 		ActiveBuilders: c.activeBuilders, WaiterCount: uint64(len(c.waiters)),
 		PreMetaFailures: c.preMetaFailures, Retries: c.retries, Poisoned: c.poison != nil,
 		WakeReason: c.wakeReason, PublishCalls: c.publishCalls,
+		ResourceCoalesces: c.resourceCoalesces, ResourceConflicts: c.resourceConflicts,
+		RejectedCandidates: c.rejectedCandidates, Resources: c.resourceStatsLocked(),
 	}
 }
 
@@ -441,7 +473,17 @@ func (c *Coordinator) run() {
 			for i := range group {
 				group[i] = c.pending[i].candidate
 			}
-			candidate := coalesceCandidates(group)
+			candidate, coalesceErr := coalesceCandidates(group)
+			if coalesceErr != nil {
+				c.resourceConflicts++
+				c.poison = errors.Join(ErrRecoveryRequired, coalesceErr)
+				c.failWaitersLocked(c.poison)
+				c.clearPublishRequestLocked()
+				c.captureRecoveryResourcesLocked()
+				c.notifyLocked()
+				c.mu.Unlock()
+				continue
+			}
 			c.publishNow = false
 			c.wakeReason = WakeNone
 			c.publishing = true
@@ -512,6 +554,9 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		var removedBytes uint64
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
+			if set := entry.candidate.resourceSet(); set != nil {
+				set.releaseFrom(ResourceOwnerCoordinator)
+			}
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
 		if removedBytes <= c.pendingBytes {
@@ -765,4 +810,91 @@ func (c *Coordinator) signal() {
 func (c *Coordinator) notifyLocked() {
 	close(c.changed)
 	c.changed = make(chan struct{})
+}
+
+func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
+	sets := make([]*StableResourceSet, 0, len(c.pending))
+	for _, entry := range c.pending {
+		if set := entry.candidate.resourceSet(); set != nil {
+			sets = append(sets, set)
+		}
+	}
+	union, err := UnionStableResourceSets(sets...)
+	if err != nil {
+		return nil
+	}
+	return union.Stats(c.clock.Now())
+}
+
+func (c *Coordinator) captureRecoveryResourcesLocked() {
+	seen := make(map[*StableResourceSet]struct{}, len(c.recoverySets)+len(c.pending))
+	for _, set := range c.recoverySets {
+		seen[set] = struct{}{}
+	}
+	for _, entry := range c.pending {
+		set := entry.candidate.resourceSet()
+		if set == nil {
+			continue
+		}
+		if _, ok := seen[set]; !ok {
+			c.recoverySets = append(c.recoverySets, set)
+			seen[set] = struct{}{}
+		}
+	}
+	c.pending = nil
+	c.pendingBytes = 0
+	c.firstPendingAt = time.Time{}
+}
+
+// RecoveryResourceHandoff owns pins retained after shutdown or ambiguous
+// publication. Reopen/recovery consumes the evidence and then releases it.
+type RecoveryResourceHandoff struct {
+	sets []*StableResourceSet
+	once sync.Once
+}
+
+func (handoff *RecoveryResourceHandoff) Len() int {
+	if handoff == nil {
+		return 0
+	}
+	return len(handoff.sets)
+}
+
+func (handoff *RecoveryResourceHandoff) Sets() []*StableResourceSet {
+	if handoff == nil {
+		return nil
+	}
+	return append([]*StableResourceSet(nil), handoff.sets...)
+}
+
+func (handoff *RecoveryResourceHandoff) Release() {
+	if handoff == nil {
+		return
+	}
+	handoff.once.Do(func() {
+		for _, set := range handoff.sets {
+			set.releaseFrom(ResourceOwnerRecovery)
+		}
+		handoff.sets = nil
+	})
+}
+
+// TakeRecoveryHandoff transfers all retained coordinator pins exactly once.
+// It is valid after poison and after Stop; an empty handoff is harmless.
+func (c *Coordinator) TakeRecoveryHandoff() *RecoveryResourceHandoff {
+	if c == nil {
+		return &RecoveryResourceHandoff{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.captureRecoveryResourcesLocked()
+	sets := c.recoverySets
+	c.recoverySets = nil
+	transferred := make([]*StableResourceSet, 0, len(sets))
+	for _, set := range sets {
+		if set.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery) == nil {
+			transferred = append(transferred, set)
+		}
+	}
+	return &RecoveryResourceHandoff{sets: transferred}
 }
