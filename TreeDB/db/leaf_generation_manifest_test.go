@@ -942,15 +942,15 @@ func TestNoteLeafGenerationWritableFileIDs_PersistsSealedRecordLengthIndex(t *te
 }
 
 func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based save failure is not reliable on Windows")
-	}
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	if db.leafGenerationManifestStore == nil || db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
+		t.Skip("stable manifest replacement hooks are unavailable")
+	}
 
 	leafDir := LeafLogDirPath(dir)
 	_, fileID1 := createLeafGenerationTestSegment(t, leafDir, rewriteLeafLogLaneID, 1)
@@ -960,14 +960,10 @@ func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *
 	if err := db.noteLeafGenerationWritableFileID(fileID1, 55); err != nil {
 		t.Fatalf("noteLeafGenerationWritableFileID first: %v", err)
 	}
-	if err := os.Chmod(leafDir, 0o500); err != nil {
-		t.Fatalf("Chmod read-only leaf dir: %v", err)
-	}
-	defer func() {
-		_ = os.Chmod(leafDir, 0o700)
-	}()
-	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err == nil {
-		t.Fatal("expected manifest save failure")
+	cut := errors.New("manifest save cut")
+	db.leafGenerationManifestStore.hooks.BeforeTempCreate = func() error { return cut }
+	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); !errors.Is(err, cut) {
+		t.Fatalf("manifest save error=%v, want %v", err, cut)
 	}
 	current := db.leafGenerationManifest.Generations[db.leafGenerationManifest.currentGenerationIndex()]
 	if got, want := current.FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
@@ -983,9 +979,7 @@ func TestNoteLeafGenerationWritableFileID_SaveFailureLeavesManifestRetryable(t *
 	if got, want := loadedBefore.Generations[loadedBefore.currentGenerationIndex()].FileIDs, []uint32{rawFileID1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("persisted current FileIDs before retry=%v, want %v", got, want)
 	}
-	if err := os.Chmod(leafDir, 0o700); err != nil {
-		t.Fatalf("Chmod writable leaf dir: %v", err)
-	}
+	db.leafGenerationManifestStore.hooks.BeforeTempCreate = nil
 	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err != nil {
 		t.Fatalf("noteLeafGenerationWritableFileID retry: %v", err)
 	}
