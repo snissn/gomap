@@ -36,6 +36,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -8762,6 +8763,7 @@ type DB struct {
 	valueLogRewriteTriggerChurn    int64
 	valueLogRewriteMinSegmentAge   time.Duration
 	valueLogReader                 *valuelog.Manager
+	stableResourcePins             *rootpublication.IdentityPinRegistry
 	valueLogHotLanes               []int
 	valueLogWarmLanes              []int
 	valueLogColdLanes              []int
@@ -12329,6 +12331,27 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
 	reader.SetCurrentWritableMmapEnabled(opts.ValueLogCurrentWritableMmap)
 	reader.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
+	var stableResourcePins *rootpublication.IdentityPinRegistry
+	if provider, ok := backend.(interface {
+		StableResourcePinRegistry() *rootpublication.IdentityPinRegistry
+	}); ok {
+		stableResourcePins = provider.StableResourcePinRegistry()
+	}
+	if stableResourcePins == nil {
+		stableResourcePins = rootpublication.NewIdentityPinRegistry()
+		if installer, ok := backend.(interface {
+			SetValueLogStableResourcePinRegistry(*rootpublication.IdentityPinRegistry) error
+		}); ok {
+			if err := installer.SetValueLogStableResourcePinRegistry(stableResourcePins); err != nil {
+				_ = reader.Close()
+				return nil, err
+			}
+		}
+	}
+	if err := reader.SetStableResourcePinRegistry(stableResourcePins); err != nil {
+		_ = reader.Close()
+		return nil, err
+	}
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
@@ -12610,6 +12633,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableValueLogPointers:                   true,
 		indexOuterLeavesInValueLog:                 opts.IndexOuterLeavesInValueLog,
 		valueLogReader:                             valueLogReader,
+		stableResourcePins:                         stableResourcePins,
 		valueLogRetain:                             retained,
 		debugFlushPointers:                         debugFlushPointers,
 		debugFlushTiming:                           debugFlushTiming,

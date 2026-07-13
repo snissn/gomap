@@ -18,6 +18,7 @@ type cachingValueLogAppender struct {
 
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
 var _ backenddb.ValueLogExternalRefFlusher = (*cachingValueLogAppender)(nil)
+var _ backenddb.StableValueLogSegmentRegistrar = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}

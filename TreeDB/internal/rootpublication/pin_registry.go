@@ -9,9 +9,11 @@ import (
 var ErrUnbalancedResourcePin = errors.New("stable resource release without a matching pin")
 
 // IdentityPinRegistry serializes stable-resource registration against physical
-// deletion for every owner of the same open-file identity. Registries are
-// explicitly DB-scoped and injected into each producer/deleter; there is no
-// process-global lookup by path.
+// deletion for every owner of the same open-file identity. This identity-only
+// gate is deliberately distinct from token normalization, whose key remains
+// (resource kind, stable identity, generation). Registries are explicitly
+// DB-scoped and injected into each producer/deleter; there is no process-global
+// lookup by path.
 type IdentityPinRegistry struct {
 	mu         sync.Mutex
 	states     map[StableIdentity]*identityPinState

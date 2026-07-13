@@ -863,6 +863,16 @@ func (w *Writer) FileID() uint32 {
 	return w.fileID
 }
 
+// OpenFile returns the writer's borrowed current descriptor. Callers that need
+// stable ownership must duplicate it while holding the writer owner's rotation
+// lock; the returned descriptor must not be closed by the caller.
+func (w *Writer) OpenFile() *os.File {
+	if w == nil {
+		return nil
+	}
+	return w.f
+}
+
 func (w *Writer) Size() int64 {
 	if w == nil {
 		return 0

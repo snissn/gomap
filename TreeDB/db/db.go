@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -86,6 +87,7 @@ type snapshotView struct {
 
 type DB struct {
 	valueLogManager                *valuelog.Manager
+	stableResourcePins             *rootpublication.IdentityPinRegistry
 	snapshotViewRO                 atomic.Pointer[snapshotView]
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
 	snapshotAcquireEpoch           atomic.Uint64
@@ -1887,6 +1889,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	vm.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
+	stableResourcePins := rootpublication.NewIdentityPinRegistry()
+	if err := vm.SetStableResourcePinRegistry(stableResourcePins); err != nil {
+		_ = vm.Close()
+		p.Close()
+		return nil, err
+	}
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -1905,6 +1913,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	db := &DB{
 		valueLogManager:                vm,
+		stableResourcePins:             stableResourcePins,
 		valueLogRefTracker:             newValueLogRefTrackerForOptions(opts),
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,

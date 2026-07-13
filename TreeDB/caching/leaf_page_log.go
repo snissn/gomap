@@ -18,6 +18,7 @@ type cachingLeafPageLog struct {
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
+var _ backenddb.StableOuterLeafSegmentRegistrar = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
 var compactLeafLogPayloadScratchPtrRefPool sync.Pool
