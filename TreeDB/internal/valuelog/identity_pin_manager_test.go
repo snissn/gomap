@@ -584,6 +584,52 @@ func TestManagerStableDeleteEmitsCanonicalUnlinkCutBeforeQuarantineUnlink(t *tes
 	}
 }
 
+func TestManagerRejectsRegistryInstallationAfterAnotherManagerCommitsDelete(t *testing.T) {
+	dir := t.TempDir()
+	fileID, path := writeIdentityPinTestSegment(t, dir)
+	late, err := NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Close()
+	registry := rootpublication.NewIdentityPinRegistry()
+	deleter, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deleter.RemoveSegment(fileID); err != nil {
+		_ = deleter.Close()
+		t.Fatal(err)
+	}
+	if err := deleter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("committed delete left path: %v", err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("registry retained %d identities after committed delete", got)
+	}
+	if err := late.SetStableResourcePinRegistry(registry); !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("late registry installation error=%v want ErrUnresolvedResource", err)
+	}
+	token, err := late.StableResourceToken(fileID, StableResourceRegistration{
+		Kind: rootpublication.ResourceValueLog, LogicalLane: "main", Generation: 1,
+		DiagnosticPath: "value_vlog/" + filepath.Base(path),
+		Reachability:   rootpublication.ReachabilityValueLogPointer,
+	})
+	if token != nil {
+		token.Release()
+		t.Fatal("unregistered manager returned a stable resource token")
+	}
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("unregistered manager token error=%v want ErrUnresolvedResource", err)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("late installation resurrected %d identities", got)
+	}
+}
+
 func TestManagerStableDeleteRestoreCompensatesCanonicalUnlink(t *testing.T) {
 	dir := t.TempDir()
 	fileID, path := writeIdentityPinTestSegment(t, dir)
