@@ -12,8 +12,26 @@ func stableToken(identity string, generation, frontier uint64, sync func(context
 	return StableResourceToken{
 		Kind: StableResourceValueLog, Namespace: "main", Identity: identity, Generation: generation,
 		DiagnosticPath: "value_vlog/current", Frontier: frontier, Digest: "header-a", ReachableBy: "system_root.value_log",
-		NamespaceToken: StableNamespaceToken{ParentIdentity: "db-dir", Identity: "value-vlog-dir", Generation: 1, Establish: func(context.Context) error { return nil }},
-		FlushThrough:   func(context.Context, uint64) error { return nil }, SyncThrough: sync, Lease: NewStableResourceLease(nil),
+		PinnedOperationID: identity + "-handle",
+		NamespaceToken:    StableNamespaceToken{ParentIdentity: "db-dir", Identity: "value-vlog-dir", Generation: 1, Establish: func(context.Context) error { return nil }},
+		FlushThrough:      func(context.Context, uint64) error { return nil }, SyncThrough: sync, Lease: NewStableResourceLease(nil),
+	}
+}
+
+func TestStableResourceTokenOrdersDataBeforeNamespace(t *testing.T) {
+	var events []string
+	token := stableToken("inode", 1, 1, func(context.Context, uint64) error { events = append(events, "sync"); return nil })
+	token.FlushThrough = func(context.Context, uint64) error { events = append(events, "flush"); return nil }
+	token.NamespaceToken.Establish = func(context.Context) error { events = append(events, "namespace"); return nil }
+	set, err := NewStableResourceSet([]StableResourceToken{token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.FlushAndSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(events), "[flush sync namespace]"; got != want {
+		t.Fatalf("order=%s want=%s", got, want)
 	}
 }
 
@@ -73,6 +91,45 @@ func TestStableResourceTokenRejectsDigestAndNamespaceConflicts(t *testing.T) {
 	two.NamespaceToken.Identity = "other-dir"
 	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
 		t.Fatalf("namespace err=%v", err)
+	}
+	two = one
+	two.NamespaceToken.Generation++
+	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("generation err=%v", err)
+	}
+	two = one
+	two.ReachableBy = "other.root"
+	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("reachable err=%v", err)
+	}
+	two = one
+	two.PinnedOperationID = "other-handle"
+	if _, err := NewStableResourceSet([]StableResourceToken{one, two}); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("operation err=%v", err)
+	}
+}
+
+func TestStableResourceTokenDuplicateCombinesLeasesAndLifecycle(t *testing.T) {
+	var left, right atomic.Uint64
+	one := stableToken("inode", 1, 1, func(context.Context, uint64) error { return nil })
+	one.Lease = NewStableResourceLease(func() { left.Add(1) })
+	two := one
+	two.Lease = NewStableResourceLease(func() { right.Add(1) })
+	set, err := NewStableResourceSet([]StableResourceToken{one, two})
+	if err != nil {
+		t.Fatal(err)
+	}
+	debt := NewStableResourceDebt(set)
+	debt.Retry()
+	if left.Load() != 0 || right.Load() != 0 {
+		t.Fatal("retry released pin")
+	}
+	debt.Success()
+	debt.Superseded()
+	debt.Abandon()
+	debt.Poison()
+	if left.Load() != 1 || right.Load() != 1 {
+		t.Fatalf("left=%d right=%d", left.Load(), right.Load())
 	}
 }
 
@@ -161,10 +218,15 @@ func TestStableResourceTokenMetricsExposeExactOperationCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var metrics StableResourceMetricsRecorder
+	metrics.ObservePending(2, 64, 2, 2)
+	metrics.ObserveCoalesced(1)
+	metrics.ObserveConflict()
+	metrics.ObserveRejected()
 	if err := set.FlushAndSyncWithMetrics(context.Background(), &metrics); err != nil {
 		t.Fatal(err)
 	}
-	if got := metrics.Snapshot(); got.Flushes != 1 || got.Syncs != 1 || got.NamespaceSyncs != 1 {
+	metrics.ObservePending(0, 0, 0, 0)
+	if got := metrics.Snapshot(); got.Flushes != 1 || got.Syncs != 1 || got.NamespaceSyncs != 1 || got.PendingTokensHighWater != 2 || got.PendingBytesHighWater != 64 || got.DescriptorHighWater != 2 || got.PinHighWater != 2 || got.Coalesced != 1 || got.Conflicts != 1 || got.Rejected != 1 || got.ByKind[StableResourceValueLog].Syncs != 1 {
 		t.Fatalf("metrics=%+v", got)
 	}
 }

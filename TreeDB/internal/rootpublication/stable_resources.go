@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +67,16 @@ type StableResourceLease struct {
 	release func()
 }
 
+func joinStableResourceLeases(left, right *StableResourceLease) *StableResourceLease {
+	if left == right {
+		return left
+	}
+	return NewStableResourceLease(func() {
+		left.Release()
+		right.Release()
+	})
+}
+
 func NewStableResourceLease(release func()) *StableResourceLease {
 	return &StableResourceLease{release: release}
 }
@@ -95,10 +104,15 @@ type StableResourceToken struct {
 	Frontier       uint64
 	Digest         string
 	ReachableBy    string
-	NamespaceToken StableNamespaceToken
-	FlushThrough   func(context.Context, uint64) error
-	SyncThrough    func(context.Context, uint64) error
-	Lease          *StableResourceLease
+	// PinnedOperationID identifies the captured handle/generation operation.
+	// Duplicate tokens with different operations are rejected rather than
+	// accidentally selecting one callback and leaking the other producer pin.
+	PinnedOperationID string
+	MutableAppend     bool
+	NamespaceToken    StableNamespaceToken
+	FlushThrough      func(context.Context, uint64) error
+	SyncThrough       func(context.Context, uint64) error
+	Lease             *StableResourceLease
 }
 
 func (t StableResourceToken) key() string {
@@ -106,7 +120,7 @@ func (t StableResourceToken) key() string {
 }
 
 func (t StableResourceToken) validate() error {
-	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.ReachableBy == "" {
+	if t.Kind == "" || t.Namespace == "" || t.Identity == "" || t.Frontier == 0 || t.ReachableBy == "" || t.PinnedOperationID == "" {
 		return fmt.Errorf("%w: incomplete stable resource token kind=%q identity=%q", ErrInvalidCandidate, t.Kind, t.Identity)
 	}
 	if err := t.NamespaceToken.validate(); err != nil {
@@ -117,6 +131,12 @@ func (t StableResourceToken) validate() error {
 	}
 	if t.Lease == nil {
 		return fmt.Errorf("%w: resource %q has no ownership lease", ErrInvalidCandidate, t.Identity)
+	}
+	if t.MutableAppend {
+		return nil
+	}
+	if t.Digest == "" {
+		return fmt.Errorf("%w: immutable resource %q is missing digest", ErrInvalidCandidate, t.Identity)
 	}
 	return nil
 }
@@ -146,9 +166,16 @@ func NewStableResourceSet(tokens []StableResourceToken) (StableResourceSet, erro
 }
 
 func mergeStableResourceToken(left, right StableResourceToken) (StableResourceToken, error) {
-	if left.Digest != right.Digest || left.NamespaceToken.Identity != right.NamespaceToken.Identity || left.NamespaceToken.ParentIdentity != right.NamespaceToken.ParentIdentity {
+	if left.Digest != right.Digest ||
+		left.ReachableBy != right.ReachableBy ||
+		left.MutableAppend != right.MutableAppend ||
+		left.PinnedOperationID != right.PinnedOperationID ||
+		left.NamespaceToken.Identity != right.NamespaceToken.Identity ||
+		left.NamespaceToken.ParentIdentity != right.NamespaceToken.ParentIdentity ||
+		left.NamespaceToken.Generation != right.NamespaceToken.Generation {
 		return StableResourceToken{}, fmt.Errorf("%w: conflicting stable resource identity %q", ErrInvalidCandidate, left.Identity)
 	}
+	left.Lease = joinStableResourceLeases(left.Lease, right.Lease)
 	if right.Frontier > left.Frontier {
 		left.Frontier, left.FlushThrough, left.SyncThrough = right.Frontier, right.FlushThrough, right.SyncThrough
 	}
@@ -164,18 +191,19 @@ func (s StableResourceSet) union(other StableResourceSet) (StableResourceSet, er
 	return NewStableResourceSet(append(s.Tokens(), other.Tokens()...))
 }
 
-// FlushAndSync establishes namespaces before flushing and syncing each pinned
-// resource through its greatest coalesced frontier.
+// FlushAndSync flushes and syncs data through every captured frontier before
+// establishing creation/rename namespace durability. Callbacks are pinned at
+// registration and never reopen DiagnosticPath.
 func (s StableResourceSet) FlushAndSync(ctx context.Context) error {
 	for _, token := range s.tokens {
-		if err := token.NamespaceToken.establish(ctx); err != nil {
-			return err
-		}
 		if err := token.FlushThrough(ctx, token.Frontier); err != nil {
 			return fmt.Errorf("root publication: flush %s/%s: %w", token.Kind, token.Identity, err)
 		}
 		if err := token.SyncThrough(ctx, token.Frontier); err != nil {
 			return fmt.Errorf("root publication: sync %s/%s: %w", token.Kind, token.Identity, err)
+		}
+		if err := token.NamespaceToken.establish(ctx); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -185,26 +213,29 @@ func (s StableResourceSet) FlushAndSync(ctx context.Context) error {
 // recorder explicit prevents hidden process-global registration state.
 func (s StableResourceSet) FlushAndSyncWithMetrics(ctx context.Context, metrics *StableResourceMetricsRecorder) error {
 	for _, token := range s.tokens {
-		if err := token.NamespaceToken.establish(ctx); err != nil {
-			if metrics != nil {
-				metrics.rejected.Add(1)
-			}
-			return err
-		}
-		if metrics != nil {
-			metrics.namespaceSyncs.Add(1)
-		}
+		flushStarted := time.Now()
 		if err := token.FlushThrough(ctx, token.Frontier); err != nil {
 			return fmt.Errorf("root publication: flush %s/%s: %w", token.Kind, token.Identity, err)
 		}
 		if metrics != nil {
-			metrics.flushes.Add(1)
+			metrics.record(token.Kind, stableResourceFlush, time.Since(flushStarted))
 		}
+		syncStarted := time.Now()
 		if err := token.SyncThrough(ctx, token.Frontier); err != nil {
 			return fmt.Errorf("root publication: sync %s/%s: %w", token.Kind, token.Identity, err)
 		}
 		if metrics != nil {
-			metrics.syncs.Add(1)
+			metrics.record(token.Kind, stableResourceSync, time.Since(syncStarted))
+		}
+		namespaceStarted := time.Now()
+		if err := token.NamespaceToken.establish(ctx); err != nil {
+			if metrics != nil {
+				metrics.reject()
+			}
+			return err
+		}
+		if metrics != nil {
+			metrics.record(token.Kind, stableResourceNamespace, time.Since(namespaceStarted))
 		}
 	}
 	return nil
@@ -213,6 +244,28 @@ func (s StableResourceSet) FlushAndSyncWithMetrics(ctx context.Context, metrics 
 func (s StableResourceSet) Release() {
 	for _, token := range s.tokens {
 		token.Lease.Release()
+	}
+}
+
+// StableResourceDebt owns a candidate's leases across outcome transitions.
+// Retry and partial durable failure retain pins; all terminal paths release
+// exactly once. #3679/#3718 choose the production transition point.
+type StableResourceDebt struct {
+	set  StableResourceSet
+	once sync.Once
+}
+
+func NewStableResourceDebt(set StableResourceSet) *StableResourceDebt {
+	return &StableResourceDebt{set: set}
+}
+func (d *StableResourceDebt) Retry()      {}
+func (d *StableResourceDebt) Success()    { d.release() }
+func (d *StableResourceDebt) Superseded() { d.release() }
+func (d *StableResourceDebt) Abandon()    { d.release() }
+func (d *StableResourceDebt) Poison()     { d.release() }
+func (d *StableResourceDebt) release() {
+	if d != nil {
+		d.once.Do(d.set.Release)
 	}
 }
 
@@ -280,17 +333,116 @@ type StableResourceMetrics struct {
 	Conflicts              uint64
 	Rejected               uint64
 	OldestPendingAge       time.Duration
+	ByKind                 map[StableResourceKind]StableResourceKindMetrics
 }
+
+type StableResourceKindMetrics struct {
+	Flushes, Syncs, NamespaceSyncs                 uint64
+	FlushDuration, SyncDuration, NamespaceDuration time.Duration
+}
+
+type stableResourceMetricEvent uint8
+
+const (
+	stableResourceFlush stableResourceMetricEvent = iota
+	stableResourceSync
+	stableResourceNamespace
+)
 
 // StableResourceMetricsRecorder is candidate-local instrumentation for the
 // later production publisher. It deliberately has no global registry.
 type StableResourceMetricsRecorder struct {
-	flushes, syncs, namespaceSyncs, rejected atomic.Uint64
+	mu                                            sync.Mutex
+	pendingAt                                     time.Time
+	pendingTokens, pendingBytes                   uint64
+	pendingTokensHighWater, pendingBytesHighWater uint64
+	descriptorHighWater, pinHighWater             uint64
+	coalesced, conflicts, rejected                uint64
+	byKind                                        map[StableResourceKind]StableResourceKindMetrics
 }
+
+func (r *StableResourceMetricsRecorder) ObservePending(tokens, bytes, descriptors, pins uint64) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if tokens > 0 && r.pendingTokens == 0 {
+		r.pendingAt = time.Now()
+	}
+	if tokens == 0 {
+		r.pendingAt = time.Time{}
+	}
+	r.pendingTokens, r.pendingBytes = tokens, bytes
+	if tokens > r.pendingTokensHighWater {
+		r.pendingTokensHighWater = tokens
+	}
+	if bytes > r.pendingBytesHighWater {
+		r.pendingBytesHighWater = bytes
+	}
+	if descriptors > r.descriptorHighWater {
+		r.descriptorHighWater = descriptors
+	}
+	if pins > r.pinHighWater {
+		r.pinHighWater = pins
+	}
+}
+
+func (r *StableResourceMetricsRecorder) ObserveCoalesced(count uint64) {
+	if r != nil {
+		r.mu.Lock()
+		r.coalesced += count
+		r.mu.Unlock()
+	}
+}
+
+func (r *StableResourceMetricsRecorder) ObserveConflict() {
+	if r != nil {
+		r.mu.Lock()
+		r.conflicts++
+		r.mu.Unlock()
+	}
+}
+
+func (r *StableResourceMetricsRecorder) ObserveRejected() { r.reject() }
+
+func (r *StableResourceMetricsRecorder) record(kind StableResourceKind, event stableResourceMetricEvent, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byKind == nil {
+		r.byKind = make(map[StableResourceKind]StableResourceKindMetrics)
+	}
+	m := r.byKind[kind]
+	switch event {
+	case stableResourceFlush:
+		m.Flushes++
+		m.FlushDuration += d
+	case stableResourceSync:
+		m.Syncs++
+		m.SyncDuration += d
+	case stableResourceNamespace:
+		m.NamespaceSyncs++
+		m.NamespaceDuration += d
+	}
+	r.byKind[kind] = m
+}
+func (r *StableResourceMetricsRecorder) reject() { r.mu.Lock(); r.rejected++; r.mu.Unlock() }
 
 func (r *StableResourceMetricsRecorder) Snapshot() StableResourceMetrics {
 	if r == nil {
 		return StableResourceMetrics{}
 	}
-	return StableResourceMetrics{Flushes: r.flushes.Load(), Syncs: r.syncs.Load(), NamespaceSyncs: r.namespaceSyncs.Load(), Rejected: r.rejected.Load()}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := StableResourceMetrics{PendingTokensHighWater: r.pendingTokensHighWater, PendingBytesHighWater: r.pendingBytesHighWater, DescriptorHighWater: r.descriptorHighWater, PinHighWater: r.pinHighWater, Coalesced: r.coalesced, Conflicts: r.conflicts, Rejected: r.rejected, ByKind: make(map[StableResourceKind]StableResourceKindMetrics, len(r.byKind))}
+	for kind, metrics := range r.byKind {
+		result.ByKind[kind] = metrics
+		result.Flushes += metrics.Flushes
+		result.Syncs += metrics.Syncs
+		result.NamespaceSyncs += metrics.NamespaceSyncs
+	}
+	if !r.pendingAt.IsZero() {
+		result.OldestPendingAge = time.Since(r.pendingAt)
+	}
+	return result
 }

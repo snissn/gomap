@@ -7,16 +7,18 @@ deleting owner are named. The implementation remains dormant until #3679 and
 
 | Root/catalog/frame field | Producer | Kind | Stable identity and frontier/digest | Namespace operation | Registrar | Recovery validator | Deleting owner |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ValuePtr.FileID` | `db/value_log.go` append and rotate | value_log | file ID + generation; appended byte frontier | value-log lane create/rotate | value-log producer | value-log open/replay | `ValueLogGC` / rewrite |
-| leaf root generation | `db/leaf_page_log.go`, pack rewrite | outer_leaf | generation ID + sealed digest | pack/create/rename | leaf builder | leaf generation open | leaf generation GC |
+| `ValuePtr.FileID` | `db/value_log_appender.go:AppendValueLogValues` | value_log | file ID + generation; appended byte frontier | value-log lane create/rotate | value-log producer | `db/value_log_appender.go` | `db/vlog_gc.go` / rewrite |
+| raw leaf root generation | `db/leaf_page_log.go:AppendLeafPage` | outer_leaf | generation ID + sealed digest | lane create/rotate | leaf builder | `db/leaf_generation_manifest.go` | `db/leaf_generation_gc.go` |
+| packed leaf generation | `db/leaf_generation_pack.go` | outer_leaf | generation ID + sealed digest | pack/create/rename | pack writer | `db/leaf_generation_manifest.go` | `db/leaf_generation_gc.go` |
 | leaf manifest | leaf generation pack writer | outer_leaf | manifest generation + digest | rename into leaf namespace | pack writer | manifest loader | leaf generation GC |
+| collection dictionary | `collections/template_v1.go` | dictionary | catalog generation + digest | catalog create/rename | collection root builder | `collections/template_v1.go` | `db/vacuum_collection_roots.go` |
 | collection catalog/template | `collections` catalog builders | template | catalog generation + digest | catalog create/rename | collection root builder | catalog decode | collection vacuum |
 | column part | `collections` column writer | column | asset ref + content digest | asset create/rename | collection root builder | column asset loader | column asset lifecycle |
-| typed-column parts/value/code | `internal/typedcolumn`, collections adapters | typed_column | part/section ID + digest | part create/rename | collection root builder | typed-column image validation | column asset lifecycle |
-| HNSW/vector packs | `collections` vector graph builders | vector | pack ID + digest | pack create/rename | collection root builder | vector pack validation | vector maintenance |
+| typed-column parts/value/code | `internal/typedcolumn/part.go`, collections adapters | typed_column | part/section ID + digest | part create/rename | collection root builder | `internal/typedcolumn/part_image_decode.go` | `collections/column_store_compaction.go` |
+| HNSW/vector packs | `collections/column_vector_graph_manifest.go` | vector | pack ID + digest | pack create/rename | collection root builder | `collections/column_vector_graph_manifest.go` | `collections/column_store_compaction.go` |
 | text dictionaries/postings/positions | `collections/text_v2_storage.go` | text | catalog/asset ID + digest | text asset create/rename | collection root builder | text catalog validation | text maintenance |
-| command-WAL segment/external RID | `db/command_wal_raw.go` | command_wal | segment generation/RID + durable LSN | WAL segment create/rotate | command-WAL builder | command-WAL replay | WAL retention |
-| query-ready assets | #3694 query-ready producer | query_ready | asset ID + digest | query-ready create/rename | collection root builder | query-ready validation | query-ready lifecycle |
+| command-WAL segment/external RID | `db/command_wal_raw.go` | command_wal | segment generation/RID + durable LSN | WAL segment create/rotate | command-WAL builder | `db/command_wal_v2_recovery.go` | `db/command_wal_raw.go` |
+| query-ready assets | `internal/typedcolumn/query_ready_delta.go` | query_ready | asset ID + digest | query-ready create/rename | collection root builder | `internal/typedcolumn/query_ready_delta.go` | `collections/column_store_compaction.go` |
 
 All paths in this table are diagnostic only; token identity and pinned callbacks
 are the durable authority. Adding an authoritative field requires adding its
