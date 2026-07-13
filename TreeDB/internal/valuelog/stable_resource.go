@@ -115,32 +115,21 @@ func (w *Writer) bindStableResourcePinRegistry(registration *StableResourceRegis
 	return nil
 }
 
-// SetStableResourcePinRegistry installs the DB-scoped physical identity gate
-// used by every manager that can delete these segment files.
+// SetStableResourcePinRegistry only accepts the registry already installed by
+// the constructor. Installing a registry after the initial directory scan can
+// resurrect an identity another manager already committed as deleted.
 func (m *Manager) SetStableResourcePinRegistry(registry *rootpublication.IdentityPinRegistry) error {
 	if m == nil || registry == nil {
 		return errors.New("valuelog: nil stable resource pin registry")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stableResourcePins != nil && m.stableResourcePins != registry {
+	if m.stableResourcePins == nil {
+		return fmt.Errorf("%w: stable resource pin registry must be installed at manager construction", rootpublication.ErrUnresolvedResource)
+	}
+	if m.stableResourcePins != registry {
 		return errors.New("valuelog: stable resource pin registry already installed")
 	}
-	if m.stableResourcePins == registry {
-		return nil
-	}
-	observed := make([]*File, 0, len(m.files))
-	for _, file := range m.files {
-		if err := m.observeStableFileWithRegistryLocked(file, registry); err != nil {
-			for _, prior := range observed {
-				_ = registry.Unobserve(prior.stableIdentity)
-				prior.stableObserved = false
-			}
-			return err
-		}
-		observed = append(observed, file)
-	}
-	m.stableResourcePins = registry
 	return nil
 }
 

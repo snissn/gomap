@@ -23,6 +23,10 @@ A TreeDB deployment uses:
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
+- transient, crash-persistent value-log delete intents beside a segment as
+  `.<segment-name>.delete-<volume-id>-<object-id>/<segment-name>`, where the
+  fixed-width hexadecimal ids identify the exact physical object being
+  deleted,
 - typed asset manager segments under
   `column_assets/<namespace>/assets/segments/segment-*.tca` for production
   typed-storage physical assets (`column_assets` remains the compatibility
@@ -53,6 +57,12 @@ Raft provider state is separate from the main DB. The local command WAL under
 value storage managed by reachability-based GC and rewrite/compaction. The
 single-group provider/storage boundary is defined in
 `TreeDB/docs/spec/raftcluster.md`.
+
+The identity-encoded delete-intent directory is recovery state, not another
+value-log segment or an age-based retention mechanism. It may remain after an
+interrupted unlink. A writable open reconciles it before exposing segments; a
+read-only open never mutates it and reports `ErrRecoveryRequired`. Because
+TreeDB is pre-alpha, this protocol has no compatibility migration scaffold.
 
 ## 1.1 Opt-in external-version MVCC key subspace
 

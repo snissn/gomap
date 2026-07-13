@@ -22,7 +22,24 @@ Conceptually, a value-log segment can be:
 3. eligible (unreferenced and not active),
 4. deleted/zombied.
 
-### 2.1 External-version logical pruning is not segment GC
+### 2.1 Physical-identity deletion and quarantine
+
+All managers and writers that can publish or delete segments in one live DB
+namespace share a physical-identity registry.
+The registry must be installed at construction, before the initial segment
+scan; attaching it afterward is forbidden because an already-open unregistered
+handle could otherwise resurrect an identity another manager committed as
+deleted. Stable publication pins and delete leases use the captured file-handle
+identity, not a later pathname lookup.
+
+Destructive segment removal first moves the canonical name into a private,
+same-parent, identity-encoded quarantine directory. Validation and unlink then
+operate on that exact renamed object. A replacement created at the old
+canonical name is never selected for cleanup. An interrupted quarantine is
+durable recovery state: read-write open reconciles it before scanning segments,
+while read-only open returns `ErrRecoveryRequired` without mutation.
+
+### 2.2 External-version logical pruning is not segment GC
 
 `TreeDB/mvcc.PruneVersions` deletes obsolete physical index keys only after its
 persisted external timestamp floor makes those historical reads invalid. It
