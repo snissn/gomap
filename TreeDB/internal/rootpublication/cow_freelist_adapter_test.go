@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -28,12 +29,22 @@ func TestCowFreelistExtensionCarriesExactOrderedReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coalesced := coalesceCandidates([]*PreparedRootCandidate{first, second})
+	coalesced, err := coalesceCandidates([]*PreparedRootCandidate{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
 	extension, ok := coalesced.extensions.cowFreelist.(cowFreelistExtension)
 	if !ok || len(extension.chain) != 2 {
 		t.Fatalf("extension=%#v", coalesced.extensions.cowFreelist)
 	}
 	if extension.chain[0] != firstCandidate.GenerationRef() || extension.chain[1] != secondCandidate.GenerationRef() {
 		t.Fatal("coalescing lost exact order")
+	}
+}
+
+func TestCowFreelistExtensionRejectsWrongType(t *testing.T) {
+	_, err := (cowFreelistExtension{}).union(testExtension(1))
+	if !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("union error=%v, want ErrResourceConflict", err)
 	}
 }

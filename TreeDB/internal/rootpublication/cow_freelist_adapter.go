@@ -1,6 +1,8 @@
 package rootpublication
 
 import (
+	"fmt"
+
 	"github.com/snissn/gomap/TreeDB/freelist"
 )
 
@@ -11,15 +13,15 @@ type cowFreelistExtension struct {
 	chain []freelist.GenerationRefV1
 }
 
-func (e cowFreelistExtension) union(other immutableExtension) immutableExtension {
+func (e cowFreelistExtension) union(other immutableExtension) (immutableExtension, error) {
 	o, ok := other.(cowFreelistExtension)
 	if !ok {
-		return e
+		return nil, fmt.Errorf("%w: COW freelist extension has type %T", ErrResourceConflict, other)
 	}
 	chain := make([]freelist.GenerationRefV1, 0, len(e.chain)+len(o.chain))
 	chain = append(chain, e.chain...)
 	chain = append(chain, o.chain...)
-	return cowFreelistExtension{chain: chain}
+	return cowFreelistExtension{chain: chain}, nil
 }
 
 func newPreparedRootCandidateWithCowFreelist(spec CandidateSpec, g *freelist.FreelistGenerationV1) (*PreparedRootCandidate, error) {
