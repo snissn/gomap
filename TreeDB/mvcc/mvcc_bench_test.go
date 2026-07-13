@@ -125,6 +125,12 @@ func BenchmarkCommitAtGetAtInterleaved(b *testing.B) {
 	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.sources_max", "iterator_sources_max")
 	reportMVCCBenchGauge(b, after, "treedb.cache.iterator.queue_len_max", "iterator_queue_len_max")
 	reportMVCCBenchGauge(b, after, "treedb.cache.queue_len", "iterator_queue_len_end")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.calls_total", "point_successor_calls/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.sources_total", "point_successor_sources/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.mutable_probes_total", "point_successor_mutable_probes/op")
+	reportMVCCBenchCounter(b, before, after, "treedb.cache.point_successor.backend_probes_total", "point_successor_backend_probes/op")
+	reportMVCCBenchGauge(b, after, "treedb.cache.point_successor.sources_max", "point_successor_sources_max")
+	reportMVCCBenchGauge(b, after, "treedb.cache.point_successor.general_merge_iterators_total", "point_successor_general_merge_iterators")
 }
 
 func reportMVCCBenchCounter(b *testing.B, before, after map[string]string, key, name string) {

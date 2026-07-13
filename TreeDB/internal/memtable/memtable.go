@@ -78,6 +78,12 @@ type Table interface {
 	Freeze()
 }
 
+// SuccessorTable is the native point-successor seam used by bounded point
+// reads. Returned key/value slices alias table storage.
+type SuccessorTable interface {
+	SeekGE(start, end []byte) (key, val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool)
+}
+
 // RevisionTable is implemented by memtables that carry native entry revisions
 // beside value/pointer/flags metadata.
 type RevisionTable interface {
@@ -358,6 +364,19 @@ func (m *Memtable) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.sl.GetEntryWithRevision(key)
+}
+
+func (m *Memtable) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if end != nil && bytes.Compare(start, end) >= 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	key, val, ptr, flags, revision, found := m.sl.SeekGEEntryWithRevision(start)
+	if !found || (end != nil && bytes.Compare(key, end) >= 0) {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	return key, val, ptr, flags, revision, true
 }
 
 // Size returns the total memory usage (arena size).

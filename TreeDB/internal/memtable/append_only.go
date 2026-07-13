@@ -2120,6 +2120,112 @@ func (m *AppendOnly) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, by
 	}
 }
 
+func appendOnlyEntryInRange(ent *appendOnlyEntry, start, end []byte) bool {
+	if ent == nil {
+		return false
+	}
+	key := appendOnlyEntryKey(ent)
+	return bytes.Compare(key, start) >= 0 && (end == nil || bytes.Compare(key, end) < 0)
+}
+
+func (m *AppendOnly) seekGEEntryLocked(start, end []byte) *appendOnlyEntry {
+	if m.count == 0 || (end != nil && bytes.Compare(start, end) >= 0) {
+		return nil
+	}
+	active := m.entries[:m.count]
+	if m.ordered {
+		idx := sort.Search(len(active), func(i int) bool {
+			return bytes.Compare(appendOnlyEntryKey(&active[i]), start) >= 0
+		})
+		if idx < len(active) && appendOnlyEntryInRange(&active[idx], start, end) {
+			return &active[idx]
+		}
+		return nil
+	}
+	if len(m.sortedRuns) > 0 {
+		var best *appendOnlyEntry
+		bestRun := -1
+		for runIdx, run := range m.sortedRuns {
+			if !appendOnlySortedRunValid(run, len(active)) {
+				continue
+			}
+			pos := sort.Search(run.end-run.start, func(i int) bool {
+				return bytes.Compare(appendOnlyEntryKey(&active[run.start+i]), start) >= 0
+			})
+			if pos >= run.end-run.start {
+				continue
+			}
+			ent := &active[run.start+pos]
+			if !appendOnlyEntryInRange(ent, start, end) {
+				continue
+			}
+			if best == nil || bytes.Compare(appendOnlyEntryKey(ent), appendOnlyEntryKey(best)) < 0 ||
+				(bytes.Equal(appendOnlyEntryKey(ent), appendOnlyEntryKey(best)) && runIdx > bestRun) {
+				best, bestRun = ent, runIdx
+			}
+		}
+		return best
+	}
+	// The unordered fallback keeps only a latest-key hash index. Scan those
+	// indices without allocating; exact-start hits remain O(1) in GetAt's common
+	// commit-then-read path, while arbitrary successors remain correct.
+	var best *appendOnlyEntry
+	consider := func(idx int) {
+		if idx < 0 || idx >= len(active) {
+			return
+		}
+		ent := &active[idx]
+		if !appendOnlyEntryInRange(ent, start, end) {
+			return
+		}
+		if best == nil || bytes.Compare(appendOnlyEntryKey(ent), appendOnlyEntryKey(best)) < 0 {
+			best = ent
+		}
+	}
+	for _, idx := range m.latest {
+		consider(idx)
+	}
+	for _, idx := range m.latest64 {
+		consider(idx)
+	}
+	return best
+}
+
+func (m *AppendOnly) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if end != nil && bytes.Compare(start, end) >= 0 {
+		return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	if val, ptr, flags, revision, found := m.GetEntryWithRevision(start); found {
+		return start, val, ptr, flags, revision, true
+	}
+	for {
+		m.mu.RLock()
+		if !m.ordered && len(m.sortedRuns) == 0 && m.latestDirty {
+			m.mu.RUnlock()
+			m.mu.Lock()
+			if !m.ordered && len(m.sortedRuns) == 0 && m.latestDirty {
+				m.rebuildLatestIndexLocked()
+			}
+			m.mu.Unlock()
+			continue
+		}
+		ent := m.seekGEEntryLocked(start, end)
+		if ent == nil {
+			m.mu.RUnlock()
+			return nil, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+		}
+		key, val, ptr, flags, revision := appendOnlyEntryKey(ent), ent.value, ent.ptr, ent.flags, ent.revision
+		m.mu.RUnlock()
+		if flags&node.FlagTombstone != 0 {
+			return key, nil, page.ValuePtr{}, flags, revision, true
+		}
+		if flags&node.FlagPointer == 0 {
+			ptr = page.ValuePtr{}
+		}
+		return key, val, ptr, flags, revision, true
+	}
+}
+
 func (m *AppendOnly) Size() int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
