@@ -2946,7 +2946,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if db.testFailFinalizeCommit.Load() {
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
-	if forceValueLogRefresh && db.valueLogManager != nil {
+	// Every newly reachable external segment must be registered before the
+	// immutable manifest captures its exact identity. This is independent of
+	// whether visible-state installation later needs a manager refresh.
+	if db.valueLogManager != nil {
 		if err := durabilitycut.EmitBasic(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
 			return post, prePublishErr(err)
 		}
@@ -2976,7 +2979,24 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// publisher owns the only V1 meta mutation path.
 	t0 := time.Now()
 	var err error
-	nextMeta, err = db.publishDurableRootV1(idx, nextMeta, retired, vlogRefDelta)
+	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
+		db.durablePublishMu.Lock()
+		defer db.durablePublishMu.Unlock()
+		if db.durableRoot.pending != nil {
+			return post, wrapFinalizeCommitError(freelist.ErrCOWCandidatePrepared, true)
+		}
+		candidate, prepareErr := db.prepareDurableRootCandidateV1(idx, nextMeta, retired, vlogRefDelta)
+		if prepareErr != nil {
+			return post, wrapFinalizeCommitError(prepareErr, true)
+		}
+		// The immutable candidate now owns its allocator reservations and exact
+		// resource handles. No root-serialization lock is needed by the remaining
+		// flush/sync/meta transaction or the visible-state install below.
+		releaseRootSerialization()
+		nextMeta, err = db.executeDurableRootCandidateV1(candidate)
+	} else {
+		nextMeta, err = db.publishDurableRootV1(idx, nextMeta, retired, vlogRefDelta)
+	}
 	if err != nil {
 		return post, err
 	}

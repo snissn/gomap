@@ -214,6 +214,57 @@ func durableDiagnosticPathV1(root, path string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
+// ensureDurableValueLogReferencesRegisteredV1 resolves only the projected
+// pointer dependencies that are absent from the manager. Normal in-process
+// writers register segments at creation time; this bounded fallback covers
+// externally prepared pointer segments without turning root publication into a
+// recursive directory scan. ValuePtr does not encode the value/leaf namespace,
+// so the same file ID in both namespaces is an identity conflict.
+func (db *DB) ensureDurableValueLogReferencesRegisteredV1(references map[uint32]struct{}) error {
+	if db == nil || db.valueLogManager == nil || len(references) == 0 {
+		return nil
+	}
+	fileIDs := make([]uint32, 0, len(references))
+	for fileID := range references {
+		fileIDs = append(fileIDs, fileID)
+	}
+	sort.Slice(fileIDs, func(i, j int) bool { return fileIDs[i] < fileIDs[j] })
+	for _, fileID := range fileIDs {
+		if db.valueLogManager.HasSegment(fileID) {
+			continue
+		}
+		candidatePaths := []string{
+			valuelog.SegmentPath(ValueLogDirPath(db.dir), fileID),
+			valuelog.SegmentPath(LeafLogDirPath(db.dir), fileID),
+		}
+		found := make([]string, 0, len(candidatePaths))
+		for _, path := range candidatePaths {
+			info, err := os.Stat(path)
+			switch {
+			case err == nil && !info.IsDir():
+				found = append(found, path)
+			case err == nil:
+				return fmt.Errorf("%w: value-log file %d path %q is not a file", rootpublication.ErrUnresolvedResource, fileID, path)
+			case errors.Is(err, os.ErrNotExist):
+				continue
+			default:
+				return fmt.Errorf("%w: inspect value-log file %d path %q: %v", rootpublication.ErrUnresolvedResource, fileID, path, err)
+			}
+		}
+		switch len(found) {
+		case 0:
+			return fmt.Errorf("%w: value-log file %d is not registered and has no canonical segment", rootpublication.ErrUnresolvedResource, fileID)
+		case 1:
+			if err := db.valueLogManager.RegisterSegment(found[0], fileID); err != nil {
+				return fmt.Errorf("register durable value-log file %d: %w", fileID, err)
+			}
+		default:
+			return fmt.Errorf("%w: value-log file %d exists in both canonical namespaces", rootpublication.ErrResourceConflict, fileID)
+		}
+	}
+	return nil
+}
+
 func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta) (*rootpublication.StableResourceSet, error) {
 	if db.valueLogManager == nil {
 		return nil, nil
@@ -230,6 +281,9 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 	}
 	if len(references) == 0 {
 		return nil, nil
+	}
+	if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
+		return nil, err
 	}
 
 	set := db.valueLogManager.CurrentSetNoRefresh()

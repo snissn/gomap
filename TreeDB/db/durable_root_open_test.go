@@ -2,10 +2,15 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -311,5 +316,68 @@ func TestDurableRootPublicationRetainsAndRetriesExactPreMetaCandidate(t *testing
 	}
 	if meta.CommitSeq != 2 {
 		t.Fatalf("retried durable meta commit=%d, want 2", meta.CommitSeq)
+	}
+}
+
+func TestDurableRootPublicationIOReleasesRootSerializationLocks(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	tryExclusive := func(tryLock func() bool, unlock func()) bool {
+		deadline := time.Now().Add(100 * time.Millisecond)
+		for {
+			if tryLock() {
+				unlock()
+				return true
+			}
+			if time.Now().After(deadline) {
+				return false
+			}
+			runtime.Gosched()
+		}
+	}
+	checkLocks := func(stage string) error {
+		if !tryExclusive(database.mu.TryLock, database.mu.Unlock) {
+			return fmt.Errorf("db.mu held during %s", stage)
+		}
+		if !tryExclusive(database.writeMu.TryLock, database.writeMu.Unlock) {
+			return fmt.Errorf("writeMu held during %s", stage)
+		}
+		if !tryExclusive(database.commitMu.TryLock, database.commitMu.Unlock) {
+			return fmt.Errorf("commitMu held during %s", stage)
+		}
+		return nil
+	}
+
+	var observedMu sync.Mutex
+	observed := make(map[durabilitycut.Point]bool)
+	var lockErrors []error
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch event.Point {
+		case durabilitycut.BeforeIndexDataSync, durabilitycut.BeforeMetaWrite, durabilitycut.BeforeMetaSync:
+			observedMu.Lock()
+			observed[event.Point] = true
+			if lockErr := checkLocks(string(event.Point)); lockErr != nil {
+				lockErrors = append(lockErrors, lockErr)
+			}
+			observedMu.Unlock()
+		}
+		return nil
+	})
+	if err := database.SetSync([]byte("lock-free"), []byte("durable-root")); err != nil {
+		restore()
+		t.Fatal(err)
+	}
+	restore()
+	if err := errors.Join(lockErrors...); err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range []durabilitycut.Point{durabilitycut.BeforeIndexDataSync, durabilitycut.BeforeMetaWrite, durabilitycut.BeforeMetaSync} {
+		if !observed[point] {
+			t.Fatalf("did not observe %s", point)
+		}
 	}
 }

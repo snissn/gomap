@@ -417,7 +417,13 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		return false, nil
 	}
-	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
+	preparePublishWithoutRootLock := func() (*finalizeCommitPrepareGuard, error) {
+		b.db.writeMu.RUnlock()
+		guard, prepareErr := b.db.prepareFlushApplyPublish(sync)
+		b.db.writeMu.RLock()
+		return guard, prepareErr
+	}
+	publishPrepareGuard, err := preparePublishWithoutRootLock()
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -433,7 +439,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	if hook := b.db.testAfterOptimisticPublishPrepareHook; hook != nil {
 		publishPrepareGuard.Release()
 		hook()
-		publishPrepareGuard, err = b.db.prepareFlushApplyPublish(sync)
+		publishPrepareGuard, err = preparePublishWithoutRootLock()
 		if err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 			b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -482,9 +488,15 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 	}
 
+	rootLocksReleased := false
+	releaseRootSerialization := func() {
+		b.db.commitMu.Unlock()
+		b.db.writeMu.RUnlock()
+		rootLocksReleased = true
+	}
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, releaseRootSerialization: releaseRootSerialization})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -503,6 +515,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.skipPrePublishFlush = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
+		opts.releaseRootSerialization = releaseRootSerialization
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu so that no concurrent writer can
 		// slip past the poison check in appendRawKVCommandWALIntent and publish a
@@ -517,12 +530,16 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 			b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
 		}
 	}
-	b.db.commitMu.Unlock()
+	if !rootLocksReleased {
+		b.db.commitMu.Unlock()
+	}
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-		b.db.writeMu.RUnlock()
+		if !rootLocksReleased {
+			b.db.writeMu.RUnlock()
+		}
 		return false, err
 	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
@@ -533,7 +550,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
-	b.db.writeMu.RUnlock()
+	if !rootLocksReleased {
+		b.db.writeMu.RUnlock()
+	}
 	return true, nil
 }
 

@@ -33,6 +33,11 @@ type finalizeCommitOptions struct {
 	syncMetaPageOnly            bool
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
+	// releaseRootSerialization transfers an already-prepared candidate from
+	// root construction to the synchronous durability transaction. The callback
+	// must release every DB/write/commit/root-build lock held by the caller and
+	// is invoked exactly once, immediately before external/index/meta I/O.
+	releaseRootSerialization func()
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
