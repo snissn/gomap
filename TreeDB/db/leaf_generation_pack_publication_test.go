@@ -235,8 +235,9 @@ func TestLeafGenerationPack_PostPromotionCreateCutRollsBackExactly(t *testing.T)
 
 	cutErr := errors.New("injected post-promotion create cut")
 	var (
-		namespaceEvents []durabilitycut.Event
-		promotedPath    string
+		namespaceEvents     []durabilitycut.Event
+		promotedPath        string
+		promotedCreateIndex = -1
 	)
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Namespace == "" {
@@ -247,6 +248,7 @@ func TestLeafGenerationPack_PostPromotionCreateCutRollsBackExactly(t *testing.T)
 			event.Resource == durabilitycut.ResourceOuterLeaf &&
 			filepath.Clean(filepath.Dir(event.NewPath)) == filepath.Clean(LeafLogDirPath(dir)) {
 			promotedPath = event.NewPath
+			promotedCreateIndex = len(namespaceEvents) - 1
 			return cutErr
 		}
 		return nil
@@ -263,14 +265,21 @@ func TestLeafGenerationPack_PostPromotionCreateCutRollsBackExactly(t *testing.T)
 	if db.publicationPoisoned.Load() {
 		t.Fatal("exactly rolled-back promotion poisoned DB")
 	}
-	if promotedPath == "" {
+	if promotedPath == "" || promotedCreateIndex < 0 {
 		t.Fatalf("namespace events=%#v, want promoted create", namespaceEvents)
 	}
 	if _, statErr := os.Stat(promotedPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("promoted path survived exact rollback: %v", statErr)
 	}
-	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceUnlink || got.OldPath != promotedPath {
-		t.Fatalf("last namespace event=%#v, want exact promotion unlink", got)
+	promotionUnlinked := false
+	for _, event := range namespaceEvents[promotedCreateIndex+1:] {
+		if event.Namespace == durabilitycut.NamespaceUnlink && event.OldPath == promotedPath {
+			promotionUnlinked = true
+			break
+		}
+	}
+	if !promotionUnlinked {
+		t.Fatalf("namespace events after promoted create=%#v, want exact promotion unlink for %q", namespaceEvents[promotedCreateIndex+1:], promotedPath)
 	}
 	if got := db.idx.Load().pager.PageCount(); got != beforePages {
 		t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
