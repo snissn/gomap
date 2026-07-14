@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +13,63 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 )
+
+func testColumnStoreCompactStableAbandonPreservesSameSizeReboundSegment(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950()}
+	_, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, typedColumnQ2ClickHouseSortKey1950(), batches)
+	defer closeFn()
+	updated := batches[0][0]
+	updated.TimeUS++
+	updateTypedColumnEvent1953(t, col, updated)
+
+	injected := errors.New("injected post-prepare compaction failure")
+	var segmentPath, rotatedPath string
+	var replacement []byte
+	restoreHook := setColumnStoreCompactionAfterPrepareTestHook(func(prepared ColumnPublishPreparedAssets) error {
+		if !prepared.stableResourcesRequired || prepared.stableResources == nil {
+			t.Fatalf("prepared stable authority required=%t resources=%v", prepared.stableResourcesRequired, prepared.stableResources)
+		}
+		if len(prepared.Assets) == 0 {
+			t.Fatal("compaction prepared no assets")
+		}
+		var err error
+		segmentPath, err = columnAssetSegmentPath(d.ColumnAssetRootDir(), prepared.Assets[0].Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(segmentPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rotatedPath = segmentPath + ".stable-abandon-original"
+		if err := os.Rename(segmentPath, rotatedPath); err != nil {
+			t.Fatal(err)
+		}
+		replacement = bytes.Repeat([]byte{'R'}, int(info.Size()))
+		if err := os.WriteFile(segmentPath, replacement, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return injected
+	})
+	defer restoreHook()
+
+	if _, err := col.ColumnStoreCompact(context.Background(), ColumnStoreCompactOptions{}); !errors.Is(err, injected) {
+		t.Fatalf("ColumnStoreCompact error=%v want injected failure", err)
+	}
+	got, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, replacement) {
+		t.Fatalf("same-size replacement mutated: bytes=%d want %d", len(got), len(replacement))
+	}
+	if info, err := os.Stat(rotatedPath); err != nil || info.Size() == 0 {
+		t.Fatalf("retained original stat=%v info=%v", err, info)
+	}
+	if filepath.Dir(segmentPath) != filepath.Dir(rotatedPath) {
+		t.Fatalf("rotated original escaped segment directory: %q %q", segmentPath, rotatedPath)
+	}
+}
 
 func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
@@ -64,6 +123,9 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if beforeView.mutationParts == 0 || len(oldRefs) == 0 {
 		t.Fatalf("before compaction manifest mutation_parts=%d refs=%d want mutation-bearing refs", beforeView.mutationParts, len(oldRefs))
 	}
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
 
 	stats, err := col.ColumnStoreCompact(context.Background(), ColumnStoreCompactOptions{})
 	if err != nil {
@@ -74,6 +136,17 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	}
 	if got := col.Meta().Options.ColumnStore.PhysicalMutationParts; got != 0 {
 		t.Fatalf("PhysicalMutationParts=%d want reset after compaction", got)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("stable asset pins after compaction publish=%d want baseline %d", got, baselinePins)
+	}
+	if got := registry.ActiveIdentities(); got != baselineIdentities {
+		t.Fatalf("stable asset identities after compaction publish=%d want baseline %d", got, baselineIdentities)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); ordinaryColumnStableAuthorityEnabled() && got == 0 {
+		t.Fatal("successful compaction publish retained no exact namespace sync proof")
+	} else if !ordinaryColumnStableAuthorityEnabled() && got != 0 {
+		t.Fatalf("legacy pre-cutover compaction retained %d exact namespace sync proofs, want 0", got)
 	}
 
 	after, err := col.RunColumnPhysicalQuery(req)

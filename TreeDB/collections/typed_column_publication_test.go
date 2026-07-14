@@ -1582,6 +1582,7 @@ func TestTypedColumnManifestAcceptsMultipartPartSetRefs1787(t *testing.T) {
 }
 
 func TestTypedColumnMultipartPartSetRefsRetainedDuringGC1787(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
 	extraRef := publishTypedColumnMultipartPartRef1787(t, d, col, 3)
@@ -1611,6 +1612,7 @@ func TestTypedColumnMultipartPartSetRefsRetainedDuringGC1787(t *testing.T) {
 }
 
 func TestTypedColumnMultipartPartSetRefsRewriteAndGCSafe1787(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	dir := d.Dir()
 	dClosed := false
@@ -1834,6 +1836,7 @@ func TestTypedColumnColumnAssetRewriteRoundTripMixedRefs(t *testing.T) {
 }
 
 func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	dir := d.Dir()
 	dClosed := false

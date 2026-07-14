@@ -301,6 +301,168 @@ func TestStableResourceSetRejectsConflictingLogicalObligationAtomically(t *testi
 	}
 }
 
+func TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "large-logical.asset", "0123456789abcdef")
+	physicalDigest := sha256.Sum256([]byte("large-physical-segment"))
+	obligations := make([]StableLogicalObligation, stableLogicalObligationLinearLimit+1)
+	for i := range obligations {
+		obligations[i] = StableLogicalObligation{
+			Class: "column-asset-ref-v1", Kind: "query_ready_base_v1", Namespace: "events",
+			Generation: 7, PartID: uint64(i + 1), FileID: 1, Offset: int64(i), Length: 1,
+			Checksum: uint32(100 + i), Reachability: ReachabilityQueryReadyBase,
+			Digest: sha256.Sum256([]byte(fmt.Sprintf("large-logical-%d", i))),
+		}
+	}
+	newToken := func(logical []StableLogicalObligation) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceQueryReadyAsset, LogicalLane: "events", ResourceID: "1", Generation: 1,
+			DiagnosticPath: "large-logical.asset", File: file, Frontier: DurableFrontier{Bytes: 16},
+			Digest: physicalDigest, Reachability: ReachabilityQueryReadyBase, LogicalObligations: logical,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityQueryReadyBase)
+	if err := builder.Add(newToken(obligations)); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := obligations[stableLogicalObligationLinearLimit/2]
+	conflicting.Checksum++
+	conflicting.Digest = sha256.Sum256([]byte("large-logical-conflict"))
+	if err := builder.Add(newToken([]StableLogicalObligation{conflicting})); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("large conflicting logical obligation error=%v want ErrResourceConflict", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	descriptor := set.Descriptors()[0]
+	if got := len(descriptor.LogicalObligations()); got != len(obligations) {
+		t.Fatalf("logical obligations after large rejection=%d want %d", got, len(obligations))
+	}
+	if descriptor.Frontier().Bytes != 16 {
+		t.Fatalf("large rejected logical obligation advanced frontier=%d want 16", descriptor.Frontier().Bytes)
+	}
+}
+
+func stableLogicalObligationFixture(partID uint64, checksum uint32, label string) StableLogicalObligation {
+	return StableLogicalObligation{
+		Class: "column-asset-ref-v1", Kind: "query_ready_base_v1", Namespace: "events",
+		Generation: 7, PartID: partID, FileID: 1, Offset: int64(partID), Length: 1,
+		Checksum: checksum, Reachability: ReachabilityQueryReadyBase,
+		Digest: sha256.Sum256([]byte(label)),
+	}
+}
+
+func TestStableResourceSetRejectedLogicalObligationBatchDoesNotLeakEarlierAddition(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "atomic-logical.asset", "0123456789abcdef")
+	physicalDigest := sha256.Sum256([]byte("atomic-logical-physical"))
+	newToken := func(obligations []StableLogicalObligation) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceQueryReadyAsset, LogicalLane: "events", ResourceID: "1", Generation: 1,
+			DiagnosticPath: "atomic-logical.asset", File: file, Frontier: DurableFrontier{Bytes: 16},
+			Digest: physicalDigest, Reachability: ReachabilityQueryReadyBase, LogicalObligations: obligations,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	original := stableLogicalObligationFixture(2, 200, "atomic-logical-original")
+	builder := NewStableResourceSetBuilder(ReachabilityQueryReadyBase)
+	if err := builder.Add(newToken([]StableLogicalObligation{original})); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := original
+	conflicting.Checksum++
+	conflicting.Digest = sha256.Sum256([]byte("atomic-logical-conflict"))
+	if err := builder.Add(newToken([]StableLogicalObligation{
+		stableLogicalObligationFixture(1, 100, "atomic-logical-new-before-conflict"),
+		conflicting,
+	})); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("conflicting logical obligation batch error=%v want ErrResourceConflict", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if got := set.Descriptors()[0].LogicalObligations(); len(got) != 1 || got[0] != original {
+		t.Fatalf("rejected logical obligation batch mutated builder obligations: %+v", got)
+	}
+}
+
+func TestStableResourceSetRejectedLargeLogicalObligationBatchDoesNotLeakEarlierAddition(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "atomic-large-logical.asset", "0123456789abcdef")
+	physicalDigest := sha256.Sum256([]byte("atomic-large-logical-physical"))
+	newToken := func(obligations []StableLogicalObligation) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceQueryReadyAsset, LogicalLane: "events", ResourceID: "1", Generation: 1,
+			DiagnosticPath: "atomic-large-logical.asset", File: file, Frontier: DurableFrontier{Bytes: 16},
+			Digest: physicalDigest, Reachability: ReachabilityQueryReadyBase, LogicalObligations: obligations,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	original := make([]StableLogicalObligation, stableLogicalObligationLinearLimit+1)
+	for i := range original {
+		original[i] = stableLogicalObligationFixture(uint64(i+2), uint32(200+i), fmt.Sprintf("atomic-large-logical-%d", i))
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityQueryReadyBase)
+	if err := builder.Add(newToken(original)); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := original[len(original)-1]
+	conflicting.Checksum++
+	conflicting.Digest = sha256.Sum256([]byte("atomic-large-logical-conflict"))
+	if err := builder.Add(newToken([]StableLogicalObligation{
+		stableLogicalObligationFixture(1, 100, "atomic-large-logical-new-before-conflict"),
+		conflicting,
+	})); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("large conflicting logical obligation batch error=%v want ErrResourceConflict", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if got := set.Descriptors()[0].LogicalObligations(); len(got) != len(original) {
+		t.Fatalf("rejected large logical obligation batch mutated builder count=%d want %d", len(got), len(original))
+	}
+}
+
+func TestStableResourceTokenCapturesSingleLogicalObligationByValue(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "single-logical.asset", "0123456789abcdef")
+	original := stableLogicalObligationFixture(1, 100, "single-logical-original")
+	input := []StableLogicalObligation{original}
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceQueryReadyAsset, LogicalLane: "events", ResourceID: "1", Generation: 1,
+		DiagnosticPath: "single-logical.asset", File: file, Frontier: DurableFrontier{Bytes: 16},
+		Digest: sha256.Sum256([]byte("single-logical-physical")), Reachability: ReachabilityQueryReadyBase,
+		LogicalObligations: input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	input[0] = stableLogicalObligationFixture(9, 900, "single-logical-mutated")
+	if got := token.LogicalObligations(); len(got) != 1 || got[0] != original {
+		t.Fatalf("token aliases caller logical obligation input: %+v", got)
+	}
+}
+
 func TestStableResourceTokenCapturesExactRIDMembershipByValue(t *testing.T) {
 	dir := t.TempDir()
 	file := writeStableResourceFixture(t, dir, "capture.vlog", "original-resource-bytes")

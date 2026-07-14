@@ -474,6 +474,7 @@ func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
 }
 
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	dClosed := false
@@ -758,6 +759,7 @@ func TestColumnAssetRewriteAutomaticMappedResourcePinSkipsSegment1788(t *testing
 }
 
 func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	dClosed := false
