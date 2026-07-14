@@ -14,7 +14,8 @@ type removeStableColumnAssetChildFunc func(parent *os.File, name, diagnosticPath
 
 var columnAssetStableDeleteTestHooks = struct {
 	sync.RWMutex
-	beforeValidation func()
+	beforeSegmentLock func()
+	beforeValidation  func()
 }{}
 
 func removeStableColumnAssetChild(parent *os.File, name, _ string) error {
@@ -30,6 +31,17 @@ func deleteColumnAssetSegmentStable(path string, registry *rootpublication.Ident
 	if registry == nil || remove == nil {
 		return false, fmt.Errorf("%w: column asset stable delete requires registry and remover", rootpublication.ErrUnresolvedResource)
 	}
+	columnAssetStableDeleteTestHooks.RLock()
+	beforeSegmentLock := columnAssetStableDeleteTestHooks.beforeSegmentLock
+	columnAssetStableDeleteTestHooks.RUnlock()
+	if beforeSegmentLock != nil {
+		beforeSegmentLock()
+	}
+	// Match producer ordering: segment lock first, then identity registry. GC
+	// and rewrite already hold the outer collection mutation lock when present.
+	segmentLock := columnAssetSegmentWriteLock(path)
+	segmentLock.Lock()
+	defer segmentLock.Unlock()
 	parent, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -76,6 +88,18 @@ func deleteColumnAssetSegmentStable(path string, registry *rootpublication.Ident
 	lease.CommitDeleted()
 	committed = true
 	return true, nil
+}
+
+func setColumnAssetStableDeleteBeforeSegmentLockTestHook(hook func()) func() {
+	columnAssetStableDeleteTestHooks.Lock()
+	previous := columnAssetStableDeleteTestHooks.beforeSegmentLock
+	columnAssetStableDeleteTestHooks.beforeSegmentLock = hook
+	columnAssetStableDeleteTestHooks.Unlock()
+	return func() {
+		columnAssetStableDeleteTestHooks.Lock()
+		columnAssetStableDeleteTestHooks.beforeSegmentLock = previous
+		columnAssetStableDeleteTestHooks.Unlock()
+	}
 }
 
 func setColumnAssetStableDeleteBeforeValidationTestHook(hook func()) func() {
