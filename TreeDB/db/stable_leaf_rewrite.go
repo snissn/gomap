@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 
@@ -66,7 +67,7 @@ func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOute
 	if writer.stableDictionaryResourceProvider != nil {
 		dictionaryProvider = writer.stableDictionaryResourceProvider()
 	}
-	dictionaryResources, err := captureStableDictionaryResources(dictionaryProvider, writer.leafDictID, writer.leafDict)
+	dictionaryResources, err := captureStableDictionaryResources(context.Background(), dictionaryProvider, writer.leafDictID, writer.leafDict)
 	if err != nil {
 		capture.abandon()
 		return nil, err
