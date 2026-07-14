@@ -49,11 +49,19 @@ func (snapshot *templateStableSnapshot) GetEntry(key []byte) (templatedb.StableP
 	if err != nil {
 		return templatedb.StablePhysicalEntry{}, err
 	}
+	recordLength := uint64(page.ValuePtrRecordLength(entry.ValuePtr))
+	if entry.Flags&node.FlagPointer != 0 && recordLength == 0 {
+		resolved, err := snapshot.snapshot.StableValueLogRecordLength(entry.ValuePtr)
+		if err != nil {
+			return templatedb.StablePhysicalEntry{}, err
+		}
+		recordLength = uint64(resolved)
+	}
 	return templatedb.StablePhysicalEntry{
 		Pointer:      entry.Flags&node.FlagPointer != 0,
 		FileID:       entry.ValuePtr.FileID,
 		Offset:       entry.ValuePtr.Offset,
-		RecordLength: uint64(page.ValuePtrRecordLength(entry.ValuePtr)),
+		RecordLength: recordLength,
 	}, nil
 }
 

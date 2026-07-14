@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -234,6 +235,38 @@ func (snapshot *Snapshot) NewStableValueLogPhysicalResourceToken(
 		return nil, fmt.Errorf("%w: stable value-log manager unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	return snapshot.vlogManager.StableExistingPhysicalResourceToken(fileID, spec, constructor)
+}
+
+// StableValueLogRecordLength returns the exact record length for a pointer in
+// this snapshot's pinned value-log generation. Grouped pointers may omit their
+// best-effort length hint; those lengths are read from the already-pinned
+// segment header rather than rediscovered through the current manager lane.
+func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32, error) {
+	if snapshot == nil {
+		return 0, fmt.Errorf("%w: stable value-log snapshot unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if err := snapshot.beginRead(); err != nil {
+		return 0, err
+	}
+	defer snapshot.endRead()
+	if !snapshot.stableIndexCapture || snapshot.state == nil || snapshot.state.ValueLogSet == nil {
+		return 0, fmt.Errorf("%w: stable value-log generation unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if hint := page.ValuePtrRecordLength(ptr); hint != 0 {
+		return hint, nil
+	}
+	if ptr.Offset < 4 {
+		return 0, fmt.Errorf("%w: invalid value-log pointer offset %d", rootpublication.ErrResourceConflict, ptr.Offset)
+	}
+	segment := snapshot.state.ValueLogSet.Files[ptr.FileID]
+	if segment == nil || segment.File == nil {
+		return 0, fmt.Errorf("%w: stable value-log file %d unavailable", rootpublication.ErrUnresolvedResource, ptr.FileID)
+	}
+	recordLength, err := readValueLogRecordLengthFromHeader(segment.File, int64(ptr.Offset-4))
+	if err != nil {
+		return 0, fmt.Errorf("stable value-log file %d record header: %w", ptr.FileID, err)
+	}
+	return recordLength, nil
 }
 
 // NewStableIndexResourceToken binds a producer-specific token to the exact
