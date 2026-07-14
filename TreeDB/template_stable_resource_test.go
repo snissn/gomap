@@ -89,6 +89,64 @@ func TestTemplateKVStableCaptureResourcesOutliveDatabaseClose(t *testing.T) {
 	}
 }
 
+func TestTemplateKVStableResourceReleaseRacesDatabaseClose(t *testing.T) {
+	for _, forcePointers := range []bool{false, true} {
+		name := "inline"
+		if forcePointers {
+			name = "pointer"
+		}
+		t.Run(name, func(t *testing.T) {
+			opts := Options{Dir: t.TempDir()}
+			opts.ValueLog.ForcePointers = forcePointers
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+
+			definition := []byte("inline-release-close-race")
+			if forcePointers {
+				definition = make([]byte, 4096)
+				if _, err := rand.New(rand.NewSource(3)).Read(definition); err != nil {
+					t.Fatalf("prepare template: %v", err)
+				}
+			}
+			store := templatedb.New(templateKV{db: database}, templatedb.Config{})
+			templateID, err := store.PutTemplateDef(context.Background(), definition, nil)
+			if err != nil {
+				t.Fatalf("put template: %v", err)
+			}
+			resources, err := store.CaptureTemplateResources(context.Background(), templateID)
+			if err != nil {
+				t.Fatalf("capture template: %v", err)
+			}
+			registry := database.backend.StableResourceIdentityPinRegistry()
+
+			start := make(chan struct{})
+			closeDone := make(chan error, 1)
+			releaseDone := make(chan struct{})
+			go func() {
+				<-start
+				closeDone <- database.Close()
+			}()
+			go func() {
+				<-start
+				resources.Release()
+				close(releaseDone)
+			}()
+			close(start)
+			if closeErr := <-closeDone; closeErr != nil {
+				t.Fatalf("close racing stable resource release: %v", closeErr)
+			}
+			<-releaseDone
+			if got := registry.ActivePins(); got != 0 {
+				t.Fatalf("identity pins after concurrent close/release=%d want 0", got)
+			}
+			resources.Release()
+		})
+	}
+}
+
 func TestTemplateKVStableCaptureResolvesOmittedGroupedRecordLength(t *testing.T) {
 	opts := Options{Dir: t.TempDir()}
 	opts.ValueLog.ForcePointers = true
