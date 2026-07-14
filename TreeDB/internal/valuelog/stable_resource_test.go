@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestOrdinaryOuterLeafCreationClassifiesFallbackDirectorySync(t *testing.T) {
@@ -544,6 +545,8 @@ func TestStableValueLogTokenCarriesCanonicalExternalRIDFence(t *testing.T) {
 
 func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 	dir := t.TempDir()
+	segmentRIDs := [][]uint64{{9, 2}, {14, 4}}
+	segmentPointers := make([][]page.ValuePtr, len(segmentRIDs))
 	fileIDs := make([]uint32, 2)
 	for i := range fileIDs {
 		fileID, err := EncodeFileID(1, uint32(i+1))
@@ -555,9 +558,13 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := writer.Append(0, nil, uint64(i+1), []byte("external-rid-child")); err != nil {
-			_ = writer.Close()
-			t.Fatal(err)
+		for _, rid := range segmentRIDs[i] {
+			ptr, err := writer.Append(0, nil, rid, []byte("external-rid-child"))
+			if err != nil {
+				_ = writer.Close()
+				t.Fatal(err)
+			}
+			segmentPointers[i] = append(segmentPointers[i], ptr)
 		}
 		if err := writer.Close(); err != nil {
 			t.Fatal(err)
@@ -570,8 +577,8 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 	}
 	defer manager.Close()
 	children := []StableExternalRIDSegment{
-		{FileID: fileIDs[0], RIDs: []uint64{9, 2, 9}, Digest: sha256.Sum256([]byte("segment-1"))},
-		{FileID: fileIDs[1], RIDs: []uint64{14, 4}, Digest: sha256.Sum256([]byte("segment-2"))},
+		{FileID: fileIDs[0], RIDs: []uint64{9, 2, 9}, Pointers: []page.ValuePtr{segmentPointers[0][0], segmentPointers[0][1], segmentPointers[0][0]}, Digest: sha256.Sum256([]byte("segment-1"))},
+		{FileID: fileIDs[1], RIDs: []uint64{14, 4}, Pointers: segmentPointers[1], Digest: sha256.Sum256([]byte("segment-2"))},
 	}
 	fence, err := NewStableExternalRIDFence([]uint64{14, 9, 4, 2, 9})
 	if err != nil {
@@ -595,6 +602,22 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 		t.Fatalf("external-RID pins after release=%d want 0", got)
 	}
 
+	t.Run("RID assigned to wrong manager child", func(t *testing.T) {
+		misassigned := append([]StableExternalRIDSegment(nil), children...)
+		misassigned[0].RIDs = []uint64{9, 4, 9}
+		misassigned[1].RIDs = []uint64{14, 2}
+		resources, err := manager.CaptureStableExternalRIDFence(fence, misassigned)
+		if resources != nil {
+			resources.Release()
+		}
+		if !errors.Is(err, rootpublication.ErrResourceConflict) || !strings.Contains(err.Error(), "does not belong") {
+			t.Fatalf("misassigned external RID resources=%v err=%v want ownership conflict", resources, err)
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("external-RID pins after ownership conflict=%d want 0", got)
+		}
+	})
+
 	for omitted := range children {
 		t.Run(fmt.Sprintf("segment-%d", omitted), func(t *testing.T) {
 			missing := append([]StableExternalRIDSegment(nil), children[:omitted]...)
@@ -616,6 +639,8 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 				missing := append([]StableExternalRIDSegment(nil), children...)
 				missing[childIndex].RIDs = append([]uint64(nil), children[childIndex].RIDs...)
 				missing[childIndex].RIDs = append(missing[childIndex].RIDs[:ridIndex], missing[childIndex].RIDs[ridIndex+1:]...)
+				missing[childIndex].Pointers = append([]page.ValuePtr(nil), children[childIndex].Pointers...)
+				missing[childIndex].Pointers = append(missing[childIndex].Pointers[:ridIndex], missing[childIndex].Pointers[ridIndex+1:]...)
 				resources, err := manager.CaptureStableExternalRIDFence(fence, missing)
 				// A duplicate occurrence is not an omitted logical RID; the unique
 				// fence remains complete and must still capture successfully.
@@ -659,6 +684,8 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
 	dir := b.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()
+	segmentRIDs := [][]uint64{{1, 101}, {2, 102}}
+	segmentPointers := make([][]page.ValuePtr, len(segmentRIDs))
 	fileIDs := make([]uint32, 2)
 	for i := 0; i < 2; i++ {
 		fileID, err := EncodeFileID(1, uint32(i+1))
@@ -670,9 +697,13 @@ func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, err := writer.Append(0, nil, uint64(i+1), []byte("external-rid-record")); err != nil {
-			_ = writer.Close()
-			b.Fatal(err)
+		for _, rid := range segmentRIDs[i] {
+			ptr, err := writer.Append(0, nil, rid, []byte("external-rid-record"))
+			if err != nil {
+				_ = writer.Close()
+				b.Fatal(err)
+			}
+			segmentPointers[i] = append(segmentPointers[i], ptr)
 		}
 		if err := writer.Close(); err != nil {
 			b.Fatal(err)
@@ -684,8 +715,8 @@ func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
 	}
 	b.Cleanup(func() { _ = manager.Close() })
 	children := []StableExternalRIDSegment{
-		{FileID: fileIDs[0], RIDs: []uint64{1, 101, 1}, Digest: sha256.Sum256([]byte("external-rid-segment-1"))},
-		{FileID: fileIDs[1], RIDs: []uint64{2, 102, 2}, Digest: sha256.Sum256([]byte("external-rid-segment-2"))},
+		{FileID: fileIDs[0], RIDs: []uint64{1, 101, 1}, Pointers: []page.ValuePtr{segmentPointers[0][0], segmentPointers[0][1], segmentPointers[0][0]}, Digest: sha256.Sum256([]byte("external-rid-segment-1"))},
+		{FileID: fileIDs[1], RIDs: []uint64{2, 102, 2}, Pointers: []page.ValuePtr{segmentPointers[1][0], segmentPointers[1][1], segmentPointers[1][0]}, Digest: sha256.Sum256([]byte("external-rid-segment-2"))},
 	}
 	fence, err := NewStableExternalRIDFence([]uint64{102, 1, 2, 101})
 	if err != nil {
