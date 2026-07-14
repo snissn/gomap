@@ -39,6 +39,8 @@ type durableRootRuntimeV1 struct {
 	slot          uint64
 	slotCommit    [2]uint64
 	slotResources [2]*rootpublication.StableResourceSet
+	slotMeta      [2]page.DurableMetaV1
+	slotRecord    [2]rootpublication.DurableRootRecordV1
 	pending       *durableRootPublishCandidateV1
 	ambiguous     []*durableRootPublishCandidateV1
 }
@@ -120,6 +122,25 @@ func durableManifestFromResourcesV1(resources *rootpublication.StableResourceSet
 		}
 	}
 	return rootpublication.NewDependencyManifestV1(entries)
+}
+
+func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublication.DurableRootRecordV1) ([]uint64, error) {
+	if meta.CommitSeq == 0 && record.CommitSeq == 0 {
+		return nil, nil
+	}
+	if meta.CommitSeq == 0 || record.CommitSeq != meta.CommitSeq || meta.RootRecordPageID < 2 || record.Manifest.FirstPageID < 2 || record.Manifest.PageCount == 0 {
+		return nil, errors.New("incomplete durable-root slot auxiliary inventory")
+	}
+	lastManifestPage := record.Manifest.FirstPageID + uint64(record.Manifest.PageCount) - 1
+	if lastManifestPage < record.Manifest.FirstPageID || lastManifestPage >= record.TotalPages || meta.RootRecordPageID >= record.TotalPages {
+		return nil, errors.New("durable-root slot auxiliary inventory outside durable extent")
+	}
+	pages := make([]uint64, 0, int(record.Manifest.PageCount)+1)
+	for pageID := record.Manifest.FirstPageID; pageID <= lastManifestPage; pageID++ {
+		pages = append(pages, pageID)
+	}
+	pages = append(pages, meta.RootRecordPageID)
+	return pages, nil
 }
 
 func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
@@ -402,6 +423,17 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
+	target := uint64(MetaPage0ID)
+	if current.slot == MetaPage0ID {
+		target = MetaPage1ID
+	}
+	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(current.slotMeta[target], current.slotRecord[target])
+	if err != nil {
+		return nil, err
+	}
+	if err := idx.allocator.RetireCOWV1(overwrittenPages, current.slotCommit[target]); err != nil {
+		return nil, fmt.Errorf("retire overwritten durable-root slot pages: %w", err)
+	}
 	if err := idx.allocator.RetireCOWV1(retired, current.record.CommitSeq); err != nil {
 		return nil, fmt.Errorf("retire COW pages: %w", err)
 	}
@@ -449,11 +481,6 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
-	target := uint64(MetaPage0ID)
-	if current.slot == MetaPage0ID {
-		target = MetaPage1ID
-	}
-
 	stableSnapshot := db.acquireDurableCandidateStableIndexSnapshotV1(idx)
 	if stableSnapshot == nil {
 		return nil, errors.New("capture stable index snapshot")
@@ -620,6 +647,8 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	current.manifest = candidate.manifest
 	current.slot = candidate.target
 	current.slotCommit[candidate.target] = candidate.next.CommitSeq
+	current.slotMeta[candidate.target] = candidate.meta
+	current.slotRecord[candidate.target] = candidate.record
 	previousResources := current.slotResources[candidate.target]
 	current.slotResources[candidate.target] = candidate.resources
 	current.pending = nil
@@ -774,6 +803,8 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	db.installDurableRootSelectionV1(durableRootSelectionV1{
 		Slot: MetaPage0ID, Meta: meta, Record: record, Freelist: generation, Manifest: manifest,
 		SlotCommits: [2]uint64{1, 0},
+		SlotMetas:   [2]page.DurableMetaV1{meta, {}},
+		SlotRecords: [2]rootpublication.DurableRootRecordV1{record, {}},
 	})
 	return nil
 }
@@ -796,6 +827,7 @@ func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 	db.durableRoot = durableRootRuntimeV1{
 		meta: selected.Meta, record: selected.Record, manifest: selected.Manifest,
 		slot: selected.Slot, slotCommit: selected.SlotCommits, slotResources: selected.SlotResources,
+		slotMeta: selected.SlotMetas, slotRecord: selected.SlotRecords,
 	}
 	db.meta = page.MetaPageBody{
 		CommitSeq: selected.Record.CommitSeq, UserRootPageID: selected.Record.UserRootPageID,

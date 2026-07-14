@@ -45,7 +45,12 @@ type durableRootSelectionV1 struct {
 	// SlotResources retains the exact external-resource closure for every
 	// independently complete slot, including the older fallback generation.
 	SlotResources [2]*rootpublication.StableResourceSet
-	resources     *rootpublication.StableResourceSet
+	// SlotMetas and SlotRecords retain the bounded auxiliary-page inventory for
+	// each complete slot. Publication uses the overwritten slot's inventory to
+	// retire its manifest and root-record pages without scanning history.
+	SlotMetas   [2]page.DurableMetaV1
+	SlotRecords [2]rootpublication.DurableRootRecordV1
+	resources   *rootpublication.StableResourceSet
 }
 
 type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error)
@@ -80,10 +85,14 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 	})
 	var chosen *durableRootSelectionV1
 	var slotResources [2]*rootpublication.StableResourceSet
+	var slotMetas [2]page.DurableMetaV1
+	var slotRecords [2]rootpublication.DurableRootRecordV1
 	for _, candidate := range candidates {
 		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest)
 		if err == nil {
 			slotResources[candidate.slot] = selected.resources
+			slotMetas[candidate.slot] = selected.Meta
+			slotRecords[candidate.slot] = selected.Record
 			selected.resources = nil
 			if chosen == nil {
 				copy := selected
@@ -98,6 +107,8 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 	}
 	if chosen != nil {
 		chosen.SlotResources = slotResources
+		chosen.SlotMetas = slotMetas
+		chosen.SlotRecords = slotRecords
 		return *chosen, nil
 	}
 	for _, resources := range slotResources {

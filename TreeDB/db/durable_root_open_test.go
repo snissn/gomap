@@ -83,6 +83,12 @@ func TestDurableRootPublicationAlternatesIndependentSlotsAndReopens(t *testing.T
 	if reopened.metaPageID != MetaPage0ID || reopened.durableRoot.slotCommit != [2]uint64{3, 2} {
 		t.Fatalf("reopened slot/commits=(%d,%v), want (0,[3 2])", reopened.metaPageID, reopened.durableRoot.slotCommit)
 	}
+	for slot := uint64(MetaPage0ID); slot <= MetaPage1ID; slot++ {
+		pages, err := durableRootSlotAuxiliaryPagesV1(reopened.durableRoot.slotMeta[slot], reopened.durableRoot.slotRecord[slot])
+		if err != nil || len(pages) == 0 {
+			t.Fatalf("reopened slot %d auxiliary inventory=(%v,%v), want complete", slot, pages, err)
+		}
+	}
 	for key, want := range map[string]string{"a": "one", "b": "two"} {
 		got, err := reopened.Get([]byte(key))
 		if err != nil {
@@ -400,5 +406,58 @@ func TestDurableRootPublicationIOReleasesRootSerializationLocks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDurableRootAlternatingSlotsRetireAuxiliaryHistory(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	state := database.State()
+	if state == nil {
+		t.Fatal("missing initial state")
+	}
+	initialAuxiliary, err := durableRootSlotAuxiliaryPagesV1(database.durableRoot.slotMeta[MetaPage0ID], database.durableRoot.slotRecord[MetaPage0ID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initialAuxiliary) == 0 {
+		t.Fatal("missing initial durable-root auxiliary inventory")
+	}
+
+	var steadyRetired []uint64
+	for lsn := uint64(1); lsn <= 64; lsn++ {
+		if err := database.publishCommandWALRoots(
+			state.RootPageID,
+			state.SystemRootPageID,
+			lsn,
+			[]CommandWALLSNRange{{First: lsn, Last: lsn}},
+			true,
+		); err != nil {
+			t.Fatalf("publication %d: %v", lsn, err)
+		}
+		if lsn > 32 {
+			steadyRetired = append(steadyRetired, database.idx.Load().allocator.COWGenerationV1().RetiredCount())
+		}
+	}
+	generation := database.idx.Load().allocator.COWGenerationV1()
+	for _, pageID := range initialAuxiliary {
+		if !generation.Allocatable(pageID) {
+			t.Fatalf("overwritten slot auxiliary page %d remains retained after the recovery horizon advanced", pageID)
+		}
+	}
+	minimum, maximum := steadyRetired[0], steadyRetired[0]
+	for _, count := range steadyRetired[1:] {
+		if count < minimum {
+			minimum = count
+		}
+		if count > maximum {
+			maximum = count
+		}
+	}
+	if maximum > 32 || maximum-minimum > 16 {
+		t.Fatalf("steady retired inventory min=%d max=%d, want bounded two-slot history", minimum, maximum)
 	}
 }
