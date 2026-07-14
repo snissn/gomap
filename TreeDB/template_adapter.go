@@ -30,3 +30,10 @@ func (kv templateKV) NewBatch() templatedb.Batch {
 	}
 	return b
 }
+
+func (kv templateKV) AcquireStableTemplateSnapshot() templatedb.StablePhysicalSnapshot {
+	if kv.db == nil {
+		return nil
+	}
+	return acquireStableTemplateSnapshot(kv.db.backend)
+}

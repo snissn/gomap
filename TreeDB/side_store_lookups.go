@@ -50,6 +50,10 @@ func (kv templateBackendKV) NewBatch() templatedb.Batch {
 	return b
 }
 
+func (kv templateBackendKV) AcquireStableTemplateSnapshot() templatedb.StablePhysicalSnapshot {
+	return acquireStableTemplateSnapshot(kv.db)
+}
+
 func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 	if opts == nil || opts.DisableSideStores {
 		return func() error { return nil }, nil
