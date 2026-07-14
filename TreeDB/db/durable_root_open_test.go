@@ -239,3 +239,77 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 		t.Fatalf("recovered slot pins after close=%d, want 0", got)
 	}
 }
+
+func TestDurableRootPublicationRetainsAndRetriesExactPreMetaCandidate(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := database.valueLogIdentityPins
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("identity pins after close=%d, want 0", got)
+		}
+	}()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 30_000, 1, func(int) []byte {
+		return []byte("retry-owned durable value")
+	})
+	if err := database.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("retry"), ptrs[0]); err != nil {
+		t.Fatal(err)
+	}
+	database.testFailWriteMeta.Store(true)
+	err = batch.WriteSync()
+	database.testFailWriteMeta.Store(false)
+	if closeErr := batch.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if !errors.Is(err, errTestWriteMetaFailpoint) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("pre-meta publish error=%v, want failpoint without recovery poison", err)
+	}
+	if database.publicationPoisoned.Load() {
+		t.Fatal("pre-meta publication failure poisoned writable handle")
+	}
+	if database.metaPageID != MetaPage0ID || database.currentCommitSeq() != 1 {
+		t.Fatalf("authoritative slot/commit after failure=(%d,%d), want (0,1)", database.metaPageID, database.currentCommitSeq())
+	}
+	pending := database.durableRoot.pending
+	if pending == nil || pending.resources == nil || pending.resources.Len() != 1 || pending.token == nil || pending.prepared == nil {
+		t.Fatalf("retained candidate=%+v, want exact resources/index/COW ownership", pending)
+	}
+	if got := database.stableIndexCaptures.Load(); got != 1 {
+		t.Fatalf("stable index captures while retry pending=%d, want 1", got)
+	}
+	if got := registry.ActivePins(); got != 2 {
+		t.Fatalf("identity pins while retry pending=%d, want value-log plus index", got)
+	}
+
+	next, err := database.retryPendingDurableRootV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.CommitSeq != 2 || database.durableRoot.pending != nil || database.durableRoot.slot != MetaPage1ID {
+		t.Fatalf("retried commit/pending/slot=(%d,%v,%d), want (2,nil,1)", next.CommitSeq, database.durableRoot.pending, database.durableRoot.slot)
+	}
+	if got := database.stableIndexCaptures.Load(); got != 0 {
+		t.Fatalf("stable index captures after retry=%d, want 0", got)
+	}
+	if got := registry.ActivePins(); got != 1 {
+		t.Fatalf("identity pins after retry=%d, want retained slot value-log pin", got)
+	}
+	meta, err := readDurableMetaSlotV1(database.idx.Load().pager, MetaPage1ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.CommitSeq != 2 {
+		t.Fatalf("retried durable meta commit=%d, want 2", meta.CommitSeq)
+	}
+}

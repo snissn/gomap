@@ -31,13 +31,47 @@ func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 }
 
 type durableRootRuntimeV1 struct {
-	meta               page.DurableMetaV1
-	record             rootpublication.DurableRootRecordV1
-	manifest           *rootpublication.DependencyManifestV1
-	slot               uint64
-	slotCommit         [2]uint64
-	slotResources      [2]*rootpublication.StableResourceSet
-	ambiguousResources []*rootpublication.StableResourceSet
+	meta          page.DurableMetaV1
+	record        rootpublication.DurableRootRecordV1
+	manifest      *rootpublication.DependencyManifestV1
+	slot          uint64
+	slotCommit    [2]uint64
+	slotResources [2]*rootpublication.StableResourceSet
+	pending       *durableRootPublishCandidateV1
+	ambiguous     []*durableRootPublishCandidateV1
+}
+
+// durableRootPublishCandidateV1 owns every identity and allocator reservation
+// needed to retry one exact pre-meta publication. It is immutable after
+// preparation except for the phase markers, which only move forward while
+// durablePublishMu is held.
+type durableRootPublishCandidateV1 struct {
+	idx        *indexGen
+	base       durableRootRuntimeV1
+	next       page.MetaPageBody
+	resources  *rootpublication.StableResourceSet
+	manifest   *rootpublication.DependencyManifestV1
+	prepared   *freelist.PreparedCOWCandidateV1
+	capability freelist.ReuseCapability
+	token      *rootpublication.StableResourceToken
+	record     rootpublication.DurableRootRecordV1
+	meta       page.DurableMetaV1
+	target     uint64
+
+	materialized bool
+	metaMutated  bool
+	released     bool
+}
+
+func (candidate *durableRootPublishCandidateV1) release() {
+	if candidate == nil || candidate.released {
+		return
+	}
+	candidate.released = true
+	candidate.resources.Release()
+	if candidate.token != nil {
+		candidate.token.Release()
+	}
 }
 
 func durableRootCandidateIDV1(current durableRootRuntimeV1, next page.MetaPageBody) freelist.CandidateIDV1 {
@@ -242,41 +276,31 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 	return resources, nil
 }
 
-// publishDurableRootV1 is the sole V1 meta mutator. It materializes the COW
-// inventory and root record, persists the exact captured index identity, then
-// writes the alternate meta slot once. In-memory authority advances only after
-// that slot is durably synchronized.
-func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (page.MetaPageBody, error) {
-	if db == nil || idx == nil || idx.pager == nil || idx.allocator == nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("missing durable-root index"), true)
-	}
-	db.durablePublishMu.Lock()
-	defer db.durablePublishMu.Unlock()
-
+// prepareDurableRootCandidateV1 validates and freezes one exact publication
+// candidate without mutating either meta slot. COW pages are encoded into the
+// allocator-owned memory store here but are not copied into the index until
+// after external dependencies cross their flush and sync frontiers.
+func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (*durableRootPublishCandidateV1, error) {
 	current := db.durableRoot
 	if current.meta.CommitSeq == 0 || current.record.CommitSeq != current.meta.CommitSeq || next.CommitSeq != current.meta.CommitSeq+1 {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("durable-root publication sequence mismatch"), true)
+		return nil, errors.New("durable-root publication sequence mismatch")
 	}
 	if next.UserRootPageID < 2 || next.SystemRootPageID < 2 {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("durable-root candidate has invalid roots"), true)
+		return nil, errors.New("durable-root candidate has invalid roots")
 	}
 	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+		return nil, err
 	}
 	capability, err := freelist.NewReuseCapability(oldest, db.MinPinnedSnapshotCommitSeq(), 0)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+		return nil, err
 	}
-	if err := idx.allocator.RetireCOWV1(retired, current.record.CommitSeq); err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("retire COW pages: %w", err), true)
-	}
-
 	resources, err := db.captureDurableValueLogResourcesV1(idx, next, vlogRefDelta)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
+		return nil, fmt.Errorf("capture durable-root dependencies: %w", err)
 	}
-	releaseResources := resources != nil
+	releaseResources := true
 	defer func() {
 		if releaseResources {
 			resources.Release()
@@ -284,7 +308,10 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 	}()
 	manifest, err := durableManifestFromResourcesV1(resources)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+		return nil, err
+	}
+	if err := idx.allocator.RetireCOWV1(retired, current.record.CommitSeq); err != nil {
+		return nil, fmt.Errorf("retire COW pages: %w", err)
 	}
 	auxiliaryCount := int(manifest.PageCount()) + 1
 	prepared, err := idx.allocator.PrepareCOWCandidateV1(
@@ -296,29 +323,21 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 		freelist.NewMemoryPageStoreV1(),
 	)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("prepare COW generation: %w", err), true)
+		return nil, fmt.Errorf("prepare COW generation: %w", err)
 	}
 	generation := prepared.Candidate().Generation()
 	auxiliary := prepared.AuxiliaryPageIDs()
 	if generation == nil || len(auxiliary) != auxiliaryCount {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("incomplete durable-root COW candidate"), true)
+		return nil, errors.New("incomplete durable-root COW candidate")
 	}
-	if err := idx.pager.Truncate(generation.HighWater()); err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("extend durable index: %w", err), true)
-	}
-	for _, image := range prepared.Candidate().Pages() {
-		if err := idx.pager.Write(image.PageID, image.Data); err != nil {
-			return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("write COW page %d: %w", image.PageID, err), true)
-		}
-	}
-	sink := durablePagerSinkV1{pager: idx.pager}
-	manifestRef, err := manifest.Materialize(auxiliary[0], sink)
-	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
-	}
-	recordPageID := auxiliary[len(auxiliary)-1]
+
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
+	recordPageID := auxiliary[len(auxiliary)-1]
+	manifestRef, err := manifest.Materialize(auxiliary[0], freelist.NewMemoryPageStoreV1())
+	if err != nil {
+		return nil, err
+	}
 	record := rootpublication.DurableRootRecordV1{
 		CommitSeq: next.CommitSeq, DurableSeq: next.CommitSeq,
 		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
@@ -330,99 +349,210 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 		ParentRecordDigest:   current.meta.RootRecordDigest,
 		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, next.CommitSeq, recordPageID),
 	}
-	recordImage, recordDigest, err := record.EncodePage(recordPageID)
+	_, recordDigest, err := record.EncodePage(recordPageID)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
-	}
-	if err := idx.pager.Write(recordPageID, recordImage); err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("write durable root record: %w", err), true)
+		return nil, err
 	}
 	meta, err := page.NewDurableMetaV1(next.CommitSeq, next.CommitSeq, recordPageID, recordDigest)
 	if err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+		return nil, err
 	}
-
-	stableSnapshot := db.AcquireStableSnapshot()
-	if stableSnapshot == nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("capture stable index snapshot"), true)
-	}
-	token, err := stableSnapshot.CaptureStableIndexFileResource()
-	if err != nil {
-		_ = stableSnapshot.Close()
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture stable index resource: %w", err), true)
-	}
-	defer token.Release()
-	if resources != nil {
-		if err := resources.SyncThrough(); err != nil {
-			return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("sync durable-root external dependencies: %w", err), true)
-		}
-	}
-	if err := token.SyncThrough(); err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("sync durable-root dependencies: %w", err), true)
-	}
-
 	target := uint64(MetaPage0ID)
 	if current.slot == MetaPage0ID {
 		target = MetaPage1ID
 	}
+
+	stableSnapshot := db.AcquireStableSnapshot()
+	if stableSnapshot == nil {
+		return nil, errors.New("capture stable index snapshot")
+	}
+	if stableSnapshot.idx != idx {
+		_ = stableSnapshot.Close()
+		return nil, errors.New("stable index generation changed during durable-root preparation")
+	}
+	token, err := stableSnapshot.CaptureStableIndexFileResource()
+	if err != nil {
+		_ = stableSnapshot.Close()
+		return nil, fmt.Errorf("capture stable index resource: %w", err)
+	}
+
+	candidate := &durableRootPublishCandidateV1{
+		idx: idx, base: current, next: next, resources: resources, manifest: manifest,
+		prepared: prepared, capability: capability, token: token, record: record, meta: meta, target: target,
+	}
+	releaseResources = false
+	return candidate, nil
+}
+
+func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCandidateV1) error {
+	if candidate == nil || candidate.idx == nil || candidate.prepared == nil {
+		return errors.New("missing durable-root candidate")
+	}
+	if candidate.materialized {
+		return nil
+	}
+	generation := candidate.prepared.Candidate().Generation()
+	if generation == nil {
+		return errors.New("missing durable-root COW generation")
+	}
+	if err := candidate.idx.pager.Truncate(generation.HighWater()); err != nil {
+		return fmt.Errorf("extend durable index: %w", err)
+	}
+	for _, image := range candidate.prepared.Candidate().Pages() {
+		if err := candidate.idx.pager.Write(image.PageID, image.Data); err != nil {
+			return fmt.Errorf("write COW page %d: %w", image.PageID, err)
+		}
+	}
+	auxiliary := candidate.prepared.AuxiliaryPageIDs()
+	if _, err := candidate.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: candidate.idx.pager}); err != nil {
+		return err
+	}
+	recordPageID := auxiliary[len(auxiliary)-1]
+	recordImage, recordDigest, err := candidate.record.EncodePage(recordPageID)
+	if err != nil {
+		return err
+	}
+	if recordDigest != candidate.meta.RootRecordDigest {
+		return errors.New("durable-root record digest changed after preparation")
+	}
+	if err := candidate.idx.pager.Write(recordPageID, recordImage); err != nil {
+		return fmt.Errorf("write durable root record: %w", err)
+	}
+	candidate.materialized = true
+	return nil
+}
+
+func (db *DB) retainDurableRootRetryV1(candidate *durableRootPublishCandidateV1, err error) (page.MetaPageBody, error) {
+	current := candidate.base
+	current.pending = candidate
+	db.durableRoot = current
+	return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+}
+
+func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidateV1, err error) (page.MetaPageBody, error) {
+	current := candidate.base
+	current.pending = nil
+	current.ambiguous = append(current.ambiguous, candidate)
+	db.durableRoot = current
+	db.publicationPoisoned.Store(true)
+	return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+}
+
+func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandidateV1) (page.MetaPageBody, error) {
+	if candidate == nil || candidate.released || candidate.metaMutated {
+		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("durable-root candidate is not retryable"), true)
+	}
+	if err := candidate.resources.FlushThrough(); err != nil {
+		return db.retainDurableRootRetryV1(candidate, fmt.Errorf("flush durable-root external dependencies: %w", err))
+	}
+	if err := candidate.resources.SyncThrough(); err != nil {
+		return db.retainDurableRootRetryV1(candidate, fmt.Errorf("sync durable-root external dependencies: %w", err))
+	}
+	if err := db.materializeDurableRootCandidateV1(candidate); err != nil {
+		return db.retainDurableRootRetryV1(candidate, err)
+	}
+	if err := candidate.token.SyncThrough(); err != nil {
+		return db.retainDurableRootRetryV1(candidate, fmt.Errorf("sync durable-root index: %w", err))
+	}
+
 	metaPath := ""
 	if durabilitycut.Enabled() {
 		metaPath = filepath.Join(db.dir, indexFileName)
 	}
-	metaOffset := int64(target) * int64(page.PageSize)
+	metaOffset := int64(candidate.target) * int64(page.PageSize)
 	if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+		return db.retainDurableRootRetryV1(candidate, err)
 	}
 	if db.testFailWriteMeta.Load() {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errTestWriteMetaFailpoint, true)
+		return db.retainDurableRootRetryV1(candidate, errTestWriteMetaFailpoint)
 	}
-	if err := writeDurableMetaSlotV1(sink, target, meta); err != nil {
-		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
-	}
-	postMetaError := func(err error) (page.MetaPageBody, error) {
-		// Once the target meta page may have changed, either its old or new
-		// generation can become authoritative after a later whole-file sync.
-		// Retain the candidate closure in addition to both installed slot
-		// closures until recovery resolves that ambiguity.
-		if resources != nil {
-			current.ambiguousResources = append(current.ambiguousResources, resources)
-			db.durableRoot = current
-			releaseResources = false
-		}
-		db.publicationPoisoned.Store(true)
-		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+
+	// The outcome becomes ambiguous as soon as the target-meta mutation starts,
+	// including a write call that returns an error after a partial page update.
+	candidate.metaMutated = true
+	if err := writeDurableMetaSlotV1(durablePagerSinkV1{pager: candidate.idx.pager}, candidate.target, candidate.meta); err != nil {
+		return db.poisonDurableRootCandidateV1(candidate, err)
 	}
 	if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return postMetaError(err)
+		return db.poisonDurableRootCandidateV1(candidate, err)
 	}
 	if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-		return postMetaError(err)
+		return db.poisonDurableRootCandidateV1(candidate, err)
 	}
 	if db.testFailSyncMeta.Load() {
-		return postMetaError(errTestSyncMetaFailpoint)
+		return db.poisonDurableRootCandidateV1(candidate, errTestSyncMetaFailpoint)
 	}
-	if err := token.WithPinnedFile(func(file *os.File) error {
-		return idx.pager.SyncPagesWithStableFile(file, []uint64{target})
+	if err := candidate.token.WithPinnedFile(func(file *os.File) error {
+		return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})
 	}); err != nil {
-		return postMetaError(err)
+		return db.poisonDurableRootCandidateV1(candidate, err)
 	}
 	if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-		return postMetaError(err)
+		return db.poisonDurableRootCandidateV1(candidate, err)
 	}
-	if err := idx.allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
-		return postMetaError(fmt.Errorf("publish COW generation: %w", err))
+	if err := candidate.idx.allocator.PublishCOWCandidateV1(candidate.prepared, candidate.capability); err != nil {
+		return db.poisonDurableRootCandidateV1(candidate, fmt.Errorf("publish COW generation: %w", err))
 	}
-	current.meta = meta
-	current.record = record
-	current.manifest = manifest
-	current.slot = target
-	current.slotCommit[target] = next.CommitSeq
-	previousResources := current.slotResources[target]
-	current.slotResources[target] = resources
+
+	current := candidate.base
+	current.meta = candidate.meta
+	current.record = candidate.record
+	current.manifest = candidate.manifest
+	current.slot = candidate.target
+	current.slotCommit[candidate.target] = candidate.next.CommitSeq
+	previousResources := current.slotResources[candidate.target]
+	current.slotResources[candidate.target] = candidate.resources
+	current.pending = nil
 	db.durableRoot = current
-	releaseResources = false
+	candidate.resources = nil
+	candidate.release()
 	previousResources.Release()
-	return next, nil
+	return candidate.next, nil
+}
+
+func sameDurableRootCandidateV1(candidate *durableRootPublishCandidateV1, idx *indexGen, next page.MetaPageBody) bool {
+	if candidate == nil || candidate.idx != idx {
+		return false
+	}
+	want := candidate.next
+	return next.CommitSeq == want.CommitSeq && next.UserRootPageID == want.UserRootPageID &&
+		next.SystemRootPageID == want.SystemRootPageID && next.AppliedCommandLSN == want.AppliedCommandLSN &&
+		next.MaxEntryRevision == want.MaxEntryRevision && next.LastCommitHeight == want.LastCommitHeight
+}
+
+// publishDurableRootV1 is the sole V1 meta mutator. Pre-meta failures retain
+// the exact immutable candidate for retry; post-meta failures retain it as an
+// ambiguous recovery closure and poison the writable handle.
+func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (page.MetaPageBody, error) {
+	if db == nil || idx == nil || idx.pager == nil || idx.allocator == nil {
+		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("missing durable-root index"), true)
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	if pending := db.durableRoot.pending; pending != nil {
+		if !sameDurableRootCandidateV1(pending, idx, next) {
+			return page.MetaPageBody{}, wrapFinalizeCommitError(freelist.ErrCOWCandidatePrepared, true)
+		}
+		return db.executeDurableRootCandidateV1(pending)
+	}
+	candidate, err := db.prepareDurableRootCandidateV1(idx, next, retired, vlogRefDelta)
+	if err != nil {
+		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
+	}
+	return db.executeDurableRootCandidateV1(candidate)
+}
+
+func (db *DB) retryPendingDurableRootV1() (page.MetaPageBody, error) {
+	if db == nil {
+		return page.MetaPageBody{}, ErrClosed
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	pending := db.durableRoot.pending
+	if pending == nil {
+		return page.MetaPageBody{}, errors.New("durable-root publication has no retry candidate")
+	}
+	return db.executeDurableRootCandidateV1(pending)
 }
 
 func (db *DB) initializeDurableRootV1(idx *indexGen) error {
@@ -633,11 +763,17 @@ func (db *DB) releaseDurableRootResourcesV1() {
 	}
 	db.durablePublishMu.Lock()
 	resources := append([]*rootpublication.StableResourceSet(nil), db.durableRoot.slotResources[:]...)
-	resources = append(resources, db.durableRoot.ambiguousResources...)
+	pending := db.durableRoot.pending
+	ambiguous := append([]*durableRootPublishCandidateV1(nil), db.durableRoot.ambiguous...)
 	db.durableRoot.slotResources = [2]*rootpublication.StableResourceSet{}
-	db.durableRoot.ambiguousResources = nil
+	db.durableRoot.pending = nil
+	db.durableRoot.ambiguous = nil
 	db.durablePublishMu.Unlock()
 	for _, set := range resources {
 		set.Release()
+	}
+	pending.release()
+	for _, candidate := range ambiguous {
+		candidate.release()
 	}
 }
