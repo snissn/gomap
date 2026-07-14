@@ -14,6 +14,9 @@ type stableResourceEntry struct {
 	token              *StableResourceToken
 	pins               []*StableResourceToken
 	pinIndex           map[*StableResourceToken]struct{}
+	logicalLane        string
+	resourceID         string
+	diagnosticPath     string
 	frontier           DurableFrontier
 	reachability       map[ReachabilityField]struct{}
 	logicalObligations []StableLogicalObligation
@@ -25,7 +28,8 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 		reachability[field] = struct{}{}
 	}
 	clone := stableResourceEntry{
-		token: entry.token, frontier: cloneDurableFrontier(entry.frontier),
+		token: entry.token, logicalLane: entry.logicalLane, resourceID: entry.resourceID,
+		diagnosticPath: entry.diagnosticPath, frontier: cloneDurableFrontier(entry.frontier),
 		// Logical obligations are immutable after normalization. The full slice
 		// expression makes every clone copy-on-append while avoiding a redundant
 		// backing-array allocation at each ownership transfer.
@@ -200,6 +204,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability[token.reachability] = struct{}{}
+		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
 		if existing.namespace == nil && token.namespace != nil {
 			// Preserve the one namespace-creation obligation independently of
 			// insertion order by making its exact-handle token representative.
@@ -213,11 +218,25 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		return nil
 	}
 	*entries = append(*entries, stableResourceEntry{
-		token: token, frontier: cloneDurableFrontier(token.frontier),
+		token: token, logicalLane: token.logicalLane, resourceID: token.resourceID,
+		diagnosticPath: token.diagnosticPath, frontier: cloneDurableFrontier(token.frontier),
 		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
 		logicalObligations: stableLogicalObligationList(token.logicalObligations),
 	})
 	return nil
+}
+
+func mergeStableResourceDescriptorIdentity(entry *stableResourceEntry, lane, resourceID, diagnosticPath string) {
+	if entry == nil {
+		return
+	}
+	if entry.logicalLane == "" || lane < entry.logicalLane ||
+		(lane == entry.logicalLane && (resourceID < entry.resourceID ||
+			(resourceID == entry.resourceID && diagnosticPath < entry.diagnosticPath))) {
+		entry.logicalLane = lane
+		entry.resourceID = resourceID
+		entry.diagnosticPath = diagnosticPath
+	}
 }
 
 func stableResourcesCoalesce(existing, incoming *StableResourceToken) (bool, error) {
@@ -275,6 +294,7 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
 		for field := range incoming.reachability {
 			entry.reachability[field] = struct{}{}
 		}
@@ -436,11 +456,11 @@ func sortStableResourceEntries(entries []stableResourceEntry) {
 		if left.kind != right.kind {
 			return left.kind < right.kind
 		}
-		if left.logicalLane != right.logicalLane {
-			return left.logicalLane < right.logicalLane
+		if entries[i].logicalLane != entries[j].logicalLane {
+			return entries[i].logicalLane < entries[j].logicalLane
 		}
-		if left.resourceID != right.resourceID {
-			return left.resourceID < right.resourceID
+		if entries[i].resourceID != entries[j].resourceID {
+			return entries[i].resourceID < entries[j].resourceID
 		}
 		if left.generation != right.generation {
 			return left.generation < right.generation
@@ -462,6 +482,9 @@ type StableResourceSet struct {
 // every reachability field, and every logical obligation retained by the set.
 type StableResourceDescriptor struct {
 	kind               ResourceKind
+	logicalLane        string
+	resourceID         string
+	diagnosticPath     string
 	identity           StableIdentity
 	generation         uint64
 	digest             [32]byte
@@ -471,6 +494,9 @@ type StableResourceDescriptor struct {
 }
 
 func (descriptor StableResourceDescriptor) Kind() ResourceKind       { return descriptor.kind }
+func (descriptor StableResourceDescriptor) LogicalLane() string      { return descriptor.logicalLane }
+func (descriptor StableResourceDescriptor) ResourceID() string       { return descriptor.resourceID }
+func (descriptor StableResourceDescriptor) DiagnosticPath() string   { return descriptor.diagnosticPath }
 func (descriptor StableResourceDescriptor) Identity() StableIdentity { return descriptor.identity }
 func (descriptor StableResourceDescriptor) Generation() uint64       { return descriptor.generation }
 func (descriptor StableResourceDescriptor) Digest() [32]byte         { return descriptor.digest }
@@ -572,7 +598,8 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 			return stableLogicalObligationLess(logicalObligations[i], logicalObligations[j])
 		})
 		descriptors[i] = StableResourceDescriptor{
-			kind: entry.token.kind, identity: entry.token.identity, generation: entry.token.generation,
+			kind: entry.token.kind, logicalLane: entry.logicalLane, resourceID: entry.resourceID,
+			diagnosticPath: entry.diagnosticPath, identity: entry.token.identity, generation: entry.token.generation,
 			digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
 			logicalObligations: logicalObligations,
 		}

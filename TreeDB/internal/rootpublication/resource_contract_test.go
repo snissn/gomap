@@ -208,6 +208,9 @@ func TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor(
 				t.Fatalf("descriptor count=%d want 1", len(descriptors))
 			}
 			descriptor := descriptors[0]
+			if descriptor.LogicalLane() != "first" || descriptor.ResourceID() != "segment-a" || descriptor.DiagnosticPath() != "maindb/value_vlog/000001.vlog" {
+				t.Fatalf("descriptor logical representative=(%q,%q,%q), want deterministic first/segment-a/path", descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.DiagnosticPath())
+			}
 			wantRIDs := []uint64{2, 4, 9, 20, 30}
 			if got := descriptor.RIDs(); !slices.Equal(got, wantRIDs) {
 				t.Fatalf("descriptor RIDs=%v want %v", got, wantRIDs)
