@@ -835,32 +835,41 @@ func TestCommandWALFormatRejectsFrameCRCMismatch(t *testing.T) {
 	}
 }
 
-func TestCommandWALFormatRoundTripExternalRefs(t *testing.T) {
-	digest := [32]byte{0xaa, 0xbb, 0xcc}
-	frame := mustCommandFrame(t, CommandEnvelope{
-		LSN:           4,
-		Kind:          CommandKindRawKVBatch,
-		Scope:         CommandScopeRawKV,
-		PayloadFormat: PayloadFormatRawKVBatchV1,
-		ExternalRefs: []ExternalRef{{
-			Class:  ExternalRefValueLog,
-			FileID: 41,
-			Offset: 128,
-			Length: 512,
-			Digest: digest,
-			Path:   []byte("value_vlog/value-l0-000041.log"),
-		}},
-	})
-	got, err := DecodeCommandFrame(frame)
+func TestCommandWALFormatRejectsDormantExternalRefs(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload(nil)
 	if err != nil {
-		t.Fatalf("DecodeCommandFrame: %v", err)
+		t.Fatal(err)
 	}
-	if len(got.ExternalRefs) != 1 {
-		t.Fatalf("external refs len=%d want 1", len(got.ExternalRefs))
+	classes := []ExternalRefClass{
+		ExternalRefValueLog,
+		ExternalRefLeafLog,
+		ExternalRefPayloadFile,
+		0,
+		ExternalRefClass(99),
 	}
-	ref := got.ExternalRefs[0]
-	if ref.Class != ExternalRefValueLog || ref.FileID != 41 || ref.Offset != 128 || ref.Length != 512 || ref.Digest != digest || string(ref.Path) != "value_vlog/value-l0-000041.log" {
-		t.Fatalf("external ref mismatch: %+v", ref)
+	for _, class := range classes {
+		t.Run(fmt.Sprint(class), func(t *testing.T) {
+			ref := ExternalRef{Class: class, FileID: 41, Offset: 128, Length: 512}
+			_, err := EncodeCommandFrame(CommandEnvelope{
+				LSN:           4,
+				Kind:          CommandKindRawKVBatch,
+				Scope:         CommandScopeRawKV,
+				PayloadFormat: PayloadFormatRawKVBatchV1,
+				ExternalRefs:  []ExternalRef{ref},
+			})
+			if !errors.Is(err, ErrCommandWALUnsupportedExternalRef) {
+				t.Fatalf("EncodeCommandFrame class=%d error=%v, want ErrCommandWALUnsupportedExternalRef", class, err)
+			}
+
+			extRefs, err := encodeExternalRefs([]ExternalRef{ref})
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame := mustCommandFrameWithSections(t, payload, extRefs, nil, nil)
+			if _, err := DecodeCommandFrame(frame); !errors.Is(err, ErrCommandWALUnsupportedExternalRef) {
+				t.Fatalf("DecodeCommandFrame class=%d error=%v, want ErrCommandWALUnsupportedExternalRef", class, err)
+			}
+		})
 	}
 }
 

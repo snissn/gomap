@@ -134,6 +134,73 @@ func TestCommandFrameV2RejectsCriticalFeatureFlagsBeforeDestinationMutation(t *t
 	}
 }
 
+func TestCommandFrameV2RejectsDormantExternalRefsBeforeDestinationMutation(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classes := []ExternalRefClass{
+		ExternalRefValueLog,
+		ExternalRefLeafLog,
+		ExternalRefPayloadFile,
+		0,
+		ExternalRefClass(99),
+	}
+	for _, class := range classes {
+		t.Run(fmt.Sprint(class), func(t *testing.T) {
+			ref := ExternalRef{Class: class, FileID: 41, Offset: 128, Length: 512}
+			backing := make([]byte, 512)
+			for i := range backing {
+				backing[i] = byte(i)
+			}
+			want := append([]byte(nil), backing...)
+			_, err := EncodeCommandFrameV2To(backing[:0], CommandEnvelope{
+				DurabilityClass: CommandDurabilityRelaxed,
+				LSN:             4,
+				Kind:            CommandKindRawKVBatch,
+				Scope:           CommandScopeRawKV,
+				PayloadFormat:   PayloadFormatRawKVBatchV1,
+				ExternalRefs:    []ExternalRef{ref},
+			})
+			if !errors.Is(err, ErrCommandWALUnsupportedExternalRef) {
+				t.Fatalf("EncodeCommandFrameV2To class=%d error=%v, want ErrCommandWALUnsupportedExternalRef", class, err)
+			}
+			if !reflect.DeepEqual(backing, want) {
+				t.Fatalf("class=%d mutated destination backing storage", class)
+			}
+
+			extRefs, err := encodeExternalRefs([]ExternalRef{ref})
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame := mustCommandFrameV2WithExternalRefs(t, payload, extRefs)
+			if _, err := DecodeCommandFrameV2(frame); !errors.Is(err, ErrCommandWALUnsupportedExternalRef) {
+				t.Fatalf("DecodeCommandFrameV2 class=%d error=%v, want ErrCommandWALUnsupportedExternalRef", class, err)
+			}
+		})
+	}
+}
+
+func mustCommandFrameV2WithExternalRefs(t *testing.T, payload, extRefs []byte) []byte {
+	t.Helper()
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		DurabilityClass: CommandDurabilityRelaxed,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([]byte, len(frame)+len(extRefs))
+	copy(out, frame)
+	binary.LittleEndian.PutUint32(out[60:64], uint32(len(extRefs)))
+	copy(out[len(frame):], extRefs)
+	return out
+}
+
 func TestCommandFrameV2RejectsCompressedSegmentStorage(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{
 		Op:    RawKVOpSet,

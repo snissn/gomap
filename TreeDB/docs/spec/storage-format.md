@@ -2181,6 +2181,13 @@ bytes[32] Digest
 bytes Path[PathLen]
 ```
 
+The typed `ExternalRefs` layout is reserved but inert: current V1 and V2
+encoders and decoders reject every non-empty section with
+`ErrCommandWALUnsupportedExternalRef`. #3718 owns atomic activation after the
+typed resource producers, exact-handle pins, sync order, recovery resolvers,
+and deletion owners exist. RawKV `SetRID` uses the separate V2
+`ExternalRefFenceV1` precondition and is not disabled by this quarantine.
+
 Precondition and result-assertion sections each start with `u32 Count`; every
 entry is:
 

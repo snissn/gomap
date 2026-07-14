@@ -115,7 +115,7 @@ the helper call.
 | `AppliedLSN` | Highest contiguous command LSN covered by the durable checkpointed TreeDB state. This value is selected atomically with the roots that contain those command effects. |
 | `Checkpoint` | Durable root boundary that syncs required files and records `AppliedLSN`. |
 | `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, target raw KV revision state, and `AppliedLSN` visible together. |
-| `ExternalRef` | Durable reference to bytes outside the command frame, such as value-log bytes, future column files, dictionaries, filters, manifests, or compression metadata. Required external refs must be prepared, synced/protected as required by the durability mode, and declared before the command frame is recoverable. |
+| `ExternalRef` | Reserved typed reference to bytes outside the command frame. The current V1 and inert V2 codecs reject every non-empty `CommandEnvelope.ExternalRefs` section; #3718 must activate producer, pin, sync, recovery, and deletion ownership atomically before these references can become durable authority. |
 | `State root` | The TreeDB root state selected by meta/system-root recovery. In distributed mode this is not automatically a consensus digest. |
 | `Replay executor` | The same semantic command executor used by the normal write path, constrained to deterministic replay mode. |
 | `DeclarativeUpdateOp` | Versioned update operator whose canonical payload fully defines replay, for example set field to literal, unset field, or a future `$inc`-style operator. |
@@ -211,8 +211,9 @@ must not change replay bytes.
   multi-scope command.
 - The segment frame CRC covers the encoded command frame bytes for physical
   corruption and truncation detection.
-- `ExternalRefs` declare required bytes that must be readable before replay can
-  serve data depending on the command.
+- `ExternalRefs` is a reserved wire section for required bytes outside a
+  command frame. Current V1 and inert V2 encode/decode reject every non-empty
+  section until #3718 activates its complete authority closure.
 - `Preconditions` make stale or incompatible replay fail closed.
 - `ResultAssertions` allow recovery to detect semantic drift, for example
   expected matched/modified counts or optional document digests.
@@ -281,6 +282,11 @@ one canonical `ExternalRefFenceV1` precondition on every raw-KV frame containing
 `SetRID`; a frame without `SetRID` has no RID fence. The fence is the unique RID
 count plus SHA-256 over sorted unique little-endian RIDs and is verified from
 decoded payload bytes before external dependency lookup.
+
+The `ExternalRefFenceV1` precondition is distinct from the dormant typed
+`CommandEnvelope.ExternalRefs` section. It fences the RID set already encoded
+by RawKV `SetRID` payload operations and remains supported while typed
+`ExternalRefs` are rejected.
 
 Recovery first derives the highest valid durable frontier and validates the
 entire prefix through it without mutation. Only a complete contiguous

@@ -1094,6 +1094,15 @@ func TestStableColumnPreparedValidationRejectsMissingAuthoritativeResources(t *t
 	}
 }
 
+func TestStableLegacyVectorResourceTokenIsExcluded(t *testing.T) {
+	_, err := NewStableLegacyVectorResourceToken(rootpublication.StableResourceSpec{
+		Reachability: rootpublication.ReachabilityLegacyVectorSnapshot,
+	})
+	if !errors.Is(err, rootpublication.ErrResourceExcluded) {
+		t.Fatalf("legacy vector token error=%v, want ErrResourceExcluded", err)
+	}
+}
+
 func declaredColumnAssetKinds(t *testing.T) map[string]ColumnAssetKind {
 	t.Helper()
 	parsed, err := parser.ParseFile(token.NewFileSet(), "column_publish_plan.go", nil, 0)

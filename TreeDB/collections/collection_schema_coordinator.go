@@ -7,9 +7,10 @@ import (
 )
 
 type collectionSchemaCoordinator struct {
-	schemaMu  sync.RWMutex
-	domainsMu sync.Mutex
-	domains   map[*collectionWriteDomain]struct{}
+	schemaMu              sync.RWMutex
+	legacyVectorSidecarMu sync.Mutex
+	domainsMu             sync.Mutex
+	domains               map[*collectionWriteDomain]struct{}
 }
 
 type collectionDBSchemaCoordinators struct {
@@ -27,6 +28,32 @@ var collectionSchemaMutationFlushHook struct {
 var collectionSchemaMutationBeforeLockHook struct {
 	mu sync.Mutex
 	fn func()
+}
+
+var legacyVectorSnapshotPostEpochRenameHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setLegacyVectorSnapshotPostEpochRenameHookForTest(fn func()) func() {
+	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
+	prev := legacyVectorSnapshotPostEpochRenameHook.fn
+	legacyVectorSnapshotPostEpochRenameHook.fn = fn
+	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
+	return func() {
+		legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
+		legacyVectorSnapshotPostEpochRenameHook.fn = prev
+		legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
+	}
+}
+
+func runLegacyVectorSnapshotPostEpochRenameHookForTest() {
+	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
+	fn := legacyVectorSnapshotPostEpochRenameHook.fn
+	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // setCollectionSchemaMutationFlushHookForTest temporarily replaces the flush
@@ -175,6 +202,15 @@ func (c *Collection) lockCollectionSchemaWrite() func() {
 	}
 	coord.schemaMu.Lock()
 	return coord.schemaMu.Unlock
+}
+
+func (c *Collection) lockLegacyVectorSidecar() func() {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return func() {}
+	}
+	coord.legacyVectorSidecarMu.Lock()
+	return coord.legacyVectorSidecarMu.Unlock
 }
 
 func (c *Collection) flushCollectionWriteDomainsForSchemaMutation() error {

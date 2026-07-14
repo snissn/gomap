@@ -150,6 +150,16 @@ func TestRebuildableQueryReadyPoliciesAreNotRegisterable(t *testing.T) {
 	}
 }
 
+func TestLegacyVectorPolicyIsRebuildableAndNotRegisterable(t *testing.T) {
+	policy, ok := StableResourcePolicyFor(ReachabilityLegacyVectorSnapshot)
+	if !ok {
+		t.Fatal("legacy vector field missing canonical policy")
+	}
+	if policy.Registerable || policy.Classification != "rebuildable-non-authoritative" {
+		t.Fatalf("legacy vector policy=%+v, want rebuildable and non-registerable", policy)
+	}
+}
+
 func TestAdjacentDBPublicationIssueRouting(t *testing.T) {
 	wantIssue := map[ReachabilityField]string{
 		ReachabilityMetaPage:   "#3679",

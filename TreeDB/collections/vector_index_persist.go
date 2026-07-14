@@ -363,6 +363,8 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 	if idx.collection == nil || idx.collection.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockSidecar := idx.collection.lockLegacyVectorSidecar()
+	defer unlockSidecar()
 	indexDir, err := idx.persistDir()
 	if err != nil {
 		return status, err
@@ -430,6 +432,7 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 	if err := fsyncDir(indexDir); err != nil {
 		return status, err
 	}
+	runLegacyVectorSnapshotPostEpochRenameHookForTest()
 
 	manifest := vectorIndexManifest{
 		FormatVersion:  vectorIndexFormatVersion,
@@ -561,6 +564,8 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	if c.db == nil {
 		return nil, status, errCollectionDBNil
 	}
+	unlockSidecar := c.lockLegacyVectorSidecar()
+	defer unlockSidecar()
 	if opts.Name == "" {
 		opts.Name = vectorIndexDefaultName(opts.Field)
 	}
@@ -633,6 +638,8 @@ func (idx *VectorIndex) PruneOldSnapshots(keep int) (VectorIndexPruneStatus, err
 	if keep <= 0 {
 		return status, errors.New("collections: vector index snapshot keep count must be positive")
 	}
+	unlockSidecar := idx.collection.lockLegacyVectorSidecar()
+	defer unlockSidecar()
 	indexDir, err := idx.persistDir()
 	if err != nil {
 		return status, err

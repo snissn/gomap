@@ -89,11 +89,11 @@ func buildRows() []Row {
 		add(nonAuthoritative("collections.ColumnAssetKind."+name, "query-ready cache asset kind", "rebuildable prepared asset", "#3677", "query-ready base, delta, and consolidated files are cache accelerators and do not select recovery state"))
 	}
 
-	add(active("commitlog.ExternalRefClass.ExternalRefValueLog", "command WAL external ref", "mutable value-log segment range", "command envelope encoder", "value-log FileID plus pinned file identity", "Offset + Length and optional Digest", "value_vlog segment", "command journal append adapter", "command replay resolves and validates the value-log record", "value-log GC/rewrite with WAL reachability pins"))
-	add(active("commitlog.ExternalRefClass.ExternalRefLeafLog", "command WAL external ref", "mutable outer-leaf log segment range", "command envelope encoder", "leaf-log FileID plus pinned file identity", "Offset + Length and optional Digest", "leaf-log segment", "command journal append adapter", "command replay resolves and validates the leaf-log record", "leaf-generation GC with WAL reachability pins"))
-	add(quarantined("commitlog.ExternalRefClass.ExternalRefPayloadFile", "command WAL external ref", "payload side file", "#3677", "no production producer exists outside tests; publication must reject this class until it has identity, sync, recovery, and deletion ownership"))
+	for _, name := range []string{"ExternalRefValueLog", "ExternalRefLeafLog", "ExternalRefPayloadFile"} {
+		add(quarantined("commitlog.ExternalRefClass."+name, "command WAL external ref", "reserved typed external resource range", "#3718", "no production producer exists; V1 and V2 reject every non-empty typed ExternalRefs section until identity, sync, recovery, and deletion ownership activate atomically"))
+	}
 	for _, field := range []string{"Class", "Flags", "FileID", "Offset", "Length", "Digest"} {
-		add(active("commitlog.ExternalRef."+field, "command WAL external ref field", "typed external resource range", "command envelope encoder", "class, FileID, and pinned backing identity", "Offset + Length and Digest", "class-selected value or leaf log namespace", "command journal publication adapter", "replay resolves the typed ref and validates its fence", "class-selected GC with WAL reachability pins"))
+		add(adjacent("commitlog.ExternalRef."+field, "command WAL external ref field", "reserved typed external resource range", "#3718", "the dormant typed ExternalRefs section is rejected until V2 producer, pin, sync, recovery, and deletion ownership activate atomically"))
 	}
 	add(Row{
 		Field: "commitlog.ExternalRef.Path", Scope: "command WAL external ref field", ResourceClass: "diagnostic DB-relative path",
@@ -106,7 +106,7 @@ func buildRows() []Row {
 	for _, field := range []string{"Version", "DurabilityClass", "LSN", "Kind", "Scope", "FeatureFlags", "CatalogEpoch", "SchemaEpoch", "BaseAppliedLSN", "PayloadFormat", "Payload", "Preconditions", "ResultAssertions"} {
 		add(adjacent("commitlog.CommandEnvelope."+field, "command WAL envelope field", "logical command and durable-horizon authority", "#3718", "V2 envelope activation and durable prefix semantics are owned by the atomic command-WAL cutover"))
 	}
-	add(active("commitlog.CommandEnvelope.ExternalRefs", "command WAL envelope field", "transitive external resource closure", "command envelope encoder", "typed ExternalRef identities", "every referenced range frontier and digest", "class-selected value or leaf log namespace", "command journal publication adapter", "fence and referenced-record validation", "class-selected GC with WAL reachability pins"))
+	add(adjacent("commitlog.CommandEnvelope.ExternalRefs", "command WAL envelope field", "reserved transitive external resource closure", "#3718", "V1 and V2 reject every non-empty typed ExternalRefs section until the atomic command-WAL cutover supplies complete ownership"))
 	for _, field := range []string{"Type", "Payload"} {
 		add(adjacent("commitlog.CommandExtension."+field, "command WAL extension field", "V2 precondition/assertion extension", "#3718", "extension activation and critical-field handling are part of the atomic V2 command-WAL cutover"))
 	}
@@ -137,7 +137,7 @@ func buildRows() []Row {
 	}
 	add(adjacent("collections.CollectionRoot", "named collection root", "index/value-log transitive closure", "#3679", "named roots are page-index authority, not external resource kinds"))
 	add(adjacent("collections.VectorNativeRoot", "native vector root", "index/value-log transitive closure", "#3679", "native vector state is stored in named roots and value-log closure, not vector sidecar files"))
-	add(quarantined("collections.LegacyVectorSidecar", "legacy vector sidecar", "legacy side file", "#3677", "legacy vector sidecars have no current publication token contract and cannot activate"))
+	add(nonAuthoritative("collections.LegacyVectorSidecar", "legacy vector sidecar", "rebuildable exact-search cache", "#3677", "legacy vector sidecars are validated accelerators with exact-search fallback and never select recovery state"))
 
 	return rows
 }

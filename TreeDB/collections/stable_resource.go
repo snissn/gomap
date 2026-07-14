@@ -61,13 +61,13 @@ func NewStableColumnAssetResourceToken(spec rootpublication.StableResourceSpec) 
 	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerColumnAsset, spec, classification)
 }
 
-// NewStableLegacyVectorResourceToken registers an exact immutable file in a
-// legacy vector snapshot generation before its manifest becomes reachable.
+// NewStableLegacyVectorResourceToken rejects legacy vector sidecars because
+// they are rebuildable exact-search accelerators, not publication authority.
 func NewStableLegacyVectorResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	if spec.Reachability != rootpublication.ReachabilityLegacyVectorSnapshot {
 		return nil, fmt.Errorf("%w: legacy-vector producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
 	}
-	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerLegacyVector, spec, "authoritative-legacy")
+	return nil, fmt.Errorf("%w: legacy vector sidecars are rebuildable and non-authoritative", rootpublication.ErrResourceExcluded)
 }
 
 // stableColumnAssetResourceClassification is the checked producer policy for

@@ -92,12 +92,14 @@ func TestTextRootFamiliesAreExhaustive(t *testing.T) {
 
 func TestKnownNonAuthoritySurfacesFailClosed(t *testing.T) {
 	want := map[string]ActivationState{
+		"commitlog.ExternalRefClass.ExternalRefValueLog":                        ActivationQuarantined,
+		"commitlog.ExternalRefClass.ExternalRefLeafLog":                         ActivationQuarantined,
 		"commitlog.ExternalRefClass.ExternalRefPayloadFile":                     ActivationQuarantined,
 		"commitlog.ExternalRef.Path":                                            ActivationNonAuthoritative,
 		"collections.ColumnAssetKind.ColumnAssetKindQueryReadyBase":             ActivationNonAuthoritative,
 		"collections.ColumnAssetKind.ColumnAssetKindQueryReadyDelta":            ActivationNonAuthoritative,
 		"collections.ColumnAssetKind.ColumnAssetKindQueryReadyConsolidatedBase": ActivationNonAuthoritative,
-		"collections.LegacyVectorSidecar":                                       ActivationQuarantined,
+		"collections.LegacyVectorSidecar":                                       ActivationNonAuthoritative,
 		"page.MetaPageBody.ActiveSlabID":                                        ActivationQuarantined,
 		"page.MetaPageBody.ActiveSlabTail":                                      ActivationQuarantined,
 	}
