@@ -4291,7 +4291,17 @@ func (w *rewriteWriter) rotateLeaf() error {
 	return w.rotateLeafCapture(nil)
 }
 
+type rewriteLeafRotationCaptureFunc func(*valuelog.Writer, string, uint32, bool) (bool, error)
+
 func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture) error {
+	var captureRotation rewriteLeafRotationCaptureFunc
+	if capture != nil {
+		captureRotation = capture.captureRotation
+	}
+	return w.rotateLeafCaptureWith(captureRotation)
+}
+
+func (w *rewriteWriter) rotateLeafCaptureWith(capture rewriteLeafRotationCaptureFunc) error {
 	var rotationErr error
 	nextSeq, err := w.nextLeafSeq()
 	if err != nil {
@@ -4339,7 +4349,7 @@ func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture
 			return err
 		}
 	} else {
-		installed, err := capture.captureRotation(w.leafW, path, fileID, true)
+		installed, err := capture(w.leafW, path, fileID, true)
 		if err != nil && !installed {
 			return err
 		}
@@ -4353,7 +4363,7 @@ func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture
 	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.leafSeq = nextSeq
 	if err := w.noteCreatedSegment(path, fileID, w.leafW); err != nil {
-		return err
+		return errors.Join(rotationErr, err)
 	}
 	w.leafCurrentPath = path
 	w.leafCurrentFileID = fileID

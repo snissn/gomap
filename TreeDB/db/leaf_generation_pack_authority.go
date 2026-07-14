@@ -249,31 +249,34 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		promoted[i] = authority.segments[i].created
 	}
 	mutated := false
+	fail := func(err error) ([]rewriteCreatedSegment, bool, error) {
+		if mutated {
+			authority.retainForRecovery()
+			err = errors.Join(err, ErrRecoveryRequired)
+		}
+		return promoted, mutated, err
+	}
 	for i := range authority.segments {
 		segment := &authority.segments[i]
 		name := filepath.Base(segment.created.path)
 		installed, err := authority.moveNoReplace(authority.stagingParent, segment.handle, name, authority.destinationParent, name)
 		mutated = mutated || installed
 		if err != nil {
-			if installed {
-				err = errors.Join(err, ErrRecoveryRequired)
-				authority.retainForRecovery()
-			}
-			return promoted, mutated, err
+			return fail(err)
 		}
 		destination := filepath.Join(authority.destinationDir, name)
 		segment.created.path = destination
 		promoted[i] = segment.created
 		if err := rootpublication.ValidateStableChildLink(authority.destinationParent, segment.handle, name); err != nil {
-			return promoted, true, errors.Join(err, ErrRecoveryRequired)
+			return fail(err)
 		}
 		if err := observeNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, authority.destinationDir, "", destination); err != nil {
-			return promoted, true, err
+			return fail(err)
 		}
 	}
 	for _, parent := range []string{authority.stagingDir, authority.destinationDir} {
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, parent, parent); err != nil {
-			return promoted, true, errors.Join(err, ErrRecoveryRequired)
+			return fail(err)
 		}
 	}
 	registrations := make([]rootpublication.StableNamespaceSpec, len(authority.segments))
@@ -282,7 +285,7 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		name := filepath.Base(segment.created.path)
 		relativeDir, err := filepath.Rel(authority.db.dir, authority.destinationDir)
 		if err != nil {
-			return promoted, true, err
+			return fail(err)
 		}
 		registrations[i] = rootpublication.StableNamespaceSpec{
 			Parent: authority.destinationParent, LinkedResource: segment.handle,
@@ -296,7 +299,7 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 	})
 	authority.namespaceSyncNanos = time.Since(namespaceSyncStarted).Nanoseconds()
 	if err != nil {
-		return promoted, true, errors.Join(err, ErrRecoveryRequired)
+		return fail(err)
 	}
 	defer func() {
 		for _, namespace := range namespaces {
@@ -305,7 +308,7 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 	}()
 	for _, parent := range []string{authority.stagingDir, authority.destinationDir} {
 		if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, parent, parent); err != nil {
-			return promoted, true, errors.Join(err, ErrRecoveryRequired)
+			return fail(err)
 		}
 	}
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafPackedPointer)
@@ -314,7 +317,7 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		relativePath, err := filepath.Rel(authority.db.dir, segment.created.path)
 		if err != nil {
 			builder.Abandon()
-			return promoted, true, err
+			return fail(err)
 		}
 		token, err := rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerOuterLeaf, rootpublication.StableResourceSpec{
 			Kind: rootpublication.ResourceOuterLeafPack, LogicalLane: "leaf-generation-pack",
@@ -326,18 +329,18 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		}, "authoritative")
 		if err != nil {
 			builder.Abandon()
-			return promoted, true, err
+			return fail(err)
 		}
 		if err := builder.Add(token); err != nil {
 			token.Release()
 			builder.Abandon()
-			return promoted, true, err
+			return fail(err)
 		}
 	}
 	resources, err := builder.Freeze()
 	if err != nil {
 		builder.Abandon()
-		return promoted, true, err
+		return fail(err)
 	}
 	authority.resources = resources
 	return promoted, true, nil

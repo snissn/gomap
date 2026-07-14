@@ -1615,7 +1615,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		runStats.ApplyStages.PageSyncTimeNanos += pageSyncDuration.Nanoseconds()
 	}
-	dirWaitDuration := time.Duration(0)
 	publishEvent.Phase = leafGenerationPackAfterDirectorySync
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: directory sync failpoint: %w", err))
@@ -1721,7 +1720,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			runStats.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(leafCtx.sourceLiveMovedByGeneration)
 		}
 	}
-	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
+	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s namespace_sync=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, time.Duration(authority.namespaceSyncNanos), registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()
 	postWorkStarted := time.Now()
 	db.finalizeCommitPostWork(post)

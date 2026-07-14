@@ -82,6 +82,39 @@ func (fixture *leafPackAuthorityFixture) close(t *testing.T) {
 	}
 }
 
+func newLeafPackAuthorityFixtureSegment(t *testing.T, fixture *leafPackAuthorityFixture, seq uint32) (rewriteCreatedSegment, page.LeafLogPtr, *valuelog.Writer) {
+	t.Helper()
+	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := valuelog.SegmentPath(fixture.stagingDir, fileID)
+	writer, err := valuelog.NewStagingWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valuePtr, err := writer.Append(0, nil, uint64(seq), []byte("additional-packed-outer-leaf"))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Sync(); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	identity, err := writer.StableIdentity()
+	if err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	pointer, err := page.LeafLogPtrFromValuePtr(valuePtr)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	return rewriteCreatedSegment{path: path, fileID: fileID, identity: identity}, pointer, writer
+}
+
 func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRegistration(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
@@ -466,6 +499,99 @@ func TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity(t *tes
 	}
 	if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
 		t.Fatalf("ambiguous authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
+	}
+}
+
+func TestLeafGenerationPackPromotionAuthorityRetainsCumulativePartialInstall(t *testing.T) {
+	fixture := newLeafPackAuthorityFixture(t)
+	defer fixture.close(t)
+	secondCreated, secondPointer, secondWriter := newLeafPackAuthorityFixtureSegment(t, &fixture, 2)
+	defer secondWriter.Close()
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.release()
+	if err := authority.capture(
+		[]rewriteCreatedSegment{fixture.created, secondCreated},
+		[]page.LeafLogPtr{fixture.pointer, secondPointer},
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixture.close(t)
+	if err := secondWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	testErr := errors.New("second segment did not install")
+	moveCalls := 0
+	authority.moveNoReplace = func(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+		moveCalls++
+		if moveCalls == 1 {
+			return rootpublication.MoveStableChildFileNoReplace(sourceParent, expected, oldName, destinationParent, newName)
+		}
+		return false, testErr
+	}
+	promoted, mutated, err := authority.promote()
+	if moveCalls != 2 || !mutated || !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("promote calls=%d mutated=%v err=%v want cumulative recovery failure", moveCalls, mutated, err)
+	}
+	if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
+		t.Fatalf("partial-install authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
+	}
+	firstDestination := filepath.Join(fixture.destination, filepath.Base(fixture.created.path))
+	if len(promoted) != 2 || promoted[0].path != firstDestination || promoted[1] != secondCreated {
+		t.Fatalf("partial promoted state=%+v want first destination and second original", promoted)
+	}
+	if err := rootpublication.ValidateStableChildLink(authority.destinationParent, authority.segments[0].handle, filepath.Base(firstDestination)); err != nil {
+		t.Fatalf("first installed identity: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(fixture.destination, filepath.Base(secondCreated.path))); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("second destination unexpectedly installed: %v", statErr)
+	}
+}
+
+func TestLeafGenerationPackPromotionAuthorityRetainsPostInstallCutFailures(t *testing.T) {
+	tests := []struct {
+		name  string
+		match func(durabilitycut.Event) bool
+	}{
+		{name: "namespace-observation", match: func(event durabilitycut.Event) bool { return event.Namespace == durabilitycut.NamespaceCreate }},
+		{name: "before-parent-sync", match: func(event durabilitycut.Event) bool { return event.Point == durabilitycut.BeforeNewFileDirectorySync }},
+		{name: "after-parent-sync", match: func(event durabilitycut.Event) bool { return event.Point == durabilitycut.AfterNewFileDirectorySync }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLeafPackAuthorityFixture(t)
+			defer fixture.close(t)
+			authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer authority.release()
+			if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+				t.Fatal(err)
+			}
+			fixture.close(t)
+
+			testErr := errors.New("post-install durability cut")
+			cutCalls := 0
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if test.match(event) {
+					cutCalls++
+					return testErr
+				}
+				return nil
+			})
+			_, mutated, promoteErr := authority.promote()
+			restore()
+			if cutCalls != 1 || !mutated || !errors.Is(promoteErr, testErr) || !errors.Is(promoteErr, ErrRecoveryRequired) {
+				t.Fatalf("promote cuts=%d mutated=%v err=%v want retained post-install failure", cutCalls, mutated, promoteErr)
+			}
+			if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
+				t.Fatalf("post-install authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
+			}
+		})
 	}
 }
 
