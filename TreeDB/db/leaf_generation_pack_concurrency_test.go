@@ -414,6 +414,7 @@ func TestLeafGenerationPack_CloseWaitsForCopyTeardown(t *testing.T) {
 }
 
 func TestLeafGenerationPack_CheckpointReopenPreservesLeafRefsAndValuePointers(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	opts := Options{
 		Dir:                        dir,
