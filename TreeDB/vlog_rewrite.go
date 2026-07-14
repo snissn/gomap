@@ -2,8 +2,11 @@ package treedb
 
 import (
 	"context"
+	"fmt"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 // ValueLogRewriteStats summarizes value-log rewrite compaction results.
@@ -50,6 +53,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			}
 			cfg.ApplyToOptions(&opts)
 		}
+	}
+	if opts.ValueLog.TemplateMode != template.TemplateOff {
+		return ValueLogRewriteStats{}, fmt.Errorf("%w: offline template rewrite requires dependency-closed rewritten-root publication (#3679)", rootpublication.ErrUnresolvedResource)
 	}
 
 	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)

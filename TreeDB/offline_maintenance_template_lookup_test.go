@@ -2,17 +2,48 @@ package treedb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
+
+func TestValueLogRewriteOfflineRejectsTemplateActivationBeforeSideStoreOpen(t *testing.T) {
+	root := t.TempDir()
+	database, err := Open(Options{Dir: root})
+	if err != nil {
+		t.Fatalf("open main database: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close main database: %v", err)
+	}
+
+	templateDir := filepath.Join(root, "templatedb")
+	templateBackend, err := treedbdb.Open(treedbdb.Options{Dir: templateDir})
+	if err != nil {
+		t.Fatalf("hold templatedb open: %v", err)
+	}
+	defer templateBackend.Close()
+
+	_, err = ValueLogRewriteOffline(Options{
+		Dir: root, IgnoreFormatConfig: true,
+		ValueLog: ValueLogOptions{TemplateMode: templ.TemplateOnly},
+	})
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("offline template rewrite error=%v want unresolved authority before side-store open", err)
+	}
+	if err := templateBackend.SetSync([]byte("still-open"), []byte("yes")); err != nil {
+		t.Fatalf("rejected rewrite disturbed held templatedb: %v", err)
+	}
+}
 
 func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T) {
 	dir := t.TempDir()

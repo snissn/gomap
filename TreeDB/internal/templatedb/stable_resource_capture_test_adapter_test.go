@@ -29,15 +29,15 @@ func (kv stableTestKV) NewBatch() Batch {
 	return kv.db.NewBatch()
 }
 
-func (kv stableTestKV) AcquireStableTemplateSnapshot() StablePhysicalSnapshot {
+func (kv stableTestKV) AcquireStableTemplateSnapshot() (StablePhysicalSnapshot, error) {
 	if kv.db == nil {
-		return nil
+		return nil, nil
 	}
 	snapshot := kv.db.AcquireStableSnapshot()
 	if snapshot == nil {
-		return nil
+		return nil, nil
 	}
-	return &stableTestSnapshot{snapshot: snapshot, dir: kv.db.Dir()}
+	return &stableTestSnapshot{snapshot: snapshot, dir: kv.db.Dir()}, nil
 }
 
 type stableTestSnapshot struct {
@@ -77,6 +77,8 @@ func (snapshot *stableTestSnapshot) NewStableIndexResourceToken(spec rootpublica
 func (snapshot *stableTestSnapshot) NewStableValueLogResourceToken(fileID uint32, spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	return snapshot.snapshot.NewStableValueLogPhysicalResourceToken(fileID, spec, NewStableTemplateResourceToken)
 }
+
+func (snapshot *stableTestSnapshot) ReleaseCaptureLease() {}
 
 func (snapshot *stableTestSnapshot) Close() error {
 	return snapshot.snapshot.Close()
