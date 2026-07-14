@@ -53,6 +53,23 @@ func leafGenerationPackPromotionPreflight() error {
 	return nil
 }
 
+var leafGenerationPackPromotionTargetProbe = rootpublication.ProbeStableChildFileNoReplaceInstall
+
+func leafGenerationPackPromotionTargetPreflight(destinationDir string) error {
+	if err := leafGenerationPackPromotionPreflight(); err != nil {
+		return err
+	}
+	destinationParent, err := os.Open(destinationDir)
+	if err != nil {
+		return err
+	}
+	defer destinationParent.Close()
+	if err := leafGenerationPackPromotionTargetProbe(destinationParent); err != nil {
+		return fmt.Errorf("leaf generation pack promotion target %q: %w", destinationDir, err)
+	}
+	return nil
+}
+
 func newLeafGenerationPackPromotionAuthority(db *DB, stagingDir, destinationDir string) (*leafGenerationPackPromotionAuthority, error) {
 	if db == nil || db.valueLogIdentityPins == nil {
 		return nil, fmt.Errorf("%w: leaf pack requires DB-scoped identity pins", rootpublication.ErrUnresolvedResource)

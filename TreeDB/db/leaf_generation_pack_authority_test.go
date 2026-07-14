@@ -332,6 +332,66 @@ func TestLeafGenerationPackPromotionAuthorityRejectsReboundSourceBeforeMutation(
 	}
 }
 
+func TestLeafGenerationPackTargetProbeFailsBeforePublicationOrStaging(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	originalProbe := leafGenerationPackPromotionTargetProbe
+	probeCalls := 0
+	probeErr := fmt.Errorf("%w: injected target filesystem", rootpublication.ErrNamespacePersistenceUnsupported)
+	leafGenerationPackPromotionTargetProbe = func(*os.File) error {
+		probeCalls++
+		return probeErr
+	}
+	defer func() { leafGenerationPackPromotionTargetProbe = originalProbe }()
+	epochBefore := db.systemRootPublishEpoch.Load()
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
+	})
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("LeafGenerationPack error=%v want typed target capability failure", err)
+	}
+	if probeCalls != 1 || stats.CopyAttempts != 0 {
+		t.Fatalf("probe calls=%d copy attempts=%d want 1,0", probeCalls, stats.CopyAttempts)
+	}
+	if epochAfter := db.systemRootPublishEpoch.Load(); epochAfter != epochBefore {
+		t.Fatalf("publication epoch changed before=%d after=%d", epochBefore, epochAfter)
+	}
+	staging, globErr := filepath.Glob(filepath.Join(LeafLogDirPath(dir), ".leaf-pack-copy-*"))
+	if globErr != nil || len(staging) != 0 {
+		t.Fatalf("staging after target preflight failure=%v err=%v", staging, globErr)
+	}
+}
+
+func TestLeafGenerationPackTargetProbePreservesTwoParentSyncContract(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+	var beforeSyncs, afterSyncs int
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeNewFileDirectorySync {
+			beforeSyncs++
+		}
+		if event.Point == durabilitycut.AfterNewFileDirectorySync {
+			afterSyncs++
+		}
+		return nil
+	})
+	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
+	})
+	restore()
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if beforeSyncs != 2 || afterSyncs != 2 {
+		t.Fatalf("target probe changed namespace sync contract: before=%d after=%d want 2,2", beforeSyncs, afterSyncs)
+	}
+}
+
 func TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)

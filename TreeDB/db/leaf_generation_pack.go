@@ -12,6 +12,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -25,15 +26,30 @@ var removeLeafGenerationPackStagingDirFn = func(path string) error {
 }
 
 func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
-	entries, err := os.ReadDir(leafDir)
+	leafParent, err := os.Open(leafDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+	defer leafParent.Close()
+	entries, err := leafParent.ReadDir(-1)
+	if err != nil {
+		return err
+	}
 	removed := false
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), rootpublication.StableChildFileInstallProbePrefix) {
+			if entry.IsDir() {
+				return fmt.Errorf("leaf generation pack: reserved install probe name %q is a directory", entry.Name())
+			}
+			if err := rootpublication.RemoveStableChildFile(leafParent, entry.Name()); err != nil {
+				return fmt.Errorf("leaf generation pack: remove orphan install probe %q: %w", entry.Name(), err)
+			}
+			removed = true
+			continue
+		}
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".leaf-pack-copy-") {
 			continue
 		}
@@ -252,10 +268,12 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	if len(rawSourceIDs) == 0 {
 		return stats, nil
 	}
+	layout := resolveStorageLayout(db.dir)
 	// Stable packed publication requires exact relative namespace primitives.
-	// Fail before publishing a value-log set or creating a staging directory,
-	// writer, or private pager. A true no-op needs no namespace capability.
-	if err := leafGenerationPackPromotionPreflight(); err != nil {
+	// Exercise the real target filesystem install before publishing a value-log
+	// set or creating a staging directory, writer, or private pager. A true
+	// no-op needs no namespace capability.
+	if err := leafGenerationPackPromotionTargetPreflight(layout.leafVLogDir); err != nil {
 		return stats, err
 	}
 	if err := db.publishValueLogSetNoRefresh(); err != nil {
@@ -284,7 +302,6 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		return stats, err
 	}
 
-	layout := resolveStorageLayout(db.dir)
 	blockCompression := db.valueLogCompression != ValueLogCompressionOff
 	blockCodec := valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	leafBlockCodec := leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)

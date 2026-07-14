@@ -823,6 +823,10 @@ func TestLeafGenerationPack_StartupCleansOrphansWithoutDeletingLiveAttempt(t *te
 	if err := os.WriteFile(filepath.Join(orphan, "index.pages"), []byte("orphan"), 0o600); err != nil {
 		t.Fatalf("WriteFile orphan: %v", err)
 	}
+	probeOrphan := filepath.Join(LeafLogDirPath(dir), rootpublication.StableChildFileInstallProbePrefix+"crash-left")
+	if err := os.WriteFile(probeOrphan, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile probe orphan: %v", err)
+	}
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -830,6 +834,9 @@ func TestLeafGenerationPack_StartupCleansOrphansWithoutDeletingLiveAttempt(t *te
 	defer func() { _ = reopened.Close() }()
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatalf("orphan stat error=%v want not-exist", err)
+	}
+	if _, err := os.Stat(probeOrphan); !os.IsNotExist(err) {
+		t.Fatalf("probe orphan stat error=%v want not-exist", err)
 	}
 }
 

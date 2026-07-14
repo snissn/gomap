@@ -221,3 +221,72 @@ func TestMoveStableChildFileNoReplaceUsesRetainedIdentityAcrossRebindWindow(t *t
 		}
 	}
 }
+
+func TestProbeStableChildFileNoReplaceInstallExercisesTargetAndCleansAliases(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	if err := ProbeStableChildFileNoReplaceInstall(parent); err != nil {
+		t.Fatalf("ProbeStableChildFileNoReplaceInstall: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("probe aliases remain: %v", entries)
+	}
+}
+
+func TestProbeStableChildFileNoReplaceInstallCleansPostInstallAmbiguity(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	testErr := errors.New("post-install ambiguity")
+	move := func(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+		installed, err := MoveStableChildFileNoReplace(sourceParent, expected, oldName, destinationParent, newName)
+		if err != nil {
+			return installed, err
+		}
+		return installed, testErr
+	}
+	err = probeStableChildFileNoReplaceInstall(parent, ".probe-source", ".probe-installed", move, RemoveStableChildFile)
+	if !errors.Is(err, testErr) {
+		t.Fatalf("probe error=%v want ambiguity", err)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ambiguous probe aliases remain: %v", entries)
+	}
+}
+
+func TestProbeStableChildFileNoReplaceInstallCleanupFailureBlocks(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	cleanupErr := errors.New("cleanup blocked")
+	removeCalls := 0
+	remove := func(parent *os.File, name string) error {
+		removeCalls++
+		if removeCalls == 1 {
+			return cleanupErr
+		}
+		return RemoveStableChildFile(parent, name)
+	}
+	err = probeStableChildFileNoReplaceInstall(parent, ".probe-source", ".probe-installed", MoveStableChildFileNoReplace, remove)
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("probe error=%v want cleanup failure", err)
+	}
+}
