@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -15,7 +16,7 @@ import (
 // acquireStableTemplateSnapshot exposes only the pinned physical view needed
 // by templatedb. The adapter deliberately retains the real backend rather than
 // reconstructing authority from public lookup bytes.
-func acquireStableTemplateSnapshot(backend *db.DB) templatedb.StablePhysicalSnapshot {
+func acquireStableTemplateSnapshot(backend *db.DB) *templateStableSnapshot {
 	if backend == nil {
 		return nil
 	}
@@ -27,8 +28,10 @@ func acquireStableTemplateSnapshot(backend *db.DB) templatedb.StablePhysicalSnap
 }
 
 type templateStableSnapshot struct {
-	snapshot *db.Snapshot
-	dir      string
+	snapshot            *db.Snapshot
+	dir                 string
+	captureLeaseOnce    sync.Once
+	captureLeaseRelease func()
 }
 
 func (snapshot *templateStableSnapshot) Get(key []byte) ([]byte, error) {
@@ -88,9 +91,25 @@ func (snapshot *templateStableSnapshot) NewStableValueLogResourceToken(fileID ui
 	return snapshot.snapshot.NewStableValueLogPhysicalResourceToken(fileID, spec, templatedb.NewStableTemplateResourceToken)
 }
 
+func (snapshot *templateStableSnapshot) ReleaseCaptureLease() {
+	if snapshot == nil {
+		return
+	}
+	snapshot.captureLeaseOnce.Do(func() {
+		if snapshot.captureLeaseRelease != nil {
+			snapshot.captureLeaseRelease()
+		}
+	})
+}
+
 func (snapshot *templateStableSnapshot) Close() error {
 	if snapshot == nil || snapshot.snapshot == nil {
+		if snapshot != nil {
+			snapshot.ReleaseCaptureLease()
+		}
 		return nil
 	}
-	return snapshot.snapshot.Close()
+	err := snapshot.snapshot.Close()
+	snapshot.ReleaseCaptureLease()
+	return err
 }

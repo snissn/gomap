@@ -35,6 +35,7 @@ type StablePhysicalSnapshot interface {
 	ValueLogDiagnosticPath(uint32) (string, error)
 	NewStableIndexResourceToken(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)
 	NewStableValueLogResourceToken(uint32, rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)
+	ReleaseCaptureLease()
 	Close() error
 }
 
@@ -76,6 +77,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: templatedb stable snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
+	defer snapshot.ReleaseCaptureLease()
 	snapshotOwned := false
 	defer func() {
 		if !snapshotOwned {

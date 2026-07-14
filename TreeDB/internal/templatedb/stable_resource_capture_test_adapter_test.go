@@ -78,6 +78,8 @@ func (snapshot *stableTestSnapshot) NewStableValueLogResourceToken(fileID uint32
 	return snapshot.snapshot.NewStableValueLogPhysicalResourceToken(fileID, spec, NewStableTemplateResourceToken)
 }
 
+func (snapshot *stableTestSnapshot) ReleaseCaptureLease() {}
+
 func (snapshot *stableTestSnapshot) Close() error {
 	return snapshot.snapshot.Close()
 }
