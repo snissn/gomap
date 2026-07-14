@@ -14,7 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestStandaloneStableLeafRewriteMergesDictionaryClosure(t *testing.T) {
+func TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
@@ -42,12 +42,15 @@ func TestStandaloneStableLeafRewriteMergesDictionaryClosure(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
-	db.SetStableDictionaryResourceProvider(provider)
 	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
 	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
 	writer.blockCompression = true
 	writer.SetLeafDictMode(dictID, dictionary, false)
 	db.SetLeafPageLog(writer)
+	// Production installs the rewrite leaf log before caching.SetDictStore can
+	// publish its dictionary authority. The stable append must consult the DB's
+	// current provider rather than retaining the nil provider seen at install.
+	db.SetStableDictionaryResourceProvider(provider)
 	t.Cleanup(func() {
 		_ = db.Close()
 		_ = writer.Close()

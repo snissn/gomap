@@ -30,7 +30,11 @@ func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOute
 		writer:  writer,
 		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
 	}
-	dictionaryResources, err := captureStableDictionaryResources(writer.stableDictionaryResources, writer.leafDictID, writer.leafDict)
+	var dictionaryProvider StableDictionaryResourceProvider
+	if writer.stableDictionaryResourceProvider != nil {
+		dictionaryProvider = writer.stableDictionaryResourceProvider()
+	}
+	dictionaryResources, err := captureStableDictionaryResources(dictionaryProvider, writer.leafDictID, writer.leafDict)
 	if err != nil {
 		capture.abandon()
 		return nil, err

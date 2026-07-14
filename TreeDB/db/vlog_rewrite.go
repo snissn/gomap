@@ -3393,15 +3393,15 @@ type rewriteWriter struct {
 	ridAlloc         *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
-	currentPath               string
-	currentFileID             uint32
-	leafCurrentPath           string
-	leafCurrentFileID         uint32
-	stableResourcePins        *rootpublication.IdentityPinRegistry
-	stableRegistryErr         error
-	stableDictionaryResources StableDictionaryResourceProvider
-	leafStaging               bool
-	lastLeafRecordLen         uint32
+	currentPath                      string
+	currentFileID                    uint32
+	leafCurrentPath                  string
+	leafCurrentFileID                uint32
+	stableResourcePins               *rootpublication.IdentityPinRegistry
+	stableRegistryErr                error
+	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
+	leafStaging                      bool
+	lastLeafRecordLen                uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -3501,14 +3501,17 @@ func (w *rewriteWriter) bindStableResourcePinRegistry(registry *rootpublication.
 	return nil
 }
 
-func (w *rewriteWriter) bindStableDictionaryResourceProvider(provider StableDictionaryResourceProvider) error {
+func (w *rewriteWriter) bindStableDictionaryResourceProvider(provider func() StableDictionaryResourceProvider) error {
 	if w == nil {
 		return fmt.Errorf("%w: standalone leaf writer unavailable", rootpublication.ErrUnresolvedResource)
 	}
-	if w.leafW != nil || (w.stableDictionaryResources != nil && w.stableDictionaryResources != provider) {
-		return fmt.Errorf("%w: stable dictionary provider installed after writer open or differs from its original provider", rootpublication.ErrUnresolvedResource)
+	if provider == nil {
+		return fmt.Errorf("%w: standalone leaf writer requires a dictionary provider resolver", rootpublication.ErrUnresolvedResource)
 	}
-	w.stableDictionaryResources = provider
+	if w.leafW != nil {
+		return fmt.Errorf("%w: stable dictionary provider resolver installed after writer open", rootpublication.ErrUnresolvedResource)
+	}
+	w.stableDictionaryResourceProvider = provider
 	return nil
 }
 
@@ -3564,7 +3567,7 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.leafSeqAllocator = seqAlloc
 	clone.ridAlloc = ridAlloc
 	clone.stableResourcePins = w.stableResourcePins
-	clone.stableDictionaryResources = w.stableDictionaryResources
+	clone.stableDictionaryResourceProvider = w.stableDictionaryResourceProvider
 	clone.stableRegistryErr = w.stableRegistryErr
 	clone.blockCompression = w.blockCompression
 	clone.blockCodec = w.blockCodec

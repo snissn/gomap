@@ -223,7 +223,7 @@ type leafPageLogStableRegistryBinder interface {
 }
 
 type leafPageLogStableDictionaryBinder interface {
-	bindStableDictionaryResourceProvider(StableDictionaryResourceProvider) error
+	bindStableDictionaryResourceProvider(func() StableDictionaryResourceProvider) error
 }
 
 type leafPageLogRecordLengthProvider interface {
@@ -965,7 +965,7 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 		_ = binder.bindStableResourcePinRegistry(db.valueLogIdentityPins)
 	}
 	if binder, ok := log.(leafPageLogStableDictionaryBinder); ok {
-		_ = binder.bindStableDictionaryResourceProvider(db.stableDictionaryResourceProvider())
+		_ = binder.bindStableDictionaryResourceProvider(db.stableDictionaryResourceProvider)
 	}
 	installed := log
 	if wrap {
