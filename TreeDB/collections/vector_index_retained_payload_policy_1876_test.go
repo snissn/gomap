@@ -277,6 +277,7 @@ func retainedPayloadPolicyName1876(policy ColumnRetainedPayloadPolicy) string {
 
 func openRetainedPayloadPolicyFixture1876(tb testing.TB, shape retainedPayloadPolicyFixtureShape1876, policy ColumnRetainedPayloadPolicy, forceValueLogPointers bool) retainedPayloadPolicyFixture1876 {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
 	if shape.rows <= 0 || shape.dims <= 0 || shape.topK <= 0 || shape.topK > shape.rows {
 		tb.Fatalf("invalid fixture shape: %+v", shape)
 	}

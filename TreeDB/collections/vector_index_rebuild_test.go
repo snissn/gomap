@@ -808,6 +808,7 @@ func TestColumnGraphRebuildVectorIndexAdjacencyUsesFlattenedNativeGraphV2A(t *te
 }
 
 func TestColumnGraphRebuildVectorIndexAllocatesPartIDsAcrossGraphIndexesV2A(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)

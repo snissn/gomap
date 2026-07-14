@@ -308,6 +308,7 @@ func benchmarkIndexInsertBatch2564(b *testing.B, docs, dims, m int) {
 
 func openIndexInsertSearchInsertedFixture2564(tb testing.TB, docs, dims, m int) indexInsertSearchFixture2564 {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
 	fixture := openIndexInsertSearchEmptyFixture2564(tb, tb.TempDir(), docs, dims, m)
 	if _, err := fixture.col.InsertBatch(fixture.ids, fixture.rawDocs); err != nil {
 		_ = fixture.db.Close()

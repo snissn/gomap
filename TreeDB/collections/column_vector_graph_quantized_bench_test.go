@@ -2584,6 +2584,7 @@ func openColumnGraphScalarU8AlphaQuantizedBenchCollection2845(tb testing.TB, sha
 
 func openColumnGraphScalarU8QuantizedBenchCollectionWithDefinitions2845(tb testing.TB, shape columnGraphScalarU8QuantizedBenchShape1926, qdefs []QuantizedVectorIndexDefinition) (string, *backenddb.DB, *Collection, VectorIndexDefinition, []columnGraphRebuildInputRowV2A) {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
 	if shape.rows <= 0 || shape.dims <= 0 {
 		tb.Fatalf("invalid benchmark shape rows=%d dims=%d", shape.rows, shape.dims)
 	}

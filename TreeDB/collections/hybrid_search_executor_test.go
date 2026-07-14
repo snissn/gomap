@@ -558,6 +558,7 @@ func BenchmarkSearchHybridExecutor2505(b *testing.B) {
 
 func openHybridSearchExecutorFixture2505(tb testing.TB, rows []hybridSearchExecutorFixtureRow2505) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
