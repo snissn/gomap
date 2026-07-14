@@ -3981,6 +3981,13 @@ func TestCollectionLegacyVectorSnapshotSaveSerializesPruneAfterEpochRename(t *te
 		t.Fatal("second save did not reach post-epoch-rename hook")
 	}
 
+	pruneLockAttempted := make(chan struct{})
+	var pruneLockAttemptedOnce sync.Once
+	restoreBeforeLock := setLegacyVectorSidecarBeforeLockHookForTest(func() {
+		pruneLockAttemptedOnce.Do(func() { close(pruneLockAttempted) })
+	})
+	defer restoreBeforeLock()
+
 	pruneDone := make(chan struct {
 		status VectorIndexPruneStatus
 		err    error
@@ -3993,17 +4000,38 @@ func TestCollectionLegacyVectorSnapshotSaveSerializesPruneAfterEpochRename(t *te
 		}{status, err}
 	}()
 	select {
+	case <-pruneLockAttempted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prune did not attempt to acquire the legacy sidecar lock")
+	}
+	select {
 	case got := <-pruneDone:
 		t.Fatalf("prune completed while save was paused after epoch rename: %+v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	releaseOnce.Do(func() { close(release) })
-	second := <-saveDone
+	var second struct {
+		status VectorIndexLoadStatus
+		err    error
+	}
+	select {
+	case second = <-saveDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second save did not complete after release")
+	}
 	if second.err != nil {
 		t.Fatalf("save second snapshot: %v", second.err)
 	}
-	pruned := <-pruneDone
+	var pruned struct {
+		status VectorIndexPruneStatus
+		err    error
+	}
+	select {
+	case pruned = <-pruneDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prune did not complete after save release")
+	}
 	if pruned.err != nil {
 		t.Fatalf("prune after save: %v", pruned.err)
 	}

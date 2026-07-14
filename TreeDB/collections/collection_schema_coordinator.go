@@ -35,6 +35,11 @@ var legacyVectorSnapshotPostEpochRenameHook struct {
 	fn func()
 }
 
+var legacyVectorSidecarBeforeLockHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
 func setLegacyVectorSnapshotPostEpochRenameHookForTest(fn func()) func() {
 	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
 	prev := legacyVectorSnapshotPostEpochRenameHook.fn
@@ -51,6 +56,27 @@ func runLegacyVectorSnapshotPostEpochRenameHookForTest() {
 	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
 	fn := legacyVectorSnapshotPostEpochRenameHook.fn
 	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func setLegacyVectorSidecarBeforeLockHookForTest(fn func()) func() {
+	legacyVectorSidecarBeforeLockHook.mu.Lock()
+	prev := legacyVectorSidecarBeforeLockHook.fn
+	legacyVectorSidecarBeforeLockHook.fn = fn
+	legacyVectorSidecarBeforeLockHook.mu.Unlock()
+	return func() {
+		legacyVectorSidecarBeforeLockHook.mu.Lock()
+		legacyVectorSidecarBeforeLockHook.fn = prev
+		legacyVectorSidecarBeforeLockHook.mu.Unlock()
+	}
+}
+
+func runLegacyVectorSidecarBeforeLockHookForTest() {
+	legacyVectorSidecarBeforeLockHook.mu.Lock()
+	fn := legacyVectorSidecarBeforeLockHook.fn
+	legacyVectorSidecarBeforeLockHook.mu.Unlock()
 	if fn != nil {
 		fn()
 	}
@@ -209,6 +235,7 @@ func (c *Collection) lockLegacyVectorSidecar() func() {
 	if coord == nil {
 		return func() {}
 	}
+	runLegacyVectorSidecarBeforeLockHookForTest()
 	coord.legacyVectorSidecarMu.Lock()
 	return coord.legacyVectorSidecarMu.Unlock
 }
