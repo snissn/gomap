@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -47,11 +48,11 @@ type leafGenerationPackPromotionAuthority struct {
 	moveNoReplace         func(*os.File, *os.File, string, *os.File, string) (bool, error)
 }
 
-func (authority *leafGenerationPackPromotionAuthority) captureDictionary(dictID uint64, dictionary []byte) error {
+func (authority *leafGenerationPackPromotionAuthority) captureDictionary(ctx context.Context, dictID uint64, dictionary []byte) error {
 	if authority == nil || authority.released || authority.dictionaryResources != nil || len(authority.segments) != 0 {
 		return rootpublication.ErrResourceOwnership
 	}
-	resources, err := captureStableDictionaryResources(authority.db.stableDictionaryResourceProvider(), dictID, dictionary)
+	resources, err := captureStableDictionaryResources(ctx, authority.db.stableDictionaryResourceProvider(), dictID, dictionary)
 	if err != nil {
 		return err
 	}

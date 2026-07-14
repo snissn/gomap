@@ -19,6 +19,35 @@ type testStableDictionaryProvider struct {
 	releaseCalls atomic.Int32
 }
 
+type canceledContextStableDictionaryProvider struct {
+	sawCanceled atomic.Bool
+}
+
+func (provider *canceledContextStableDictionaryProvider) CaptureDictionaryResources(ctx context.Context, _ uint64) (*rootpublication.StableResourceSet, error) {
+	if ctx.Err() == context.Canceled {
+		provider.sawCanceled.Store(true)
+		return nil, ctx.Err()
+	}
+	return nil, fmt.Errorf("dictionary capture received uncanceled context")
+}
+
+func TestLeafGenerationPackPromotionAuthorityPropagatesCaptureContext(t *testing.T) {
+	database := &DB{}
+	provider := &canceledContextStableDictionaryProvider{}
+	database.SetStableDictionaryResourceProvider(provider)
+	authority := &leafGenerationPackPromotionAuthority{db: database}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := authority.captureDictionary(ctx, 7400, []byte("canceled packed dictionary authority"))
+	if err != context.Canceled {
+		t.Fatalf("capture error=%v want context.Canceled", err)
+	}
+	if !provider.sawCanceled.Load() {
+		t.Fatal("packed dictionary provider did not receive operation cancellation")
+	}
+}
+
 func newTestStableDictionaryProvider(t *testing.T, dictID uint64, dictionary []byte) *testStableDictionaryProvider {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "dictionary-authority-")

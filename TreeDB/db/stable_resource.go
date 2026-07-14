@@ -79,14 +79,17 @@ func (db *DB) stableDictionaryResourceProvider() StableDictionaryResourceProvide
 	return provider
 }
 
-func captureStableDictionaryResources(provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte) (*rootpublication.StableResourceSet, error) {
+func captureStableDictionaryResources(ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte) (*rootpublication.StableResourceSet, error) {
 	if dictID == 0 || len(dictionary) == 0 {
 		return nil, nil
 	}
 	if provider == nil {
 		return nil, fmt.Errorf("%w: dictionary %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, dictID)
 	}
-	resources, err := provider.CaptureDictionaryResources(context.Background(), dictID)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resources, err := provider.CaptureDictionaryResources(ctx, dictID)
 	if err != nil {
 		return nil, err
 	}

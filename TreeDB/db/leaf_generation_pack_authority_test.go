@@ -210,7 +210,7 @@ func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authority.captureDictionary(dictID, dictionary); err != nil {
+	if err := authority.captureDictionary(context.Background(), dictID, dictionary); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
@@ -253,7 +253,7 @@ func TestLeafGenerationPackPromotionAuthorityRetainsDictionaryAcrossPostLinkPois
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authority.captureDictionary(dictID, dictionary); err != nil {
+	if err := authority.captureDictionary(context.Background(), dictID, dictionary); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
