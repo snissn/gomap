@@ -306,13 +306,13 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		spec.Namespace = namespace
 		callerRelease := spec.OnRelease
 		spec.OnRelease = func() {
-			if callerRelease != nil {
-				callerRelease()
-			}
+			_ = snapshot.Close()
 			if leaseTransferred.CompareAndSwap(true, false) {
 				database.stableIndexCaptures.Add(-1)
 			}
-			_ = snapshot.Close()
+			if callerRelease != nil {
+				callerRelease()
+			}
 		}
 		token, err = constructor(spec)
 		return err
