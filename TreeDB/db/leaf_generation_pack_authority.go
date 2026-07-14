@@ -44,6 +44,8 @@ type leafGenerationPackPromotionAuthority struct {
 	resources             *rootpublication.StableResourceSet
 	namespaceSyncNanos    int64
 	retainedForRecovery   bool
+	recoveryCleanup       []rewriteCreatedSegment
+	recoveryStagingRoot   string
 	released              bool
 	moveNoReplace         func(*os.File, *os.File, string, *os.File, string) (bool, error)
 }
@@ -386,9 +388,41 @@ func (authority *leafGenerationPackPromotionAuthority) retainForRecovery() {
 		return
 	}
 	authority.retainedForRecovery = true
-	authority.db.registerInternalTeardownHook(func() error {
-		return authority.release()
+	authority.db.registerCaptureTeardownHook(func() error {
+		var cleanupErr error
+		stagingRoot := authority.recoveryStagingRoot
+		if len(authority.recoveryCleanup) != 0 {
+			cleanupErr = cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
+				authority.destinationParent,
+				authority.recoveryCleanup,
+			)
+			if cleanupErr == nil {
+				authority.recoveryCleanup = nil
+			}
+		}
+		releaseErr := authority.release()
+		if cleanupErr != nil {
+			return errors.Join(cleanupErr, releaseErr, ErrRecoveryRequired)
+		}
+		if releaseErr != nil {
+			return errors.Join(releaseErr, ErrRecoveryRequired)
+		}
+		if stagingRoot != "" {
+			if err := removeLeafGenerationPackStagingDirFn(stagingRoot); err != nil {
+				return errors.Join(err, ErrRecoveryRequired)
+			}
+		}
+		return nil
 	})
+}
+
+func (authority *leafGenerationPackPromotionAuthority) retainPromotedCleanupForRecovery(promoted []rewriteCreatedSegment, stagingRoot string) {
+	if authority == nil || authority.released || len(promoted) == 0 {
+		return
+	}
+	authority.recoveryCleanup = append(authority.recoveryCleanup[:0], promoted...)
+	authority.recoveryStagingRoot = stagingRoot
+	authority.retainForRecovery()
 }
 
 func (authority *leafGenerationPackPromotionAuthority) releaseCaptured() {
@@ -423,6 +457,8 @@ func (authority *leafGenerationPackPromotionAuthority) release() error {
 		return nil
 	}
 	authority.released = true
+	authority.recoveryCleanup = nil
+	authority.recoveryStagingRoot = ""
 	authority.releaseCaptured()
 	var err error
 	if authority.stagingParent != nil {

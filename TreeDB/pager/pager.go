@@ -793,13 +793,13 @@ func (p *Pager) SyncIndexData() error {
 // the pager-owned descriptor, the retained handle still supplies the file
 // durability fence required by an outstanding stable-resource token.
 func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
+	if file == nil {
+		return errors.New("pager: stable index file unavailable")
+	}
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
 			return err
 		}
-	}
-	if file == nil {
-		return errors.New("pager: stable index file unavailable")
 	}
 	if err := p.syncDirtyChunksWithFile(true, 0, file); err != nil {
 		return err

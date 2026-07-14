@@ -243,10 +243,13 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
 		return nil, err
 	}
-	if err := snap.Close(); err != nil {
-		return nil, err
-	}
+	closeErr := snap.Close()
+	// Snapshot pointers are single-use after Close returns, including when it
+	// reports an error. Clear deferred-cleanup ownership before checking it.
 	snap = nil
+	if closeErr != nil {
+		return nil, closeErr
+	}
 	runColumnVectorGraphStableBeforeCaptureAdmissionTestHook()
 	captureLease, err := c.db.AcquireStableResourceCaptureLease()
 	if err != nil {

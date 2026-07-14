@@ -244,6 +244,12 @@ type DB struct {
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
 	internalTeardownHooksClosed bool
+	// captureTeardownHooks are registered by producers while they hold a
+	// teardownMu read lease. Close drains them only after acquiring teardownMu
+	// exclusively, so a recovery callback cannot race its admitted producer.
+	captureTeardownHooksMu     sync.Mutex
+	captureTeardownHooks       []func() error
+	captureTeardownHooksClosed bool
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -2422,6 +2428,61 @@ func (db *DB) runInternalTeardownHooksMaintenanceLocked() error {
 	return errors.Join(errs...)
 }
 
+// registerCaptureTeardownHook retains recovery work discovered by a producer
+// that already owns a teardownMu read lease. Unlike ordinary internal teardown
+// hooks, these callbacks must not run until every admitted producer has
+// released its lease.
+func (db *DB) registerCaptureTeardownHook(hook func() error) func() {
+	if db == nil || hook == nil {
+		return func() {}
+	}
+	db.captureTeardownHooksMu.Lock()
+	defer db.captureTeardownHooksMu.Unlock()
+	if db.captureTeardownHooksClosed {
+		return func() {}
+	}
+	idx := len(db.captureTeardownHooks)
+	db.captureTeardownHooks = append(db.captureTeardownHooks, hook)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.captureTeardownHooksMu.Lock()
+			if idx >= 0 && idx < len(db.captureTeardownHooks) && db.captureTeardownHooks[idx] != nil {
+				db.captureTeardownHooks[idx] = nil
+			}
+			db.captureTeardownHooksMu.Unlock()
+		})
+	}
+}
+
+// runCaptureTeardownHooksLocked runs after Close owns teardownMu exclusively.
+// Producers holding capture leases have therefore finished registering and
+// can no longer race their retained recovery authority.
+func (db *DB) runCaptureTeardownHooksLocked() error {
+	db.captureTeardownHooksMu.Lock()
+	if db.captureTeardownHooksClosed {
+		db.captureTeardownHooksMu.Unlock()
+		return nil
+	}
+	db.captureTeardownHooksClosed = true
+	hooks := append([]func() error(nil), db.captureTeardownHooks...)
+	clear(db.captureTeardownHooks)
+	db.captureTeardownHooks = nil
+	db.captureTeardownHooksMu.Unlock()
+
+	var errs []error
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
@@ -2501,6 +2562,9 @@ func (db *DB) closeAfterHooks() error {
 	// revalidating work. Never wait for them while holding writeMu.
 	db.teardownMu.Lock()
 	defer db.teardownMu.Unlock()
+	if err := db.runCaptureTeardownHooksLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.valueLogRefTracker != nil {

@@ -31,6 +31,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -256,6 +257,25 @@ func captureProductionValueLogAuthority(t productionAuthorityContext) (*rootpubl
 	return freezeProductionAuthorityToken(rootpublication.ReachabilityValueLogPointer, token)
 }
 
+func buildProductionAuthorityLeafPage(t productionAuthorityContext, tag byte) ([]byte, error) {
+	t.Helper()
+	buf := make([]byte, page.PageSize)
+	builder := node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		key := []byte{'p', 'r', 'o', 'd', '-', tag, '-', byte('a' + i)}
+		value := []byte{'v', 'a', 'l', 'u', 'e', '-', tag, '-', byte('a' + i)}
+		if err := builder.AddLeafEntry(key, value, node.FlagInline, page.ValuePtr{}); err != nil {
+			return nil, fmt.Errorf("build production authority leaf entry %d: %w", i, err)
+		}
+	}
+	builder.FinishNoNode()
+	return buf, nil
+}
+
 func captureProductionRawOuterLeafAuthority(t productionAuthorityContext) (*rootpublication.StableResourceSet, error) {
 	t.Helper()
 	dir := t.TempDir()
@@ -277,7 +297,11 @@ func captureProductionRawOuterLeafAuthority(t productionAuthorityContext) (*root
 	if !ok {
 		return nil, fmt.Errorf("%w: standalone leaf producer %T has no stable append", rootpublication.ErrUnresolvedResource, log)
 	}
-	_, resources, err := stable.AppendLeafPageWithStableResources([]byte(strings.Repeat("production-raw-outer-leaf-", 64)))
+	leafPage, err := buildProductionAuthorityLeafPage(t, 'r')
+	if err != nil {
+		return nil, err
+	}
+	_, resources, err := stable.AppendLeafPageWithStableResources(leafPage)
 	return resources, err
 }
 
@@ -288,9 +312,11 @@ func captureProductionPackedOuterLeafAuthority(t productionAuthorityContext) (*r
 		return nil, err
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
-		[]byte(strings.Repeat("production-packed-outer-leaf-", 64)),
-	})
+	leafPage, err := buildProductionAuthorityLeafPage(t, 'p')
+	if err != nil {
+		return nil, err
+	}
+	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{leafPage})
 	if err != nil {
 		return nil, err
 	}

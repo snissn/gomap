@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -411,6 +412,222 @@ func TestLeafGenerationPackStablePrepareLateCleanupErrorReturnsNoAuthority(t *te
 	}
 	if got := registry.ActiveIdentities(); got != baselineIdentities {
 		t.Fatalf("active identities after late cleanup failure=%d want %d", got, baselineIdentities)
+	}
+}
+
+func TestLeafGenerationPackStablePrepareValidationFailureCleansPromotedChildren(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+		t.Skip("stable packed promotion requires exact relative cross-parent namespace support")
+	}
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	registry := database.StableResourceIdentityPinRegistry()
+	baseline := registry.Stats()
+	sentinel := errors.New("injected post-promotion closure validation failure")
+	restore := setLeafGenerationPackStableClosureValidationTestHook(func() error { return sentinel })
+	defer restore()
+
+	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
+		buildLeafGenerationPackStablePage(t, 'h'),
+	})
+	if closure != nil {
+		_ = closure.Release()
+		t.Fatal("post-promotion validation failure returned non-nil closure")
+	}
+	if !errors.Is(err, sentinel) || !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("PrepareLeafGenerationPackStableClosure error=%v want injected and typed unresolved-resource errors", err)
+	}
+	leafDir := resolveStorageLayout(dir).leafVLogDir
+	for _, pattern := range []string{"*.vlog", "*.log"} {
+		matches, globErr := filepath.Glob(filepath.Join(leafDir, pattern))
+		if globErr != nil {
+			t.Fatalf("Glob(%q): %v", pattern, globErr)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("post-promotion validation cleanup left final children for %q: %v", pattern, matches)
+		}
+	}
+	if got := registry.Stats(); got != baseline {
+		t.Fatalf("stable registry after post-promotion validation cleanup=%+v want baseline %+v", got, baseline)
+	}
+}
+
+func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsAndRetries(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+		t.Skip("stable packed promotion requires exact relative cross-parent namespace support")
+	}
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := database.StableResourceIdentityPinRegistry()
+	baseline := registry.Stats()
+	validationErr := errors.New("injected post-promotion closure validation failure")
+	cleanupCut := errors.New("injected deletion-directory sync cut")
+	restoreValidation := setLeafGenerationPackStableClosureValidationTestHook(func() error { return validationErr })
+	defer restoreValidation()
+	cutCalls := 0
+	restoreCut := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeDeletionDirectorySync && event.Resource == durabilitycut.ResourceOuterLeaf && cutCalls == 0 {
+			cutCalls++
+			return cleanupCut
+		}
+		return nil
+	})
+
+	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
+		buildLeafGenerationPackStablePage(t, 'i'),
+	})
+	restoreCut()
+	if closure != nil {
+		_ = closure.Release()
+		_ = database.Close()
+		t.Fatal("ambiguous post-promotion cleanup returned non-nil closure")
+	}
+	if !errors.Is(err, validationErr) || !errors.Is(err, cleanupCut) ||
+		!errors.Is(err, rootpublication.ErrUnresolvedResource) || !errors.Is(err, ErrRecoveryRequired) {
+		_ = database.Close()
+		t.Fatalf("PrepareLeafGenerationPackStableClosure error=%v want validation, cleanup-cut, typed unresolved-resource, and recovery-required errors", err)
+	}
+	if cutCalls != 1 {
+		_ = database.Close()
+		t.Fatalf("deletion-directory sync cuts=%d want 1", cutCalls)
+	}
+	retained := registry.Stats()
+	if retained.ActivePins <= baseline.ActivePins || retained.ActiveIdentities <= baseline.ActiveIdentities ||
+		retained.ActiveStableNamespaceLinks <= baseline.ActiveStableNamespaceLinks {
+		_ = database.Close()
+		t.Fatalf("ambiguous cleanup registry=%+v want authority retained above baseline %+v", retained, baseline)
+	}
+	leafDir := resolveStorageLayout(dir).leafVLogDir
+	stagingPattern := filepath.Join(leafDir, ".leaf-pack-stable-prepare-*")
+	stagingRoots, globErr := filepath.Glob(stagingPattern)
+	if globErr != nil {
+		_ = database.Close()
+		t.Fatalf("Glob(%q): %v", stagingPattern, globErr)
+	}
+	if len(stagingRoots) != 1 {
+		_ = database.Close()
+		t.Fatalf("retained stable-prepare staging roots=%v want one exact recovery root", stagingRoots)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close retrying exact promoted cleanup: %v", err)
+	}
+	if got := registry.Stats(); got != baseline {
+		t.Fatalf("stable registry after teardown cleanup retry=%+v want baseline %+v", got, baseline)
+	}
+	stagingRoots, globErr = filepath.Glob(stagingPattern)
+	if globErr != nil {
+		t.Fatalf("Glob(%q): %v", stagingPattern, globErr)
+	}
+	if len(stagingRoots) != 0 {
+		t.Fatalf("teardown cleanup retry left stable-prepare staging roots: %v", stagingRoots)
+	}
+	for _, pattern := range []string{"*.vlog", "*.log"} {
+		matches, globErr := filepath.Glob(filepath.Join(leafDir, pattern))
+		if globErr != nil {
+			t.Fatalf("Glob(%q): %v", pattern, globErr)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("teardown cleanup retry left final children for %q: %v", pattern, matches)
+		}
+	}
+}
+
+func TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClose(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
+		t.Skip("stable packed promotion requires exact relative cross-parent namespace support")
+	}
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := database.StableResourceIdentityPinRegistry()
+	baseline := registry.Stats()
+	validationErr := errors.New("injected concurrent-close validation failure")
+	cleanupCut := errors.New("injected concurrent-close deletion sync cut")
+	validationStarted := make(chan struct{})
+	resumeValidation := make(chan struct{})
+	var validationOnce sync.Once
+	restoreValidation := setLeafGenerationPackStableClosureValidationTestHook(func() error {
+		validationOnce.Do(func() { close(validationStarted) })
+		<-resumeValidation
+		return validationErr
+	})
+	defer restoreValidation()
+	cleanupAttempts := 0
+	restoreCut := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.BeforeDeletionDirectorySync || event.Resource != durabilitycut.ResourceOuterLeaf {
+			return nil
+		}
+		cleanupAttempts++
+		if cleanupAttempts == 1 {
+			return cleanupCut
+		}
+		return nil
+	})
+	defer restoreCut()
+
+	leafPage := buildLeafGenerationPackStablePage(t, 'j')
+	prepared := make(chan leafGenerationPackStablePrepareResult, 1)
+	go func() {
+		closure, prepareErr := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
+			leafPage,
+		})
+		prepared <- leafGenerationPackStablePrepareResult{closure: closure, err: prepareErr}
+	}()
+	awaitLeafGenerationPackStablePrepareSignal(t, validationStarted, "post-promotion validation")
+
+	closed := make(chan error, 1)
+	go func() { closed <- database.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !database.IsClosing() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !database.IsClosing() {
+		close(resumeValidation)
+		t.Fatal("Close did not reach teardown while packed validation was paused")
+	}
+	close(resumeValidation)
+
+	result := awaitLeafGenerationPackStablePrepareResult(t, prepared)
+	if result.closure != nil {
+		_ = result.closure.Release()
+		t.Fatal("ambiguous concurrent-Close cleanup returned non-nil closure")
+	}
+	if !errors.Is(result.err, validationErr) || !errors.Is(result.err, cleanupCut) ||
+		!errors.Is(result.err, rootpublication.ErrUnresolvedResource) || !errors.Is(result.err, ErrRecoveryRequired) {
+		t.Fatalf("PrepareLeafGenerationPackStableClosure error=%v want validation, cleanup-cut, typed unresolved-resource, and recovery-required errors", result.err)
+	}
+	select {
+	case closeErr := <-closed:
+		if closeErr != nil {
+			t.Fatalf("Close draining retained packed cleanup: %v", closeErr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not drain retained packed cleanup after capture release")
+	}
+	if cleanupAttempts < 2 {
+		t.Fatalf("deletion-directory sync attempts=%d want initial failure plus teardown retry", cleanupAttempts)
+	}
+	if got := registry.Stats(); got != baseline {
+		t.Fatalf("stable registry after concurrent Close cleanup=%+v want baseline %+v", got, baseline)
+	}
+	leafDir := resolveStorageLayout(dir).leafVLogDir
+	for _, pattern := range []string{"*.vlog", "*.log", ".leaf-pack-stable-prepare-*"} {
+		matches, globErr := filepath.Glob(filepath.Join(leafDir, pattern))
+		if globErr != nil {
+			t.Fatalf("Glob(%q): %v", pattern, globErr)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("concurrent Close cleanup left paths for %q: %v", pattern, matches)
+		}
 	}
 }
 

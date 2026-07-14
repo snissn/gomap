@@ -6,8 +6,34 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestSyncIndexDataWithStableFileRejectsNilBeforeDurabilityCut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	p, err := Open(path, syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	var points []durabilitycut.Point
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceIndex {
+			points = append(points, event.Point)
+		}
+		return nil
+	})
+	defer restore()
+
+	if err := p.SyncIndexDataWithStableFile(nil); err == nil {
+		t.Fatal("nil stable target unexpectedly entered durability barrier")
+	}
+	if len(points) != 0 {
+		t.Fatalf("nil stable target emitted durability cuts=%v want none", points)
+	}
+}
 
 func TestSyncIndexDataWithStableFileDrainsLiveMappingsAndSurvivesClose(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")

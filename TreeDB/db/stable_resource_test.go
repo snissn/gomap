@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -47,6 +48,56 @@ func TestOpenSharesValueLogIdentityPinRegistryWithManager(t *testing.T) {
 	}
 	if got := database.valueLogManager.StableResourcePinRegistry(); got != registry {
 		t.Fatalf("value-log manager registry = %p, DB registry = %p", got, registry)
+	}
+}
+
+func TestCaptureTeardownHookRegisteredDuringCloseWaitsForLease(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := database.AcquireStableResourceCaptureLease()
+	if err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- database.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !database.IsClosing() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !database.IsClosing() {
+		lease.Release()
+		t.Fatal("Close did not reach teardown while capture lease was held")
+	}
+
+	hookRan := make(chan struct{})
+	database.registerCaptureTeardownHook(func() error {
+		close(hookRan)
+		return nil
+	})
+	select {
+	case <-hookRan:
+		lease.Release()
+		t.Fatal("capture teardown hook ran before the admitted lease drained")
+	default:
+	}
+	lease.Release()
+
+	select {
+	case closeErr := <-closed:
+		if closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not finish after the capture lease drained")
+	}
+	select {
+	case <-hookRan:
+	default:
+		t.Fatal("Close did not run the late capture teardown hook")
 	}
 }
 
