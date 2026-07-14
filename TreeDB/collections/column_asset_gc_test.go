@@ -213,6 +213,75 @@ func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCSkipsPinnedSegmentAndContinuesM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	pinned := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 110, []byte("pinned-reclaimable-segment"))
+	deletable := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 111, []byte("later-reclaimable-segment"))
+	pinnedPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), pinned)
+	if err != nil {
+		t.Fatalf("pinned columnAssetSegmentPath: %v", err)
+	}
+	deletablePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), deletable)
+	if err != nil {
+		t.Fatalf("deletable columnAssetSegmentPath: %v", err)
+	}
+	token := pinColumnAssetRefIdentityForTest(t, d.ColumnAssetRootDir(), d.ColumnAssetIdentityPinRegistry(), pinned)
+	defer token.Release()
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: []ColumnAssetRef{pinned, deletable},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC: %v", err)
+	}
+	if stats.SegmentsEligible != 2 || stats.SegmentsDeleted != 1 || stats.BytesDeleted != deletable.Length {
+		t.Fatalf("stats=%+v want two eligible and only later segment deleted", stats)
+	}
+	if _, err := os.Stat(pinnedPath); err != nil {
+		t.Fatalf("pinned candidate removed: %v", err)
+	}
+	if _, err := os.Stat(deletablePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("later candidate stat error=%v want not exist", err)
+	}
+}
+
+func TestColumnAssetGCPropagatesNonPinnedDeleteErrorM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 112, []byte("delete-error-segment"))
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	wantErr := errors.New("remove failed")
+	restoreHooks := setColumnAssetGCTestHooks(func(string) error { return wantErr }, func(string) error { return nil })
+	defer restoreHooks()
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ColumnAssetGC error=%v want %v", err, wantErr)
+	}
+	if stats.SegmentsDeleted != 0 || stats.BytesDeleted != 0 {
+		t.Fatalf("failed delete stats=%+v", stats)
+	}
+	if _, err := os.Stat(candidatePath); err != nil {
+		t.Fatalf("failed delete removed candidate: %v", err)
+	}
+}
+
 func TestColumnAssetGCRetainsPreparedUnpublishedSegmentAfterReopenM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

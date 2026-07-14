@@ -891,7 +891,9 @@ func (s *columnPhysicalAssetAppendSession) abort() error {
 		abortErr = appender.abort()
 	}
 	s.activeRefs = nil
-	s.stableBuilder.Abandon()
+	if s.stableBuilder != nil {
+		s.stableBuilder.Abandon()
+	}
 	s.closeErr = errors.Join(s.closeErr, abortErr)
 	return s.closeErr
 }
@@ -1298,7 +1300,7 @@ func (a *columnPhysicalAssetSegmentAppender) closeWithStableResources(refs []Col
 			fileSyncErr = syncColumnAssetSegmentFileForPublish(a.file)
 			a.closeStats.FileSync += time.Since(start)
 		}
-		if fileSyncErr == nil && len(refs) != 0 {
+		if appenderErr == nil && !a.failed && fileSyncErr == nil && len(refs) != 0 {
 			resources, resourceErr = a.captureStableResources(refs, registry)
 		}
 		start := time.Now()

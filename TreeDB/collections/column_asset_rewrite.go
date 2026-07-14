@@ -459,6 +459,10 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 }
 
 func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult, registry *rootpublication.IdentityPinRegistry) error {
+	return cleanupColumnAssetRewriteCopiedSegmentWithSync(rootDir, remap, registry, syncColumnAssetDir)
+}
+
+func cleanupColumnAssetRewriteCopiedSegmentWithSync(rootDir string, remap columnAssetRewriteCopyResult, registry *rootpublication.IdentityPinRegistry, syncDir func(string) error) error {
 	if len(remap.newRefs) == 0 {
 		return nil
 	}
@@ -467,7 +471,10 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 		return err
 	}
 	_, removeErr := deleteColumnAssetSegmentStable(segmentPath, registry, removeStableColumnAssetChild)
-	syncErr := syncColumnAssetDir(filepath.Dir(segmentPath))
+	if errors.Is(removeErr, rootpublication.ErrResourcePinned) {
+		removeErr = nil
+	}
+	syncErr := syncDir(filepath.Dir(segmentPath))
 	return errors.Join(removeErr, syncErr)
 }
 

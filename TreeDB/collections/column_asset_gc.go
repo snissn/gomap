@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
@@ -193,6 +195,9 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		deleted, err := deleteColumnAssetSegmentStable(entry.Path, c.db.ColumnAssetIdentityPinRegistry(), removeSegment)
+		if errors.Is(err, rootpublication.ErrResourcePinned) {
+			continue
+		}
 		if err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}

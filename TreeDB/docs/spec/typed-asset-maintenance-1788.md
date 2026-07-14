@@ -83,6 +83,23 @@ segment locks. An external actor that can rebind a name after retained-link
 validation is outside this in-process serialization boundary and remains
 explicit hardening work.
 
+## Windows capability boundary
+
+Windows does not currently have a supported exact retained-parent namespace
+persistence primitive. Production central-column writes therefore remain
+fail-closed with `rootpublication.ErrNamespacePersistenceUnsupported`; they do
+not publish manifest metadata or a manifest root and do not retain identity
+pins. The Windows core CI shard explicitly runs the focused first-publish
+capability test for this contract.
+
+The complete `github.com/snissn/gomap/TreeDB/collections` and
+`github.com/snissn/gomap/TreeDB/documentservice` package suites are unsupported
+on Windows until a real namespace persistence primitive exists. Their
+functional suite coverage remains on Linux and macOS. Windows CI continues to
+run the TreeDB root and DB suites, the dedicated caching shards, and every other
+package; the two exact package exclusions are checked and logged by the
+centralized Windows core package router.
+
 `ColumnAssetGC` may delete only canonical whole segments whose bytes are wholly
 reclaimable and whose plan is complete. Mixed live/dead segments become rewrite
 debt and are retained.
@@ -110,4 +127,5 @@ covered by their existing maintenance contracts.
 The standalone `tcs1_hnsw_search_pack` rebuild writer does not use the central
 batch session yet. Its token classification remains fail-closed inventory, but
 production capture/composite authority for that separate writer is remaining
-#3677 work rather than evidence supplied by the central-batch implementation.
+issue `#3677` work rather than evidence supplied by the central-batch
+implementation.

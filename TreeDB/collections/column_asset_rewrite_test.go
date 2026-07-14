@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestColumnAssetRewriteEligibleRefsAreDeterministicM15C(t *testing.T) {
@@ -953,6 +954,55 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
 	}
 	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+}
+
+func TestColumnAssetRewriteCopiedCleanupSkipsPinnedAndPreservesSyncM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	copied := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 113, []byte("pinned-copied-segment"))
+	copiedPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), copied)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	token := pinColumnAssetRefIdentityForTest(t, d.ColumnAssetRootDir(), d.ColumnAssetIdentityPinRegistry(), copied)
+	defer token.Release()
+	remap := columnAssetRewriteCopyResult{newRefs: []ColumnAssetRef{copied}}
+
+	var syncCalls int
+	if err := cleanupColumnAssetRewriteCopiedSegmentWithSync(d.ColumnAssetRootDir(), remap, d.ColumnAssetIdentityPinRegistry(), func(dir string) error {
+		syncCalls++
+		if dir != filepath.Dir(copiedPath) {
+			t.Fatalf("sync dir=%q want %q", dir, filepath.Dir(copiedPath))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("pinned copied cleanup: %v", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("pinned copied cleanup sync calls=%d want 1", syncCalls)
+	}
+	if _, err := os.Stat(copiedPath); err != nil {
+		t.Fatalf("pinned copied segment removed: %v", err)
+	}
+
+	wantSyncErr := errors.New("sync failed")
+	syncCalls = 0
+	err = cleanupColumnAssetRewriteCopiedSegmentWithSync(d.ColumnAssetRootDir(), remap, nil, func(string) error {
+		syncCalls++
+		return wantSyncErr
+	})
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) || !errors.Is(err, wantSyncErr) {
+		t.Fatalf("non-pinned cleanup error=%v want joined unresolved-resource and sync errors", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("failed cleanup sync calls=%d want 1", syncCalls)
+	}
 }
 
 func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *testing.T) {
