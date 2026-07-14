@@ -238,6 +238,14 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			errs = append(errs, err)
 		}
 	}
+	type namespaceProof struct {
+		segment rewriteCreatedSegment
+		name    string
+	}
+	proofsPendingDeletionSync := make([]namespaceProof, 0, len(promoted))
+	queueProofAfterDeletionSync := func(segment rewriteCreatedSegment, name string) {
+		proofsPendingDeletionSync = append(proofsPendingDeletionSync, namespaceProof{segment: segment, name: name})
+	}
 	for _, segment := range promoted {
 		name := filepath.Base(segment.path)
 		if name == "." || name == "" || segment.identity == (rootpublication.StableIdentity{}) {
@@ -247,7 +255,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 		child, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
 		if err != nil {
 			if os.IsNotExist(err) {
-				forgetProof(segment, name)
+				queueProofAfterDeletionSync(segment, name)
 				continue
 			}
 			errs = append(errs, fmt.Errorf("open promoted packed segment %q for abandonment: %w", name, err))
@@ -269,7 +277,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			errs = append(errs, fmt.Errorf("unlink promoted packed segment %q: %w", name, err))
 			continue
 		}
-		forgetProof(segment, name)
+		queueProofAfterDeletionSync(segment, name)
 		if err := observeNamespaceMutation(durabilitycut.NamespaceUnlink, durabilitycut.ResourceOuterLeaf, diagnosticDir, segment.path, ""); err != nil {
 			errs = append(errs, err)
 		}
@@ -277,6 +285,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			errs = append(errs, err)
 		}
 	}
+	deletionNamespaceSynced := false
 	if len(promoted) != 0 {
 		// Sync even when every child is already absent. This makes a retry after
 		// a partial unlink or an interrupted prior directory sync prove the same
@@ -287,6 +296,16 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			errs = append(errs, errors.Join(err, ErrRecoveryRequired))
 		} else if err := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, diagnosticDir, diagnosticDir); err != nil {
 			errs = append(errs, errors.Join(err, ErrRecoveryRequired))
+		} else {
+			deletionNamespaceSynced = true
+		}
+	}
+	if deletionNamespaceSynced {
+		// The positive-link proof remains recovery authority until the exact
+		// deletion namespace is durably established. Retiring it immediately
+		// after unlink would create an authority gap if this sync were ambiguous.
+		for _, proof := range proofsPendingDeletionSync {
+			forgetProof(proof.segment, proof.name)
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
