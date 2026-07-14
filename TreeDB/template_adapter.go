@@ -31,9 +31,18 @@ func (kv templateKV) NewBatch() templatedb.Batch {
 	return b
 }
 
-func (kv templateKV) AcquireStableTemplateSnapshot() templatedb.StablePhysicalSnapshot {
+func (kv templateKV) AcquireStableTemplateSnapshot() (templatedb.StablePhysicalSnapshot, error) {
 	if kv.db == nil {
-		return nil
+		return nil, nil
 	}
-	return acquireStableTemplateSnapshot(kv.db.backend)
+	// Cached WriteSync establishes journal durability, but the exact backend
+	// index generation cannot certify a definition until the cached mutation has
+	// crossed a checkpoint boundary. Capture is a rare publication operation,
+	// so establish that physical boundary here before pinning the backend view.
+	if kv.db.cached != nil {
+		if err := kv.db.Checkpoint(); err != nil {
+			return nil, err
+		}
+	}
+	return acquireStableTemplateSnapshot(kv.db.backend), nil
 }

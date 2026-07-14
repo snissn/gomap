@@ -29,15 +29,15 @@ func (kv stableTestKV) NewBatch() Batch {
 	return kv.db.NewBatch()
 }
 
-func (kv stableTestKV) AcquireStableTemplateSnapshot() StablePhysicalSnapshot {
+func (kv stableTestKV) AcquireStableTemplateSnapshot() (StablePhysicalSnapshot, error) {
 	if kv.db == nil {
-		return nil
+		return nil, nil
 	}
 	snapshot := kv.db.AcquireStableSnapshot()
 	if snapshot == nil {
-		return nil
+		return nil, nil
 	}
-	return &stableTestSnapshot{snapshot: snapshot, dir: kv.db.Dir()}
+	return &stableTestSnapshot{snapshot: snapshot, dir: kv.db.Dir()}, nil
 }
 
 type stableTestSnapshot struct {

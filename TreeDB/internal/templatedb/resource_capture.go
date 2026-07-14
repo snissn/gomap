@@ -42,7 +42,7 @@ type StablePhysicalSnapshot interface {
 // insufficient authority because they do not pin the exact index generation
 // or a pointer-backed definition's value-log segment against replacement.
 type StablePhysicalCapturer interface {
-	AcquireStableTemplateSnapshot() StablePhysicalSnapshot
+	AcquireStableTemplateSnapshot() (StablePhysicalSnapshot, error)
 }
 
 // CaptureTemplateResources returns the exact durable resources required to
@@ -69,7 +69,10 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snapshot := provider.AcquireStableTemplateSnapshot()
+	snapshot, err := provider.AcquireStableTemplateSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("templatedb: establish stable template snapshot: %w", err)
+	}
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: templatedb stable snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}

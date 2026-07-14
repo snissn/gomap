@@ -50,8 +50,8 @@ func (kv templateBackendKV) NewBatch() templatedb.Batch {
 	return b
 }
 
-func (kv templateBackendKV) AcquireStableTemplateSnapshot() templatedb.StablePhysicalSnapshot {
-	return acquireStableTemplateSnapshot(kv.db)
+func (kv templateBackendKV) AcquireStableTemplateSnapshot() (templatedb.StablePhysicalSnapshot, error) {
+	return acquireStableTemplateSnapshot(kv.db), nil
 }
 
 func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
