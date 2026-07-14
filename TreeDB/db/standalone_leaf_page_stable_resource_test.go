@@ -3,6 +3,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"testing"
@@ -14,6 +15,48 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
+
+func TestStandaloneStableLeafRewriteIgnoresTemplateMagicInRawPage(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.leafDictUseRawPages = true
+	database.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = database.Close()
+		_ = writer.Close()
+	})
+
+	leafPage := buildRewriteLeafPageFixture(t, "raw-template-magic")
+	// A valid little-endian page ID can begin with the template envelope's
+	// magic/version/flag bytes. Raw pages must never be probed as encoded
+	// template payloads merely because their first four bytes collide.
+	binary.LittleEndian.PutUint64(leafPage[:8], 0x01014d54)
+	if !templ.IsEncodedPayload(leafPage) {
+		t.Fatal("raw-page regression fixture does not collide with template magic")
+	}
+
+	stable := database.leafPageLog.(LeafPageStableLog)
+	_, resources, err := stable.AppendLeafPageWithStableResources(leafPage)
+	if err != nil {
+		t.Fatalf("stable raw leaf append: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable raw leaf append returned nil resources")
+	}
+	defer resources.Release()
+	for _, descriptor := range resources.Descriptors() {
+		for _, field := range descriptor.ReachabilityFields() {
+			if field == rootpublication.ReachabilityTemplateGeneration {
+				t.Fatal("raw leaf page acquired template authority")
+			}
+		}
+	}
+}
 
 func stableLeafTemplateFixture(t *testing.T, pageBytes []byte) (templ.Config, *testStableTemplateProvider) {
 	t.Helper()

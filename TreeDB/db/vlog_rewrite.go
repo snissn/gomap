@@ -3464,6 +3464,7 @@ type rewriteWriter struct {
 	leafCompactScratch []byte
 	leafCompactArena   []byte
 	leafBatchRecords   []valuelog.Record
+	leafBatchTemplates []bool
 	leafBatchValuePtrs []page.ValuePtr
 }
 
@@ -4020,6 +4021,11 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 	}
 	records := w.leafBatchRecords[:len(leafPages)]
 	clear(records)
+	if cap(w.leafBatchTemplates) < len(leafPages) {
+		w.leafBatchTemplates = make([]bool, len(leafPages))
+	}
+	templateEncoded := w.leafBatchTemplates[:len(leafPages)]
+	clear(templateEncoded)
 	w.leafCompactArena = w.leafCompactArena[:0]
 	rawPayloadBytes := 0
 	dictID := uint64(0)
@@ -4055,13 +4061,13 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 	if useDict {
 		for i := range records {
 			beforeLen := len(records[i].Value)
-			dictID, dict, records[i].Value = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, records[i].Value)
+			dictID, dict, records[i].Value, templateEncoded[i] = w.applyTemplateCompressionResult(rewriteTemplateClassOuterLeaf, dictID, dict, records[i].Value)
 			rawPayloadBytes += len(records[i].Value) - beforeLen
 		}
 	} else {
 		for i := range records {
 			var ignoredDict []byte
-			dictID, ignoredDict, records[i].Value = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, records[i].Value)
+			dictID, ignoredDict, records[i].Value, templateEncoded[i] = w.applyTemplateCompressionResult(rewriteTemplateClassOuterLeaf, 0, nil, records[i].Value)
 			if dictID != 0 || len(ignoredDict) != 0 {
 				return nil, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
 			}
@@ -4073,8 +4079,10 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 	}
 	if capture != nil {
 		for i := range records {
-			if err := capture.captureTemplatePayload(w.templateStore, records[i].Value); err != nil {
-				return nil, err
+			if templateEncoded[i] {
+				if err := capture.captureTemplatePayload(w.templateStore, records[i].Value); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -4123,8 +4131,9 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 	dictID := w.leafDictID
 	dict := w.leafDict
 	if w.blockCompression && dictID != 0 && len(dict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
-		dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
-		if capture != nil {
+		var templateEncoded bool
+		dictID, dict, leafPage, templateEncoded = w.applyTemplateCompressionResult(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
+		if capture != nil && templateEncoded {
 			if err := capture.captureTemplatePayload(w.templateStore, leafPage); err != nil {
 				return page.LeafLogPtr{}, err
 			}
@@ -4143,11 +4152,12 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 		w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 		return page.LeafLogPtrFromValuePtr(ptr)
 	}
-	dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
+	var templateEncoded bool
+	dictID, dict, leafPage, templateEncoded = w.applyTemplateCompressionResult(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
 	if dictID != 0 || len(dict) != 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
 	}
-	if capture != nil {
+	if capture != nil && templateEncoded {
 		if err := capture.captureTemplatePayload(w.templateStore, leafPage); err != nil {
 			return page.LeafLogPtr{}, err
 		}
@@ -4498,27 +4508,32 @@ func (w *rewriteWriter) templateEngineForClass(class rewriteTemplateClass) *temp
 }
 
 func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dictID uint64, dict []byte, value []byte) (uint64, []byte, []byte) {
+	dictID, dict, value, _ = w.applyTemplateCompressionResult(class, dictID, dict, value)
+	return dictID, dict, value
+}
+
+func (w *rewriteWriter) applyTemplateCompressionResult(class rewriteTemplateClass, dictID uint64, dict []byte, value []byte) (uint64, []byte, []byte, bool) {
 	if w == nil {
-		return dictID, dict, value
+		return dictID, dict, value, false
 	}
 	originalLen := len(value)
 	engine := w.templateEngineForClass(class)
 	switch w.templateMode {
 	case template.TemplateOnly:
 		if engine == nil || w.templateStore == nil {
-			return dictID, dict, value
+			return dictID, dict, value, false
 		}
 		dictID = 0
 		dict = nil
 	case template.TemplatePrepass:
 		if engine == nil || w.templateStore == nil {
-			return dictID, dict, value
+			return dictID, dict, value, false
 		}
 		// Keep dict path active and template-encode first.
 	case template.TemplateOff:
-		return dictID, dict, value
+		return dictID, dict, value, false
 	default:
-		return dictID, dict, value
+		return dictID, dict, value, false
 	}
 	w.templateAttempts++
 	w.templateInBytes += int64(originalLen)
@@ -4530,8 +4545,10 @@ func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dic
 		w.templatePointerAttempts++
 		w.templatePointerInBytes += int64(originalLen)
 	}
+	templateEncoded := false
 	if payload, ok := engine.Encode(nil, value, w.templateStore); ok && len(payload) > 0 {
 		value = payload
+		templateEncoded = true
 		w.templateKept++
 		switch class {
 		case rewriteTemplateClassOuterLeaf:
@@ -4547,7 +4564,7 @@ func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dic
 		w.templatePointerOutBytes += int64(len(value))
 	}
 	w.templateOutBytes += int64(len(value))
-	return dictID, dict, value
+	return dictID, dict, value, templateEncoded
 }
 
 func parseTemplateReasonSnapshot(snapshot map[string]string) map[string]uint64 {
