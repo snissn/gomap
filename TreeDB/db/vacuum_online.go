@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -323,6 +324,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
+	}
+	if db.stableIndexCaptures.Load() != 0 {
+		return rootpublication.ErrResourcePinned
 	}
 	if err := db.CheckStorageMaintenanceReady(); err != nil {
 		return err

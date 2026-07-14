@@ -301,6 +301,52 @@ func TestStableResourceSetRejectsConflictingLogicalObligationAtomically(t *testi
 	}
 }
 
+func TestStableResourceSetKeepsDifferentImmutableGenerationsOnSharedPhysicalFile(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "shared-immutable")
+	if err != nil {
+		t.Fatalf("create shared file: %v", err)
+	}
+	defer file.Close()
+	if _, err := file.Write([]byte("shared immutable generations")); err != nil {
+		t.Fatalf("write shared file: %v", err)
+	}
+
+	newToken := func(generation uint64, label string) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind:           ResourceDictionary,
+			ResourceID:     label,
+			Generation:     generation,
+			DiagnosticPath: label,
+			File:           file,
+			Frontier:       DurableFrontier{Bytes: 1},
+			Digest:         sha256.Sum256([]byte(label)),
+			Reachability:   ReachabilityDictionaryGeneration,
+		})
+		if err != nil {
+			t.Fatalf("new generation %d token: %v", generation, err)
+		}
+		return token
+	}
+
+	builder := NewStableResourceSetBuilder(ReachabilityDictionaryGeneration)
+	defer builder.Abandon()
+	if err := builder.Add(newToken(1, "dictionary-1")); err != nil {
+		t.Fatalf("add generation 1: %v", err)
+	}
+	if err := builder.Add(newToken(2, "dictionary-2")); err != nil {
+		t.Fatalf("add generation 2 sharing physical file: %v", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatalf("freeze generations: %v", err)
+	}
+	defer set.Release()
+	if got := set.Len(); got != 2 {
+		t.Fatalf("shared physical generations len=%d want 2", got)
+	}
+}
+
 func TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically(t *testing.T) {
 	dir := t.TempDir()
 	file := writeStableResourceFixture(t, dir, "large-logical.asset", "0123456789abcdef")

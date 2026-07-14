@@ -430,7 +430,7 @@ func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
 		return nil, err
 	}
 	path := filepath.Join(valueLogDir, fmt.Sprintf("value-l%d-%06d.log", 0, seq))
-	writer, err := valuelog.NewWriter(path, fileID)
+	writer, err := valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, s.backend.StableResourceIdentityPinRegistry())
 	if err != nil {
 		return nil, err
 	}

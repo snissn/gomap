@@ -180,6 +180,7 @@ type DB struct {
 	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
 	updateLocks                     keyupdate.Locks
 	maintenanceMu                   sync.Mutex
+	stableIndexCaptures             atomic.Int64
 	combineMu                       sync.RWMutex
 	combineReqCh                    chan *commitCombineReq
 	combineStopCh                   chan struct{}
@@ -1378,7 +1379,9 @@ type Snapshot struct {
 	treeRoot                uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
-	registryShardHint int
+	registryShardHint             int
+	stableIndexCapture            bool
+	stableIndexCaptureTransferred bool
 }
 
 type snapshotRootTree struct {
@@ -1409,6 +1412,19 @@ func (s *Snapshot) Pager() *pager.Pager {
 		return nil
 	}
 	return s.idx.pager
+}
+
+// IndexGeneration returns the immutable index generation pinned by this
+// snapshot. It is zero after the snapshot has closed.
+func (s *Snapshot) IndexGeneration() uint64 {
+	if err := s.beginRead(); err != nil {
+		return 0
+	}
+	defer s.endRead()
+	if s.idx == nil {
+		return 0
+	}
+	return s.idx.id
 }
 
 func (s *Snapshot) State() *DBState {
@@ -1550,6 +1566,24 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	return snap
 }
 
+// AcquireStableSnapshot pins the current index generation against online
+// vacuum namespace replacement. Close releases the maintenance pin only after
+// every snapshot-bound reader has drained.
+func (db *DB) AcquireStableSnapshot() *Snapshot {
+	if db == nil {
+		return nil
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	snapshot := db.AcquireSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	db.stableIndexCaptures.Add(1)
+	snapshot.stableIndexCapture = true
+	return snapshot
+}
+
 func (s *Snapshot) releaseLeafGenerationPins() {
 	if s == nil {
 		return
@@ -1611,6 +1645,12 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		}
 	}
 	s.releaseLeafGenerationPins()
+	if s.stableIndexCapture && s.db != nil && !s.stableIndexCaptureTransferred {
+		s.db.stableIndexCaptures.Add(-1)
+	}
+	if s.stableIndexCapture {
+		s.stableIndexCapture = false
+	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)
 	}

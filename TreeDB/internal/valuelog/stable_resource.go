@@ -236,6 +236,32 @@ func (m *Manager) StableResourceToken(fileID uint32, registration StableResource
 	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
 }
 
+// StableExistingPhysicalResourceToken captures an exact manager-owned segment
+// for a producer outside the value-log domain. The segment's namespace was
+// durably installed before it entered the manager; the returned token adds the
+// shared physical deletion pin and the caller's producer classification.
+func (m *Manager) StableExistingPhysicalResourceToken(
+	fileID uint32,
+	spec rootpublication.StableResourceSpec,
+	constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error),
+) (*rootpublication.StableResourceToken, error) {
+	if m == nil || constructor == nil {
+		return nil, errors.New("valuelog: stable physical capture unavailable")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	file := m.files[fileID]
+	if file == nil || file.File == nil {
+		return nil, &fileNotFoundError{id: fileID}
+	}
+	if m.stableResourcePins == nil || !file.stableObserved {
+		return nil, fmt.Errorf("%w: manager segment has no stable identity observer", rootpublication.ErrUnresolvedResource)
+	}
+	spec.File = file.File
+	spec.PinRegistry = m.stableResourcePins
+	return constructor(spec)
+}
+
 func (m *Manager) observeStableFileLocked(file *File) error {
 	if m == nil || m.stableResourcePins == nil {
 		return nil
