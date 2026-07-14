@@ -244,7 +244,8 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 	}
 	defer unlock()
 	if sync && db != nil && db.commandWAL {
-		return db.appendCommandWALDurablePrefixBarrier()
+		_, err := db.appendCommandWALDurablePrefixBarrier()
+		return err
 	}
 
 	if appender := db.currentValueLogAppender(); appender != nil {
@@ -263,13 +264,12 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 	return db.FlushCommandWAL(sync)
 }
 
-func (db *DB) appendCommandWALDurablePrefixBarrier() error {
-	_, err := db.appendCommandWALIntent(&commandWALBatchIntent{
+func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
+	return db.appendCommandWALIntent(&commandWALBatchIntent{
 		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
 		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
 		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
 	}, true)
-	return err
 }
 
 func (db *DB) flushCommandWAL(sync bool, observe bool) error {
@@ -1186,13 +1186,18 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 			}
 			// An already-appended relaxed foreground frame may later be published
 			// through an explicit sync API. Its durability class is immutable, so close
-			// the prefix through a durable barrier before publishing its LSN.
-			// The barrier owns its own later LSN; callers must still publish the
-			// original intent LSN as the mutation's applied-command frontier.
+			// the prefix through a durable barrier and publish that barrier as part of
+			// the same contiguous applied-command range. The intent keeps its original
+			// LSN as the mutation identity returned to its caller.
 			if sync && db.commandWALDurableLSN.Load() < intent.inner.lsn {
-				if err := db.appendCommandWALDurablePrefixBarrier(); err != nil {
+				barrierLSN, err := db.appendCommandWALDurablePrefixBarrier()
+				if err != nil {
 					return intent.inner.lsn, err
 				}
+				if intent.inner.coveredRange[0].First == 0 {
+					intent.inner.coveredRange[0].First = intent.inner.lsn
+				}
+				intent.inner.coveredRange[0].Last = barrierLSN
 			}
 		}
 		// Replay intents already refer to a durable frame; recovery must only
@@ -1721,7 +1726,7 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 	}
 	return finalizeCommitOptions{
 		commandWALPublish: true,
-		appliedCommandLSN: intent.lsn,
+		appliedCommandLSN: appliedRange.Last,
 		appliedRanges:     []CommandWALLSNRange{appliedRange},
 		maxEntryRevision:  intent.maxEntryRevision,
 	}

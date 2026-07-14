@@ -978,8 +978,9 @@ func TestPublishStagedCommandWALNoopSyncFailureRetainsDebtForRetry(t *testing.T)
 	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
 		t.Fatalf("PublishStagedCommandWALNoop retry: %v", err)
 	}
-	if got := db.State().AppliedCommandLSN; got != lsn {
-		t.Fatalf("AppliedCommandLSN=%d, want staged frame lsn %d after retry", got, lsn)
+	const barrierLSN = uint64(2)
+	if got := db.State().AppliedCommandLSN; got != barrierLSN {
+		t.Fatalf("AppliedCommandLSN=%d, want durable barrier lsn %d after retry", got, barrierLSN)
 	}
 	stats = db.Stats()
 	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {

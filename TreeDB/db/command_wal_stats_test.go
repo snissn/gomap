@@ -338,8 +338,9 @@ func TestPublishStagedCommandWALNoopSyncClosesExistingFrameDurablePrefix(t *test
 	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
 		t.Fatalf("PublishStagedCommandWALNoop sync: %v", err)
 	}
-	if got := db.State().AppliedCommandLSN; got != lsn {
-		t.Fatalf("AppliedCommandLSN=%d, want staged frame lsn %d", got, lsn)
+	const barrierLSN = uint64(2)
+	if got := db.State().AppliedCommandLSN; got != barrierLSN {
+		t.Fatalf("AppliedCommandLSN=%d, want durable barrier lsn %d", got, barrierLSN)
 	}
 	stats = db.Stats()
 	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
@@ -357,6 +358,17 @@ func TestPublishStagedCommandWALNoopSyncClosesExistingFrameDurablePrefix(t *test
 	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.frames"); got != 2 {
 		t.Fatalf("command WAL frames=%d, want relaxed frame plus durable barrier", got)
 	}
+
+	next := mustRawKVCommandWALIntent(t, db, "after/staged-sync", "value")
+	if err := db.PublishCommandWALNoop(next, false); err != nil {
+		t.Fatalf("PublishCommandWALNoop after staged sync barrier: %v", err)
+	}
+	if got := next.AssignedLSN(); got != barrierLSN+1 {
+		t.Fatalf("next command lsn=%d, want %d", got, barrierLSN+1)
+	}
+	if got := db.State().AppliedCommandLSN; got != barrierLSN+1 {
+		t.Fatalf("AppliedCommandLSN after next command=%d, want %d", got, barrierLSN+1)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close after sync publish: %v", err)
 	}
@@ -365,11 +377,11 @@ func TestPublishStagedCommandWALNoopSyncClosesExistingFrameDurablePrefix(t *test
 		t.Fatalf("reopen after sync publish: %v", err)
 	}
 	defer func() { _ = reopen.Close() }()
-	if got := reopen.State().AppliedCommandLSN; got != 2 {
-		t.Fatalf("reopened AppliedCommandLSN=%d, want durable barrier lsn 2", got)
+	if got := reopen.State().AppliedCommandLSN; got != barrierLSN+1 {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want next command lsn %d", got, barrierLSN+1)
 	}
-	if got := reopen.Stats()["treedb.command_wal.durable_wal_lsn"]; got != "2" {
-		t.Fatalf("reopened durable_wal_lsn=%q, want durable barrier lsn 2", got)
+	if got := reopen.Stats()["treedb.command_wal.durable_wal_lsn"]; got != "3" {
+		t.Fatalf("reopened durable_wal_lsn=%q, want graceful close through next command lsn 3", got)
 	}
 }
 

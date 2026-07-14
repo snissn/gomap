@@ -274,6 +274,10 @@ as one format boundary:
 - a durable command or empty barrier syncs the coalesced dependency prefix and
   successor namespaces before appending, then syncs the WAL before releasing
   debt;
+- when an already-appended relaxed staged intent is published through a sync
+  API, its publication covers the contiguous range from the mutation LSN
+  through the appended durable barrier LSN; the mutation keeps its original LSN
+  identity while `AppliedCommandLSN` advances through the barrier;
 - a successful synced checkpoint cleanup releases debt through its durable
   `AppliedCommandLSN`, so a later barrier cannot reopen a covered segment that
   cleanup deleted; and

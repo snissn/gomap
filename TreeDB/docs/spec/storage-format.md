@@ -1879,8 +1879,12 @@ barrier deterministically coalesces debt through its assigned prefix, syncs the
 exact files, stabilizes the retained namespaces, appends the durable V2 frame,
 and then syncs the command WAL. That successful final WAL sync advances the
 in-memory durable WAL LSN and releases covered debt. A successful synced
-checkpoint cleanup may also advance and release through the already-durable
-`AppliedCommandLSN`: durable root coverage has superseded those command frames,
+publication of an already-appended relaxed staged command publishes one
+contiguous applied range through the new durable barrier LSN; it must not leave
+the barrier below the durable frontier but above `AppliedCommandLSN`. A
+successful synced checkpoint cleanup may also advance and release through the
+already-durable `AppliedCommandLSN`: durable root coverage has superseded those
+command frames,
 and cleanup may already have deleted their segments. Cleanup or directory-sync
 failure retains the debt; a later barrier must never reopen a deleted segment
 through an obsolete rotation token. A failure before a durable frame append
