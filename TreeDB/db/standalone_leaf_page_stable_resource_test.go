@@ -516,6 +516,125 @@ func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testin
 	}
 }
 
+func TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		configure    func(*testing.T, *rewriteWriter)
+		wantTemplate bool
+	}{
+		{
+			name: "compression-off",
+			configure: func(_ *testing.T, writer *rewriteWriter) {
+				writer.blockCompression = false
+			},
+		},
+		{
+			name: "template-only",
+			configure: func(t *testing.T, writer *rewriteWriter) {
+				pageBytes := buildRewriteLeafPageFixture(t, "eda")
+				cfg, provider := stableLeafTemplateFixture(t, pageBytes)
+				writer.SetTemplateCompression(templ.TemplateOnly, cfg, provider)
+			},
+			wantTemplate: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			const dictID = uint64(7304)
+			dictionaryProvider := newTestStableDictionaryProvider(t, dictID, []byte("provider-dictionary-that-must-not-be-captured"))
+			database.SetStableDictionaryResourceProvider(dictionaryProvider)
+			writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+			writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+			writer.SetLeafDictMode(dictID, []byte("configured-dictionary-not-emitted"), false)
+			test.configure(t, writer)
+			database.SetLeafPageLog(writer)
+			t.Cleanup(func() {
+				_ = database.Close()
+				_ = writer.Close()
+			})
+
+			pageBytes := buildRewriteLeafPageFixture(t, "eda")
+			_, resources, err := database.leafPageLog.(LeafPageStableLog).AppendLeafPageWithStableResources(pageBytes)
+			if err != nil {
+				t.Fatalf("stable append: %v", err)
+			}
+			if resources == nil {
+				t.Fatal("stable append returned nil resources")
+			}
+			defer resources.Release()
+			if got := dictionaryProvider.captureCalls.Load(); got != 0 {
+				t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
+			}
+			var hasDictionary, hasTemplate bool
+			for _, descriptor := range resources.Descriptors() {
+				for _, field := range descriptor.ReachabilityFields() {
+					hasDictionary = hasDictionary || field == rootpublication.ReachabilityDictionaryGeneration
+					hasTemplate = hasTemplate || field == rootpublication.ReachabilityTemplateGeneration
+				}
+			}
+			if hasDictionary || hasTemplate != test.wantTemplate {
+				t.Fatalf("closure dictionary=%v template=%v want dictionary=false template=%v", hasDictionary, hasTemplate, test.wantTemplate)
+			}
+		})
+	}
+}
+
+func TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const dictID = uint64(7305)
+	dictionaryProvider := newTestStableDictionaryProvider(t, dictID, []byte("provider-dictionary-that-must-not-be-captured"))
+	database.SetStableDictionaryResourceProvider(dictionaryProvider)
+	pageBytes := buildRewriteLeafPageFixture(t, "edb")
+	cfg, templateProvider := stableLeafTemplateFixture(t, pageBytes)
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.blockCompression = true
+	writer.SetLeafDictMode(dictID, []byte("configured-dictionary-not-emitted"), false)
+	writer.SetTemplateCompression(templ.TemplateOnly, cfg, templateProvider)
+	database.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = database.Close()
+		_ = writer.Close()
+	})
+
+	pages := make([][]byte, rewriteLeafLogBatchMaxK+1)
+	for i := range pages {
+		pages[i] = append([]byte(nil), pageBytes...)
+	}
+	ptrs, resources, err := database.leafPageLog.(LeafPageStableBatchLog).AppendLeafPagesWithStableResources(pages)
+	if err != nil {
+		t.Fatalf("stable wide batch append: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable wide batch append returned nil resources")
+	}
+	defer resources.Release()
+	if len(ptrs) != len(pages) {
+		t.Fatalf("stable wide batch pointers=%d want %d", len(ptrs), len(pages))
+	}
+	if got := dictionaryProvider.captureCalls.Load(); got != 0 {
+		t.Fatalf("dictionary capture calls=%d want 0 for emitted dictID 0", got)
+	}
+	var hasDictionary, hasTemplate bool
+	for _, descriptor := range resources.Descriptors() {
+		for _, field := range descriptor.ReachabilityFields() {
+			hasDictionary = hasDictionary || field == rootpublication.ReachabilityDictionaryGeneration
+			hasTemplate = hasTemplate || field == rootpublication.ReachabilityTemplateGeneration
+		}
+	}
+	if hasDictionary || !hasTemplate {
+		t.Fatalf("closure dictionary=%v template=%v want dictionary=false template=true", hasDictionary, hasTemplate)
+	}
+}
+
 func TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})

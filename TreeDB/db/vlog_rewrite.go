@@ -4148,6 +4148,11 @@ func (w *rewriteWriter) prepareLeafPageBatch(startRID uint64, leafPages [][]byte
 	prepared.dictID = dictID
 	prepared.dict = dict
 	prepared.rawPayloadBytes = rawPayloadBytes
+	if capture != nil {
+		if err := capture.captureDictionary(context.Background(), prepared.dictID, prepared.dict); err != nil {
+			return rewritePreparedLeafBatch{}, err
+		}
+	}
 	return prepared, nil
 }
 
@@ -4205,6 +4210,11 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 				return page.LeafLogPtr{}, err
 			}
 		}
+		if capture != nil {
+			if err := capture.captureDictionary(context.Background(), dictID, dict); err != nil {
+				return page.LeafLogPtr{}, err
+			}
+		}
 		if err := w.ensureLeafWriterCapture(capture); err != nil {
 			return page.LeafLogPtr{}, err
 		}
@@ -4226,6 +4236,11 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 	}
 	if templateEncoded && capture != nil {
 		if err := capture.captureEncodedTemplatePayload(w.templateStore, leafPage); err != nil {
+			return page.LeafLogPtr{}, err
+		}
+	}
+	if capture != nil {
+		if err := capture.captureDictionary(context.Background(), dictID, dict); err != nil {
 			return page.LeafLogPtr{}, err
 		}
 	}

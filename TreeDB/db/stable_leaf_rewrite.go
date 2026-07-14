@@ -16,7 +16,37 @@ type rewriteStableOuterLeafCapture struct {
 	builder          *rootpublication.StableResourceSetBuilder
 	tokens           []*rootpublication.StableResourceToken
 	parentGeneration uint64
+	dictionaryIDs    map[uint64]struct{}
 	templateIDs      map[uint64]struct{}
+}
+
+func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Context, dictID uint64, dictionary []byte) error {
+	if capture == nil || dictID == 0 || len(dictionary) == 0 {
+		return nil
+	}
+	if _, ok := capture.dictionaryIDs[dictID]; ok {
+		return nil
+	}
+	var provider StableDictionaryResourceProvider
+	if capture.writer != nil && capture.writer.stableDictionaryResourceProvider != nil {
+		provider = capture.writer.stableDictionaryResourceProvider()
+	}
+	resources, err := captureStableDictionaryResources(ctx, provider, dictID, dictionary)
+	if err != nil {
+		return err
+	}
+	if resources == nil {
+		return fmt.Errorf("%w: dictionary %d has no stable resource closure", rootpublication.ErrUnresolvedResource, dictID)
+	}
+	if err := capture.builder.Merge(resources); err != nil {
+		resources.Release()
+		return err
+	}
+	if capture.dictionaryIDs == nil {
+		capture.dictionaryIDs = make(map[uint64]struct{})
+	}
+	capture.dictionaryIDs[dictID] = struct{}{}
+	return nil
 }
 
 func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(store templ.Store, payload []byte) error {
@@ -62,22 +92,6 @@ func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOute
 	capture := &rewriteStableOuterLeafCapture{
 		writer:  writer,
 		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
-	}
-	var dictionaryProvider StableDictionaryResourceProvider
-	if writer.stableDictionaryResourceProvider != nil {
-		dictionaryProvider = writer.stableDictionaryResourceProvider()
-	}
-	dictionaryResources, err := captureStableDictionaryResources(context.Background(), dictionaryProvider, writer.leafDictID, writer.leafDict)
-	if err != nil {
-		capture.abandon()
-		return nil, err
-	}
-	if dictionaryResources != nil {
-		if err := capture.builder.Merge(dictionaryResources); err != nil {
-			dictionaryResources.Release()
-			capture.abandon()
-			return nil, err
-		}
 	}
 	return capture, nil
 }
