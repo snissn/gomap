@@ -72,7 +72,9 @@ func NewStableLegacyVectorResourceToken(spec rootpublication.StableResourceSpec)
 // fail closed until their durability ownership is reviewed.
 func stableColumnAssetResourceClassification(kind ColumnAssetKind) (rootpublication.ResourceKind, rootpublication.ReachabilityField, string, error) {
 	switch kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart:
+	case ColumnAssetKindTCS1PartImage:
+		return rootpublication.ResourceColumnAsset, rootpublication.ReachabilityColumnManifest, "authoritative", nil
+	case ColumnAssetKindTCS1TypedColumnPart:
 		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, "authoritative", nil
 	case ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1Int64Values:
 		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative", nil

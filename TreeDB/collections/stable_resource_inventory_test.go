@@ -509,19 +509,20 @@ func testStableColumnAssetCaptureFailureResourcePlateau(t *testing.T) {
 
 func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 	type expectedPolicy struct {
+		kind           rootpublication.ResourceKind
 		field          rootpublication.ReachabilityField
 		classification string
 	}
 	want := map[ColumnAssetKind]expectedPolicy{
-		ColumnAssetKindTCS1PartImage:              {rootpublication.ReachabilityTypedColumnMultipart, "authoritative"},
-		ColumnAssetKindTCS1TypedColumnPart:        {rootpublication.ReachabilityTypedColumnMultipart, "authoritative"},
-		ColumnAssetKindTCS1AggregateMetadata:      {rootpublication.ReachabilityTypedColumnValue, "authoritative"},
-		ColumnAssetKindTCS1DictionaryCodes:        {rootpublication.ReachabilityTypedColumnCode, "authoritative"},
-		ColumnAssetKindTCS1Int64Values:            {rootpublication.ReachabilityTypedColumnValue, "authoritative"},
-		ColumnAssetKindTCS1HNSWSearchPack:         {rootpublication.ReachabilityHNSWSearchPack, "declared-authoritative-production-pending"},
-		ColumnAssetKindQueryReadyBase:             {rootpublication.ReachabilityQueryReadyBase, "rebuildable-non-authoritative"},
-		ColumnAssetKindQueryReadyDelta:            {rootpublication.ReachabilityQueryReadyDelta, "rebuildable-non-authoritative"},
-		ColumnAssetKindQueryReadyConsolidatedBase: {rootpublication.ReachabilityQueryReadyConsolidatedBase, "rebuildable-non-authoritative"},
+		ColumnAssetKindTCS1PartImage:              {rootpublication.ResourceColumnAsset, rootpublication.ReachabilityColumnManifest, "authoritative"},
+		ColumnAssetKindTCS1TypedColumnPart:        {rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, "authoritative"},
+		ColumnAssetKindTCS1AggregateMetadata:      {rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative"},
+		ColumnAssetKindTCS1DictionaryCodes:        {rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnCode, "authoritative"},
+		ColumnAssetKindTCS1Int64Values:            {rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative"},
+		ColumnAssetKindTCS1HNSWSearchPack:         {rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, "declared-authoritative-production-pending"},
+		ColumnAssetKindQueryReadyBase:             {rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyBase, "rebuildable-non-authoritative"},
+		ColumnAssetKindQueryReadyDelta:            {rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyDelta, "rebuildable-non-authoritative"},
+		ColumnAssetKindQueryReadyConsolidatedBase: {rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyConsolidatedBase, "rebuildable-non-authoritative"},
 	}
 	declared := declaredColumnAssetKinds(t)
 	generated := make(map[string]authorityinventory.Row)
@@ -548,8 +549,8 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 		if gotField != expected.field {
 			t.Errorf("kind %q field=%q want %q", kind, gotField, expected.field)
 		}
-		if gotKind == "" {
-			t.Errorf("kind %q has empty resource kind", kind)
+		if gotKind != expected.kind {
+			t.Errorf("kind %q resource kind=%q want %q", kind, gotKind, expected.kind)
 		}
 		if gotClassification != expected.classification {
 			t.Errorf("kind %q classification=%q want literal %q", kind, gotClassification, expected.classification)

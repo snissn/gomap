@@ -1510,31 +1510,71 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	if prepared.stableResources == nil {
 		t.Fatal("production column prepare did not retain stable resources")
 	}
+	requiredAuthority := rootpublication.NewStableResourceSetBuilder(
+		rootpublication.ReachabilityColumnManifest,
+		rootpublication.ReachabilityTypedColumnMultipart,
+	)
+	if err := requiredAuthority.Merge(prepared.stableResources); err != nil {
+		t.Fatalf("merge production resources into required authority set: %v", err)
+	}
+	prepared.stableResources = nil
+	prepared.stableResources, err = requiredAuthority.Freeze()
+	if err != nil {
+		t.Fatalf("production resources did not satisfy row-image and typed-column authority: %v", err)
+	}
 	defer prepared.stableResources.Release()
-	if got := prepared.stableResources.Len(); got != 1 {
-		t.Fatalf("coalesced stable resources=%d want one shared .tca identity", got)
+	if got := prepared.stableResources.Len(); got != 2 {
+		t.Fatalf("coalesced stable resources=%d want row-image and typed-asset authority", got)
 	}
 	descriptors := prepared.stableResources.Descriptors()
-	if got := descriptors[0].Frontier().Bytes; got != uint64(prepared.Assets[len(prepared.Assets)-1].Ref.Offset+prepared.Assets[len(prepared.Assets)-1].Ref.Length) {
-		t.Fatalf("stable frontier=%d want final prepared ref end", got)
-	}
-	fields := descriptors[0].ReachabilityFields()
 	wantFields := map[rootpublication.ReachabilityField]bool{
+		rootpublication.ReachabilityColumnManifest:       true,
 		rootpublication.ReachabilityTypedColumnMultipart: true,
 		rootpublication.ReachabilityTypedColumnValue:     true,
 		rootpublication.ReachabilityTypedColumnCode:      true,
 	}
-	for _, field := range fields {
-		delete(wantFields, field)
+	var logicalObligations int
+	for _, descriptor := range descriptors {
+		for _, field := range descriptor.ReachabilityFields() {
+			delete(wantFields, field)
+		}
+		logicalObligations += len(descriptor.LogicalObligations())
+		switch descriptor.Kind() {
+		case rootpublication.ResourceColumnAsset:
+			wantFrontier := uint64(prepared.Assets[0].Ref.Offset + prepared.Assets[0].Ref.Length)
+			if got := descriptor.Frontier().Bytes; got != wantFrontier {
+				t.Fatalf("row-image stable frontier=%d want %d", got, wantFrontier)
+			}
+			if got := len(descriptor.LogicalObligations()); got != 1 {
+				t.Fatalf("row-image logical obligations=%d want 1", got)
+			}
+		case rootpublication.ResourceTypedColumnAsset:
+			last := prepared.Assets[len(prepared.Assets)-1].Ref
+			wantFrontier := uint64(last.Offset + last.Length)
+			if got := descriptor.Frontier().Bytes; got != wantFrontier {
+				t.Fatalf("typed-asset stable frontier=%d want %d", got, wantFrontier)
+			}
+			if got := len(descriptor.LogicalObligations()); got != len(want)-1 {
+				t.Fatalf("typed-asset logical obligations=%d want %d", got, len(want)-1)
+			}
+		default:
+			t.Fatalf("unexpected production stable resource kind %q", descriptor.Kind())
+		}
 	}
 	if len(wantFields) != 0 {
 		t.Fatalf("stable resource missing production reachability fields: %v", wantFields)
 	}
-	if got := len(descriptors[0].LogicalObligations()); got != len(want) {
-		t.Fatalf("logical stable obligations=%d want %d", got, len(want))
+	if logicalObligations != len(want) {
+		t.Fatalf("logical stable obligations=%d want %d", logicalObligations, len(want))
 	}
-	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 1 {
-		t.Fatalf("coalesced physical stable pins=%d want 1", got)
+	if descriptors[0].Identity() != descriptors[1].Identity() {
+		t.Fatalf("row and typed authority do not share one physical identity: %+v", descriptors)
+	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 2 {
+		t.Fatalf("coalesced stable pins=%d want 2 authority classes", got)
+	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActiveIdentities(); got != 1 {
+		t.Fatalf("coalesced stable identities=%d want one shared .tca identity", got)
 	}
 	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), prepared.Assets[0].Ref)
 	if err != nil {
@@ -1546,6 +1586,9 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	prepared.stableResources.Release()
 	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 0 {
 		t.Fatalf("physical pins after release=%d want 0", got)
+	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActiveIdentities(); got != 0 {
+		t.Fatalf("physical identities after release=%d want 0", got)
 	}
 	if deleted, err := deleteColumnAssetSegmentStable(segmentPath, d.ColumnAssetIdentityPinRegistry(), removeStableColumnAssetChild); err != nil || !deleted {
 		t.Fatalf("delete released production segment=(%v,%v) want (true,nil)", deleted, err)

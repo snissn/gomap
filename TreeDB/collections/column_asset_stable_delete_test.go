@@ -71,9 +71,19 @@ func TestDeleteColumnAssetSegmentStableWaitsForActiveAppender(t *testing.T) {
 		deleted bool
 		err     error
 	}
+	segmentLockProved := make(chan struct{}, 1)
+	remover := func(parent *os.File, name, diagnosticPath string) error {
+		lock := columnAssetSegmentWriteLock(diagnosticPath)
+		if lock.TryLock() {
+			lock.Unlock()
+			return errors.New("stable delete remover ran without canonical segment lock")
+		}
+		segmentLockProved <- struct{}{}
+		return removeStableColumnAssetChild(parent, name, diagnosticPath)
+	}
 	result := make(chan deleteResult, 1)
 	go func() {
-		deleted, err := deleteColumnAssetSegmentStable(appender.assetPath, rootpublication.NewIdentityPinRegistry(), removeStableColumnAssetChild)
+		deleted, err := deleteColumnAssetSegmentStable(appender.assetPath, rootpublication.NewIdentityPinRegistry(), remover)
 		result <- deleteResult{deleted: deleted, err: err}
 	}()
 	<-lockAttempted
@@ -102,6 +112,11 @@ func TestDeleteColumnAssetSegmentStableWaitsForActiveAppender(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("stable delete remained blocked after writer released segment lock")
+	}
+	select {
+	case <-segmentLockProved:
+	default:
+		t.Fatal("stable delete remover did not prove canonical segment lock ownership")
 	}
 	select {
 	case <-validationReached:

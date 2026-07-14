@@ -62,10 +62,17 @@ The production central column publish path captures the exact open `.tca`
 segment after its existing content sync and before close. All row image, typed
 part, aggregate metadata, dictionary-code, and int64-value refs in that batch
 are retained as immutable logical obligations in one coalesced stable-resource
-descriptor at the greatest byte frontier. The unclaimed descriptor remains
+set at the greatest per-class byte frontiers. The unclaimed set remains
 owned only through the command publish boundary; collection-root/candidate
 authority is deliberately left to #3679. Query-ready assets remain rebuildable
 and non-authoritative.
+
+Within that set, compatibility row-image `tcs1_part_image` refs are
+column-manifest assets (`column.manifest_asset_ref`), while
+`tcs1_typed_column_part` refs are typed multipart assets
+(`column.typed_multipart_ref`). Sharing one physical `.tca` identity does not
+collapse those distinct reachability obligations: the set retains two authority
+descriptors and two pins over one observed physical identity.
 
 Those producer pins and destructive GC/rewrite cleanup share one DB-scoped
 identity registry. A pinned identity cannot acquire a delete lease. Deletion
