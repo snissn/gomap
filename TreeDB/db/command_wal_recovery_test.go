@@ -14,6 +14,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -897,6 +898,95 @@ func TestAppendCommandWALIntentPostAppendCutRecordsLSNAndPoisonsHandle(t *testin
 	}
 	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishStagedCommandWALNoopSyncFailureRetainsDebtForRetry(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "k", "v")
+	dependency, err := os.Create(filepath.Join(dir, "staged-sync-dependency"))
+	if err != nil {
+		t.Fatalf("create staged sync dependency: %v", err)
+	}
+	defer dependency.Close()
+	if err := dependency.Truncate(1); err != nil {
+		t.Fatalf("truncate staged sync dependency: %v", err)
+	}
+	wantErr := errors.New("injected staged sync dependency failure")
+	failNextSync := true
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+		Kind:           rootpublication.ResourceValueLog,
+		LogicalLane:    "test/staged-sync",
+		ResourceID:     "dependency",
+		Generation:     1,
+		DiagnosticPath: "staged-sync-dependency",
+		File:           dependency,
+		Frontier:       rootpublication.DurableFrontier{Bytes: 1},
+		Reachability:   rootpublication.ReachabilityValueLogPointer,
+		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error {
+			if failNextSync {
+				failNextSync = false
+				return wantErr
+			}
+			return file.Sync()
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStableResourceToken: %v", err)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+	if err := builder.Add(token); err != nil {
+		token.Release()
+		t.Fatalf("add staged sync dependency: %v", err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatalf("freeze staged sync dependency: %v", err)
+	}
+	intent.inner.dependencyResources = resources
+	lsn, err := db.AppendStagedCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent relaxed: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("staged intent lsn=%d, want 1", lsn)
+	}
+
+	err = db.PublishStagedCommandWALNoop(intent, true)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("PublishStagedCommandWALNoop error=%v, want injected dependency failure", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after pre-barrier failure", got)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+		t.Fatalf("durable_wal_lsn=%q, want 0 after pre-barrier failure", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want original staged frame retained", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.retries_total"]; got != "1" {
+		t.Fatalf("pending debt retries=%q, want 1 after pre-barrier failure", got)
+	}
+
+	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop retry: %v", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("AppliedCommandLSN=%d, want staged frame lsn %d after retry", got, lsn)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want barrier lsn 2 after retry", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after retry", got)
 	}
 }
 

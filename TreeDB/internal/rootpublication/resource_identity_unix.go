@@ -103,3 +103,10 @@ func syncStableNamespace(parent *os.File) error {
 		return err
 	}
 }
+
+func syncStableFile(file *os.File) error {
+	if file == nil {
+		return os.ErrInvalid
+	}
+	return file.Sync()
+}

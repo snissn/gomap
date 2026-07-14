@@ -244,12 +244,7 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 	}
 	defer unlock()
 	if sync && db != nil && db.commandWAL {
-		_, err := db.appendCommandWALIntent(&commandWALBatchIntent{
-			kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
-			payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
-			statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
-		}, true)
-		return err
+		return db.appendCommandWALDurablePrefixBarrier()
 	}
 
 	if appender := db.currentValueLogAppender(); appender != nil {
@@ -266,6 +261,15 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 		}
 	}
 	return db.FlushCommandWAL(sync)
+}
+
+func (db *DB) appendCommandWALDurablePrefixBarrier() error {
+	_, err := db.appendCommandWALIntent(&commandWALBatchIntent{
+		kind: commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
+		payloadFormat: commitlog.PayloadFormatDurablePrefixBarrierV1,
+		statsPath:     commandWALAppendStatsBarrier, statsPathSet: true,
+	}, true)
+	return err
 }
 
 func (db *DB) flushCommandWAL(sync bool, observe bool) error {
@@ -1171,6 +1175,16 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 		if !intent.inner.fromReplay {
 			if err := db.commandWALPoisonedError(); err != nil {
 				return 0, err
+			}
+			// An already-appended relaxed foreground frame may later be published
+			// through an explicit sync API. Its durability class is immutable, so close
+			// the prefix through a durable barrier before publishing its LSN.
+			// The barrier owns its own later LSN; callers must still publish the
+			// original intent LSN as the mutation's applied-command frontier.
+			if sync && db.commandWALDurableLSN.Load() < intent.inner.lsn {
+				if err := db.appendCommandWALDurablePrefixBarrier(); err != nil {
+					return intent.inner.lsn, err
+				}
 			}
 		}
 		// Replay intents already refer to a durable frame; recovery must only

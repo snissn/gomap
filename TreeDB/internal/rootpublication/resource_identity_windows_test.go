@@ -69,6 +69,41 @@ func TestStableNamespaceRegistrationSyncsExactParentWindows(t *testing.T) {
 	}
 }
 
+func TestStableResourceTokenSyncsAppendOnlyExactHandleWindows(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := OpenStableChildFile(parent, "append-only.log", os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("OpenStableChildFile append-only: %v", err)
+	}
+	defer child.Close()
+	const payload = "stable append frontier"
+	if _, err := child.Write([]byte(payload)); err != nil {
+		t.Fatalf("write append-only child: %v", err)
+	}
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind:           ResourceValueLog,
+		LogicalLane:    "test/windows-append-only",
+		ResourceID:     "append-only",
+		Generation:     1,
+		DiagnosticPath: "append-only.log",
+		File:           child,
+		Frontier:       DurableFrontier{Bytes: uint64(len(payload))},
+		Reachability:   ReachabilityValueLogPointer,
+	})
+	if err != nil {
+		t.Fatalf("NewStableResourceToken: %v", err)
+	}
+	defer token.Release()
+	if err := token.SyncThrough(); err != nil {
+		t.Fatalf("SyncThrough append-only stable pin: %v", err)
+	}
+}
+
 func TestStableNamespaceCreationProofSyncsExactParentWindows(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)

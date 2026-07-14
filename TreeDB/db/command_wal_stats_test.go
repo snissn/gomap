@@ -304,6 +304,115 @@ func TestCommandWALStatsExposeDurablePrefixAndPendingDebt(t *testing.T) {
 	}
 }
 
+func TestPublishStagedCommandWALNoopSyncClosesExistingFrameDurablePrefix(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	lsn, err := db.AppendStagedCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent relaxed: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("staged intent lsn=%d, want 1", lsn)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+		t.Fatalf("durable_wal_lsn=%q, want 0 before sync publish", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want 1 before sync publish", got)
+	}
+
+	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop sync: %v", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("AppliedCommandLSN=%d, want staged frame lsn %d", got, lsn)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want durable barrier lsn 2", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after sync publish", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.count_total"); got != 2 {
+		t.Fatalf("append count=%d, want relaxed frame plus durable barrier", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.barrier.count_total"); got != 1 {
+		t.Fatalf("barrier sync count=%d, want 1", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.frames"); got != 2 {
+		t.Fatalf("command WAL frames=%d, want relaxed frame plus durable barrier", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close after sync publish: %v", err)
+	}
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen after sync publish: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want durable barrier lsn 2", got)
+	}
+	if got := reopen.Stats()["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("reopened durable_wal_lsn=%q, want durable barrier lsn 2", got)
+	}
+}
+
+func TestPublishStagedCommandWALNoopSyncDoesNotAppendBarrierForDurableFrame(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	lsn, err := db.AppendStagedCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent durable: %v", err)
+	}
+	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop durable: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "1" {
+		t.Fatalf("durable_wal_lsn=%q, want original durable frame lsn 1", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.count_total"); got != 1 {
+		t.Fatalf("append count=%d, want only original durable frame", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.barrier.count_total"); got != 0 {
+		t.Fatalf("barrier sync count=%d, want 0", got)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("AppliedCommandLSN=%d, want durable frame lsn %d", got, lsn)
+	}
+}
+
 func TestCommandWALStatsReadOnlyReportsPersistedMode(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})

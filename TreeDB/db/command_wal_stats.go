@@ -29,9 +29,9 @@ const (
 	commandWALAppendStatsPayload
 	commandWALAppendStatsEntryScan
 	commandWALAppendStatsIntent
-	// commandWALAppendStatsBarrier is not an append path. It attributes a
-	// FlushCommandWAL call that has no frame append in the same operation, such
-	// as an empty public WriteSync or checkpoint publication boundary.
+	// commandWALAppendStatsBarrier attributes the flush/sync work for a
+	// DurablePrefixBarrierV1 append, including empty public WriteSync and
+	// checkpoint publication boundaries with no foreground mutation frame.
 	commandWALAppendStatsBarrier
 	commandWALStatsPathCount
 )

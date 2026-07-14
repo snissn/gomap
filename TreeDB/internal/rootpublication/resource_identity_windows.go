@@ -182,24 +182,45 @@ func syncStableNamespace(parent *os.File) error {
 	return err
 }
 
+func syncStableFile(file *os.File) error {
+	if file == nil {
+		return os.ErrInvalid
+	}
+	// Append-only handles intentionally carry FILE_APPEND_DATA instead of
+	// FILE_WRITE_DATA so writes cannot overwrite an earlier frontier. Windows
+	// nevertheless requires GENERIC_WRITE for FlushFileBuffers. ReOpenFile adds
+	// that access on the exact file-system object retained by the pin; reopening
+	// the diagnostic pathname would lose the rename/recreate identity guarantee.
+	handle, err := reopenStableWindowsHandle(file, windows.FILE_FLAG_WRITE_THROUGH, "stable file")
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	return windows.FlushFileBuffers(handle)
+}
+
 var stableWindowsReOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
 
 func reopenStableWindowsDirectory(parent *os.File) (windows.Handle, error) {
-	if parent == nil {
+	return reopenStableWindowsHandle(parent, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_WRITE_THROUGH, "namespace parent")
+}
+
+func reopenStableWindowsHandle(file *os.File, flags uint32, description string) (windows.Handle, error) {
+	if file == nil {
 		return 0, os.ErrInvalid
 	}
 	handle, _, callErr := stableWindowsReOpenFile.Call(
-		parent.Fd(),
+		file.Fd(),
 		uintptr(windows.GENERIC_WRITE),
 		uintptr(windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE),
-		uintptr(windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_WRITE_THROUGH),
+		uintptr(flags),
 	)
-	runtime.KeepAlive(parent)
+	runtime.KeepAlive(file)
 	if handle == ^uintptr(0) {
 		if callErr == nil {
 			callErr = windows.ERROR_INVALID_HANDLE
 		}
-		return 0, fmt.Errorf("reopen exact namespace parent: %w", callErr)
+		return 0, fmt.Errorf("reopen exact %s: %w", description, callErr)
 	}
 	return windows.Handle(handle), nil
 }

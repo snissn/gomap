@@ -520,7 +520,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	}
 	syncThrough := spec.SyncThrough
 	if syncThrough == nil {
-		syncThrough = func(file *os.File, _ DurableFrontier) error { return file.Sync() }
+		syncThrough = func(file *os.File, _ DurableFrontier) error { return syncStableFile(file) }
 	}
 	token := &StableResourceToken{
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,

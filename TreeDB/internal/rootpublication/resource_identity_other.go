@@ -35,3 +35,10 @@ func stableIdentityFromFile(*os.File) (StableIdentity, error) {
 func syncStableNamespace(*os.File) error {
 	return ErrNamespacePersistenceUnsupported
 }
+
+func syncStableFile(file *os.File) error {
+	if file == nil {
+		return os.ErrInvalid
+	}
+	return file.Sync()
+}
