@@ -95,6 +95,26 @@ func TestColumnAssetGCRejectsChildRebindFromPlan(t *testing.T) {
 	testColumnAssetGCRejectsChildRebindFromPlan(t)
 }
 
+func TestColumnAssetGCRejectsCompletedCrossManagerPublicationAfterPlan(t *testing.T) {
+	requireStableColumnAuthorityTest(t)
+	testColumnAssetGCRejectsCompletedCrossManagerPublicationAfterPlan(t)
+}
+
+func TestColumnAssetGCRejectsAppendedCandidateFrontierAfterPlan(t *testing.T) {
+	requireStableColumnAuthorityTest(t)
+	testColumnAssetGCRejectsAppendedCandidateFrontierAfterPlan(t)
+}
+
+func TestColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *testing.T) {
+	requireStableColumnAuthorityTest(t)
+	testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t)
+}
+
+func TestColumnPublishStableAbandonPreservesSameSizeReboundSegment(t *testing.T) {
+	requireStableColumnAuthorityTest(t)
+	testColumnPublishStableAbandonPreservesSameSizeReboundSegment(t)
+}
+
 func TestColumnStoreCompactStableAbandonPreservesSameSizeReboundSegment(t *testing.T) {
 	requireStableColumnAuthorityTest(t)
 	testColumnStoreCompactStableAbandonPreservesSameSizeReboundSegment(t)

@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"go/ast"
@@ -251,6 +252,271 @@ func testColumnAssetGCRejectsChildRebindFromPlan(t *testing.T) {
 	}
 	if string(gotOriginal) != string(originalPayload) {
 		t.Fatalf("rotated original=%q want %q", gotOriginal, originalPayload)
+	}
+}
+
+func testColumnAssetGCRejectsCompletedCrossManagerPublicationAfterPlan(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	managerA := NewCollectionManager(d)
+	managerB := NewCollectionManager(d)
+	colA := openColumnStoreCollectionM10B(t, d, managerA)
+	colB := openColumnStoreCollectionM10B(t, d, managerB)
+	configureStableGCDirectViewPublication(t, colA, colB)
+	if _, err := colA.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"did:seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	candidatePayload := []byte("same-inode-candidate-before-publication")
+	directFileID, err := directViewTypedColumnSegmentFileID(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), colA, directFileID, candidatePayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("published-after-gc-plan")
+	document := []byte(`{"time_us":2,"kind":"repost","did":"did:published"}`)
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		if _, err := colB.Insert(key, document); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+
+	stats, err := colA.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("completed cross-manager publication GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("completed cross-manager publication GC stats=%+v want eligible untouched", stats)
+	}
+	info, err := os.Stat(segmentPath)
+	if err != nil {
+		t.Fatalf("published segment removed: %v", err)
+	}
+	if info.Size() <= int64(len(candidatePayload)) {
+		t.Fatalf("published segment size=%d want greater than candidate frontier=%d", info.Size(), len(candidatePayload))
+	}
+	got, err := colB.Get(key)
+	if err != nil {
+		t.Fatalf("Get published document: %v", err)
+	}
+	if !bytes.Equal(got, document) {
+		t.Fatalf("published document=%s want %s", got, document)
+	}
+	freshPlan, err := colA.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("fresh reachability plan: %v", err)
+	}
+	var publishedRef ColumnAssetRef
+	for _, entry := range freshPlan.Entries {
+		if entry.Ref.FileID != directFileID || entry.Status != ColumnAssetReachabilityProtected {
+			continue
+		}
+		for _, source := range entry.Sources {
+			if source == ColumnAssetReachabilitySourceActiveManifest {
+				publishedRef = entry.Ref
+				break
+			}
+		}
+		if publishedRef.FileID != 0 {
+			break
+		}
+	}
+	if publishedRef.FileID == 0 {
+		t.Fatalf("fresh plan has no protected active-manifest ref for direct file_id=%d: %+v", directFileID, freshPlan.Entries)
+	}
+	if raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), publishedRef); err != nil {
+		t.Fatalf("read checksum-valid published direct-view ref %+v: %v", publishedRef, err)
+	} else if len(raw) == 0 {
+		t.Fatalf("published direct-view ref %+v read empty payload", publishedRef)
+	}
+}
+
+func testColumnAssetGCRejectsAppendedCandidateFrontierAfterPlan(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"did:seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+	candidatePayload := []byte("candidate-frontier-before-append")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 121, candidatePayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended := []byte("-appended-after-plan")
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		file, err := os.OpenFile(segmentPath, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(appended); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("appended-frontier GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("appended-frontier GC stats=%+v want eligible untouched", stats)
+	}
+	got, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatalf("appended candidate removed: %v", err)
+	}
+	want := append(append([]byte(nil), candidatePayload...), appended...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("appended candidate=%q want %q", got, want)
+	}
+}
+
+func testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	managerA := NewCollectionManager(d)
+	managerB := NewCollectionManager(d)
+	colA := openColumnStoreCollectionM10B(t, d, managerA)
+	colB := openColumnStoreCollectionM10B(t, d, managerB)
+	if _, err := colA.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"did:seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+	candidatePayload := []byte("unchanged-frontier-candidate")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), colA, 122, candidatePayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("published-to-other-segment")
+	document := []byte(`{"time_us":3,"kind":"like","did":"did:other"}`)
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		if _, err := colB.Insert(key, document); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+
+	stats, err := colA.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("commit-advance GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("commit-advance GC stats=%+v want eligible untouched", stats)
+	}
+	gotCandidate, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatalf("unchanged-frontier candidate removed: %v", err)
+	}
+	if !bytes.Equal(gotCandidate, candidatePayload) {
+		t.Fatalf("unchanged-frontier candidate=%q want %q", gotCandidate, candidatePayload)
+	}
+	gotDocument, err := colB.Get(key)
+	if err != nil {
+		t.Fatalf("Get cross-manager publication: %v", err)
+	}
+	if !bytes.Equal(gotDocument, document) {
+		t.Fatalf("cross-manager publication=%s want %s", gotDocument, document)
+	}
+}
+
+func testColumnPublishStableAbandonPreservesSameSizeReboundSegment(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	injected := errors.New("injected ordinary publication failure after asset preparation")
+	var segmentPath, rotatedPath string
+	var replacement []byte
+	restoreHook := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(prepared ColumnPublishPreparedAssets) error {
+		if !prepared.stableResourcesRequired || prepared.stableResources == nil {
+			t.Fatalf("ordinary publication stable authority required=%t resources=%v", prepared.stableResourcesRequired, prepared.stableResources)
+		}
+		if len(prepared.Assets) == 0 {
+			t.Fatal("ordinary publication prepared no assets")
+		}
+		var err error
+		segmentPath, err = columnAssetSegmentPath(d.ColumnAssetRootDir(), prepared.Assets[0].Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(segmentPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rotatedPath = segmentPath + ".ordinary-stable-abandon-original"
+		if err := os.Rename(segmentPath, rotatedPath); err != nil {
+			t.Fatal(err)
+		}
+		replacement = bytes.Repeat([]byte{'R'}, int(info.Size()))
+		if err := os.WriteFile(segmentPath, replacement, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return injected
+	})
+	defer restoreHook()
+
+	if _, err := col.Insert([]byte("ordinary-rebound"), []byte(`{"time_us":4,"kind":"like","did":"did:rebound"}`)); !errors.Is(err, injected) {
+		t.Fatalf("ordinary Insert error=%v want injected failure", err)
+	}
+	got, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, replacement) {
+		t.Fatalf("ordinary same-size replacement mutated: bytes=%d want %d", len(got), len(replacement))
+	}
+	if info, err := os.Stat(rotatedPath); err != nil || info.Size() == 0 {
+		t.Fatalf("ordinary retained original stat=%v info=%v", err, info)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("ordinary abandoned publication pins=%d want baseline=%d", got, baselinePins)
+	}
+}
+
+func configureStableGCDirectViewPublication(t *testing.T, collections ...*Collection) {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	for i := range cfg.Columns {
+		if cfg.Columns[i].Name == "time_us" {
+			cfg.Columns[i].Owner = TypedStorageOwnerColumnPart
+			cfg.Columns[i].FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+		}
+	}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !columnStoreConfigNeedsDirectViewTypedColumnAlignment(*normalized) {
+		t.Fatal("configured collection does not require direct-view typed-column alignment")
+	}
+	for _, col := range collections {
+		if col == nil || col.catalog == nil {
+			t.Fatal("missing collection catalog")
+		}
+		copied := normalized.copy()
+		col.catalog.meta.Options.ColumnStore = &copied
 	}
 }
 

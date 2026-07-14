@@ -3,12 +3,35 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+type columnPhysicalAssetPreparationAfterPrepareHookState struct {
+	hook func(ColumnPublishPreparedAssets) error
+}
+
+var columnPhysicalAssetPreparationAfterPrepareHook atomic.Pointer[columnPhysicalAssetPreparationAfterPrepareHookState]
+
+func runColumnPhysicalAssetPreparationAfterPrepareHook(prepared ColumnPublishPreparedAssets) error {
+	state := columnPhysicalAssetPreparationAfterPrepareHook.Load()
+	if state == nil || state.hook == nil {
+		return nil
+	}
+	return state.hook(prepared)
+}
+
+func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPublishPreparedAssets) error) func() {
+	previous := columnPhysicalAssetPreparationAfterPrepareHook.Load()
+	columnPhysicalAssetPreparationAfterPrepareHook.Store(&columnPhysicalAssetPreparationAfterPrepareHookState{hook: hook})
+	return func() {
+		columnPhysicalAssetPreparationAfterPrepareHook.Store(previous)
+	}
+}
 
 type columnWritePublishInput struct {
 	meta               CollectionMeta
@@ -1169,6 +1192,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 	}
 	if err := flushPendingAssets(); err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
+	if err := runColumnPhysicalAssetPreparationAfterPrepareHook(prepared); err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
 	cleanupAssets = nil

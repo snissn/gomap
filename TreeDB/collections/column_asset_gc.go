@@ -42,9 +42,10 @@ type ColumnAssetGCStats struct {
 	BytesRetained    int64
 }
 
-// ErrColumnAssetGCPlanStale reports that a parent directory or candidate file
-// no longer has the exact physical identity captured by GC planning. Callers
-// may retry from a fresh reachability plan; the replacement is never touched.
+// ErrColumnAssetGCPlanStale reports that a parent directory, candidate file,
+// exact byte frontier, or committed-root witness no longer matches GC
+// planning. Callers may retry from a fresh reachability plan; changed storage
+// is never touched.
 var ErrColumnAssetGCPlanStale = errors.New("collections: column asset GC plan identity changed")
 
 var (
@@ -86,7 +87,7 @@ func newColumnAssetStableSegmentDeleter(segmentDir string, registry *rootpublica
 	return &columnAssetStableSegmentDeleter{segmentDir: segmentDir, parent: parent, registry: registry, parentIdentity: parentIdentity}, nil
 }
 
-func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlannedSegment) (bool, error) {
+func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlannedSegment, validatePlanCurrent func() error) (bool, error) {
 	fileID := planned.entry.FileID
 	if deleter == nil || deleter.parent == nil || fileID == 0 {
 		return false, errors.New("collections: incomplete stable column segment delete")
@@ -125,8 +126,21 @@ func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlan
 	if beforeUnlink != nil {
 		beforeUnlink()
 	}
+	info, err := resource.Stat()
+	if err != nil {
+		return false, err
+	}
+	if info.Size() != planned.entry.Bytes {
+		return false, fmt.Errorf("%w: candidate frontier changed for file_id=%d planned_bytes=%d current_bytes=%d",
+			ErrColumnAssetGCPlanStale, fileID, planned.entry.Bytes, info.Size())
+	}
 	if err := rootpublication.ValidateStableChildLink(deleter.parent, resource, name); err != nil {
 		return false, err
+	}
+	if validatePlanCurrent != nil {
+		if err := validatePlanCurrent(); err != nil {
+			return false, err
+		}
 	}
 	if removeHook != nil {
 		err = removeHook(filepath.Join(deleter.segmentDir, name))
@@ -179,7 +193,7 @@ func deleteColumnAssetSegmentWithStableLease(segmentDir string, fileID uint32, r
 	if err != nil {
 		return false, err
 	}
-	deleted, err := deleter.delete(planned)
+	deleted, err := deleter.delete(planned, nil)
 	return deleted, deleter.finish(err)
 }
 
@@ -206,7 +220,12 @@ func planColumnAssetStableSegmentDelete(segmentDir string, fileID uint32) (colum
 	if err != nil {
 		return planned, false, err
 	}
+	info, err := resource.Stat()
+	if err != nil {
+		return planned, false, err
+	}
 	planned.entry.FileID = fileID
+	planned.entry.Bytes = info.Size()
 	return planned, true, nil
 }
 
@@ -406,7 +425,20 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := ctx.Err(); err != nil {
 			return stats, deleter.finish(err)
 		}
-		deleted, err := deleter.delete(planned)
+		deleted, err := deleter.delete(planned, func() error {
+			currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+			if currentCommitSeq != plan.PlanCommitSeq || currentSystemRoot != plan.SystemRoot {
+				return fmt.Errorf("%w: committed root changed for collection=%q planned_commit_seq=%d current_commit_seq=%d planned_system_root=%d current_system_root=%d",
+					ErrColumnAssetGCPlanStale,
+					plan.Collection,
+					plan.PlanCommitSeq,
+					currentCommitSeq,
+					plan.SystemRoot,
+					currentSystemRoot,
+				)
+			}
+			return nil
+		})
 		if err != nil {
 			// A publication owner can pin an otherwise unreachable segment
 			// between planning and deletion. Retain it for a later GC pass.
