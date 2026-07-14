@@ -623,15 +623,20 @@ func TestRawKVCommandWALPreAppendFailureReleasesOneShotDependencies(t *testing.T
 	baselinePins := d.valueLogIdentityPins.ActivePins()
 	wantErr := errors.New("injected pre-append failure")
 	reached := false
+	active := true
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !active {
+			return nil
+		}
 		if event.Point == durabilitycut.BeforeDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
 			reached = true
 			return wantErr
 		}
 		return nil
 	})
+	defer restore()
 	lsn, err := d.AppendRawKVCommandWALOrderedEntries([]batchpkg.Entry{entry}, true)
-	restore()
+	active = false
 	if !errors.Is(err, wantErr) || lsn != 0 || !reached {
 		t.Fatalf("AppendRawKVCommandWALOrderedEntries=(lsn=%d,error=%v,reached=%t), want (0,injected,true)", lsn, err, reached)
 	}
@@ -651,15 +656,20 @@ func TestRawKVCommandWALPreAppendFailureRetainsReusableDependenciesForRetry(t *t
 	baselinePins := d.valueLogIdentityPins.ActivePins()
 	wantErr := errors.New("injected pre-append failure")
 	reached := false
+	active := true
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !active {
+			return nil
+		}
 		if event.Point == durabilitycut.BeforeDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
 			reached = true
 			return wantErr
 		}
 		return nil
 	})
+	defer restore()
 	lsn, err := d.AppendCommandWALIntent(intent, true)
-	restore()
+	active = false
 	if !errors.Is(err, wantErr) || lsn != 0 || intent.AssignedLSN() != 0 || !reached {
 		t.Fatalf("AppendCommandWALIntent=(lsn=%d,assigned=%d,error=%v,reached=%t), want (0,0,injected,true)", lsn, intent.AssignedLSN(), err, reached)
 	}

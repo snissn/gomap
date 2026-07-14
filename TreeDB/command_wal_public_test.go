@@ -2222,26 +2222,6 @@ func TestPublicCommandWALCloseReportsFinalCheckpointError(t *testing.T) {
 	}
 }
 
-func TestPublicCommandWALPublishSyncMatrix(t *testing.T) {
-	tests := []struct {
-		mode string
-		sync bool
-		want bool
-	}{
-		{mode: "wal_on_sync", sync: false, want: false},
-		{mode: "wal_on_sync", sync: true, want: true},
-		{mode: "wal_on_sync+no_read_checksum", sync: true, want: true},
-		{mode: "wal_on_relaxed_sync", sync: true, want: true},
-		{mode: "wal_on_relaxed_sync+verify_on_read", sync: true, want: true},
-		{mode: "wal_off_relaxed_sync", sync: true, want: true},
-	}
-	for _, tt := range tests {
-		if got := publicCommandWALPublishSync(tt.mode, tt.sync); got != tt.want {
-			t.Fatalf("publicCommandWALPublishSync(%q, %t)=%t, want %t", tt.mode, tt.sync, got, tt.want)
-		}
-	}
-}
-
 func recvTestErr(t *testing.T, ch <-chan error) error {
 	t.Helper()
 	select {

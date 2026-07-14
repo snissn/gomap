@@ -908,19 +908,16 @@ func (db *DB) captureCommandWALExternalDependencies(intent *commandWALBatchInten
 		return nil, err
 	}
 	segments := make([]valuelog.StableExternalRIDSegment, 0, len(fileIDs))
-	for _, fileID := range fileIDs {
-		var child []rawKVCommandWALRIDCacheEntry
-		for _, entry := range entries {
-			if entry.ptr.FileID == fileID {
-				child = append(child, entry)
-			}
+	for _, entry := range entries {
+		if len(segments) == 0 || segments[len(segments)-1].FileID != entry.ptr.FileID {
+			segments = append(segments, valuelog.StableExternalRIDSegment{
+				FileID: entry.ptr.FileID,
+				Digest: stableExternalRIDSegmentDigest(entry.ptr.FileID),
+			})
 		}
-		segment := valuelog.StableExternalRIDSegment{FileID: fileID, Digest: stableExternalRIDSegmentDigest(fileID)}
-		for _, entry := range child {
-			segment.RIDs = append(segment.RIDs, entry.rid)
-			segment.Pointers = append(segment.Pointers, entry.ptr)
-		}
-		segments = append(segments, segment)
+		segment := &segments[len(segments)-1]
+		segment.RIDs = append(segment.RIDs, entry.rid)
+		segment.Pointers = append(segment.Pointers, entry.ptr)
 	}
 	resources, err := db.valueLogManager.CaptureStableExternalRIDFence(valuelog.StableExternalRIDFence{
 		Count: fence.Count, Digest: fence.Digest,

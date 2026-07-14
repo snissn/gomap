@@ -2368,7 +2368,7 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 		return err
 	}
 	if db.commandWALCached && db.backend != nil {
-		if err := db.backend.CleanupCommandWALCoveredSegments(publicCommandWALPublishSync(db.durabilityMode, true)); err != nil {
+		if err := db.backend.CleanupCommandWALCoveredSegments(true); err != nil {
 			return err
 		}
 	}

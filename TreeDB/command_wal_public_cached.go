@@ -241,7 +241,7 @@ func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
 		return
 	}
 	if tdb.backend.CommandWALActiveBytes() > 0 {
-		tdb.commandWALCheckpointCutoverErr = tdb.backend.RotateCommandWALActiveSegment(publicCommandWALPublishSync(tdb.durabilityMode, true))
+		tdb.commandWALCheckpointCutoverErr = tdb.backend.RotateCommandWALActiveSegment(true)
 	}
 }
 
@@ -302,11 +302,7 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
 	}
-	return tdb.backend.CleanupCommandWALCoveredSegments(publicCommandWALPublishSync(tdb.durabilityMode, sync))
-}
-
-func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
-	return sync
+	return tdb.backend.CleanupCommandWALCoveredSegments(sync)
 }
 
 func (tdb *DB) syncPublicCommandWAL() error {
@@ -316,7 +312,7 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	return tdb.backend.FlushCommandWALBarrier(publicCommandWALPublishSync(tdb.durabilityMode, true))
+	return tdb.backend.FlushCommandWALBarrier(true)
 }
 
 type commandWALPublicBatch struct {
