@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestOrdinaryOuterLeafCreationClassifiesFallbackDirectorySync(t *testing.T) {
@@ -539,6 +541,250 @@ func TestStableValueLogTokenCarriesCanonicalExternalRIDFence(t *testing.T) {
 	if token.Kind() != rootpublication.ResourceCommandWALExternalRID {
 		t.Fatalf("token kind=%q want command WAL external RID", token.Kind())
 	}
+}
+
+func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
+	dir := t.TempDir()
+	segmentRIDs := [][]uint64{{9, 2}, {14, 4}}
+	segmentPointers := make([][]page.ValuePtr, len(segmentRIDs))
+	fileIDs := make([]uint32, 2)
+	for i := range fileIDs {
+		fileID, err := EncodeFileID(1, uint32(i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fileIDs[i] = fileID
+		writer, err := NewWriter(SegmentPath(dir, fileID), fileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rid := range segmentRIDs[i] {
+			ptr, err := writer.Append(0, nil, rid, []byte("external-rid-child"))
+			if err != nil {
+				_ = writer.Close()
+				t.Fatal(err)
+			}
+			segmentPointers[i] = append(segmentPointers[i], ptr)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	children := []StableExternalRIDSegment{
+		{FileID: fileIDs[0], RIDs: []uint64{9, 2, 9}, Pointers: []page.ValuePtr{segmentPointers[0][0], segmentPointers[0][1], segmentPointers[0][0]}, Digest: sha256.Sum256([]byte("segment-1"))},
+		{FileID: fileIDs[1], RIDs: []uint64{14, 4}, Pointers: segmentPointers[1], Digest: sha256.Sum256([]byte("segment-2"))},
+	}
+	fence, err := NewStableExternalRIDFence([]uint64{14, 9, 4, 2, 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := manager.CaptureStableExternalRIDFence(fence, children)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != len(children) {
+		t.Fatalf("external-RID descriptors=%d want %d", len(descriptors), len(children))
+	}
+	for i, descriptor := range descriptors {
+		if descriptor.Generation() != uint64(children[i].FileID) || descriptor.Kind() != rootpublication.ResourceCommandWALExternalRID {
+			t.Fatalf("external-RID descriptor[%d]=%+v", i, descriptor)
+		}
+	}
+	resources.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("external-RID pins after release=%d want 0", got)
+	}
+
+	t.Run("current-writable barrier runs outside manager lock", func(t *testing.T) {
+		if err := manager.PromoteCurrentWritable(fileIDs[0]); err != nil {
+			t.Fatal(err)
+		}
+		manager.mu.RLock()
+		managed := manager.files[fileIDs[0]]
+		manager.mu.RUnlock()
+		managed.verifiedFileSize.Store(0)
+		barrierCalls := 0
+		manager.SetCurrentWritableReadBarrier(func(uint32) error {
+			if !manager.mu.TryLock() {
+				return errors.New("manager lock held across current-writable barrier")
+			}
+			manager.mu.Unlock()
+			barrierCalls++
+			return nil
+		})
+		defer manager.SetCurrentWritableReadBarrier(nil)
+		resources, err := manager.CaptureStableExternalRIDFence(fence, children)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resources.Release()
+		if barrierCalls == 0 {
+			t.Fatal("current-writable membership validation did not invoke barrier")
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("external-RID pins after current-writable capture=%d want 0", got)
+		}
+	})
+
+	t.Run("RID assigned to wrong manager child", func(t *testing.T) {
+		misassigned := append([]StableExternalRIDSegment(nil), children...)
+		misassigned[0].RIDs = []uint64{9, 4, 9}
+		misassigned[1].RIDs = []uint64{14, 2}
+		resources, err := manager.CaptureStableExternalRIDFence(fence, misassigned)
+		if resources != nil {
+			resources.Release()
+		}
+		if !errors.Is(err, rootpublication.ErrResourceConflict) || !strings.Contains(err.Error(), "does not belong") {
+			t.Fatalf("misassigned external RID resources=%v err=%v want ownership conflict", resources, err)
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("external-RID pins after ownership conflict=%d want 0", got)
+		}
+	})
+
+	for omitted := range children {
+		t.Run(fmt.Sprintf("segment-%d", omitted), func(t *testing.T) {
+			missing := append([]StableExternalRIDSegment(nil), children[:omitted]...)
+			missing = append(missing, children[omitted+1:]...)
+			if resources, err := manager.CaptureStableExternalRIDFence(fence, missing); !errors.Is(err, rootpublication.ErrUnresolvedResource) || resources != nil {
+				if resources != nil {
+					resources.Release()
+				}
+				t.Fatalf("omitted external-RID segment %d resources=%v err=%v want ErrUnresolvedResource", omitted, resources, err)
+			}
+			if got := registry.ActivePins(); got != 0 {
+				t.Fatalf("external-RID pins after omitted segment %d=%d want 0", omitted, got)
+			}
+		})
+	}
+	for childIndex := range children {
+		for ridIndex := range children[childIndex].RIDs {
+			t.Run(fmt.Sprintf("segment-%d-rid-%d", childIndex, ridIndex), func(t *testing.T) {
+				missing := append([]StableExternalRIDSegment(nil), children...)
+				missing[childIndex].RIDs = append([]uint64(nil), children[childIndex].RIDs...)
+				missing[childIndex].RIDs = append(missing[childIndex].RIDs[:ridIndex], missing[childIndex].RIDs[ridIndex+1:]...)
+				missing[childIndex].Pointers = append([]page.ValuePtr(nil), children[childIndex].Pointers...)
+				missing[childIndex].Pointers = append(missing[childIndex].Pointers[:ridIndex], missing[childIndex].Pointers[ridIndex+1:]...)
+				resources, err := manager.CaptureStableExternalRIDFence(fence, missing)
+				// A duplicate occurrence is not an omitted logical RID; the unique
+				// fence remains complete and must still capture successfully.
+				if children[childIndex].RIDs[ridIndex] == 9 && len(missing[childIndex].RIDs) == 2 {
+					if err != nil || resources == nil {
+						t.Fatalf("deduplicated RID occurrence resources=%v err=%v", resources, err)
+					}
+					resources.Release()
+				} else if !errors.Is(err, rootpublication.ErrUnresolvedResource) || resources != nil {
+					if resources != nil {
+						resources.Release()
+					}
+					t.Fatalf("omitted external RID child=%d rid=%d resources=%v err=%v want ErrUnresolvedResource", childIndex, ridIndex, resources, err)
+				}
+				if got := registry.ActivePins(); got != 0 {
+					t.Fatalf("external-RID pins after RID omission child=%d rid=%d: %d", childIndex, ridIndex, got)
+				}
+			})
+		}
+	}
+
+	for omitted := range children {
+		missing := append([]StableExternalRIDSegment(nil), children...)
+		missingID, err := EncodeFileID(2, uint32(omitted+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing[omitted].FileID = missingID
+		if resources, err := manager.CaptureStableExternalRIDFence(fence, missing); err == nil || resources != nil || !strings.Contains(err.Error(), fmt.Sprintf("child %d", missingID)) {
+			if resources != nil {
+				resources.Release()
+			}
+			t.Fatalf("omitted external-RID child %d resources=%v err=%v", omitted, resources, err)
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("external-RID pins after omitted child %d=%d want 0", omitted, got)
+		}
+	}
+}
+
+func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
+	dir := b.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	segmentRIDs := [][]uint64{{1, 101}, {2, 102}}
+	segmentPointers := make([][]page.ValuePtr, len(segmentRIDs))
+	fileIDs := make([]uint32, 2)
+	for i := 0; i < 2; i++ {
+		fileID, err := EncodeFileID(1, uint32(i+1))
+		if err != nil {
+			b.Fatal(err)
+		}
+		fileIDs[i] = fileID
+		writer, err := NewWriter(SegmentPath(dir, fileID), fileID)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, rid := range segmentRIDs[i] {
+			ptr, err := writer.Append(0, nil, rid, []byte("external-rid-record"))
+			if err != nil {
+				_ = writer.Close()
+				b.Fatal(err)
+			}
+			segmentPointers[i] = append(segmentPointers[i], ptr)
+		}
+		if err := writer.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = manager.Close() })
+	children := []StableExternalRIDSegment{
+		{FileID: fileIDs[0], RIDs: []uint64{1, 101, 1}, Pointers: []page.ValuePtr{segmentPointers[0][0], segmentPointers[0][1], segmentPointers[0][0]}, Digest: sha256.Sum256([]byte("external-rid-segment-1"))},
+		{FileID: fileIDs[1], RIDs: []uint64{2, 102, 2}, Pointers: []page.ValuePtr{segmentPointers[1][0], segmentPointers[1][1], segmentPointers[1][0]}, Digest: sha256.Sum256([]byte("external-rid-segment-2"))},
+	}
+	fence, err := NewStableExternalRIDFence([]uint64{102, 1, 2, 101})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
+	var pinHighWater uint64
+	for i := 0; i < b.N; i++ {
+		resources, err := manager.CaptureStableExternalRIDFence(fence, children)
+		if err != nil {
+			b.Fatal(err)
+		}
+		descriptors += uint64(len(resources.Descriptors()))
+		for _, descriptor := range resources.Descriptors() {
+			obligations += uint64(len(descriptor.LogicalObligations()))
+		}
+		for _, stats := range resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
+		resources.Release()
+	}
+	b.StopTimer()
+	if got := registry.ActivePins(); got != 0 {
+		b.Fatalf("active external-RID pins after release=%d want 0", got)
+	}
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(obligations)/float64(b.N), "logical_obligations/op")
+	b.ReportMetric(float64(pinHighWater), "pin_high_water")
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "content_syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace_syncs/op")
 }
 
 func TestStableValueLogRegistrationSupportsOuterLeafProducerKinds(t *testing.T) {

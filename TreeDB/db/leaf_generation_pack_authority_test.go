@@ -30,39 +30,39 @@ type leafPackAuthorityFixture struct {
 	pointer     page.LeafLogPtr
 }
 
-func newLeafPackAuthorityFixture(t *testing.T) leafPackAuthorityFixture {
-	t.Helper()
-	root := t.TempDir()
+func newLeafPackAuthorityFixture(tb testing.TB) leafPackAuthorityFixture {
+	tb.Helper()
+	root := tb.TempDir()
 	destination := filepath.Join(root, leafVLogDirName)
 	stagingDir := filepath.Join(destination, ".leaf-pack-copy-test", leafVLogDirName)
 	for _, dir := range []string{destination, stagingDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatalf("MkdirAll %s: %v", dir, err)
+			tb.Fatalf("MkdirAll %s: %v", dir, err)
 		}
 	}
 	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, 1)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	path := valuelog.SegmentPath(stagingDir, fileID)
 	writer, err := valuelog.NewStagingWriter(path, fileID)
 	if err != nil {
-		t.Fatalf("NewStagingWriter: %v", err)
+		tb.Fatalf("NewStagingWriter: %v", err)
 	}
 	valuePtr, err := writer.Append(0, nil, 1, []byte("packed-outer-leaf"))
 	if err != nil {
-		t.Fatalf("Append: %v", err)
+		tb.Fatalf("Append: %v", err)
 	}
 	if err := writer.Sync(); err != nil {
-		t.Fatalf("Sync: %v", err)
+		tb.Fatalf("Sync: %v", err)
 	}
 	identity, err := writer.StableIdentity()
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	pointer, err := page.LeafLogPtrFromValuePtr(valuePtr)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	registry := rootpublication.NewIdentityPinRegistry()
 	return leafPackAuthorityFixture{
@@ -72,47 +72,105 @@ func newLeafPackAuthorityFixture(t *testing.T) leafPackAuthorityFixture {
 	}
 }
 
-func (fixture *leafPackAuthorityFixture) close(t *testing.T) {
-	t.Helper()
+func (fixture *leafPackAuthorityFixture) close(tb testing.TB) {
+	tb.Helper()
 	if fixture.writer != nil {
 		if err := fixture.writer.Close(); err != nil {
-			t.Fatalf("Close writer: %v", err)
+			tb.Fatalf("Close writer: %v", err)
 		}
 		fixture.writer = nil
 	}
 }
 
-func newLeafPackAuthorityFixtureSegment(t *testing.T, fixture *leafPackAuthorityFixture, seq uint32) (rewriteCreatedSegment, page.LeafLogPtr, *valuelog.Writer) {
-	t.Helper()
+func newLeafPackAuthorityFixtureSegment(tb testing.TB, fixture *leafPackAuthorityFixture, seq uint32) (rewriteCreatedSegment, page.LeafLogPtr, *valuelog.Writer) {
+	tb.Helper()
 	fileID, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, seq)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	path := valuelog.SegmentPath(fixture.stagingDir, fileID)
 	writer, err := valuelog.NewStagingWriter(path, fileID)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	valuePtr, err := writer.Append(0, nil, uint64(seq), []byte("additional-packed-outer-leaf"))
 	if err != nil {
 		_ = writer.Close()
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	if err := writer.Sync(); err != nil {
 		_ = writer.Close()
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	identity, err := writer.StableIdentity()
 	if err != nil {
 		_ = writer.Close()
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	pointer, err := page.LeafLogPtrFromValuePtr(valuePtr)
 	if err != nil {
 		_ = writer.Close()
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return rewriteCreatedSegment{path: path, fileID: fileID, identity: identity}, pointer, writer
+}
+
+func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
+	b.ReportAllocs()
+	b.SetBytes(int64(len("packed-outer-leaf")))
+	b.ResetTimer()
+	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
+	var pinHighWater uint64
+	var namespaceSyncNanos int64
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		fixture := newLeafPackAuthorityFixture(b)
+		authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+			b.Fatal(err)
+		}
+		b.StopTimer()
+		fixture.close(b)
+		b.StartTimer()
+		if _, mutated, err := authority.promote(); err != nil || !mutated {
+			b.Fatalf("promote mutated=%t err=%v", mutated, err)
+		}
+		descriptors += uint64(len(authority.resources.Descriptors()))
+		for _, descriptor := range authority.resources.Descriptors() {
+			obligations += uint64(len(descriptor.LogicalObligations()))
+		}
+		for _, stats := range authority.resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
+		namespaceSyncNanos += authority.namespaceSyncNanos
+		b.StopTimer()
+		if err := authority.release(); err != nil {
+			b.Fatal(err)
+		}
+		if got := fixture.registry.ActivePins(); got != 0 {
+			b.Fatalf("active packed outer-leaf pins after release=%d want 0", got)
+		}
+		if err := os.RemoveAll(fixture.db.dir); err != nil {
+			b.Fatalf("remove fixture %s: %v", fixture.db.dir, err)
+		}
+		b.StartTimer()
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(obligations)/float64(b.N), "logical_obligations/op")
+	b.ReportMetric(float64(pinHighWater), "pin_high_water")
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "capture_content_syncs/op")
+	b.ReportMetric(1, "creation_file_syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace_syncs/op")
+	b.ReportMetric(float64(namespaceSyncNanos)/float64(b.N), "namespace_sync_ns/op")
 }
 
 func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRegistration(t *testing.T) {

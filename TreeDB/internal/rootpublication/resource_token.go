@@ -1299,6 +1299,18 @@ func (token *StableNamespaceToken) validateStable() error {
 	}
 	switch token.state.Load() {
 	case namespaceStable:
+		if token.hasLinkedResource {
+			token.mu.Lock()
+			defer token.mu.Unlock()
+			if token.state.Load() == namespaceFailed {
+				return token.stabilizeErr
+			}
+			if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
+				token.stabilizeErr = err
+				token.state.Store(namespaceFailed)
+				return err
+			}
+		}
 		return nil
 	case namespaceFailed:
 		token.mu.Lock()

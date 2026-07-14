@@ -501,14 +501,14 @@ func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
 				t.Fatalf("copy cycle %d: %v", cycle, err)
 			}
 			defer remap.releaseStableResources()
-			if remap.stableSegments != 1 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != 1 || remap.stablePinHighWater != 1 {
-				t.Fatalf("copy cycle %d stable counters segments=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want all=1", cycle, remap.stableSegments, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
+			if remap.stableSegments != 1 || remap.stableDescriptors != 2 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != 1 || remap.stablePinHighWater != remap.stableDescriptors {
+				t.Fatalf("copy cycle %d stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want 1,2,1,1,2", cycle, remap.stableSegments, remap.stableDescriptors, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
 			}
-			if got := len(remap.stableResources.Descriptors()); got != 1 {
-				t.Fatalf("copy cycle %d descriptors=%d want 1", cycle, got)
+			if got := len(remap.stableResources.Descriptors()); got != 2 {
+				t.Fatalf("copy cycle %d descriptors=%d want 2", cycle, got)
 			}
-			if got := registry.ActivePins(); got != baselinePins+1 {
-				t.Fatalf("copy cycle %d active pins=%d want %d", cycle, got, baselinePins+1)
+			if got := registry.ActivePins(); got != baselinePins+2 {
+				t.Fatalf("copy cycle %d active pins=%d want %d", cycle, got, baselinePins+2)
 			}
 			if got := registry.ActiveIdentities(); got != baselineIdentities+1 {
 				t.Fatalf("copy cycle %d active identities=%d want %d", cycle, got, baselineIdentities+1)
@@ -521,7 +521,7 @@ func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
 			t.Fatalf("copy cycle %d released identities=%d want baseline %d", cycle, got, baselineIdentities)
 		}
 	}
-	t.Logf("stable rewrite copy: cycles=%d segments_per_cycle=1 content_syncs_per_cycle=1 namespace_syncs_per_cycle=1 descriptor_pin_high_water=1", cycles)
+	t.Logf("stable rewrite copy: cycles=%d segments_per_cycle=1 descriptors_per_cycle=2 content_syncs_per_cycle=1 namespace_syncs_per_cycle=1 descriptor_pin_high_water=2", cycles)
 }
 
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {

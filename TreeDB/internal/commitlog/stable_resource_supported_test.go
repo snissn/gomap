@@ -407,6 +407,10 @@ func TestCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	testCommandJournalStableRotationDoesNotLoseClosedSegment(t)
 }
 
+func TestCommandJournalStableRotationRejectsEachMissingSegment(t *testing.T) {
+	testCommandJournalStableRotationRejectsEachMissingSegment(t)
+}
+
 func TestCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t *testing.T) {
 	testCommandJournalStableRotationFrontierUsesSegmentAppendsNotOwnerCursor(t)
 }

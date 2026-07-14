@@ -148,6 +148,46 @@ func TestCaptureDictionaryResourcesFailureDoesNotLeakVacuumFence(t *testing.T) {
 	}
 }
 
+func TestCaptureDictionaryResourcesRejectsEachMissingPointerChild(t *testing.T) {
+	for _, omitted := range []dictionaryStablePhysicalRole{dictionaryStableIndexRole, dictionaryStableValueLogRole} {
+		t.Run(string(omitted), func(t *testing.T) {
+			store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			payload := bytes.Repeat([]byte("pointer-dictionary-child-omission|"), 256)
+			dictID, err := store.PutDictBytes(context.Background(), payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var withheld []*rootpublication.StableResourceToken
+			previous := addDictionaryStableResourceToken
+			addDictionaryStableResourceToken = func(builder *rootpublication.StableResourceSetBuilder, token *rootpublication.StableResourceToken, role dictionaryStablePhysicalRole) error {
+				if role == omitted {
+					withheld = append(withheld, token)
+					return nil
+				}
+				return builder.Add(token)
+			}
+			resources, captureErr := store.CaptureDictionaryResources(context.Background(), dictID)
+			addDictionaryStableResourceToken = previous
+			for _, token := range withheld {
+				token.Release()
+			}
+			if resources != nil {
+				resources.Release()
+			}
+			if !errors.Is(captureErr, rootpublication.ErrUnresolvedResource) || resources != nil {
+				t.Fatalf("omitted %s resources=%v err=%v want ErrUnresolvedResource", omitted, resources, captureErr)
+			}
+			if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
+				t.Fatalf("omitted %s active pins=%d want 0", omitted, got)
+			}
+		})
+	}
+}
+
 func TestCaptureDictionaryResourcesBlocksOnlineIndexVacuumUntilRelease(t *testing.T) {
 	store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
 	if err != nil {

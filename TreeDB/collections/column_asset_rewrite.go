@@ -329,6 +329,7 @@ type columnAssetRewriteCopyResult struct {
 	segmentFileID        uint32
 	stableResources      *rootpublication.StableResourceSet
 	stableSegments       uint64
+	stableDescriptors    uint64
 	stableContentSyncs   uint64
 	stableNamespaceSyncs uint64
 	stablePinHighWater   uint64
@@ -465,18 +466,24 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	if out.stableResources == nil {
 		return columnAssetRewriteCopyResult{}, errors.New("collections: column asset rewrite copy returned no stable authority")
 	}
-	out.stableSegments = uint64(len(out.stableResources.Descriptors()))
+	descriptors := out.stableResources.Descriptors()
+	out.stableDescriptors = uint64(len(descriptors))
+	identities := make(map[rootpublication.StableIdentity]struct{}, len(descriptors))
+	for _, descriptor := range descriptors {
+		identities[descriptor.Identity()] = struct{}{}
+	}
+	out.stableSegments = uint64(len(identities))
 	out.stableContentSyncs = uint64(appender.closeStats.FileSyncCount)
 	for _, stats := range out.stableResources.Stats(time.Now()) {
 		out.stableNamespaceSyncs += stats.NamespaceSyncs
+		out.stablePinHighWater += stats.PinHighWater
 	}
-	// This rewrite transaction owns one newly-created segment and holds one
-	// exact identity pin for it through publication. Treat any divergence as a
-	// failed stable-resource preparation rather than certifying weaker evidence.
-	out.stablePinHighWater = out.stableSegments
-	if out.stableSegments != 1 || out.stableContentSyncs != 1 || out.stableNamespaceSyncs != 1 || out.stablePinHighWater != 1 {
+	// This rewrite transaction owns one newly-created physical segment. A mixed
+	// segment may require multiple kind-scoped descriptors and pins while still
+	// sharing one exact file identity and one content/namespace sync epoch.
+	if out.stableSegments != 1 || out.stableDescriptors == 0 || out.stableContentSyncs != 1 || out.stableNamespaceSyncs != 1 || out.stablePinHighWater != out.stableDescriptors {
 		out.releaseStableResources()
-		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable counters segments=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want all=1", rootpublication.ErrUnresolvedResource, out.stableSegments, out.stableContentSyncs, out.stableNamespaceSyncs, out.stablePinHighWater)
+		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want segments/content/namespace=1 and pins=descriptors", rootpublication.ErrUnresolvedResource, out.stableSegments, out.stableDescriptors, out.stableContentSyncs, out.stableNamespaceSyncs, out.stablePinHighWater)
 	}
 	assets := make([]ColumnPreparedAsset, len(out.newRefs))
 	for i, ref := range out.newRefs {

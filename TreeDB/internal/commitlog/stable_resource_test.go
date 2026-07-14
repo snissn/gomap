@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,84 @@ func testCommandJournalStableRotationDoesNotLoseClosedSegment(t *testing.T) {
 	wantActive := filepath.ToSlash(filepath.Join("maindb", "wal", CommandSegmentName(3, 2)))
 	if rotation.Active.DiagnosticPath() != wantActive {
 		t.Fatalf("active diagnostic path=%q want %q", rotation.Active.DiagnosticPath(), wantActive)
+	}
+}
+
+func testCommandJournalStableRotationRejectsEachMissingSegment(t *testing.T) {
+	buildRotation := func(t *testing.T) (*CommandJournal, *CommandJournalStableRotation) {
+		t.Helper()
+		journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: 11})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := journal.AppendCommand(CommandEnvelope{
+			Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+		}); err != nil {
+			_ = journal.Close()
+			t.Fatal(err)
+		}
+		rotation, err := journal.RotateActiveSegmentWithStableResources(true)
+		if err != nil {
+			_ = journal.Close()
+			t.Fatal(err)
+		}
+		return journal, rotation
+	}
+
+	t.Run("complete", func(t *testing.T) {
+		journal, rotation := buildRotation(t)
+		defer journal.Close()
+		builder := rootpublication.NewStableResourceSetBuilder(
+			rootpublication.ReachabilityCommandWALActive,
+			rootpublication.ReachabilityCommandWALRotated,
+		)
+		defer builder.Abandon()
+		if err := builder.Add(rotation.TakeClosed()); err != nil {
+			t.Fatal(err)
+		}
+		if err := builder.Add(rotation.TakeActive()); err != nil {
+			t.Fatal(err)
+		}
+		resources, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		resources.Release()
+	})
+
+	for _, omitted := range []rootpublication.ReachabilityField{
+		rootpublication.ReachabilityCommandWALActive,
+		rootpublication.ReachabilityCommandWALRotated,
+	} {
+		t.Run("omit-"+string(omitted), func(t *testing.T) {
+			journal, rotation := buildRotation(t)
+			defer journal.Close()
+			builder := rootpublication.NewStableResourceSetBuilder(
+				rootpublication.ReachabilityCommandWALActive,
+				rootpublication.ReachabilityCommandWALRotated,
+			)
+			defer builder.Abandon()
+			closed := rotation.TakeClosed()
+			active := rotation.TakeActive()
+			if omitted == rootpublication.ReachabilityCommandWALActive {
+				active.Release()
+				if err := builder.Add(closed); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				closed.Release()
+				if err := builder.Add(active); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resources, err := builder.Freeze()
+			if resources != nil {
+				resources.Release()
+			}
+			if !errors.Is(err, rootpublication.ErrUnresolvedResource) || !strings.Contains(err.Error(), string(omitted)) {
+				t.Fatalf("omitted %s resources=%v err=%v want exact ErrUnresolvedResource", omitted, resources, err)
+			}
+		})
 	}
 }
 

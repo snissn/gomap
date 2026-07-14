@@ -37,7 +37,12 @@ func (authority *columnVectorGraphStableResourceAccumulator) newAppender(rootDir
 	if authority == nil || authority.builder == nil || authority.registry == nil {
 		return nil, errors.New("collections: column vector rebuild stable authority is unavailable")
 	}
-	return newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, authority.registry)
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, authority.registry)
+	if err != nil {
+		return nil, err
+	}
+	appender.stableVectorGraphAuthority = true
+	return appender, nil
 }
 
 func (authority *columnVectorGraphStableResourceAccumulator) closeAppender(appender *columnPhysicalAssetSegmentAppender) error {
@@ -84,7 +89,7 @@ func (authority *columnVectorGraphStableResourceAccumulator) freeze(assets []col
 	for i := range assets {
 		prepared[i] = ColumnPreparedAsset{Ref: assets[i].Ref, Rows: assets[i].RowCount, Bytes: assets[i].AssetBytes}
 	}
-	if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
+	if err := validateStableVectorGraphResourcesMatchPrepared(prepared, resources); err != nil {
 		resources.Release()
 		return nil, fmt.Errorf("collections: column vector rebuild stable resource union: %w", err)
 	}

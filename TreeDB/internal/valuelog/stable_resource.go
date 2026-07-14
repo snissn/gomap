@@ -1,6 +1,8 @@
 package valuelog
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -8,12 +10,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 var newValueLogStableNamespaceToken = rootpublication.NewStableNamespaceToken
@@ -220,6 +224,10 @@ func (m *Manager) StableResourceToken(fileID uint32, registration StableResource
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.stableResourceTokenLocked(fileID, registration)
+}
+
+func (m *Manager) stableResourceTokenLocked(fileID uint32, registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
 	file := m.files[fileID]
 	if file == nil {
 		return nil, &fileNotFoundError{id: fileID}
@@ -234,6 +242,177 @@ func (m *Manager) StableResourceToken(fileID uint32, registration StableResource
 	}
 	defer namespace.Release()
 	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
+}
+
+// StableExternalRIDSegment describes the exact value-log child required by a
+// dormant command-WAL external-RID fence. Pointers are positionally aligned
+// with RIDs and are validated through the manager-owned open handle before the
+// child is pinned. Capturing this producer-side closure does not activate
+// command-WAL ExternalRefs; #3718 still owns that consumer.
+type StableExternalRIDSegment struct {
+	FileID   uint32
+	RIDs     []uint64
+	Pointers []page.ValuePtr
+	Digest   [32]byte
+}
+
+// StableExternalRIDFence is the independently derived command-payload fence
+// that a physical value-log closure must satisfy. #3718 will derive the same
+// count/digest from the durable command payload when it activates the consumer.
+type StableExternalRIDFence struct {
+	Count  uint32
+	Digest [32]byte
+}
+
+// NewStableExternalRIDFence canonicalizes the command payload's complete RID
+// set without accepting any physical segment assignment.
+func NewStableExternalRIDFence(rids []uint64) (StableExternalRIDFence, error) {
+	canonical, err := canonicalStableExternalRIDs(rids)
+	if err != nil {
+		return StableExternalRIDFence{}, err
+	}
+	if uint64(len(canonical)) > uint64(^uint32(0)) {
+		return StableExternalRIDFence{}, fmt.Errorf("%w: external-RID fence exceeds uint32 count", rootpublication.ErrResourceConflict)
+	}
+	h := sha256.New()
+	var encoded [8]byte
+	for _, rid := range canonical {
+		binary.LittleEndian.PutUint64(encoded[:], rid)
+		_, _ = h.Write(encoded[:])
+	}
+	var fence StableExternalRIDFence
+	fence.Count = uint32(len(canonical))
+	copy(fence.Digest[:], h.Sum(nil))
+	return fence, nil
+}
+
+func canonicalStableExternalRIDs(rids []uint64) ([]uint64, error) {
+	canonical := append([]uint64(nil), rids...)
+	for _, rid := range canonical {
+		if rid == 0 {
+			return nil, fmt.Errorf("%w: external-RID fence contains zero RID", rootpublication.ErrUnresolvedResource)
+		}
+	}
+	sort.Slice(canonical, func(i, j int) bool { return canonical[i] < canonical[j] })
+	unique := canonical[:0]
+	for _, rid := range canonical {
+		if len(unique) == 0 || unique[len(unique)-1] != rid {
+			unique = append(unique, rid)
+		}
+	}
+	if len(unique) == 0 {
+		return nil, fmt.Errorf("%w: external-RID fence has no RIDs", rootpublication.ErrUnresolvedResource)
+	}
+	return unique, nil
+}
+
+// CaptureStableExternalRIDFence captures every manager-owned value-log child
+// needed by the independently derived fence. The manager fixes the producer,
+// reachability field, exact handles, and shared deletion gate; callers cannot
+// omit a segment/RID, substitute paths, or provide identity overrides.
+func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, segments []StableExternalRIDSegment) (*rootpublication.StableResourceSet, error) {
+	if m == nil || fence.Count == 0 || len(segments) == 0 {
+		return nil, fmt.Errorf("%w: external-RID fence has no value-log children", rootpublication.ErrUnresolvedResource)
+	}
+	ordered := append([]StableExternalRIDSegment(nil), segments...)
+	for i := range ordered {
+		ordered[i].RIDs = append([]uint64(nil), ordered[i].RIDs...)
+		ordered[i].Pointers = append([]page.ValuePtr(nil), ordered[i].Pointers...)
+		if ordered[i].FileID == 0 || len(ordered[i].RIDs) == 0 || len(ordered[i].Pointers) != len(ordered[i].RIDs) {
+			return nil, fmt.Errorf("%w: external-RID child has empty file ID or mismatched RID/pointer set", rootpublication.ErrUnresolvedResource)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].FileID < ordered[j].FileID })
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i-1].FileID == ordered[i].FileID {
+			return nil, fmt.Errorf("%w: duplicate external-RID value-log child %d", rootpublication.ErrResourceConflict, ordered[i].FileID)
+		}
+	}
+	physicalRIDs := make([]uint64, 0)
+	ridOwners := make(map[uint64]uint32)
+	for _, child := range ordered {
+		for _, rid := range child.RIDs {
+			if owner, exists := ridOwners[rid]; exists && owner != child.FileID {
+				return nil, fmt.Errorf("%w: external RID %d is assigned to value-log children %d and %d", rootpublication.ErrResourceConflict, rid, owner, child.FileID)
+			}
+			ridOwners[rid] = child.FileID
+			physicalRIDs = append(physicalRIDs, rid)
+		}
+	}
+	actualFence, err := NewStableExternalRIDFence(physicalRIDs)
+	if err != nil {
+		return nil, err
+	}
+	if actualFence != fence {
+		return nil, fmt.Errorf("%w: external-RID physical closure count=%d digest=%x does not satisfy expected count=%d digest=%x", rootpublication.ErrUnresolvedResource, actualFence.Count, actualFence.Digest, fence.Count, fence.Digest)
+	}
+
+	files := make([]*File, len(ordered))
+	m.mu.RLock()
+	for i, child := range ordered {
+		file := m.files[child.FileID]
+		if file == nil {
+			m.mu.RUnlock()
+			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, &fileNotFoundError{id: child.FileID})
+		}
+		files[i] = file
+	}
+	m.mu.RUnlock()
+	for i, child := range ordered {
+		if err := validateStableExternalRIDMembership(files[i], child); err != nil {
+			return nil, err
+		}
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i, child := range ordered {
+		if m.files[child.FileID] != files[i] {
+			return nil, fmt.Errorf("%w: external-RID value-log child %d changed during membership validation", rootpublication.ErrResourceConflict, child.FileID)
+		}
+	}
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALExternalRIDFence)
+	for _, child := range ordered {
+		token, err := m.stableResourceTokenLocked(child.FileID, StableResourceRegistration{
+			Kind: rootpublication.ResourceCommandWALExternalRID, LogicalLane: "command-wal-v2/external-rid",
+			Generation:     uint64(child.FileID),
+			DiagnosticPath: filepath.Join(filepath.Base(m.dir), fmt.Sprintf("%06d.vlog", child.FileID)),
+			Reachability:   rootpublication.ReachabilityCommandWALExternalRIDFence,
+			ExternalRIDs:   child.RIDs, Digest: child.Digest,
+		})
+		if err != nil {
+			builder.Abandon()
+			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, err)
+		}
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			builder.Abandon()
+			return nil, err
+		}
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		return nil, err
+	}
+	return resources, nil
+}
+
+func validateStableExternalRIDMembership(file *File, child StableExternalRIDSegment) error {
+	for i, rid := range child.RIDs {
+		ptr := child.Pointers[i]
+		if ptr.FileID != child.FileID {
+			return fmt.Errorf("%w: external RID %d pointer names value-log child %d, want %d", rootpublication.ErrResourceConflict, rid, ptr.FileID, child.FileID)
+		}
+		actualRID, err := file.ReadRIDUnverified(ptr)
+		if err != nil {
+			return fmt.Errorf("%w: validate external RID %d in value-log child %d: %v", rootpublication.ErrUnresolvedResource, rid, child.FileID, err)
+		}
+		if actualRID != rid {
+			return fmt.Errorf("%w: external RID %d does not belong to value-log child %d at supplied pointer (found %d)", rootpublication.ErrResourceConflict, rid, child.FileID, actualRID)
+		}
+	}
+	return nil
 }
 
 // StableExistingPhysicalResourceToken captures an exact manager-owned segment

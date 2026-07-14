@@ -18,6 +18,17 @@ var (
 	dictionaryValueLogPhysicalDigest = sha256.Sum256([]byte("dictdb-value-log-v1"))
 )
 
+type dictionaryStablePhysicalRole string
+
+const (
+	dictionaryStableIndexRole    dictionaryStablePhysicalRole = "index"
+	dictionaryStableValueLogRole dictionaryStablePhysicalRole = "value-log"
+)
+
+var addDictionaryStableResourceToken = func(builder *rootpublication.StableResourceSetBuilder, token *rootpublication.StableResourceToken, _ dictionaryStablePhysicalRole) error {
+	return builder.Add(token)
+}
+
 // CaptureDictionaryResources returns the exact transitive durable resources
 // needed to decode dictID. The returned set owns its snapshot and deletion pins
 // until Release; callers must merge it into the parent publication before the
@@ -85,7 +96,7 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 		return nil, fmt.Errorf("dictdb: capture dictionary %d index: %w", dictID, err)
 	}
 	snapshotOwned = true
-	if err := builder.Add(indexToken); err != nil {
+	if err := addDictionaryStableResourceToken(builder, indexToken, dictionaryStableIndexRole); err != nil {
 		indexToken.Release()
 		return nil, fmt.Errorf("dictdb: add dictionary %d index: %w", dictID, err)
 	}
@@ -124,7 +135,7 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 		if tokenErr != nil {
 			return nil, fmt.Errorf("dictdb: capture dictionary %d value-log: %w", dictID, tokenErr)
 		}
-		if addErr := builder.Add(token); addErr != nil {
+		if addErr := addDictionaryStableResourceToken(builder, token, dictionaryStableValueLogRole); addErr != nil {
 			token.Release()
 			return nil, fmt.Errorf("dictdb: add dictionary %d value-log: %w", dictID, addErr)
 		}
@@ -134,5 +145,45 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 	if err != nil {
 		return nil, fmt.Errorf("dictdb: freeze dictionary %d resources: %w", dictID, err)
 	}
+	if err := validateCapturedDictionaryPhysicalClosure(resources, entry.Flags&node.FlagPointer != 0); err != nil {
+		resources.Release()
+		return nil, fmt.Errorf("dictdb: validate dictionary %d physical closure: %w", dictID, err)
+	}
 	return resources, nil
+}
+
+func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+	if resources == nil {
+		return fmt.Errorf("%w: dictionary capture returned no physical closure", rootpublication.ErrUnresolvedResource)
+	}
+	var index, valueLog bool
+	for _, descriptor := range resources.Descriptors() {
+		if descriptor.Kind() != rootpublication.ResourceDictionary {
+			return fmt.Errorf("%w: dictionary closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind())
+		}
+		switch descriptor.Digest() {
+		case dictionaryIndexPhysicalDigest:
+			if index {
+				return fmt.Errorf("%w: dictionary closure contains duplicate index authority", rootpublication.ErrResourceConflict)
+			}
+			index = true
+		case dictionaryValueLogPhysicalDigest:
+			if valueLog {
+				return fmt.Errorf("%w: dictionary closure contains duplicate value-log authority", rootpublication.ErrResourceConflict)
+			}
+			valueLog = true
+		default:
+			return fmt.Errorf("%w: dictionary closure contains unknown physical role", rootpublication.ErrResourceConflict)
+		}
+	}
+	if !index {
+		return fmt.Errorf("%w: dictionary closure omitted index authority", rootpublication.ErrUnresolvedResource)
+	}
+	if pointer && !valueLog {
+		return fmt.Errorf("%w: pointer dictionary closure omitted value-log authority", rootpublication.ErrUnresolvedResource)
+	}
+	if !pointer && valueLog {
+		return fmt.Errorf("%w: inline dictionary closure contains value-log authority", rootpublication.ErrResourceConflict)
+	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,6 +233,10 @@ func TestColumnVectorGraphRebuildStableAuthorityMatchesEveryPublishedAsset(t *te
 		}
 		got := make(map[columnVectorStableLogicalRefKey]int, len(assets))
 		for _, descriptor := range resources.Descriptors() {
+			fields := descriptor.ReachabilityFields()
+			if len(fields) != 1 || fields[0] != rootpublication.ReachabilityVectorGraphPack {
+				return fmt.Errorf("vector descriptor reachability=%v want [%s]", fields, rootpublication.ReachabilityVectorGraphPack)
+			}
 			for _, logical := range descriptor.LogicalObligations() {
 				key := columnVectorStableLogicalRefKey{
 					kind: logical.Kind, namespace: logical.Namespace, generation: logical.Generation,
@@ -421,4 +426,155 @@ func TestColumnVectorGraphRebuildStableAuthorityHookFailureReleasesPins(t *testi
 	if got := registry.ActiveIdentities(); got != baselineIdentities {
 		t.Fatalf("active identities after failed preparation=%d want baseline=%d", got, baselineIdentities)
 	}
+}
+
+func TestColumnVectorGraphStableAuthorityRejectsEachMissingTransitiveChild(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable vector authority requires exact relative namespace support")
+	}
+	roles := []ColumnAssetKind{
+		ColumnAssetKindTCS1TypedColumnPart,
+		ColumnAssetKindTCS1Int64Values,
+		ColumnAssetKindTCS1HNSWSearchPack,
+	}
+	for omitted := range roles {
+		t.Run(string(roles[omitted]), func(t *testing.T) {
+			cfg := testColumnStoreConfig(nil)
+			normalized, err := normalizeColumnStoreConfig("vector-missing-child-"+string(roles[omitted]), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry := rootpublication.NewIdentityPinRegistry()
+			authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			appender, err := authority.newAppender(t.TempDir(), *normalized)
+			if err != nil {
+				authority.abandon()
+				t.Fatal(err)
+			}
+			items := make([]columnPhysicalAssetAppendItem, 0, len(roles)-1)
+			for i, kind := range roles {
+				if i == omitted {
+					continue
+				}
+				items = append(items, columnPhysicalAssetAppendItem{payload: []byte("child-" + string(kind)), kind: kind, generation: 1, partID: uint64(i + 1)})
+			}
+			refs, err := appender.appendKinds(items)
+			if err != nil {
+				_ = appender.abort()
+				authority.abandon()
+				t.Fatal(err)
+			}
+			if err := authority.closeAppender(appender); err != nil {
+				authority.abandon()
+				t.Fatal(err)
+			}
+			resources, err := authority.builder.Freeze()
+			if err != nil {
+				authority.abandon()
+				t.Fatal(err)
+			}
+			authority.builder = nil
+			defer resources.Release()
+
+			expected := make([]ColumnPreparedAsset, 0, len(roles))
+			for _, ref := range refs {
+				expected = append(expected, ColumnPreparedAsset{Ref: ref})
+			}
+			last := refs[len(refs)-1]
+			missing := last
+			missing.Kind = roles[omitted]
+			missing.PartID = uint64(omitted + 1)
+			missing.Offset = last.Offset + last.Length
+			missing.Length = 1
+			missing.Checksum++
+			expected = append(expected, ColumnPreparedAsset{Ref: missing})
+			err = validateStableVectorGraphResourcesMatchPrepared(expected, resources)
+			if err == nil || !strings.Contains(err.Error(), string(rootpublication.ReachabilityVectorGraphPack)) {
+				t.Fatalf("missing %s error=%v want exact %s field", roles[omitted], err, rootpublication.ReachabilityVectorGraphPack)
+			}
+			resources.Release()
+			if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+				t.Fatalf("missing %s release pins=%d identities=%d", roles[omitted], registry.ActivePins(), registry.ActiveIdentities())
+			}
+		})
+	}
+}
+
+func BenchmarkColumnVectorGraphStableResourceCapture(b *testing.B) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		b.Skip("stable vector authority requires exact relative namespace support")
+	}
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("vector-stable-capture-benchmark", cfg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := b.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	items := []columnPhysicalAssetAppendItem{
+		{payload: []byte("vector-adjacency"), kind: ColumnAssetKindTCS1TypedColumnPart, partID: 1},
+		{payload: []byte("vector-hnsw-pack"), kind: ColumnAssetKindTCS1HNSWSearchPack, partID: 2},
+	}
+	b.SetBytes(int64(len(items[0].payload) + len(items[1].payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
+	var pinHighWater uint64
+	for i := 0; i < b.N; i++ {
+		authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
+		if err != nil {
+			b.Fatal(err)
+		}
+		appender, err := authority.newAppender(root, *normalized)
+		if err != nil {
+			authority.abandon()
+			b.Fatal(err)
+		}
+		generation := uint64(i + 1)
+		for j := range items {
+			items[j].generation = generation
+		}
+		refs, err := appender.appendKinds(items)
+		if err != nil {
+			_ = appender.abort()
+			authority.abandon()
+			b.Fatal(err)
+		}
+		if err := authority.closeAppender(appender); err != nil {
+			authority.abandon()
+			b.Fatal(err)
+		}
+		assets := make([]columnVectorIndexStateAssetSnapshot, len(refs))
+		for j, ref := range refs {
+			assets[j] = columnVectorIndexStateAssetSnapshot{Ref: ref, AssetBytes: ref.Length}
+		}
+		resources, err := authority.freeze(assets)
+		if err != nil {
+			b.Fatal(err)
+		}
+		descriptors += uint64(len(resources.Descriptors()))
+		for _, descriptor := range resources.Descriptors() {
+			obligations += uint64(len(descriptor.LogicalObligations()))
+		}
+		for _, stats := range resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
+		resources.Release()
+	}
+	b.StopTimer()
+	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		b.Fatalf("released vector authority pins=%d identities=%d want 0,0", registry.ActivePins(), registry.ActiveIdentities())
+	}
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(obligations)/float64(b.N), "logical-obligations/op")
+	b.ReportMetric(float64(pinHighWater), "pin-high-water")
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "content-syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace-syncs/op")
 }

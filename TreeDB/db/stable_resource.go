@@ -283,6 +283,12 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 	if !snapshot.stableIndexCapture || snapshot.idx == nil || snapshot.idx.pager == nil || snapshot.db == nil {
 		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
 	}
+	if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
+		pager := snapshot.idx.pager
+		spec.SyncThrough = func(*os.File, rootpublication.DurableFrontier) error {
+			return pager.SyncIndexData()
+		}
+	}
 	database := snapshot.db
 	namespace, err := snapshot.idx.stableIndexNamespaceToken(snapshot.db.dir)
 	if err != nil {
@@ -337,6 +343,25 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		return nil, err
 	}
 	return token, nil
+}
+
+// CaptureStableIndexFileResource captures publication authority for the exact
+// index generation already pinned by this stable snapshot. Unlike
+// NewStableIndexResourceToken, this producer-owned entry point does not let a
+// caller select the resource kind, reachability field, handle, frontier, or
+// constructor.
+func (snapshot *Snapshot) CaptureStableIndexFileResource() (*rootpublication.StableResourceToken, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	return snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+		Kind:          rootpublication.ResourceIndex,
+		LogicalLane:   "db/index",
+		ResourceID:    indexFileName,
+		Digest:        sha256.Sum256([]byte("treedb/index-file/v1")),
+		Reachability:  rootpublication.ReachabilityIndexFile,
+		ContentSynced: false,
+	}, NewStableDBResourceToken)
 }
 
 // ValueLogIdentityPinRegistry exposes the DB-scoped physical deletion gate to

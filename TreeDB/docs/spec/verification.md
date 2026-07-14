@@ -92,6 +92,18 @@ materialized temporary-image bytes, family coverage, and committed-fixture
 shard balance. These measurements bound test-harness cost; they are not
 production throughput evidence.
 
+`TestProductionWitnessRegistryExactlyMatchesCanonicalPolicy` is the independent
+producer-side coverage gate for DUR-03 #3677. Its handwritten 16-row registry
+points to package-local tests that execute the real producer-owned capture
+paths; a separate literal 20-row registry keeps adjacent, rebuildable, legacy,
+and separate-durability fields negative. `TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants`
+maps the same 16 fields independently into the #3717 generator and proves the
+deterministic 19-image shape: synced baseline, target-meta-only, sixteen
+one-missing-dependency images, and full writeback. That generator test does not
+materialize or reopen those 19 images through public `Open`, does not prove a
+root candidate consumes the captured resource sets, and does not close DUR-09
+#3679.
+
 ### 0.3 Counterexample-to-conformance map
 
 Counterexamples use real production calls and bytes. Every generated image is
