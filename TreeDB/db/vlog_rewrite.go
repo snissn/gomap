@@ -3972,6 +3972,29 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStart(startRID uint64, leafPages [
 	return w.appendLeafPagesWithRIDStartCapture(startRID, leafPages, nil)
 }
 
+type rewritePreparedLeafBatch struct {
+	records         []valuelog.Record
+	dictID          uint64
+	dict            []byte
+	rawPayloadBytes int
+}
+
+func cloneRewritePreparedLeafBatch(prepared rewritePreparedLeafBatch) rewritePreparedLeafBatch {
+	clone := rewritePreparedLeafBatch{
+		records:         make([]valuelog.Record, len(prepared.records)),
+		dictID:          prepared.dictID,
+		dict:            prepared.dict,
+		rawPayloadBytes: prepared.rawPayloadBytes,
+	}
+	for i := range prepared.records {
+		clone.records[i] = valuelog.Record{
+			RID:   prepared.records[i].RID,
+			Value: append([]byte(nil), prepared.records[i].Value...),
+		}
+	}
+	return clone
+}
+
 func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture) ([]page.LeafLogPtr, error) {
 	if w == nil {
 		return nil, errors.New("vlog-rewrite: nil writer")
@@ -3987,6 +4010,35 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 		return []page.LeafLogPtr{ptr}, nil
 	}
 	if len(leafPages) > rewriteLeafLogBatchMaxK {
+		if capture != nil && w.leafDir != "" {
+			// Capture every chunk's transitive template closure before the first
+			// chunk can initialize or mutate the leaf-log namespace.
+			preparedBatches := make([]rewritePreparedLeafBatch, 0, (len(leafPages)+rewriteLeafLogBatchMaxK-1)/rewriteLeafLogBatchMaxK)
+			for start := 0; start < len(leafPages); {
+				end := start + rewriteLeafLogBatchMaxK
+				if end > len(leafPages) {
+					end = len(leafPages)
+				}
+				if len(leafPages)-end == 1 {
+					end--
+				}
+				prepared, err := w.prepareLeafPageBatch(startRID+uint64(start), leafPages[start:end], capture)
+				if err != nil {
+					return nil, err
+				}
+				preparedBatches = append(preparedBatches, cloneRewritePreparedLeafBatch(prepared))
+				start = end
+			}
+			ptrs := make([]page.LeafLogPtr, 0, len(leafPages))
+			for _, prepared := range preparedBatches {
+				chunkPtrs, err := w.appendPreparedLeafPageBatch(prepared, capture)
+				if err != nil {
+					return nil, err
+				}
+				ptrs = append(ptrs, chunkPtrs...)
+			}
+			return ptrs, nil
+		}
 		ptrs := make([]page.LeafLogPtr, 0, len(leafPages))
 		for start := 0; start < len(leafPages); start += rewriteLeafLogBatchMaxK {
 			end := start + rewriteLeafLogBatchMaxK
@@ -4015,6 +4067,15 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 		}
 		return ptrs, nil
 	}
+	prepared, err := w.prepareLeafPageBatch(startRID, leafPages, capture)
+	if err != nil {
+		return nil, err
+	}
+	return w.appendPreparedLeafPageBatch(prepared, capture)
+}
+
+func (w *rewriteWriter) prepareLeafPageBatch(startRID uint64, leafPages [][]byte, capture *rewriteStableOuterLeafCapture) (rewritePreparedLeafBatch, error) {
+	var prepared rewritePreparedLeafBatch
 	if cap(w.leafBatchRecords) < len(leafPages) {
 		w.leafBatchRecords = make([]valuelog.Record, len(leafPages))
 	}
@@ -4031,14 +4092,14 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 	}
 	for i, leafPage := range leafPages {
 		if len(leafPage) != page.PageSize {
-			return nil, fmt.Errorf("vlog-rewrite: leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPage), page.PageSize)
+			return prepared, fmt.Errorf("vlog-rewrite: leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPage), page.PageSize)
 		}
 		encodedLeafPage := leafPage
 		if w.leafPagesUseCompactPayload() {
 			var err error
 			w.leafCompactArena, encodedLeafPage, _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(w.leafCompactArena, leafPage)
 			if err != nil {
-				return nil, err
+				return prepared, err
 			}
 		}
 		if useDict && !rewriteAllowDictForSmallPayload(encodedLeafPage) {
@@ -4055,15 +4116,27 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 	if useDict {
 		for i := range records {
 			beforeLen := len(records[i].Value)
-			dictID, dict, records[i].Value = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, records[i].Value)
+			var templateEncoded bool
+			dictID, dict, records[i].Value, templateEncoded = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, records[i].Value)
+			if templateEncoded && capture != nil {
+				if err := capture.captureEncodedTemplatePayload(w.templateStore, records[i].Value); err != nil {
+					return prepared, err
+				}
+			}
 			rawPayloadBytes += len(records[i].Value) - beforeLen
 		}
 	} else {
 		for i := range records {
 			var ignoredDict []byte
-			dictID, ignoredDict, records[i].Value = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, records[i].Value)
+			var templateEncoded bool
+			dictID, ignoredDict, records[i].Value, templateEncoded = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, records[i].Value)
 			if dictID != 0 || len(ignoredDict) != 0 {
-				return nil, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
+				return prepared, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
+			}
+			if templateEncoded && capture != nil {
+				if err := capture.captureEncodedTemplatePayload(w.templateStore, records[i].Value); err != nil {
+					return prepared, err
+				}
 			}
 		}
 		rawPayloadBytes = 0
@@ -4071,24 +4144,26 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 			rawPayloadBytes += len(records[i].Value)
 		}
 	}
-	if capture != nil {
-		for i := range records {
-			if err := capture.captureTemplatePayload(w.templateStore, records[i].Value); err != nil {
-				return nil, err
-			}
-		}
-	}
+	prepared.records = records
+	prepared.dictID = dictID
+	prepared.dict = dict
+	prepared.rawPayloadBytes = rawPayloadBytes
+	return prepared, nil
+}
+
+func (w *rewriteWriter) appendPreparedLeafPageBatch(prepared rewritePreparedLeafBatch, capture *rewriteStableOuterLeafCapture) ([]page.LeafLogPtr, error) {
+	records := prepared.records
 	if err := w.ensureLeafWriterCapture(capture); err != nil {
 		return nil, err
 	}
-	if err := w.maybeRotateLeafForEstimateCapture(rewriteDictFrameRecordLen(rawPayloadBytes, len(records)), capture); err != nil {
+	if err := w.maybeRotateLeafForEstimateCapture(rewriteDictFrameRecordLen(prepared.rawPayloadBytes, len(records)), capture); err != nil {
 		return nil, err
 	}
 	if cap(w.leafBatchValuePtrs) < len(records) {
 		w.leafBatchValuePtrs = make([]page.ValuePtr, len(records))
 	}
 	valuePtrs := w.leafBatchValuePtrs[:len(records)]
-	valuePtrs, _, err := w.leafW.AppendFrameWithStatsInto(dictID, dict, records, valuePtrs)
+	valuePtrs, _, err := w.leafW.AppendFrameWithStatsInto(prepared.dictID, prepared.dict, records, valuePtrs)
 	if err != nil {
 		return nil, err
 	}
@@ -4123,9 +4198,10 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 	dictID := w.leafDictID
 	dict := w.leafDict
 	if w.blockCompression && dictID != 0 && len(dict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
-		dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
-		if capture != nil {
-			if err := capture.captureTemplatePayload(w.templateStore, leafPage); err != nil {
+		var templateEncoded bool
+		dictID, dict, leafPage, templateEncoded = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
+		if templateEncoded && capture != nil {
+			if err := capture.captureEncodedTemplatePayload(w.templateStore, leafPage); err != nil {
 				return page.LeafLogPtr{}, err
 			}
 		}
@@ -4143,12 +4219,13 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 		w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 		return page.LeafLogPtrFromValuePtr(ptr)
 	}
-	dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
+	var templateEncoded bool
+	dictID, dict, leafPage, templateEncoded = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
 	if dictID != 0 || len(dict) != 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
 	}
-	if capture != nil {
-		if err := capture.captureTemplatePayload(w.templateStore, leafPage); err != nil {
+	if templateEncoded && capture != nil {
+		if err := capture.captureEncodedTemplatePayload(w.templateStore, leafPage); err != nil {
 			return page.LeafLogPtr{}, err
 		}
 	}
@@ -4497,29 +4574,30 @@ func (w *rewriteWriter) templateEngineForClass(class rewriteTemplateClass) *temp
 	}
 }
 
-func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dictID uint64, dict []byte, value []byte) (uint64, []byte, []byte) {
+func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dictID uint64, dict []byte, value []byte) (uint64, []byte, []byte, bool) {
 	if w == nil {
-		return dictID, dict, value
+		return dictID, dict, value, false
 	}
 	originalLen := len(value)
 	engine := w.templateEngineForClass(class)
 	switch w.templateMode {
 	case template.TemplateOnly:
 		if engine == nil || w.templateStore == nil {
-			return dictID, dict, value
+			return dictID, dict, value, false
 		}
 		dictID = 0
 		dict = nil
 	case template.TemplatePrepass:
 		if engine == nil || w.templateStore == nil {
-			return dictID, dict, value
+			return dictID, dict, value, false
 		}
 		// Keep dict path active and template-encode first.
 	case template.TemplateOff:
-		return dictID, dict, value
+		return dictID, dict, value, false
 	default:
-		return dictID, dict, value
+		return dictID, dict, value, false
 	}
+	templateEncoded := false
 	w.templateAttempts++
 	w.templateInBytes += int64(originalLen)
 	switch class {
@@ -4532,6 +4610,7 @@ func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dic
 	}
 	if payload, ok := engine.Encode(nil, value, w.templateStore); ok && len(payload) > 0 {
 		value = payload
+		templateEncoded = true
 		w.templateKept++
 		switch class {
 		case rewriteTemplateClassOuterLeaf:
@@ -4547,7 +4626,7 @@ func (w *rewriteWriter) applyTemplateCompression(class rewriteTemplateClass, dic
 		w.templatePointerOutBytes += int64(len(value))
 	}
 	w.templateOutBytes += int64(len(value))
-	return dictID, dict, value
+	return dictID, dict, value, templateEncoded
 }
 
 func parseTemplateReasonSnapshot(snapshot map[string]string) map[string]uint64 {
@@ -4638,7 +4717,7 @@ func (w *rewriteWriter) appendSingleValueWithDictClass(class rewriteTemplateClas
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
-	dictID, dict, value = w.applyTemplateCompression(class, dictID, dict, value)
+	dictID, dict, value, _ = w.applyTemplateCompression(class, dictID, dict, value)
 	if err := w.flushPendingBatches(); err != nil {
 		return page.ValuePtr{}, err
 	}
@@ -4726,7 +4805,7 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
-	dictID, dict, value = w.applyTemplateCompression(class, dictID, dict, value)
+	dictID, dict, value, _ = w.applyTemplateCompression(class, dictID, dict, value)
 	if dictID == 0 || len(dict) == 0 {
 		if w.blockCompression {
 			return w.appendBlockValue(rid, value)

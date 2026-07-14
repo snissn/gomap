@@ -19,8 +19,8 @@ type rewriteStableOuterLeafCapture struct {
 	templateIDs      map[uint64]struct{}
 }
 
-func (capture *rewriteStableOuterLeafCapture) captureTemplatePayload(store templ.Store, payload []byte) error {
-	if capture == nil || !templ.IsEncodedPayload(payload) {
+func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(store templ.Store, payload []byte) error {
+	if capture == nil {
 		return nil
 	}
 	templateID, err := templ.EncodedPayloadTemplateID(payload)
