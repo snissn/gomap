@@ -15,7 +15,7 @@ import (
 )
 
 func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
 
@@ -105,7 +105,7 @@ func TestHTTPL2LargeFiniteEmbeddingsReturnFiniteScore(t *testing.T) {
 }
 
 func TestHTTPDocumentVectorRoundTrip(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
 
@@ -127,7 +127,7 @@ func TestHTTPDocumentVectorRoundTrip(t *testing.T) {
 }
 
 func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
 
@@ -176,7 +176,7 @@ func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
 }
 
 func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
 
@@ -242,7 +242,7 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 }
 
 func TestHTTPBenchmarkVectorSearchBinaryF32LE(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
 

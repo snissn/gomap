@@ -81,7 +81,7 @@ func BenchmarkBenchmarkVectorSearchDecode(b *testing.B) {
 }
 
 func BenchmarkBenchmarkVectorSearchHTTPPredecodedRequest(b *testing.B) {
-	svc, db := newTestService(b)
+	svc, db := newStandaloneVectorTestService(b)
 	b.Cleanup(func() { _ = db.Close() })
 	ctx := b.Context()
 	index := "bench_http_predecoded"
@@ -111,7 +111,7 @@ func BenchmarkBenchmarkVectorSearchHTTPPredecodedRequest(b *testing.B) {
 }
 
 func BenchmarkBenchmarkVectorSearchHTTPHandler(b *testing.B) {
-	svc, db := newTestService(b)
+	svc, db := newStandaloneVectorTestService(b)
 	b.Cleanup(func() { _ = db.Close() })
 	ctx := b.Context()
 	index := "bench_http_handler"

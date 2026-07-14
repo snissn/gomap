@@ -49,7 +49,7 @@ func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
 }
 
 func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
@@ -155,7 +155,7 @@ func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
 }
 
 func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -205,7 +205,7 @@ func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
 }
 
 func TestServiceConcurrentFilterDeleteAndUpsertPreservesReplacement(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -264,7 +264,7 @@ func TestServiceConcurrentFilterDeleteAndUpsertPreservesReplacement(t *testing.T
 }
 
 func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -313,7 +313,7 @@ func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *test
 }
 
 func TestServiceKeywordSearchRankedLexicalResultsAndTieOrder(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
@@ -367,7 +367,7 @@ func TestServiceKeywordSearchRankedLexicalResultsAndTieOrder(t *testing.T) {
 }
 
 func TestServiceHybridSearchTextVectorAndOverlap(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -422,7 +422,7 @@ func TestServiceHybridSearchTextVectorAndOverlap(t *testing.T) {
 }
 
 func TestServiceKeywordHybridFiltersAndMissingIndexesFailClosed(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -602,7 +602,7 @@ func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
 }
 
 func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
@@ -764,7 +764,7 @@ func TestServiceIndexCapabilitiesIncludeScalarU8PerGranuleAlphaRerank2844(t *tes
 }
 
 func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
@@ -799,7 +799,7 @@ func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.
 }
 
 func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
@@ -837,7 +837,7 @@ func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 }
 
 func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	vectorOptions := &BenchmarkVectorIndexOptions{
@@ -925,7 +925,7 @@ func TestServiceBenchmarkResetDeletesCompatibleNativeIndex(t *testing.T) {
 }
 
 func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
-	svc, db := newTestService(t)
+	svc, db := newStandaloneVectorTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "bench", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}})
@@ -1050,14 +1050,19 @@ func searchMetaHasSources(meta map[string]any, sources ...string) bool {
 
 func newTestService(t testing.TB) (*Service, *backenddb.DB) {
 	t.Helper()
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("document service vector publication requires exact relative namespace support")
-	}
 	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	return New(collections.NewCollectionManager(db)), db
+}
+
+func newStandaloneVectorTestService(t testing.TB) (*Service, *backenddb.DB) {
+	t.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("document service vector publication requires exact relative namespace support")
+	}
+	return newTestService(t)
 }
 
 func testBackendOptions(dir string) backenddb.Options {
