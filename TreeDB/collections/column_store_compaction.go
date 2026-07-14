@@ -127,6 +127,7 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		}
 		return stats, err
 	}
+	defer prepared.stableResources.Release()
 	cleanupPrepared := func(baseErr error) error {
 		if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
 			return errors.Join(baseErr, cleanupErr)

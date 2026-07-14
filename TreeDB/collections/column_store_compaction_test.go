@@ -69,6 +69,12 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ColumnStoreCompact: %v", err)
 	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 0 {
+		t.Fatalf("compaction retained %d column asset pins", got)
+	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActiveIdentities(); got != 0 {
+		t.Fatalf("compaction retained %d column asset identities", got)
+	}
 	if !stats.Compacted || stats.PreviousGeneration != beforeView.manifest.Generation || stats.NewGeneration <= stats.PreviousGeneration || stats.RowsCompacted != len(live) || stats.MutationPartsBefore == 0 || stats.MutationPartsAfter != 0 || stats.AssetsPublished == 0 {
 		t.Fatalf("compaction stats=%+v want logical rewrite of latest-visible rows", stats)
 	}
