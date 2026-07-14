@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -39,6 +40,8 @@ type durableRootSelectionV1 struct {
 	Record   rootpublication.DurableRootRecordV1
 	Freelist *freelist.FreelistGenerationV1
 	Manifest *rootpublication.DependencyManifestV1
+	// SlotCommits contains only independently complete recovery generations.
+	SlotCommits [2]uint64
 }
 
 type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) error
@@ -71,12 +74,23 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		}
 		return candidates[i].slot < candidates[j].slot
 	})
+	var chosen *durableRootSelectionV1
 	for _, candidate := range candidates {
 		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest)
 		if err == nil {
-			return selected, nil
+			if chosen == nil {
+				copy := selected
+				chosen = &copy
+			}
+			if chosen != nil {
+				chosen.SlotCommits[candidate.slot] = selected.Meta.CommitSeq
+			}
+			continue
 		}
 		reasons[candidate.slot] = err
+	}
+	if chosen != nil {
+		return *chosen, nil
 	}
 	detail := &NoRecoverableMetaError{SlotReasons: reasons}
 	legacy := true
@@ -170,7 +184,7 @@ func validateDurableRootPageV1(source freelist.PageSource, pageID, totalPages ui
 	if header.PageID != pageID {
 		return errors.New("page identity mismatch")
 	}
-	switch page.PageType(header.Flags) {
+	switch node.NewNode(image).Type() {
 	case page.PageTypeLeaf, page.PageTypeInternal:
 		return nil
 	default:

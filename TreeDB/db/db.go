@@ -172,6 +172,7 @@ type DB struct {
 	writeMu          sync.RWMutex
 	teardownMu       sync.RWMutex // Pins Close-sensitive resources outside writeMu.
 	commitMu         sync.Mutex
+	durablePublishMu sync.Mutex
 	publishPrepareMu sync.RWMutex
 	// valueLogPublicationMu prevents snapshots and RefreshValueLogSet from
 	// observing segments while maintenance is promoting/registering them before
@@ -198,6 +199,7 @@ type DB struct {
 	vacuumPreflushHook            func() error
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
+	durableRoot                   durableRootRuntimeV1
 	entryRevisionFloor            atomic.Uint64
 	commandJournal                *commitlog.CommandJournal
 	conditionalActiveTxnCount     atomic.Int64
@@ -2708,115 +2710,18 @@ func (db *DB) recover() error {
 		if db.readOnly {
 			return errors.New("read-only open requires an existing index with meta pages")
 		}
-		if _, err := p.Alloc(2); err != nil {
-			return err
-		}
-		db.meta = page.MetaPageBody{}
-		db.metaPageID = MetaPage1ID
-
-		rootID, err := p.Alloc(1)
-		if err != nil {
-			return err
-		}
-		data, err := p.GetForWrite(rootID)
-		if err != nil {
-			return err
-		}
-		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		b.SetPageID(rootID)
-		b.Finish()
-
-		db.meta.UserRootPageID = rootID
-
-		// Init System Root
-		sysRootID, err := p.Alloc(1)
-		if err != nil {
-			return err
-		}
-		dataSys, err := p.GetForWrite(sysRootID)
-		if err != nil {
-			return err
-		}
-		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		bSys.SetPageID(sysRootID)
-		bSys.Finish()
-
-		db.meta.SystemRootPageID = sysRootID
-		db.meta.CommitSeq = 0
-
-		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
-			return err
-		}
-		if err := db.writeMeta(MetaPage1ID, db.meta); err != nil {
-			return err
-		}
-		db.metaPageID = MetaPage0ID
-		return nil
+		return db.initializeDurableRootV1(idx)
 	}
 
-	m0, valid0 := db.readMeta(MetaPage0ID)
-	m1, valid1 := db.readMeta(MetaPage1ID)
-
-	type metaCandidate struct {
-		id   uint64
-		meta page.MetaPageBody
+	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1)
+	if err != nil {
+		return err
 	}
-	var candidates []metaCandidate
-	if valid0 {
-		candidates = append(candidates, metaCandidate{id: MetaPage0ID, meta: m0})
+	p.SetPageCount(selected.Record.TotalPages)
+	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+		return fmt.Errorf("enable recovered COW freelist: %w", err)
 	}
-	if valid1 {
-		candidates = append(candidates, metaCandidate{id: MetaPage1ID, meta: m1})
-	}
-	if len(candidates) == 0 {
-		return errors.New("both meta pages corrupted")
-	}
-	if len(candidates) == 2 && candidates[0].meta.CommitSeq < candidates[1].meta.CommitSeq {
-		candidates[0], candidates[1] = candidates[1], candidates[0]
-	}
-
-	var chosen *metaCandidate
-	for i := range candidates {
-		c := &candidates[i]
-
-		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
-			continue
-		}
-		if !db.freelistHeadValid(p, c.meta.FreelistHeadID) {
-			continue
-		}
-
-		chosen = c
-		break
-	}
-	if chosen == nil {
-		return errors.New("no valid meta page")
-	}
-
-	db.meta = chosen.meta
-	db.metaPageID = chosen.id
-
-	if chosen.meta.TotalPages > 0 {
-		p.SetPageCount(chosen.meta.TotalPages)
-	}
-
-	// Update Allocator Head and best-effort seed cheap freelist debt counters used
-	// by background vacuum trigger reports. Keep open behavior tolerant: if the
-	// optional seed walk fails, the trigger treats absent reclaimable counts as
-	// no debt and FragmentationReport can still surface the detailed error.
-	idx.allocator.SetHead(chosen.meta.FreelistHeadID)
-	_ = idx.allocator.RefreshStats(chosen.meta.TotalPages)
-
+	db.installDurableRootSelectionV1(selected)
 	return nil
 }
 
@@ -3031,10 +2936,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		nextMeta.MaxEntryRevision = uint64(opts.maxEntryRevision)
 	}
 
-	targetPageID := uint64(0)
-	if db.metaPageID == 0 {
-		targetPageID = 1
-	}
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 
@@ -3069,69 +2970,28 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		}
 	}
 
-	// 3. Write Meta - No DB Lock
+	// 3. Materialize the COW inventory, sync the exact index identity, write the
+	// alternate durable-meta slot once, and sync that slot. The durable-root
+	// publisher owns the only V1 meta mutation path.
 	t0 := time.Now()
-	var metaPath string
-	if durabilitycut.Enabled() {
-		metaPath = filepath.Join(db.dir, "index.db")
-	}
-	metaOffset := int64(targetPageID) * int64(page.PageSize)
-	if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return post, prePublishErr(err)
-	}
-	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
-		return post, prePublishErr(err)
-	}
-	postMetaWriteErr := func(err error) error {
-		if err == nil {
-			return nil
-		}
-		// The target meta page has been dirtied. Any failure from this point
-		// leaves publication outcome ambiguous until the database is reopened.
-		db.publicationPoisoned.Store(true)
-		return wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
-	}
-	if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return post, postMetaWriteErr(err)
+	var err error
+	nextMeta, err = db.publishDurableRootV1(idx, nextMeta, retired)
+	if err != nil {
+		return post, err
 	}
 	if debugTiming {
 		durMeta = time.Since(t0)
 	}
 
-	// 4. Sync Meta - No DB Lock
-	if sync {
-		t1 := time.Now()
-		var err error
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-			return post, postMetaWriteErr(err)
-		}
-		if db.testFailSyncMeta.Load() {
-			err = errTestSyncMetaFailpoint
-		} else if opts.syncMetaPageOnly {
-			err = idx.pager.SyncPages([]uint64{targetPageID})
-		} else {
-			err = idx.pager.Sync()
-		}
-		if err != nil {
-			return post, postMetaWriteErr(err)
-		}
-		if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-			return post, postMetaWriteErr(err)
-		}
-		if debugTiming {
-			durSync2 = time.Since(t1)
-		}
-	}
-
-	// 5. Update visible state and retire pages.
+	// 4. Update visible state. Page retirement is part of the COW generation
+	// sealed by publishDurableRootV1, never an in-memory graveyard side effect.
 	lockStart = time.Now()
 	db.mu.Lock()
 	watermarkWait += time.Since(lockStart)
 	holdStart = time.Now()
 	db.meta = nextMeta
 	db.advanceEntryRevisionFloor(page.EntryRevision(nextMeta.MaxEntryRevision))
-	db.metaPageID = targetPageID
-	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
+	db.metaPageID = db.durableRoot.slot
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
