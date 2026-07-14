@@ -347,18 +347,30 @@ func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, se
 		return nil, fmt.Errorf("%w: external-RID physical closure count=%d digest=%x does not satisfy expected count=%d digest=%x", rootpublication.ErrUnresolvedResource, actualFence.Count, actualFence.Digest, fence.Count, fence.Digest)
 	}
 
+	files := make([]*File, len(ordered))
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, child := range ordered {
+	for i, child := range ordered {
 		file := m.files[child.FileID]
 		if file == nil {
+			m.mu.RUnlock()
 			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, &fileNotFoundError{id: child.FileID})
 		}
-		if err := validateStableExternalRIDMembership(file, child); err != nil {
+		files[i] = file
+	}
+	m.mu.RUnlock()
+	for i, child := range ordered {
+		if err := validateStableExternalRIDMembership(files[i], child); err != nil {
 			return nil, err
 		}
 	}
 
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i, child := range ordered {
+		if m.files[child.FileID] != files[i] {
+			return nil, fmt.Errorf("%w: external-RID value-log child %d changed during membership validation", rootpublication.ErrResourceConflict, child.FileID)
+		}
+	}
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALExternalRIDFence)
 	for _, child := range ordered {
 		token, err := m.stableResourceTokenLocked(child.FileID, StableResourceRegistration{

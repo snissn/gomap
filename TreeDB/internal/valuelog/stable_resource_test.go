@@ -602,6 +602,37 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 		t.Fatalf("external-RID pins after release=%d want 0", got)
 	}
 
+	t.Run("current-writable barrier runs outside manager lock", func(t *testing.T) {
+		if err := manager.PromoteCurrentWritable(fileIDs[0]); err != nil {
+			t.Fatal(err)
+		}
+		manager.mu.RLock()
+		managed := manager.files[fileIDs[0]]
+		manager.mu.RUnlock()
+		managed.verifiedFileSize.Store(0)
+		barrierCalls := 0
+		manager.SetCurrentWritableReadBarrier(func(uint32) error {
+			if !manager.mu.TryLock() {
+				return errors.New("manager lock held across current-writable barrier")
+			}
+			manager.mu.Unlock()
+			barrierCalls++
+			return nil
+		})
+		defer manager.SetCurrentWritableReadBarrier(nil)
+		resources, err := manager.CaptureStableExternalRIDFence(fence, children)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resources.Release()
+		if barrierCalls == 0 {
+			t.Fatal("current-writable membership validation did not invoke barrier")
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("external-RID pins after current-writable capture=%d want 0", got)
+		}
+	})
+
 	t.Run("RID assigned to wrong manager child", func(t *testing.T) {
 		misassigned := append([]StableExternalRIDSegment(nil), children...)
 		misassigned[0].RIDs = []uint64{9, 4, 9}
