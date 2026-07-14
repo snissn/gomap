@@ -2607,6 +2607,7 @@ func (db *DB) closeAfterHooks() error {
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
+	db.releaseDurableRootResourcesV1()
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
@@ -2975,7 +2976,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// publisher owns the only V1 meta mutation path.
 	t0 := time.Now()
 	var err error
-	nextMeta, err = db.publishDurableRootV1(idx, nextMeta, retired)
+	nextMeta, err = db.publishDurableRootV1(idx, nextMeta, retired, vlogRefDelta)
 	if err != nil {
 		return post, err
 	}

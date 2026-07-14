@@ -42,9 +42,13 @@ type durableRootSelectionV1 struct {
 	Manifest *rootpublication.DependencyManifestV1
 	// SlotCommits contains only independently complete recovery generations.
 	SlotCommits [2]uint64
+	// SlotResources retains the exact external-resource closure for every
+	// independently complete slot, including the older fallback generation.
+	SlotResources [2]*rootpublication.StableResourceSet
+	resources     *rootpublication.StableResourceSet
 }
 
-type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) error
+type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error)
 
 type durableMetaCandidateV1 struct {
 	slot uint64
@@ -75,9 +79,12 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		return candidates[i].slot < candidates[j].slot
 	})
 	var chosen *durableRootSelectionV1
+	var slotResources [2]*rootpublication.StableResourceSet
 	for _, candidate := range candidates {
 		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest)
 		if err == nil {
+			slotResources[candidate.slot] = selected.resources
+			selected.resources = nil
 			if chosen == nil {
 				copy := selected
 				chosen = &copy
@@ -90,7 +97,11 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		reasons[candidate.slot] = err
 	}
 	if chosen != nil {
+		chosen.SlotResources = slotResources
 		return *chosen, nil
+	}
+	for _, resources := range slotResources {
+		resources.Release()
 	}
 	detail := &NoRecoverableMetaError{SlotReasons: reasons}
 	legacy := true
@@ -155,18 +166,27 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	if err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("dependency manifest: %w", err)
 	}
+	var resources *rootpublication.StableResourceSet
 	if validateManifest != nil {
-		if err := validateManifest(manifest); err != nil {
+		resources, err = validateManifest(manifest)
+		if err != nil {
 			return durableRootSelectionV1{}, fmt.Errorf("dependency manifest: %w", err)
 		}
 	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			resources.Release()
+		}
+	}()
 	if err := validateDurableRootPageV1(source, record.UserRootPageID, record.TotalPages); err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("user root page: %w", err)
 	}
 	if err := validateDurableRootPageV1(source, record.SystemRootPageID, record.TotalPages); err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("system root page: %w", err)
 	}
-	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest}, nil
+	accepted = true
+	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest, resources: resources}, nil
 }
 
 func validateDurableRootPageV1(source freelist.PageSource, pageID, totalPages uint64) error {

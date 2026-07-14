@@ -1,16 +1,21 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -26,11 +31,13 @@ func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 }
 
 type durableRootRuntimeV1 struct {
-	meta       page.DurableMetaV1
-	record     rootpublication.DurableRootRecordV1
-	manifest   *rootpublication.DependencyManifestV1
-	slot       uint64
-	slotCommit [2]uint64
+	meta               page.DurableMetaV1
+	record             rootpublication.DurableRootRecordV1
+	manifest           *rootpublication.DependencyManifestV1
+	slot               uint64
+	slotCommit         [2]uint64
+	slotResources      [2]*rootpublication.StableResourceSet
+	ambiguousResources []*rootpublication.StableResourceSet
 }
 
 func durableRootCandidateIDV1(current durableRootRuntimeV1, next page.MetaPageBody) freelist.CandidateIDV1 {
@@ -62,11 +69,184 @@ func oldestRecoverableSlotCommitV1(commits [2]uint64) (uint64, error) {
 	return oldest, nil
 }
 
+func durableManifestFromResourcesV1(resources *rootpublication.StableResourceSet) (*rootpublication.DependencyManifestV1, error) {
+	if resources == nil {
+		return rootpublication.NewDependencyManifestV1(nil)
+	}
+	descriptors := resources.Descriptors()
+	entries := make([]rootpublication.DependencyManifestEntryV1, len(descriptors))
+	for i, descriptor := range descriptors {
+		entries[i] = rootpublication.DependencyManifestEntryV1{
+			Kind: descriptor.Kind(), LogicalLane: descriptor.LogicalLane(),
+			ResourceID: descriptor.ResourceID(), DiagnosticPath: descriptor.DiagnosticPath(),
+			Identity: descriptor.Identity(), Generation: descriptor.Generation(),
+			Frontier: descriptor.Frontier(), Reachability: descriptor.ReachabilityFields(),
+		}
+	}
+	return rootpublication.NewDependencyManifestV1(entries)
+}
+
+func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
+	tracker := db.valueLogRefTracker
+	if tracker == nil {
+		return nil, false, nil
+	}
+	tracker.mu.RLock()
+	if !tracker.valid || tracker.commitSeq != db.durableRoot.record.CommitSeq {
+		tracker.mu.RUnlock()
+		return nil, false, nil
+	}
+	counts := make(map[uint32]uint64, len(tracker.counts))
+	for fileID, count := range tracker.counts {
+		counts[fileID] = count
+	}
+	tracker.mu.RUnlock()
+
+	if delta == nil {
+		if next.UserRootPageID != db.durableRoot.record.UserRootPageID || next.SystemRootPageID != db.durableRoot.record.SystemRootPageID {
+			return nil, false, nil
+		}
+	} else if err := delta.forEachChange(func(fileID uint32, change int64) error {
+		current := counts[fileID]
+		switch {
+		case change > 0:
+			if uint64(change) > ^uint64(0)-current {
+				return fmt.Errorf("value-log dependency count overflow for file %d", fileID)
+			}
+			counts[fileID] = current + uint64(change)
+		case change < 0:
+			decrement := uint64(-change)
+			if decrement > current {
+				return fmt.Errorf("value-log dependency count underflow for file %d", fileID)
+			}
+			if decrement == current {
+				delete(counts, fileID)
+			} else {
+				counts[fileID] = current - decrement
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, false, err
+	}
+
+	references := make(map[uint32]struct{}, len(counts))
+	for fileID, count := range counts {
+		if count != 0 {
+			references[fileID] = struct{}{}
+		}
+	}
+	return references, true, nil
+}
+
+func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPageBody) (map[uint32]struct{}, error) {
+	snapshot := db.AcquireSnapshot()
+	if snapshot == nil || snapshot.state == nil {
+		if snapshot != nil {
+			_ = snapshot.Close()
+		}
+		return nil, errors.New("capture candidate dependency snapshot")
+	}
+	if snapshot.idx != idx {
+		_ = snapshot.Close()
+		return nil, errors.New("candidate dependency index changed")
+	}
+	candidateState := *snapshot.state
+	candidateState.CommitSeq = next.CommitSeq
+	candidateState.RootPageID = next.UserRootPageID
+	candidateState.SystemRootPageID = next.SystemRootPageID
+	candidateState.AppliedCommandLSN = next.AppliedCommandLSN
+	candidateState.MaxEntryRevision = page.EntryRevision(next.MaxEntryRevision)
+	snapshot.state = &candidateState
+	result, scanErr := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
+		Collectors: maintenanceReachabilityValueLogRefCounts,
+	})
+	closeErr := snapshot.Close()
+	if scanErr != nil || closeErr != nil {
+		return nil, errors.Join(scanErr, closeErr)
+	}
+	return result.valueLogReferencedSegments, nil
+}
+
+func durableDiagnosticPathV1(root, path string) (string, error) {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", err
+	}
+	relative = filepath.Clean(relative)
+	if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("resource path %q is outside database root", path)
+	}
+	return filepath.ToSlash(relative), nil
+}
+
+func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta) (*rootpublication.StableResourceSet, error) {
+	if db.valueLogManager == nil {
+		return nil, nil
+	}
+	references, projected, err := db.projectedValueLogReferencesV1(next, delta)
+	if err != nil {
+		return nil, err
+	}
+	if !projected {
+		references, err = db.scanCandidateValueLogReferencesV1(idx, next)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(references) == 0 {
+		return nil, nil
+	}
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	fileIDs := make([]uint32, 0, len(references))
+	for fileID := range references {
+		fileIDs = append(fileIDs, fileID)
+	}
+	sort.Slice(fileIDs, func(i, j int) bool { return fileIDs[i] < fileIDs[j] })
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+	abandon := true
+	defer func() {
+		if abandon {
+			builder.Abandon()
+		}
+	}()
+	for _, fileID := range fileIDs {
+		file := set.Files[fileID]
+		if file == nil || file.IsZombie.Load() || file.File == nil {
+			return nil, fmt.Errorf("%w: value-log file %d is not registered", rootpublication.ErrUnresolvedResource, fileID)
+		}
+		diagnosticPath, err := durableDiagnosticPathV1(db.dir, file.Path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: value-log file %d: %v", rootpublication.ErrUnresolvedResource, fileID, err)
+		}
+		token, err := db.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
+			Kind: rootpublication.ResourceValueLog, LogicalLane: "db/value-log",
+			Generation: uint64(fileID), DiagnosticPath: diagnosticPath,
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			return nil, err
+		}
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		return nil, err
+	}
+	abandon = false
+	return resources, nil
+}
+
 // publishDurableRootV1 is the sole V1 meta mutator. It materializes the COW
 // inventory and root record, persists the exact captured index identity, then
 // writes the alternate meta slot once. In-memory authority advances only after
 // that slot is durably synchronized.
-func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retired []uint64) (page.MetaPageBody, error) {
+func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (page.MetaPageBody, error) {
 	if db == nil || idx == nil || idx.pager == nil || idx.allocator == nil {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("missing durable-root index"), true)
 	}
@@ -92,9 +272,17 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("retire COW pages: %w", err), true)
 	}
 
-	// External producers are added to this deterministic inventory below; the
-	// index itself is represented by the enclosing root/meta/COW record.
-	manifest, err := rootpublication.NewDependencyManifestV1(nil)
+	resources, err := db.captureDurableValueLogResourcesV1(idx, next, vlogRefDelta)
+	if err != nil {
+		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
+	}
+	releaseResources := resources != nil
+	defer func() {
+		if releaseResources {
+			resources.Release()
+		}
+	}()
+	manifest, err := durableManifestFromResourcesV1(resources)
 	if err != nil {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
 	}
@@ -164,6 +352,11 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture stable index resource: %w", err), true)
 	}
 	defer token.Release()
+	if resources != nil {
+		if err := resources.SyncThrough(); err != nil {
+			return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("sync durable-root external dependencies: %w", err), true)
+		}
+	}
 	if err := token.SyncThrough(); err != nil {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("sync durable-root dependencies: %w", err), true)
 	}
@@ -187,6 +380,15 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
 	}
 	postMetaError := func(err error) (page.MetaPageBody, error) {
+		// Once the target meta page may have changed, either its old or new
+		// generation can become authoritative after a later whole-file sync.
+		// Retain the candidate closure in addition to both installed slot
+		// closures until recovery resolves that ambiguity.
+		if resources != nil {
+			current.ambiguousResources = append(current.ambiguousResources, resources)
+			db.durableRoot = current
+			releaseResources = false
+		}
 		db.publicationPoisoned.Store(true)
 		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
 	}
@@ -215,7 +417,11 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 	current.manifest = manifest
 	current.slot = target
 	current.slotCommit[target] = next.CommitSeq
+	previousResources := current.slotResources[target]
+	current.slotResources[target] = resources
 	db.durableRoot = current
+	releaseResources = false
+	previousResources.Release()
 	return next, nil
 }
 
@@ -339,7 +545,7 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 	db.durableRoot = durableRootRuntimeV1{
 		meta: selected.Meta, record: selected.Record, manifest: selected.Manifest,
-		slot: selected.Slot, slotCommit: selected.SlotCommits,
+		slot: selected.Slot, slotCommit: selected.SlotCommits, slotResources: selected.SlotResources,
 	}
 	db.meta = page.MetaPageBody{
 		CommitSeq: selected.Record.CommitSeq, UserRootPageID: selected.Record.UserRootPageID,
@@ -350,12 +556,88 @@ func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 	db.metaPageID = selected.Slot
 }
 
-func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.DependencyManifestV1) error {
+func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error) {
 	if manifest == nil {
-		return rootpublication.ErrDependencyManifestFormat
+		return nil, rootpublication.ErrDependencyManifestFormat
 	}
-	// Stable external-resource reopening is added by the publisher alongside
-	// manifest population. An empty manifest is the complete inventory for a
-	// fresh index without reachable external dependencies.
-	return nil
+	entries := manifest.Entries()
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if db == nil || db.valueLogManager == nil {
+		return nil, fmt.Errorf("%w: value-log manager unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	builder := rootpublication.NewStableResourceSetBuilder()
+	abandon := true
+	defer func() {
+		if abandon {
+			builder.Abandon()
+		}
+	}()
+	for _, entry := range entries {
+		if entry.Kind != rootpublication.ResourceValueLog {
+			return nil, fmt.Errorf("%w: unsupported durable dependency kind %q", rootpublication.ErrUnresolvedResource, entry.Kind)
+		}
+		fileID64, err := strconv.ParseUint(entry.ResourceID, 10, 32)
+		if err != nil || fileID64 == 0 || entry.Generation != fileID64 || entry.LogicalLane != "db/value-log" {
+			return nil, fmt.Errorf("%w: invalid value-log resource identity %q/%d", rootpublication.ErrUnresolvedResource, entry.ResourceID, entry.Generation)
+		}
+		if len(entry.Reachability) != 1 || entry.Reachability[0] != rootpublication.ReachabilityValueLogPointer {
+			return nil, fmt.Errorf("%w: value-log resource %q has invalid reachability", rootpublication.ErrUnresolvedResource, entry.ResourceID)
+		}
+		fileID := uint32(fileID64)
+		file := set.Files[fileID]
+		if file == nil || file.File == nil || file.IsZombie.Load() {
+			return nil, fmt.Errorf("%w: value-log file %d is missing", rootpublication.ErrUnresolvedResource, fileID)
+		}
+		diagnosticPath, err := durableDiagnosticPathV1(db.dir, file.Path)
+		if err != nil || diagnosticPath != entry.DiagnosticPath {
+			return nil, fmt.Errorf("%w: value-log file %d path differs from manifest", rootpublication.ErrResourceConflict, fileID)
+		}
+		token, err := db.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
+			Kind: rootpublication.ResourceValueLog, LogicalLane: entry.LogicalLane,
+			Generation: entry.Generation, DiagnosticPath: entry.DiagnosticPath,
+			Reachability: rootpublication.ReachabilityValueLogPointer,
+		})
+		if err != nil {
+			return nil, err
+		}
+		identity := token.Identity()
+		frontier := token.Frontier()
+		if identity.Generation != entry.Identity.Generation || !rootpublication.SamePhysicalIdentity(identity, entry.Identity) {
+			token.Release()
+			return nil, fmt.Errorf("%w: value-log file %d identity differs from manifest", rootpublication.ErrResourceConflict, fileID)
+		}
+		if frontier.Bytes < entry.Frontier.Bytes {
+			token.Release()
+			return nil, fmt.Errorf("%w: value-log file %d frontier %d is below required %d", rootpublication.ErrFrontierBeyondResource, fileID, frontier.Bytes, entry.Frontier.Bytes)
+		}
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			return nil, err
+		}
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		return nil, err
+	}
+	abandon = false
+	return resources, nil
+}
+
+func (db *DB) releaseDurableRootResourcesV1() {
+	if db == nil {
+		return
+	}
+	db.durablePublishMu.Lock()
+	resources := append([]*rootpublication.StableResourceSet(nil), db.durableRoot.slotResources[:]...)
+	resources = append(resources, db.durableRoot.ambiguousResources...)
+	db.durableRoot.slotResources = [2]*rootpublication.StableResourceSet{}
+	db.durableRoot.ambiguousResources = nil
+	db.durablePublishMu.Unlock()
+	for _, set := range resources {
+		set.Release()
+	}
 }

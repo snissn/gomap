@@ -2,8 +2,11 @@ package db
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -83,5 +86,156 @@ func TestDurableRootPublicationAlternatesIndependentSlotsAndReopens(t *testing.T
 		if string(got) != want {
 			t.Fatalf("Get(%q)=%q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestDurableRootManifestPinsValueLogIdentityAndFallsBackWhenNewestDependencyIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 10_000, 1, func(int) []byte {
+		value := make([]byte, 4<<10)
+		for i := range value {
+			value[i] = byte(i)
+		}
+		return value
+	})
+	if err := database.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("external"), ptrs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if database.durableRoot.slot != MetaPage1ID || database.durableRoot.manifest == nil {
+		t.Fatalf("durable root slot/manifest=(%d,%v), want slot 1 and manifest", database.durableRoot.slot, database.durableRoot.manifest)
+	}
+	entries := database.durableRoot.manifest.Entries()
+	if len(entries) != 1 || entries[0].Kind != rootpublication.ResourceValueLog {
+		t.Fatalf("manifest entries=%+v, want one value-log dependency", entries)
+	}
+	if entries[0].Frontier.Bytes == 0 || entries[0].Identity.Generation != entries[0].Generation {
+		t.Fatalf("manifest value-log identity/frontier=%+v/%+v", entries[0].Identity, entries[0].Frontier)
+	}
+	resources := database.durableRoot.slotResources[MetaPage1ID]
+	if resources == nil || resources.Len() != 1 {
+		t.Fatalf("slot 1 resource closure=%v len=%d, want one retained dependency", resources, resources.Len())
+	}
+	registry := database.valueLogIdentityPins
+	if registry.ActivePins() == 0 {
+		t.Fatal("published durable slot did not retain its value-log identity pin")
+	}
+	dependencyPath := filepath.Join(dir, filepath.FromSlash(entries[0].DiagnosticPath))
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("durable slot pins after close=%d, want 0", got)
+	}
+	if err := os.Rename(dependencyPath, dependencyPath+".missing"); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.metaPageID != MetaPage0ID || reopened.currentCommitSeq() != 1 {
+		t.Fatalf("fallback slot/commit=(%d,%d), want (0,1)", reopened.metaPageID, reopened.currentCommitSeq())
+	}
+	found, err := reopened.Has([]byte("external"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("fallback root unexpectedly contains value-log-backed key")
+	}
+}
+
+func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *testing.T) {
+	dir := t.TempDir()
+	options := Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}}
+	database, err := Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 20_000, 1, func(int) []byte {
+		return []byte("durable external value")
+	})
+	if err := database.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("external"), ptrs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetSync([]byte("inline-1"), []byte{}); err != nil {
+		t.Fatal(err)
+	}
+	for slot, resources := range database.durableRoot.slotResources {
+		if resources == nil || resources.Len() != 1 {
+			t.Fatalf("published slot %d closure=%v len=%d, want one dependency", slot, resources, resources.Len())
+		}
+	}
+	registry := database.valueLogIdentityPins
+	if got := registry.ActivePins(); got != 2 {
+		t.Fatalf("published slot pins=%d, want exactly 2", got)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("published slot pins after close=%d, want 0", got)
+	}
+
+	reopened, err := Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedRegistry := reopened.valueLogIdentityPins
+	for slot, resources := range reopened.durableRoot.slotResources {
+		if resources == nil || resources.Len() != 1 {
+			t.Fatalf("recovered slot %d closure=%v len=%d, want one dependency", slot, resources, resources.Len())
+		}
+	}
+	if got := reopenedRegistry.ActivePins(); got != 2 {
+		t.Fatalf("recovered slot pins=%d, want exactly 2", got)
+	}
+	if err := reopened.SetSync([]byte("inline-2"), []byte{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopenedRegistry.ActivePins(); got != 2 {
+		t.Fatalf("slot pins after target replacement=%d, want exactly 2", got)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := reopenedRegistry.ActivePins(); got != 0 {
+		t.Fatalf("recovered slot pins after close=%d, want 0", got)
 	}
 }
