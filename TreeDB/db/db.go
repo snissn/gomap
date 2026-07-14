@@ -88,6 +88,7 @@ type snapshotView struct {
 type DB struct {
 	valueLogManager                *valuelog.Manager
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
+	columnAssetIdentityPins        *rootpublication.IdentityPinRegistry
 	snapshotViewRO                 atomic.Pointer[snapshotView]
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
 	snapshotAcquireEpoch           atomic.Uint64
@@ -1880,6 +1881,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
+	columnAssetIdentityPins := rootpublication.NewIdentityPinRegistry()
 	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		p.Close()
@@ -1914,6 +1916,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	db := &DB{
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,
+		columnAssetIdentityPins:        columnAssetIdentityPins,
 		valueLogRefTracker:             newValueLogRefTrackerForOptions(opts),
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,

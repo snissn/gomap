@@ -146,6 +146,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
+	defer func() { plan.releaseStableResources() }()
 	var updatedMeta CollectionMeta
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -244,6 +245,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
+	defer func() { plan.releaseStableResources() }()
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
@@ -670,6 +672,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				retErr = errors.Join(retErr, cleanupErr)
 			}
 		}
+		if retErr != nil {
+			prepared.stableResources.Release()
+			prepared.stableResources = nil
+		}
 	}()
 	trackCleanupAsset := func(ref ColumnAssetRef) {
 		cleanupAssets = append(cleanupAssets, ColumnPreparedAsset{Ref: ref})
@@ -744,7 +750,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendSyncEpochCount int
 		if needsAppender {
 			appendStart := time.Now()
-			session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
+			session = newColumnPhysicalAssetAppendSessionWithStableResources(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.ColumnAssetIdentityPinRegistry())
 			appendOpenDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
@@ -853,10 +859,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		if session != nil {
 			appendStart := time.Now()
-			closeStats, err := session.close()
+			closeStats, stableResources, err := session.closeWithStableResources()
 			if err != nil {
 				return err
 			}
+			prepared.stableResources = stableResources
 			closed = true
 			appendCloseDuration += time.Since(appendStart)
 			appendFileSyncDuration += closeStats.FileSync

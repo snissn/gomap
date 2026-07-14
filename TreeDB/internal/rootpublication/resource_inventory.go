@@ -72,7 +72,7 @@ var canonicalReachabilityRequirements = []struct {
 	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
 	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
 	{ReachabilityTypedColumnCode, ResourceTypedColumnAsset, "authoritative", StableProducerColumnAsset},
-	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "authoritative", StableProducerColumnAsset},
+	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "declared-authoritative-production-pending", StableProducerColumnAsset},
 	{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "authoritative-transitive", StableProducerColumnAsset},
 	{ReachabilityLegacyVectorSnapshot, ResourceLegacyVectorSnapshot, "authoritative-legacy", StableProducerLegacyVector},
 	{ReachabilityCommandWALActive, ResourceCommandWAL, "authoritative", StableProducerCommandWAL},
@@ -112,7 +112,7 @@ var stableResourceInventory = []StableResourceInventoryRow{
 	{ReachabilityTypedColumnMultipart, ResourceTypedColumnAsset, "TreeDB/collections/column_asset_manager.go; TreeDB/collections/typed_column_publication.go", "pinned tcs1_part_image/tcs1_typed_column_part identity", "asset offset/length/checksum", "segment create/rotation token", "typed-column child builder", "TreeDB/collections/column_physical_asset.go; TreeDB/internal/typedcolumn", "column asset GC/rewrite/reachability", "authoritative"},
 	{ReachabilityTypedColumnValue, ResourceTypedColumnAsset, "TreeDB/collections/column_asset_manager.go", "pinned tcs1_int64_values/tcs1_aggregate_metadata identity", "asset offset/length/checksum", "segment create/rotation token", "typed-column child builder", "typed-column readers and physical checksum validator", "column asset GC/rewrite/reachability", "authoritative"},
 	{ReachabilityTypedColumnCode, ResourceTypedColumnAsset, "TreeDB/collections/column_asset_manager.go", "pinned tcs1_dictionary_codes identity", "asset offset/length/checksum", "segment create/rotation token", "typed-column child builder", "typed-column readers and physical checksum validator", "column asset GC/rewrite/reachability", "authoritative"},
-	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "TreeDB/collections/column_hnsw_search_pack_writer.go; TreeDB/collections/column_asset_manager.go", "pinned tcs1_hnsw_search_pack identity", "pack checksum/base identity", "segment create/rotation token", "HNSW child builder", "TreeDB/collections/column_hnsw_search_pack_reader.go", "column asset GC/rewrite/reachability", "authoritative"},
+	{ReachabilityHNSWSearchPack, ResourceVectorGraphPack, "TreeDB/collections/column_hnsw_search_pack_writer.go; TreeDB/collections/column_asset_manager.go", "declared pinned tcs1_hnsw_search_pack identity; production capture pending", "pack checksum/base identity", "segment create/rotation token pending on standalone writer", "HNSW child builder pending #3677 follow-up", "TreeDB/collections/column_hnsw_search_pack_reader.go", "column asset GC/rewrite/reachability uses the shared deletion gate", "declared-authoritative-production-pending"},
 	{ReachabilityVectorGraphPack, ResourceVectorGraphPack, "TreeDB/collections/column_vector_graph_typed_column.go; TreeDB/collections/column_vector_graph_manifest.go; TreeDB/collections/column_vector_index_state_adjacency.go", "transitive pinned graph part identities", "graph manifest and part checksums", "segment create/rotation tokens", "vector graph child builder", "TreeDB/collections/column_vector_index_state_*; graph asset readers", "column asset GC/rewrite/reachability", "authoritative-transitive"},
 	{ReachabilityLegacyVectorSnapshot, ResourceLegacyVectorSnapshot, "TreeDB/collections/vector_index_persist.go; TreeDB/collections/vector_index_rebuild.go", "pinned epoch meta/nodes/edges/tombstones/docmap identities", "per-file SHA-256 and size + manifest digest", "epoch directory and manifest rename tokens", "legacy vector snapshot builder", "TreeDB/collections/vector_index_persist.go load validation", "TreeDB/collections/vector_index_persist.go old-epoch cleanup", "authoritative-legacy"},
 	{ReachabilityCommandWALActive, ResourceCommandWAL, "TreeDB/internal/commitlog/writer.go; TreeDB/internal/commitlog/journal_owner.go; TreeDB/db/command_wal_raw.go", "pinned active segment handle + segment generation", "required command-frame byte/LSN frontier", "active segment creation token", "command-WAL frame builder before append debt", "TreeDB/internal/commitlog/reader.go; TreeDB/db/wal_recovery.go", "TreeDB/db/command_wal_raw.go; TreeDB/db/command_wal_publish.go", "authoritative"},
@@ -203,7 +203,7 @@ func registerableClassification(classification string) bool {
 	switch classification {
 	case "adjacent-root-publication", "adjacent-freelist-publication",
 		"explicit-legacy-exclusion", "explicit-separate-domain",
-		"rebuildable-non-authoritative":
+		"rebuildable-non-authoritative", "declared-authoritative-production-pending":
 		return false
 	default:
 		return true

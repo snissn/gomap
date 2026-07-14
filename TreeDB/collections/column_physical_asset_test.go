@@ -16,6 +16,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -2308,6 +2309,39 @@ func TestColumnPhysicalAssetAppendSessionBatchesMixedTargets3151(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetAppendSessionAbandonsPinsWhenStableFreezeFails3677(t *testing.T) {
+	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
+	registry := rootpublication.NewIdentityPinRegistry()
+	session := newColumnPhysicalAssetAppendSessionWithStableResources(
+		backenddb.ColumnAssetRootDirPath(t.TempDir()),
+		cfg,
+		registry,
+	)
+	// Require a field that the column asset cannot cover so Freeze fails after
+	// the captured token has transferred into the session builder.
+	session.stableBuilder = rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityVectorGraphPack)
+	defer func() { _ = session.abort() }()
+	if _, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+		payload:    []byte("row-asset"),
+		kind:       ColumnAssetKindTCS1PartImage,
+		generation: 1,
+		partID:     columnPhysicalRowAssetPartID,
+	}}); err != nil {
+		t.Fatalf("appendKinds: %v", err)
+	}
+	_, resources, err := session.closeWithStableResources()
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("closeWithStableResources error=%v want ErrUnresolvedResource", err)
+	}
+	if resources != nil {
+		resources.Release()
+		t.Fatal("failed stable freeze returned resources")
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("failed stable freeze retained %d identity pins", got)
+	}
+}
+
 func TestColumnPhysicalAssetAppendSessionAbortRetainsNewUnreachableTargets3151(t *testing.T) {
 	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
@@ -2392,6 +2426,64 @@ func TestColumnPhysicalAssetSegmentAppendWriterSyncsDirectoryOnlyForCreate3150(t
 	}
 	if err := second.close(); err != nil {
 		t.Fatalf("second close: %v", err)
+	}
+}
+
+func TestColumnPhysicalAssetStableAppendSessionCachesCreateNamespaceSync3677(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	registry := rootpublication.NewIdentityPinRegistry()
+	appendOnce := func(partID uint64) (columnPhysicalAssetSegmentCloseStats, bool) {
+		t.Helper()
+		session := newColumnPhysicalAssetAppendSessionWithStableResources(root, *normalized, registry)
+		if _, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+			payload:    []byte("row-asset"),
+			kind:       ColumnAssetKindTCS1PartImage,
+			generation: 7,
+			partID:     partID,
+		}}); err != nil {
+			t.Fatalf("appendKinds part %d: %v", partID, err)
+		}
+		structuralSync := session.active.syncDirOnClose
+		stats, resources, err := session.closeWithStableResources()
+		if err != nil {
+			t.Fatalf("closeWithStableResources part %d: %v", partID, err)
+		}
+		resources.Release()
+		return stats, structuralSync
+	}
+
+	firstStats, firstStructuralSync := appendOnce(1)
+	if !firstStructuralSync {
+		t.Fatal("new stable segment append did not require namespace stabilization")
+	}
+	assetPath, err := columnAssetSegmentPath(root, ColumnAssetRef{
+		Namespace: normalized.AssetManager.Namespace,
+		FileID:    columnAssetM12ASegmentFileID,
+	})
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if !columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatal("stable namespace capture did not mark segment directory sync known")
+	}
+	if firstStats.SyncEpochCount != 1 || firstStats.FileSyncCount != 1 {
+		t.Fatalf("first stable close stats=%+v want one file sync epoch", firstStats)
+	}
+
+	secondStats, secondStructuralSync := appendOnce(2)
+	if secondStructuralSync {
+		t.Fatal("existing stable segment append repeated structural namespace sync")
+	}
+	if secondStats.DirSync != 0 || secondStats.SyncEpochCount != 1 || secondStats.FileSyncCount != 1 {
+		t.Fatalf("second stable close stats=%+v want file-only sync epoch", secondStats)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("released stable sessions retained %d identity pins", got)
 	}
 }
 

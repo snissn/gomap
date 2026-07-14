@@ -13,6 +13,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -393,6 +394,9 @@ func TestColumnStoreCommandWALInsertPublishesManifestM10B(t *testing.T) {
 	}
 	if len(insertedIDs) != 2 {
 		t.Fatalf("InsertBatch inserted=%d, want 2", len(insertedIDs))
+	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 0 {
+		t.Fatalf("successful command publish retained %d column asset pins", got)
 	}
 	insertLSN := d.State().AppliedCommandLSN
 	if insertLSN == 0 || insertLSN <= baseLSN {
@@ -1502,6 +1506,49 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 		prepared.AssetMetrics.DictionarySidecarCount != 1 || prepared.AssetMetrics.Int64SidecarCount != 1 ||
 		prepared.AssetMetrics.AggregateMetadataCount != 2 {
 		t.Fatalf("asset metrics=%+v want row=1 typed=1 dict=1 int64=1 aggregate=2", prepared.AssetMetrics)
+	}
+	if prepared.stableResources == nil {
+		t.Fatal("production column prepare did not retain stable resources")
+	}
+	defer prepared.stableResources.Release()
+	if got := prepared.stableResources.Len(); got != 1 {
+		t.Fatalf("coalesced stable resources=%d want one shared .tca identity", got)
+	}
+	descriptors := prepared.stableResources.Descriptors()
+	if got := descriptors[0].Frontier().Bytes; got != uint64(prepared.Assets[len(prepared.Assets)-1].Ref.Offset+prepared.Assets[len(prepared.Assets)-1].Ref.Length) {
+		t.Fatalf("stable frontier=%d want final prepared ref end", got)
+	}
+	fields := descriptors[0].ReachabilityFields()
+	wantFields := map[rootpublication.ReachabilityField]bool{
+		rootpublication.ReachabilityTypedColumnMultipart: true,
+		rootpublication.ReachabilityTypedColumnValue:     true,
+		rootpublication.ReachabilityTypedColumnCode:      true,
+	}
+	for _, field := range fields {
+		delete(wantFields, field)
+	}
+	if len(wantFields) != 0 {
+		t.Fatalf("stable resource missing production reachability fields: %v", wantFields)
+	}
+	if got := len(descriptors[0].LogicalObligations()); got != len(want) {
+		t.Fatalf("logical stable obligations=%d want %d", got, len(want))
+	}
+	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 1 {
+		t.Fatalf("coalesced physical stable pins=%d want 1", got)
+	}
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), prepared.Assets[0].Ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if _, err := deleteColumnAssetSegmentStable(segmentPath, d.ColumnAssetIdentityPinRegistry(), removeStableColumnAssetChild); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("delete pinned production segment error=%v want ErrResourcePinned", err)
+	}
+	prepared.stableResources.Release()
+	if got := d.ColumnAssetIdentityPinRegistry().ActivePins(); got != 0 {
+		t.Fatalf("physical pins after release=%d want 0", got)
+	}
+	if deleted, err := deleteColumnAssetSegmentStable(segmentPath, d.ColumnAssetIdentityPinRegistry(), removeStableColumnAssetChild); err != nil || !deleted {
+		t.Fatalf("delete released production segment=(%v,%v) want (true,nil)", deleted, err)
 	}
 }
 

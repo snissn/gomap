@@ -58,6 +58,24 @@ The maintenance plan reports active handle accounting:
 
 ## Destructive actions
 
+The production central column publish path captures the exact open `.tca`
+segment after its existing content sync and before close. All row image, typed
+part, aggregate metadata, dictionary-code, and int64-value refs in that batch
+are retained as immutable logical obligations in one coalesced stable-resource
+descriptor at the greatest byte frontier. The unclaimed descriptor remains
+owned only through the command publish boundary; collection-root/candidate
+authority is deliberately left to #3679. Query-ready assets remain rebuildable
+and non-authoritative.
+
+Those producer pins and destructive GC/rewrite cleanup share one DB-scoped
+identity registry. A pinned identity cannot acquire a delete lease. Deletion
+opens the exact parent and child, validates that the retained child is still
+linked at the canonical name, and uses a parent-handle-relative unlink. TreeDB
+serializes its own column namespace mutations with the collection mutation and
+segment locks. An external actor that can rebind a name after retained-link
+validation is outside this in-process serialization boundary and remains
+explicit hardening work.
+
 `ColumnAssetGC` may delete only canonical whole segments whose bytes are wholly
 reclaimable and whose plan is complete. Mixed live/dead segments become rewrite
 debt and are retained.
@@ -81,3 +99,8 @@ API cleanup, or a new search algorithm. Vector-index state assets, legacy vector
 graph assets, and aggregate/dictionary/int64 sidecars remain derived refs tied
 to their owning manifest generation. Value-log and leaf-log lifecycle remain
 covered by their existing maintenance contracts.
+
+The standalone `tcs1_hnsw_search_pack` rebuild writer does not use the central
+batch session yet. Its token classification remains fail-closed inventory, but
+production capture/composite authority for that separate writer is remaining
+#3677 work rather than evidence supplied by the central-batch implementation.

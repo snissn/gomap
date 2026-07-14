@@ -783,12 +783,15 @@ func (s columnPhysicalAssetSegmentCloseStatBucket) CleanupDuration() time.Durati
 }
 
 type columnPhysicalAssetAppendSession struct {
-	rootDir    string
-	cfg        ColumnStoreConfig
-	active     *columnPhysicalAssetSegmentAppender
-	activeFile uint32
-	closeStats columnPhysicalAssetSegmentCloseStats
-	closeErr   error
+	rootDir        string
+	cfg            ColumnStoreConfig
+	active         *columnPhysicalAssetSegmentAppender
+	activeFile     uint32
+	closeStats     columnPhysicalAssetSegmentCloseStats
+	closeErr       error
+	stableRegistry *rootpublication.IdentityPinRegistry
+	stableBuilder  *rootpublication.StableResourceSetBuilder
+	activeRefs     []ColumnAssetRef
 }
 
 func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) *columnPhysicalAssetAppendSession {
@@ -796,6 +799,13 @@ func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) 
 		rootDir: rootDir,
 		cfg:     cfg,
 	}
+}
+
+func newColumnPhysicalAssetAppendSessionWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry) *columnPhysicalAssetAppendSession {
+	session := newColumnPhysicalAssetAppendSession(rootDir, cfg)
+	session.stableRegistry = registry
+	session.stableBuilder = rootpublication.NewStableResourceSetBuilder()
+	return session
 }
 
 func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
@@ -837,6 +847,9 @@ func (s *columnPhysicalAssetAppendSession) appendKindsMeasured(fileID uint32, it
 	}
 	writeStart := time.Now()
 	refs, err := appender.appendKinds(items)
+	if err == nil && s.stableBuilder != nil {
+		s.activeRefs = append(s.activeRefs, refs...)
+	}
 	return refs, openDuration, time.Since(writeStart), err
 }
 
@@ -846,6 +859,24 @@ func (s *columnPhysicalAssetAppendSession) close() (columnPhysicalAssetSegmentCl
 	}
 	_ = s.closeActive()
 	return s.closeStats, s.closeErr
+}
+
+func (s *columnPhysicalAssetAppendSession) closeWithStableResources() (columnPhysicalAssetSegmentCloseStats, *rootpublication.StableResourceSet, error) {
+	if s == nil {
+		return columnPhysicalAssetSegmentCloseStats{}, nil, nil
+	}
+	_ = s.closeActive()
+	if s.closeErr != nil {
+		s.stableBuilder.Abandon()
+		return s.closeStats, nil, s.closeErr
+	}
+	resources, err := s.stableBuilder.Freeze()
+	if err != nil {
+		s.stableBuilder.Abandon()
+		s.closeErr = errors.Join(s.closeErr, err)
+		return s.closeStats, nil, s.closeErr
+	}
+	return s.closeStats, resources, nil
 }
 
 func (s *columnPhysicalAssetAppendSession) abort() error {
@@ -869,7 +900,20 @@ func (s *columnPhysicalAssetAppendSession) closeActive() error {
 	activeFile := s.activeFile
 	s.active = nil
 	s.activeFile = 0
-	err := appender.close()
+	var err error
+	if s.stableBuilder != nil {
+		var resources *rootpublication.StableResourceSet
+		resources, err = appender.closeWithStableResources(s.activeRefs, s.stableRegistry)
+		if err == nil {
+			err = s.stableBuilder.Merge(resources)
+		}
+		if err != nil {
+			resources.Release()
+		}
+	} else {
+		err = appender.close()
+	}
+	s.activeRefs = nil
 	s.closeStats.AddSegment(activeFile, appender.closeStats)
 	s.closeErr = errors.Join(s.closeErr, err)
 	return err
@@ -1225,14 +1269,21 @@ func writeColumnAssetSegmentPayload(w io.Writer, payload []byte) (int, error) {
 }
 
 func (a *columnPhysicalAssetSegmentAppender) close() error {
+	_, err := a.closeWithStableResources(nil, nil)
+	return err
+}
+
+func (a *columnPhysicalAssetSegmentAppender) closeWithStableResources(refs []ColumnAssetRef, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceSet, error) {
 	if a == nil {
-		return nil
+		return nil, nil
 	}
 	a.closeStats = columnPhysicalAssetSegmentCloseStats{}
 	a.closeStats.CloseCount = 1
 	var appenderErr error
 	var fileSyncErr error
 	var fileCloseErr error
+	var resourceErr error
+	var resources *rootpublication.StableResourceSet
 	if a.failed {
 		appenderErr = errors.New("collections: column physical asset appender is failed")
 	}
@@ -1243,6 +1294,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 			fileSyncErr = syncColumnAssetSegmentFileForPublish(a.file)
 			a.closeStats.FileSync += time.Since(start)
 		}
+		if fileSyncErr == nil && len(refs) != 0 {
+			resources, resourceErr = a.captureStableResources(refs, registry)
+		}
 		start := time.Now()
 		fileCloseErr = a.file.Close()
 		a.closeStats.FileClose += time.Since(start)
@@ -1250,22 +1304,68 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		a.file = nil
 	}
 	var dirSyncErr error
-	if a.syncDirOnClose && appenderErr == nil && fileSyncErr == nil && fileCloseErr == nil {
+	if a.syncDirOnClose && resources == nil && appenderErr == nil && fileSyncErr == nil && fileCloseErr == nil && resourceErr == nil {
 		start := time.Now()
 		dirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
 		a.closeStats.DirSync += time.Since(start)
 	}
-	if a.syncDirOnClose && dirSyncErr == nil && !a.failed && fileSyncErr == nil && fileCloseErr == nil {
+	if a.syncDirOnClose && dirSyncErr == nil && !a.failed && fileSyncErr == nil && fileCloseErr == nil && resourceErr == nil {
 		markColumnAssetSegmentDirSynced(a.assetPath)
 	}
-	if a.closeStats.FileSyncCount > 0 && !a.failed && fileSyncErr == nil && fileCloseErr == nil && dirSyncErr == nil {
+	if a.closeStats.FileSyncCount > 0 && !a.failed && fileSyncErr == nil && fileCloseErr == nil && dirSyncErr == nil && resourceErr == nil {
 		a.closeStats.SyncEpochCount = 1
 	}
-	if a.created && (appenderErr != nil || fileSyncErr != nil || fileCloseErr != nil || dirSyncErr != nil) {
+	if a.created && (appenderErr != nil || fileSyncErr != nil || fileCloseErr != nil || dirSyncErr != nil || resourceErr != nil) {
 		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
 	}
 	a.releaseLock()
-	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, dirSyncErr)
+	err := errors.Join(appenderErr, fileSyncErr, resourceErr, fileCloseErr, dirSyncErr)
+	if err != nil {
+		resources.Release()
+		resources = nil
+	}
+	return resources, err
+}
+
+func (a *columnPhysicalAssetSegmentAppender) captureStableResources(refs []ColumnAssetRef, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceSet, error) {
+	if a == nil || a.file == nil || registry == nil {
+		return nil, fmt.Errorf("%w: column asset stable capture requires appender file and DB registry", rootpublication.ErrUnresolvedResource)
+	}
+	parent, err := openStableColumnAssetParent(a.namespace.SegmentDir)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	var namespaceToken *rootpublication.StableNamespaceToken
+	if a.syncDirOnClose {
+		namespaceToken, err = stableColumnAssetNamespaceToken(parent, a.file, refs[0])
+		if err != nil {
+			return nil, err
+		}
+		start := time.Now()
+		if err := namespaceToken.Stabilize(); err != nil {
+			namespaceToken.Release()
+			return nil, err
+		}
+		a.closeStats.DirSync += time.Since(start)
+		defer namespaceToken.Release()
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	for _, ref := range refs {
+		if ref.FileID != a.fileID {
+			return nil, fmt.Errorf("%w: column asset ref file_id=%d differs from appender file_id=%d", rootpublication.ErrResourceConflict, ref.FileID, a.fileID)
+		}
+		token, err := stableColumnAssetResourceTokenWithRegistry(a.file, ref, namespaceToken, registry)
+		if err != nil {
+			return nil, err
+		}
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			return nil, err
+		}
+	}
+	return builder.Freeze()
 }
 
 func (a *columnPhysicalAssetSegmentAppender) abort() error {

@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"slices"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
@@ -205,7 +205,7 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		return stats, nil
 	}
 	cleanupRemap := func(baseErr error) error {
-		if cleanupErr := cleanupColumnAssetRewriteCopiedSegment(c.db.ColumnAssetRootDir(), remap); cleanupErr != nil {
+		if cleanupErr := cleanupColumnAssetRewriteCopiedSegment(c.db.ColumnAssetRootDir(), remap, c.db.ColumnAssetIdentityPinRegistry()); cleanupErr != nil {
 			return errors.Join(baseErr, cleanupErr)
 		}
 		return baseErr
@@ -458,7 +458,7 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 	return appender.abort()
 }
 
-func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult) error {
+func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult, registry *rootpublication.IdentityPinRegistry) error {
 	if len(remap.newRefs) == 0 {
 		return nil
 	}
@@ -466,10 +466,7 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 	if err != nil {
 		return err
 	}
-	removeErr := os.Remove(segmentPath)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
+	_, removeErr := deleteColumnAssetSegmentStable(segmentPath, registry, removeStableColumnAssetChild)
 	syncErr := syncColumnAssetDir(filepath.Dir(segmentPath))
 	return errors.Join(removeErr, syncErr)
 }

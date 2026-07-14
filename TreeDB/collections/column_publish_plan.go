@@ -9,6 +9,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -158,6 +159,9 @@ type ColumnPublishPreparedAssets struct {
 	RowRemainderBytes  int64
 	ColumnPayloadBytes int64
 	AssetMetrics       ColumnPublishAssetPreparationMetrics
+	// stableResources is the unclaimed producer authority retained only until
+	// the command publish boundary. Root/candidate ownership belongs to #3679.
+	stableResources *rootpublication.StableResourceSet
 }
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
@@ -253,6 +257,7 @@ type ColumnPublishPlan struct {
 	ManifestBytes                          int64
 	Lifecycle                              ColumnPublishLifecycleSummary
 	StageMetrics                           ColumnPublishStageMetrics
+	stableResources                        *rootpublication.StableResourceSet
 }
 
 // ColumnManifestRootDelta is the ordered-root publish descriptor for the
@@ -407,6 +412,14 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish asset preparation failed: %w", err)
 	}
 	metrics.AssetPreparation = time.Since(start)
+	stableResources := prepared.stableResources
+	prepared.stableResources = nil
+	retainStableResources := false
+	defer func() {
+		if !retainStableResources {
+			stableResources.Release()
+		}
+	}()
 	metrics.AssetMetrics = prepared.AssetMetrics
 	if err := validateColumnPublishPreparedAssets(prepared); err != nil {
 		return ColumnPublishPlan{}, err
@@ -486,7 +499,8 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 			PreparedRefs:   len(manifestPrepared.Assets),
 			PreparedBytes:  preparedBytes,
 		},
-		StageMetrics: metrics,
+		StageMetrics:    metrics,
+		stableResources: stableResources,
 	}
 
 	if input.Hooks.BuildSystemDelta != nil {
@@ -496,6 +510,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		}
 		plan.StageMetrics.SystemDeltaConstruction = time.Since(start)
 	}
+	retainStableResources = true
 	return plan, nil
 }
 
@@ -1158,6 +1173,7 @@ func checkedSumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) (int64, er
 }
 
 func cloneColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) ColumnPublishPreparedAssets {
+	prepared.stableResources = nil
 	if len(prepared.Assets) == 0 {
 		return prepared
 	}
@@ -1186,6 +1202,15 @@ func cloneColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosure)
 }
 
 func cloneColumnPublishPlanForHook(plan ColumnPublishPlan) ColumnPublishPlan {
+	plan.stableResources = nil
 	plan.PreparedAssets = cloneColumnPreparedAssets(plan.PreparedAssets)
 	return plan
+}
+
+func (plan *ColumnPublishPlan) releaseStableResources() {
+	if plan == nil {
+		return
+	}
+	plan.stableResources.Release()
+	plan.stableResources = nil
 }

@@ -150,6 +150,16 @@ func TestRebuildableQueryReadyPoliciesAreNotRegisterable(t *testing.T) {
 	}
 }
 
+func TestDeclaredPendingHNSWPolicyIsNotRegisterable(t *testing.T) {
+	policy, ok := StableResourcePolicyFor(ReachabilityHNSWSearchPack)
+	if !ok {
+		t.Fatal("HNSW search-pack field missing canonical policy")
+	}
+	if policy.Registerable || policy.Classification != "declared-authoritative-production-pending" {
+		t.Fatalf("HNSW search-pack policy=%+v want production-pending non-registerable", policy)
+	}
+}
+
 func TestAdjacentDBPublicationIssueRouting(t *testing.T) {
 	wantIssue := map[ReachabilityField]string{
 		ReachabilityMetaPage:   "#3679",

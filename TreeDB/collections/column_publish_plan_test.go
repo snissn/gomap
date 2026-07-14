@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestColumnPublishPlanDisabledFastPathAllocatesZeroM10A(t *testing.T) {
@@ -377,6 +379,7 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []string
+			var stableRegistry *rootpublication.IdentityPinRegistry
 			input := testColumnPublishPlanInputM10A(identity, asset)
 			input.Hooks.ExtractDocuments = func() error {
 				calls = append(calls, "extract")
@@ -388,7 +391,9 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 			}
 			input.Hooks.PrepareAssets = func(in ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 				calls = append(calls, "prepare_assets")
-				return ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{asset}, RowCount: 10, ColumnPayloadBytes: asset.Bytes}, nil
+				resources, registry := testColumnPublishStableResources(t, asset.Ref)
+				stableRegistry = registry
+				return ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{asset}, RowCount: 10, ColumnPayloadBytes: asset.Bytes, stableResources: resources}, nil
 			}
 			input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
 				calls = append(calls, "manifest_encode")
@@ -414,8 +419,44 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 			if got := strings.Join(calls, ","); got != tt.wantCalls {
 				t.Fatalf("calls=%q want %q", got, tt.wantCalls)
 			}
+			if stableRegistry != nil && stableRegistry.ActivePins() != 0 {
+				t.Fatalf("failed plan retained %d stable pins", stableRegistry.ActivePins())
+			}
 		})
 	}
+}
+
+func testColumnPublishStableResources(t testing.TB, ref ColumnAssetRef) (*rootpublication.StableResourceSet, *rootpublication.IdentityPinRegistry) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "column-plan-*.tca")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if _, err := file.Write(make([]byte, ref.Offset+ref.Length)); err != nil {
+		_ = file.Close()
+		t.Fatalf("write stable resource: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatalf("sync stable resource: %v", err)
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	token, err := stableColumnAssetResourceTokenWithRegistry(file, ref, nil, registry)
+	_ = file.Close()
+	if err != nil {
+		t.Fatalf("stableColumnAssetResourceTokenWithRegistry: %v", err)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	if err := builder.Add(token); err != nil {
+		token.Release()
+		t.Fatalf("add stable token: %v", err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatalf("freeze stable resources: %v", err)
+	}
+	return resources, registry
 }
 
 func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {

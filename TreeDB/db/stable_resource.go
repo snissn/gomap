@@ -15,6 +15,15 @@ func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry
 	return db.valueLogIdentityPins
 }
 
+// ColumnAssetIdentityPinRegistry exposes the DB-scoped deletion gate shared by
+// central column-asset producers, GC, and rewrite cleanup.
+func (db *DB) ColumnAssetIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
+	if db == nil {
+		return nil
+	}
+	return db.columnAssetIdentityPins
+}
+
 // NewStableDBResourceToken registers the exact already-open index handle.
 // Meta/root publication stays adjacent (#3679), while freelist/COW publication
 // stays adjacent (#3678); neither has an independent external identity here.

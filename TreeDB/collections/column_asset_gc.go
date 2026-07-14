@@ -41,7 +41,7 @@ type ColumnAssetGCStats struct {
 
 var (
 	columnAssetGCTestHookMu             sync.RWMutex
-	removeColumnAssetGCSegment          = os.Remove
+	removeColumnAssetGCSegment          = removeStableColumnAssetChild
 	syncColumnAssetGCDeletedSegmentsDir = syncColumnAssetDir
 )
 
@@ -192,8 +192,12 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := ctx.Err(); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
-		if err := removeSegment(entry.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		deleted, err := deleteColumnAssetSegmentStable(entry.Path, c.db.ColumnAssetIdentityPinRegistry(), removeSegment)
+		if err != nil {
 			return stats, syncDeletedSegmentsDir(err)
+		}
+		if !deleted {
+			continue
 		}
 		stats.SegmentsDeleted++
 		stats.BytesDeleted = addColumnAssetReachabilityBytes(stats.BytesDeleted, entry.ReclaimableBytes)
@@ -253,7 +257,7 @@ func columnAssetGCPlanForDetail(plan ColumnAssetReachabilityPlan, detailed, segm
 	return plan
 }
 
-func removeColumnAssetGCSegmentFunc() func(string) error {
+func removeColumnAssetGCSegmentFunc() removeStableColumnAssetChildFunc {
 	columnAssetGCTestHookMu.RLock()
 	fn := removeColumnAssetGCSegment
 	columnAssetGCTestHookMu.RUnlock()
@@ -272,7 +276,7 @@ func setColumnAssetGCTestHooks(remove func(string) error, syncDeletedDir func(st
 	prevRemove := removeColumnAssetGCSegment
 	prevSync := syncColumnAssetGCDeletedSegmentsDir
 	if remove != nil {
-		removeColumnAssetGCSegment = remove
+		removeColumnAssetGCSegment = func(_ *os.File, _ string, path string) error { return remove(path) }
 	}
 	if syncDeletedDir != nil {
 		syncColumnAssetGCDeletedSegmentsDir = syncDeletedDir

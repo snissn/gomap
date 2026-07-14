@@ -33,18 +33,19 @@ func NewStableCollectionResourceToken(spec rootpublication.StableResourceSpec) (
 }
 
 // NewStableColumnAssetResourceToken registers an exact open segment for
-// authoritative column, typed-column, and graph/HNSW asset references.
-// Rebuildable query-ready references are mapped here so the canonical
-// production boundary can reject them as non-authoritative.
+// authoritative column and typed-column asset references. Pending HNSW and
+// rebuildable query-ready references are mapped here so the canonical
+// production boundary can reject them until they have producer authority.
 func NewStableColumnAssetResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	classification := ""
 	switch spec.Reachability {
 	case rootpublication.ReachabilityColumnManifest,
 		rootpublication.ReachabilityTypedColumnMultipart,
 		rootpublication.ReachabilityTypedColumnValue,
-		rootpublication.ReachabilityTypedColumnCode,
-		rootpublication.ReachabilityHNSWSearchPack:
+		rootpublication.ReachabilityTypedColumnCode:
 		classification = "authoritative"
+	case rootpublication.ReachabilityHNSWSearchPack:
+		classification = "declared-authoritative-production-pending"
 	case rootpublication.ReachabilityVectorGraphPack:
 		classification = "authoritative-transitive"
 	case rootpublication.ReachabilityQueryReadyBase,
@@ -78,7 +79,7 @@ func stableColumnAssetResourceClassification(kind ColumnAssetKind) (rootpublicat
 	case ColumnAssetKindTCS1DictionaryCodes:
 		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnCode, "authoritative", nil
 	case ColumnAssetKindTCS1HNSWSearchPack:
-		return rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, "authoritative", nil
+		return rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, "declared-authoritative-production-pending", nil
 	case ColumnAssetKindQueryReadyBase:
 		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyBase, "rebuildable-non-authoritative", nil
 	case ColumnAssetKindQueryReadyDelta:
@@ -149,6 +150,10 @@ func stableColumnAssetDiagnosticPath(ref ColumnAssetRef) string {
 // generation, part, range, and checksum obligation. Tokens for several refs in
 // one segment coalesce physically without collapsing those logical obligations.
 func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+	return stableColumnAssetResourceTokenWithRegistry(file, ref, namespace, nil)
+}
+
+func stableColumnAssetResourceTokenWithRegistry(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceToken, error) {
 	resourceKind, reachability, _, err := stableColumnAssetResourceClassification(ref.Kind)
 	if err != nil {
 		return nil, err
@@ -156,7 +161,17 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
-	return NewStableColumnAssetResourceToken(rootpublication.StableResourceSpec{
+	var identity rootpublication.StableIdentity
+	if registry != nil {
+		identity, err = rootpublication.StableIdentityFromFile(file)
+		if err != nil {
+			return nil, err
+		}
+		if err := registry.Observe(identity); err != nil {
+			return nil, fmt.Errorf("collections: observe stable column asset identity: %w", err)
+		}
+	}
+	token, err := NewStableColumnAssetResourceToken(rootpublication.StableResourceSpec{
 		Kind: resourceKind, LogicalLane: ref.Namespace, ResourceID: fmt.Sprint(ref.FileID),
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
@@ -165,7 +180,17 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 		// The producer synchronizes the exact registered frontier before capture.
 		// A later coalesced frontier still performs a real sync.
 		ContentSynced: true,
+		PinRegistry:   registry,
+		OnRelease: func() {
+			if registry != nil {
+				_ = registry.Unobserve(identity)
+			}
+		},
 	})
+	if err != nil && registry != nil {
+		_ = registry.Unobserve(identity)
+	}
+	return token, err
 }
 
 func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {
