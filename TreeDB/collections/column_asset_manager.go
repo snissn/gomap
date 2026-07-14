@@ -883,13 +883,17 @@ func (s *columnPhysicalAssetAppendSession) abort() error {
 	if s == nil {
 		return nil
 	}
-	if s.active == nil {
-		return nil
+	var abortErr error
+	if s.active != nil {
+		appender := s.active
+		s.active = nil
+		s.activeFile = 0
+		abortErr = appender.abort()
 	}
-	appender := s.active
-	s.active = nil
-	s.activeFile = 0
-	return appender.abort()
+	s.activeRefs = nil
+	s.stableBuilder.Abandon()
+	s.closeErr = errors.Join(s.closeErr, abortErr)
+	return s.closeErr
 }
 
 func (s *columnPhysicalAssetAppendSession) closeActive() error {

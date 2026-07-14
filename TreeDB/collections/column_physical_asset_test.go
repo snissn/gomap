@@ -2342,6 +2342,68 @@ func TestColumnPhysicalAssetAppendSessionAbandonsPinsWhenStableFreezeFails3677(t
 	}
 }
 
+func TestColumnPhysicalAssetStableAppendSessionAbortAbandonsMergedPins3677(t *testing.T) {
+	for _, activeSecond := range []bool{false, true} {
+		t.Run(fmt.Sprintf("active_second=%t", activeSecond), func(t *testing.T) {
+			cfg, payloads := columnAssetDirectViewAlignmentTestPayloads(t)
+			registry := rootpublication.NewIdentityPinRegistry()
+			session := newColumnPhysicalAssetAppendSessionWithStableResources(
+				backenddb.ColumnAssetRootDirPath(t.TempDir()),
+				cfg,
+				registry,
+			)
+			if _, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+				payload:    []byte("first-file"),
+				kind:       ColumnAssetKindTCS1PartImage,
+				generation: 31,
+				partID:     columnPhysicalRowAssetPartID,
+			}}); err != nil {
+				t.Fatalf("append first file: %v", err)
+			}
+			if err := session.closeActive(); err != nil {
+				t.Fatalf("close and merge first file: %v", err)
+			}
+			if got := registry.ActivePins(); got != 1 {
+				t.Fatalf("merged first-file pins=%d want 1 before abort", got)
+			}
+			if got := registry.ActiveIdentities(); got != 1 {
+				t.Fatalf("merged first-file identities=%d want 1 before abort", got)
+			}
+			if activeSecond {
+				directFileID, err := directViewTypedColumnSegmentFileID(31)
+				if err != nil {
+					t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+				}
+				if _, err := session.appendKinds(directFileID, []columnPhysicalAssetAppendItem{{
+					payload:    payloads[0],
+					kind:       ColumnAssetKindTCS1TypedColumnPart,
+					generation: 31,
+					partID:     typedColumnPartAssetPartID,
+				}}); err != nil {
+					t.Fatalf("start second file: %v", err)
+				}
+			} else if session.active != nil {
+				t.Fatal("first-file close left an active appender")
+			}
+
+			priorErr := errors.New("prior close error")
+			session.closeErr = priorErr
+			if err := session.abort(); !errors.Is(err, priorErr) {
+				t.Fatalf("abort error=%v want preserved prior close error", err)
+			}
+			if session.active != nil || len(session.activeRefs) != 0 {
+				t.Fatalf("abort retained active=%v refs=%d", session.active != nil, len(session.activeRefs))
+			}
+			if got := registry.ActivePins(); got != 0 {
+				t.Fatalf("abort retained %d identity pins", got)
+			}
+			if got := registry.ActiveIdentities(); got != 0 {
+				t.Fatalf("abort retained %d observed identities", got)
+			}
+		})
+	}
+}
+
 func TestColumnPhysicalAssetAppendSessionAbortRetainsNewUnreachableTargets3151(t *testing.T) {
 	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
