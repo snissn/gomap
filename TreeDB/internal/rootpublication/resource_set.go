@@ -74,12 +74,20 @@ func mergeStableLogicalObligations(target *[]StableLogicalObligation, incoming [
 		for _, obligation := range *target {
 			byKey[stableLogicalObligationKey(obligation)] = obligation
 		}
+		// Preflight the complete incoming batch before mutating the live builder.
+		// Add is atomic: a later conflict must not leave an earlier obligation
+		// appended to the existing resource entry.
 		for _, obligation := range incoming {
 			key := stableLogicalObligationKey(obligation)
 			if existing, ok := byKey[key]; ok {
 				if existing != obligation {
 					return fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
 				}
+			}
+		}
+		for _, obligation := range incoming {
+			key := stableLogicalObligationKey(obligation)
+			if _, ok := byKey[key]; ok {
 				continue
 			}
 			byKey[key] = obligation
@@ -87,9 +95,11 @@ func mergeStableLogicalObligations(target *[]StableLogicalObligation, incoming [
 		}
 		return nil
 	}
+	// The small-set path deliberately stays allocation-free. Its first pass is
+	// conflict-only; the second pass applies additions after the whole batch is
+	// known compatible.
 	for _, obligation := range incoming {
 		key := stableLogicalObligationKey(obligation)
-		duplicate := false
 		for _, existing := range *target {
 			if stableLogicalObligationKey(existing) != key {
 				continue
@@ -97,8 +107,17 @@ func mergeStableLogicalObligations(target *[]StableLogicalObligation, incoming [
 			if existing != obligation {
 				return fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
 			}
-			duplicate = true
 			break
+		}
+	}
+	for _, obligation := range incoming {
+		key := stableLogicalObligationKey(obligation)
+		duplicate := false
+		for _, existing := range *target {
+			if stableLogicalObligationKey(existing) == key {
+				duplicate = true
+				break
+			}
 		}
 		if !duplicate {
 			*target = append(*target, obligation)

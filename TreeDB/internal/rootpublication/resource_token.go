@@ -245,7 +245,10 @@ func normalizeStableLogicalObligations(obligations []StableLogicalObligation, re
 		if err := validateStableLogicalObligation(obligations[0], reachability); err != nil {
 			return nil, err
 		}
-		return obligations[:1:1], nil
+		// StableResourceToken is immutable and must not retain a caller-owned
+		// singleton backing array. Cap clamping prevents append aliasing but does
+		// not prevent direct element mutation.
+		return []StableLogicalObligation{obligations[0]}, nil
 	}
 	if len(obligations) > stableLogicalObligationLinearLimit {
 		byKey := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(obligations))
