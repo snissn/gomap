@@ -33,6 +33,7 @@ type finalizeCommitOptions struct {
 	syncMetaPageOnly            bool
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
+	durablePublishLocked        bool
 	// releaseRootSerialization transfers an already-prepared candidate from
 	// root construction to the synchronous durability transaction. The callback
 	// must release every DB/write/commit/root-build lock held by the caller and
@@ -41,9 +42,15 @@ type finalizeCommitOptions struct {
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	durablePublishLocked := false
+	defer func() {
+		if durablePublishLocked {
+			db.durablePublishMu.Unlock()
+		}
+	}()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 
@@ -56,6 +63,17 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 	if rootsUnchanged {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
+	db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	db.writeMu.Unlock()
+	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
+	if err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		return err
+	}
+	defer publishPrepareGuard.Release()
 
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
@@ -69,11 +87,16 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		nil,
 		nil,
 		finalizeCommitOptions{
-			commandWALPublish: true,
-			appliedCommandLSN: appliedLSN,
-			appliedRanges:     covered,
+			commandWALPublish:        true,
+			appliedCommandLSN:        appliedLSN,
+			appliedRanges:            covered,
+			skipPrePublishFlush:      true,
+			durablePublishLocked:     true,
+			releaseRootSerialization: func() {},
 		},
 	)
+	db.durablePublishMu.Unlock()
+	durablePublishLocked = false
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)

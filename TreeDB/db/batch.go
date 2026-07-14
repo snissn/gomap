@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -540,6 +541,12 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		if !rootLocksReleased {
 			b.db.writeMu.RUnlock()
 		}
+		if intent == nil && errors.Is(err, errDurableRootCandidateStale) {
+			if freeErr := tracker.FreeAll(); freeErr != nil {
+				return false, freeErr
+			}
+			return false, nil
+		}
 		return false, err
 	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
@@ -560,10 +567,21 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
+	durablePublishLocked := false
+	defer func() {
+		if durablePublishLocked {
+			b.db.durablePublishMu.Unlock()
+		}
+	}()
 	commitWaitStart := time.Now()
 	b.db.writeMu.Lock()
 	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
-	defer b.db.writeMu.Unlock()
+	rootLocksReleased := false
+	defer func() {
+		if !rootLocksReleased {
+			b.db.writeMu.Unlock()
+		}
+	}()
 	if b.db.closing.Load() {
 		return ErrClosed
 	}
@@ -649,6 +667,10 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	b.db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	b.db.writeMu.Unlock()
+	rootLocksReleased = true
 	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -657,10 +679,11 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		return err
 	}
 	defer publishPrepareGuard.Release()
+	releaseRootSerialization := func() {}
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, releaseRootSerialization: releaseRootSerialization})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -675,8 +698,12 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.skipPrePublishFlush = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
+		opts.durablePublishLocked = true
+		opts.releaseRootSerialization = releaseRootSerialization
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
+	b.db.durablePublishMu.Unlock()
+	durablePublishLocked = false
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)

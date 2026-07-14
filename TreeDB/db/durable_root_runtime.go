@@ -23,6 +23,8 @@ import (
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
 
+var errDurableRootCandidateStale = errors.New("durable-root candidate base changed")
+
 func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 	if sink.pager == nil {
 		return errors.New("missing durable pager")
@@ -175,10 +177,42 @@ func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *value
 
 func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPageBody) (map[uint32]struct{}, error) {
 	snapshot := db.AcquireSnapshot()
-	if snapshot == nil || snapshot.state == nil {
-		if snapshot != nil {
-			_ = snapshot.Close()
+	if snapshot == nil {
+		// Command-WAL recovery publishes roots before Open installs the first
+		// public snapshot view. Build the same bounded candidate projection from
+		// the already-recovered index and the manager's registered file set.
+		// This fallback is recovery-only: once visible state exists, a failed
+		// AcquireSnapshot must continue to fail closed rather than bypass its
+		// publication and shutdown guards.
+		if db.state.Load() != nil || db.valueLogManager == nil {
+			return nil, errors.New("capture candidate dependency snapshot")
 		}
+		set := db.valueLogManager.CurrentSetNoRefresh()
+		candidateState := DBState{
+			ValueLogSet:                set,
+			LeafGenerations:            db.currentLeafGenerationView(),
+			LeafGenerationStateVersion: db.leafGenerationStateVersion,
+		}
+		applyDurableRootCandidateStateV1(&candidateState, next)
+		recoverySnapshot := &Snapshot{
+			db:                db,
+			idx:               idx,
+			state:             &candidateState,
+			vlogManager:       db.valueLogManager,
+			reader:            newValueReader(set),
+			registryShardHint: snapshotShardHintUnset,
+		}
+		result, scanErr := db.maintenanceReachabilityScan(context.Background(), recoverySnapshot, maintenanceReachabilityScanOptions{
+			Collectors: maintenanceReachabilityValueLogRefCounts,
+		})
+		releaseErr := db.valueLogManager.Release(set)
+		if scanErr != nil || releaseErr != nil {
+			return nil, errors.Join(scanErr, releaseErr)
+		}
+		return result.valueLogReferencedSegments, nil
+	}
+	if snapshot.state == nil {
+		_ = snapshot.Close()
 		return nil, errors.New("capture candidate dependency snapshot")
 	}
 	if snapshot.idx != idx {
@@ -186,11 +220,7 @@ func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPag
 		return nil, errors.New("candidate dependency index changed")
 	}
 	candidateState := *snapshot.state
-	candidateState.CommitSeq = next.CommitSeq
-	candidateState.RootPageID = next.UserRootPageID
-	candidateState.SystemRootPageID = next.SystemRootPageID
-	candidateState.AppliedCommandLSN = next.AppliedCommandLSN
-	candidateState.MaxEntryRevision = page.EntryRevision(next.MaxEntryRevision)
+	applyDurableRootCandidateStateV1(&candidateState, next)
 	snapshot.state = &candidateState
 	result, scanErr := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
 		Collectors: maintenanceReachabilityValueLogRefCounts,
@@ -200,6 +230,14 @@ func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPag
 		return nil, errors.Join(scanErr, closeErr)
 	}
 	return result.valueLogReferencedSegments, nil
+}
+
+func applyDurableRootCandidateStateV1(state *DBState, next page.MetaPageBody) {
+	state.CommitSeq = next.CommitSeq
+	state.RootPageID = next.UserRootPageID
+	state.SystemRootPageID = next.SystemRootPageID
+	state.AppliedCommandLSN = next.AppliedCommandLSN
+	state.MaxEntryRevision = page.EntryRevision(next.MaxEntryRevision)
 }
 
 func durableDiagnosticPathV1(root, path string) (string, error) {
@@ -337,7 +375,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (*durableRootPublishCandidateV1, error) {
 	current := db.durableRoot
 	if current.meta.CommitSeq == 0 || current.record.CommitSeq != current.meta.CommitSeq || next.CommitSeq != current.meta.CommitSeq+1 {
-		return nil, errors.New("durable-root publication sequence mismatch")
+		return nil, fmt.Errorf("%w: durable=%d candidate=%d", errDurableRootCandidateStale, current.meta.CommitSeq, next.CommitSeq)
 	}
 	if next.UserRootPageID < 2 || next.SystemRootPageID < 2 {
 		return nil, errors.New("durable-root candidate has invalid roots")
@@ -416,7 +454,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		target = MetaPage1ID
 	}
 
-	stableSnapshot := db.AcquireStableSnapshot()
+	stableSnapshot := db.acquireDurableCandidateStableIndexSnapshotV1(idx)
 	if stableSnapshot == nil {
 		return nil, errors.New("capture stable index snapshot")
 	}
@@ -436,6 +474,34 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	}
 	releaseResources = false
 	return candidate, nil
+}
+
+// acquireDurableCandidateStableIndexSnapshotV1 uses the normal public stable
+// snapshot once Open has installed visible state. Command-WAL replay reaches
+// durable publication earlier, while the recovered index is already the DB's
+// exclusive live generation but no public snapshot view exists yet. In that
+// recovery-only window, synthesize the same maintenance lease around the exact
+// index generation so the resource token retains it through publication.
+func (db *DB) acquireDurableCandidateStableIndexSnapshotV1(idx *indexGen) *Snapshot {
+	if snapshot := db.AcquireStableSnapshot(); snapshot != nil {
+		return snapshot
+	}
+	if db == nil || idx == nil || db.state.Load() != nil || db.closing.Load() {
+		return nil
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if db.state.Load() != nil || db.closing.Load() || db.idx.Load() != idx {
+		return nil
+	}
+	snapshot := db.snapPool.Get()
+	snapshot.db = db
+	snapshot.idx = idx
+	snapshot.stableIndexCapture = true
+	snapshot.closed.Store(false)
+	snapshot.readState.Store(0)
+	db.stableIndexCaptures.Add(1)
+	return snapshot
 }
 
 func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCandidateV1) error {

@@ -1374,14 +1374,21 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		return ErrCommandWALUnsupported
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
+	durablePublishLocked := false
+	defer func() {
+		if durablePublishLocked {
+			db.durablePublishMu.Unlock()
+		}
+	}()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()
+		db.writeMu.Unlock()
 		return err
 	}
 	db.mu.RLock()
@@ -1390,16 +1397,33 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	systemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(intent))
+	db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	db.commitMu.Unlock()
+	db.writeMu.Unlock()
+	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
-		db.commitMu.Unlock()
 		return err
 	}
-	db.commitMu.Unlock()
+	defer publishPrepareGuard.Release()
+	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
+	finalizeOpts.skipPrePublishFlush = true
+	finalizeOpts.durablePublishLocked = true
+	finalizeOpts.releaseRootSerialization = func() {}
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, finalizeOpts)
+	if err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		return err
+	}
+	db.durablePublishMu.Unlock()
+	durablePublishLocked = false
 	db.finalizeCommitPostWork(post)
 	intent.inner.staged = false
 	return nil

@@ -2980,8 +2980,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	t0 := time.Now()
 	var err error
 	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
-		db.durablePublishMu.Lock()
-		defer db.durablePublishMu.Unlock()
+		if !opts.durablePublishLocked {
+			db.durablePublishMu.Lock()
+			defer db.durablePublishMu.Unlock()
+		}
 		if db.durableRoot.pending != nil {
 			return post, wrapFinalizeCommitError(freelist.ErrCOWCandidatePrepared, true)
 		}
