@@ -1900,6 +1900,9 @@ func commandFrameEncodedSize(env CommandEnvelope) (int, error) {
 	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
 		payloadLen = rawKVBatchHeaderSize
 	}
+	if err := validateExternalRefClasses(env.ExternalRefs); err != nil {
+		return 0, err
+	}
 	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
 	if err != nil {
 		return 0, err
@@ -3239,10 +3242,8 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	for i := range refs {
-		if !supportedExternalRefClass(refs[i].Class) {
-			return nil, ErrCorrupt
-		}
+	if err := validateExternalRefClasses(refs); err != nil {
+		return nil, err
 	}
 	total, err := externalRefsEncodedLen(refs)
 	if err != nil {
@@ -3265,6 +3266,15 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 		off += len(ref.Path)
 	}
 	return out, nil
+}
+
+func validateExternalRefClasses(refs []ExternalRef) error {
+	for i := range refs {
+		if !supportedExternalRefClass(refs[i].Class) {
+			return ErrCorrupt
+		}
+	}
+	return nil
 }
 
 func externalRefsEncodedLen(refs []ExternalRef) (int, error) {

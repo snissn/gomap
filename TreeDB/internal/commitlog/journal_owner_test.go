@@ -336,6 +336,47 @@ func TestCommandJournalSegmentTargetRotatesBeforeLSNReservation(t *testing.T) {
 	}
 }
 
+func TestCommandJournalRejectsQuarantinedExternalRefBeforeRotation(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	if _, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand valid: %v", err)
+	}
+	activePath := j.Path()
+
+	_, err = j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		ExternalRefs: []ExternalRef{{
+			Class:  ExternalRefPayloadFile,
+			FileID: 1,
+			Length: 1,
+		}},
+	})
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("quarantined external ref error=%v, want ErrCorrupt", err)
+	}
+	if got := j.Path(); got != activePath {
+		t.Fatalf("active segment changed from %q to %q after rejected append", activePath, got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, CommandSegmentName(0, 2))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected append created successor segment: %v", err)
+	}
+	if got := j.NextLSN(); got != 2 {
+		t.Fatalf("NextLSN=%d after rejected append, want 2", got)
+	}
+}
+
 func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
