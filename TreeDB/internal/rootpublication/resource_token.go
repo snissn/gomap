@@ -172,37 +172,127 @@ type StableLogicalObligation struct {
 	Digest       [32]byte
 }
 
-func stableLogicalObligationKey(obligation StableLogicalObligation) string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%020d\x00%020d\x00%020d\x00%020d\x00%020d\x00%s",
-		obligation.Class, obligation.Kind, obligation.Namespace, obligation.Generation, obligation.PartID,
-		obligation.FileID, obligation.Offset, obligation.Length, obligation.Reachability)
+// stableLogicalObligationIndex is the immutable reference identity used for
+// de-duplication. Checksum and Digest intentionally remain outside the index so
+// two declarations of one reference can be rejected when their integrity
+// metadata differs. Keeping this key comparable avoids formatting a string on
+// every merge and descriptor sort in the publication hot path.
+type stableLogicalObligationIndex struct {
+	class        string
+	kind         string
+	namespace    string
+	generation   uint64
+	partID       uint64
+	fileID       uint64
+	offset       int64
+	length       int64
+	reachability ReachabilityField
 }
 
+func stableLogicalObligationKey(obligation StableLogicalObligation) stableLogicalObligationIndex {
+	return stableLogicalObligationIndex{
+		class: obligation.Class, kind: obligation.Kind, namespace: obligation.Namespace,
+		generation: obligation.Generation, partID: obligation.PartID, fileID: obligation.FileID,
+		offset: obligation.Offset, length: obligation.Length, reachability: obligation.Reachability,
+	}
+}
+
+func stableLogicalObligationLess(left, right StableLogicalObligation) bool {
+	leftKey, rightKey := stableLogicalObligationKey(left), stableLogicalObligationKey(right)
+	if leftKey.class != rightKey.class {
+		return leftKey.class < rightKey.class
+	}
+	if leftKey.kind != rightKey.kind {
+		return leftKey.kind < rightKey.kind
+	}
+	if leftKey.namespace != rightKey.namespace {
+		return leftKey.namespace < rightKey.namespace
+	}
+	if leftKey.generation != rightKey.generation {
+		return leftKey.generation < rightKey.generation
+	}
+	if leftKey.partID != rightKey.partID {
+		return leftKey.partID < rightKey.partID
+	}
+	if leftKey.fileID != rightKey.fileID {
+		return leftKey.fileID < rightKey.fileID
+	}
+	if leftKey.offset != rightKey.offset {
+		return leftKey.offset < rightKey.offset
+	}
+	if leftKey.length != rightKey.length {
+		return leftKey.length < rightKey.length
+	}
+	return leftKey.reachability < rightKey.reachability
+}
+
+func validateStableLogicalObligation(obligation StableLogicalObligation, reachability ReachabilityField) error {
+	if obligation.Class == "" || obligation.Kind == "" || obligation.Namespace == "" ||
+		obligation.Generation == 0 || obligation.FileID == 0 || obligation.Offset < 0 ||
+		obligation.Length <= 0 || obligation.Reachability == "" || obligation.Digest == [32]byte{} {
+		return fmt.Errorf("%w: incomplete logical resource obligation", ErrUnresolvedResource)
+	}
+	if obligation.Reachability != reachability {
+		return fmt.Errorf("%w: logical obligation field %q differs from token field %q", ErrResourceConflict, obligation.Reachability, reachability)
+	}
+	return nil
+}
+
+const stableLogicalObligationLinearLimit = 16
+
 func normalizeStableLogicalObligations(obligations []StableLogicalObligation, reachability ReachabilityField) ([]StableLogicalObligation, error) {
-	byKey := make(map[string]StableLogicalObligation, len(obligations))
-	for _, obligation := range obligations {
-		if obligation.Class == "" || obligation.Kind == "" || obligation.Namespace == "" ||
-			obligation.Generation == 0 || obligation.FileID == 0 || obligation.Offset < 0 ||
-			obligation.Length <= 0 || obligation.Reachability == "" || obligation.Digest == [32]byte{} {
-			return nil, fmt.Errorf("%w: incomplete logical resource obligation", ErrUnresolvedResource)
+	if len(obligations) == 1 {
+		if err := validateStableLogicalObligation(obligations[0], reachability); err != nil {
+			return nil, err
 		}
-		if obligation.Reachability != reachability {
-			return nil, fmt.Errorf("%w: logical obligation field %q differs from token field %q", ErrResourceConflict, obligation.Reachability, reachability)
+		return obligations[:1:1], nil
+	}
+	if len(obligations) > stableLogicalObligationLinearLimit {
+		byKey := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(obligations))
+		for _, obligation := range obligations {
+			if err := validateStableLogicalObligation(obligation, reachability); err != nil {
+				return nil, err
+			}
+			key := stableLogicalObligationKey(obligation)
+			if existing, ok := byKey[key]; ok && existing != obligation {
+				return nil, fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+			}
+			byKey[key] = obligation
+		}
+		normalized := make([]StableLogicalObligation, 0, len(byKey))
+		for _, obligation := range byKey {
+			normalized = append(normalized, obligation)
+		}
+		sort.Slice(normalized, func(i, j int) bool {
+			return stableLogicalObligationLess(normalized[i], normalized[j])
+		})
+		return normalized[:len(normalized):len(normalized)], nil
+	}
+	normalized := make([]StableLogicalObligation, 0, len(obligations))
+	for _, obligation := range obligations {
+		if err := validateStableLogicalObligation(obligation, reachability); err != nil {
+			return nil, err
 		}
 		key := stableLogicalObligationKey(obligation)
-		if existing, ok := byKey[key]; ok && existing != obligation {
-			return nil, fmt.Errorf("%w: logical obligation %q has conflicting immutable checksum or digest", ErrResourceConflict, key)
+		duplicate := false
+		for _, existing := range normalized {
+			if stableLogicalObligationKey(existing) != key {
+				continue
+			}
+			if existing != obligation {
+				return nil, fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+			}
+			duplicate = true
+			break
 		}
-		byKey[key] = obligation
-	}
-	normalized := make([]StableLogicalObligation, 0, len(byKey))
-	for _, obligation := range byKey {
-		normalized = append(normalized, obligation)
+		if !duplicate {
+			normalized = append(normalized, obligation)
+		}
 	}
 	sort.Slice(normalized, func(i, j int) bool {
-		return stableLogicalObligationKey(normalized[i]) < stableLogicalObligationKey(normalized[j])
+		return stableLogicalObligationLess(normalized[i], normalized[j])
 	})
-	return normalized, nil
+	return normalized[:len(normalized):len(normalized)], nil
 }
 
 func cloneStableLogicalObligations(obligations []StableLogicalObligation) []StableLogicalObligation {
@@ -580,13 +670,29 @@ func (token *StableResourceToken) releasePinned() {
 	}
 }
 
-func (token *StableResourceToken) logicalKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%020d", token.kind, token.logicalLane, token.resourceID, token.generation)
+type stableLogicalResourceKey struct {
+	kind       ResourceKind
+	lane       string
+	resourceID string
+	generation uint64
 }
 
-func (token *StableResourceToken) identityKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%020d\x00%x\x00%020d", token.kind, token.identity.Platform,
-		token.identity.VolumeID, token.identity.ObjectID, token.generation)
+type stablePhysicalResourceKey struct {
+	kind       ResourceKind
+	platform   string
+	volumeID   uint64
+	objectID   [16]byte
+	generation uint64
+}
+
+func (token *StableResourceToken) logicalKey() stableLogicalResourceKey {
+	return stableLogicalResourceKey{
+		kind: token.kind, lane: token.logicalLane, resourceID: token.resourceID, generation: token.generation,
+	}
+}
+
+func (token *StableResourceToken) identityKey() stablePhysicalResourceKey {
+	return token.mutablePhysicalKey()
 }
 
 func (token *StableResourceToken) samePhysicalIdentity(other *StableResourceToken) bool {
@@ -594,9 +700,11 @@ func (token *StableResourceToken) samePhysicalIdentity(other *StableResourceToke
 		token.identity.VolumeID == other.identity.VolumeID && token.identity.ObjectID == other.identity.ObjectID
 }
 
-func (token *StableResourceToken) mutablePhysicalKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%020d\x00%x\x00%020d", token.kind, token.identity.Platform,
-		token.identity.VolumeID, token.identity.ObjectID, token.generation)
+func (token *StableResourceToken) mutablePhysicalKey() stablePhysicalResourceKey {
+	return stablePhysicalResourceKey{
+		kind: token.kind, platform: token.identity.Platform, volumeID: token.identity.VolumeID,
+		objectID: token.identity.ObjectID, generation: token.generation,
+	}
 }
 
 func (token *StableResourceToken) namespaceCompatible(other *StableResourceToken) bool {

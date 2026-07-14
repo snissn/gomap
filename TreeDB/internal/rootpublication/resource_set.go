@@ -16,7 +16,7 @@ type stableResourceEntry struct {
 	pinIndex           map[*StableResourceToken]struct{}
 	frontier           DurableFrontier
 	reachability       map[ReachabilityField]struct{}
-	logicalObligations map[string]StableLogicalObligation
+	logicalObligations []StableLogicalObligation
 }
 
 func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
@@ -24,13 +24,12 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 	for field := range entry.reachability {
 		reachability[field] = struct{}{}
 	}
-	logicalObligations := make(map[string]StableLogicalObligation, len(entry.logicalObligations))
-	for key, obligation := range entry.logicalObligations {
-		logicalObligations[key] = obligation
-	}
 	clone := stableResourceEntry{
 		token: entry.token, frontier: cloneDurableFrontier(entry.frontier),
-		reachability: reachability, logicalObligations: logicalObligations,
+		// Logical obligations are immutable after normalization. The full slice
+		// expression makes every clone copy-on-append while avoiding a redundant
+		// backing-array allocation at each ownership transfer.
+		reachability: reachability, logicalObligations: entry.logicalObligations[:len(entry.logicalObligations):len(entry.logicalObligations)],
 	}
 	if len(entry.pins) != 0 {
 		clone.pins = append([]*StableResourceToken(nil), entry.pins...)
@@ -69,26 +68,47 @@ func activeEntryToken(entry stableResourceEntry) *StableResourceToken {
 	return entry.token
 }
 
-func mergeStableLogicalObligations(target map[string]StableLogicalObligation, incoming []StableLogicalObligation) error {
-	for _, obligation := range incoming {
-		key := stableLogicalObligationKey(obligation)
-		if existing, ok := target[key]; ok && existing != obligation {
-			return fmt.Errorf("%w: logical obligation %q has conflicting immutable checksum or digest", ErrResourceConflict, key)
+func mergeStableLogicalObligations(target *[]StableLogicalObligation, incoming []StableLogicalObligation) error {
+	if len(*target)+len(incoming) > stableLogicalObligationLinearLimit {
+		byKey := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(*target)+len(incoming))
+		for _, obligation := range *target {
+			byKey[stableLogicalObligationKey(obligation)] = obligation
 		}
+		for _, obligation := range incoming {
+			key := stableLogicalObligationKey(obligation)
+			if existing, ok := byKey[key]; ok {
+				if existing != obligation {
+					return fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+				}
+				continue
+			}
+			byKey[key] = obligation
+			*target = append(*target, obligation)
+		}
+		return nil
 	}
 	for _, obligation := range incoming {
 		key := stableLogicalObligationKey(obligation)
-		target[key] = obligation
+		duplicate := false
+		for _, existing := range *target {
+			if stableLogicalObligationKey(existing) != key {
+				continue
+			}
+			if existing != obligation {
+				return fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+			}
+			duplicate = true
+			break
+		}
+		if !duplicate {
+			*target = append(*target, obligation)
+		}
 	}
 	return nil
 }
 
-func stableLogicalObligationMap(obligations []StableLogicalObligation) map[string]StableLogicalObligation {
-	out := make(map[string]StableLogicalObligation, len(obligations))
-	for _, obligation := range obligations {
-		out[stableLogicalObligationKey(obligation)] = obligation
-	}
-	return out
+func stableLogicalObligationList(obligations []StableLogicalObligation) []StableLogicalObligation {
+	return obligations[:len(obligations):len(obligations)]
 }
 
 type StableResourceSetBuilder struct {
@@ -144,7 +164,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		entry := &(*entries)[i]
 		existing := entry.token
 		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(token) {
-			return fmt.Errorf("%w: logical resource %q changed stable identity", ErrResourceConflict, logicalKey)
+			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
 		}
 		coalesce, err := stableResourcesCoalesce(existing, token)
 		if err != nil {
@@ -154,9 +174,9 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 			continue
 		}
 		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
-			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, existing.identityKey())
+			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
-		if err := mergeStableLogicalObligations(entry.logicalObligations, token.logicalObligations); err != nil {
+		if err := mergeStableLogicalObligations(&entry.logicalObligations, token.logicalObligations); err != nil {
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
@@ -176,7 +196,7 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 	*entries = append(*entries, stableResourceEntry{
 		token: token, frontier: cloneDurableFrontier(token.frontier),
 		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
-		logicalObligations: stableLogicalObligationMap(token.logicalObligations),
+		logicalObligations: stableLogicalObligationList(token.logicalObligations),
 	})
 	return nil
 }
@@ -220,7 +240,7 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 		entry := &(*entries)[i]
 		existing := entry.token
 		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(incoming.token) {
-			return fmt.Errorf("%w: logical resource %q changed stable identity", ErrResourceConflict, logicalKey)
+			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
 		}
 		coalesce, err := stableResourcesCoalesce(existing, incoming.token)
 		if err != nil {
@@ -230,13 +250,9 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 			continue
 		}
 		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
-			return fmt.Errorf("%w: incompatible duplicate stable identity %q", ErrResourceConflict, existing.identityKey())
+			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
-		incomingObligations := make([]StableLogicalObligation, 0, len(incoming.logicalObligations))
-		for _, obligation := range incoming.logicalObligations {
-			incomingObligations = append(incomingObligations, obligation)
-		}
-		if err := mergeStableLogicalObligations(entry.logicalObligations, incomingObligations); err != nil {
+		if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
@@ -502,12 +518,9 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 			fields = append(fields, field)
 		}
 		sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
-		logicalObligations := make([]StableLogicalObligation, 0, len(entry.logicalObligations))
-		for _, obligation := range entry.logicalObligations {
-			logicalObligations = append(logicalObligations, obligation)
-		}
+		logicalObligations := cloneStableLogicalObligations(entry.logicalObligations)
 		sort.Slice(logicalObligations, func(i, j int) bool {
-			return stableLogicalObligationKey(logicalObligations[i]) < stableLogicalObligationKey(logicalObligations[j])
+			return stableLogicalObligationLess(logicalObligations[i], logicalObligations[j])
 		})
 		descriptors[i] = StableResourceDescriptor{
 			kind: entry.token.kind, identity: entry.token.identity, generation: entry.token.generation,
@@ -570,7 +583,7 @@ func (set *StableResourceSet) FlushThrough() error {
 			continue
 		}
 		if err := token.flushThrough(entry.frontier); err != nil {
-			errs = append(errs, fmt.Errorf("flush stable resource %q: %w", token.logicalKey(), err))
+			errs = append(errs, fmt.Errorf("flush stable resource %+v: %w", token.logicalKey(), err))
 		}
 	}
 	return errors.Join(errs...)
@@ -595,7 +608,7 @@ func (set *StableResourceSet) SyncThrough() error {
 			continue
 		}
 		if err := token.syncThrough(entry.frontier); err != nil {
-			errs = append(errs, fmt.Errorf("sync stable resource %q: %w", token.logicalKey(), err))
+			errs = append(errs, fmt.Errorf("sync stable resource %+v: %w", token.logicalKey(), err))
 		}
 	}
 	return errors.Join(errs...)

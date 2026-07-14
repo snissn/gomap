@@ -301,6 +301,55 @@ func TestStableResourceSetRejectsConflictingLogicalObligationAtomically(t *testi
 	}
 }
 
+func TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "large-logical.asset", "0123456789abcdef")
+	physicalDigest := sha256.Sum256([]byte("large-physical-segment"))
+	obligations := make([]StableLogicalObligation, stableLogicalObligationLinearLimit+1)
+	for i := range obligations {
+		obligations[i] = StableLogicalObligation{
+			Class: "column-asset-ref-v1", Kind: "query_ready_base_v1", Namespace: "events",
+			Generation: 7, PartID: uint64(i + 1), FileID: 1, Offset: int64(i), Length: 1,
+			Checksum: uint32(100 + i), Reachability: ReachabilityQueryReadyBase,
+			Digest: sha256.Sum256([]byte(fmt.Sprintf("large-logical-%d", i))),
+		}
+	}
+	newToken := func(logical []StableLogicalObligation) *StableResourceToken {
+		t.Helper()
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceQueryReadyAsset, LogicalLane: "events", ResourceID: "1", Generation: 1,
+			DiagnosticPath: "large-logical.asset", File: file, Frontier: DurableFrontier{Bytes: 16},
+			Digest: physicalDigest, Reachability: ReachabilityQueryReadyBase, LogicalObligations: logical,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityQueryReadyBase)
+	if err := builder.Add(newToken(obligations)); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := obligations[stableLogicalObligationLinearLimit/2]
+	conflicting.Checksum++
+	conflicting.Digest = sha256.Sum256([]byte("large-logical-conflict"))
+	if err := builder.Add(newToken([]StableLogicalObligation{conflicting})); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("large conflicting logical obligation error=%v want ErrResourceConflict", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	descriptor := set.Descriptors()[0]
+	if got := len(descriptor.LogicalObligations()); got != len(obligations) {
+		t.Fatalf("logical obligations after large rejection=%d want %d", got, len(obligations))
+	}
+	if descriptor.Frontier().Bytes != 16 {
+		t.Fatalf("large rejected logical obligation advanced frontier=%d want 16", descriptor.Frontier().Bytes)
+	}
+}
+
 func TestStableResourceTokenCapturesExactRIDMembershipByValue(t *testing.T) {
 	dir := t.TempDir()
 	file := writeStableResourceFixture(t, dir, "capture.vlog", "original-resource-bytes")

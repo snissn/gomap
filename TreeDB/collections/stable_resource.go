@@ -124,7 +124,17 @@ func stableColumnLogicalObligation(ref ColumnAssetRef, reachability rootpublicat
 		binary.LittleEndian.PutUint32(encoded[:], value)
 		return append(raw, encoded[:]...)
 	}
-	raw := make([]byte, 0, len(ref.Kind)+len(ref.Namespace)+len(reachability)+64)
+	// Four length prefixes, the fixed class, and the six numeric fields add 75
+	// bytes beyond the variable strings. Normal production namespaces fit the
+	// stack buffer; unusually large names retain the exact heap fallback.
+	encodedLen := len(ref.Kind) + len(ref.Namespace) + len(reachability) + 75
+	var stack [512]byte
+	var raw []byte
+	if encodedLen <= len(stack) {
+		raw = stack[:0:encodedLen]
+	} else {
+		raw = make([]byte, 0, encodedLen)
+	}
 	raw = appendString(raw, obligationClass)
 	raw = appendString(raw, string(ref.Kind))
 	raw = appendString(raw, ref.Namespace)
@@ -210,7 +220,12 @@ func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetR
 }
 
 func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, resources *rootpublication.StableResourceSet) error {
-	expected := make(map[rootpublication.StableLogicalObligation]struct{}, len(assets))
+	const linearLimit = 16
+	expected := make([]rootpublication.StableLogicalObligation, 0, len(assets))
+	var expectedIndex map[rootpublication.StableLogicalObligation]struct{}
+	if len(assets) > linearLimit {
+		expectedIndex = make(map[rootpublication.StableLogicalObligation]struct{}, len(assets))
+	}
 	for i, asset := range assets {
 		_, reachability, classification, err := stableColumnAssetResourceClassification(asset.Ref.Kind)
 		if err != nil {
@@ -220,10 +235,19 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 			continue
 		}
 		obligation := stableColumnLogicalObligation(asset.Ref, reachability)
-		if _, duplicate := expected[obligation]; duplicate {
-			return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+		if expectedIndex != nil {
+			if _, duplicate := expectedIndex[obligation]; duplicate {
+				return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+			}
+			expectedIndex[obligation] = struct{}{}
+		} else {
+			for _, existing := range expected {
+				if existing == obligation {
+					return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+				}
+			}
 		}
-		expected[obligation] = struct{}{}
+		expected = append(expected, obligation)
 	}
 	if resources == nil {
 		if len(expected) != 0 {
@@ -231,7 +255,11 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 		}
 		return nil
 	}
-	actual := make(map[rootpublication.StableLogicalObligation]struct{}, len(expected))
+	actual := make([]rootpublication.StableLogicalObligation, 0, len(expected))
+	var actualIndex map[rootpublication.StableLogicalObligation]struct{}
+	if expectedIndex != nil {
+		actualIndex = make(map[rootpublication.StableLogicalObligation]struct{}, len(expected))
+	}
 	for _, descriptor := range resources.Descriptors() {
 		for _, obligation := range descriptor.LogicalObligations() {
 			resourceKind, _, classification, err := stableColumnAssetResourceClassification(ColumnAssetKind(obligation.Kind))
@@ -241,19 +269,54 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 			if classification != "authoritative" || resourceKind != descriptor.Kind() {
 				return fmt.Errorf("collections: stable column obligation kind=%q resource_kind=%q classification=%q", obligation.Kind, descriptor.Kind(), classification)
 			}
-			if _, duplicate := actual[obligation]; duplicate {
-				return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+			if actualIndex != nil {
+				if _, duplicate := actualIndex[obligation]; duplicate {
+					return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+				}
+				actualIndex[obligation] = struct{}{}
+			} else {
+				for _, existing := range actual {
+					if existing == obligation {
+						return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+					}
+				}
 			}
-			actual[obligation] = struct{}{}
+			actual = append(actual, obligation)
 		}
 	}
-	for obligation := range expected {
-		if _, ok := actual[obligation]; !ok {
+	for _, obligation := range expected {
+		if actualIndex != nil {
+			if _, found := actualIndex[obligation]; !found {
+				return fmt.Errorf("collections: stable column resources missing prepared obligation %+v", obligation)
+			}
+			continue
+		}
+		found := false
+		for _, candidate := range actual {
+			if candidate == obligation {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return fmt.Errorf("collections: stable column resources missing prepared obligation %+v", obligation)
 		}
 	}
-	for obligation := range actual {
-		if _, ok := expected[obligation]; !ok {
+	for _, obligation := range actual {
+		if expectedIndex != nil {
+			if _, found := expectedIndex[obligation]; !found {
+				return fmt.Errorf("collections: stable column resources contain unprepared obligation %+v", obligation)
+			}
+			continue
+		}
+		found := false
+		for _, candidate := range expected {
+			if candidate == obligation {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return fmt.Errorf("collections: stable column resources contain unprepared obligation %+v", obligation)
 		}
 	}
