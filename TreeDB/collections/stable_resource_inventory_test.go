@@ -19,6 +19,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func TestStableLegacyVectorResourceTokenRejectsCompatibilitySidecar(t *testing.T) {
+	token, err := NewStableLegacyVectorResourceToken(rootpublication.StableResourceSpec{
+		Reachability: rootpublication.ReachabilityLegacyVectorSnapshot,
+	})
+	if token != nil {
+		token.Release()
+	}
+	if !errors.Is(err, rootpublication.ErrResourceExcluded) {
+		t.Fatalf("legacy vector token error=%v want ErrResourceExcluded", err)
+	}
+}
+
 func testStableColumnConstructionPinBlocksCrossManagerGC(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

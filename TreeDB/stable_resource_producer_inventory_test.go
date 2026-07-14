@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/authorityinventory"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -16,10 +17,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
-type exactHandleProducer func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)
+type exactHandleConstructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)
 
-func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testing.T) {
-	producers := map[rootpublication.ReachabilityField]exactHandleProducer{
+func TestEveryRegisterableInventoryFieldHasConcreteExactHandleConstructor(t *testing.T) {
+	constructors := map[rootpublication.ReachabilityField]exactHandleConstructor{
 		rootpublication.ReachabilityIndexFile:                  db.NewStableDBResourceToken,
 		rootpublication.ReachabilityValueLogPointer:            valuelog.NewStableValueLogResourceToken,
 		rootpublication.ReachabilityOuterLeafRawPointer:        valuelog.NewStableOuterLeafRawResourceToken,
@@ -33,7 +34,6 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 		rootpublication.ReachabilityTypedColumnCode:            collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityHNSWSearchPack:             collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityVectorGraphPack:            collections.NewStableColumnAssetResourceToken,
-		rootpublication.ReachabilityLegacyVectorSnapshot:       collections.NewStableLegacyVectorResourceToken,
 		rootpublication.ReachabilityCommandWALActive:           commitlog.NewStableCommandWALResourceToken,
 		rootpublication.ReachabilityCommandWALRotated:          commitlog.NewStableCommandWALResourceToken,
 		rootpublication.ReachabilityCommandWALExternalRIDFence: valuelog.NewStableValueLogResourceToken,
@@ -45,16 +45,16 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 		if !ok {
 			t.Fatalf("required field %q has no policy", field)
 		}
-		producer, hasProducer := producers[field]
+		constructor, hasConstructor := constructors[field]
 		if !policy.Registerable {
-			if hasProducer {
-				t.Errorf("excluded field %q has concrete candidate producer", field)
+			if hasConstructor {
+				t.Errorf("excluded field %q has concrete token constructor", field)
 			}
 			continue
 		}
 		registerable++
-		if !hasProducer {
-			t.Errorf("registerable field %q has no concrete producer entry point", field)
+		if !hasConstructor {
+			t.Errorf("registerable field %q has no concrete token constructor", field)
 			continue
 		}
 		path := filepath.Join(t.TempDir(), fmt.Sprintf("resource-%d", i))
@@ -71,18 +71,35 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 			DiagnosticPath: filepath.Base(path), File: file, Frontier: rootpublication.DurableFrontier{Bytes: 1},
 			Digest: sha256.Sum256([]byte(field)), Reachability: field,
 		}
-		resource, err := producer(spec)
+		resource, err := constructor(spec)
 		_ = file.Close()
 		if err != nil {
-			t.Errorf("concrete producer for %q: %v", field, err)
+			t.Errorf("concrete token constructor for %q: %v", field, err)
 			continue
 		}
 		if resource.Identity() == (rootpublication.StableIdentity{}) {
-			t.Errorf("concrete producer for %q did not pin exact handle identity", field)
+			t.Errorf("concrete token constructor for %q did not pin exact handle identity", field)
 		}
 		resource.Release()
 	}
-	if len(producers) != registerable {
-		t.Errorf("concrete producer fields=%d registerable canonical fields=%d", len(producers), registerable)
+	if len(constructors) != registerable {
+		t.Errorf("concrete constructor fields=%d registerable canonical fields=%d", len(constructors), registerable)
 	}
+}
+
+func TestLegacyVectorAuthorityInventoriesAgreeOnQuarantine(t *testing.T) {
+	policy, ok := rootpublication.StableResourcePolicyFor(rootpublication.ReachabilityLegacyVectorSnapshot)
+	if !ok || policy.Registerable || policy.Classification != "explicit-legacy-exclusion" {
+		t.Fatalf("root-publication legacy vector policy=%+v want explicit exclusion", policy)
+	}
+	for _, row := range authorityinventory.Rows {
+		if row.Field != "collections.LegacyVectorSidecar" {
+			continue
+		}
+		if row.ActivationState != authorityinventory.ActivationQuarantined {
+			t.Fatalf("authority inventory legacy vector state=%s want quarantined", row.ActivationState)
+		}
+		return
+	}
+	t.Fatal("authority inventory missing collections.LegacyVectorSidecar")
 }

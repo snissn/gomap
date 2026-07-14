@@ -3239,6 +3239,11 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
+	for i := range refs {
+		if !supportedExternalRefClass(refs[i].Class) {
+			return nil, ErrCorrupt
+		}
+	}
 	total, err := externalRefsEncodedLen(refs)
 	if err != nil {
 		return nil, err
@@ -3310,6 +3315,9 @@ func decodeExternalRefs(data []byte) ([]ExternalRef, error) {
 		}
 		ref := ExternalRef{}
 		ref.Class = ExternalRefClass(binary.LittleEndian.Uint16(data[off : off+2]))
+		if !supportedExternalRefClass(ref.Class) {
+			return nil, ErrCorrupt
+		}
 		ref.Flags = binary.LittleEndian.Uint16(data[off+2 : off+4])
 		pathLen := binary.LittleEndian.Uint32(data[off+4 : off+8])
 		ref.FileID = binary.LittleEndian.Uint64(data[off+8 : off+16])
@@ -3328,6 +3336,17 @@ func decodeExternalRefs(data []byte) ([]ExternalRef, error) {
 		return nil, ErrCorrupt
 	}
 	return refs, nil
+}
+
+func supportedExternalRefClass(class ExternalRefClass) bool {
+	switch class {
+	case ExternalRefValueLog, ExternalRefLeafLog:
+		return true
+	default:
+		// ExternalRefPayloadFile is reserved but quarantined until a production
+		// identity, sync, recovery, and deletion owner exist.
+		return false
+	}
 }
 
 func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {

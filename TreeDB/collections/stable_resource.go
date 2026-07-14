@@ -61,13 +61,14 @@ func NewStableColumnAssetResourceToken(spec rootpublication.StableResourceSpec) 
 	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerColumnAsset, spec, classification)
 }
 
-// NewStableLegacyVectorResourceToken registers an exact immutable file in a
-// legacy vector snapshot generation before its manifest becomes reachable.
+// NewStableLegacyVectorResourceToken rejects the explicit compatibility-only
+// sidecar. SaveSnapshot/LoadVectorIndexSnapshot do not publish a root/catalog
+// field, so the legacy epoch must never certify candidate authority.
 func NewStableLegacyVectorResourceToken(spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
 	if spec.Reachability != rootpublication.ReachabilityLegacyVectorSnapshot {
 		return nil, fmt.Errorf("%w: legacy-vector producer does not own reachability field %q", rootpublication.ErrUnresolvedResource, spec.Reachability)
 	}
-	return rootpublication.NewStableProducerResourceTokenForDomain(rootpublication.StableProducerLegacyVector, spec, "authoritative-legacy")
+	return nil, fmt.Errorf("%w: %s is an explicit compatibility-only sidecar", rootpublication.ErrResourceExcluded, spec.Reachability)
 }
 
 // stableColumnAssetResourceClassification is the checked producer policy for

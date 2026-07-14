@@ -150,6 +150,16 @@ func TestRebuildableQueryReadyPoliciesAreNotRegisterable(t *testing.T) {
 	}
 }
 
+func TestLegacyVectorSnapshotPolicyIsCompatibilityOnly(t *testing.T) {
+	policy, ok := StableResourcePolicyFor(ReachabilityLegacyVectorSnapshot)
+	if !ok {
+		t.Fatal("legacy vector snapshot missing canonical policy")
+	}
+	if policy.Registerable || policy.Classification != "explicit-legacy-exclusion" || policy.Producer != StableProducerLegacyExcluded {
+		t.Fatalf("legacy vector snapshot policy=%+v want compatibility-only exclusion", policy)
+	}
+}
+
 func TestAdjacentDBPublicationIssueRouting(t *testing.T) {
 	wantIssue := map[ReachabilityField]string{
 		ReachabilityMetaPage:   "#3679",

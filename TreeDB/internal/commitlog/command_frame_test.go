@@ -864,6 +864,31 @@ func TestCommandWALFormatRoundTripExternalRefs(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatRejectsQuarantinedPayloadFileExternalRef(t *testing.T) {
+	_, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           5,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		ExternalRefs: []ExternalRef{{
+			Class:  ExternalRefPayloadFile,
+			FileID: 1,
+			Offset: 0,
+			Length: 1,
+		}},
+	})
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("payload-file external ref error=%v want ErrCorrupt", err)
+	}
+
+	encoded := make([]byte, 4+externalRefEncodedFixedSize)
+	binary.LittleEndian.PutUint32(encoded[:4], 1)
+	binary.LittleEndian.PutUint16(encoded[4:6], uint16(ExternalRefPayloadFile))
+	if _, err := decodeExternalRefs(encoded); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("decoded payload-file external ref error=%v want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALRawKVBatchAllowsEmptyKeysButRejectsNilKeys(t *testing.T) {
 	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: nil, Value: []byte("v")}}); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("EncodeRawKVBatchPayload nil key error=%v, want ErrCorrupt", err)
