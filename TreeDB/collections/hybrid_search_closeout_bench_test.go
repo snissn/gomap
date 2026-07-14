@@ -224,6 +224,7 @@ func BenchmarkSearchHybridCloseout2506(b *testing.B) {
 
 func openHybridCloseoutFixture2506(tb testing.TB, docs, dims, m int) hybridCloseoutFixture2506 {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)

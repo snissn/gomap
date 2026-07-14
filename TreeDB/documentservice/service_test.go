@@ -11,6 +11,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
@@ -556,6 +557,9 @@ func TestServiceOpenedIncompatibleTextVectorSchemasFailClosed(t *testing.T) {
 }
 
 func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("document service vector publication requires exact relative namespace support")
+	}
 	dir := t.TempDir()
 	ctx := context.Background()
 	db, err := backenddb.Open(testBackendOptions(dir))
@@ -1046,6 +1050,9 @@ func searchMetaHasSources(meta map[string]any, sources ...string) bool {
 
 func newTestService(t testing.TB) (*Service, *backenddb.DB) {
 	t.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("document service vector publication requires exact relative namespace support")
+	}
 	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
