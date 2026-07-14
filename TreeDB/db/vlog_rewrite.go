@@ -3374,6 +3374,10 @@ func valueLogRewriteCollectionRootStoragePolicy(oldPager *pager.Pager, rootID ui
 type rewriteCreatedSegment struct {
 	path   string
 	fileID uint32
+	// identity is captured from the writer's exact active handle at creation or
+	// rotation time. Packed promotion must match it after flush and relative
+	// reopen; zero is retained only for legacy test fixtures.
+	identity rootpublication.StableIdentity
 }
 
 type rewriteWriter struct {
@@ -3577,12 +3581,20 @@ func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
 	return nil
 }
 
-func (w *rewriteWriter) noteCreatedSegment(path string, fileID uint32) {
+func (w *rewriteWriter) noteCreatedSegment(path string, fileID uint32, writer *valuelog.Writer) error {
 	if w == nil || path == "" || fileID == 0 {
-		return
+		return nil
+	}
+	if writer == nil {
+		return errors.New("vlog-rewrite: created segment has no writer handle")
+	}
+	identity, err := writer.StableIdentity()
+	if err != nil {
+		return err
 	}
 	w.createdIDs = append(w.createdIDs, fileID)
-	w.createdSegments = append(w.createdSegments, rewriteCreatedSegment{path: path, fileID: fileID})
+	w.createdSegments = append(w.createdSegments, rewriteCreatedSegment{path: path, fileID: fileID, identity: identity})
+	return nil
 }
 
 func rewriteDictFrameRecordLen(rawPayloadBytes, k int) int64 {
@@ -4181,7 +4193,11 @@ func (w *rewriteWriter) rotate() error {
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.w = writer
 		w.seq = nextSeq
-		w.noteCreatedSegment(path, fileID)
+		if err := w.noteCreatedSegment(path, fileID, w.w); err != nil {
+			_ = w.w.Close()
+			w.w = nil
+			return err
+		}
 		w.currentPath = path
 		w.currentFileID = fileID
 		return nil
@@ -4192,7 +4208,9 @@ func (w *rewriteWriter) rotate() error {
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.seq = nextSeq
-	w.noteCreatedSegment(path, fileID)
+	if err := w.noteCreatedSegment(path, fileID, w.w); err != nil {
+		return err
+	}
 	w.currentPath = path
 	w.currentFileID = fileID
 	return nil
@@ -4273,7 +4291,17 @@ func (w *rewriteWriter) rotateLeaf() error {
 	return w.rotateLeafCapture(nil)
 }
 
+type rewriteLeafRotationCaptureFunc func(*valuelog.Writer, string, uint32, bool) (bool, error)
+
 func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture) error {
+	var captureRotation rewriteLeafRotationCaptureFunc
+	if capture != nil {
+		captureRotation = capture.captureRotation
+	}
+	return w.rotateLeafCaptureWith(captureRotation)
+}
+
+func (w *rewriteWriter) rotateLeafCaptureWith(capture rewriteLeafRotationCaptureFunc) error {
 	var rotationErr error
 	nextSeq, err := w.nextLeafSeq()
 	if err != nil {
@@ -4307,7 +4335,11 @@ func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 		w.leafW = writer
 		w.leafSeq = nextSeq
-		w.noteCreatedSegment(path, fileID)
+		if err := w.noteCreatedSegment(path, fileID, w.leafW); err != nil {
+			_ = w.leafW.Close()
+			w.leafW = nil
+			return err
+		}
 		w.leafCurrentPath = path
 		w.leafCurrentFileID = fileID
 		return nil
@@ -4317,7 +4349,7 @@ func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture
 			return err
 		}
 	} else {
-		installed, err := capture.captureRotation(w.leafW, path, fileID, true)
+		installed, err := capture(w.leafW, path, fileID, true)
 		if err != nil && !installed {
 			return err
 		}
@@ -4330,7 +4362,9 @@ func (w *rewriteWriter) rotateLeafCapture(capture *rewriteStableOuterLeafCapture
 	w.leafW.SetBlockCompression(leafCodec, w.blockCompression)
 	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	w.leafSeq = nextSeq
-	w.noteCreatedSegment(path, fileID)
+	if err := w.noteCreatedSegment(path, fileID, w.leafW); err != nil {
+		return errors.Join(rotationErr, err)
+	}
 	w.leafCurrentPath = path
 	w.leafCurrentFileID = fileID
 	return rotationErr

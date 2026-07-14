@@ -22,6 +22,7 @@ type leafGenerationPackTestCandidate struct {
 
 func prepareLeafGenerationPackTestCandidate(t *testing.T, db *DB, leafLog *rewriteWriter, keys int) leafGenerationPackTestCandidate {
 	t.Helper()
+	requireLeafGenerationPackPromotionSupport(t)
 	if keys < 128 {
 		keys = 128
 	}
@@ -413,6 +414,7 @@ func TestLeafGenerationPack_CloseWaitsForCopyTeardown(t *testing.T) {
 }
 
 func TestLeafGenerationPack_CheckpointReopenPreservesLeafRefsAndValuePointers(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	opts := Options{
 		Dir:                        dir,

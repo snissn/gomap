@@ -25,6 +25,12 @@ func renameStableChildFile(*os.File, string, string) error {
 	return fmt.Errorf("%w: relative directory-handle rename is unavailable", ErrNamespacePersistenceUnsupported)
 }
 
+func stableCrossParentMoveNoReplaceSupported() bool { return false }
+
+func moveStableChildFileNoReplace(*os.File, *os.File, string, *os.File, string) (bool, error) {
+	return false, fmt.Errorf("%w: cross-parent no-replace move is unavailable", ErrNamespacePersistenceUnsupported)
+}
+
 type stableWindowsFileIDInfo struct {
 	VolumeSerialNumber uint64
 	FileID             [16]byte

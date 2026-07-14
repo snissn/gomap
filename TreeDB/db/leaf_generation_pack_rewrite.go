@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -113,13 +114,42 @@ func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegm
 		if seg.fileID == 0 || seg.path == "" {
 			continue
 		}
+		if seg.identity != (rootpublication.StableIdentity{}) {
+			file, err := os.Open(seg.path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				errs = append(errs, err)
+				continue
+			}
+			identity, identityErr := rootpublication.StableIdentityFromFile(file)
+			closeErr := file.Close()
+			if identityErr != nil || closeErr != nil {
+				errs = append(errs, errors.Join(identityErr, closeErr))
+				continue
+			}
+			if !rootpublication.SamePhysicalIdentity(identity, seg.identity) {
+				errs = append(errs, errors.Join(
+					fmt.Errorf("%w: rewrite-created segment %d path was rebound", rootpublication.ErrResourceConflict, seg.fileID),
+					ErrRecoveryRequired,
+				))
+				continue
+			}
+		}
 		if db != nil && db.valueLogManager != nil {
 			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
 				errs = append(errs, fmt.Errorf("register rewrite-created segment %d for removal: %w", seg.fileID, err))
 				continue
 			}
-			if err := db.valueLogManager.RemoveSegmentForce(seg.fileID); err != nil {
-				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, errors.Join(err, ErrRecoveryRequired)))
+			var removeErr error
+			if seg.identity != (rootpublication.StableIdentity{}) {
+				removeErr = db.valueLogManager.RemoveSegmentExpectedIdentity(seg.fileID, seg.identity)
+			} else {
+				removeErr = db.valueLogManager.RemoveSegmentForce(seg.fileID)
+			}
+			if removeErr != nil {
+				errs = append(errs, fmt.Errorf("remove rewrite-created segment %d: %w", seg.fileID, errors.Join(removeErr, ErrRecoveryRequired)))
 			}
 			continue
 		}
@@ -1138,31 +1168,6 @@ func leafGenerationPackCommittedRetired(ids []uint64) []uint64 {
 	return out
 }
 
-func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir string) ([]rewriteCreatedSegment, error) {
-	promoted := append([]rewriteCreatedSegment(nil), created...)
-	for i := range promoted {
-		if promoted[i].path == "" || promoted[i].fileID == 0 {
-			continue
-		}
-		destination := filepath.Join(leafDir, filepath.Base(promoted[i].path))
-		if _, err := os.Stat(destination); err == nil {
-			return promoted, fmt.Errorf("leaf generation pack: publish destination already exists: %s", destination)
-		} else if !os.IsNotExist(err) {
-			return promoted, err
-		}
-		oldPath := promoted[i].path
-		renamed, err := renamePersistentFile(leafDir, oldPath, destination, durabilitycut.ResourceOuterLeaf)
-		if err != nil {
-			if renamed {
-				promoted[i].path = destination
-			}
-			return promoted, err
-		}
-		promoted[i].path = destination
-	}
-	return promoted, nil
-}
-
 func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, _ bool, leafFrameK int, attempt int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
 	applyStarted := time.Now()
 	if db == nil {
@@ -1191,6 +1196,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := ctx.Err(); err != nil {
 		return 0, 0, err
 	}
+	authority, err := newLeafGenerationPackPromotionAuthority(db, writer.leafDir, resolveStorageLayout(db.dir).leafVLogDir)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: prepare packed promotion authority: %w", err)
+	}
+	defer func() {
+		if !authority.retainedForRecovery {
+			err = errors.Join(err, authority.release())
+		}
+	}()
 
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
@@ -1413,6 +1427,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: snapshot created leaf ref segments: %w", err)
 	}
+	if err := authority.capture(createdSegments, leafGenerationPackPointers(leafCtx)); err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: capture packed segment authority: %w", err)
+	}
 	// The staging manager may mmap copied segments while applying collection
 	// deltas. Windows forbids renaming those files while the mappings are open,
 	// so release every staging read handle before entering publish.
@@ -1497,34 +1514,21 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
 	}
 	promotionStarted := time.Now()
-	promotedSegments, promoteErr := promoteLeafGenerationPackSegments(createdSegments, resolveStorageLayout(db.dir).leafVLogDir)
+	promotedSegments, promotionMutated, promoteErr := authority.promote()
 	if runStats != nil {
 		runStats.ApplyStages.PromotionTimeNanos += time.Since(promotionStarted).Nanoseconds()
+		runStats.ApplyStages.DirectorySyncTimeNanos += authority.namespaceSyncNanos
 	}
 	createdSegments = promotedSegments
-	var (
-		publishAlloc *leafGenerationPackPublishAllocator
-		dirSyncCh    chan leafGenerationPackDirectorySyncResult
-	)
-	waitDirectorySync := func() error {
-		if dirSyncCh == nil {
-			return nil
-		}
-		waitStarted := time.Now()
-		result := <-dirSyncCh
-		dirSyncCh = nil
-		if runStats != nil {
-			runStats.ApplyStages.DirectorySyncTimeNanos += result.timeNanos
-			runStats.ApplyStages.DirectorySyncWaitTimeNanos += time.Since(waitStarted).Nanoseconds()
-		}
-		return result.err
-	}
+	var publishAlloc *leafGenerationPackPublishAllocator
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
-		if syncErr := waitDirectorySync(); syncErr != nil {
-			baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", syncErr))
-		}
 		if publishAlloc != nil {
 			publishAlloc.Rollback()
+		}
+		// Release the candidate set and capture pins before asking the manager's
+		// deletion owner to acquire an exact-identity delete lease.
+		if releaseErr := authority.release(); releaseErr != nil {
+			baseErr = errors.Join(baseErr, releaseErr)
 		}
 		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
 		if cleanupErr != nil {
@@ -1544,9 +1548,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return copied, copiedBytes, cleanupErr
 	}
 	if promoteErr != nil {
+		if promotionMutated && !errors.Is(promoteErr, ErrRecoveryRequired) {
+			promoteErr = errors.Join(promoteErr, ErrRecoveryRequired)
+		}
 		promoteErr = fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr)
 		if errors.Is(promoteErr, ErrRecoveryRequired) {
 			db.publicationPoisoned.Store(true)
+			authority.retainForRecovery()
 			unlockPublish()
 			return 0, 0, promoteErr
 		}
@@ -1556,15 +1564,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promoted leaf directory failpoint: %w", err))
 	}
-	if len(createdSegments) > 0 {
-		dirSyncCh = make(chan leafGenerationPackDirectorySyncResult, 1)
-		leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-		started := time.Now()
-		go func(started time.Time) {
-			err := syncNewFileNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf)
-			dirSyncCh <- leafGenerationPackDirectorySyncResult{err: err, timeNanos: time.Since(started).Nanoseconds()}
-		}(started)
-	}
+	// Exact packed promotion already synchronized both the staging and
+	// destination parents once as one namespace batch. Do not issue the former
+	// path-based destination-directory sync here.
 
 	var leafManifest *leafGenerationManifest
 	var leafManifestRawFileIDs []uint32
@@ -1613,11 +1615,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		runStats.ApplyStages.PageSyncTimeNanos += pageSyncDuration.Nanoseconds()
 	}
-	dirWaitStarted := time.Now()
-	if err := waitDirectorySync(); err != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", err))
-	}
-	dirWaitDuration := time.Since(dirWaitStarted)
 	publishEvent.Phase = leafGenerationPackAfterDirectorySync
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: directory sync failpoint: %w", err))
@@ -1635,6 +1632,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
 				return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: register rewritten leaf segment %d: %w", seg.fileID, err))
 			}
+		}
+		if err := authority.verifyManagerRegistration(); err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: verify registered packed segment identity: %w", err))
 		}
 	}
 	publishEvent.Phase = leafGenerationPackAfterRegistration
@@ -1696,6 +1696,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			// The alternate meta page was written and its durability outcome is
 			// ambiguous. Retain every candidate resource and fail closed until reopen.
 			db.publicationPoisoned.Store(true)
+			authority.retainForRecovery()
 			unlockPublish()
 			return 0, 0, errors.Join(
 				fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr),
@@ -1704,6 +1705,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
 	}
+	// Metadata now makes the manager-owned exact identities reachable. Its
+	// observers take over deletion fencing, so the local packed candidate set
+	// can be released only at this point.
+	if err := authority.release(); err != nil {
+		db.publicationPoisoned.Store(true)
+		unlockPublish()
+		return 0, 0, errors.Join(fmt.Errorf("vlog-rewrite: release packed promotion authority: %w", err), ErrRecoveryRequired)
+	}
 	db.invalidateLeafGenerationSubtreeStats(publishAlloc.Pages())
 	if runStats != nil && runStats.trackCarry {
 		runStats.publishedState = db.state.Load()
@@ -1711,7 +1720,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			runStats.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(leafCtx.sourceLiveMovedByGeneration)
 		}
 	}
-	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
+	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s namespace_sync=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, time.Duration(authority.namespaceSyncNanos), registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()
 	postWorkStarted := time.Now()
 	db.finalizeCommitPostWork(post)
@@ -1719,9 +1728,4 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.ApplyStages.PostWorkTimeNanos += time.Since(postWorkStarted).Nanoseconds()
 	}
 	return leafCtx.copied, leafCtx.copiedBytes, nil
-}
-
-type leafGenerationPackDirectorySyncResult struct {
-	err       error
-	timeNanos int64
 }

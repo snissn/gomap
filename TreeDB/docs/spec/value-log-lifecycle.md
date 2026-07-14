@@ -242,8 +242,19 @@ Leaf-generation pack uses a two-phase copy/publish state machine:
    generation, and exact source-generation state/file lists. Any mismatch
    discards the whole attempt and performs one full retry; no copied root,
    retired-page list, or private allocation is reused.
-4. **Install:** while holding `writeMu` and the value-log visibility gate, rename
-   staged files into `leaf_vlog`, fsync that directory, and call `RegisterSegment`.
+4. **Install:** while holding `writeMu` and the value-log visibility gate, link
+   each retained staged-file handle into `leaf_vlog` with no replacement,
+   validate that every destination link is
+   still the creation-handle identity, and fsync each distinct parent exactly
+   once as one namespace batch. The batch freezes one
+   `ResourceOuterLeafPack` token per reachable segment, bound to its immutable
+   byte frontier, digest, physical identity, generation, and packed-pointer
+   reachability. The original link remains in the private staging namespace
+   until successful publication cleanup; promotion never unlinks a source
+   pathname that may have been rebound. Capture and resource-set pins deny
+   deletion through
+   `RegisterSegment`; manager registration must report the same physical
+   identities before publication can continue.
    Registration is tentative and publish-owned: existing snapshots retain their
    immutable old set, while `AcquireSnapshot` and `RefreshValueLogSet` cannot
    construct a set containing candidates before root publication. Rebase private
@@ -268,8 +279,18 @@ the highest valid durable meta state. Startup removes orphan
 cannot delete an active attempt.
 
 Before promotion, leaf pack closes both staging append writers and the private
-staging value-log manager. This releases mapped read handles as well as ordinary
-file handles, which is required for rename-based promotion on Windows.
+staging value-log manager, while retaining separately reopened exact segment
+handles and identity pins. Any failure after a destination link is installed,
+or after the alternate meta write has an ambiguous durability outcome, poisons
+the live handle and retains those authorities until `Close`. Cleanup also
+checks the creation identity before unlinking a pathname, so a rebound path is
+never deleted.
+
+Packed promotion currently fails closed before creating staging state on
+platforms without the exact relative-parent, cross-parent no-replace, and
+namespace-persistence primitives. In particular, Windows returns the typed
+`ErrNamespacePersistenceUnsupported`; portable packed promotion there is
+deferred rather than weakened to path-based rename evidence.
 
 `maintenanceMu`, the snapshot generation pins, and `teardownMu` remain held
 across copy and publish. Therefore leaf-generation GC cannot reclaim a source

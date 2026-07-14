@@ -287,6 +287,7 @@ func TestTextV2RewriteSnapshotBoundAndConcurrentServing2630(t *testing.T) {
 }
 
 func TestTextV2RewriteStorageMaintenanceAndValueLogGC2630(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	prevGOMAXPROCS := runtime.GOMAXPROCS(2)
 	t.Cleanup(func() { runtime.GOMAXPROCS(prevGOMAXPROCS) })
 

@@ -365,6 +365,7 @@ func collectNestedLeafValueLogFileCounts(t *testing.T, reader interface {
 }
 
 func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -535,6 +536,7 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 }
 
 func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	t.Setenv(envLeafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM, "0")
 	dir := t.TempDir()

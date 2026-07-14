@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
@@ -32,6 +33,7 @@ func leafGenerationPackPublicationTestOptions(dir string) Options {
 
 func openLeafGenerationPackPublicationTestDB(t *testing.T, dir string) (*DB, *rewriteWriter) {
 	t.Helper()
+	requireLeafGenerationPackPromotionSupport(t)
 	db, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -221,7 +223,7 @@ func TestLeafGenerationPack_ClosesStagingReaderBeforePromotion(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testing.T) {
+func TestLeafGenerationPack_PostPromotionCreateCutStopsNamespaceCleanup(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer func() {
@@ -230,7 +232,7 @@ func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testi
 	}()
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 
-	cutErr := errors.New("injected post-promotion rename cut")
+	cutErr := errors.New("injected post-promotion create cut")
 	var (
 		namespaceEvents []durabilitycut.Event
 		promotedPath    string
@@ -240,9 +242,9 @@ func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testi
 			return nil
 		}
 		namespaceEvents = append(namespaceEvents, event)
-		if event.Namespace == durabilitycut.NamespaceRename &&
+		if event.Namespace == durabilitycut.NamespaceCreate &&
 			event.Resource == durabilitycut.ResourceOuterLeaf &&
-			strings.Contains(event.OldPath, ".leaf-pack-copy-") {
+			filepath.Clean(filepath.Dir(event.NewPath)) == filepath.Clean(LeafLogDirPath(dir)) {
 			promotedPath = event.NewPath
 			return cutErr
 		}
@@ -258,16 +260,16 @@ func TestLeafGenerationPack_PostPromotionRenameCutStopsNamespaceCleanup(t *testi
 		t.Fatalf("LeafGenerationPack error=%v, want injected cut and ErrRecoveryRequired", err)
 	}
 	if !db.publicationPoisoned.Load() {
-		t.Fatal("post-promotion rename cut did not poison DB")
+		t.Fatal("post-promotion create cut did not poison DB")
 	}
 	if promotedPath == "" {
-		t.Fatalf("namespace events=%#v, want promoted rename", namespaceEvents)
+		t.Fatalf("namespace events=%#v, want promoted create", namespaceEvents)
 	}
 	if _, statErr := os.Stat(promotedPath); statErr != nil {
 		t.Fatalf("promoted path stat=%v, want retained candidate", statErr)
 	}
-	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceRename || got.NewPath != promotedPath {
-		t.Fatalf("last namespace event=%#v, want promotion rename as final mutation", got)
+	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceCreate || got.NewPath != promotedPath {
+		t.Fatalf("last namespace event=%#v, want promotion create as final mutation", got)
 	}
 	if err := db.SetSync([]byte("after-promotion-cut"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("SetSync after promotion cut error=%v, want ErrRecoveryRequired", err)
@@ -360,7 +362,7 @@ func TestLeafGenerationPack_PostPublicationCleanupFailureIsReportedOutOfBand(t *
 	}
 }
 
-func TestLeafGenerationPack_PromotedDirectorySyncFailureCleansCandidates(t *testing.T) {
+func TestLeafGenerationPack_PromotedDirectorySyncCutPoisonsAndRetainsCandidates(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
@@ -368,27 +370,26 @@ func TestLeafGenerationPack_PromotedDirectorySyncFailureCleansCandidates(t *test
 	beforePages := db.idx.Load().pager.PageCount()
 	testErr := errors.New("leaf pack directory sync failpoint")
 
-	originalSyncDir := syncDirFn
-	defer func() { syncDirFn = originalSyncDir }()
 	var failOnce atomic.Bool
 	failOnce.Store(true)
 	leafDir := filepath.Clean(LeafLogDirPath(dir))
-	syncDirFn = func(path string) error {
-		if filepath.Clean(path) == leafDir && failOnce.CompareAndSwap(true, false) {
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeNewFileDirectorySync && filepath.Clean(event.Path) == leafDir && failOnce.CompareAndSwap(true, false) {
 			return testErr
 		}
-		return originalSyncDir(path)
-	}
+		return nil
+	})
+	defer restore()
 
 	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{candidate.generation.GenerationID},
 		Force:         true,
 	})
-	if !errors.Is(err, testErr) {
-		t.Fatalf("LeafGenerationPack error=%v want directory sync failpoint", err)
+	if !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack error=%v want directory sync cut and recovery-required", err)
 	}
-	if db.publicationPoisoned.Load() {
-		t.Fatal("pre-meta directory sync failure poisoned DB")
+	if !db.publicationPoisoned.Load() {
+		t.Fatal("post-mutation directory sync cut did not poison DB")
 	}
 	if got := db.idx.Load().pager.PageCount(); got != beforePages {
 		t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
@@ -396,14 +397,60 @@ func TestLeafGenerationPack_PromotedDirectorySyncFailureCleansCandidates(t *test
 	if _, err := os.Stat(candidate.sourcePath); err != nil {
 		t.Fatalf("source removed after directory sync failure: %v", err)
 	}
-	if err := db.SetSync([]byte("after-directory-sync-failure"), []byte("ok")); err != nil {
-		t.Fatalf("SetSync after directory sync failure: %v", err)
+	if err := db.SetSync([]byte("after-directory-sync-failure"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("SetSync after ambiguous directory sync error=%v want recovery-required", err)
+	}
+}
+
+func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+	baselinePins := db.valueLogIdentityPins.ActivePins()
+	seen := make(map[leafGenerationPackPublishPhase]bool)
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		switch event.Phase {
+		case leafGenerationPackAfterPromotion, leafGenerationPackAfterRegistration, leafGenerationPackBeforeMetaWrite:
+			seen[event.Phase] = true
+			if got := db.valueLogIdentityPins.ActivePins(); got <= baselinePins {
+				return fmt.Errorf("packed authority pins=%d baseline=%d at phase=%d", got, baselinePins, event.Phase)
+			}
+		}
+		if event.Phase == leafGenerationPackAfterRegistration {
+			for _, id := range event.FileIDs {
+				identity, ok := db.valueLogManager.StableSegmentIdentity(id)
+				if !ok {
+					return fmt.Errorf("manager missing stable identity %d", id)
+				}
+				if _, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+					return fmt.Errorf("delete race for %d error=%v want pinned", id, err)
+				}
+			}
+		}
+		return nil
+	})
+	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
+	})
+	unregister()
+	if err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	for _, phase := range []leafGenerationPackPublishPhase{leafGenerationPackAfterPromotion, leafGenerationPackAfterRegistration, leafGenerationPackBeforeMetaWrite} {
+		if !seen[phase] {
+			t.Fatalf("publication phase %d was not observed", phase)
+		}
+	}
+	if got := db.valueLogIdentityPins.ActivePins(); got != baselinePins {
+		t.Fatalf("packed pins after metadata handoff=%d want baseline %d", got, baselinePins)
 	}
 }
 
 func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	registry := db.valueLogIdentityPins
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 768)
 	beforeSeq := db.State().CommitSeq
 	var promotedIDs []uint32
@@ -426,6 +473,9 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 	}
 	if !db.publicationPoisoned.Load() {
 		t.Fatal("meta-sync ambiguity did not poison DB")
+	}
+	if got := registry.ActivePins(); got == 0 {
+		t.Fatal("ambiguous publish released packed authority before close")
 	}
 	if _, err := os.Stat(candidate.sourcePath); err != nil {
 		t.Fatalf("source removed after ambiguous publish: %v", err)
@@ -466,6 +516,12 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 		t.Fatalf("later raw pager sync: %v", err)
 	}
 	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("packed authority pins after close=%d want 0", got)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("packed authority identities after close=%d want 0", got)
+	}
 
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
@@ -768,6 +824,10 @@ func TestLeafGenerationPack_StartupCleansOrphansWithoutDeletingLiveAttempt(t *te
 	if err := os.WriteFile(filepath.Join(orphan, "index.pages"), []byte("orphan"), 0o600); err != nil {
 		t.Fatalf("WriteFile orphan: %v", err)
 	}
+	probeOrphan := filepath.Join(LeafLogDirPath(dir), rootpublication.StableChildFileInstallProbePrefix+"crash-left")
+	if err := os.WriteFile(probeOrphan, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile probe orphan: %v", err)
+	}
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -775,6 +835,9 @@ func TestLeafGenerationPack_StartupCleansOrphansWithoutDeletingLiveAttempt(t *te
 	defer func() { _ = reopened.Close() }()
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatalf("orphan stat error=%v want not-exist", err)
+	}
+	if _, err := os.Stat(probeOrphan); !os.IsNotExist(err) {
+		t.Fatalf("probe orphan stat error=%v want not-exist", err)
 	}
 }
 

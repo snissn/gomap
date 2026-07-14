@@ -205,6 +205,7 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 }
 
 func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentSupported(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	d, err := Open(Options{
 		Dir:                        dir,

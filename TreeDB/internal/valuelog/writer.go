@@ -954,6 +954,17 @@ func (w *Writer) FileID() uint32 {
 	return w.fileID
 }
 
+// StableIdentity captures the exact physical identity of the active writer
+// handle. Staging producers use it before close so later relative reopen and
+// promotion can reject a rebound child instead of trusting its pathname.
+func (w *Writer) StableIdentity() (rootpublication.StableIdentity, error) {
+	var file *os.File
+	if w != nil {
+		file = w.f
+	}
+	return rootpublication.StableIdentityFromFile(file)
+}
+
 func (w *Writer) Size() int64 {
 	if w == nil {
 		return 0

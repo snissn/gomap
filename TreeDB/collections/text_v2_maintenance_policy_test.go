@@ -573,6 +573,7 @@ func TestTextV2MaintenancePolicyRejectsNegativeMaxDuration2732(t *testing.T) {
 }
 
 func TestTextV2MaintenancePolicyStorageComposition2732(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	d, closeDB := openTextV2MaintenanceCompressedDB2732(t, dir)
 	col, _ := createTextV2MaintenancePolicyFixture2732(t, d, 64)

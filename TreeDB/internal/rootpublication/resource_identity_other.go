@@ -18,6 +18,12 @@ func renameStableChildFile(*os.File, string, string) error {
 	return ErrNamespacePersistenceUnsupported
 }
 
+func stableCrossParentMoveNoReplaceSupported() bool { return false }
+
+func moveStableChildFileNoReplace(*os.File, *os.File, string, *os.File, string) (bool, error) {
+	return false, ErrNamespacePersistenceUnsupported
+}
+
 func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }

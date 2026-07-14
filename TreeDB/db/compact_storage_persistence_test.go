@@ -14,6 +14,7 @@ import (
 )
 
 func TestCompactStorageExhaustiveDefaultWriteProducedLeafPointersSurviveReopenGC(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	opts := compactPersistenceProofOptions(dir)
