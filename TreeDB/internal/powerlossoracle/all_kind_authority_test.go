@@ -37,6 +37,10 @@ var allKindProductionDependencies = []struct {
 }
 
 func TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants(t *testing.T) {
+	// This is deliberately generator-only coverage built from a literal shape.
+	// The TreeDB package's TestProductionAuthorityNamespaceAsymmetryVariants
+	// separately binds real producer tokens to their exact files and evaluates
+	// every generated namespace image through typed recovery.
 	required := rootpublication.RequiredReachabilityFields()
 	if len(allKindProductionDependencies) != len(required) {
 		t.Fatalf("all-kind generator fields=%d canonical registerable fields=%d", len(allKindProductionDependencies), len(required))
@@ -57,12 +61,14 @@ func TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants(t *testing.T)
 
 	first, firstCoverage, firstRoot, firstPaths := allKindAuthorityVariantFixture(t)
 	second, secondCoverage, _, _ := allKindAuthorityVariantFixture(t)
-	if firstCoverage.Generated != 19 || secondCoverage.Generated != 19 {
-		t.Fatalf("generated variants first=%d second=%d want 19", firstCoverage.Generated, secondCoverage.Generated)
+	if firstCoverage.Generated != 51 || secondCoverage.Generated != 51 {
+		t.Fatalf("generated variants first=%d second=%d want 51", firstCoverage.Generated, secondCoverage.Generated)
 	}
 	if firstCoverage.ByFamily[VariantSyncedOnly] != 1 ||
 		firstCoverage.ByFamily[VariantTargetMetaOnly] != 1 ||
 		firstCoverage.ByFamily[VariantOneMissingDependency] != len(allKindProductionDependencies) ||
+		firstCoverage.ByFamily[VariantDataWithoutNamespace] != len(allKindProductionDependencies) ||
+		firstCoverage.ByFamily[VariantNamespaceWithoutData] != len(allKindProductionDependencies) ||
 		firstCoverage.ByFamily[VariantFullWriteback] != 1 {
 		t.Fatalf("all-kind coverage=%+v", firstCoverage.ByFamily)
 	}
@@ -74,12 +80,17 @@ func TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants(t *testing.T)
 		targetStable := requireAllKindPathStable(t, variant.Model, firstRoot, firstPaths["target"])
 		stableDependencies := 0
 		omittedIdentity := ""
+		qualifiedPath := ""
 		for _, dependency := range allKindProductionDependencies {
 			path := firstPaths[dependency.field]
+			identity := string(dependency.kind) + "/" + dependency.field
+			if variant.Qualifier == identity {
+				qualifiedPath = path
+			}
 			if requireAllKindPathStable(t, variant.Model, firstRoot, path) {
 				stableDependencies++
 			} else {
-				omittedIdentity = string(dependency.kind) + "/" + dependency.field
+				omittedIdentity = identity
 			}
 		}
 		switch variant.Family {
@@ -94,6 +105,14 @@ func TestAllKindAuthorityGeneratesStableTargetAndAllButOneVariants(t *testing.T)
 		case VariantOneMissingDependency:
 			if !targetStable || stableDependencies != len(allKindProductionDependencies)-1 || variant.Qualifier != omittedIdentity {
 				t.Fatalf("one-missing qualifier=%q omitted=%q target=%t stable_dependencies=%d", variant.Qualifier, omittedIdentity, targetStable, stableDependencies)
+			}
+		case VariantDataWithoutNamespace:
+			if targetStable || stableDependencies != 0 || qualifiedPath == "" || containsString(variant.Model.StablePaths(), qualifiedPath) {
+				t.Fatalf("data-without-namespace qualifier=%q path=%q target=%t stable_dependencies=%d stable_paths=%v", variant.Qualifier, qualifiedPath, targetStable, stableDependencies, variant.Model.StablePaths())
+			}
+		case VariantNamespaceWithoutData:
+			if targetStable || stableDependencies != 0 || qualifiedPath == "" || !containsString(variant.Model.StablePaths(), qualifiedPath) {
+				t.Fatalf("namespace-without-data qualifier=%q path=%q target=%t stable_dependencies=%d stable_paths=%v", variant.Qualifier, qualifiedPath, targetStable, stableDependencies, variant.Model.StablePaths())
 			}
 		case VariantFullWriteback:
 			if !targetStable || stableDependencies != len(allKindProductionDependencies) {
@@ -114,39 +133,48 @@ func allKindAuthorityVariantFixture(t *testing.T) ([]Variant, Coverage, string, 
 	if err := os.WriteFile(filepath.Join(root, paths["target"]), []byte("old-target"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for i, dependency := range allKindProductionDependencies {
-		path := fmt.Sprintf("dependency-%02d", i)
-		paths[dependency.field] = path
-		if err := os.WriteFile(filepath.Join(root, path), []byte("old-"+dependency.field), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	model, err := Capture(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, paths["target"]), []byte("new-target"), 0o600); err != nil {
+	if err := model.Write(paths["target"], []byte("new-target")); err != nil {
 		t.Fatal(err)
 	}
 	dependencies := make([]DirtyResource, 0, len(allKindProductionDependencies))
-	for _, dependency := range allKindProductionDependencies {
-		path := paths[dependency.field]
-		if err := os.WriteFile(filepath.Join(root, path), []byte("new-"+dependency.field), 0o600); err != nil {
+	for i, dependency := range allKindProductionDependencies {
+		namespace := fmt.Sprintf("namespaces/dependency-%02d", i)
+		path := namespace + "/resource"
+		paths[dependency.field] = path
+		if err := model.Create(path, []byte("new-"+dependency.field)); err != nil {
 			t.Fatal(err)
 		}
-		dependencies = append(dependencies, DirtyResource{Kind: dependency.kind, ID: dependency.field, Path: path})
-	}
-	if err := model.Overlay(root); err != nil {
-		t.Fatal(err)
+		dependencies = append(dependencies, DirtyResource{
+			Kind:          dependency.kind,
+			ID:            dependency.field,
+			Path:          path,
+			NewName:       true,
+			NamespaceDirs: []string{".", "namespaces", namespace},
+		})
 	}
 	target := DirtyResource{Kind: ResourceIndex, ID: "target-meta", Path: paths["target"]}
 	variants, coverage, err := GenerateVariants(CutSpec{
 		ID: "all-kind-production-authority", Point: AfterMetaWrite, Occurrence: 0,
 		Model: model, TargetMeta: &target, Dependencies: dependencies,
-		RequiredFamilies: []VariantFamily{VariantSyncedOnly, VariantTargetMetaOnly, VariantOneMissingDependency, VariantFullWriteback},
+		RequiredFamilies: []VariantFamily{
+			VariantSyncedOnly,
+			VariantTargetMetaOnly,
+			VariantOneMissingDependency,
+			VariantDataWithoutNamespace,
+			VariantNamespaceWithoutData,
+			VariantFullWriteback,
+		},
 		ExpectedByFamily: map[VariantFamily]ExpectedResult{
-			VariantSyncedOnly: ExpectedOldRoot, VariantTargetMetaOnly: ExpectedCorruption,
-			VariantOneMissingDependency: ExpectedCorruption, VariantFullWriteback: ExpectedNewRoot,
+			VariantSyncedOnly:           ExpectedOldRoot,
+			VariantTargetMetaOnly:       ExpectedCorruption,
+			VariantOneMissingDependency: ExpectedCorruption,
+			VariantDataWithoutNamespace: ExpectedOldRoot,
+			VariantNamespaceWithoutData: ExpectedOldRoot,
+			VariantFullWriteback:        ExpectedNewRoot,
 		},
 	})
 	if err != nil {

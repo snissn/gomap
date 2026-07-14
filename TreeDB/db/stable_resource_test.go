@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -171,6 +173,65 @@ func TestCaptureStableIndexFileResourceProductionWitness(t *testing.T) {
 		if got := database.stableIndexCaptures.Load(); got != 0 {
 			t.Fatalf("capture %d stable-index leases=%d want 0", i, got)
 		}
+	}
+}
+
+func TestCaptureStableIndexFileResourceSyncThroughSurvivesDBClose(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable index namespace capture unsupported on Windows")
+	}
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := database.AcquireStableSnapshot()
+	if snapshot == nil {
+		_ = database.Close()
+		t.Fatal("AcquireStableSnapshot returned nil")
+	}
+	token, err := snapshot.CaptureStableIndexFileResource()
+	if err != nil {
+		_ = snapshot.Close()
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	defer token.Release()
+
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceIndex {
+			events = append(events, event)
+		}
+		return nil
+	})
+	if err := token.SyncThrough(); err != nil {
+		restore()
+		t.Fatalf("sync exact index handle after DB close: %v", err)
+	}
+	restore()
+	points := make([]durabilitycut.Point, len(events))
+	for i, event := range events {
+		if event.Root != dir || event.Path != filepath.Join(dir, indexFileName) {
+			t.Fatalf("index durability event root=%q path=%q", event.Root, event.Path)
+		}
+		points[i] = event.Point
+	}
+	if got, want := points, []durabilitycut.Point{durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync}; !slices.Equal(got, want) {
+		t.Fatalf("index durability points=%v want %v", got, want)
+	}
+
+	token.Release()
+	token.Release()
+	if got := database.stableIndexCaptures.Load(); got != 0 {
+		t.Fatalf("stable-index leases=%d want 0", got)
 	}
 }
 

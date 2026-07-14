@@ -776,7 +776,7 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 
 // Sync msyncs the memory maps and syncs the backing file to disk.
 func (p *Pager) Sync() error {
-	return p.syncDirtyChunks(true, 0)
+	return p.syncDirtyChunksWithFile(true, 0, p.file)
 }
 
 // SyncIndexData is the production index-publication data barrier. It performs
@@ -784,13 +784,28 @@ func (p *Pager) Sync() error {
 // boundary used by the power-loss oracle. Meta-page syncs continue to use Sync
 // and therefore are not mislabeled as pre-publication index-data barriers.
 func (p *Pager) SyncIndexData() error {
+	return p.SyncIndexDataWithStableFile(p.file)
+}
+
+// SyncIndexDataWithStableFile is the index-publication data barrier bound to
+// an exact retained index handle. While the pager is live it drains dirty mmap
+// chunks before syncing that handle. After Pager.Close has unmapped and closed
+// the pager-owned descriptor, the retained handle still supplies the file
+// durability fence required by an outstanding stable-resource token.
+func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
 			return err
 		}
 	}
-	if err := p.Sync(); err != nil {
+	if file == nil {
+		return errors.New("pager: stable index file unavailable")
+	}
+	if err := p.syncDirtyChunksWithFile(true, 0, file); err != nil {
 		return err
+	}
+	if info, err := file.Stat(); err == nil {
+		p.durableFileSize.Store(info.Size())
 	}
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
@@ -801,6 +816,10 @@ func (p *Pager) SyncIndexData() error {
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
+	return p.syncDirtyChunksWithFile(syncFile, firstChunk, p.file)
+}
+
+func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarget *os.File) error {
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -874,7 +893,9 @@ func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
 	}
 
 	if syncErr == nil && syncFile {
-		if err := p.file.Sync(); err != nil {
+		if syncTarget == nil {
+			syncErr = errors.New("pager: sync file unavailable")
+		} else if err := syncTarget.Sync(); err != nil {
 			syncErr = err
 		} else {
 			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)

@@ -2550,6 +2550,10 @@ func (db *DB) closeAfterHooks() error {
 			errs = append(errs, err)
 		}
 	}
+	// Namespace sync proofs are valid only for this DB lifetime. Stable
+	// publication closures retain exact handles independently and remain usable
+	// after shutdown, while a later DB instance establishes fresh evidence.
+	db.valueLogIdentityPins.ClearStableNamespaceLinks()
 	if lock != nil {
 		if err := lock.Close(); err != nil {
 			errs = append(errs, err)

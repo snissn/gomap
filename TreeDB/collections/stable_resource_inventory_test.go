@@ -1116,9 +1116,14 @@ func TestStableColumnPreparedValidationRejectsEachMissingProductionObligation(t 
 	kinds := []ColumnAssetKind{
 		ColumnAssetKindTCS1PartImage,
 		ColumnAssetKindTCS1TypedColumnPart,
+		ColumnAssetKindTCS1AggregateMetadata,
 		ColumnAssetKindTCS1Int64Values,
 		ColumnAssetKindTCS1DictionaryCodes,
 		ColumnAssetKindTCS1HNSWSearchPack,
+	}
+	const authoritativeProductionChildCount = 6
+	if len(kinds) != authoritativeProductionChildCount {
+		t.Fatalf("production authoritative child inventory=%d want %d", len(kinds), authoritativeProductionChildCount)
 	}
 	root := filepath.Join(t.TempDir(), "column-assets")
 	cfg := columnRetainedSemanticStreamV1JSONCursorTestConfig()
@@ -1153,6 +1158,13 @@ func TestStableColumnPreparedValidationRejectsEachMissingProductionObligation(t 
 	}
 	if err := validateStableColumnResourcesMatchPrepared(expected, full); err != nil {
 		t.Fatalf("complete production closure: %v", err)
+	}
+	logicalObligationCount := 0
+	for _, descriptor := range full.Descriptors() {
+		logicalObligationCount += len(descriptor.LogicalObligations())
+	}
+	if logicalObligationCount != authoritativeProductionChildCount {
+		t.Fatalf("complete production closure logical children=%d want %d", logicalObligationCount, authoritativeProductionChildCount)
 	}
 	for omitted := range sources {
 		partialSources := append([]*rootpublication.StableResourceSet(nil), sources[:omitted]...)

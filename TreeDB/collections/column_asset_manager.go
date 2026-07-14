@@ -772,6 +772,15 @@ var (
 	stableColumnAssetConstructionHookMu sync.RWMutex
 	stableColumnAssetConstructionHook   func(uint32)
 	stableColumnAssetBeforeObserveHook  func(*os.File, *os.File, string)
+	stableColumnAssetObligationHook     func(ColumnAssetRef, rootpublication.StableLogicalObligation, *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision
+)
+
+type columnAssetStableCaptureTestDecision uint8
+
+const (
+	columnAssetStableCaptureKeep columnAssetStableCaptureTestDecision = iota
+	columnAssetStableCaptureOmitObligation
+	columnAssetStableCaptureOmitToken
 )
 
 func columnAssetStableConstructionHook() func(uint32) {
@@ -784,6 +793,16 @@ func columnAssetStableBeforeObserveHook() func(*os.File, *os.File, string) {
 	stableColumnAssetConstructionHookMu.RLock()
 	defer stableColumnAssetConstructionHookMu.RUnlock()
 	return stableColumnAssetBeforeObserveHook
+}
+
+// columnAssetStableObligationHook is a fault-injection seam at the real token
+// capture boundary. It can omit the producer-created logical obligation or the
+// exact token/ref while retaining ordinary construction and cleanup behavior,
+// so closure validation must fail before publication can make the ref visible.
+func columnAssetStableObligationHook() func(ColumnAssetRef, rootpublication.StableLogicalObligation, *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision {
+	stableColumnAssetConstructionHookMu.RLock()
+	defer stableColumnAssetConstructionHookMu.RUnlock()
+	return stableColumnAssetObligationHook
 }
 
 func setColumnAssetStableConstructionTestHook(hook func(uint32)) func() {
@@ -806,6 +825,18 @@ func setColumnAssetStableBeforeObserveTestHook(hook func(*os.File, *os.File, str
 	return func() {
 		stableColumnAssetConstructionHookMu.Lock()
 		stableColumnAssetBeforeObserveHook = previous
+		stableColumnAssetConstructionHookMu.Unlock()
+	}
+}
+
+func setColumnAssetStableObligationTestHook(hook func(ColumnAssetRef, rootpublication.StableLogicalObligation, *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision) func() {
+	stableColumnAssetConstructionHookMu.Lock()
+	previous := stableColumnAssetObligationHook
+	stableColumnAssetObligationHook = hook
+	stableColumnAssetConstructionHookMu.Unlock()
+	return func() {
+		stableColumnAssetConstructionHookMu.Lock()
+		stableColumnAssetObligationHook = previous
 		stableColumnAssetConstructionHookMu.Unlock()
 	}
 }
@@ -1653,6 +1684,9 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 			token, err = stableVectorGraphResourceTokenWithRegistry(a.file, ref, tokenNamespace, a.stableRegistry)
 		} else {
 			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, tokenNamespace, a.stableRegistry)
+		}
+		if errors.Is(err, errColumnAssetStableTokenOmittedForTest) {
+			continue
 		}
 		if err != nil {
 			builder.Abandon()
