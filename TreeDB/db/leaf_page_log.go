@@ -129,16 +129,19 @@ func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpubl
 		}
 	}
 	descriptors := resources.Descriptors()
-	if len(descriptors) != len(required) {
-		return fmt.Errorf("%w: leaf append returned %d stable descriptors for %d referenced segments", rootpublication.ErrResourceConflict, len(descriptors), len(required))
-	}
 	for _, descriptor := range descriptors {
-		if descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
-			return fmt.Errorf("%w: leaf append returned stable kind %q", rootpublication.ErrResourceConflict, descriptor.Kind())
-		}
 		fields := descriptor.ReachabilityFields()
-		if len(fields) != 1 || fields[0] != rootpublication.ReachabilityOuterLeafRawPointer {
+		if len(fields) != 1 {
 			return fmt.Errorf("%w: leaf append returned stable reachability %v", rootpublication.ErrResourceConflict, fields)
+		}
+		if fields[0] == rootpublication.ReachabilityDictionaryGeneration {
+			if descriptor.Kind() != rootpublication.ResourceDictionary || len(descriptor.LogicalObligations()) == 0 {
+				return fmt.Errorf("%w: leaf append returned incomplete dictionary authority", rootpublication.ErrUnresolvedResource)
+			}
+			continue
+		}
+		if fields[0] != rootpublication.ReachabilityOuterLeafRawPointer || descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
+			return fmt.Errorf("%w: leaf append returned unsupported stable kind %q reachability %v", rootpublication.ErrResourceConflict, descriptor.Kind(), fields)
 		}
 		minimumBytes, ok := required[descriptor.Generation()]
 		if !ok {
@@ -217,6 +220,10 @@ type leafPageLogProtectedRootPairSnapshotProvider interface {
 
 type leafPageLogStableRegistryBinder interface {
 	bindStableResourcePinRegistry(*rootpublication.IdentityPinRegistry) error
+}
+
+type leafPageLogStableDictionaryBinder interface {
+	bindStableDictionaryResourceProvider(func() StableDictionaryResourceProvider) error
 }
 
 type leafPageLogRecordLengthProvider interface {
@@ -956,6 +963,9 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 		// producer records a typed late-bind failure so ordinary compatibility
 		// may continue while every stable sibling fails closed.
 		_ = binder.bindStableResourcePinRegistry(db.valueLogIdentityPins)
+	}
+	if binder, ok := log.(leafPageLogStableDictionaryBinder); ok {
+		_ = binder.bindStableDictionaryResourceProvider(db.stableDictionaryResourceProvider)
 	}
 	installed := log
 	if wrap {

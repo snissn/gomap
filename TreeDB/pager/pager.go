@@ -80,6 +80,21 @@ type Pager struct {
 	prefetched     atomic.Pointer[prefetchBitset]
 }
 
+// WithStableResourceFile calls fn with the exact index handle owned by this
+// pager while preventing concurrent close. The handle is callback-scoped;
+// callers that need to retain it must duplicate it before fn returns.
+func (p *Pager) WithStableResourceFile(fn func(*os.File) error) error {
+	if p == nil || fn == nil {
+		return errors.New("pager: stable resource file unavailable")
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.file == nil || p.memoryOnly {
+		return errors.New("pager: stable resource file unavailable")
+	}
+	return fn(p.file)
+}
+
 // Open opens the pager at the given path.
 // If the file doesn't exist, it creates it.
 // chunkSize determines the size of each mmap region.

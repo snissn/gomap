@@ -26,10 +26,27 @@ func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOute
 	if writer.stableResourcePins == nil {
 		return nil, fmt.Errorf("%w: raw outer-leaf producer lacks the DB-scoped pin registry", rootpublication.ErrUnresolvedResource)
 	}
-	return &rewriteStableOuterLeafCapture{
+	capture := &rewriteStableOuterLeafCapture{
 		writer:  writer,
 		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
-	}, nil
+	}
+	var dictionaryProvider StableDictionaryResourceProvider
+	if writer.stableDictionaryResourceProvider != nil {
+		dictionaryProvider = writer.stableDictionaryResourceProvider()
+	}
+	dictionaryResources, err := captureStableDictionaryResources(dictionaryProvider, writer.leafDictID, writer.leafDict)
+	if err != nil {
+		capture.abandon()
+		return nil, err
+	}
+	if dictionaryResources != nil {
+		if err := capture.builder.Merge(dictionaryResources); err != nil {
+			dictionaryResources.Release()
+			capture.abandon()
+			return nil, err
+		}
+	}
+	return capture, nil
 }
 
 func (capture *rewriteStableOuterLeafCapture) bindParentGeneration(writer *valuelog.Writer) error {

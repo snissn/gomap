@@ -1,7 +1,9 @@
 package db
 
 import (
+	"crypto/sha256"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -41,5 +43,45 @@ func TestOpenSharesValueLogIdentityPinRegistryWithManager(t *testing.T) {
 	}
 	if got := database.valueLogManager.StableResourcePinRegistry(); got != registry {
 		t.Fatalf("value-log manager registry = %p, DB registry = %p", got, registry)
+	}
+}
+
+func TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on Windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	snapshot := database.AcquireStableSnapshot()
+	if snapshot == nil {
+		t.Fatal("AcquireStableSnapshot returned nil")
+	}
+	token, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+		Kind:          rootpublication.ResourceDictionary,
+		LogicalLane:   "dictdb/index",
+		ResourceID:    "index",
+		Digest:        sha256.Sum256([]byte("stable-index-test")),
+		Reachability:  rootpublication.ReachabilityDictionaryGeneration,
+		ContentSynced: true,
+	}, rootpublication.NewStableResourceToken)
+	if err != nil {
+		_ = snapshot.Close()
+		t.Fatalf("NewStableIndexResourceToken: %v", err)
+	}
+
+	if err := snapshot.Close(); err != nil {
+		t.Fatalf("Close transferred snapshot: %v", err)
+	}
+	if err := database.VacuumIndexOnline(t.Context()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		token.Release()
+		t.Fatalf("vacuum with live index token error=%v want ErrResourcePinned", err)
+	}
+	token.Release()
+	if err := database.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatalf("vacuum after index token release: %v", err)
 	}
 }

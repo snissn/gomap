@@ -1,10 +1,13 @@
 package db
 
 import (
+	"errors"
+	"os"
 	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -29,6 +32,10 @@ type indexGen struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	stableNamespaceMu     sync.Mutex
+	stableNamespaceParent *os.File
+	stableNamespaceProof  *rootpublication.StableNamespaceCreationProof
 }
 
 func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper) *indexGen {
@@ -57,6 +64,16 @@ func (g *indexGen) close() error {
 		if g.pager != nil {
 			g.closeErr = g.pager.Close()
 		}
+		g.stableNamespaceMu.Lock()
+		if g.stableNamespaceProof != nil {
+			g.stableNamespaceProof.Release()
+			g.stableNamespaceProof = nil
+		}
+		if g.stableNamespaceParent != nil {
+			g.closeErr = errors.Join(g.closeErr, g.stableNamespaceParent.Close())
+			g.stableNamespaceParent = nil
+		}
+		g.stableNamespaceMu.Unlock()
 	})
 	return g.closeErr
 }

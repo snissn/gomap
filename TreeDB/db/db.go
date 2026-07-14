@@ -153,6 +153,8 @@ type DB struct {
 	valueLogDictPut                func(context.Context, []byte) (uint64, error)
 	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
 	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
+	stableDictionaryResourcesMu    sync.RWMutex
+	stableDictionaryResources      StableDictionaryResourceProvider
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32
@@ -180,6 +182,7 @@ type DB struct {
 	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
 	updateLocks                     keyupdate.Locks
 	maintenanceMu                   sync.Mutex
+	stableIndexCaptures             atomic.Int64
 	combineMu                       sync.RWMutex
 	combineReqCh                    chan *commitCombineReq
 	combineStopCh                   chan struct{}
@@ -1378,7 +1381,9 @@ type Snapshot struct {
 	treeRoot                uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
-	registryShardHint int
+	registryShardHint             int
+	stableIndexCapture            bool
+	stableIndexCaptureTransferred bool
 }
 
 type snapshotRootTree struct {
@@ -1550,6 +1555,24 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	return snap
 }
 
+// AcquireStableSnapshot pins the current index generation against online
+// vacuum namespace replacement. Close releases the maintenance pin only after
+// every snapshot-bound reader has drained.
+func (db *DB) AcquireStableSnapshot() *Snapshot {
+	if db == nil {
+		return nil
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	snapshot := db.AcquireSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	db.stableIndexCaptures.Add(1)
+	snapshot.stableIndexCapture = true
+	return snapshot
+}
+
 func (s *Snapshot) releaseLeafGenerationPins() {
 	if s == nil {
 		return
@@ -1611,6 +1634,12 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		}
 	}
 	s.releaseLeafGenerationPins()
+	if s.stableIndexCapture && s.db != nil && !s.stableIndexCaptureTransferred {
+		s.db.stableIndexCaptures.Add(-1)
+	}
+	if s.stableIndexCapture {
+		s.stableIndexCapture = false
+	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)
 	}

@@ -4349,6 +4349,12 @@ func (db *DB) SetDictStore(store DictStore) {
 		return
 	}
 	db.dictStore = store
+	if setter, ok := db.backend.(interface {
+		SetStableDictionaryResourceProvider(backenddb.StableDictionaryResourceProvider)
+	}); ok {
+		provider, _ := store.(backenddb.StableDictionaryResourceProvider)
+		setter.SetStableDictionaryResourceProvider(provider)
+	}
 	db.dictCurrentCached.Store(0)
 	db.dictCurrentOps.Store(0)
 	for class := 0; class < vlogDictClassCount; class++ {
@@ -8482,6 +8488,13 @@ type Options struct {
 type DictStore interface {
 	GetCurrent(ctx context.Context) (uint64, error)
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
+}
+
+// stableDictionaryResourceProvider is optional so lightweight/test dictionary
+// stores do not need publication authority. Stable append paths fail closed for
+// a selected non-zero dictionary when the provider is absent.
+type stableDictionaryResourceProvider interface {
+	CaptureDictionaryResources(ctx context.Context, dictID uint64) (*rootpublication.StableResourceSet, error)
 }
 
 type dictStoreCurrentByClass interface {
@@ -17062,6 +17075,24 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 	}
 	resetBlockCompressionHints := finalWriteMode == vlogWriteBlock &&
 		(probeCompression || retainedStorageFirstBlockAttempt)
+	if capture != nil && dictID != 0 {
+		provider, ok := db.dictStore.(stableDictionaryResourceProvider)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: dictionary %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, dictID)
+		}
+		dictionaryResources, captureErr := provider.CaptureDictionaryResources(context.Background(), dictID)
+		if captureErr != nil {
+			return nil, nil, captureErr
+		}
+		if captureErr := backenddb.ValidateStableDictionaryResourceClosure(dictionaryResources, dictID, dict); captureErr != nil {
+			dictionaryResources.Release()
+			return nil, nil, captureErr
+		}
+		if captureErr := capture.mergeChild(dictionaryResources); captureErr != nil {
+			dictionaryResources.Release()
+			return nil, nil, captureErr
+		}
+	}
 
 	prepareWriteMode := finalWriteMode
 	if prepareWriteMode == vlogWriteBlock && (!leafLogAppend || db.flushApplyConcurrency <= 1) {

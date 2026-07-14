@@ -199,6 +199,85 @@ func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRe
 	}
 }
 
+func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *testing.T) {
+	fixture := newLeafPackAuthorityFixture(t)
+	defer fixture.close(t)
+	const dictID = uint64(7401)
+	dictionary := []byte("packed dictionary authority")
+	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
+	fixture.db.SetStableDictionaryResourceProvider(provider)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.captureDictionary(dictID, dictionary); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.close(t)
+	if _, mutated, err := authority.promote(); err != nil || !mutated {
+		t.Fatalf("promote mutated=%v err=%v", mutated, err)
+	}
+	var hasDictionary, hasPacked bool
+	for _, descriptor := range authority.resources.Descriptors() {
+		for _, field := range descriptor.ReachabilityFields() {
+			switch field {
+			case rootpublication.ReachabilityDictionaryGeneration:
+				hasDictionary = true
+			case rootpublication.ReachabilityOuterLeafPackedPointer:
+				hasPacked = true
+			}
+		}
+	}
+	if !hasDictionary || !hasPacked || provider.releaseCalls.Load() != 0 {
+		t.Fatalf("promoted closure dictionary=%v packed=%v releaseCalls=%d", hasDictionary, hasPacked, provider.releaseCalls.Load())
+	}
+	if err := authority.release(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.releaseCalls.Load(); got != 1 {
+		t.Fatalf("dictionary releases=%d want 1", got)
+	}
+}
+
+func TestLeafGenerationPackPromotionAuthorityRetainsDictionaryAcrossPostLinkPoison(t *testing.T) {
+	fixture := newLeafPackAuthorityFixture(t)
+	defer fixture.close(t)
+	const dictID = uint64(7402)
+	dictionary := []byte("poisoned packed dictionary authority")
+	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
+	fixture.db.SetStableDictionaryResourceProvider(provider)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.captureDictionary(dictID, dictionary); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.close(t)
+	poison := errors.New("post-link poison")
+	authority.moveNoReplace = func(*os.File, *os.File, string, *os.File, string) (bool, error) {
+		return true, poison
+	}
+	if _, mutated, err := authority.promote(); !mutated || !errors.Is(err, poison) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("poisoned promote mutated=%v err=%v", mutated, err)
+	}
+	if !authority.retainedForRecovery || provider.releaseCalls.Load() != 0 {
+		t.Fatalf("poisoned authority retained=%v dictionary releases=%d", authority.retainedForRecovery, provider.releaseCalls.Load())
+	}
+	if err := authority.release(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.releaseCalls.Load(); got != 1 {
+		t.Fatalf("dictionary releases=%d want 1", got)
+	}
+}
+
 func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)

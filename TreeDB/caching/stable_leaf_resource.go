@@ -83,6 +83,13 @@ func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableRes
 	return nil
 }
 
+func (capture *stableOuterLeafCapture) mergeChild(child *rootpublication.StableResourceSet) error {
+	if capture == nil || capture.builder == nil || child == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	return capture.builder.Merge(child)
+}
+
 func (capture *stableOuterLeafCapture) addRotation(rotation *valuelog.StableResourceRotation) error {
 	if rotation == nil {
 		return rootpublication.ErrResourceOwnership
