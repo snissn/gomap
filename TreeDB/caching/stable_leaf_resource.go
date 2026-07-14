@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 
@@ -88,6 +89,49 @@ func (capture *stableOuterLeafCapture) mergeChild(child *rootpublication.StableR
 		return rootpublication.ErrResourceOwnership
 	}
 	return capture.builder.Merge(child)
+}
+
+// validateCapturedDictionaryResources binds the exact dictionary bytes used by
+// the encoder to every captured physical resource. A provider may own the right
+// dictionary ID while returning authority for stale or different bytes; stable
+// publication must detect that mismatch before the outer-leaf writer mutates.
+func validateCapturedDictionaryResources(resources *rootpublication.StableResourceSet, dictID uint64, dictionary []byte) error {
+	if resources == nil || dictID == 0 || len(dictionary) == 0 {
+		return fmt.Errorf("%w: incomplete dictionary resource closure", rootpublication.ErrUnresolvedResource)
+	}
+	digest := sha256.Sum256(dictionary)
+	expectedLength := int64(len(dictionary))
+	foundDictionaryResource := false
+	for _, descriptor := range resources.Descriptors() {
+		isDictionaryResource := false
+		for _, field := range descriptor.ReachabilityFields() {
+			if field == rootpublication.ReachabilityDictionaryGeneration {
+				isDictionaryResource = true
+				foundDictionaryResource = true
+				break
+			}
+		}
+		if !isDictionaryResource {
+			continue
+		}
+		matched := false
+		for _, obligation := range descriptor.LogicalObligations() {
+			if obligation.Generation == dictID && obligation.FileID == dictID &&
+				obligation.Offset == 0 && obligation.Length == expectedLength &&
+				obligation.Reachability == rootpublication.ReachabilityDictionaryGeneration &&
+				obligation.Digest == digest {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%w: dictionary %d bytes do not match captured resource closure", rootpublication.ErrResourceConflict, dictID)
+		}
+	}
+	if !foundDictionaryResource {
+		return fmt.Errorf("%w: dictionary %d closure has no dictionary resource", rootpublication.ErrUnresolvedResource, dictID)
+	}
+	return nil
 }
 
 func (capture *stableOuterLeafCapture) addRotation(rotation *valuelog.StableResourceRotation) error {

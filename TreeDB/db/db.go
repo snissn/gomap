@@ -1414,19 +1414,6 @@ func (s *Snapshot) Pager() *pager.Pager {
 	return s.idx.pager
 }
 
-// IndexGeneration returns the immutable index generation pinned by this
-// snapshot. It is zero after the snapshot has closed.
-func (s *Snapshot) IndexGeneration() uint64 {
-	if err := s.beginRead(); err != nil {
-		return 0
-	}
-	defer s.endRead()
-	if s.idx == nil {
-		return 0
-	}
-	return s.idx.id
-}
-
 func (s *Snapshot) State() *DBState {
 	if err := s.beginRead(); err != nil {
 		return nil

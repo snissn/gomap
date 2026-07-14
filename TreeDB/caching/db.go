@@ -17078,6 +17078,10 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		if captureErr != nil {
 			return nil, nil, captureErr
 		}
+		if captureErr := validateCapturedDictionaryResources(dictionaryResources, dictID, dict); captureErr != nil {
+			dictionaryResources.Release()
+			return nil, nil, captureErr
+		}
 		if captureErr := capture.mergeChild(dictionaryResources); captureErr != nil {
 			dictionaryResources.Release()
 			return nil, nil, captureErr
