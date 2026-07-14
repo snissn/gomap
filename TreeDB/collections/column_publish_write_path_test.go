@@ -874,6 +874,9 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			}
 			framesBefore := countCollectionCommandWALFrames(t, dir)
 			appliedBefore := d.State().AppliedCommandLSN
+			registry := d.StableResourceIdentityPinRegistry()
+			baselinePins := registry.ActivePins()
+			baselineIdentities := registry.ActiveIdentities()
 
 			intent, err := stale.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{
 				ID:       []byte("stale"),
@@ -909,6 +912,12 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			}
 			if got := d.State().AppliedCommandLSN; got != appliedBefore {
 				t.Fatalf("AppliedCommandLSN after stale preflight=%d, want %d", got, appliedBefore)
+			}
+			if got := registry.ActivePins(); got != baselinePins {
+				t.Fatalf("stable asset pins after failed publish=%d want baseline %d", got, baselinePins)
+			}
+			if got := registry.ActiveIdentities(); got != baselineIdentities {
+				t.Fatalf("stable asset identities after failed publish=%d want baseline %d", got, baselineIdentities)
 			}
 		})
 	}
@@ -1458,6 +1467,14 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand: %v", err)
 	}
+	if ordinaryColumnStableAuthorityEnabled() {
+		if prepared.stableResources == nil || !prepared.stableResourcesRequired {
+			t.Fatalf("production preparation stable resources=%v required=%t want active stable authority", prepared.stableResources, prepared.stableResourcesRequired)
+		}
+		defer prepared.stableResources.Release()
+	} else if prepared.stableResources != nil || prepared.stableResourcesRequired {
+		t.Fatalf("production preparation stable resources=%v required=%t want legacy pre-cutover path", prepared.stableResources, prepared.stableResourcesRequired)
+	}
 	want := []struct {
 		kind   ColumnAssetKind
 		partID uint64
@@ -1548,6 +1565,14 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	}, rows)
 	if err != nil {
 		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand: %v", err)
+	}
+	if ordinaryColumnStableAuthorityEnabled() {
+		if prepared.stableResources == nil || !prepared.stableResourcesRequired {
+			t.Fatalf("production preparation stable resources=%v required=%t want active stable authority", prepared.stableResources, prepared.stableResourcesRequired)
+		}
+		defer prepared.stableResources.Release()
+	} else if prepared.stableResources != nil || prepared.stableResourcesRequired {
+		t.Fatalf("production preparation stable resources=%v required=%t want legacy pre-cutover path", prepared.stableResources, prepared.stableResourcesRequired)
 	}
 	directFileID, err := directViewTypedColumnSegmentFileID(1)
 	if err != nil {
@@ -1642,6 +1667,9 @@ func TestPrepareColumnPhysicalAssetRowsDoesNotAllocateDirectViewAfterSharedClose
 	}
 	defer func() { _ = d.Close() }()
 	col := &Collection{db: d}
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
 	sharedSeedRef, err := writeColumnAssetToManagerSegment(d.ColumnAssetRootDir(), *cfg, []byte("existing-shared"), ColumnAssetKindTCS1PartImage, 99, columnPhysicalRowAssetPartID, columnAssetM12ASegmentFileID)
 	if err != nil {
 		t.Fatalf("writeColumnAssetToManagerSegment: %v", err)
@@ -1702,6 +1730,12 @@ func TestPrepareColumnPhysicalAssetRowsDoesNotAllocateDirectViewAfterSharedClose
 	}
 	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("direct path after shared close failure stat=%v want never allocated", err)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("stable pins after prepare failure=%d want baseline %d", got, baselinePins)
+	}
+	if got := registry.ActiveIdentities(); got != baselineIdentities {
+		t.Fatalf("stable identities after prepare failure=%d want baseline %d", got, baselineIdentities)
 	}
 }
 

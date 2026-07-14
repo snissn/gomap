@@ -11,6 +11,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+var syncStableColumnAssetResourceForPublish = func(file *os.File, _ rootpublication.DurableFrontier) error {
+	return file.Sync()
+}
+
 // NewStableCollectionResourceToken rejects collection/text named roots until
 // their adjacent publication milestone (#3679); they have no independent
 // external identity that #3677 can register.
@@ -120,7 +124,17 @@ func stableColumnLogicalObligation(ref ColumnAssetRef, reachability rootpublicat
 		binary.LittleEndian.PutUint32(encoded[:], value)
 		return append(raw, encoded[:]...)
 	}
-	raw := make([]byte, 0, len(ref.Kind)+len(ref.Namespace)+len(reachability)+64)
+	// Four length prefixes, the fixed class, and the six numeric fields add 75
+	// bytes beyond the variable strings. Normal production namespaces fit the
+	// stack buffer; unusually large names retain the exact heap fallback.
+	encodedLen := len(ref.Kind) + len(ref.Namespace) + len(reachability) + 75
+	var stack [512]byte
+	var raw []byte
+	if encodedLen <= len(stack) {
+		raw = stack[:0:encodedLen]
+	} else {
+		raw = make([]byte, 0, encodedLen)
+	}
 	raw = appendString(raw, obligationClass)
 	raw = appendString(raw, string(ref.Kind))
 	raw = appendString(raw, ref.Namespace)
@@ -149,6 +163,10 @@ func stableColumnAssetDiagnosticPath(ref ColumnAssetRef) string {
 // generation, part, range, and checksum obligation. Tokens for several refs in
 // one segment coalesce physically without collapsing those logical obligations.
 func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+	return stableColumnAssetResourceTokenWithRegistry(file, ref, namespace, nil)
+}
+
+func stableColumnAssetResourceTokenWithRegistry(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceToken, error) {
 	resourceKind, reachability, _, err := stableColumnAssetResourceClassification(ref.Kind)
 	if err != nil {
 		return nil, err
@@ -156,16 +174,38 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
-	return NewStableColumnAssetResourceToken(rootpublication.StableResourceSpec{
+	var identity rootpublication.StableIdentity
+	if registry != nil {
+		identity, err = rootpublication.StableIdentityFromFile(file)
+		if err != nil {
+			return nil, err
+		}
+		if err := registry.Observe(identity); err != nil {
+			return nil, err
+		}
+	}
+	observed := registry != nil
+	token, err := NewStableColumnAssetResourceToken(rootpublication.StableResourceSpec{
 		Kind: resourceKind, LogicalLane: ref.Namespace, ResourceID: fmt.Sprint(ref.FileID),
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
 		LogicalObligations: []rootpublication.StableLogicalObligation{stableColumnLogicalObligation(ref, reachability)},
+		PinRegistry:        registry,
+		SyncThrough:        syncStableColumnAssetResourceForPublish,
+		OnRelease: func() {
+			if observed {
+				_ = registry.Unobserve(identity)
+			}
+		},
 		// The producer synchronizes the exact registered frontier before capture.
 		// A later coalesced frontier still performs a real sync.
 		ContentSynced: true,
 	})
+	if err != nil && observed {
+		_ = registry.Unobserve(identity)
+	}
+	return token, err
 }
 
 func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {
@@ -177,4 +217,108 @@ func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetR
 		NewName:        filepath.Base(stableColumnAssetDiagnosticPath(ref)),
 		DiagnosticPath: filepath.Dir(stableColumnAssetDiagnosticPath(ref)),
 	})
+}
+
+func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, resources *rootpublication.StableResourceSet) error {
+	const linearLimit = 16
+	expected := make([]rootpublication.StableLogicalObligation, 0, len(assets))
+	var expectedIndex map[rootpublication.StableLogicalObligation]struct{}
+	if len(assets) > linearLimit {
+		expectedIndex = make(map[rootpublication.StableLogicalObligation]struct{}, len(assets))
+	}
+	for i, asset := range assets {
+		_, reachability, classification, err := stableColumnAssetResourceClassification(asset.Ref.Kind)
+		if err != nil {
+			return fmt.Errorf("collections: prepared column asset[%d] stable classification: %w", i, err)
+		}
+		if classification == "rebuildable-non-authoritative" {
+			continue
+		}
+		obligation := stableColumnLogicalObligation(asset.Ref, reachability)
+		if expectedIndex != nil {
+			if _, duplicate := expectedIndex[obligation]; duplicate {
+				return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+			}
+			expectedIndex[obligation] = struct{}{}
+		} else {
+			for _, existing := range expected {
+				if existing == obligation {
+					return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+				}
+			}
+		}
+		expected = append(expected, obligation)
+	}
+	if resources == nil {
+		if len(expected) != 0 {
+			return fmt.Errorf("collections: %d authoritative prepared column assets have no stable resources", len(expected))
+		}
+		return nil
+	}
+	actual := make([]rootpublication.StableLogicalObligation, 0, len(expected))
+	var actualIndex map[rootpublication.StableLogicalObligation]struct{}
+	if expectedIndex != nil {
+		actualIndex = make(map[rootpublication.StableLogicalObligation]struct{}, len(expected))
+	}
+	for _, descriptor := range resources.Descriptors() {
+		for _, obligation := range descriptor.LogicalObligations() {
+			resourceKind, _, classification, err := stableColumnAssetResourceClassification(ColumnAssetKind(obligation.Kind))
+			if err != nil {
+				return fmt.Errorf("collections: stable column obligation classification: %w", err)
+			}
+			if classification != "authoritative" || resourceKind != descriptor.Kind() {
+				return fmt.Errorf("collections: stable column obligation kind=%q resource_kind=%q classification=%q", obligation.Kind, descriptor.Kind(), classification)
+			}
+			if actualIndex != nil {
+				if _, duplicate := actualIndex[obligation]; duplicate {
+					return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+				}
+				actualIndex[obligation] = struct{}{}
+			} else {
+				for _, existing := range actual {
+					if existing == obligation {
+						return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+					}
+				}
+			}
+			actual = append(actual, obligation)
+		}
+	}
+	for _, obligation := range expected {
+		if actualIndex != nil {
+			if _, found := actualIndex[obligation]; !found {
+				return fmt.Errorf("collections: stable column resources missing prepared obligation %+v", obligation)
+			}
+			continue
+		}
+		found := false
+		for _, candidate := range actual {
+			if candidate == obligation {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("collections: stable column resources missing prepared obligation %+v", obligation)
+		}
+	}
+	for _, obligation := range actual {
+		if expectedIndex != nil {
+			if _, found := expectedIndex[obligation]; !found {
+				return fmt.Errorf("collections: stable column resources contain unprepared obligation %+v", obligation)
+			}
+			continue
+		}
+		found := false
+		for _, candidate := range expected {
+			if candidate == obligation {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("collections: stable column resources contain unprepared obligation %+v", obligation)
+		}
+	}
+	return nil
 }

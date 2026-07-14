@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -16,6 +18,507 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/authorityinventory"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func testStableColumnConstructionPinBlocksCrossManagerGC(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	candidatePayload := []byte("construction-authority-candidate")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 117, candidatePayload)
+
+	otherManager := NewCollectionManager(d)
+	otherCol, err := otherManager.OpenCollection(col.Meta().Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := *otherCol.Meta().Options.ColumnStore
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	opened := make(chan struct{})
+	resume := make(chan struct{})
+	restoreHook := setColumnAssetStableConstructionTestHook(func(fileID uint32) {
+		if fileID != candidate.FileID {
+			return
+		}
+		close(opened)
+		<-resume
+	})
+	defer restoreHook()
+	type appendResult struct {
+		resources *rootpublication.StableResourceSet
+		err       error
+	}
+	done := make(chan appendResult, 1)
+	go func() {
+		session := newColumnPhysicalAssetAppendSessionWithStableResources(d.ColumnAssetRootDir(), cfg, registry)
+		_, err := session.appendKinds(candidate.FileID, []columnPhysicalAssetAppendItem{{
+			payload: []byte("later-unpublished-bytes"), kind: ColumnAssetKindTCS1PartImage, generation: 9, partID: 9,
+		}})
+		if err != nil {
+			_ = session.abort()
+			done <- appendResult{err: err}
+			return
+		}
+		_, resources, err := session.closeWithStableResources()
+		done <- appendResult{resources: resources, err: err}
+	}()
+	<-opened
+	if got := registry.ActivePins(); got != baselinePins+1 {
+		t.Fatalf("construction pins=%d want baseline+1=%d", got, baselinePins+1)
+	}
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		close(resume)
+		t.Fatal(err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		close(resume)
+		t.Fatalf("construction-race GC stats=%+v want eligible retained", stats)
+	}
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		close(resume)
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(candidatePath); err != nil {
+		close(resume)
+		t.Fatalf("construction-race candidate removed: %v", err)
+	}
+	close(resume)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.resources == nil {
+		t.Fatal("construction-race append returned no stable resources")
+	}
+	result.resources.Release()
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("pins after final release=%d want baseline=%d", got, baselinePins)
+	}
+}
+
+func testStableColumnConstructionRejectsUnlinkBeforeObserve(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
+		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "construction-pre-observe-unlink",
+	}}
+	registry := rootpublication.NewIdentityPinRegistry()
+	unlinked := false
+	restoreHook := setColumnAssetStableBeforeObserveTestHook(func(parent, _ *os.File, name string) {
+		if err := rootpublication.RemoveStableChildFile(parent, name); err != nil {
+			t.Fatal(err)
+		}
+		unlinked = true
+	})
+	defer restoreHook()
+	session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+	refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+		payload: []byte("must-not-write-unlinked-inode"), kind: ColumnAssetKindTCS1PartImage, generation: 1, partID: 1,
+	}})
+	if !errors.Is(err, rootpublication.ErrResourceConflict) {
+		_ = session.abort()
+		t.Fatalf("pre-observe unlink append error=%v want ErrResourceConflict", err)
+	}
+	if !unlinked || len(refs) != 0 {
+		t.Fatalf("pre-observe unlink=%t refs=%+v want unlinked/no refs", unlinked, refs)
+	}
+	if err := session.abort(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("pre-observe unlink pins=%d want 0", got)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("pre-observe unlink identities=%d want 0", got)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(root, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(columnAssetM12ASegmentFileID))
+	if _, err := os.Stat(segmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pre-observe unlinked segment visible: %v", err)
+	}
+}
+
+func testColumnAssetGCRejectsParentDirectoryRebindFromPlan(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	originalPayload := []byte("planned-parent-original")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 118, originalPayload)
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), candidate.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(candidate.FileID))
+	rotatedDir := namespace.SegmentDir + ".planned-original"
+	replacementPayload := []byte("same-size-replacement!!")
+	if len(replacementPayload) != len(originalPayload) {
+		t.Fatalf("test payload sizes replacement=%d original=%d", len(replacementPayload), len(originalPayload))
+	}
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		if err := os.Rename(namespace.SegmentDir, rotatedDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(namespace.SegmentDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(segmentPath, replacementPayload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("parent-rebind GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("parent-rebind GC stats=%+v want eligible untouched", stats)
+	}
+	gotReplacement, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotReplacement) != string(replacementPayload) {
+		t.Fatalf("replacement=%q want %q", gotReplacement, replacementPayload)
+	}
+	gotOriginal, err := os.ReadFile(filepath.Join(rotatedDir, columnAssetSegmentFileName(candidate.FileID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotOriginal) != string(originalPayload) {
+		t.Fatalf("rotated original=%q want %q", gotOriginal, originalPayload)
+	}
+}
+
+func testColumnAssetGCRejectsChildRebindFromPlan(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	originalPayload := []byte("planned-child-original")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 120, originalPayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedPath := segmentPath + ".planned-original"
+	replacementPayload := []byte(strings.Repeat("R", len(originalPayload)))
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		if err := os.Rename(segmentPath, rotatedPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(segmentPath, replacementPayload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("child-rebind GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("child-rebind GC stats=%+v want eligible untouched", stats)
+	}
+	gotReplacement, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotReplacement) != string(replacementPayload) {
+		t.Fatalf("replacement=%q want %q", gotReplacement, replacementPayload)
+	}
+	gotOriginal, err := os.ReadFile(rotatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotOriginal) != string(originalPayload) {
+		t.Fatalf("rotated original=%q want %q", gotOriginal, originalPayload)
+	}
+}
+
+func testColumnAssetGCRejectsCompletedCrossManagerPublicationAfterPlan(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	managerA := NewCollectionManager(d)
+	managerB := NewCollectionManager(d)
+	colA := openColumnStoreCollectionM10B(t, d, managerA)
+	colB := openColumnStoreCollectionM10B(t, d, managerB)
+	configureStableGCDirectViewPublication(t, colA, colB)
+	if _, err := colA.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"did:seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	candidatePayload := []byte("same-inode-candidate-before-publication")
+	directFileID, err := directViewTypedColumnSegmentFileID(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), colA, directFileID, candidatePayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("published-after-gc-plan")
+	document := []byte(`{"time_us":2,"kind":"repost","did":"did:published"}`)
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		if _, err := colB.Insert(key, document); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+
+	stats, err := colA.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("completed cross-manager publication GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("completed cross-manager publication GC stats=%+v want eligible untouched", stats)
+	}
+	info, err := os.Stat(segmentPath)
+	if err != nil {
+		t.Fatalf("published segment removed: %v", err)
+	}
+	if info.Size() <= int64(len(candidatePayload)) {
+		t.Fatalf("published segment size=%d want greater than candidate frontier=%d", info.Size(), len(candidatePayload))
+	}
+	got, err := colB.Get(key)
+	if err != nil {
+		t.Fatalf("Get published document: %v", err)
+	}
+	if !bytes.Equal(got, document) {
+		t.Fatalf("published document=%s want %s", got, document)
+	}
+	freshPlan, err := colA.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("fresh reachability plan: %v", err)
+	}
+	var publishedRef ColumnAssetRef
+	for _, entry := range freshPlan.Entries {
+		if entry.Ref.FileID != directFileID || entry.Status != ColumnAssetReachabilityProtected {
+			continue
+		}
+		for _, source := range entry.Sources {
+			if source == ColumnAssetReachabilitySourceActiveManifest {
+				publishedRef = entry.Ref
+				break
+			}
+		}
+		if publishedRef.FileID != 0 {
+			break
+		}
+	}
+	if publishedRef.FileID == 0 {
+		t.Fatalf("fresh plan has no protected active-manifest ref for direct file_id=%d: %+v", directFileID, freshPlan.Entries)
+	}
+	if raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), publishedRef); err != nil {
+		t.Fatalf("read checksum-valid published direct-view ref %+v: %v", publishedRef, err)
+	} else if len(raw) == 0 {
+		t.Fatalf("published direct-view ref %+v read empty payload", publishedRef)
+	}
+}
+
+func testColumnAssetGCRejectsAppendedCandidateFrontierAfterPlan(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"did:seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+	candidatePayload := []byte("candidate-frontier-before-append")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 121, candidatePayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended := []byte("-appended-after-plan")
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		file, err := os.OpenFile(segmentPath, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(appended); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("appended-frontier GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("appended-frontier GC stats=%+v want eligible untouched", stats)
+	}
+	got, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatalf("appended candidate removed: %v", err)
+	}
+	want := append(append([]byte(nil), candidatePayload...), appended...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("appended candidate=%q want %q", got, want)
+	}
+}
+
+func testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	managerA := NewCollectionManager(d)
+	managerB := NewCollectionManager(d)
+	colA := openColumnStoreCollectionM10B(t, d, managerA)
+	colB := openColumnStoreCollectionM10B(t, d, managerB)
+	if _, err := colA.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"did:seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+	candidatePayload := []byte("unchanged-frontier-candidate")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), colA, 122, candidatePayload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("published-to-other-segment")
+	document := []byte(`{"time_us":3,"kind":"like","did":"did:other"}`)
+	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
+		if _, err := colB.Insert(key, document); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restoreHook()
+
+	stats, err := colA.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
+		t.Fatalf("commit-advance GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("commit-advance GC stats=%+v want eligible untouched", stats)
+	}
+	gotCandidate, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatalf("unchanged-frontier candidate removed: %v", err)
+	}
+	if !bytes.Equal(gotCandidate, candidatePayload) {
+		t.Fatalf("unchanged-frontier candidate=%q want %q", gotCandidate, candidatePayload)
+	}
+	gotDocument, err := colB.Get(key)
+	if err != nil {
+		t.Fatalf("Get cross-manager publication: %v", err)
+	}
+	if !bytes.Equal(gotDocument, document) {
+		t.Fatalf("cross-manager publication=%s want %s", gotDocument, document)
+	}
+}
+
+func testColumnPublishStableAbandonPreservesSameSizeReboundSegment(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	injected := errors.New("injected ordinary publication failure after asset preparation")
+	var segmentPath, rotatedPath string
+	var replacement []byte
+	restoreHook := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(prepared ColumnPublishPreparedAssets) error {
+		if !prepared.stableResourcesRequired || prepared.stableResources == nil {
+			t.Fatalf("ordinary publication stable authority required=%t resources=%v", prepared.stableResourcesRequired, prepared.stableResources)
+		}
+		if len(prepared.Assets) == 0 {
+			t.Fatal("ordinary publication prepared no assets")
+		}
+		var err error
+		segmentPath, err = columnAssetSegmentPath(d.ColumnAssetRootDir(), prepared.Assets[0].Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(segmentPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rotatedPath = segmentPath + ".ordinary-stable-abandon-original"
+		if err := os.Rename(segmentPath, rotatedPath); err != nil {
+			t.Fatal(err)
+		}
+		replacement = bytes.Repeat([]byte{'R'}, int(info.Size()))
+		if err := os.WriteFile(segmentPath, replacement, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return injected
+	})
+	defer restoreHook()
+
+	if _, err := col.Insert([]byte("ordinary-rebound"), []byte(`{"time_us":4,"kind":"like","did":"did:rebound"}`)); !errors.Is(err, injected) {
+		t.Fatalf("ordinary Insert error=%v want injected failure", err)
+	}
+	got, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, replacement) {
+		t.Fatalf("ordinary same-size replacement mutated: bytes=%d want %d", len(got), len(replacement))
+	}
+	if info, err := os.Stat(rotatedPath); err != nil || info.Size() == 0 {
+		t.Fatalf("ordinary retained original stat=%v info=%v", err, info)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("ordinary abandoned publication pins=%d want baseline=%d", got, baselinePins)
+	}
+}
+
+func configureStableGCDirectViewPublication(t *testing.T, collections ...*Collection) {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	for i := range cfg.Columns {
+		if cfg.Columns[i].Name == "time_us" {
+			cfg.Columns[i].Owner = TypedStorageOwnerColumnPart
+			cfg.Columns[i].FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+		}
+	}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !columnStoreConfigNeedsDirectViewTypedColumnAlignment(*normalized) {
+		t.Fatal("configured collection does not require direct-view typed-column alignment")
+	}
+	for _, col := range collections {
+		if col == nil || col.catalog == nil {
+			t.Fatal("missing collection catalog")
+		}
+		copied := normalized.copy()
+		col.catalog.meta.Options.ColumnStore = &copied
+	}
+}
 
 func testStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T) {
 	dir := t.TempDir()
@@ -576,6 +1079,21 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 	}
 }
 
+func TestStableColumnPreparedValidationRejectsMissingAuthoritativeResources(t *testing.T) {
+	authoritative := ColumnPreparedAsset{Ref: ColumnAssetRef{
+		Kind: ColumnAssetKindTCS1PartImage, Namespace: "missing-authority", Generation: 1,
+		PartID: 1, FileID: 1, Offset: 0, Length: 8, Checksum: 1,
+	}}
+	if err := validateStableColumnResourcesMatchPrepared([]ColumnPreparedAsset{authoritative}, nil); err == nil {
+		t.Fatal("authoritative prepared ref without stable resources passed validation")
+	}
+	rebuildable := authoritative
+	rebuildable.Ref.Kind = ColumnAssetKindQueryReadyBase
+	if err := validateStableColumnResourcesMatchPrepared([]ColumnPreparedAsset{rebuildable}, nil); err != nil {
+		t.Fatalf("rebuildable prepared ref requires no authoritative resource: %v", err)
+	}
+}
+
 func declaredColumnAssetKinds(t *testing.T) map[string]ColumnAssetKind {
 	t.Helper()
 	parsed, err := parser.ParseFile(token.NewFileSet(), "column_publish_plan.go", nil, 0)
@@ -742,4 +1260,452 @@ func testStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 	if string(got) != "stable-column-payload" {
 		t.Fatalf("pinned token read %q after path replacement", got)
 	}
+}
+
+func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable-session",
+		},
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	physicalResourceSyncs := 0
+	originalResourceSync := syncStableColumnAssetResourceForPublish
+	syncStableColumnAssetResourceForPublish = func(*os.File, rootpublication.DurableFrontier) error {
+		physicalResourceSyncs++
+		return nil
+	}
+	t.Cleanup(func() { syncStableColumnAssetResourceForPublish = originalResourceSync })
+	session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+	refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{
+		{payload: []byte("row-image"), kind: ColumnAssetKindTCS1PartImage, generation: 7, partID: 1},
+		{payload: []byte("dictionary-codes"), kind: ColumnAssetKindTCS1DictionaryCodes, generation: 7, partID: 2},
+		{payload: []byte("hnsw-search-pack"), kind: ColumnAssetKindTCS1HNSWSearchPack, generation: 7, partID: 3},
+		{payload: []byte("int64-values"), kind: ColumnAssetKindTCS1Int64Values, generation: 7, partID: 4},
+	})
+	if err != nil {
+		_ = session.abort()
+		t.Fatal(err)
+	}
+	closeStats, resources, err := session.closeWithStableResources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources == nil {
+		t.Fatal("stable append session returned nil resources")
+	}
+	defer resources.Release()
+	if closeStats.FileSyncCount != 1 || closeStats.SyncEpochCount != 1 {
+		t.Fatalf("stable append close stats=%+v want one content sync epoch", closeStats)
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != 2 {
+		t.Fatalf("stable descriptors=%d want typed-column and vector resource kinds", len(descriptors))
+	}
+	byKind := make(map[rootpublication.ResourceKind]rootpublication.StableResourceDescriptor, len(descriptors))
+	for _, descriptor := range descriptors {
+		byKind[descriptor.Kind()] = descriptor
+	}
+	typed := byKind[rootpublication.ResourceTypedColumnAsset]
+	if got, want := typed.Frontier().Bytes, uint64(refs[3].Offset+refs[3].Length); got != want {
+		t.Fatalf("typed-column coalesced frontier=%d want %d", got, want)
+	}
+	vector := byKind[rootpublication.ResourceVectorGraphPack]
+	if got, want := vector.Frontier().Bytes, uint64(refs[2].Offset+refs[2].Length); got != want {
+		t.Fatalf("vector frontier=%d want %d", got, want)
+	}
+	var obligations []rootpublication.StableLogicalObligation
+	for _, descriptor := range descriptors {
+		obligations = append(obligations, descriptor.LogicalObligations()...)
+	}
+	if len(obligations) != len(refs) {
+		t.Fatalf("logical obligations=%d want %d across resource kinds", len(obligations), len(refs))
+	}
+	for _, ref := range refs {
+		found := false
+		for _, obligation := range obligations {
+			if obligation.Kind == string(ref.Kind) && obligation.Offset == ref.Offset && obligation.Length == ref.Length && obligation.Checksum == ref.Checksum {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("logical obligations=%+v missing ref=%+v", obligations, ref)
+		}
+	}
+	if got := registry.ActivePins(); got != 2 {
+		t.Fatalf("active kind-scoped pins=%d want 2", got)
+	}
+	resourceSyncCounts := func() (uint64, uint64) {
+		t.Helper()
+		var contentSyncs, namespaceSyncs uint64
+		for _, stats := range resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+		}
+		return contentSyncs, namespaceSyncs
+	}
+	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != 0 || namespaceSyncs != 1 {
+		t.Fatalf("captured sync counts content=%d namespace=%d want 0,1", contentSyncs, namespaceSyncs)
+	}
+	if err := resources.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != uint64(len(descriptors)) || namespaceSyncs != 1 {
+		t.Fatalf("post-SyncThrough attempt counts content=%d namespace=%d want %d,1", contentSyncs, namespaceSyncs, len(descriptors))
+	}
+	if physicalResourceSyncs != 0 {
+		t.Fatalf("post-SyncThrough physical content syncs=%d want 0", physicalResourceSyncs)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(root, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentDir := namespace.SegmentDir
+	if _, err := deleteColumnAssetSegmentWithStableLease(segmentDir, refs[0].FileID, registry); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("delete pinned segment error=%v want ErrResourcePinned", err)
+	}
+	resources.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("active physical pins after release=%d want 0", got)
+	}
+	deleted, err := deleteColumnAssetSegmentWithStableLease(segmentDir, refs[0].FileID, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("stable delete reported no deletion")
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("active registry identities after delete=%d want 0", got)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != 0 {
+		t.Fatalf("stable namespace proofs after delete=%d want 0", got)
+	}
+}
+
+func testStableColumnAppendSessionNamespaceSyncProofTracksExactIdentity(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable-link-proof",
+		},
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	appendAndClose := func(generation uint64) (ColumnAssetRef, uint64) {
+		t.Helper()
+		session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+		refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+			payload: []byte("payload"), kind: ColumnAssetKindTCS1PartImage, generation: generation, partID: generation,
+		}})
+		if err != nil {
+			_ = session.abort()
+			t.Fatal(err)
+		}
+		_, resources, err := session.closeWithStableResources()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var namespaceSyncs uint64
+		for _, stats := range resources.Stats(time.Now()) {
+			namespaceSyncs += stats.NamespaceSyncs
+		}
+		resources.Release()
+		return refs[0], namespaceSyncs
+	}
+
+	firstRef, firstSyncs := appendAndClose(1)
+	if firstSyncs != 1 {
+		t.Fatalf("first exact binding namespace syncs=%d want 1", firstSyncs)
+	}
+	_, secondSyncs := appendAndClose(2)
+	if secondSyncs != 0 {
+		t.Fatalf("known exact binding namespace syncs=%d want 0", secondSyncs)
+	}
+	segmentPath, err := columnAssetSegmentPath(root, firstRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(segmentPath, segmentPath+".rebound-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(segmentPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	thirdRef, reboundSyncs := appendAndClose(3)
+	if reboundSyncs != 1 {
+		t.Fatalf("rebound exact binding namespace syncs=%d want 1", reboundSyncs)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != 1 {
+		t.Fatalf("stable namespace proofs after rebound=%d want one current binding", got)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(root, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := deleteColumnAssetSegmentWithStableLease(namespace.SegmentDir, thirdRef.FileID, registry); err != nil || !deleted {
+		t.Fatalf("delete rebound current binding deleted=%t err=%v", deleted, err)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != 0 {
+		t.Fatalf("stable namespace proofs after exact delete=%d want 0", got)
+	}
+}
+
+func testStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		closeParent bool
+	}{
+		{name: "token-build"},
+		{name: "parent-close", closeParent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "column-assets")
+			cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
+				Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable-failure-" + test.name,
+			}}
+			registry := rootpublication.NewIdentityPinRegistry()
+			var parent *os.File
+			originalOpenParent := openStableColumnAssetParent
+			openStableColumnAssetParent = func(path string) (*os.File, error) {
+				opened, err := originalOpenParent(path)
+				parent = opened
+				return opened, err
+			}
+			t.Cleanup(func() { openStableColumnAssetParent = originalOpenParent })
+			injected := errors.New("injected stable capture failure")
+			originalToken := stableColumnAssetResourceTokenWithRegistryForPublish
+			stableColumnAssetResourceTokenWithRegistryForPublish = func(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceToken, error) {
+				if !test.closeParent {
+					return nil, injected
+				}
+				token, err := originalToken(file, ref, namespace, registry)
+				if err != nil {
+					return nil, err
+				}
+				if err := parent.Close(); err != nil {
+					token.Release()
+					return nil, err
+				}
+				return token, nil
+			}
+			t.Cleanup(func() { stableColumnAssetResourceTokenWithRegistryForPublish = originalToken })
+
+			session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+			if _, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+				payload: []byte("payload"), kind: ColumnAssetKindTCS1PartImage, generation: 1, partID: 1,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			_, resources, err := session.closeWithStableResources()
+			if err == nil {
+				if resources != nil {
+					resources.Release()
+				}
+				t.Fatal("injected stable close failure returned nil error")
+			}
+			if resources != nil {
+				resources.Release()
+				t.Fatal("failed stable close returned resources")
+			}
+			if got := registry.ActivePins(); got != 0 {
+				t.Fatalf("active pins after failure=%d want 0", got)
+			}
+			if got := registry.ActiveIdentities(); got != 0 {
+				t.Fatalf("active identities after failure=%d want 0", got)
+			}
+			if got := registry.ActiveStableNamespaceLinks(); got != 0 {
+				t.Fatalf("stable namespace proofs after failure=%d want 0", got)
+			}
+		})
+	}
+}
+
+func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	if _, err := col.Insert([]byte("stable-publish"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("active stable asset pins after command-WAL publish=%d want baseline %d", got, baselinePins)
+	}
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column asset manager config after publish: %+v", cfg)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(namespace.SegmentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segments := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), columnAssetSegmentFilePrefix) ||
+			!strings.HasSuffix(entry.Name(), columnAssetSegmentFileSuffix) {
+			continue
+		}
+		segments++
+		segment, err := os.Open(filepath.Join(namespace.SegmentDir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity, identityErr := rootpublication.StableIdentityFromFile(segment)
+		closeErr := segment.Close()
+		if identityErr != nil {
+			t.Fatal(identityErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if got := registry.PinCount(identity); got != 0 {
+			t.Fatalf("column segment %q pins after command-WAL publish=%d want 0", entry.Name(), got)
+		}
+		if got := registry.ObserverCount(identity); got != 0 {
+			t.Fatalf("column segment %q observers after command-WAL publish=%d want 0", entry.Name(), got)
+		}
+	}
+	if segments == 0 {
+		t.Fatal("command-WAL publish produced no column segment identities to verify")
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got == 0 {
+		t.Fatal("successful command-WAL publish retained no exact namespace sync proof")
+	}
+}
+
+func testColumnAssetStableDeletePreservesReboundEntry(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "rebound-delete",
+		},
+	}
+	ref, err := writeColumnAssetToManager(root, cfg, []byte("original"), ColumnAssetKindTCS1PartImage, 7, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedPath := segmentPath + ".rotated"
+	restoreHook := setColumnAssetStableDeleteBeforeUnlinkTestHook(func() {
+		if err := os.Rename(segmentPath, rotatedPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(segmentPath, []byte("replacement"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Cleanup(restoreHook)
+	registry := rootpublication.NewIdentityPinRegistry()
+	deleted, err := deleteColumnAssetSegmentWithStableLease(filepath.Dir(segmentPath), ref.FileID, registry)
+	if !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("rebound delete error=%v want ErrResourceConflict", err)
+	}
+	if deleted {
+		t.Fatal("rebound delete reported deletion")
+	}
+	replacement, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(replacement) != "replacement" {
+		t.Fatalf("rebound entry=%q want replacement", replacement)
+	}
+	original, err := os.ReadFile(rotatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(original) != "original" {
+		t.Fatalf("rotated original=%q want original", original)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("active registry identities after aborted delete=%d want 0", got)
+	}
+}
+
+func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
+	root := filepath.Join(b.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
+		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable-central-append-benchmark",
+	}}
+	registry := rootpublication.NewIdentityPinRegistry()
+	payload := []byte("stable-central-column-append-payload")
+
+	appendAndClose := func(generation uint64) (columnPhysicalAssetSegmentCloseStats, *rootpublication.StableResourceSet, uint64) {
+		b.Helper()
+		session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+		if _, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+			payload: payload, kind: ColumnAssetKindTCS1PartImage, generation: generation, partID: generation,
+		}}); err != nil {
+			_ = session.abort()
+			b.Fatal(err)
+		}
+		closeStats, resources, err := session.closeWithStableResources()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if resources == nil {
+			b.Fatal("stable central append returned no authority")
+		}
+		var namespaceSyncs uint64
+		for _, stats := range resources.Stats(time.Now()) {
+			namespaceSyncs += stats.NamespaceSyncs
+		}
+		return closeStats, resources, namespaceSyncs
+	}
+
+	primeStats, primeResources, primeNamespaceSyncs := appendAndClose(1)
+	if primeStats.FileSyncCount != 1 || primeNamespaceSyncs != 1 {
+		primeResources.Release()
+		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content and namespace sync", primeStats, primeNamespaceSyncs)
+	}
+	primeResources.Release()
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	var contentSyncs uint64
+	var namespaceSyncs uint64
+	var pinHighWater uint64
+	for i := 0; i < b.N; i++ {
+		closeStats, resources, iterationNamespaceSyncs := appendAndClose(uint64(i + 2))
+		contentSyncs += uint64(closeStats.FileSyncCount)
+		namespaceSyncs += iterationNamespaceSyncs
+		for _, stats := range resources.Stats(time.Now()) {
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
+		resources.Release()
+	}
+	b.StopTimer()
+
+	if contentSyncs != uint64(b.N) {
+		b.Fatalf("content syncs=%d want %d", contentSyncs, b.N)
+	}
+	if namespaceSyncs != 0 {
+		b.Fatalf("namespace syncs after exact proof priming=%d want 0", namespaceSyncs)
+	}
+	if pinHighWater != 1 {
+		b.Fatalf("pin high-water=%d want 1", pinHighWater)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		b.Fatalf("active pins after benchmark=%d want 0", got)
+	}
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "content_syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace_syncs/op")
+	b.ReportMetric(float64(pinHighWater), "pin_high_water")
 }

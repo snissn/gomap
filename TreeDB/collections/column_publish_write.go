@@ -3,11 +3,35 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+type columnPhysicalAssetPreparationAfterPrepareHookState struct {
+	hook func(ColumnPublishPreparedAssets) error
+}
+
+var columnPhysicalAssetPreparationAfterPrepareHook atomic.Pointer[columnPhysicalAssetPreparationAfterPrepareHookState]
+
+func runColumnPhysicalAssetPreparationAfterPrepareHook(prepared ColumnPublishPreparedAssets) error {
+	state := columnPhysicalAssetPreparationAfterPrepareHook.Load()
+	if state == nil || state.hook == nil {
+		return nil
+	}
+	return state.hook(prepared)
+}
+
+func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPublishPreparedAssets) error) func() {
+	previous := columnPhysicalAssetPreparationAfterPrepareHook.Load()
+	columnPhysicalAssetPreparationAfterPrepareHook.Store(&columnPhysicalAssetPreparationAfterPrepareHookState{hook: hook})
+	return func() {
+		columnPhysicalAssetPreparationAfterPrepareHook.Store(previous)
+	}
+}
 
 type columnWritePublishInput struct {
 	meta               CollectionMeta
@@ -146,6 +170,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
+	defer func() { plan.releaseStableResources() }()
 	var updatedMeta CollectionMeta
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -160,6 +185,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		if err != nil {
 			return nil, err
 		}
+		plan.releaseStableResources()
 		plan = nextPlan
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		materializeStart := time.Now()
@@ -244,6 +270,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
+	defer func() { plan.releaseStableResources() }()
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
@@ -257,6 +284,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		if err != nil {
 			return nil, err
 		}
+		plan.releaseStableResources()
 		plan = nextPlan
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		materializeStart := time.Now()
@@ -665,9 +693,16 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (_ ColumnPublishPreparedAssets, retErr error) {
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
 	defer func() {
-		if retErr != nil && len(cleanupAssets) != 0 {
-			if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
-				retErr = errors.Join(retErr, cleanupErr)
+		if retErr != nil {
+			if prepared.stableResources != nil {
+				prepared.stableResources.Release()
+				prepared.stableResources = nil
+			}
+			retainStableOrphans := prepared.stableResourcesRequired && columnPreparedAssetsRequireOrphanRetention(cleanupAssets)
+			if len(cleanupAssets) != 0 && !retainStableOrphans {
+				if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
+					retErr = errors.Join(retErr, cleanupErr)
+				}
 			}
 		}
 	}()
@@ -744,7 +779,18 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendSyncEpochCount int
 		if needsAppender {
 			appendStart := time.Now()
-			session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
+			if ordinaryColumnStableAuthorityEnabled() {
+				prepared.stableResourcesRequired = true
+				session = newColumnPhysicalAssetAppendSessionWithStableResources(
+					c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.StableResourceIdentityPinRegistry(),
+				)
+			} else {
+				// Pre-#3679 compatibility boundary: platforms without exact
+				// relative namespace persistence keep the legacy publication path
+				// and do not claim stable authority. Explicit stable APIs still
+				// fail closed with ErrNamespacePersistenceUnsupported.
+				session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
+			}
 			appendOpenDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
@@ -853,9 +899,25 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		if session != nil {
 			appendStart := time.Now()
-			closeStats, err := session.close()
-			if err != nil {
-				return err
+			var closeStats columnPhysicalAssetSegmentCloseStats
+			if prepared.stableResourcesRequired {
+				var resources *rootpublication.StableResourceSet
+				var err error
+				closeStats, resources, err = session.closeWithStableResources()
+				if err != nil {
+					return err
+				}
+				if prepared.stableResources != nil {
+					resources.Release()
+					return errors.New("collections: column physical asset preparation produced more than one stable resource set")
+				}
+				prepared.stableResources = resources
+			} else {
+				var err error
+				closeStats, err = session.close()
+				if err != nil {
+					return err
+				}
 			}
 			closed = true
 			appendCloseDuration += time.Since(appendStart)
@@ -1132,8 +1194,29 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if err := flushPendingAssets(); err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
+	if err := runColumnPhysicalAssetPreparationAfterPrepareHook(prepared); err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
 	cleanupAssets = nil
 	return prepared, nil
+}
+
+func ordinaryColumnStableAuthorityEnabled() bool {
+	return rootpublication.StableRelativeNamespaceSupported()
+}
+
+// Stable-authoritative bytes remain persistent storage even when publication
+// fails. Once their exact identity authority is released, pathname cleanup
+// could target a same-name replacement, so retain them for reachability GC.
+// Query-ready assets remain rebuildable and keep their existing cleanup path.
+func columnPreparedAssetsRequireOrphanRetention(assets []ColumnPreparedAsset) bool {
+	for _, asset := range assets {
+		_, _, classification, err := stableColumnAssetResourceClassification(asset.Ref.Kind)
+		if err != nil || classification != "rebuildable-non-authoritative" {
+			return true
+		}
+	}
+	return false
 }
 
 func columnPublishDurationShare(total time.Duration, partBytes, totalBytes int64) time.Duration {

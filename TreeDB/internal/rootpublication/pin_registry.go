@@ -16,10 +16,20 @@ var (
 // deleter that can reach the same physical files. Logical generations are not
 // part of this key: deleting an inode must be blocked by every alias of it.
 type IdentityPinRegistry struct {
-	mu         sync.Mutex
-	states     map[StableIdentity]*identityPinState
-	namespaces map[string]bool
-	activePins uint64
+	mu          sync.Mutex
+	states      map[StableIdentity]*identityPinState
+	namespaces  map[string]bool
+	stableLinks map[stableNamespaceLink]struct{}
+	activePins  uint64
+}
+
+// stableNamespaceLink records that an exact parent/child/name binding has
+// already survived the required parent-directory sync. Pathnames alone are
+// insufficient because either component can be rebound between appends.
+type stableNamespaceLink struct {
+	parent StableIdentity
+	child  StableIdentity
+	name   string
 }
 
 type identityPinState struct {
@@ -47,8 +57,9 @@ type IdentityPin struct {
 
 func NewIdentityPinRegistry() *IdentityPinRegistry {
 	return &IdentityPinRegistry{
-		states:     make(map[StableIdentity]*identityPinState),
-		namespaces: make(map[string]bool),
+		states:      make(map[StableIdentity]*identityPinState),
+		namespaces:  make(map[string]bool),
+		stableLinks: make(map[stableNamespaceLink]struct{}),
 	}
 }
 
@@ -251,6 +262,22 @@ func (registry *IdentityPinRegistry) PinCount(identity StableIdentity) uint64 {
 	return 0
 }
 
+// ObserverCount reports producer observations for one exact physical identity.
+// It is intentionally identity-scoped so lifecycle checks do not confuse a
+// resource with unrelated long-lived DB observers sharing this registry.
+func (registry *IdentityPinRegistry) ObserverCount(identity StableIdentity) uint64 {
+	identity, err := validateRegistryIdentity(identity)
+	if registry == nil || err != nil {
+		return 0
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if state := registry.states[identity]; state != nil {
+		return state.observers
+	}
+	return 0
+}
+
 func (registry *IdentityPinRegistry) ActivePins() uint64 {
 	if registry == nil {
 		return 0
@@ -268,6 +295,120 @@ func (registry *IdentityPinRegistry) ActiveIdentities() int {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	return len(registry.states)
+}
+
+func stableNamespaceLinkFromFiles(parent, child *os.File, name string) (stableNamespaceLink, error) {
+	if name == "" {
+		return stableNamespaceLink{}, fmt.Errorf("%w: empty stable child name", ErrUnresolvedResource)
+	}
+	parentIdentity, err := StableIdentityFromFile(parent)
+	if err != nil {
+		return stableNamespaceLink{}, err
+	}
+	childIdentity, err := StableIdentityFromFile(child)
+	if err != nil {
+		return stableNamespaceLink{}, err
+	}
+	parentIdentity, err = validateRegistryIdentity(parentIdentity)
+	if err != nil {
+		return stableNamespaceLink{}, err
+	}
+	childIdentity, err = validateRegistryIdentity(childIdentity)
+	if err != nil {
+		return stableNamespaceLink{}, err
+	}
+	return stableNamespaceLink{parent: parentIdentity, child: childIdentity, name: name}, nil
+}
+
+// StableNamespaceLinkKnown reports whether this exact physical parent/child
+// binding has already been made namespace-durable by this DB instance.
+func (registry *IdentityPinRegistry) StableNamespaceLinkKnown(parent, child *os.File, name string) (bool, error) {
+	if registry == nil {
+		return false, fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(parent, child, name)
+	if err != nil {
+		return false, err
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	_, known := registry.stableLinks[link]
+	return known, nil
+}
+
+// RememberStableNamespaceLink records proof only after the exact parent handle
+// has been synced while the exact child binding was validated.
+func (registry *IdentityPinRegistry) RememberStableNamespaceLink(parent, child *os.File, name string) error {
+	if registry == nil {
+		return fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(parent, child, name)
+	if err != nil {
+		return err
+	}
+	registry.mu.Lock()
+	if registry.stableLinks == nil {
+		registry.stableLinks = make(map[stableNamespaceLink]struct{})
+	}
+	for prior := range registry.stableLinks {
+		if prior.parent == link.parent && prior.name == link.name && prior.child != link.child {
+			delete(registry.stableLinks, prior)
+		}
+	}
+	registry.stableLinks[link] = struct{}{}
+	registry.mu.Unlock()
+	return nil
+}
+
+// ForgetStableNamespaceLink discards only the proof for this exact physical
+// binding. A rebound child with the same pathname remains a distinct key.
+func (registry *IdentityPinRegistry) ForgetStableNamespaceLink(parent, child *os.File, name string) error {
+	if registry == nil {
+		return fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(parent, child, name)
+	if err != nil {
+		return err
+	}
+	registry.mu.Lock()
+	delete(registry.stableLinks, link)
+	registry.mu.Unlock()
+	return nil
+}
+
+// ForgetStableNamespaceLinkIdentity is the post-close companion to
+// ForgetStableNamespaceLink. Callers must have captured both identities from
+// the exact handles before closing them.
+func (registry *IdentityPinRegistry) ForgetStableNamespaceLinkIdentity(parent, child StableIdentity, name string) error {
+	if registry == nil {
+		return fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	parent, err := validateRegistryIdentity(parent)
+	if err != nil {
+		return err
+	}
+	child, err = validateRegistryIdentity(child)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return fmt.Errorf("%w: empty stable child name", ErrUnresolvedResource)
+	}
+	registry.mu.Lock()
+	delete(registry.stableLinks, stableNamespaceLink{parent: parent, child: child, name: name})
+	registry.mu.Unlock()
+	return nil
+}
+
+// ActiveStableNamespaceLinks reports retained identity-keyed sync proofs for
+// leak and stress gates.
+func (registry *IdentityPinRegistry) ActiveStableNamespaceLinks() int {
+	if registry == nil {
+		return 0
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return len(registry.stableLinks)
 }
 
 func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) *identityPinState {

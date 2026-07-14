@@ -11,8 +11,16 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func requireColumnAssetExactDestructiveGCTest(tb testing.TB) {
+	tb.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		tb.Skip("destructive column asset GC requires exact relative namespace authority")
+	}
+}
 
 func TestColumnAssetGCDryRunReportsReclaimableButDoesNotDeleteM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
@@ -173,6 +181,7 @@ func TestColumnAssetGCDryRunSummaryReportsEligibleWithoutSegmentEntriesM15B(t *t
 }
 
 func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -274,6 +283,7 @@ func TestColumnAssetGCRetainsPreparedUnpublishedSegmentAfterReopenM15C(t *testin
 }
 
 func TestColumnAssetGCTreatsMissingEligibleSegmentAsDeletedM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -329,6 +339,7 @@ func TestColumnAssetGCTreatsMissingEligibleSegmentAsDeletedM15B(t *testing.T) {
 }
 
 func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -475,7 +486,75 @@ func TestColumnAssetGCProtectsPinnedCandidateM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCRetainsStablePublicationPinThenDeletesM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 97, []byte("stable-publication-pinned-candidate"))
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(candidatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
+	token, err := stableColumnAssetResourceTokenWithRegistry(file, candidate, nil, registry)
+	if err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC with stable publication pin: %v", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("pinned GC stats=%+v want eligible retained segment", stats)
+	}
+	if _, err := os.Stat(candidatePath); err != nil {
+		t.Fatalf("stable publication pin did not retain segment: %v", err)
+	}
+	token.Release()
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("active stable publication pins after release=%d want baseline %d", got, baselinePins)
+	}
+
+	stats, err = col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after stable publication release: %v", err)
+	}
+	if stats.SegmentsDeleted != 1 {
+		t.Fatalf("released GC stats=%+v want one deleted segment", stats)
+	}
+	if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("released stable publication segment stat=%v want not-exist", err)
+	}
+	if got := registry.ActiveIdentities(); got != baselineIdentities {
+		t.Fatalf("active stable identities after GC=%d want baseline %d", got, baselineIdentities)
+	}
+}
+
 func TestColumnAssetGCConsumesLifecyclePinSet1954(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -532,6 +611,7 @@ func TestColumnAssetGCConsumesLifecyclePinSet1954(t *testing.T) {
 }
 
 func TestColumnAssetGCQuarantineRegistrySegmentsFailClosed1954(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -588,6 +668,7 @@ func TestColumnAssetGCQuarantineRegistrySegmentsFailClosed1954(t *testing.T) {
 }
 
 func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -655,6 +736,7 @@ func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
 }
 
 func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()

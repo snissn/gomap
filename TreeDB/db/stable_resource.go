@@ -15,6 +15,12 @@ func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry
 	return db.valueLogIdentityPins
 }
 
+// StableResourceIdentityPinRegistry exposes the DB-scoped physical deletion
+// gate to non-value-log producers and deleters that share durable files.
+func (db *DB) StableResourceIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
+	return db.ValueLogIdentityPinRegistry()
+}
+
 // NewStableDBResourceToken registers the exact already-open index handle.
 // Meta/root publication stays adjacent (#3679), while freelist/COW publication
 // stays adjacent (#3678); neither has an independent external identity here.
