@@ -78,6 +78,10 @@ type columnVectorGraphInvNormStateSource struct {
 }
 
 func prepareColumnVectorGraphInvNormStateAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnVectorGraphPreparedInvNormStateAsset, error) {
+	return prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection, base, def, generation, partID, rows, nil)
+}
+
+func prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnVectorGraphPreparedInvNormStateAsset, error) {
 	payload, err := prepareColumnVectorGraphInvNormStatePayload(collection, base, def, partID, rows)
 	if err != nil {
 		return columnVectorGraphPreparedInvNormStateAsset{}, err
@@ -91,13 +95,13 @@ func prepareColumnVectorGraphInvNormStateAsset(assetRootDir, collection string, 
 	if generation == 0 || partID == 0 {
 		return columnVectorGraphPreparedInvNormStateAsset{}, errors.New("collections: column_graph inv_norm state requires generation and part_id")
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payload.Config)
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payload.Config, authority)
 	if err != nil {
 		return columnVectorGraphPreparedInvNormStateAsset{}, err
 	}
 	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
 	ref, appendErr := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
-	closeErr := appender.close()
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
 		return columnVectorGraphPreparedInvNormStateAsset{}, errors.Join(appendErr, closeErr)
 	}

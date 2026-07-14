@@ -239,6 +239,7 @@ func TestCollectionReadViewForcedReadAtFallbackReturnsIdenticalDocuments(t *test
 }
 
 func TestCollectionReadViewMappedPinsProtectRewriteCandidates(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
 	if _, err := col.InsertBatch(

@@ -54,6 +54,10 @@ type columnVectorGraphDocumentIDStateSource struct {
 }
 
 func prepareColumnVectorGraphDocumentIDStateAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnVectorGraphPreparedDocumentIDStateAsset, error) {
+	return prepareColumnVectorGraphDocumentIDStateAssetWithStableAuthority(assetRootDir, collection, base, def, generation, partID, rows, nil)
+}
+
+func prepareColumnVectorGraphDocumentIDStateAssetWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnVectorGraphPreparedDocumentIDStateAsset, error) {
 	payload, err := prepareColumnVectorGraphDocumentIDStatePayload(collection, base, def, partID, rows)
 	if err != nil {
 		return columnVectorGraphPreparedDocumentIDStateAsset{}, err
@@ -64,13 +68,13 @@ func prepareColumnVectorGraphDocumentIDStateAsset(assetRootDir, collection strin
 	if generation == 0 || partID == 0 {
 		return columnVectorGraphPreparedDocumentIDStateAsset{}, errors.New("collections: column_graph document-id state requires generation and part_id")
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payload.Config)
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payload.Config, authority)
 	if err != nil {
 		return columnVectorGraphPreparedDocumentIDStateAsset{}, err
 	}
 	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
 	ref, appendErr := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
-	closeErr := appender.close()
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
 		return columnVectorGraphPreparedDocumentIDStateAsset{}, errors.Join(appendErr, closeErr)
 	}

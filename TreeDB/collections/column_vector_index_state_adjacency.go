@@ -159,6 +159,10 @@ func buildColumnVectorIndexStateAdjacencyLists(rows []columnVectorGraphAssetRow)
 }
 
 func prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorIndexStatePreparedAdjacencyAsset, error) {
+	return prepareColumnVectorIndexStateAdjacencyAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
+}
+
+func prepareColumnVectorIndexStateAdjacencyAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) ([]columnVectorIndexStatePreparedAdjacencyAsset, error) {
 	payloads, err := prepareColumnVectorIndexStateAdjacencyPayloads(assetRootDir, collection, base, def, firstPartID, rows)
 	if err != nil {
 		return nil, err
@@ -166,12 +170,12 @@ func prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection strin
 	if len(payloads) == 0 {
 		return nil, nil
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payloads[0].Config)
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payloads[0].Config, authority)
 	if err != nil {
 		return nil, err
 	}
 	layers, appendErr := appendColumnVectorIndexStateAdjacencyPayloads(appender, generation, payloads)
-	closeErr := appender.close()
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
 		return nil, errors.Join(appendErr, closeErr)
 	}

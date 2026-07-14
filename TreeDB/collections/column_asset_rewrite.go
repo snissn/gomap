@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
@@ -204,59 +205,58 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
-	cleanupRemap := func(baseErr error) error {
-		if cleanupErr := cleanupColumnAssetRewriteCopiedSegment(c.db.ColumnAssetRootDir(), remap); cleanupErr != nil {
-			return errors.Join(baseErr, cleanupErr)
-		}
-		return baseErr
-	}
+	// Copied segments remain persistent GC orphans on every pre-visibility
+	// failure. Authority release must never pathname-delete a segment that may
+	// have been rebound after its exact handle was captured.
+	defer remap.releaseStableResources()
 	if opts.afterCopyHookForTest != nil {
 		if err := opts.afterCopyHookForTest(); err != nil {
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-			return stats, cleanupRemap(err)
+			return stats, err
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(err)
+		return stats, err
 	}
-	// This preflight still runs before the publish attempt, so copied segments
-	// can be safely removed when the root descriptor has already moved.
+	// This preflight still runs before the publish attempt. A stale copy remains
+	// a persistent GC orphan because pathname cleanup cannot prove that the
+	// captured inode is still bound to its original name.
 	if err := c.columnAssetRewriteRootDescriptorPreflight(state)(); err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(err)
+		return stats, err
 	}
 	if opts.afterPrePublishHookForTest != nil {
 		if err := opts.afterPrePublishHookForTest(); err != nil {
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-			return stats, cleanupRemap(err)
+			return stats, err
 		}
 	}
 
 	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecordsInPlace(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(err)
+		return stats, err
 	}
 	if patched != len(remap.oldRefs) {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(fmt.Errorf("collections: column asset rewrite patched %d manifest refs, want %d", patched, len(remap.oldRefs)))
+		return stats, fmt.Errorf("collections: column asset rewrite patched %d manifest refs, want %d", patched, len(remap.oldRefs))
 	}
 	updatedIdentity, err := columnAssetRewriteUpdatedIdentity(state, patchedRecords)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(err)
+		return stats, err
 	}
 	updatedMeta, err := columnAssetRewriteUpdatedMeta(state.meta, updatedIdentity)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(err)
+		return stats, err
 	}
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
 	if err != nil {
 		if columnAssetRewritePublishFailedBeforeApply(err) {
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-			return stats, cleanupRemap(err)
+			return stats, err
 		}
 		// Publish errors can be ambiguous after root/system application starts;
 		// retain the copied segment as fail-closed maintenance debt and make it a
@@ -323,10 +323,23 @@ type columnAssetRewriteManifestState struct {
 }
 
 type columnAssetRewriteCopyResult struct {
-	oldRefs       []ColumnAssetRef
-	newRefs       []ColumnAssetRef
-	byOldRef      map[ColumnAssetRef]ColumnAssetRef
-	segmentFileID uint32
+	oldRefs              []ColumnAssetRef
+	newRefs              []ColumnAssetRef
+	byOldRef             map[ColumnAssetRef]ColumnAssetRef
+	segmentFileID        uint32
+	stableResources      *rootpublication.StableResourceSet
+	stableSegments       uint64
+	stableContentSyncs   uint64
+	stableNamespaceSyncs uint64
+	stablePinHighWater   uint64
+}
+
+func (result *columnAssetRewriteCopyResult) releaseStableResources() {
+	if result == nil || result.stableResources == nil {
+		return
+	}
+	result.stableResources.Release()
+	result.stableResources = nil
 }
 
 func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteManifestState, error) {
@@ -400,7 +413,9 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 		return columnAssetRewriteCopyResult{}, err
 	}
 	defer func() { _ = readCache.close() }()
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(c.db.ColumnAssetRootDir(), cfg)
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(
+		c.db.ColumnAssetRootDir(), cfg, c.db.StableResourceIdentityPinRegistry(),
+	)
 	if err != nil {
 		return columnAssetRewriteCopyResult{}, err
 	}
@@ -445,6 +460,32 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	if err := appender.close(); err != nil {
 		return columnAssetRewriteCopyResult{}, err
 	}
+	out.stableResources = appender.stableResources
+	appender.stableResources = nil
+	if out.stableResources == nil {
+		return columnAssetRewriteCopyResult{}, errors.New("collections: column asset rewrite copy returned no stable authority")
+	}
+	out.stableSegments = uint64(len(out.stableResources.Descriptors()))
+	out.stableContentSyncs = uint64(appender.closeStats.FileSyncCount)
+	for _, stats := range out.stableResources.Stats(time.Now()) {
+		out.stableNamespaceSyncs += stats.NamespaceSyncs
+	}
+	// This rewrite transaction owns one newly-created segment and holds one
+	// exact identity pin for it through publication. Treat any divergence as a
+	// failed stable-resource preparation rather than certifying weaker evidence.
+	out.stablePinHighWater = out.stableSegments
+	if out.stableSegments != 1 || out.stableContentSyncs != 1 || out.stableNamespaceSyncs != 1 || out.stablePinHighWater != 1 {
+		out.releaseStableResources()
+		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable counters segments=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want all=1", rootpublication.ErrUnresolvedResource, out.stableSegments, out.stableContentSyncs, out.stableNamespaceSyncs, out.stablePinHighWater)
+	}
+	assets := make([]ColumnPreparedAsset, len(out.newRefs))
+	for i, ref := range out.newRefs {
+		assets[i] = ColumnPreparedAsset{Ref: ref}
+	}
+	if err := validateStableColumnResourcesMatchPrepared(assets, out.stableResources); err != nil {
+		out.releaseStableResources()
+		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable closure: %v", rootpublication.ErrUnresolvedResource, err)
+	}
 	closed = true
 	return out, nil
 }
@@ -456,22 +497,6 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 	// Abandoned partial copies remain unreachable persistent orphans. Abort
 	// closes only the exact file handle; later reachability GC may reclaim them.
 	return appender.abort()
-}
-
-func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult) error {
-	if len(remap.newRefs) == 0 {
-		return nil
-	}
-	segmentPath, err := columnAssetSegmentPath(rootDir, remap.newRefs[0])
-	if err != nil {
-		return err
-	}
-	removeErr := os.Remove(segmentPath)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	syncErr := syncColumnAssetDir(filepath.Dir(segmentPath))
-	return errors.Join(removeErr, syncErr)
 }
 
 func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {

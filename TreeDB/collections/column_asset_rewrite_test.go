@@ -473,6 +473,57 @@ func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(refs) == 0 {
+		t.Fatal("manifest refs empty, test requires stable rewrite inputs")
+	}
+	cfg := *col.Meta().Options.ColumnStore
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
+	const cycles = 16
+	for cycle := 0; cycle < cycles; cycle++ {
+		func() {
+			remap, err := col.copyColumnAssetRewriteRefs(context.Background(), cfg, refs)
+			if err != nil {
+				t.Fatalf("copy cycle %d: %v", cycle, err)
+			}
+			defer remap.releaseStableResources()
+			if remap.stableSegments != 1 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != 1 || remap.stablePinHighWater != 1 {
+				t.Fatalf("copy cycle %d stable counters segments=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want all=1", cycle, remap.stableSegments, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
+			}
+			if got := len(remap.stableResources.Descriptors()); got != 1 {
+				t.Fatalf("copy cycle %d descriptors=%d want 1", cycle, got)
+			}
+			if got := registry.ActivePins(); got != baselinePins+1 {
+				t.Fatalf("copy cycle %d active pins=%d want %d", cycle, got, baselinePins+1)
+			}
+			if got := registry.ActiveIdentities(); got != baselineIdentities+1 {
+				t.Fatalf("copy cycle %d active identities=%d want %d", cycle, got, baselineIdentities+1)
+			}
+		}()
+		if got := registry.ActivePins(); got != baselinePins {
+			t.Fatalf("copy cycle %d released pins=%d want baseline %d", cycle, got, baselinePins)
+		}
+		if got := registry.ActiveIdentities(); got != baselineIdentities {
+			t.Fatalf("copy cycle %d released identities=%d want baseline %d", cycle, got, baselineIdentities)
+		}
+	}
+	t.Logf("stable rewrite copy: cycles=%d segments_per_cycle=1 content_syncs_per_cycle=1 namespace_syncs_per_cycle=1 descriptor_pin_high_water=1", cycles)
+}
+
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
@@ -637,6 +688,7 @@ func TestColumnAssetRewriteSkipsSegmentWhenManifestRefAlsoProtectedByPinnedSourc
 }
 
 func TestColumnAssetRewriteSkipsPreparedRunnerLifecyclePin1954(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -691,6 +743,7 @@ func TestColumnAssetRewriteSkipsPreparedRunnerLifecyclePin1954(t *testing.T) {
 }
 
 func TestColumnAssetRewriteAutomaticMappedResourcePinSkipsSegment1788(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -924,7 +977,8 @@ func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
 	}
 }
 
-func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *testing.T) {
+func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -936,12 +990,45 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	}
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	replacement := []byte("rebound-rewrite-replacement")
+	var copiedPath, displacedPath string
 
 	stats, err := col.columnAssetRewriteWithOptions(context.Background(), columnAssetRewriteOptions{
 		ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{
 			CandidateRefs: []ColumnAssetRef{candidate},
 		},
 		afterCopyHookForTest: func() error {
+			if got := registry.ActivePins(); got <= baselinePins {
+				t.Fatalf("rewrite pins before backend publication=%d want > baseline %d", got, baselinePins)
+			}
+			duringSegments := columnAssetSegmentNamesM15C(t, d, col)
+			var copiedName string
+			for _, name := range duringSegments {
+				if !slices.Contains(beforeSegments, name) {
+					if copiedName != "" {
+						t.Fatalf("rewrite created multiple copied segments: %v", duringSegments)
+					}
+					copiedName = name
+				}
+			}
+			if copiedName == "" {
+				t.Fatalf("rewrite created no copied segment: before=%v during=%v", beforeSegments, duringSegments)
+			}
+			cfg := col.Meta().Options.ColumnStore
+			namespace, namespaceErr := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
+			if namespaceErr != nil {
+				t.Fatal(namespaceErr)
+			}
+			copiedPath = filepath.Join(namespace.SegmentDir, copiedName)
+			displacedPath = copiedPath + ".displaced"
+			if renameErr := os.Rename(copiedPath, displacedPath); renameErr != nil {
+				t.Fatalf("displace copied segment: %v", renameErr)
+			}
+			if writeErr := os.WriteFile(copiedPath, replacement, 0o600); writeErr != nil {
+				t.Fatalf("write replacement segment: %v", writeErr)
+			}
 			return staleColumnAssetRewriteManifestRootM15C(d)
 		},
 	})
@@ -954,10 +1041,28 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	if stats.BytesCopied != 0 {
 		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
 	}
-	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("rewrite stale preflight leaked pins=%d want baseline %d", got, baselinePins)
+	}
+	afterSegments := columnAssetSegmentNamesM15C(t, d, col)
+	if len(afterSegments) != len(beforeSegments)+2 {
+		t.Fatalf("rebound persistent orphan segments after=%v want replacement and displaced inode beyond before=%v", afterSegments, beforeSegments)
+	}
+	for _, before := range beforeSegments {
+		if !slices.Contains(afterSegments, before) {
+			t.Fatalf("pre-existing segment %q removed after stale preflight: %v", before, afterSegments)
+		}
+	}
+	if got, readErr := os.ReadFile(copiedPath); readErr != nil || !bytes.Equal(got, replacement) {
+		t.Fatalf("rewrite replacement=%q err=%v want %q", got, readErr, replacement)
+	}
+	if info, statErr := os.Stat(displacedPath); statErr != nil || info.Size() == 0 {
+		t.Fatalf("displaced exact copied orphan info=%v err=%v want non-empty", info, statErr)
+	}
 }
 
-func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *testing.T) {
+func TestColumnAssetRewriteRetainsCopiedOrphanOnPublishPreflightRaceM15C(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -987,7 +1092,15 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *test
 	if stats.BytesCopied != 0 {
 		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
 	}
-	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+	afterSegments := columnAssetSegmentNamesM15C(t, d, col)
+	if len(afterSegments) != len(beforeSegments)+1 {
+		t.Fatalf("persistent orphan segments after=%v want one more than before=%v", afterSegments, beforeSegments)
+	}
+	for _, before := range beforeSegments {
+		if !slices.Contains(afterSegments, before) {
+			t.Fatalf("pre-existing segment %q removed after publish race: %v", before, afterSegments)
+		}
+	}
 }
 
 func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {

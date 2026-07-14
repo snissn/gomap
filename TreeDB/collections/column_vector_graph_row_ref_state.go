@@ -145,6 +145,10 @@ func columnVectorGraphRowRefStateColumnStoreConfig(collection string, base Colum
 }
 
 func prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
+	return prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
+}
+
+func prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
 	payloads, err := prepareColumnVectorGraphRowRefStatePayloads(collection, base, def, generation, firstPartID, rows)
 	if err != nil {
 		return nil, err
@@ -155,12 +159,12 @@ func prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection string, 
 	if assetRootDir == "" {
 		return nil, errors.New("collections: column_graph row-ref state requires asset root dir")
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payloads[0].Config)
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payloads[0].Config, authority)
 	if err != nil {
 		return nil, err
 	}
 	assets, appendErr := appendColumnVectorGraphRowRefStatePayloads(appender, generation, payloads)
-	closeErr := appender.close()
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
 		return nil, errors.Join(appendErr, closeErr)
 	}

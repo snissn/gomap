@@ -17,7 +17,7 @@ func fileHandleClosedForTest(file *os.File) bool {
 	return errors.Is(file.Close(), os.ErrClosed)
 }
 
-func persistentOrphanColumnStoreConfig(t *testing.T, namespace string) ColumnStoreConfig {
+func persistentOrphanColumnStoreConfig(t testing.TB, namespace string) ColumnStoreConfig {
 	t.Helper()
 	input := testColumnStoreConfig(nil)
 	input.AssetManager = &ColumnAssetManagerConfig{

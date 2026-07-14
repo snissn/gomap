@@ -15,6 +15,10 @@ type columnHNSWSearchPackPreparedAsset struct {
 }
 
 func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackPreparedAsset, error) {
+	return prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir, cfg, def, graph, generation, partID, rows, nil)
+}
+
+func prepareColumnHNSWSearchPackAssetWithStableAuthority(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnHNSWSearchPackPreparedAsset, error) {
 	if assetRootDir == "" {
 		return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: hnsw search pack requires asset root dir")
 	}
@@ -35,13 +39,13 @@ func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, cfg)
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, cfg, authority)
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
 	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1HNSWSearchPack, cfg)
 	ref, appendErr := appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, generation, partID, alignment)
-	closeErr := appender.close()
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
 		return columnHNSWSearchPackPreparedAsset{}, errors.Join(appendErr, closeErr)
 	}
