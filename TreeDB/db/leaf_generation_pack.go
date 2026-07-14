@@ -242,12 +242,6 @@ func (db *DB) leafGenerationPackSelectedWithCarry(ctx context.Context, opts Leaf
 }
 
 func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, stats LeafGenerationPackStats, carry *leafGenerationPackCarryResult) (LeafGenerationPackStats, error) {
-	// Stable packed publication requires exact relative namespace primitives.
-	// Fail before creating a staging directory, writer, or private pager on
-	// platforms that cannot provide that contract.
-	if err := leafGenerationPackPromotionPreflight(); err != nil {
-		return stats, err
-	}
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
 	if err != nil {
 		return stats, err
@@ -257,6 +251,12 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	stats.SourceFilesRequested = len(rawSourceIDs)
 	if len(rawSourceIDs) == 0 {
 		return stats, nil
+	}
+	// Stable packed publication requires exact relative namespace primitives.
+	// Fail before publishing a value-log set or creating a staging directory,
+	// writer, or private pager. A true no-op needs no namespace capability.
+	if err := leafGenerationPackPromotionPreflight(); err != nil {
+		return stats, err
 	}
 	if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err

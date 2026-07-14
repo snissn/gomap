@@ -199,6 +199,7 @@ func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReportsSidecarError
 }
 
 func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
@@ -243,6 +244,7 @@ func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T)
 }
 
 func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
@@ -287,6 +289,7 @@ func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T
 }
 
 func TestLeafGenerationPackRunOnce_ReserveRIDsUsesExternalAllocator(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
@@ -333,6 +336,7 @@ func TestLeafGenerationPackRunOnce_ReserveRIDsUsesExternalAllocator(t *testing.T
 }
 
 func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	db, err := Open(Options{
 		Dir:                        dir,
@@ -507,6 +511,7 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 }
 
 func TestLeafGenerationPack_UsesOuterLeafDict(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	const dictID = uint64(9001)
 	leafA, _, err := valuelog.MaybeCompactLeafLogPayload(buildRewriteLeafPageFixture(t, "pack-a"))
@@ -632,6 +637,7 @@ func readFirstLeafGenerationFrameHeader(t *testing.T, dir string, rawFileID uint
 }
 
 func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	const descriptorKey = "collections/root/pack/users/primary"
@@ -770,6 +776,7 @@ func TestLeafRefRewriteCtx_CollectionDescriptorDeltaIgnoresDurableInlineThreshol
 }
 
 func TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	descriptorKeys := []string{
@@ -875,6 +882,7 @@ func TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC(t *testing.T
 }
 
 func TestLeafGenerationPack_PrunesCachedSubtreesOutsideSelection(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "a", 3072, 'a')
@@ -998,6 +1006,7 @@ func expectCollectionPackValue(t *testing.T, db *DB, descriptorKey, key string, 
 }
 
 func TestLeafGenerationPack_ForceAllowsDenseGeneration(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 32768, 'a')

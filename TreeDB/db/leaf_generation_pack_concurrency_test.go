@@ -22,6 +22,7 @@ type leafGenerationPackTestCandidate struct {
 
 func prepareLeafGenerationPackTestCandidate(t *testing.T, db *DB, leafLog *rewriteWriter, keys int) leafGenerationPackTestCandidate {
 	t.Helper()
+	requireLeafGenerationPackPromotionSupport(t)
 	if keys < 128 {
 		keys = 128
 	}

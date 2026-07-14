@@ -586,6 +586,7 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 }
 
 func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	if testing.Short() {
 		t.Skip("loads enough documents to exercise collection leaf generation pack/GC")
 	}

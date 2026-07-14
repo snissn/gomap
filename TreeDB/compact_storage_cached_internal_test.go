@@ -428,6 +428,7 @@ func TestBackendValueLogRewriteReclaimsLeafGenerationDebt(t *testing.T) {
 }
 
 func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	opts := cachedRewriteReclaimTestOptions(dir)
 	opts.JournalLanes = 2

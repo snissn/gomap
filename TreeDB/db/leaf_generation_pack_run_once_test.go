@@ -10,6 +10,7 @@ import (
 )
 
 func TestLeafGenerationPackRunOnce_MovesSparseGeneration(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
@@ -119,6 +120,7 @@ func TestLeafGenerationPackRunOnce_SkipsPlanWhenWindowYieldTooLow(t *testing.T) 
 }
 
 func TestLeafGenerationPackRunOnce_BoundedSelectionCanRunWhenWholePlanReclaimPerCopyIsLow(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "dense", 32768, 'a')
@@ -152,6 +154,7 @@ func TestLeafGenerationPackRunOnce_BoundedSelectionCanRunWhenWholePlanReclaimPer
 }
 
 func TestLeafGenerationPackRunOnce_CallsLeafGenerationPlanOnce(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
@@ -180,6 +183,7 @@ func TestLeafGenerationPackRunOnce_CallsLeafGenerationPlanOnce(t *testing.T) {
 }
 
 func TestLeafGenerationPackFromPlan_ForceBypassesSelectionThresholds(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 2048, 'a')

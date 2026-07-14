@@ -70,6 +70,7 @@ func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrap
 }
 
 func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
 	opts.BackgroundCheckpointInterval = -1

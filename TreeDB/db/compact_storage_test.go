@@ -2196,6 +2196,7 @@ func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) 
 }
 
 func TestCompactStorageKeepsPackedLeafSourcesUntilIndexVacuum(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
@@ -2241,6 +2242,7 @@ func TestCompactStorageWindowsKeepsPackedLeafSourcesWhenIndexVacuumUnsupported(t
 	if runtime.GOOS != "windows" {
 		t.Skip("index vacuum is supported on this platform")
 	}
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
@@ -2365,6 +2367,7 @@ func TestCompactStorageLeafGenerationProtectedRootIDPairMergesSourcesOnce(t *tes
 }
 
 func TestCompactStorageReportsAndCompactsSelectableLeafPackDebt(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "k", 2048, 'a')
@@ -2476,6 +2479,7 @@ func TestCompactStoragePlanLeafPackDebtUsesBoundedSelection(t *testing.T) {
 }
 
 func TestCompactStorageSettleHonorsLeafPackMaxPasses(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
@@ -2518,6 +2522,7 @@ func TestCompactStorageSettleHonorsLeafPackMaxPasses(t *testing.T) {
 }
 
 func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "dense", 32768, 'a')
@@ -2559,6 +2564,7 @@ func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testin
 }
 
 func TestCompactStorageLeafPackMultiPassReusesLiveScan(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
@@ -2606,6 +2612,7 @@ func TestCompactStorageLeafPackMultiPassReusesLiveScan(t *testing.T) {
 }
 
 func TestCompactStorageLeafPackMultiPassRescansAfterForegroundCommit(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
@@ -2669,6 +2676,7 @@ func TestCompactStorageLeafPackMultiPassRescansAfterForegroundCommit(t *testing.
 }
 
 func TestCompactStorageLeafPackCarryMatchesFreshPlan(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
@@ -2688,6 +2696,7 @@ func TestCompactStorageLeafPackCarryMatchesFreshPlan(t *testing.T) {
 }
 
 func TestCompactStorageLeafPackCarryMatchesFreshPlanWithProtectedResidual(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "main", 2048, 'a')
@@ -2710,6 +2719,7 @@ func TestCompactStorageLeafPackCarryMatchesFreshPlanWithProtectedResidual(t *tes
 }
 
 func TestCompactStorageLeafPackCarryRescansWhenProtectedRootIsRewritten(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "main", 2048, 'a')
@@ -2763,6 +2773,7 @@ func TestCompactStorageLeafPackCarryRescansWhenProtectedRootIsRewritten(t *testi
 }
 
 func TestCompactStorageLeafPackCarryRescansWhenProtectedRootsChange(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "main", 512, 'a')
@@ -2892,6 +2903,7 @@ func TestCompactStoragePlanIgnoresEmptyAndCurrentLeafGenerations(t *testing.T) {
 }
 
 func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 
 	writeLeafGenerationKeys(t, d, "current", 64, 'z')
