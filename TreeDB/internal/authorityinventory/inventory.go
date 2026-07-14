@@ -116,7 +116,15 @@ func buildRows() []Row {
 
 	add(active("commitlog.CommandJournal.Frame", "command WAL frame", "mutable command-WAL segment range", "commitlog.CommandJournal.Append", "pinned journal segment identity plus LSN", "complete encoded frame end and checksum", "wal segment (no rename)", "command journal publication adapter", "journal scan validates framing, checksum, and LSN order", "command WAL retention with segment pins"))
 	add(active("dictionary.GlobalID", "value-log dictionary dependency", "transitive immutable dictionary closure", "value-log compression encoder", "stable dictdb index generation plus exact manager-owned value-log segment and dictionary ID", "dictionary definition digest plus exact index and value-log frontiers", "dictdb index namespace proof and installed value-log namespace", "dictdb CaptureDictionaryResources merged before cached stable append, raw stable rewrite, or packed promotion mutates its writer namespace", "dictionary lookup and definition decode", "online index vacuum fence plus value-log identity pin; retain forever until pin-aware dictionary GC exists"))
-	add(active("template.GlobalID", "template-v1 value dependency", "transitive immutable template closure", "template-v1 encoder", "template ID resolved through templatedb", "template definition digest", "template side store", "value-log publication closure registrar", "template lookup and definition decode", "retain forever; no deletion until pin-aware template GC exists"))
+	add(Row{
+		Field: "template.EncodedPayload.TemplateID", Scope: "value-log template dependency", ResourceClass: "transitive immutable template closure",
+		Producer: "template.Engine.Encode behind forced-off runtime mode", IdentitySource: "stable templatedb index generation plus exact pointer-backed value-log segment and salt-aware template ID",
+		FrontierOrDigest: "template definition digest plus exact index and value-log frontiers", NamespaceSite: "templatedb index namespace proof and installed value-log namespace",
+		Registrar:         "templatedb CaptureTemplateResources is merged by the stable raw outer-leaf seam; offline ordinary-value rewrite rejects activation",
+		RecoveryValidator: "template lookup, salt-aware definition identity, and definition decode", DeletionOwner: "online index vacuum fence plus value-log identity pin; retain forever because no template deletion exists",
+		ActivationState: ActivationQuarantined, AdjacentIssue: "#3679",
+		ExclusionReason: "public and cached runtime template compression is forced off; offline rewrite cannot activate until rewritten-root publication consumes its complete dependency union",
+	})
 
 	for _, name := range []string{"collectionTextIndexRootName", "collectionTextStateRootName", "collectionTextStatsRootName"} {
 		add(adjacent("collections.TextV1Root."+name, "named text-v1 root", "index/value-log transitive closure", "#3679", "text roots are page-index closure with transitive value pointers, not independent external resource files"))

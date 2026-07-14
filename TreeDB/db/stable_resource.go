@@ -8,12 +8,20 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 // StableDictionaryResourceProvider captures the exact durable transitive
 // closure needed to decode one dictionary generation.
 type StableDictionaryResourceProvider interface {
 	CaptureDictionaryResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
+}
+
+// StableTemplateResourceProvider captures the exact durable transitive closure
+// needed to decode one template generation.
+type StableTemplateResourceProvider interface {
+	CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
 }
 
 // ValidateStableDictionaryResourceClosure binds the bytes selected by an
@@ -57,6 +65,57 @@ func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableRe
 	return nil
 }
 
+// ValidateStableTemplateResourceClosure binds the immutable definition selected
+// by an encoder to every physical resource returned by a template provider.
+func ValidateStableTemplateResourceClosure(resources *rootpublication.StableResourceSet, templateID uint64, definition []byte) error {
+	if resources == nil || templateID == 0 || len(definition) == 0 {
+		return fmt.Errorf("%w: incomplete template resource closure", rootpublication.ErrUnresolvedResource)
+	}
+	validID := false
+	for salt := 0; salt <= 255; salt++ {
+		if templ.TemplateID(definition, byte(salt)) == templateID {
+			validID = true
+			break
+		}
+	}
+	if !validID {
+		return fmt.Errorf("%w: template %d does not identify the selected definition", rootpublication.ErrResourceConflict, templateID)
+	}
+	digest := sha256.Sum256(definition)
+	expectedLength := int64(len(definition))
+	foundTemplateResource := false
+	for _, descriptor := range resources.Descriptors() {
+		isTemplateResource := false
+		for _, field := range descriptor.ReachabilityFields() {
+			if field == rootpublication.ReachabilityTemplateGeneration {
+				isTemplateResource = true
+				foundTemplateResource = true
+				break
+			}
+		}
+		if !isTemplateResource {
+			continue
+		}
+		matched := false
+		for _, obligation := range descriptor.LogicalObligations() {
+			if obligation.Generation == templateID && obligation.FileID == templateID &&
+				obligation.Offset == 0 && obligation.Length == expectedLength &&
+				obligation.Reachability == rootpublication.ReachabilityTemplateGeneration &&
+				obligation.Digest == digest {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%w: template %d definition does not match captured resource closure", rootpublication.ErrResourceConflict, templateID)
+		}
+	}
+	if !foundTemplateResource {
+		return fmt.Errorf("%w: template %d closure has no template resource", rootpublication.ErrUnresolvedResource, templateID)
+	}
+	return nil
+}
+
 // SetStableDictionaryResourceProvider installs the authority provider used by
 // rewrite and packed-generation producers. It is separate from DictLookup:
 // bytes alone do not prove durable reachability or deletion safety.
@@ -94,6 +153,28 @@ func captureStableDictionaryResources(ctx context.Context, provider StableDictio
 		return nil, err
 	}
 	if err := ValidateStableDictionaryResourceClosure(resources, dictID, dictionary); err != nil {
+		resources.Release()
+		return nil, err
+	}
+	return resources, nil
+}
+
+func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64) (*rootpublication.StableResourceSet, error) {
+	if templateID == 0 {
+		return nil, nil
+	}
+	if provider == nil || store == nil {
+		return nil, fmt.Errorf("%w: template %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, templateID)
+	}
+	definition, err := store.GetTemplateDef(context.Background(), templateID)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := provider.CaptureTemplateResources(context.Background(), templateID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateStableTemplateResourceClosure(resources, templateID, definition); err != nil {
 		resources.Release()
 		return nil, err
 	}
@@ -156,6 +237,38 @@ func (snapshot *Snapshot) NewStableValueLogPhysicalResourceToken(
 	return snapshot.vlogManager.StableExistingPhysicalResourceToken(fileID, spec, constructor)
 }
 
+// StableValueLogRecordLength returns the exact record length for a pointer in
+// this snapshot's pinned value-log generation. Grouped pointers may omit their
+// best-effort length hint; those lengths are read from the already-pinned
+// segment header rather than rediscovered through the current manager lane.
+func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32, error) {
+	if snapshot == nil {
+		return 0, fmt.Errorf("%w: stable value-log snapshot unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if err := snapshot.beginRead(); err != nil {
+		return 0, err
+	}
+	defer snapshot.endRead()
+	if !snapshot.stableIndexCapture || snapshot.state == nil || snapshot.state.ValueLogSet == nil {
+		return 0, fmt.Errorf("%w: stable value-log generation unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if hint := page.ValuePtrRecordLength(ptr); hint != 0 {
+		return hint, nil
+	}
+	if ptr.Offset < 4 {
+		return 0, fmt.Errorf("%w: invalid value-log pointer offset %d", rootpublication.ErrResourceConflict, ptr.Offset)
+	}
+	segment := snapshot.state.ValueLogSet.Files[ptr.FileID]
+	if segment == nil || segment.File == nil {
+		return 0, fmt.Errorf("%w: stable value-log file %d unavailable", rootpublication.ErrUnresolvedResource, ptr.FileID)
+	}
+	recordLength, err := readValueLogRecordLengthFromHeader(segment.File, int64(ptr.Offset-4))
+	if err != nil {
+		return 0, fmt.Errorf("stable value-log file %d record header: %w", ptr.FileID, err)
+	}
+	return recordLength, nil
+}
+
 // NewStableIndexResourceToken binds a producer-specific token to the exact
 // index handle and namespace owned by this stable snapshot. The token takes
 // ownership of the snapshot maintenance pin on success.
@@ -193,13 +306,13 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		spec.Namespace = namespace
 		callerRelease := spec.OnRelease
 		spec.OnRelease = func() {
-			if callerRelease != nil {
-				callerRelease()
-			}
+			_ = snapshot.Close()
 			if leaseTransferred.CompareAndSwap(true, false) {
 				database.stableIndexCaptures.Add(-1)
 			}
-			_ = snapshot.Close()
+			if callerRelease != nil {
+				callerRelease()
+			}
 		}
 		token, err = constructor(spec)
 		return err

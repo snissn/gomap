@@ -85,3 +85,46 @@ func TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose(t *testing.T)
 		t.Fatalf("vacuum after index token release: %v", err)
 	}
 }
+
+func TestStableIndexResourceTokenRunsCallerReleaseAfterSnapshotTeardown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stable index namespace capture unsupported on Windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	snapshot := database.AcquireStableSnapshot()
+	if snapshot == nil {
+		t.Fatal("AcquireStableSnapshot returned nil")
+	}
+	releaseCalled := false
+	token, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+		Kind:          rootpublication.ResourceDictionary,
+		LogicalLane:   "dictdb/index",
+		ResourceID:    "index",
+		Digest:        sha256.Sum256([]byte("stable-index-release-order-test")),
+		Reachability:  rootpublication.ReachabilityDictionaryGeneration,
+		ContentSynced: true,
+		OnRelease: func() {
+			releaseCalled = true
+			if snapshot.db != nil || !snapshot.closed.Load() {
+				t.Error("caller release ran before stable snapshot teardown")
+			}
+			if got := database.stableIndexCaptures.Load(); got != 0 {
+				t.Errorf("caller release observed stable-index captures=%d want 0", got)
+			}
+		},
+	}, rootpublication.NewStableResourceToken)
+	if err != nil {
+		_ = snapshot.Close()
+		t.Fatalf("NewStableIndexResourceToken: %v", err)
+	}
+
+	token.Release()
+	if !releaseCalled {
+		t.Fatal("caller release was not invoked")
+	}
+}

@@ -90,3 +90,25 @@ func TestDecodePayloadMissingTemplate(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+func TestEncodedPayloadTemplateID(t *testing.T) {
+	payload, err := EncodePayload(73, [][]byte{[]byte("value")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := EncodedPayloadTemplateID(payload)
+	if err != nil || id != 73 {
+		t.Fatalf("template id=%d err=%v want 73", id, err)
+	}
+	for _, payload := range [][]byte{
+		nil,
+		[]byte("ordinary"),
+		{magic0, magic1, payloadVer, flagEncoded},
+		{magic0, magic1, payloadVer, flagEncoded, 0},
+		{magic0, magic1, payloadVer, flagEncoded, 0x80},
+	} {
+		if id, err := EncodedPayloadTemplateID(payload); err == nil || id != 0 {
+			t.Fatalf("malformed payload %x template id=%d err=%v", payload, id, err)
+		}
+	}
+}

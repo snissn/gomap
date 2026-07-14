@@ -24,6 +24,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -3610,6 +3611,18 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 type rewriteTemplateStore struct {
 	templateID uint64
 	defBytes   []byte
+}
+
+func TestValueLogRewriteOfflineRejectsTemplateActivationWithoutStableRootAuthority(t *testing.T) {
+	_, err := ValueLogRewriteOffline(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			TemplateMode: templ.TemplateOnly,
+		},
+	})
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("offline template rewrite error=%v want unresolved stable root authority", err)
+	}
 }
 
 func (s rewriteTemplateStore) GetCandidates(context.Context, uint64, int) ([]templ.Candidate, error) {
