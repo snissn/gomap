@@ -4,8 +4,10 @@ package rootpublication
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -13,8 +15,89 @@ import (
 
 func stableRelativeNamespaceSupported() bool { return false }
 
-func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
-	return nil, fmt.Errorf("%w: relative directory-handle open is unavailable", ErrNamespacePersistenceUnsupported)
+func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
+	if parent == nil {
+		return nil, os.ErrInvalid
+	}
+	_ = perm // Windows applies ACLs inherited from the exact parent namespace.
+
+	objectName, err := windows.NewNTUnicodeString(name)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: err}
+	}
+	attributes := windows.OBJECT_ATTRIBUTES{
+		RootDirectory: windows.Handle(parent.Fd()),
+		ObjectName:    objectName,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE,
+	}
+	attributes.Length = uint32(unsafe.Sizeof(attributes))
+
+	access := uint32(windows.FILE_GENERIC_READ)
+	switch flags & (os.O_WRONLY | os.O_RDWR) {
+	case os.O_WRONLY:
+		access = windows.FILE_GENERIC_WRITE
+	case os.O_RDWR:
+		access = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
+	}
+	if flags&os.O_CREATE != 0 {
+		access |= windows.FILE_GENERIC_WRITE
+	}
+	if flags&os.O_APPEND != 0 {
+		if flags&os.O_TRUNC == 0 {
+			access &^= windows.FILE_GENERIC_WRITE
+		}
+		access |= windows.FILE_APPEND_DATA | windows.FILE_WRITE_ATTRIBUTES | windows.FILE_WRITE_EA |
+			windows.STANDARD_RIGHTS_WRITE | windows.SYNCHRONIZE
+	}
+	disposition := uint32(windows.FILE_OPEN)
+	switch {
+	case flags&os.O_CREATE != 0 && flags&os.O_EXCL != 0:
+		disposition = windows.FILE_CREATE
+	case flags&os.O_CREATE != 0 && flags&os.O_TRUNC != 0:
+		disposition = windows.FILE_OVERWRITE_IF
+	case flags&os.O_CREATE != 0:
+		disposition = windows.FILE_OPEN_IF
+	case flags&os.O_TRUNC != 0:
+		disposition = windows.FILE_OVERWRITE
+	}
+	options := uint32(windows.FILE_NON_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT | windows.FILE_OPEN_REPARSE_POINT)
+	if flags&os.O_SYNC != 0 {
+		options |= windows.FILE_WRITE_THROUGH
+	}
+	var (
+		handle windows.Handle
+		iosb   windows.IO_STATUS_BLOCK
+	)
+	err = windows.NtCreateFile(
+		&handle,
+		access,
+		&attributes,
+		&iosb,
+		nil,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		disposition,
+		options,
+		0,
+		0,
+	)
+	runtime.KeepAlive(parent)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: stableWindowsNTError(err)}
+	}
+	file := os.NewFile(uintptr(handle), parent.Name()+string(os.PathSeparator)+name)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, &os.PathError{Op: "openat", Path: name, Err: errors.New("invalid Windows file handle")}
+	}
+	return file, nil
+}
+
+func stableWindowsNTError(err error) error {
+	if status, ok := err.(windows.NTStatus); ok {
+		return status.Errno()
+	}
+	return err
 }
 
 func removeStableChildFile(*os.File, string) error {
@@ -80,7 +163,16 @@ func syncStableNamespace(parent *os.File) error {
 	if parent == nil {
 		return os.ErrInvalid
 	}
-	err := windows.FlushFileBuffers(windows.Handle(parent.Fd()))
+	// os.Open directory handles do not carry GENERIC_WRITE, which
+	// FlushFileBuffers requires. ReOpenFile retains the exact file-system object
+	// while adding the access needed to issue the namespace flush; reopening the
+	// diagnostic pathname would lose the rename/recreate identity guarantee.
+	handle, err := reopenStableWindowsDirectory(parent)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	err = windows.FlushFileBuffers(handle)
 	if err == nil {
 		return nil
 	}
@@ -88,4 +180,26 @@ func syncStableNamespace(parent *os.File) error {
 		return fmt.Errorf("%w: FlushFileBuffers(directory): %v", ErrNamespacePersistenceUnsupported, err)
 	}
 	return err
+}
+
+var stableWindowsReOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
+
+func reopenStableWindowsDirectory(parent *os.File) (windows.Handle, error) {
+	if parent == nil {
+		return 0, os.ErrInvalid
+	}
+	handle, _, callErr := stableWindowsReOpenFile.Call(
+		parent.Fd(),
+		uintptr(windows.GENERIC_WRITE),
+		uintptr(windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE),
+		uintptr(windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_WRITE_THROUGH),
+	)
+	runtime.KeepAlive(parent)
+	if handle == ^uintptr(0) {
+		if callErr == nil {
+			callErr = windows.ERROR_INVALID_HANDLE
+		}
+		return 0, fmt.Errorf("reopen exact namespace parent: %w", callErr)
+	}
+	return windows.Handle(handle), nil
 }
