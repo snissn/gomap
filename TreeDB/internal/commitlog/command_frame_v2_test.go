@@ -290,6 +290,54 @@ func TestCommandFrameV2RejectsCompressedSegmentStorage(t *testing.T) {
 	}
 }
 
+func TestCommandJournalV2CompressionOptionWritesStrictlyReopenableRawFrames(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{
+		Op:    RawKVOpSet,
+		Key:   []byte("compressible"),
+		Value: bytes.Repeat([]byte("v2-command-frame-must-remain-raw"), 4096),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	journal, err := OpenCommandJournal(dir, CommandJournalOptions{Compress: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lsn, err := journal.AppendCommand(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityRelaxed,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	})
+	if err != nil {
+		_ = journal.Close()
+		t.Fatal(err)
+	}
+	path, _ := journal.ActiveSegmentSnapshot()
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.LittleEndian.Uint32(data[:4]); got&segmentFlagCompressed != 0 {
+		t.Fatalf("segment length field=%#x, V2 command frame must remain uncompressed", got)
+	}
+	frames, err := ScanCommandFramesV2(path, Options{})
+	if err != nil {
+		t.Fatalf("strict V2 reopen: %v", err)
+	}
+	if len(frames) != 1 || frames[0].LSN != lsn || !bytes.Equal(frames[0].Payload, payload) {
+		t.Fatalf("strict V2 frames=%+v, want one frame at LSN %d with original payload", frames, lsn)
+	}
+}
+
 func TestInspectCommandFrameV2TerminalTailRequiresCompleteLSNAndClass(t *testing.T) {
 	frame, err := EncodeCommandFrameV2(CommandEnvelope{
 		DurabilityClass: CommandDurabilityRelaxed,

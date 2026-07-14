@@ -1033,7 +1033,10 @@ func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
 		return ErrCorrupt
 	}
 	w.scratch = payload
-	err = w.writeSegment(payload)
+	// Strict V2 readers reject compressed segment storage so recovery can
+	// inspect frame identity directly at a torn terminal tail. Keep V2 command
+	// frames raw even when compression remains enabled for other journal data.
+	err = w.writeRawSegmentWithChecksum(payload, crc.Checksum(payload))
 	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
 		w.scratch = make([]byte, 0, w.commandBufRetain)
 	}
