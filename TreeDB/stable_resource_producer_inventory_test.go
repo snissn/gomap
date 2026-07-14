@@ -2,6 +2,7 @@ package treedb_test
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +32,6 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 		rootpublication.ReachabilityTypedColumnMultipart:       collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityTypedColumnValue:           collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityTypedColumnCode:            collections.NewStableColumnAssetResourceToken,
-		rootpublication.ReachabilityHNSWSearchPack:             collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityVectorGraphPack:            collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityLegacyVectorSnapshot:       collections.NewStableLegacyVectorResourceToken,
 		rootpublication.ReachabilityCommandWALActive:           commitlog.NewStableCommandWALResourceToken,
@@ -84,5 +84,32 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 	}
 	if len(producers) != registerable {
 		t.Errorf("concrete producer fields=%d registerable canonical fields=%d", len(producers), registerable)
+	}
+}
+
+func TestPendingHNSWExactHandleProducerRemainsRejected(t *testing.T) {
+	policy, ok := rootpublication.StableResourcePolicyFor(rootpublication.ReachabilityHNSWSearchPack)
+	if !ok {
+		t.Fatal("HNSW search-pack field has no canonical policy")
+	}
+	if policy.Registerable || policy.Classification != "declared-authoritative-production-pending" {
+		t.Fatalf("HNSW search-pack policy=%+v want production-pending non-registerable", policy)
+	}
+	path := filepath.Join(t.TempDir(), "hnsw-search-pack.tca")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.Write([]byte("pending-hnsw-resource")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = collections.NewStableColumnAssetResourceToken(rootpublication.StableResourceSpec{
+		Kind: rootpublication.ResourceVectorGraphPack, LogicalLane: "inventory", ResourceID: "hnsw", Generation: 1,
+		DiagnosticPath: filepath.Base(path), File: file, Frontier: rootpublication.DurableFrontier{Bytes: 1},
+		Digest: sha256.Sum256([]byte("hnsw")), Reachability: rootpublication.ReachabilityHNSWSearchPack,
+	})
+	if !errors.Is(err, rootpublication.ErrResourceExcluded) {
+		t.Fatalf("pending HNSW producer error=%v want ErrResourceExcluded", err)
 	}
 }
