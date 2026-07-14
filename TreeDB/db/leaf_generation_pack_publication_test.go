@@ -33,6 +33,7 @@ func leafGenerationPackPublicationTestOptions(dir string) Options {
 
 func openLeafGenerationPackPublicationTestDB(t *testing.T, dir string) (*DB, *rewriteWriter) {
 	t.Helper()
+	requireLeafGenerationPackPromotionSupport(t)
 	db, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
