@@ -88,7 +88,7 @@ func TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose(t *testing.T)
 
 func TestStableIndexResourceTokenRunsCallerReleaseAfterSnapshotTeardown(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("stable index namespace persistence unsupported on Windows")
+		t.Skip("stable index namespace capture unsupported on Windows")
 	}
 	database, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
