@@ -1016,7 +1016,7 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 		classification string
 	}
 	want := map[ColumnAssetKind]expectedPolicy{
-		ColumnAssetKindTCS1PartImage:              {rootpublication.ReachabilityTypedColumnMultipart, "authoritative"},
+		ColumnAssetKindTCS1PartImage:              {rootpublication.ReachabilityColumnManifest, "authoritative"},
 		ColumnAssetKindTCS1TypedColumnPart:        {rootpublication.ReachabilityTypedColumnMultipart, "authoritative"},
 		ColumnAssetKindTCS1AggregateMetadata:      {rootpublication.ReachabilityTypedColumnValue, "authoritative"},
 		ColumnAssetKindTCS1DictionaryCodes:        {rootpublication.ReachabilityTypedColumnCode, "authoritative"},
@@ -1080,13 +1080,28 @@ func TestStableResourceInventoryClassifiesEveryColumnAssetKind(t *testing.T) {
 }
 
 func TestStableColumnPreparedValidationRejectsMissingAuthoritativeResources(t *testing.T) {
+	for _, kind := range []ColumnAssetKind{
+		ColumnAssetKindTCS1PartImage,
+		ColumnAssetKindTCS1TypedColumnPart,
+		ColumnAssetKindTCS1AggregateMetadata,
+		ColumnAssetKindTCS1DictionaryCodes,
+		ColumnAssetKindTCS1Int64Values,
+		ColumnAssetKindTCS1HNSWSearchPack,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			authoritative := ColumnPreparedAsset{Ref: ColumnAssetRef{
+				Kind: kind, Namespace: "missing-authority", Generation: 1,
+				PartID: 1, FileID: 1, Offset: 0, Length: 8, Checksum: 1,
+			}}
+			if err := validateStableColumnResourcesMatchPrepared([]ColumnPreparedAsset{authoritative}, nil); !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+				t.Fatalf("authoritative prepared ref without stable resources error=%v want ErrUnresolvedResource", err)
+			}
+		})
+	}
 	authoritative := ColumnPreparedAsset{Ref: ColumnAssetRef{
 		Kind: ColumnAssetKindTCS1PartImage, Namespace: "missing-authority", Generation: 1,
 		PartID: 1, FileID: 1, Offset: 0, Length: 8, Checksum: 1,
 	}}
-	if err := validateStableColumnResourcesMatchPrepared([]ColumnPreparedAsset{authoritative}, nil); err == nil {
-		t.Fatal("authoritative prepared ref without stable resources passed validation")
-	}
 	rebuildable := authoritative
 	rebuildable.Ref.Kind = ColumnAssetKindQueryReadyBase
 	if err := validateStableColumnResourcesMatchPrepared([]ColumnPreparedAsset{rebuildable}, nil); err != nil {
@@ -1290,9 +1305,10 @@ func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 	session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
 	refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{
 		{payload: []byte("row-image"), kind: ColumnAssetKindTCS1PartImage, generation: 7, partID: 1},
-		{payload: []byte("dictionary-codes"), kind: ColumnAssetKindTCS1DictionaryCodes, generation: 7, partID: 2},
-		{payload: []byte("hnsw-search-pack"), kind: ColumnAssetKindTCS1HNSWSearchPack, generation: 7, partID: 3},
-		{payload: []byte("int64-values"), kind: ColumnAssetKindTCS1Int64Values, generation: 7, partID: 4},
+		{payload: []byte("typed-column-part"), kind: ColumnAssetKindTCS1TypedColumnPart, generation: 7, partID: 2},
+		{payload: []byte("dictionary-codes"), kind: ColumnAssetKindTCS1DictionaryCodes, generation: 7, partID: 3},
+		{payload: []byte("hnsw-search-pack"), kind: ColumnAssetKindTCS1HNSWSearchPack, generation: 7, partID: 4},
+		{payload: []byte("int64-values"), kind: ColumnAssetKindTCS1Int64Values, generation: 7, partID: 5},
 	})
 	if err != nil {
 		_ = session.abort()
@@ -1310,20 +1326,43 @@ func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 		t.Fatalf("stable append close stats=%+v want one content sync epoch", closeStats)
 	}
 	descriptors := resources.Descriptors()
-	if len(descriptors) != 2 {
-		t.Fatalf("stable descriptors=%d want typed-column and vector resource kinds", len(descriptors))
+	if len(descriptors) != 3 {
+		t.Fatalf("stable descriptors=%d want manifest, typed-column, and vector resource kinds", len(descriptors))
 	}
 	byKind := make(map[rootpublication.ResourceKind]rootpublication.StableResourceDescriptor, len(descriptors))
 	for _, descriptor := range descriptors {
 		byKind[descriptor.Kind()] = descriptor
 	}
 	typed := byKind[rootpublication.ResourceTypedColumnAsset]
-	if got, want := typed.Frontier().Bytes, uint64(refs[3].Offset+refs[3].Length); got != want {
+	if got, want := typed.Frontier().Bytes, uint64(refs[4].Offset+refs[4].Length); got != want {
 		t.Fatalf("typed-column coalesced frontier=%d want %d", got, want)
 	}
 	vector := byKind[rootpublication.ResourceVectorGraphPack]
-	if got, want := vector.Frontier().Bytes, uint64(refs[2].Offset+refs[2].Length); got != want {
+	if got, want := vector.Frontier().Bytes, uint64(refs[3].Offset+refs[3].Length); got != want {
 		t.Fatalf("vector frontier=%d want %d", got, want)
+	}
+	manifest := byKind[rootpublication.ResourceColumnAsset]
+	if got, want := manifest.Frontier().Bytes, uint64(refs[0].Offset+refs[0].Length); got != want {
+		t.Fatalf("manifest asset frontier=%d want %d", got, want)
+	}
+	wantFields := map[rootpublication.ReachabilityField]bool{
+		rootpublication.ReachabilityColumnManifest:       false,
+		rootpublication.ReachabilityTypedColumnMultipart: false,
+		rootpublication.ReachabilityTypedColumnCode:      false,
+		rootpublication.ReachabilityTypedColumnValue:     false,
+		rootpublication.ReachabilityHNSWSearchPack:       false,
+	}
+	for _, descriptor := range descriptors {
+		for _, field := range descriptor.ReachabilityFields() {
+			if _, ok := wantFields[field]; ok {
+				wantFields[field] = true
+			}
+		}
+	}
+	for field, found := range wantFields {
+		if !found {
+			t.Errorf("stable append authority missing reachability field %q", field)
+		}
 	}
 	var obligations []rootpublication.StableLogicalObligation
 	for _, descriptor := range descriptors {
@@ -1344,8 +1383,8 @@ func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 			t.Fatalf("logical obligations=%+v missing ref=%+v", obligations, ref)
 		}
 	}
-	if got := registry.ActivePins(); got != 2 {
-		t.Fatalf("active kind-scoped pins=%d want 2", got)
+	if got := registry.ActivePins(); got != 3 {
+		t.Fatalf("active kind-scoped pins=%d want 3", got)
 	}
 	resourceSyncCounts := func() (uint64, uint64) {
 		t.Helper()

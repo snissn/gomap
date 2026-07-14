@@ -75,7 +75,9 @@ func NewStableLegacyVectorResourceToken(spec rootpublication.StableResourceSpec)
 // fail closed until their durability ownership is reviewed.
 func stableColumnAssetResourceClassification(kind ColumnAssetKind) (rootpublication.ResourceKind, rootpublication.ReachabilityField, string, error) {
 	switch kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart:
+	case ColumnAssetKindTCS1PartImage:
+		return rootpublication.ResourceColumnAsset, rootpublication.ReachabilityColumnManifest, "authoritative", nil
+	case ColumnAssetKindTCS1TypedColumnPart:
 		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, "authoritative", nil
 	case ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1Int64Values:
 		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative", nil
@@ -168,13 +170,32 @@ func stableColumnAssetResourceToken(file *os.File, ref ColumnAssetRef, namespace
 
 func stableColumnAssetResourceTokenWithRegistry(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceToken, error) {
 	resourceKind, reachability, _, err := stableColumnAssetResourceClassification(ref.Kind)
-	if err != nil {
+	return stableColumnAssetResourceTokenWithPolicy(file, ref, namespace, registry, resourceKind, reachability, err)
+}
+
+// stableVectorGraphResourceTokenWithRegistry is the vector-rebuild-owned
+// capture boundary. The physical ref kind remains part of the logical
+// obligation, while the complete rebuild closure is registered under the
+// transitive vector-graph reachability field.
+func stableVectorGraphResourceTokenWithRegistry(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry) (*rootpublication.StableResourceToken, error) {
+	if _, _, classification, err := stableColumnAssetResourceClassification(ref.Kind); err != nil {
 		return nil, err
+	} else if classification != "authoritative" {
+		return nil, fmt.Errorf("%w: vector graph ref kind %q is not authoritative", rootpublication.ErrResourceExcluded, ref.Kind)
+	}
+	return stableColumnAssetResourceTokenWithPolicy(file, ref, namespace, registry,
+		rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityVectorGraphPack, nil)
+}
+
+func stableColumnAssetResourceTokenWithPolicy(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry, resourceKind rootpublication.ResourceKind, reachability rootpublication.ReachabilityField, policyErr error) (*rootpublication.StableResourceToken, error) {
+	if policyErr != nil {
+		return nil, policyErr
 	}
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
 	}
 	var identity rootpublication.StableIdentity
+	var err error
 	if registry != nil {
 		identity, err = rootpublication.StableIdentityFromFile(file)
 		if err != nil {
@@ -220,6 +241,14 @@ func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetR
 }
 
 func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, resources *rootpublication.StableResourceSet) error {
+	return validateStableColumnResourcesMatchPreparedPolicy(assets, resources, false)
+}
+
+func validateStableVectorGraphResourcesMatchPrepared(assets []ColumnPreparedAsset, resources *rootpublication.StableResourceSet) error {
+	return validateStableColumnResourcesMatchPreparedPolicy(assets, resources, true)
+}
+
+func validateStableColumnResourcesMatchPreparedPolicy(assets []ColumnPreparedAsset, resources *rootpublication.StableResourceSet, vectorGraphAuthority bool) error {
 	const linearLimit = 16
 	expected := make([]rootpublication.StableLogicalObligation, 0, len(assets))
 	var expectedIndex map[rootpublication.StableLogicalObligation]struct{}
@@ -234,16 +263,19 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 		if classification == "rebuildable-non-authoritative" {
 			continue
 		}
+		if vectorGraphAuthority {
+			reachability = rootpublication.ReachabilityVectorGraphPack
+		}
 		obligation := stableColumnLogicalObligation(asset.Ref, reachability)
 		if expectedIndex != nil {
 			if _, duplicate := expectedIndex[obligation]; duplicate {
-				return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+				return fmt.Errorf("collections: %w: duplicate authoritative prepared column asset ref %+v", rootpublication.ErrResourceConflict, asset.Ref)
 			}
 			expectedIndex[obligation] = struct{}{}
 		} else {
 			for _, existing := range expected {
 				if existing == obligation {
-					return fmt.Errorf("collections: duplicate authoritative prepared column asset ref %+v", asset.Ref)
+					return fmt.Errorf("collections: %w: duplicate authoritative prepared column asset ref %+v", rootpublication.ErrResourceConflict, asset.Ref)
 				}
 			}
 		}
@@ -251,7 +283,7 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 	}
 	if resources == nil {
 		if len(expected) != 0 {
-			return fmt.Errorf("collections: %d authoritative prepared column assets have no stable resources", len(expected))
+			return fmt.Errorf("collections: %w: %d authoritative prepared column assets have no stable resources", rootpublication.ErrUnresolvedResource, len(expected))
 		}
 		return nil
 	}
@@ -266,18 +298,24 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 			if err != nil {
 				return fmt.Errorf("collections: stable column obligation classification: %w", err)
 			}
+			if vectorGraphAuthority {
+				resourceKind = rootpublication.ResourceVectorGraphPack
+				if obligation.Reachability != rootpublication.ReachabilityVectorGraphPack {
+					return fmt.Errorf("collections: %w: vector graph obligation kind=%q reachability=%q", rootpublication.ErrResourceConflict, obligation.Kind, obligation.Reachability)
+				}
+			}
 			if classification != "authoritative" || resourceKind != descriptor.Kind() {
-				return fmt.Errorf("collections: stable column obligation kind=%q resource_kind=%q classification=%q", obligation.Kind, descriptor.Kind(), classification)
+				return fmt.Errorf("collections: %w: stable column obligation kind=%q resource_kind=%q classification=%q", rootpublication.ErrResourceConflict, obligation.Kind, descriptor.Kind(), classification)
 			}
 			if actualIndex != nil {
 				if _, duplicate := actualIndex[obligation]; duplicate {
-					return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+					return fmt.Errorf("collections: %w: duplicate stable column logical obligation %+v", rootpublication.ErrResourceConflict, obligation)
 				}
 				actualIndex[obligation] = struct{}{}
 			} else {
 				for _, existing := range actual {
 					if existing == obligation {
-						return fmt.Errorf("collections: duplicate stable column logical obligation %+v", obligation)
+						return fmt.Errorf("collections: %w: duplicate stable column logical obligation %+v", rootpublication.ErrResourceConflict, obligation)
 					}
 				}
 			}
@@ -287,7 +325,7 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 	for _, obligation := range expected {
 		if actualIndex != nil {
 			if _, found := actualIndex[obligation]; !found {
-				return fmt.Errorf("collections: stable column resources missing prepared obligation %+v", obligation)
+				return fmt.Errorf("collections: %w: stable column resources missing prepared obligation %+v", rootpublication.ErrUnresolvedResource, obligation)
 			}
 			continue
 		}
@@ -299,13 +337,13 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 			}
 		}
 		if !found {
-			return fmt.Errorf("collections: stable column resources missing prepared obligation %+v", obligation)
+			return fmt.Errorf("collections: %w: stable column resources missing prepared obligation %+v", rootpublication.ErrUnresolvedResource, obligation)
 		}
 	}
 	for _, obligation := range actual {
 		if expectedIndex != nil {
 			if _, found := expectedIndex[obligation]; !found {
-				return fmt.Errorf("collections: stable column resources contain unprepared obligation %+v", obligation)
+				return fmt.Errorf("collections: %w: stable column resources contain unprepared obligation %+v", rootpublication.ErrResourceConflict, obligation)
 			}
 			continue
 		}
@@ -317,7 +355,7 @@ func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, re
 			}
 		}
 		if !found {
-			return fmt.Errorf("collections: stable column resources contain unprepared obligation %+v", obligation)
+			return fmt.Errorf("collections: %w: stable column resources contain unprepared obligation %+v", rootpublication.ErrResourceConflict, obligation)
 		}
 	}
 	return nil

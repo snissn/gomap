@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -234,6 +235,64 @@ func (m *Manager) StableResourceToken(fileID uint32, registration StableResource
 	}
 	defer namespace.Release()
 	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
+}
+
+// StableExternalRIDSegment describes the exact value-log child required by a
+// dormant command-WAL external-RID fence. Capturing this producer-side closure
+// does not activate command-WAL ExternalRefs; #3718 still owns that consumer.
+type StableExternalRIDSegment struct {
+	FileID uint32
+	RIDs   []uint64
+	Digest [32]byte
+}
+
+// CaptureStableExternalRIDFence captures every requested manager-owned value-
+// log segment as one deterministic transitive resource set. The manager fixes
+// the producer, reachability field, exact handles, and shared deletion gate;
+// callers cannot substitute paths or identity overrides.
+func (m *Manager) CaptureStableExternalRIDFence(segments []StableExternalRIDSegment) (*rootpublication.StableResourceSet, error) {
+	if m == nil || len(segments) == 0 {
+		return nil, fmt.Errorf("%w: external-RID fence has no value-log children", rootpublication.ErrUnresolvedResource)
+	}
+	ordered := append([]StableExternalRIDSegment(nil), segments...)
+	for i := range ordered {
+		ordered[i].RIDs = append([]uint64(nil), ordered[i].RIDs...)
+		if ordered[i].FileID == 0 || len(ordered[i].RIDs) == 0 {
+			return nil, fmt.Errorf("%w: external-RID child has empty file ID or RID set", rootpublication.ErrUnresolvedResource)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].FileID < ordered[j].FileID })
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i-1].FileID == ordered[i].FileID {
+			return nil, fmt.Errorf("%w: duplicate external-RID value-log child %d", rootpublication.ErrResourceConflict, ordered[i].FileID)
+		}
+	}
+
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALExternalRIDFence)
+	for _, child := range ordered {
+		token, err := m.StableResourceToken(child.FileID, StableResourceRegistration{
+			Kind: rootpublication.ResourceCommandWALExternalRID, LogicalLane: "command-wal-v2/external-rid",
+			Generation:     uint64(child.FileID),
+			DiagnosticPath: filepath.Join(filepath.Base(m.dir), fmt.Sprintf("%06d.vlog", child.FileID)),
+			Reachability:   rootpublication.ReachabilityCommandWALExternalRIDFence,
+			ExternalRIDs:   child.RIDs, Digest: child.Digest,
+		})
+		if err != nil {
+			builder.Abandon()
+			return nil, fmt.Errorf("external-RID value-log child %d: %w", child.FileID, err)
+		}
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			builder.Abandon()
+			return nil, err
+		}
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		return nil, err
+	}
+	return resources, nil
 }
 
 // StableExistingPhysicalResourceToken captures an exact manager-owned segment

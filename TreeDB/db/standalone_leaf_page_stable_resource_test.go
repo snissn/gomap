@@ -758,6 +758,74 @@ func standaloneStableLeafPages(count, size int) [][]byte {
 	return pages
 }
 
+func BenchmarkStandaloneLeafPageStableBatchAuthority(b *testing.B) {
+	dir := b.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	log, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{
+		MaxSegmentBytes: 512,
+		Compression:     ValueLogCompressionOff,
+	})
+	if err != nil {
+		_ = database.Close()
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		_ = database.Close()
+		_ = log.Close()
+	})
+	database.SetLeafPageLog(log)
+	writer, ok := log.(*rewriteWriter)
+	if !ok {
+		b.Fatalf("standalone leaf log type=%T want *rewriteWriter", log)
+	}
+	stable, ok := database.leafPageLog.(LeafPageStableBatchLog)
+	if !ok {
+		b.Fatalf("installed standalone leaf log %T erased stable batch capture", database.leafPageLog)
+	}
+	// One more than the grouped-frame cap forces two physical records; the tiny
+	// segment target then makes the authority path observe a real rotation.
+	pages := standaloneStableLeafPages(valuelog.MaxFrameK+1, page.PageSize)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(pages) * page.PageSize))
+	b.ResetTimer()
+	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
+	var pinHighWater uint64
+	for i := 0; i < b.N; i++ {
+		_, resources, err := stable.AppendLeafPagesWithStableResources(pages)
+		if err != nil {
+			b.Fatal(err)
+		}
+		descriptors += uint64(len(resources.Descriptors()))
+		for _, descriptor := range resources.Descriptors() {
+			obligations += uint64(len(descriptor.LogicalObligations()))
+		}
+		for _, stats := range resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
+		resources.Release()
+	}
+	b.StopTimer()
+	if got := database.valueLogIdentityPins.ActivePins(); got != 0 {
+		b.Fatalf("active raw outer-leaf pins after release=%d want 0", got)
+	}
+	physical := writer.leafW.DurabilityStats()
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(obligations)/float64(b.N), "logical_obligations/op")
+	b.ReportMetric(float64(pinHighWater), "pin_high_water")
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "token_sync_attempts/op")
+	b.ReportMetric(float64(physical.FileSyncCalls)/float64(b.N), "file_syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace_token_syncs/op")
+	b.ReportMetric(float64(physical.DirectorySyncCalls)/float64(b.N), "directory_syncs/op")
+}
+
 func TestStandaloneLeafPageLogStableBatchCapturesExactRotatedSegments(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})

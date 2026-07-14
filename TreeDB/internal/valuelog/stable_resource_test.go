@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -539,6 +540,139 @@ func TestStableValueLogTokenCarriesCanonicalExternalRIDFence(t *testing.T) {
 	if token.Kind() != rootpublication.ResourceCommandWALExternalRID {
 		t.Fatalf("token kind=%q want command WAL external RID", token.Kind())
 	}
+}
+
+func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
+	dir := t.TempDir()
+	fileIDs := make([]uint32, 2)
+	for i := range fileIDs {
+		fileID, err := EncodeFileID(1, uint32(i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fileIDs[i] = fileID
+		writer, err := NewWriter(SegmentPath(dir, fileID), fileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Append(0, nil, uint64(i+1), []byte("external-rid-child")); err != nil {
+			_ = writer.Close()
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	children := []StableExternalRIDSegment{
+		{FileID: fileIDs[0], RIDs: []uint64{9, 2, 9}, Digest: sha256.Sum256([]byte("segment-1"))},
+		{FileID: fileIDs[1], RIDs: []uint64{14, 4}, Digest: sha256.Sum256([]byte("segment-2"))},
+	}
+	resources, err := manager.CaptureStableExternalRIDFence(children)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != len(children) {
+		t.Fatalf("external-RID descriptors=%d want %d", len(descriptors), len(children))
+	}
+	for i, descriptor := range descriptors {
+		if descriptor.Generation() != uint64(children[i].FileID) || descriptor.Kind() != rootpublication.ResourceCommandWALExternalRID {
+			t.Fatalf("external-RID descriptor[%d]=%+v", i, descriptor)
+		}
+	}
+	resources.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("external-RID pins after release=%d want 0", got)
+	}
+
+	for omitted := range children {
+		missing := append([]StableExternalRIDSegment(nil), children...)
+		missingID, err := EncodeFileID(2, uint32(omitted+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		missing[omitted].FileID = missingID
+		if resources, err := manager.CaptureStableExternalRIDFence(missing); err == nil || resources != nil || !strings.Contains(err.Error(), fmt.Sprintf("child %d", missingID)) {
+			if resources != nil {
+				resources.Release()
+			}
+			t.Fatalf("omitted external-RID child %d resources=%v err=%v", omitted, resources, err)
+		}
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("external-RID pins after omitted child %d=%d want 0", omitted, got)
+		}
+	}
+}
+
+func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
+	dir := b.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	fileIDs := make([]uint32, 2)
+	for i := 0; i < 2; i++ {
+		fileID, err := EncodeFileID(1, uint32(i+1))
+		if err != nil {
+			b.Fatal(err)
+		}
+		fileIDs[i] = fileID
+		writer, err := NewWriter(SegmentPath(dir, fileID), fileID)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := writer.Append(0, nil, uint64(i+1), []byte("external-rid-record")); err != nil {
+			_ = writer.Close()
+			b.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = manager.Close() })
+	children := []StableExternalRIDSegment{
+		{FileID: fileIDs[0], RIDs: []uint64{1, 101, 1}, Digest: sha256.Sum256([]byte("external-rid-segment-1"))},
+		{FileID: fileIDs[1], RIDs: []uint64{2, 102, 2}, Digest: sha256.Sum256([]byte("external-rid-segment-2"))},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
+	var pinHighWater uint64
+	for i := 0; i < b.N; i++ {
+		resources, err := manager.CaptureStableExternalRIDFence(children)
+		if err != nil {
+			b.Fatal(err)
+		}
+		descriptors += uint64(len(resources.Descriptors()))
+		for _, descriptor := range resources.Descriptors() {
+			obligations += uint64(len(descriptor.LogicalObligations()))
+		}
+		for _, stats := range resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
+		resources.Release()
+	}
+	b.StopTimer()
+	if got := registry.ActivePins(); got != 0 {
+		b.Fatalf("active external-RID pins after release=%d want 0", got)
+	}
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(obligations)/float64(b.N), "logical_obligations/op")
+	b.ReportMetric(float64(pinHighWater), "pin_high_water")
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "content_syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace_syncs/op")
 }
 
 func TestStableValueLogRegistrationSupportsOuterLeafProducerKinds(t *testing.T) {

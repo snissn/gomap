@@ -764,6 +764,7 @@ type columnPhysicalAssetSegmentAppender struct {
 	stableRefs                 []ColumnAssetRef
 	stableNamespaceRef         *ColumnAssetRef
 	stableResources            *rootpublication.StableResourceSet
+	stableVectorGraphAuthority bool
 	closeStats                 columnPhysicalAssetSegmentCloseStats
 }
 
@@ -1623,6 +1624,11 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 	}
 	refs := append([]ColumnAssetRef(nil), a.stableRefs...)
 	sort.SliceStable(refs, func(i, j int) bool {
+		if a.stableVectorGraphAuthority {
+			leftEnd := refs[i].Offset + refs[i].Length
+			rightEnd := refs[j].Offset + refs[j].Length
+			return leftEnd > rightEnd
+		}
 		leftKind, _, _, _ := stableColumnAssetResourceClassification(refs[i].Kind)
 		rightKind, _, _, _ := stableColumnAssetResourceClassification(refs[j].Kind)
 		if leftKind != rightKind {
@@ -1641,7 +1647,13 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		if i == 0 {
 			tokenNamespace = namespaceToken
 		}
-		token, err := stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, tokenNamespace, a.stableRegistry)
+		var token *rootpublication.StableResourceToken
+		var err error
+		if a.stableVectorGraphAuthority {
+			token, err = stableVectorGraphResourceTokenWithRegistry(a.file, ref, tokenNamespace, a.stableRegistry)
+		} else {
+			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, tokenNamespace, a.stableRegistry)
+		}
 		if err != nil {
 			builder.Abandon()
 			return nil, err

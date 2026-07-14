@@ -18,7 +18,12 @@ import (
 
 type exactHandleProducer func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)
 
-func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testing.T) {
+// TestStableProducerConstructorPolicyAcceptsCanonicalSpecs is a lower-level
+// constructor policy check. It is intentionally not the #3771 production
+// witness registry: the latter is independently maintained in
+// stable_resource_production_witness_registry_test.go and executes real
+// producer-owned capture paths.
+func TestStableProducerConstructorPolicyAcceptsCanonicalSpecs(t *testing.T) {
 	producers := map[rootpublication.ReachabilityField]exactHandleProducer{
 		rootpublication.ReachabilityIndexFile:                  db.NewStableDBResourceToken,
 		rootpublication.ReachabilityValueLogPointer:            valuelog.NewStableValueLogResourceToken,
