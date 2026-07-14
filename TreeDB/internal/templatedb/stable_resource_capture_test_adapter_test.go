@@ -10,8 +10,9 @@ import (
 )
 
 type stableTestKV struct {
-	db             *backenddb.DB
-	diagnosticPath string
+	db                     *backenddb.DB
+	diagnosticPathOverride string
+	valueLogTokenCalls     *int
 }
 
 func (kv stableTestKV) Get(key []byte) ([]byte, error) {
@@ -38,13 +39,19 @@ func (kv stableTestKV) AcquireStableTemplateSnapshot() (StablePhysicalSnapshot, 
 	if snapshot == nil {
 		return nil, nil
 	}
-	return &stableTestSnapshot{snapshot: snapshot, dir: kv.db.Dir(), diagnosticPath: kv.diagnosticPath}, nil
+	return &stableTestSnapshot{
+		snapshot:               snapshot,
+		dir:                    kv.db.Dir(),
+		diagnosticPathOverride: kv.diagnosticPathOverride,
+		valueLogTokenCalls:     kv.valueLogTokenCalls,
+	}, nil
 }
 
 type stableTestSnapshot struct {
-	snapshot       *backenddb.Snapshot
-	dir            string
-	diagnosticPath string
+	snapshot               *backenddb.Snapshot
+	dir                    string
+	diagnosticPathOverride string
+	valueLogTokenCalls     *int
 }
 
 func (snapshot *stableTestSnapshot) Get(key []byte) ([]byte, error) {
@@ -73,8 +80,8 @@ func (snapshot *stableTestSnapshot) GetEntry(key []byte) (StablePhysicalEntry, e
 }
 
 func (snapshot *stableTestSnapshot) ValueLogDiagnosticPath(fileID uint32) (string, error) {
-	if snapshot.diagnosticPath != "" {
-		return snapshot.diagnosticPath, nil
+	if snapshot.diagnosticPathOverride != "" {
+		return snapshot.diagnosticPathOverride, nil
 	}
 	state := snapshot.snapshot.State()
 	if state == nil || state.ValueLogSet == nil || state.ValueLogSet.Files[fileID] == nil {
@@ -88,6 +95,9 @@ func (snapshot *stableTestSnapshot) NewStableIndexResourceToken(spec rootpublica
 }
 
 func (snapshot *stableTestSnapshot) NewStableValueLogResourceToken(fileID uint32, spec rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+	if snapshot.valueLogTokenCalls != nil {
+		*snapshot.valueLogTokenCalls++
+	}
 	return snapshot.snapshot.NewStableValueLogPhysicalResourceToken(fileID, spec, NewStableTemplateResourceToken)
 }
 
