@@ -1890,8 +1890,8 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 // SetSync writes a key/value pair and forces a durability boundary.
-// With DurabilityWALOnRelaxed or DurabilityWALOffRelaxed enabled, Sync operations are
-// crash-consistent only (no fsync) and may not survive power loss.
+// When the command WAL is enabled, explicit sync operations opt up to durable
+// V2 publication even when the configured default durability is relaxed.
 func (db *DB) SetSync(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
@@ -1935,9 +1935,8 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 }
 
 // UpdateSync applies fn to the current value for key and writes the returned
-// mutation with a sync durability boundary. With DurabilityWALOnRelaxed or
-// DurabilityWALOffRelaxed enabled, Sync operations are crash-consistent only
-// (no fsync) and may not survive power loss.
+// mutation with a sync durability boundary. When the command WAL is enabled,
+// explicit sync operations opt up even when the configured default is relaxed.
 //
 // Concurrent UpdateSync/Update calls for the same key on the same DB handle do
 // not lose each other's changes. Because fn may be retried, it should avoid

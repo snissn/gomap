@@ -49,8 +49,7 @@ func NewDurablePrefixBarrierV1(lsn, baseAppliedLSN uint64) CommandEnvelope {
 	}
 }
 
-// EncodeCommandFrameV2 encodes the inert V2 format. Production appenders keep
-// using EncodeCommandFrame (V1) until #3718 performs the atomic activation.
+// EncodeCommandFrameV2 encodes the active command-WAL V2 format.
 func EncodeCommandFrameV2(env CommandEnvelope) ([]byte, error) {
 	return EncodeCommandFrameV2To(nil, env)
 }
@@ -139,7 +138,7 @@ func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
 	return frame, nil
 }
 
-// DecodeCommandFrameV2 decodes and fully validates one inert V2 frame.
+// DecodeCommandFrameV2 decodes and fully validates one V2 frame.
 func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 	var env CommandEnvelope
 	if len(frame) < commandFrameHeaderSize {
@@ -216,7 +215,7 @@ func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 }
 
 // ReadCommandFrameV2 reads one length/CRC-bounded segment payload and applies
-// the strict V2 decoder. It never falls back to the production V1 codec.
+// the strict V2 decoder. It never falls back to the legacy V1 codec.
 func (r *Reader) ReadCommandFrameV2() (CommandEnvelope, error) {
 	payload, err := r.readSegmentPayloadWithCompression(true, false)
 	if err != nil {
@@ -225,7 +224,7 @@ func (r *Reader) ReadCommandFrameV2() (CommandEnvelope, error) {
 	return DecodeCommandFrameV2(payload)
 }
 
-// ScanCommandFramesV2 scans one strict-V2 segment without enabling it for the
+// ScanCommandFramesV2 scans one strict-V2 segment using the same codec as the
 // production journal owner.
 func ScanCommandFramesV2(path string, opts Options) ([]CommandEnvelope, error) {
 	r, err := NewReaderWithOptions(path, opts)
@@ -266,8 +265,11 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 	if err != nil {
 		return env, 0, err
 	}
-	if segmentStart < 0 || segmentStart+segmentHeaderSize > info.Size() {
+	if segmentStart < 0 || segmentStart > info.Size() {
 		return env, info.Size(), ErrCorrupt
+	}
+	if segmentStart+segmentHeaderSize > info.Size() {
+		return env, info.Size(), errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
 	}
 	var segmentHeader [segmentHeaderSize]byte
 	if _, err := f.ReadAt(segmentHeader[:], segmentStart); err != nil {

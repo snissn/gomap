@@ -9,6 +9,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -73,34 +74,32 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 	}
 	defer func() { _ = d.Close() }()
 
-	externalErr := errors.New("external value-log sync failed")
-	appender := &commandWALBarrierTestAppender{externalErr: externalErr}
+	appender := &commandWALBarrierTestAppender{externalErr: errors.New("unused external value-log sync failure")}
 	d.SetValueLogAppender(appender)
 	beforeStats := d.Stats()
 	before := commandWALTestStatUint64(t, beforeStats, "treedb.command_wal.sync.count_total")
 	beforeFileSyncs := commandWALTestStatUint64(t, beforeStats, "treedb.command_wal.file_sync.calls_total")
-	if err := d.FlushCommandWALBarrier(true); !errors.Is(err, externalErr) {
-		t.Fatalf("FlushCommandWALBarrier error=%v, want %v", err, externalErr)
-	}
-	if appender.externalFlushes != 1 || !appender.externalSync || len(appender.externalFileIDs) != 0 {
-		t.Fatalf("external barrier calls=%d sync=%t fileIDs=%v, want one all-ref sync", appender.externalFlushes, appender.externalSync, appender.externalFileIDs)
-	}
-	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before {
-		t.Fatalf("command WAL sync count=%d, want %d when external barrier fails", got, before)
-	}
-	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != beforeFileSyncs {
-		t.Fatalf("command WAL file sync calls=%d, want %d when external barrier fails", got, beforeFileSyncs)
-	}
-
-	appender.externalErr = nil
 	if err := d.FlushCommandWALBarrier(true); err != nil {
-		t.Fatalf("FlushCommandWALBarrier retry: %v", err)
+		t.Fatalf("FlushCommandWALBarrier: %v", err)
+	}
+	if appender.externalFlushes != 0 {
+		t.Fatalf("external barrier calls=%d, want exact debt resources only", appender.externalFlushes)
 	}
 	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before+1 {
 		t.Fatalf("command WAL sync count=%d, want %d", got, before+1)
 	}
 	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != beforeFileSyncs+1 {
 		t.Fatalf("command WAL file sync calls=%d, want %d", got, beforeFileSyncs+1)
+	}
+
+	if err := d.FlushCommandWALBarrier(true); err != nil {
+		t.Fatalf("FlushCommandWALBarrier retry: %v", err)
+	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before+2 {
+		t.Fatalf("command WAL sync count=%d, want %d", got, before+2)
+	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.file_sync.calls_total"); got != beforeFileSyncs+2 {
+		t.Fatalf("command WAL file sync calls=%d, want %d", got, beforeFileSyncs+2)
 	}
 }
 
@@ -614,6 +613,109 @@ func TestRawKVOrderedEntriesIntentOwnsPayloadBytes(t *testing.T) {
 	}
 	if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSet || string(ops[0].Key) != "alpha" || string(ops[0].Value) != "one" {
 		t.Fatalf("decoded mutable ordered-entry intent ops=%+v, want alpha=one", ops)
+	}
+}
+
+func TestRawKVCommandWALPreAppendFailureReleasesOneShotDependencies(t *testing.T) {
+	d, entry := openCommandWALPointerDependencyTestDB(t)
+	defer func() { _ = d.Close() }()
+
+	baselinePins := d.valueLogIdentityPins.ActivePins()
+	wantErr := errors.New("injected pre-append failure")
+	reached := false
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
+			reached = true
+			return wantErr
+		}
+		return nil
+	})
+	lsn, err := d.AppendRawKVCommandWALOrderedEntries([]batchpkg.Entry{entry}, true)
+	restore()
+	if !errors.Is(err, wantErr) || lsn != 0 || !reached {
+		t.Fatalf("AppendRawKVCommandWALOrderedEntries=(lsn=%d,error=%v,reached=%t), want (0,injected,true)", lsn, err, reached)
+	}
+	if got := d.valueLogIdentityPins.ActivePins(); got != baselinePins {
+		t.Fatalf("active value-log pins after one-shot pre-append failure=%d, want baseline %d", got, baselinePins)
+	}
+}
+
+func TestRawKVCommandWALPreAppendFailureRetainsReusableDependenciesForRetry(t *testing.T) {
+	d, entry := openCommandWALPointerDependencyTestDB(t)
+	defer func() { _ = d.Close() }()
+
+	intent, err := d.NewRawKVCommandWALIntentFromOrderedEntries([]batchpkg.Entry{entry})
+	if err != nil {
+		t.Fatalf("NewRawKVCommandWALIntentFromOrderedEntries: %v", err)
+	}
+	baselinePins := d.valueLogIdentityPins.ActivePins()
+	wantErr := errors.New("injected pre-append failure")
+	reached := false
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeDependencyAppend && event.Resource == durabilitycut.ResourceCommandWAL {
+			reached = true
+			return wantErr
+		}
+		return nil
+	})
+	lsn, err := d.AppendCommandWALIntent(intent, true)
+	restore()
+	if !errors.Is(err, wantErr) || lsn != 0 || intent.AssignedLSN() != 0 || !reached {
+		t.Fatalf("AppendCommandWALIntent=(lsn=%d,assigned=%d,error=%v,reached=%t), want (0,0,injected,true)", lsn, intent.AssignedLSN(), err, reached)
+	}
+	if intent.inner.dependencyResources == nil {
+		t.Fatal("reusable intent discarded exact dependency handles after pre-append failure")
+	}
+	if got := d.valueLogIdentityPins.ActivePins(); got <= baselinePins {
+		t.Fatalf("active value-log pins after reusable pre-append failure=%d, want greater than baseline %d", got, baselinePins)
+	}
+
+	lsn, err = d.AppendCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent retry: %v", err)
+	}
+	if lsn == 0 || intent.AssignedLSN() != lsn {
+		t.Fatalf("AppendCommandWALIntent retry lsn=%d assigned=%d, want non-zero match", lsn, intent.AssignedLSN())
+	}
+	if got := d.valueLogIdentityPins.ActivePins(); got != baselinePins {
+		t.Fatalf("active value-log pins after successful durable retry=%d, want baseline %d", got, baselinePins)
+	}
+}
+
+func openCommandWALPointerDependencyTestDB(t *testing.T) (*DB, batchpkg.Entry) {
+	t.Helper()
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		Durability:             DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ptrs, err := d.AppendValueLogValues([][]byte{bytes.Repeat([]byte("command-wal-dependency|"), 16)})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if len(ptrs) != 1 {
+		_ = d.Close()
+		t.Fatalf("AppendValueLogValues returned %d pointers, want 1", len(ptrs))
+	}
+	path, fileID, ok := d.currentValueLogAppender().CurrentValueLogSegment()
+	if !ok || path == "" || fileID != ptrs[0].FileID {
+		_ = d.Close()
+		t.Fatalf("CurrentValueLogSegment=(%q,%d,%t), pointer file_id=%d", path, fileID, ok, ptrs[0].FileID)
+	}
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		_ = d.Close()
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	return d, batchpkg.Entry{
+		Type:     batchpkg.OpPut,
+		Key:      []byte("pointer-dependency"),
+		IsPtr:    true,
+		ValuePtr: ptrs[0],
 	}
 }
 

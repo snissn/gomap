@@ -989,6 +989,9 @@ func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, 
 }
 
 func (w *Writer) AppendCommand(env CommandEnvelope) error {
+	if env.Version == CommandFrameVersionV2 || env.DurabilityClass != 0 {
+		return w.AppendCommandV2(env)
+	}
 	size, err := commandFrameEncodedSize(env)
 	if err != nil {
 		return err
@@ -1005,6 +1008,30 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 	}
 	w.scratch = payload
 	return w.writeSegment(payload)
+}
+
+// AppendCommandV2 appends one strict V2 command envelope. The generic path is
+// intentionally shared by every command kind so activation cannot leave a V1
+// fast-path escape hatch; specialized allocation-free V2 encoders may replace
+// it without changing the persisted contract.
+func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
+	payload, err := EncodeCommandFrameV2To(w.scratch[:0], env)
+	if err != nil {
+		return err
+	}
+	size := len(payload)
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	w.scratch = payload
+	err = w.writeSegment(payload)
+	if w.commandBufRetain > 0 && cap(w.scratch) > w.commandBufRetain {
+		w.scratch = make([]byte, 0, w.commandBufRetain)
+	}
+	return err
 }
 
 func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {

@@ -13,8 +13,8 @@ import (
 
 const (
 	CommandFrameVersion uint16 = 1
-	// CommandFrameVersionV2 is intentionally separate from CommandFrameVersion.
-	// Production activation remains owned by #3718.
+	// CommandFrameVersionV2 is the active command-WAL frame version. The V1
+	// constant remains for stable fixture decoding and rebuild diagnostics.
 	CommandFrameVersionV2 uint16 = 2
 
 	CommandWALNonCriticalFlagStart uint64 = 1 << 32
@@ -2024,6 +2024,9 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 		return env, ErrCorrupt
 	}
 	version := binary.LittleEndian.Uint16(frame[4:6])
+	if version == CommandFrameVersionV2 {
+		return DecodeCommandFrameV2(frame)
+	}
 	minReader := binary.LittleEndian.Uint16(frame[6:8])
 	if version != CommandFrameVersion || minReader > CommandFrameVersion {
 		return env, ErrCommandWALUnsupportedVersion
@@ -2099,10 +2102,10 @@ func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
 	return validateCommandEnvelopePayload(env)
 }
 
-// validateExternalRefs keeps the dormant typed external-reference wire section
-// fail-closed until #3718 activates its producer, pin, sync, recovery, and
-// deletion-owner closure. RawKV SetRID references use the separate V2
-// ExternalRefFenceV1 contract and are intentionally unaffected.
+// validateExternalRefs keeps the typed external-reference wire section
+// fail-closed because no complete producer, pin, sync, recovery, and
+// deletion-owner closure exists for it. RawKV SetRID references use the active
+// V2 ExternalRefFenceV1 contract and are intentionally separate.
 func validateExternalRefs(refs []ExternalRef) error {
 	if len(refs) != 0 {
 		return ErrCommandWALUnsupportedExternalRef

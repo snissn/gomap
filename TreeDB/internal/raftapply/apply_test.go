@@ -1426,7 +1426,7 @@ func TestCollectionMutationCommandWALReplayHandlers(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("CollectionInsertBatchByIDFrame: %v", err)
 	}
-	_, insertResult, err := commandwalapply.Append(db, insertFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	_, insertResult, err := commandwalapply.Append(db, insertFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("Append insert replay frame: %v", err)
@@ -1468,7 +1468,7 @@ func TestCollectionMutationCommandWALReplayHandlers(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("CollectionUpdateBatchByIDFrame: %v", err)
 	}
-	_, updateResult, err := commandwalapply.Append(db, updateFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	_, updateResult, err := commandwalapply.Append(db, updateFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("Append update replay frame: %v", err)
@@ -1507,7 +1507,7 @@ func TestCollectionMutationCommandWALReplayHandlers(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("CollectionDeleteBatchByIDFrame: %v", err)
 	}
-	_, deleteResult, err := commandwalapply.Append(db, deleteFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	_, deleteResult, err := commandwalapply.Append(db, deleteFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: true})
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("Append delete replay frame: %v", err)

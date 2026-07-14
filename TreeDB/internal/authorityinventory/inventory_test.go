@@ -122,6 +122,7 @@ func TestAuthorityFamilyActivationBoundaries(t *testing.T) {
 	for _, prefix := range []string{
 		"page.ValuePtr.", "page.LogRecordRef.", "db.leafGenerationManifest.",
 		"db.leafGenerationRecord.", "collections.ColumnAssetRef.",
+		"commitlog.CommandExtension.", "commitlog.ExternalRefFenceV1.",
 	} {
 		for _, row := range Rows {
 			if strings.HasPrefix(row.Field, prefix) && row.ActivationState != ActivationActive {
@@ -131,20 +132,22 @@ func TestAuthorityFamilyActivationBoundaries(t *testing.T) {
 	}
 
 	wantAdjacent := map[string]string{
-		"page.MetaPageBody.CommitSeq":         "#3679",
-		"page.MetaPageBody.UserRootPageID":    "#3679",
-		"page.MetaPageBody.SystemRootPageID":  "#3679",
-		"page.MetaPageBody.FreelistHeadID":    "#3678",
-		"page.MetaPageBody.TotalPages":        "#3678",
-		"page.MetaPageBody.LastCommitHeight":  "#3679",
-		"page.MetaPageBody.AppliedCommandLSN": "#3718",
-		"page.MetaPageBody.MaxEntryRevision":  "#3679",
+		"page.MetaPageBody.CommitSeq":        "#3679",
+		"page.MetaPageBody.UserRootPageID":   "#3679",
+		"page.MetaPageBody.SystemRootPageID": "#3679",
+		"page.MetaPageBody.FreelistHeadID":   "#3678",
+		"page.MetaPageBody.TotalPages":       "#3678",
+		"page.MetaPageBody.LastCommitHeight": "#3679",
+		"page.MetaPageBody.MaxEntryRevision": "#3679",
 	}
 	for _, row := range Rows {
 		if strings.HasPrefix(row.Field, "collections.ColumnStoreConfig.") {
 			wantIssue := "#3679"
 			if row.Field == "collections.ColumnStoreConfig.RecoveryAuthoritativeAppliedCommandLSN" {
-				wantIssue = "#3718"
+				if row.ActivationState != ActivationActive {
+					t.Errorf("%s state=%s, want active", row.Field, row.ActivationState)
+				}
+				continue
 			}
 			if row.ActivationState != ActivationAdjacent || row.AdjacentIssue != wantIssue {
 				t.Errorf("%s state/owner=(%s,%s), want (adjacent,%s)", row.Field, row.ActivationState, row.AdjacentIssue, wantIssue)
@@ -158,6 +161,21 @@ func TestAuthorityFamilyActivationBoundaries(t *testing.T) {
 			t.Errorf("%s state/owner=(%s,%s), want (adjacent,%s)", row.Field, row.ActivationState, row.AdjacentIssue, issue)
 		}
 		delete(wantAdjacent, row.Field)
+	}
+	for _, field := range []string{"page.MetaPageBody.AppliedCommandLSN", "commitlog.CommandEnvelope.Version", "commitlog.CommandEnvelope.DurabilityClass", "commitlog.CommandEnvelope.LSN", "commitlog.CommandEnvelope.Kind", "commitlog.CommandEnvelope.Scope", "commitlog.CommandEnvelope.FeatureFlags", "commitlog.CommandEnvelope.CatalogEpoch", "commitlog.CommandEnvelope.SchemaEpoch", "commitlog.CommandEnvelope.BaseAppliedLSN", "commitlog.CommandEnvelope.PayloadFormat", "commitlog.CommandEnvelope.Payload", "commitlog.CommandEnvelope.Preconditions", "commitlog.CommandEnvelope.ResultAssertions"} {
+		found := false
+		for _, row := range Rows {
+			if row.Field == field {
+				found = true
+				if row.ActivationState != ActivationActive {
+					t.Errorf("%s state=%s, want active", row.Field, row.ActivationState)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing active authority row %s", field)
+		}
 	}
 	if len(wantAdjacent) != 0 {
 		t.Fatalf("missing adjacent authority rows: %v", wantAdjacent)

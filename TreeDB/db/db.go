@@ -523,6 +523,8 @@ type DB struct {
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
 	commandWALFlushPoisoned atomic.Bool
+	commandWALDurableLSN    atomic.Uint64
+	commandWALDebt          CommandWALDependencyDebt
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish.
 	// It is intentionally cleared only by close/reopen.
 	publicationPoisoned              atomic.Bool
@@ -979,10 +981,10 @@ type Options struct {
 	IgnoreFormatConfig bool
 	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
 	// backend raw KV writes. It is also enabled automatically when format.json
-	// advertises the command_wal_v1 required feature.
+	// advertises the command_wal_v2 required feature.
 	//
 	// Public treedb.Open write handles route raw KV writes through the direct
-	// backend command-WAL path while command_wal_v1 is active, avoiding the
+	// backend command-WAL path while command_wal_v2 is active, avoiding the
 	// legacy cached redo journal until cached writes are converted to typed
 	// command frames.
 	CommandWAL bool
@@ -2101,12 +2103,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			OnSegmentRotated:                db.observeCommandWALSegmentRotated,
 			InitialLSN:                      db.meta.AppliedCommandLSN,
 			SegmentSeq:                      commandSegmentSeq,
+			CaptureStableResources:          true,
 		})
 		if err != nil {
 			_ = db.Close()
 			return nil, err
 		}
 		db.commandJournal = journal
+		db.commandWALDurableLSN.Store(db.meta.AppliedCommandLSN)
 		db.refreshCommandWALClosedBytes()
 		db.cacheCommandWALRequiredFeatureStats()
 	} else {
@@ -2613,6 +2617,7 @@ func (db *DB) closeAfterHooks() error {
 			errs = append(errs, err)
 		}
 	}
+	db.commandWALDebt.releaseAll()
 	if vm != nil {
 		if err := vm.Close(); err != nil {
 			errs = append(errs, err)

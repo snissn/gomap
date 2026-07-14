@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -307,7 +306,7 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 }
 
 func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
-	return sync && strings.HasPrefix(durabilityMode, "wal_on_sync")
+	return sync
 }
 
 func (tdb *DB) syncPublicCommandWAL() error {

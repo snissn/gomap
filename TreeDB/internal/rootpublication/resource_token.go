@@ -1265,6 +1265,120 @@ func (token *StableNamespaceToken) physicalSyncStats() (uint64, time.Duration) {
 		time.Duration(token.syncNanos.Load() + token.additionalSyncNanos.Load())
 }
 
+// StabilizeStableNamespaceTokens validates every exact child obligation and
+// syncs each distinct retained parent generation once. Unlike construction-
+// time namespace batches, this is intended for obligations accumulated by a
+// relaxed publication protocol and therefore leaves pending tokens retryable
+// when the physical parent sync itself fails.
+func StabilizeStableNamespaceTokens(tokens ...*StableNamespaceToken) error {
+	type namespaceGroup struct {
+		identity StableIdentity
+		tokens   []*StableNamespaceToken
+	}
+	groups := make([]namespaceGroup, 0, len(tokens))
+	groupByIdentity := make(map[StableIdentity]int, len(tokens))
+	seen := make(map[*StableNamespaceToken]struct{}, len(tokens))
+	for _, token := range tokens {
+		if token == nil {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		identity := token.ParentIdentity()
+		groupIndex, ok := groupByIdentity[identity]
+		if !ok {
+			groupIndex = len(groups)
+			groupByIdentity[identity] = groupIndex
+			groups = append(groups, namespaceGroup{identity: identity})
+		}
+		groups[groupIndex].tokens = append(groups[groupIndex].tokens, token)
+	}
+	for _, group := range groups {
+		pending := make([]*StableNamespaceToken, 0, len(group.tokens))
+		for _, token := range group.tokens {
+			needsSync, err := token.prepareSharedStabilize()
+			if err != nil {
+				return err
+			}
+			if needsSync {
+				pending = append(pending, token)
+			}
+		}
+		if len(pending) == 0 {
+			continue
+		}
+		if err := pending[0].syncSharedParent(); err != nil {
+			return err
+		}
+		for _, token := range pending {
+			if err := token.markStableAfterSharedSync(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (token *StableNamespaceToken) prepareSharedStabilize() (bool, error) {
+	if token == nil {
+		return false, nil
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return false, ErrResourceOwnership
+	}
+	if token.state.Load() == namespaceFailed {
+		return false, token.stabilizeErr
+	}
+	if token.hasLinkedResource {
+		if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
+			token.stabilizeErr = err
+			token.state.Store(namespaceFailed)
+			return false, err
+		}
+	}
+	return token.state.Load() != namespaceStable, nil
+}
+
+func (token *StableNamespaceToken) syncSharedParent() error {
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return ErrResourceOwnership
+	}
+	if token.state.Load() == namespaceFailed {
+		return token.stabilizeErr
+	}
+	started := time.Now()
+	err := token.adapter.Sync(token.parent)
+	token.syncs.Add(1)
+	token.syncNanos.Add(uint64(time.Since(started)))
+	return err
+}
+
+func (token *StableNamespaceToken) markStableAfterSharedSync() error {
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return ErrResourceOwnership
+	}
+	if token.state.Load() == namespaceFailed {
+		return token.stabilizeErr
+	}
+	if token.hasLinkedResource {
+		if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
+			token.stabilizeErr = err
+			token.state.Store(namespaceFailed)
+			return err
+		}
+	}
+	token.state.Store(namespaceStable)
+	return nil
+}
+
 func (token *StableNamespaceToken) Stabilize() error {
 	if token == nil || token.released.Load() {
 		return ErrResourceOwnership

@@ -823,7 +823,7 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsEnvironmentOverride(t *testing.
 	}
 }
 
-func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelRelaxedFlush(t *testing.T) {
+func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelsRelaxedExplicitSync(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.PublicBatchWriteSyncPhaseStats = true
@@ -848,11 +848,11 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelRelaxedFlush(t *testing.T)
 
 	stats := db.Stats()
 	prefix := "treedb.public.batch.write_sync.phase."
-	if got := statMapUint64(t, stats, prefix+"command_flush.calls_total"); got != 1 {
-		t.Fatalf("phase command flush calls=%d, want 1 (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, prefix+"command_flush.calls_total"); got != 0 {
+		t.Fatalf("phase command flush calls=%d, want 0 (stats=%#v)", got, stats)
 	}
-	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 0 {
-		t.Fatalf("phase command sync calls=%d, want 0 (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 1 {
+		t.Fatalf("phase command sync calls=%d, want 1 (stats=%#v)", got, stats)
 	}
 	requirePublicBatchWriteSyncPhasePartitions(t, stats)
 }
@@ -996,15 +996,20 @@ func TestPublicCommandWALPointerEmptyWriteSyncSweepsPriorUnsyncedWrite(t *testin
 	}
 	after := db.Stats()
 	for key, wantDelta := range map[string]uint64{
-		"treedb.command_wal.append.count_total":                   1,
-		"treedb.command_wal.flush.count_total":                    1,
-		"treedb.command_wal.sync.count_total":                     1,
-		"treedb.command_wal.sync.barrier.count_total":             1,
-		"treedb.command_wal.write.syscalls_total":                 1,
-		"treedb.command_wal.file_sync.calls_total":                1,
-		"treedb.cache.value_log.sync.calls_total":                 1,
-		"treedb.cache.value_log.sync.pending_barrier.calls_total": 1,
-		"treedb.cache.value_log.file_sync.calls_total":            1,
+		// The relaxed mutation and the explicit durable-prefix barrier are
+		// distinct V2 frames.
+		"treedb.command_wal.append.count_total":       2,
+		"treedb.command_wal.flush.count_total":        1,
+		"treedb.command_wal.sync.count_total":         1,
+		"treedb.command_wal.sync.barrier.count_total": 1,
+		"treedb.command_wal.write.syscalls_total":     2,
+		"treedb.command_wal.file_sync.calls_total":    1,
+		"treedb.cache.value_log.sync.calls_total":     0,
+		// Durable-prefix publication syncs the pinned value-log resource
+		// directly from command-WAL dependency debt. It must not route
+		// through the cache's pending-barrier sweep.
+		"treedb.cache.value_log.sync.pending_barrier.calls_total": 0,
+		"treedb.cache.value_log.file_sync.calls_total":            0,
 		"treedb.public.batch.write.calls_total":                   1,
 		"treedb.public.batch.write_sync.calls_total":              1,
 	} {
@@ -1611,7 +1616,9 @@ func TestPublicCommandWALDurableEmptyBatchWriteSyncOnlySyncsCommandWAL(t *testin
 	after := db.Stats()
 	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.write.syscalls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 }
 
@@ -2224,9 +2231,9 @@ func TestPublicCommandWALPublishSyncMatrix(t *testing.T) {
 		{mode: "wal_on_sync", sync: false, want: false},
 		{mode: "wal_on_sync", sync: true, want: true},
 		{mode: "wal_on_sync+no_read_checksum", sync: true, want: true},
-		{mode: "wal_on_relaxed_sync", sync: true, want: false},
-		{mode: "wal_on_relaxed_sync+verify_on_read", sync: true, want: false},
-		{mode: "wal_off_relaxed_sync", sync: true, want: false},
+		{mode: "wal_on_relaxed_sync", sync: true, want: true},
+		{mode: "wal_on_relaxed_sync+verify_on_read", sync: true, want: true},
+		{mode: "wal_off_relaxed_sync", sync: true, want: true},
 	}
 	for _, tt := range tests {
 		if got := publicCommandWALPublishSync(tt.mode, tt.sync); got != tt.want {
@@ -3741,11 +3748,8 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 			valueLogMaterializationSyncs = 1
 		}
 	case "empty_write_sync_after_write":
-		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 1, 1, 1, 1
+		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
-		if forcedPointers {
-			valueLogPendingBarrierSyncs = 1
-		}
 	case "state_point_point_sync_batch_sync":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 3, 1, 2, 3, 2
 		batchWriteSyncCalls = 1

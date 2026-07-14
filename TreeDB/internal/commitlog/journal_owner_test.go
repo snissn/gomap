@@ -134,6 +134,74 @@ func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
 	}
 }
 
+func TestCommandJournalAppendHooksHoldLockAndTransferCurrentRotation(t *testing.T) {
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{
+		SegmentTargetBytes:     1,
+		CaptureStableResources: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
+	envelope := CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityRelaxed,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	}
+	assertLocked := func(stage string) {
+		t.Helper()
+		if j.mu.TryLock() {
+			j.mu.Unlock()
+			t.Fatalf("journal mutex was not held during %s hook", stage)
+		}
+	}
+	appendWithHooks := func(wantLSN uint64, wantRotations int) {
+		t.Helper()
+		lsn, err := j.AppendCommandObservedWithHooks(envelope,
+			func() error {
+				assertLocked("before-append")
+				return nil
+			},
+			func(gotLSN uint64, rotations []*CommandJournalStableRotation) error {
+				assertLocked("after-append")
+				if gotLSN != wantLSN {
+					t.Fatalf("post-hook LSN=%d, want %d", gotLSN, wantLSN)
+				}
+				if len(rotations) != wantRotations {
+					t.Fatalf("post-hook rotations=%d, want %d", len(rotations), wantRotations)
+				}
+				for _, rotation := range rotations {
+					if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
+						t.Fatalf("post-hook rotation=%+v, want exact closed and active tokens", rotation)
+					}
+					rotation.Release()
+				}
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("AppendCommandObservedWithHooks: %v", err)
+		}
+		if lsn != wantLSN {
+			t.Fatalf("append LSN=%d, want %d", lsn, wantLSN)
+		}
+	}
+
+	appendWithHooks(1, 0)
+	appendWithHooks(2, 1)
+	if rotations, err := j.TakePendingStableRotations(); err != nil {
+		t.Fatalf("TakePendingStableRotations: %v", err)
+	} else if len(rotations) != 0 {
+		for _, rotation := range rotations {
+			rotation.Release()
+		}
+		t.Fatalf("post hook left %d rotations for a later append to steal", len(rotations))
+	}
+}
+
 func TestCommandJournalRejectsOutOfRangeLane(t *testing.T) {
 	for _, lane := range []int{-1, MaxCommandJournalLane + 1} {
 		if _, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: lane}); err == nil {
@@ -1186,7 +1254,7 @@ func TestCommandJournalUnsupportedVersionDoesNotConsumeLSN(t *testing.T) {
 	defer j.Close()
 
 	_, err = j.AppendCommand(CommandEnvelope{
-		Version:       CommandFrameVersion + 1,
+		Version:       CommandFrameVersionV2 + 1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,

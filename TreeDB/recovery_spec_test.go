@@ -129,6 +129,25 @@ func runCommandWALDurableUncheckpointedWriter(t *testing.T, dir string) {
 	}
 }
 
+func runCommandWALRelaxedRotatedPrefixWriter(t *testing.T, dir string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreeDBCommandWALRelaxedRotatedPrefixWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CRASH_HELPER=1",
+		"TREEDB_CRASH_DIR="+dir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
 func TestHelperTreeDBCrashRecoveryWriter(t *testing.T) {
 	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
 		t.Skip("helper")
@@ -206,7 +225,7 @@ func TestHelperTreeDBCommandWALDurableUncheckpointedWriter(t *testing.T) {
 		t.Fatalf("missing TREEDB_CRASH_DIR")
 	}
 
-	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 	opts.CommandWALStatsScan = true
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
@@ -219,10 +238,26 @@ func TestHelperTreeDBCommandWALDurableUncheckpointedWriter(t *testing.T) {
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
+	opts.CommandWALSegmentTargetBytes = 1
 
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)
+	}
+
+	if err := db.Set([]byte("relaxed-pointer-a"), bytes.Repeat([]byte("a"), 4096)); err != nil {
+		t.Fatalf("Set relaxed-pointer-a: %v", err)
+	}
+	if err := db.Set([]byte("relaxed-pointer-b"), bytes.Repeat([]byte("b"), 4096)); err != nil {
+		t.Fatalf("Set relaxed-pointer-b: %v", err)
+	}
+	empty := db.NewBatch()
+	if err := empty.WriteSync(); err != nil {
+		_ = empty.Close()
+		t.Fatalf("empty WriteSync durable-prefix barrier: %v", err)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("empty batch Close: %v", err)
 	}
 
 	if err := db.SetSync([]byte("point-sync"), []byte("keep-point")); err != nil {
@@ -267,6 +302,96 @@ func TestHelperTreeDBCommandWALDurableUncheckpointedWriter(t *testing.T) {
 
 	// Simulate a crash by exiting without Close(), so no close-time checkpoint can
 	// publish the pending command-WAL LSNs.
+	os.Exit(0)
+}
+
+func TestHelperTreeDBCommandWALRelaxedRotatedPrefixWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CRASH_DIR")
+	}
+
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts.CommandWALStatsScan = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.FlushThreshold = 1 << 30
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+	opts.ValueLog.Generational.HotSegmentTargetBytes = 1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.CommandWALSegmentTargetBytes = 5000
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	for _, tt := range []struct {
+		key   string
+		value byte
+	}{
+		{key: "rotated-pointer-a", value: 'a'},
+		{key: "rotated-pointer-b", value: 'b'},
+	} {
+		if err := db.Set([]byte(tt.key), bytes.Repeat([]byte{tt.value}, 4096)); err != nil {
+			t.Fatalf("Set %s: %v", tt.key, err)
+		}
+	}
+
+	valueSegments, err := filepath.Glob(filepath.Join(dir, "maindb", "value_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log segments: %v", err)
+	}
+	if len(valueSegments) < 2 {
+		t.Fatalf("value-log segments=%v, want an actual relaxed rotation", valueSegments)
+	}
+	walSegments, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "commit-l*.log"))
+	if err != nil {
+		t.Fatalf("glob command-WAL segments: %v", err)
+	}
+	if len(walSegments) < 2 {
+		t.Fatalf("command-WAL segments=%v, want an actual relaxed rotation", walSegments)
+	}
+	walSizes := make([]int64, len(walSegments))
+	for i, path := range walSegments {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat command-WAL segment %s: %v", path, err)
+		}
+		walSizes[i] = info.Size()
+	}
+
+	empty := db.NewBatch()
+	if err := empty.WriteSync(); err != nil {
+		_ = empty.Close()
+		t.Fatalf("empty WriteSync durable-prefix barrier: %v", err)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("empty batch Close: %v", err)
+	}
+	barrierWALSegments, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "commit-l*.log"))
+	if err != nil {
+		t.Fatalf("glob command-WAL segments after barrier: %v", err)
+	}
+	if len(barrierWALSegments) != len(walSegments) {
+		t.Fatalf("empty WriteSync rotated command WAL: segments before=%v sizes=%v after=%v", walSegments, walSizes, barrierWALSegments)
+	}
+	if got := db.Stats()["treedb.command_wal.durable_wal_lsn"]; got != "3" {
+		t.Fatalf("durable_wal_lsn=%q, want 3 immediately after barrier WAL sync", got)
+	}
+
+	// Power loss immediately after the non-rotating explicit-sync barrier has
+	// acknowledged both relaxed pointer frames and their rotated dependencies.
 	os.Exit(0)
 }
 
@@ -336,7 +461,8 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) 
 	_ = db.SetSync([]byte("z"), []byte("9"))
 
 	// Simulate a crash immediately after DeleteRange without an additional Sync
-	// operation. PR #591 flushes this lane so replay can recover tombstones.
+	// operation. The complete flushed V2 frame survives this fixture and remains
+	// replayable; only a defective relaxed suffix may be discarded.
 	_ = db.DeleteRange([]byte("b"), []byte("d"))
 	os.Exit(0)
 }
@@ -502,7 +628,7 @@ func TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay(t *test
 	dir := t.TempDir()
 	runCommandWALDurableUncheckpointedWriter(t, dir)
 
-	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 	opts.CommandWALStatsScan = true
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -518,6 +644,10 @@ func TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay(t *test
 		{key: "point-sync", want: "keep-point"},
 		{key: "batch-sync", want: "keep-batch"},
 		{key: "deleted-sync", wantNil: true},
+		{key: "relaxed-pointer-a", want: string(bytes.Repeat([]byte("a"), 4096))},
+		{key: "relaxed-pointer-b", want: string(bytes.Repeat([]byte("b"), 4096))},
+		// DeleteRange has no explicit-sync variant. Its complete flushed frame
+		// remains replayable above the last durable V2 frontier.
 		{key: "range-delete", wantNil: true},
 	}
 	for _, tt := range tests {
@@ -541,12 +671,47 @@ func TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay(t *test
 	if err != nil {
 		t.Fatalf("parse applied_command_lsn=%q: %v", stats["treedb.applied_command_lsn"], err)
 	}
-	if applied < 5 {
-		t.Fatalf("applied_command_lsn=%d, want at least 5 after command-WAL replay (stats=%#v)", applied, stats)
+	if applied != 8 {
+		t.Fatalf("applied_command_lsn=%d, want 8 after replaying the complete relaxed suffix (stats=%#v)", applied, stats)
 	}
 	if stats["treedb.cache.redo_log.mode"] != "external_command_wal" ||
 		stats["treedb.cache.redo_log.enabled"] != "false" {
 		t.Fatalf("unexpected command-WAL cached durability stats after reopen: %#v", stats)
+	}
+}
+
+func TestCrashRecovery_CommandWALRelaxedRotatedDependenciesSurviveEmptySyncBarrier(t *testing.T) {
+	dir := t.TempDir()
+	runCommandWALRelaxedRotatedPrefixWriter(t, dir)
+
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts.CommandWALStatsScan = true
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	for _, tt := range []struct {
+		key   string
+		value byte
+	}{
+		{key: "rotated-pointer-a", value: 'a'},
+		{key: "rotated-pointer-b", value: 'b'},
+	} {
+		got, err := db.Get([]byte(tt.key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", tt.key, err)
+		}
+		want := bytes.Repeat([]byte{tt.value}, 4096)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%s) len=%d, want %d bytes of %q", tt.key, len(got), len(want), tt.value)
+		}
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.applied_command_lsn"]; got != "3" {
+		t.Fatalf("applied_command_lsn=%q, want acknowledged durable prefix 3 (stats=%#v)", got, stats)
 	}
 }
 

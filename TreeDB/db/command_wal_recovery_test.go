@@ -223,16 +223,35 @@ func TestCommandWALOpenUsesLaneZeroActiveSegmentWhenOtherLaneHigher(t *testing.T
 	writeCommandWALRawKVFrameForLane(t, dir, 0, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
 	writeCommandWALRawKVFrameForLane(t, dir, 1, 9, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 	lane0Path := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
-	f, err := os.OpenFile(lane0Path, os.O_APPEND|os.O_WRONLY, 0)
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
 	if err != nil {
-		t.Fatalf("OpenFile terminal tail: %v", err)
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
-	if _, err := f.Write([]byte{0x01, 0x02}); err != nil {
-		_ = f.Close()
-		t.Fatalf("Write terminal tail: %v", err)
+	w, err := commitlog.NewWriter(lane0Path)
+	if err != nil {
+		t.Fatalf("NewWriter terminal tail: %v", err)
 	}
-	if err := f.Close(); err != nil {
+	if err := w.AppendCommand(commitlog.CommandEnvelope{
+		Version:         commitlog.CommandFrameVersionV2,
+		DurabilityClass: commitlog.CommandDurabilityRelaxed,
+		LSN:             3,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	}); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendCommand terminal tail: %v", err)
+	}
+	if err := w.Close(); err != nil {
 		t.Fatalf("Close terminal tail writer: %v", err)
+	}
+	info, err := os.Stat(lane0Path)
+	if err != nil {
+		t.Fatalf("Stat terminal tail: %v", err)
+	}
+	if err := os.Truncate(lane0Path, info.Size()-2); err != nil {
+		t.Fatalf("Truncate terminal tail: %v", err)
 	}
 
 	db := openCommandWALDB(t, dir)
@@ -873,6 +892,9 @@ func TestAppendCommandWALIntentPostAppendCutRecordsLSNAndPoisonsHandle(t *testin
 	if lsn != 1 || intent.AssignedLSN() != lsn {
 		t.Fatalf("post-append cut lsn=%d assigned=%d, want 1", lsn, intent.AssignedLSN())
 	}
+	if got := db.Stats()["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("post-append cut debt entries=%q, want appended LSN retained", got)
+	}
 	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
 	}
@@ -882,16 +904,19 @@ func TestAppendCommandWALIntentPreFlushCutRecordsLSNAndPoisonsHandle(t *testing.
 	tests := []struct {
 		name       string
 		durability DurabilityMode
+		sync       bool
 		point      durabilitycut.Point
 	}{
 		{
 			name:       "strict-sync",
 			durability: DurabilityDurable,
+			sync:       true,
 			point:      durabilitycut.BeforeDependencyFileSync,
 		},
 		{
 			name:       "relaxed-flush",
 			durability: DurabilityWALOnRelaxed,
+			sync:       false,
 			point:      durabilitycut.BeforeUserspaceFlush,
 		},
 	}
@@ -913,7 +938,7 @@ func TestAppendCommandWALIntentPreFlushCutRecordsLSNAndPoisonsHandle(t *testing.
 				}
 				return nil
 			})
-			lsn, err := db.AppendCommandWALIntent(intent, true)
+			lsn, err := db.AppendCommandWALIntent(intent, tt.sync)
 			restore()
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("AppendCommandWALIntent error=%v, want pre-flush cut", err)
@@ -1302,7 +1327,7 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	if err := b.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set first: %v", err)
 	}
-	err := b.Write()
+	err := b.WriteSync()
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
 		t.Fatalf("Write first error=%v, want finalize commit failpoint", err)
 	}
@@ -1485,92 +1510,55 @@ func (a *commandWALExternalRefLaneFlushTestAppender) FlushValueLogExternalRefs(f
 	return nil
 }
 
-// TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment verifies that
-// flushCommandWALExternalRefs does not sync the active appender segment a
-// second time via the per-fileID loop. With sync=true, exactly one Sync call
-// (from the appender block) should occur; the per-fileID loop skips fileID==17
-// because it equals activeFileID.
-//
-// With sync=false, exactly one Flush call (from the appender block) should
-// occur, and the per-fileID sync loop is skipped entirely.
-func TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment(t *testing.T) {
-	t.Run("sync=true", func(t *testing.T) {
-		dir := t.TempDir()
-		enableCommandWALFormat(t, dir)
-		db := openCommandWALDB(t, dir)
-		defer db.Close()
+// Visibility flush is separate from durability: dependency durability must use
+// the exact stable handle captured after this flush, never Sync or pathname
+// reopen here.
+func TestCommandWALExternalRefFlushDoesNotSync(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
 
-		appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
-		db.SetValueLogAppender(appender)
-		if err := db.flushCommandWALExternalRefs(true, []uint32{17}); err != nil {
-			t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
-		}
-		if appender.syncs.Load() != 1 {
-			t.Fatalf("appender syncs=%d, want 1", appender.syncs.Load())
-		}
-		if appender.flushes.Load() != 0 {
-			t.Fatalf("appender flushes=%d, want 0 for sync=true", appender.flushes.Load())
-		}
-	})
-
-	t.Run("sync=false", func(t *testing.T) {
-		dir := t.TempDir()
-		enableCommandWALFormat(t, dir)
-		db := openCommandWALDB(t, dir)
-		defer db.Close()
-
-		appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
-		db.SetValueLogAppender(appender)
-		// sync=false: only Flush should be called (no per-fileID Sync loop).
-		if err := db.flushCommandWALExternalRefs(false, []uint32{17}); err != nil {
-			t.Fatalf("flushCommandWALExternalRefs sync=false: %v", err)
-		}
-		if appender.flushes.Load() != 1 {
-			t.Fatalf("appender flushes=%d, want 1 for sync=false", appender.flushes.Load())
-		}
-		if appender.syncs.Load() != 0 {
-			t.Fatalf("appender syncs=%d, want 0 for sync=false", appender.syncs.Load())
-		}
-	})
+	appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
+	db.SetValueLogAppender(appender)
+	if err := db.flushCommandWALExternalRefs([]uint32{17}); err != nil {
+		t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
+	}
+	if appender.flushes.Load() != 1 {
+		t.Fatalf("appender flushes=%d, want 1", appender.flushes.Load())
+	}
+	if appender.syncs.Load() != 0 {
+		t.Fatalf("appender syncs=%d, want 0", appender.syncs.Load())
+	}
 }
 
 func TestCommandWALExternalRefFlushUsesReferencedLaneFlusher(t *testing.T) {
 	fileIDs := []uint32{17, 18}
-	for _, tc := range []struct {
-		name string
-		sync bool
-	}{
-		{name: "sync=false", sync: false},
-		{name: "sync=true", sync: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := &DB{}
-			appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
-			db.SetValueLogAppender(appender)
-			if err := db.flushCommandWALExternalRefs(tc.sync, fileIDs); err != nil {
-				t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
-			}
-			if appender.externalFlushes.Load() != 1 {
-				t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
-			}
-			if appender.sync != tc.sync {
-				t.Fatalf("external flush sync=%v, want %v", appender.sync, tc.sync)
-			}
-			if len(appender.fileIDs) != len(fileIDs) {
-				t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
-			}
-			for i := range fileIDs {
-				if appender.fileIDs[i] != fileIDs[i] {
-					t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
-				}
-			}
-			if appender.flushes.Load() != 0 {
-				t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
-			}
-			if appender.syncs.Load() != 0 {
-				t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
-			}
-		})
+	db := &DB{}
+	appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
+	db.SetValueLogAppender(appender)
+	if err := db.flushCommandWALExternalRefs(fileIDs); err != nil {
+		t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
+	}
+	if appender.externalFlushes.Load() != 1 {
+		t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
+	}
+	if appender.sync {
+		t.Fatal("referenced-lane visibility flush unexpectedly requested sync")
+	}
+	if len(appender.fileIDs) != len(fileIDs) {
+		t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+	}
+	for i := range fileIDs {
+		if appender.fileIDs[i] != fileIDs[i] {
+			t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+		}
+	}
+	if appender.flushes.Load() != 0 {
+		t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
+	}
+	if appender.syncs.Load() != 0 {
+		t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
 	}
 }
 
@@ -1591,7 +1579,7 @@ func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 
 func TestCommandWALExternalRefFlushRequiresAppender(t *testing.T) {
 	db := &DB{}
-	if err := db.flushCommandWALExternalRefs(true, nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
+	if err := db.flushCommandWALExternalRefs(nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
 		t.Fatalf("flushCommandWALExternalRefs error=%v, want ErrValueLogAppenderUnavailable", err)
 	}
 }
@@ -1822,11 +1810,13 @@ func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmen
 		t.Fatalf("NewWriter: %v", err)
 	}
 	if err := w.AppendCommand(commitlog.CommandEnvelope{
-		LSN:           lsn,
-		Kind:          commitlog.CommandKindRawKVBatch,
-		Scope:         commitlog.CommandScopeRawKV,
-		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
-		Payload:       payload,
+		Version:         commitlog.CommandFrameVersionV2,
+		DurabilityClass: commitlog.CommandDurabilityDurable,
+		LSN:             lsn,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		Payload:         payload,
 	}); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendCommand: %v", err)

@@ -243,7 +243,7 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	dbClosed = true
 }
 
-func TestCommandWALStatsExposeDeferredCommandBufferTrim(t *testing.T) {
+func TestCommandWALStatsBoundV2ScratchAfterLargeFrame(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -261,26 +261,47 @@ func TestCommandWALStatsExposeDeferredCommandBufferTrim(t *testing.T) {
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.command_wal.writer.command_buffer.length_bytes"]; got != "0" {
-		t.Fatalf("command buffer len=%q, want 0 after append flush (stats=%#v)", got, stats)
-	}
-	if got, want := stats["treedb.command_wal.writer.command_buffer.capacity_bytes"], strconv.Itoa(commandWALDeferredPointBufferRetainSize); got != want {
-		t.Fatalf("command buffer cap=%q, want retain cap %s (stats=%#v)", got, want, stats)
-	}
-	if got := stats["treedb.command_wal.writer.command_buffer.trim_count"]; got != "1" {
-		t.Fatalf("command buffer trim count=%q, want 1 (stats=%#v)", got, stats)
-	}
-	dropped, err := strconv.ParseUint(stats["treedb.command_wal.writer.command_buffer.dropped_bytes_total"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse dropped bytes: %v (stats=%#v)", err, stats)
-	}
-	if dropped == 0 {
-		t.Fatalf("command buffer dropped bytes=0, want retained capacity drop accounted (stats=%#v)", stats)
+	if got, want := stats["treedb.command_wal.writer.scratch_capacity_bytes"], strconv.Itoa(commandWALDeferredPointBufferRetainSize); got != want {
+		t.Fatalf("V2 scratch cap=%q, want retain cap %s after oversized append (stats=%#v)", got, want, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	dbClosed = true
+}
+
+func TestCommandWALStatsExposeDurablePrefixAndPendingDebt(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("relaxed"), []byte("value"), false); err != nil {
+		t.Fatalf("append relaxed command: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+		t.Fatalf("durable_wal_lsn=%q, want 0 before barrier", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want 1", got)
+	}
+	if _, ok := stats["treedb.command_wal.dependency_debt.max_age_ns"]; !ok {
+		t.Fatal("pending debt age stat missing")
+	}
+
+	if err := db.FlushCommandWALBarrier(true); err != nil {
+		t.Fatalf("durable prefix barrier: %v", err)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want 2 after barrier", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after barrier", got)
+	}
 }
 
 func TestCommandWALStatsReadOnlyReportsPersistedMode(t *testing.T) {

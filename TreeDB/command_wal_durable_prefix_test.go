@@ -1,0 +1,414 @@
+package treedb
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+)
+
+func relaxedCommandWALDurablePrefixOptions(dir string) Options {
+	opts := commandWALDurabilityProofOptions(dir)
+	opts.Durability = DurabilityWALOnRelaxed
+	return opts
+}
+
+func scanPublicCommandWALV2(t *testing.T, dir string) []commitlog.CommandEnvelope {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(backenddb.WALDirPath(dir), "commit-l*.log"))
+	if err != nil {
+		t.Fatalf("glob command WAL: %v", err)
+	}
+	sort.Strings(paths)
+	if len(paths) == 0 {
+		t.Fatal("no command WAL segments")
+	}
+	var frames []commitlog.CommandEnvelope
+	for _, path := range paths {
+		segmentFrames, err := commitlog.ScanCommandFramesV2(path, commitlog.Options{})
+		if err != nil {
+			t.Fatalf("scan strict V2 command WAL %q: %v", path, err)
+		}
+		frames = append(frames, segmentFrames...)
+	}
+	sort.Slice(frames, func(i, j int) bool { return frames[i].LSN < frames[j].LSN })
+	return frames
+}
+
+func writeEmptyPublicCommandWALSync(db *DB) error {
+	b := db.NewBatch()
+	writeErr := b.WriteSync()
+	return errors.Join(writeErr, b.Close())
+}
+
+func TestPublicCommandWALRelaxedExplicitSyncPersistsDurableV2Class(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetSync([]byte("durable"), []byte("value")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+
+	frames := scanPublicCommandWALV2(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("frames=%d, want 1: %+v", len(frames), frames)
+	}
+	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityDurable {
+		t.Fatalf("durability class=%v, want durable", got)
+	}
+	if got := frames[0].Kind; got != commitlog.CommandKindRawKVBatch {
+		t.Fatalf("kind=%v, want RawKVBatch", got)
+	}
+}
+
+func TestPublicCommandWALRelaxedEmptyWriteSyncPersistsDurablePrefixBarrier(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("relaxed"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("empty WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("empty batch Close: %v", err)
+	}
+
+	frames := scanPublicCommandWALV2(t, dir)
+	if len(frames) != 2 {
+		t.Fatalf("frames=%d, want relaxed mutation plus durable barrier: %+v", len(frames), frames)
+	}
+	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityRelaxed {
+		t.Fatalf("mutation durability class=%v, want relaxed", got)
+	}
+	barrier := frames[1]
+	if got := barrier.DurabilityClass; got != commitlog.CommandDurabilityDurable {
+		t.Fatalf("barrier durability class=%v, want durable", got)
+	}
+	if got := barrier.Kind; got != commitlog.CommandKindDurablePrefixBarrier {
+		t.Fatalf("barrier kind=%v, want DurablePrefixBarrier", got)
+	}
+	if got := barrier.PayloadFormat; got != commitlog.PayloadFormatDurablePrefixBarrierV1 {
+		t.Fatalf("barrier payload format=%v, want DurablePrefixBarrierV1", got)
+	}
+	if barrier.LSN != frames[0].LSN+1 {
+		t.Fatalf("barrier LSN=%d, want mutation LSN+1=%d", barrier.LSN, frames[0].LSN+1)
+	}
+}
+
+func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
+	dir := t.TempDir()
+	opts := relaxedCommandWALDurablePrefixOptions(dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+		_ = b.Close()
+		t.Fatalf("relaxed pointer batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("relaxed pointer batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("relaxed pointer batch Close: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want 1", got)
+	}
+	kindPrefix := "treedb.command_wal.dependency_debt.kind.command-wal-external-rid."
+	if got := stats[kindPrefix+"pending_count"]; got != "1" {
+		t.Fatalf("external-RID pending count=%q, want 1 (stats=%#v)", got, stats)
+	}
+	if got := stats[kindPrefix+"pending_bytes"]; got == "" || got == "0" {
+		t.Fatalf("external-RID pending bytes=%q, want non-zero", got)
+	}
+
+	if err := db.SetSync([]byte("durable-inline"), []byte("value")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want 2", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after SetSync", got)
+	}
+}
+
+func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend(t *testing.T) {
+	dir := t.TempDir()
+	opts := relaxedCommandWALDurablePrefixOptions(dir)
+	opts.CommandWALSegmentTargetBytes = 1
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	defer restore()
+
+	if err := db.Set([]byte("relaxed-a"), []byte("value-a")); err != nil {
+		t.Fatalf("Set relaxed-a: %v", err)
+	}
+	if err := db.Set([]byte("relaxed-b"), []byte("value-b")); err != nil {
+		t.Fatalf("Set relaxed-b: %v", err)
+	}
+	for _, event := range events {
+		if event.Resource != durabilitycut.ResourceCommandWAL {
+			continue
+		}
+		if event.Point == durabilitycut.BeforeDependencyFileSync || event.Point == durabilitycut.AfterDependencyFileSync ||
+			event.Point == durabilitycut.BeforeNewFileDirectorySync || event.Point == durabilitycut.AfterNewFileDirectorySync {
+			t.Fatalf("ordinary relaxed rotation emitted stable sync event before barrier: %#v", event)
+		}
+	}
+	if got := db.Stats()["treedb.command_wal.dependency_debt.entries"]; got != "2" {
+		t.Fatalf("pending debt entries before barrier=%q, want 2", got)
+	}
+
+	if err := writeEmptyPublicCommandWALSync(db); err != nil {
+		t.Fatalf("empty WriteSync barrier: %v", err)
+	}
+
+	barrierAppend := -1
+	fileSyncBeforeBarrier := false
+	namespaceSyncBeforeBarrier := false
+	for i, event := range events {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 3 {
+			barrierAppend = i
+			break
+		}
+	}
+	if barrierAppend < 0 {
+		t.Fatalf("missing durable barrier append event in %#v", events)
+	}
+	for _, event := range events[:barrierAppend] {
+		if event.Resource != durabilitycut.ResourceCommandWAL {
+			continue
+		}
+		switch event.Point {
+		case durabilitycut.AfterDependencyFileSync:
+			fileSyncBeforeBarrier = true
+		case durabilitycut.AfterNewFileDirectorySync:
+			namespaceSyncBeforeBarrier = true
+		}
+	}
+	if !fileSyncBeforeBarrier || !namespaceSyncBeforeBarrier {
+		t.Fatalf("barrier append index=%d lacks completed old-file/new-name persistence before append: file=%t namespace=%t events=%#v", barrierAppend, fileSyncBeforeBarrier, namespaceSyncBeforeBarrier, events)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "3" {
+		t.Fatalf("durable_wal_lsn=%q, want 3", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries after barrier=%q, want 0", got)
+	}
+	frames := scanPublicCommandWALV2(t, dir)
+	if len(frames) != 3 || frames[2].Kind != commitlog.CommandKindDurablePrefixBarrier || frames[2].DurabilityClass != commitlog.CommandDurabilityDurable {
+		t.Fatalf("frames=%+v, want two relaxed mutations followed by durable barrier", frames)
+	}
+}
+
+func TestPublicCommandWALRelaxedRotationSyncCutsRetainDebtForBarrierRetry(t *testing.T) {
+	points := []durabilitycut.Point{
+		durabilitycut.BeforeDependencyFileSync,
+		durabilitycut.AfterDependencyFileSync,
+		durabilitycut.BeforeNewFileDirectorySync,
+		durabilitycut.AfterNewFileDirectorySync,
+	}
+	for _, point := range points {
+		point := point
+		t.Run(string(point), func(t *testing.T) {
+			dir := t.TempDir()
+			opts := relaxedCommandWALDurablePrefixOptions(dir)
+			opts.CommandWALSegmentTargetBytes = 1
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open relaxed command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			if err := db.Set([]byte("relaxed-a"), []byte("value-a")); err != nil {
+				t.Fatalf("Set relaxed-a: %v", err)
+			}
+			if err := db.Set([]byte("relaxed-b"), []byte("value-b")); err != nil {
+				t.Fatalf("Set relaxed-b: %v", err)
+			}
+
+			cutErr := fmt.Errorf("injected command-WAL rotation cut at %s", point)
+			cut := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if !cut && event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
+					cut = true
+					return cutErr
+				}
+				return nil
+			})
+			err = writeEmptyPublicCommandWALSync(db)
+			restore()
+			if !errors.Is(err, cutErr) {
+				t.Fatalf("empty WriteSync error=%v, want injected cut", err)
+			}
+			if !cut {
+				t.Fatalf("injected command-WAL rotation cut at %s was not reached", point)
+			}
+			stats := db.Stats()
+			if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+				t.Fatalf("durable_wal_lsn after pre-append cut=%q, want 0", got)
+			}
+			if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "2" {
+				t.Fatalf("pending debt entries after pre-append cut=%q, want retained 2", got)
+			}
+			if got := stats["treedb.command_wal.dependency_debt.retries_total"]; got != "2" {
+				t.Fatalf("pending debt retries after pre-append cut=%q, want one retry recorded for each of two entries", got)
+			}
+			if frames := scanPublicCommandWALV2(t, dir); len(frames) != 2 {
+				t.Fatalf("frames after pre-append cut=%+v, want only two relaxed frames", frames)
+			}
+
+			if err := writeEmptyPublicCommandWALSync(db); err != nil {
+				t.Fatalf("retry empty WriteSync barrier: %v", err)
+			}
+			stats = db.Stats()
+			if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "3" {
+				t.Fatalf("durable_wal_lsn after retry=%q, want 3", got)
+			}
+			if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+				t.Fatalf("pending debt entries after retry=%q, want 0", got)
+			}
+		})
+	}
+}
+
+func BenchmarkPublicCommandWALRelaxedDurablePrefixBarrier(b *testing.B) {
+	for _, groupSize := range []int{1, 8, 32} {
+		b.Run(fmt.Sprintf("group=%d", groupSize), func(b *testing.B) {
+			benchmarkRoot := b.TempDir()
+			var exactFileSyncs atomic.Uint64
+			var namespaceSyncs atomic.Uint64
+			var barrierWALSyncs atomic.Uint64
+			var relaxedStableSyncs atomic.Uint64
+
+			latencies := make([]time.Duration, 0, b.N)
+			var coalescedDependencies uint64
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := 0; i < b.N; i++ {
+				opts := relaxedCommandWALDurablePrefixOptions(filepath.Join(benchmarkRoot, strconv.Itoa(i)))
+				opts.CommandWALSegmentTargetBytes = 1
+				db, err := Open(opts)
+				if err != nil {
+					b.Fatalf("Open relaxed command WAL: %v", err)
+				}
+				func() {
+					defer func() {
+						if err := db.Close(); err != nil {
+							b.Fatalf("Close relaxed command WAL: %v", err)
+						}
+					}()
+					var barrierActive atomic.Bool
+					var barrierAppended atomic.Bool
+					restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+						if event.Resource != durabilitycut.ResourceCommandWAL {
+							return nil
+						}
+						stable := event.Point == durabilitycut.AfterDependencyFileSync || event.Point == durabilitycut.AfterNewFileDirectorySync
+						if !barrierActive.Load() {
+							if stable {
+								relaxedStableSyncs.Add(1)
+							}
+							return nil
+						}
+						if event.Point == durabilitycut.AfterDependencyAppend {
+							barrierAppended.Store(true)
+							return nil
+						}
+						if barrierAppended.Load() {
+							if event.Point == durabilitycut.AfterDependencyFileSync {
+								barrierWALSyncs.Add(1)
+							}
+							return nil
+						}
+						switch event.Point {
+						case durabilitycut.AfterDependencyFileSync:
+							exactFileSyncs.Add(1)
+						case durabilitycut.AfterNewFileDirectorySync:
+							namespaceSyncs.Add(1)
+						}
+						return nil
+					})
+					defer restore()
+					for j := 0; j < groupSize; j++ {
+						var keyBuf [64]byte
+						key := strconv.AppendInt(append(keyBuf[:0], "durable-prefix/"...), int64(i*groupSize+j), 10)
+						if err := db.Set(key, []byte("value")); err != nil {
+							b.Fatalf("relaxed Set: %v", err)
+						}
+					}
+					stats := db.Stats()
+					if got := statMapUint64B(b, stats, "treedb.command_wal.dependency_debt.entries"); got != uint64(groupSize) {
+						b.Fatalf("debt entries=%d, want barrier group size %d", got, groupSize)
+					}
+					coalescedDependencies += statMapUint64B(b, stats, "treedb.command_wal.dependency_debt.pending_count")
+					barrierAppended.Store(false)
+					barrierActive.Store(true)
+					b.StartTimer()
+					start := time.Now()
+					err := writeEmptyPublicCommandWALSync(db)
+					b.StopTimer()
+					latencies = append(latencies, time.Since(start))
+					barrierActive.Store(false)
+					if err != nil {
+						b.Fatalf("empty WriteSync barrier: %v", err)
+					}
+					if !barrierAppended.Load() {
+						b.Fatal("durable barrier append was not observed")
+					}
+				}()
+			}
+			if got := relaxedStableSyncs.Load(); got != 0 {
+				b.Fatalf("ordinary relaxed writes emitted %d stable sync events, want 0", got)
+			}
+			b.ReportMetric(float64(groupSize), "barrier_group_entries/op")
+			b.ReportMetric(float64(coalescedDependencies)/float64(b.N), "coalesced_dependency_entries/op")
+			b.ReportMetric(float64(exactFileSyncs.Load())/float64(b.N), "exact_file_syncs_before_barrier_append/op")
+			b.ReportMetric(float64(namespaceSyncs.Load())/float64(b.N), "namespace_syncs_before_barrier_append/op")
+			b.ReportMetric(float64(barrierWALSyncs.Load())/float64(b.N), "wal_file_syncs_after_barrier_append/op")
+			reportWriteSyncLatencyDistribution(b, latencies)
+		})
+	}
+}

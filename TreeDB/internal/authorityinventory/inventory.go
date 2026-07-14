@@ -72,8 +72,8 @@ func buildRows() []Row {
 		issue := "#3679"
 		reason := "column-store catalog fields select named-root and manifest closure; external obligations enter through ColumnAssetRef and transitive value pointers"
 		if field == "RecoveryAuthoritativeAppliedCommandLSN" {
-			issue = "#3718"
-			reason = "the recovery-authoritative applied LSN joins catalog visibility to the atomic command-WAL durability cutover"
+			add(active("collections.ColumnStoreConfig."+field, "collection column-store catalog", "command-WAL recovery frontier", "collection root publication", "selected meta/root generation and applied command LSN", "contiguous applied command-LSN prefix", "page file and named collection roots", "ordered root publication with command-WAL coverage", "V2 command-WAL recovery and collection catalog validation", "page/root lifecycle plus covered command-WAL retention"))
+			continue
 		}
 		add(adjacent("collections.ColumnStoreConfig."+field, "collection column-store catalog", "index/root authority metadata", issue, reason))
 	}
@@ -90,10 +90,10 @@ func buildRows() []Row {
 	}
 
 	for _, name := range []string{"ExternalRefValueLog", "ExternalRefLeafLog", "ExternalRefPayloadFile"} {
-		add(quarantined("commitlog.ExternalRefClass."+name, "command WAL external ref", "reserved typed external resource range", "#3718", "no production producer exists; V1 and V2 reject every non-empty typed ExternalRefs section until identity, sync, recovery, and deletion ownership activate atomically"))
+		add(quarantined("commitlog.ExternalRefClass."+name, "command WAL external ref", "reserved typed external resource range", "#1595", "no production producer exists; V1 and V2 reject every non-empty typed ExternalRefs section, while RawKV SetRID uses the separate active ExternalRefFenceV1 closure"))
 	}
 	for _, field := range []string{"Class", "Flags", "FileID", "Offset", "Length", "Digest"} {
-		add(adjacent("commitlog.ExternalRef."+field, "command WAL external ref field", "reserved typed external resource range", "#3718", "the dormant typed ExternalRefs section is rejected until V2 producer, pin, sync, recovery, and deletion ownership activate atomically"))
+		add(quarantined("commitlog.ExternalRef."+field, "command WAL external ref field", "reserved typed external resource range", "#1595", "the dormant typed ExternalRefs section has no complete producer, pin, sync, recovery, and deletion-owner closure"))
 	}
 	add(Row{
 		Field: "commitlog.ExternalRef.Path", Scope: "command WAL external ref field", ResourceClass: "diagnostic DB-relative path",
@@ -104,14 +104,14 @@ func buildRows() []Row {
 	})
 
 	for _, field := range []string{"Version", "DurabilityClass", "LSN", "Kind", "Scope", "FeatureFlags", "CatalogEpoch", "SchemaEpoch", "BaseAppliedLSN", "PayloadFormat", "Payload", "Preconditions", "ResultAssertions"} {
-		add(adjacent("commitlog.CommandEnvelope."+field, "command WAL envelope field", "logical command and durable-horizon authority", "#3718", "V2 envelope activation and durable prefix semantics are owned by the atomic command-WAL cutover"))
+		add(active("commitlog.CommandEnvelope."+field, "command WAL envelope field", "logical command and durable-horizon authority", "V2 command journal encoder", "LSN plus exact command-WAL segment identity", "length/CRC-bounded V2 frame and durability class", "pinned command-WAL segment and namespace generation", "CommandWALDependencyDebt and command journal", "V2 frame validation, durable-horizon classification, and tail repair", "covered command-WAL retention; ordinary cleanup is owned by #3682"))
 	}
-	add(adjacent("commitlog.CommandEnvelope.ExternalRefs", "command WAL envelope field", "reserved transitive external resource closure", "#3718", "V1 and V2 reject every non-empty typed ExternalRefs section until the atomic command-WAL cutover supplies complete ownership"))
+	add(quarantined("commitlog.CommandEnvelope.ExternalRefs", "command WAL envelope field", "reserved transitive external resource closure", "#1595", "V1 and V2 reject every non-empty typed ExternalRefs section; RawKV SetRID uses the separate active ExternalRefFenceV1 closure"))
 	for _, field := range []string{"Type", "Payload"} {
-		add(adjacent("commitlog.CommandExtension."+field, "command WAL extension field", "V2 precondition/assertion extension", "#3718", "extension activation and critical-field handling are part of the atomic V2 command-WAL cutover"))
+		add(active("commitlog.CommandExtension."+field, "command WAL extension field", "V2 precondition/assertion extension", "V2 command-frame encoder", "owning command frame LSN and segment identity", "canonical extension bytes covered by frame length and CRC", "owning command-WAL segment namespace", "V2 command-frame validation", "critical extension validation before durable-horizon classification", "covered command-WAL retention; ordinary cleanup is owned by #3682"))
 	}
 	for _, field := range []string{"Count", "Digest"} {
-		add(adjacent("commitlog.ExternalRefFenceV1."+field, "external-ref fence field", "canonical RID-set fence", "#3718", "the V2 external-ref fence becomes recovery authority only with the atomic command-WAL cutover"))
+		add(active("commitlog.ExternalRefFenceV1."+field, "external-ref fence field", "canonical RID-set fence", "RawKV SetRID V2 payload encoder", "canonical RID set plus exact pinned value-log segment identities", "RID count/digest and per-segment required record frontier", "value-log segment creation namespace", "value-log CaptureStableExternalRIDFence merged into CommandWALDependencyDebt", "V2 fence recomputation and RID existence validation through the durable horizon", "value-log GC/rewrite with command-WAL identity pins"))
 	}
 
 	add(active("commitlog.CommandJournal.Frame", "command WAL frame", "mutable command-WAL segment range", "commitlog.CommandJournal.Append", "pinned journal segment identity plus LSN", "complete encoded frame end and checksum", "wal segment (no rename)", "command journal publication adapter", "journal scan validates framing, checksum, and LSN order", "command WAL retention with segment pins"))
@@ -135,11 +135,12 @@ func buildRows() []Row {
 
 	metaAdjacent := []struct{ field, issue string }{
 		{"CommitSeq", "#3679"}, {"UserRootPageID", "#3679"}, {"SystemRootPageID", "#3679"}, {"FreelistHeadID", "#3678"},
-		{"TotalPages", "#3678"}, {"LastCommitHeight", "#3679"}, {"AppliedCommandLSN", "#3718"}, {"MaxEntryRevision", "#3679"},
+		{"TotalPages", "#3678"}, {"LastCommitHeight", "#3679"}, {"MaxEntryRevision", "#3679"},
 	}
 	for _, entry := range metaAdjacent {
 		add(adjacent("page.MetaPageBody."+entry.field, "meta-page scalar", "page-file publication scalar", entry.issue, "owned by page/meta publication ordering rather than an external resource token"))
 	}
+	add(active("page.MetaPageBody.AppliedCommandLSN", "meta-page scalar", "command-WAL applied-prefix publication scalar", "root/meta publication", "selected meta-page generation", "contiguous applied command-LSN prefix", "page file", "finalizeCommit command-WAL coverage validation", "V2 recovery starts at the selected applied prefix and rejects holes through the durable horizon", "page/meta lifecycle plus covered command-WAL retention"))
 	for _, field := range []string{"ActiveSlabID", "ActiveSlabTail"} {
 		add(quarantined("page.MetaPageBody."+field, "legacy meta-page scalar", "removed legacy value-store namespace", "#3677", "TreeDB no longer has the legacy value-store path; these format fields are decoded only for compatibility"))
 	}

@@ -220,7 +220,7 @@ func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 	}
 }
 
-func TestCachingValueLogExternalRefFlusherAccountsForRotatedCommandFrameSegment(t *testing.T) {
+func TestCachingValueLogExternalRefFlusherDefersRotatedCommandFrameSyncToPinnedDebt(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                    dir,
@@ -283,13 +283,16 @@ func TestCachingValueLogExternalRefFlusherAccountsForRotatedCommandFrameSegment(
 	after := db.Stats()
 
 	for key, want := range map[string]uint64{
-		"treedb.command_wal.append.count_total":                         1,
-		"treedb.command_wal.file_sync.calls_total":                      1,
-		"treedb.cache.value_log.sync.external_ref.calls_total":          2,
+		"treedb.command_wal.append.count_total":    1,
+		"treedb.command_wal.file_sync.calls_total": 1,
+		// Command-WAL V2 captures and syncs the referenced rotated segment
+		// through exact retained-handle debt. The cache flusher only drains
+		// userspace visibility and must not reopen or sync either segment.
+		"treedb.cache.value_log.sync.external_ref.calls_total":          0,
 		"treedb.cache.value_log.sync.external_ref.errors_total":         0,
-		"treedb.cache.value_log.file_sync.rotated_segment.calls_total":  1,
+		"treedb.cache.value_log.file_sync.rotated_segment.calls_total":  0,
 		"treedb.cache.value_log.file_sync.rotated_segment.errors_total": 0,
-		"treedb.cache.value_log.file_sync.calls_total":                  2,
+		"treedb.cache.value_log.file_sync.calls_total":                  0,
 		"treedb.cache.value_log.file_sync.errors_total":                 0,
 	} {
 		got := requireStatUint64(t, after, key) - requireStatUint64(t, before, key)

@@ -178,7 +178,7 @@ Evidence label: `process-crash` for subprocess/`os.Exit` cases and
 `clean-reopen` for orderly reopen cases. These tests are not
 `modeled-power-loss` evidence.
 
-## 2.1 Inert Command-Frame V2 Recovery Boundary
+## 2.1 Active Command-Frame V2 Recovery Boundary
 
 Invariant:
 
@@ -193,7 +193,8 @@ Invariant:
   discardable.
 - Physical repair is reverse-LSN, directory durable before anchor truncation,
   retryable at every registered cut, and read-only inspection is non-mutating.
-- Production journal append and reopen continue to emit only V1 until #3718.
+- Production command-WAL append and reopen use only V2 when
+  `command_wal_v2` is active; V1 requires a pre-alpha rebuild.
 
 Coverage:
 
@@ -207,8 +208,8 @@ and after the first non-anchor dependency-file sync, then materializes both
 through #3717 `powerlossoracle.CutSpec` stable variant IDs and retries from a
 fresh directory scan. Separate deterministic cuts cover non-anchor sync,
 unlink, deletion-directory sync, and final anchor sync. This is crash-model
-unit evidence for the inert repair boundary, not public-`Open` activation
-evidence.
+unit evidence for the physical repair boundary. Public activation coverage is
+provided by the command-WAL durable-prefix tests.
 
 ## 2.2 Publication Readability
 
@@ -900,7 +901,7 @@ PR3 implementation evidence:
   after root plus `AppliedCommandLSN` publication but before cleanup converges
   on the next open even when no frames need replay.
 - Explicit `CommandWAL` activation first fails closed on dirty legacy WAL,
-  then persists `command_wal_v1` after replay preconditions are clear and
+  then persists `command_wal_v2` after replay preconditions are clear and
   before opening the command journal, so a process cannot acknowledge typed
   frames without a durable required-feature gate.
 - Raw KV `SetRID` command entries preserve the existing value-log RID fence by
@@ -920,7 +921,7 @@ PR3 implementation evidence:
 - Empty `RawKVBatch` frames are explicit no-op command frames: they publish the
   current roots with the frame LSN so command-stream contiguity remains exact.
 - Command WAL with benchmark/compatibility WAL-off durability fails closed,
-  including after `command_wal_v1` is persisted, because PR3 requires a
+  including after `command_wal_v2` is persisted, because command-WAL mode requires a
   recoverable command frame before root visibility.
 - Command journal flush/sync failures and post-append root publication failures
   poison the open handle so no later write can create a durable LSN gap before
@@ -938,7 +939,7 @@ PR3 implementation evidence:
   retry.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
-  legacy raw records in `command_wal_v1` directories.
+  legacy raw records in `command_wal_v2` directories.
 - Strict split-state detection for non-idempotent command kinds remains a
   required gate before collection/catalog commands can be marked
   `WAL-supported`; raw KV `set`/`delete` replay uses absolute deterministic
@@ -1307,7 +1308,7 @@ throughput ratios above that bar. Historical or diagnostic results below that
 bar must be labeled as failing evidence.
 
 This test must prove public `treedb.Open` can open a read-write
-`command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
+`command_wal_v2` handle, route raw KV writes through typed `RawKVBatch` command
 frames, expose mode proof through stats, reopen without explicit backend-only
 APIs, and recover final set/delete state. Mode proof must include cheap live
 accepted/covered command-frame counters so benchmark artifacts do not require

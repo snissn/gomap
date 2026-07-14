@@ -5,8 +5,9 @@
 //
 // Durability:
 // Use SetSync / Batch.WriteSync if the write must cross the next configured
-// durability boundary. In relaxed durability modes
-// (Options.Durability = DurabilityWALOnRelaxed or DurabilityWALOffRelaxed),
+// durability boundary. With the command WAL active, explicit sync operations
+// opt up to a durable V2 prefix even when ordinary writes use
+// DurabilityWALOnRelaxed. In legacy relaxed modes without the command WAL,
 // Sync operations do not fsync and may not survive power loss. In
 // DurabilityWALOffRelaxed specifically, recent writes may remain buffered in
 // TreeDB until a later checkpoint/flush boundary even after SetSync /

@@ -315,15 +315,43 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	db.mu.RLock()
 	applied := db.meta.AppliedCommandLSN
 	db.mu.RUnlock()
-	frames, err := readCommandWALReplayFrames(segments, applied, maxSegmentBytes)
+	physicalFrames, err := readCommandWALV2PhysicalFrames(segments, applied, maxSegmentBytes)
 	if err != nil {
 		return err
+	}
+	var ridMap map[uint64]page.ValuePtr
+	needsRIDMap := false
+	for i := range physicalFrames {
+		if len(physicalFrames[i].RequiredRIDs) != 0 {
+			needsRIDMap = true
+			break
+		}
+	}
+	if needsRIDMap {
+		ridMap, err = scanValueLogSegments(segments, dictLookup)
+		if err != nil {
+			return err
+		}
+	}
+	classification, err := classifyCommandWALV2Frames(physicalFrames, applied, func(rid uint64) bool {
+		_, ok := ridMap[rid]
+		return ok
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := repairCommandWALV2Suffix(WALDirPath(db.dir), classification, db.readOnly); err != nil {
+		return err
+	}
+	db.commandWALDurableLSN.Store(classification.DurableFrontier)
+	frames := make([]commandWALReplayFrame, 0, len(classification.CompletePrefix))
+	for i := range classification.CompletePrefix {
+		frames = append(frames, commandWALReplayFrame{env: classification.CompletePrefix[i].Envelope})
 	}
 	if len(frames) == 0 {
 		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 		return err
 	}
-	var ridMap map[uint64]page.ValuePtr
 	var inlineAppender *replayInlineAppender
 	previousLeafPageLog := db.leafPageLog
 	previousValueLogAppender := db.currentValueLogAppender()
@@ -549,6 +577,15 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 	switch env.Kind {
 	case commitlog.CommandKindRawKVBatch:
 		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport)
+	case commitlog.CommandKindDurablePrefixBarrier:
+		if env.Version != commitlog.CommandFrameVersionV2 || env.DurabilityClass != commitlog.CommandDurabilityDurable || env.PayloadFormat != commitlog.PayloadFormatDurablePrefixBarrierV1 {
+			return commitlog.ErrCorrupt
+		}
+		db.mu.RLock()
+		userRoot := db.meta.UserRootPageID
+		systemRoot := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		return db.publishCommandWALRoots(userRoot, systemRoot, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
 	default:
 		if registration, ok := lookupCommandWALReplayHandler(env.Kind); ok {
 			if registration.needsReplayLogSupport && ensureReplayLogSupport != nil {

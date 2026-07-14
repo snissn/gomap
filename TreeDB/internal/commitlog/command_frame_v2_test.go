@@ -293,6 +293,20 @@ func TestInspectCommandFrameV2TerminalTailRequiresCompleteLSNAndClass(t *testing
 	}
 }
 
+func TestInspectCommandFrameV2TerminalTailMarksShortSegmentHeaderIdentityUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	if err := os.WriteFile(path, []byte{0x7f, 0x01, 0x02}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, end, err := InspectCommandFrameV2TerminalTail(path, 0)
+	if !errors.Is(err, ErrCommandWALV2TailIdentityUnavailable) || !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("inspection error=%v, want identity-unavailable corruption", err)
+	}
+	if end != 3 {
+		t.Fatalf("tail end=%d, want 3", end)
+	}
+}
+
 func TestInspectCommandFrameV2TerminalTailRejectsCriticalFeatureFlags(t *testing.T) {
 	frame, err := EncodeCommandFrameV2(CommandEnvelope{
 		DurabilityClass: CommandDurabilityRelaxed,
@@ -419,7 +433,7 @@ func TestCommandFrameV2RejectsUnknownVersionClassAndFenceCardinality(t *testing.
 	}
 }
 
-func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
+func TestCommandJournalAcceptsV2AndRetainsV1Default(t *testing.T) {
 	frame, err := EncodeCommandFrame(CommandEnvelope{
 		LSN:           1,
 		Kind:          CommandKindRawKVBatch,
@@ -430,10 +444,10 @@ func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := binary.LittleEndian.Uint16(frame[4:6]); got != CommandFrameVersion {
-		t.Fatalf("production encoder version=%d, want current V1 version=%d", got, CommandFrameVersion)
+		t.Fatalf("default encoder version=%d, want compatibility V1 version=%d", got, CommandFrameVersion)
 	}
 	if CommandFrameVersion != 1 {
-		t.Fatalf("production CommandFrameVersion=%d, V2 activation belongs to #3718", CommandFrameVersion)
+		t.Fatalf("default CommandFrameVersion=%d, want compatibility V1", CommandFrameVersion)
 	}
 
 	dir := t.TempDir()
@@ -441,21 +455,21 @@ func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := journal.AppendCommand(CommandEnvelope{
+	if lsn, err := journal.AppendCommand(CommandEnvelope{
 		Version:         CommandFrameVersionV2,
 		DurabilityClass: CommandDurabilityDurable,
 		Kind:            CommandKindRawKVBatch,
 		Scope:           CommandScopeRawKV,
 		PayloadFormat:   PayloadFormatRawKVBatchV1,
-	}); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
-		t.Fatalf("production V2 append error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}); err != nil || lsn != 1 {
+		t.Fatalf("explicit V2 append lsn=%d error=%v", lsn, err)
 	}
 	if lsn, err := journal.AppendCommand(CommandEnvelope{
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
-	}); err != nil || lsn != 1 {
-		t.Fatalf("production V1 append lsn=%d err=%v", lsn, err)
+	}); err != nil || lsn != 2 {
+		t.Fatalf("default V1 append lsn=%d err=%v", lsn, err)
 	}
 	path, _ := journal.ActiveSegmentSnapshot()
 	if err := journal.Close(); err != nil {
@@ -470,8 +484,8 @@ func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
-	}); err != nil || lsn != 2 {
-		t.Fatalf("production V1 append after reopen lsn=%d err=%v", lsn, err)
+	}); err != nil || lsn != 3 {
+		t.Fatalf("default V1 append after reopen lsn=%d err=%v", lsn, err)
 	}
 	if err := reopen.Close(); err != nil {
 		t.Fatal(err)
@@ -482,13 +496,15 @@ func TestCommandFrameV2ProductionActivationGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	for wantLSN := uint64(1); wantLSN <= 2; wantLSN++ {
+	wantVersions := []uint16{CommandFrameVersionV2, CommandFrameVersion, CommandFrameVersion}
+	for index, wantVersion := range wantVersions {
+		wantLSN := uint64(index + 1)
 		got, err := reader.ReadCommandFrame()
 		if err != nil {
-			t.Fatalf("read production frame %d: %v", wantLSN, err)
+			t.Fatalf("read journal frame %d: %v", wantLSN, err)
 		}
-		if got.Version != CommandFrameVersion || got.LSN != wantLSN {
-			t.Fatalf("production frame=%+v, want V1 lsn=%d", got, wantLSN)
+		if got.Version != wantVersion || got.LSN != wantLSN {
+			t.Fatalf("journal frame=%+v, want version=%d lsn=%d", got, wantVersion, wantLSN)
 		}
 	}
 	if _, err := reader.ReadCommandFrame(); !errors.Is(err, io.EOF) {
