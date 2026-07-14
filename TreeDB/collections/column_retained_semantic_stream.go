@@ -627,6 +627,9 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	var metrics columnRetainedSemanticStreamV1PrepareMetrics
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	// Only generic retained JSON needs the structural cursor. Keep the root
+	// object fast path allocation-free.
+	var jsonCursor *columnRetainedSemanticStreamV1JSONCursor
 	var declaredStringInterner *columnDeclaredStringInterner
 	var declaredRows []columnDeclaredRow
 	var declaredValues []columnDeclaredValue
@@ -664,7 +667,16 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 			valuesStart := row * len(cfg.Columns)
 			declaredValuesDest = declaredValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
 		}
-		values, err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner)
+		if jsonCursor == nil {
+			jsonCursor = &columnRetainedSemanticStreamV1JSONCursor{}
+		}
+		values, err := collectColumnRetainedSemanticStreamV1JSONCursorDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner, jsonCursor)
+		if errors.Is(err, errColumnRetainedSemanticStreamV1JSONCursorDepth) || errors.Is(err, errColumnRetainedSemanticStreamV1JSONCursorScratch) {
+			// Bounded cursor parse errors occur before retained emission, so this
+			// fallback cannot leave a partial stream behind. Preserve existing
+			// behavior for documents beyond the bounded parse arena.
+			values, err = collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner)
+		}
 		if err != nil {
 			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 		}
