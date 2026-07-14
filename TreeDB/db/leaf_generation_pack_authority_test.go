@@ -151,13 +151,13 @@ func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
 			}
 		}
 		namespaceSyncNanos += authority.namespaceSyncNanos
+		b.StopTimer()
 		if err := authority.release(); err != nil {
 			b.Fatal(err)
 		}
 		if got := fixture.registry.ActivePins(); got != 0 {
 			b.Fatalf("active packed outer-leaf pins after release=%d want 0", got)
 		}
-		b.StopTimer()
 		if err := os.RemoveAll(fixture.db.dir); err != nil {
 			b.Fatalf("remove fixture %s: %v", fixture.db.dir, err)
 		}
