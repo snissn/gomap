@@ -1015,16 +1015,22 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 // fast-path escape hatch; specialized allocation-free V2 encoders may replace
 // it without changing the persisted contract.
 func (w *Writer) AppendCommandV2(env CommandEnvelope) error {
-	payload, err := EncodeCommandFrameV2To(w.scratch[:0], env)
+	size, err := commandFrameV2EncodedSize(env)
 	if err != nil {
 		return err
 	}
-	size := len(payload)
 	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
+	}
+	payload, err := EncodeCommandFrameV2To(w.scratch[:0], env)
+	if err != nil {
+		return err
+	}
+	if len(payload) != size {
+		return ErrCorrupt
 	}
 	w.scratch = payload
 	err = w.writeSegment(payload)

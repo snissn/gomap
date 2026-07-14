@@ -181,6 +181,34 @@ func TestCommandFrameV2RejectsDormantExternalRefsBeforeDestinationMutation(t *te
 	}
 }
 
+func TestCommandFrameV2EncodedSizeMatchesCanonicalEncoding(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSetRID, Key: []byte("rid"), RID: 42},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := CommandEnvelope{
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             7,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	}
+	size, err := commandFrameV2EncodedSize(env)
+	if err != nil {
+		t.Fatalf("commandFrameV2EncodedSize: %v", err)
+	}
+	encoded, err := EncodeCommandFrameV2(env)
+	if err != nil {
+		t.Fatalf("EncodeCommandFrameV2: %v", err)
+	}
+	if size != len(encoded) {
+		t.Fatalf("encoded size=%d, want %d", size, len(encoded))
+	}
+}
+
 func mustCommandFrameV2WithExternalRefs(t *testing.T, payload, extRefs []byte) []byte {
 	t.Helper()
 	frame, err := EncodeCommandFrameV2(CommandEnvelope{

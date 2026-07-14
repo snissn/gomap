@@ -57,35 +57,7 @@ func EncodeCommandFrameV2(env CommandEnvelope) ([]byte, error) {
 // EncodeCommandFrameV2To is EncodeCommandFrameV2 with caller-owned capacity.
 // All semantic validation is completed before dst is resized or written.
 func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
-	if !validCommandDurabilityClass(env.DurabilityClass) {
-		return nil, ErrCorrupt
-	}
-	if env.Version == 0 {
-		env.Version = CommandFrameVersionV2
-	}
-	if env.Version != CommandFrameVersionV2 {
-		return nil, ErrCommandWALUnsupportedVersion
-	}
-	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
-		return nil, ErrCommandWALUnsupportedCriticalFlag
-	}
-	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
-		payload, err := EncodeRawKVBatchPayload(nil)
-		if err != nil {
-			return nil, err
-		}
-		env.Payload = payload
-	}
-	if err := validateCommandEnvelopeV2Identity(env); err != nil {
-		return nil, err
-	}
-	if err := validateExternalRefs(env.ExternalRefs); err != nil {
-		return nil, err
-	}
-	if err := validateCommandEnvelopePayloadV2(env); err != nil {
-		return nil, err
-	}
-	preconditions, err := canonicalCommandPreconditionsV2(env)
+	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +108,65 @@ func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
 	off += len(preconditionsBytes)
 	copy(frame[off:], assertions)
 	return frame, nil
+}
+
+func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []CommandExtension, error) {
+	if !validCommandDurabilityClass(env.DurabilityClass) {
+		return CommandEnvelope{}, nil, ErrCorrupt
+	}
+	if env.Version == 0 {
+		env.Version = CommandFrameVersionV2
+	}
+	if env.Version != CommandFrameVersionV2 {
+		return CommandEnvelope{}, nil, ErrCommandWALUnsupportedVersion
+	}
+	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+		return CommandEnvelope{}, nil, ErrCommandWALUnsupportedCriticalFlag
+	}
+	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
+		payload, err := EncodeRawKVBatchPayload(nil)
+		if err != nil {
+			return CommandEnvelope{}, nil, err
+		}
+		env.Payload = payload
+	}
+	if err := validateCommandEnvelopeV2Identity(env); err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	if err := validateExternalRefs(env.ExternalRefs); err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	if err := validateCommandEnvelopePayloadV2(env); err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	preconditions, err := canonicalCommandPreconditionsV2(env)
+	if err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	return env, preconditions, nil
+}
+
+// commandFrameV2EncodedSize validates a V2 envelope and returns its canonical
+// encoded size without allocating the complete frame. Journal and writer caps
+// use this preflight before rotation, LSN reservation, or frame encoding.
+func commandFrameV2EncodedSize(env CommandEnvelope) (int, error) {
+	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
+	if err != nil {
+		return 0, err
+	}
+	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
+	if err != nil {
+		return 0, err
+	}
+	preconditionsLen, err := commandExtensionsEncodedLen(preconditions)
+	if err != nil {
+		return 0, err
+	}
+	assertionsLen, err := commandExtensionsEncodedLen(env.ResultAssertions)
+	if err != nil {
+		return 0, err
+	}
+	return commandFrameEncodedSizeFromLengths(len(env.Payload), extRefsLen, preconditionsLen, assertionsLen)
 }
 
 // DecodeCommandFrameV2 decodes and fully validates one V2 frame.

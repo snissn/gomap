@@ -1356,6 +1356,57 @@ func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	}
 }
 
+func TestCommandJournalV2OversizedFrameDoesNotConsumeLSN(t *testing.T) {
+	emptyFrameSize, err := commandFrameV2EncodedSize(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("commandFrameV2EncodedSize empty: %v", err)
+	}
+	oversizedPayload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("k"), Value: bytes.Repeat([]byte("v"), 32)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload oversized: %v", err)
+	}
+
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{MaxSegmentSize: int64(emptyFrameSize)})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	_, err = j.AppendCommand(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         oversizedPayload,
+	})
+	if !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("oversized AppendCommand V2 error=%v, want ErrRecordTooLarge", err)
+	}
+	got, err := j.AppendCommand(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("valid AppendCommand V2 after oversized frame: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("V2 LSN after oversized frame=%d, want 1", got)
+	}
+}
+
 func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T) {
 	dir := t.TempDir()
 	var wantNext uint64 = 1

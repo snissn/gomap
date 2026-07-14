@@ -1080,11 +1080,11 @@ func (j *CommandJournal) appendCommand(
 	v2 := probe.Version == CommandFrameVersionV2 || probe.DurabilityClass != 0
 	var size int
 	if v2 {
-		encoded, err := EncodeCommandFrameV2(probe)
+		var err error
+		size, err = commandFrameV2EncodedSize(probe)
 		if err != nil {
 			return 0, err
 		}
-		size = len(encoded)
 	} else {
 		if err := validateCommandEnvelopeForEncode(probe); err != nil {
 			return 0, err
