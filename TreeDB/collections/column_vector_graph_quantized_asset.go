@@ -303,6 +303,10 @@ func columnVectorGraphQuantizedAssetRefIdentity(ref ColumnAssetRef) quantizedass
 }
 
 func prepareColumnVectorGraphQuantizedAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedQuantizedAsset, error) {
+	return prepareColumnVectorGraphQuantizedAssetsWithStableWriter(assetRootDir, collection, base, def, graph, generation, firstPartID, rows, nil)
+}
+
+func prepareColumnVectorGraphQuantizedAssetsWithStableWriter(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, writer *standaloneColumnStableAssetWriter) ([]columnVectorGraphPreparedQuantizedAsset, error) {
 	if len(def.QuantizedIndexes) == 0 {
 		return nil, nil
 	}
@@ -315,7 +319,7 @@ func prepareColumnVectorGraphQuantizedAssets(assetRootDir, collection string, ba
 	out := make([]columnVectorGraphPreparedQuantizedAsset, 0, len(def.QuantizedIndexes))
 	partID := firstPartID
 	for _, q := range def.QuantizedIndexes {
-		prepared, err := prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection, base, def, graph, q, generation, partID, rows)
+		prepared, err := prepareColumnVectorGraphQuantizedAssetWithStableWriter(assetRootDir, collection, base, def, graph, q, generation, partID, rows, writer)
 		if err != nil {
 			return nil, err
 		}
@@ -328,6 +332,10 @@ func prepareColumnVectorGraphQuantizedAssets(assetRootDir, collection string, ba
 }
 
 func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedQuantizedAsset, error) {
+	return prepareColumnVectorGraphQuantizedAssetWithStableWriter(assetRootDir, collection, base, def, graph, q, generation, partID, rows, nil)
+}
+
+func prepareColumnVectorGraphQuantizedAssetWithStableWriter(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow, writer *standaloneColumnStableAssetWriter) ([]columnVectorGraphPreparedQuantizedAsset, error) {
 	var alphaMetadata columnVectorGraphScalarU8AlphaMetadata
 	var payload []byte
 	var sourceCfg ColumnStoreConfig
@@ -348,7 +356,7 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 	if err != nil {
 		return nil, fmt.Errorf("collections: column_graph quantized index %q asset identity: %w", q.Name, err)
 	}
-	prepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, sourceCfg, q, columnVectorIndexStateAssetRoleQuantizedCodes, codesAssetID, generation, partID, len(rows), payload)
+	prepared, err := appendColumnVectorGraphQuantizedPreparedAssetWithStableWriter(assetRootDir, sourceCfg, q, columnVectorIndexStateAssetRoleQuantizedCodes, codesAssetID, generation, partID, len(rows), payload, writer)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +371,7 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 		if err != nil {
 			return nil, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha asset identity: %w", q.Name, err)
 		}
-		alphaPrepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, alphaCfg, q, columnVectorIndexStateAssetRoleQuantizedAlpha, alphaAssetID, generation, alphaPartID, len(alphaMetadata.Alphas), alphaPayload)
+		alphaPrepared, err := appendColumnVectorGraphQuantizedPreparedAssetWithStableWriter(assetRootDir, alphaCfg, q, columnVectorIndexStateAssetRoleQuantizedAlpha, alphaAssetID, generation, alphaPartID, len(alphaMetadata.Alphas), alphaPayload, writer)
 		if err != nil {
 			return nil, err
 		}
@@ -373,21 +381,29 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 }
 
 func appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir string, sourceCfg ColumnStoreConfig, q QuantizedVectorIndexDefinition, role, assetID string, generation, partID uint64, rows int, payload []byte) (columnVectorGraphPreparedQuantizedAsset, error) {
+	return appendColumnVectorGraphQuantizedPreparedAssetWithStableWriter(assetRootDir, sourceCfg, q, role, assetID, generation, partID, rows, payload, nil)
+}
+
+func appendColumnVectorGraphQuantizedPreparedAssetWithStableWriter(assetRootDir string, sourceCfg ColumnStoreConfig, q QuantizedVectorIndexDefinition, role, assetID string, generation, partID uint64, rows int, payload []byte, writer *standaloneColumnStableAssetWriter) (columnVectorGraphPreparedQuantizedAsset, error) {
 	if assetID == "" {
 		return columnVectorGraphPreparedQuantizedAsset{}, fmt.Errorf("collections: column_graph quantized index %q role %q missing asset id", q.Name, role)
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, sourceCfg)
+	var ref ColumnAssetRef
+	var err error
+	if writer != nil {
+		ref, err = writer.appendKind(sourceCfg, columnPhysicalAssetAppendItem{payload: payload, kind: ColumnAssetKindTCS1TypedColumnPart, generation: generation, partID: partID})
+	} else {
+		appender, openErr := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, sourceCfg)
+		if openErr != nil {
+			return columnVectorGraphPreparedQuantizedAsset{}, openErr
+		}
+		alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, sourceCfg)
+		var appendErr error
+		ref, appendErr = appender.appendKindWithAlignment(payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
+		err = errors.Join(appendErr, appender.close())
+	}
 	if err != nil {
 		return columnVectorGraphPreparedQuantizedAsset{}, err
-	}
-	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, sourceCfg)
-	ref, appendErr := appender.appendKindWithAlignment(payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
-	closeErr := appender.close()
-	if appendErr != nil {
-		return columnVectorGraphPreparedQuantizedAsset{}, errors.Join(appendErr, closeErr)
-	}
-	if closeErr != nil {
-		return columnVectorGraphPreparedQuantizedAsset{}, closeErr
 	}
 	if ref.Namespace != sourceCfg.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Generation != generation || ref.PartID != partID || ref.Length != int64(len(payload)) {
 		return columnVectorGraphPreparedQuantizedAsset{}, fmt.Errorf("collections: invalid column_graph quantized asset ref %+v", ref)

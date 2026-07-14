@@ -159,12 +159,34 @@ func buildColumnVectorIndexStateAdjacencyLists(rows []columnVectorGraphAssetRow)
 }
 
 func prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorIndexStatePreparedAdjacencyAsset, error) {
+	return prepareColumnVectorIndexStateAdjacencyAssetsWithStableWriter(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
+}
+
+func prepareColumnVectorIndexStateAdjacencyAssetsWithStableWriter(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, writer *standaloneColumnStableAssetWriter) ([]columnVectorIndexStatePreparedAdjacencyAsset, error) {
 	payloads, err := prepareColumnVectorIndexStateAdjacencyPayloads(assetRootDir, collection, base, def, firstPartID, rows)
 	if err != nil {
 		return nil, err
 	}
 	if len(payloads) == 0 {
 		return nil, nil
+	}
+	if writer != nil {
+		items := make([]columnPhysicalAssetAppendItem, len(payloads))
+		for i, payload := range payloads {
+			items[i] = columnPhysicalAssetAppendItem{payload: payload.Payload, kind: ColumnAssetKindTCS1TypedColumnPart, generation: generation, partID: payload.PartID}
+		}
+		refs, err := writer.appendKinds(payloads[0].Config, items)
+		if err != nil {
+			return nil, err
+		}
+		assets := make([]columnVectorIndexStatePreparedAdjacencyAsset, len(payloads))
+		for i, payload := range payloads {
+			if err := validateColumnVectorIndexStatePreparedAdjacencyRef(payload, refs[i], generation); err != nil {
+				return nil, err
+			}
+			assets[i] = columnVectorIndexStatePreparedAdjacencyAsset{Layer: payload.Layer, Config: payload.Config, Ref: refs[i], Bytes: refs[i].Length, Rows: payload.Rows, Values: payload.Values, OffsetsBytes: payload.OffsetsBytes, ValuesBytes: payload.ValuesBytes, PaddingBytes: payload.PaddingBytes, SchemaHash: payload.SchemaHash}
+		}
+		return assets, nil
 	}
 	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payloads[0].Config)
 	if err != nil {

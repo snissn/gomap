@@ -8,10 +8,53 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestStandaloneVectorRebuildFailsClosedBeforeAssetVisibilityOnWindows(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	before := columnAssetSegmentNamesM15C(t, d, col)
+	if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("RebuildVectorIndex error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
+		t.Fatalf("unsupported vector rebuild exposed segments after=%v before=%v", after, before)
+	}
+	registry := d.StableResourceIdentityPinRegistry()
+	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		t.Fatalf("unsupported vector rebuild leaked pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
+func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
+	before := columnAssetSegmentNamesM15C(t, d, col)
+	if _, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}}); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("ColumnAssetRewrite error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
+		t.Fatalf("unsupported rewrite exposed segments after=%v before=%v", after, before)
+	}
+	registry := d.StableResourceIdentityPinRegistry()
+	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		t.Fatalf("unsupported rewrite leaked pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
 
 func TestOrdinaryColumnWriteUsesLegacyPreCutoverPathOnWindows(t *testing.T) {
 	if ordinaryColumnStableAuthorityEnabled() {

@@ -603,6 +603,10 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 }
 
 func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig) (*columnPhysicalAssetSegmentAppender, error) {
+	return newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir, cfg, nil)
+}
+
+func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset segment allocation requires asset manager")
 	}
@@ -630,7 +634,12 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 		return nil, err
 	}
 	for {
-		appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
+		var appender *columnPhysicalAssetSegmentAppender
+		if registry != nil {
+			appender, err = newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir, cfg, fileID, registry)
+		} else {
+			appender, err = newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
+		}
 		if err == nil {
 			advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, allocatorCache, fileID)
 			return appender, nil

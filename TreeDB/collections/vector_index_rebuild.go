@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -23,6 +25,26 @@ var (
 	errColumnVectorGraphInvNormNormInvalid    = errors.New("collections: column_graph vector norm must be finite and non-zero")
 	errColumnVectorGraphInvNormOutOfRange     = errors.New("collections: column_graph vector inverse norm must be finite and fit float32")
 )
+
+type standaloneVectorRebuildPreparedHookState struct {
+	hook func(*rootpublication.StableResourceSet) error
+}
+
+var standaloneVectorRebuildPreparedHook atomic.Pointer[standaloneVectorRebuildPreparedHookState]
+
+func runStandaloneVectorRebuildPreparedHook(resources *rootpublication.StableResourceSet) error {
+	state := standaloneVectorRebuildPreparedHook.Load()
+	if state == nil || state.hook == nil {
+		return nil
+	}
+	return state.hook(resources)
+}
+
+func setStandaloneVectorRebuildPreparedTestHook(hook func(*rootpublication.StableResourceSet) error) func() {
+	previous := standaloneVectorRebuildPreparedHook.Load()
+	standaloneVectorRebuildPreparedHook.Store(&standaloneVectorRebuildPreparedHookState{hook: hook})
+	return func() { standaloneVectorRebuildPreparedHook.Store(previous) }
+}
 
 func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
 	if err := ValidateIndexName(name); err != nil {
@@ -147,13 +169,27 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	var rootIDs []uint64
 	if intent != nil {
 		var prepared columnVectorGraphPreparedPhysicalAsset
+		var stableResources *rootpublication.StableResourceSet
+		defer func() {
+			if stableResources != nil {
+				stableResources.Release()
+			}
+		}()
 		var updatedMeta CollectionMeta
 		buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 			var deltaRecords []columnManifestRecord
 			var nextIdentity ColumnManifestIdentity
-			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifest(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir())
+			if stableResources != nil {
+				stableResources.Release()
+				stableResources = nil
+			}
+			preparedAsset, preparedRecords, preparedIdentity, resources, prepareErr := prepareColumnVectorGraphRebuildManifestWithStableResources(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry())
 			if prepareErr != nil {
 				return nil, prepareErr
+			}
+			stableResources = resources
+			if hookErr := runStandaloneVectorRebuildPreparedHook(stableResources); hookErr != nil {
+				return nil, hookErr
 			}
 			prepared, deltaRecords, nextIdentity = preparedAsset, preparedRecords, preparedIdentity
 			if prepared.RowCount != len(rows) {
@@ -193,8 +229,12 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		}
 		c.meta = updatedMeta
 	} else {
-		prepared, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifest(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir())
+		prepared, deltaRecords, nextIdentity, stableResources, err := prepareColumnVectorGraphRebuildManifestWithStableResources(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry())
 		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		defer stableResources.Release()
+		if err := runStandaloneVectorRebuildPreparedHook(stableResources); err != nil {
 			return VectorIndexStatus{}, err
 		}
 		delta := ColumnManifestRootDelta{
@@ -246,14 +286,28 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	rootNames := []string{rootName}
 	baseRootIDs := map[string]uint64{rootName: 0}
 	var updatedMeta CollectionMeta
+	var stableResources *rootpublication.StableResourceSet
+	defer func() {
+		if stableResources != nil {
+			stableResources.Release()
+		}
+	}()
 	buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 		manifest, records, err := initialColumnVectorGraphBaseManifestForRebuild(baseMeta.Name, cfg, ctx.AppliedCommandLSN)
 		if err != nil {
 			return nil, err
 		}
-		prepared, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifest(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, nil, c.db.ColumnAssetRootDir())
+		if stableResources != nil {
+			stableResources.Release()
+			stableResources = nil
+		}
+		prepared, deltaRecords, nextIdentity, resources, err := prepareColumnVectorGraphRebuildManifestWithStableResources(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, nil, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry())
 		if err != nil {
 			return nil, err
+		}
+		stableResources = resources
+		if hookErr := runStandaloneVectorRebuildPreparedHook(stableResources); hookErr != nil {
+			return nil, hookErr
 		}
 		if prepared.RowCount != 0 {
 			return nil, fmt.Errorf("collections: empty column_graph rebuild prepared rows=%d want 0", prepared.RowCount)
@@ -706,6 +760,29 @@ func columnVectorGraphCosine(left, right columnVectorGraphAssetRow) float64 {
 }
 
 func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
+	return prepareColumnVectorGraphRebuildManifestWithStableWriter(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, nil)
+}
+
+func prepareColumnVectorGraphRebuildManifestWithStableResources(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, registry *rootpublication.IdentityPinRegistry) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, *rootpublication.StableResourceSet, error) {
+	writer := newStandaloneColumnStableAssetWriter(assetRootDir, registry)
+	prepared, nextRecords, identity, err := prepareColumnVectorGraphRebuildManifestWithStableWriter(collection, cfg, activeVectorIndexes, def, manifest, records, appliedCommandLSN, rows, assetRootDir, writer)
+	if err != nil {
+		writer.abandon()
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, nil, err
+	}
+	refs, err := columnVectorGraphAssetRefsFromManifestRecordsForReachability(nextRecords, manifest.Generation, cfg.AssetManager.Namespace, true, []VectorIndexDefinition{def})
+	if err != nil {
+		writer.abandon()
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, nil, err
+	}
+	resources, err := writer.freeze(refs)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, nil, err
+	}
+	return prepared, nextRecords, identity, resources, nil
+}
+
+func prepareColumnVectorGraphRebuildManifestWithStableWriter(collection string, cfg ColumnStoreConfig, activeVectorIndexes []VectorIndexDefinition, def VectorIndexDefinition, manifest columnManifestSnapshot, records []columnManifestRecord, appliedCommandLSN uint64, rows []columnVectorGraphAssetRow, assetRootDir string, writer *standaloneColumnStableAssetWriter) (columnVectorGraphPreparedPhysicalAsset, []columnManifestRecord, ColumnManifestIdentity, error) {
 	if appliedCommandLSN == 0 {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, errors.New("collections: column_graph rebuild requires non-zero AppliedCommandLSN")
 	}
@@ -737,7 +814,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		RowCount:     len(rows),
 	}
 	invNormPartID := partID
-	preparedInvNorm, err := prepareColumnVectorGraphInvNormStateAsset(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows)
+	preparedInvNorm, err := prepareColumnVectorGraphInvNormStateAssetWithStableWriter(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows, writer)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -760,7 +837,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if preparedInvNorm.Present {
 		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, preparedInvNorm.Ref.PartID)
 	}
-	stateAdjacencyAssets, err := prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection, cfg, def, manifest.Generation, statePartID, rows)
+	stateAdjacencyAssets, err := prepareColumnVectorIndexStateAdjacencyAssetsWithStableWriter(assetRootDir, collection, cfg, def, manifest.Generation, statePartID, rows, writer)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -768,7 +845,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if len(stateAdjacencyAssets) > 0 {
 		rowRefPartID = nextColumnVectorGraphPartIDAfter(rowRefPartID, stateAdjacencyAssets[len(stateAdjacencyAssets)-1].Ref.PartID)
 	}
-	preparedRowRefs, err := prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection, cfg, def, manifest.Generation, rowRefPartID, rows)
+	preparedRowRefs, err := prepareColumnVectorGraphRowRefStateAssetsWithStableWriter(assetRootDir, collection, cfg, def, manifest.Generation, rowRefPartID, rows, writer)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -776,7 +853,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if len(preparedRowRefs) > 0 {
 		documentIDPartID = nextColumnVectorGraphPartIDAfter(documentIDPartID, preparedRowRefs[len(preparedRowRefs)-1].Ref.PartID)
 	}
-	preparedDocumentIDs, err := prepareColumnVectorGraphDocumentIDStateAsset(assetRootDir, collection, cfg, def, manifest.Generation, documentIDPartID, rows)
+	preparedDocumentIDs, err := prepareColumnVectorGraphDocumentIDStateAssetWithStableWriter(assetRootDir, collection, cfg, def, manifest.Generation, documentIDPartID, rows, writer)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -784,7 +861,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if preparedDocumentIDs.Present {
 		quantizedPartID = nextColumnVectorGraphPartIDAfter(quantizedPartID, preparedDocumentIDs.Ref.PartID)
 	}
-	preparedQuantizedAssets, err := prepareColumnVectorGraphQuantizedAssets(assetRootDir, collection, cfg, def, graph, manifest.Generation, quantizedPartID, rows)
+	preparedQuantizedAssets, err := prepareColumnVectorGraphQuantizedAssetsWithStableWriter(assetRootDir, collection, cfg, def, graph, manifest.Generation, quantizedPartID, rows, writer)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
@@ -792,7 +869,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if len(preparedQuantizedAssets) > 0 {
 		searchPackPartID = nextColumnVectorGraphPartIDAfter(searchPackPartID, preparedQuantizedAssets[len(preparedQuantizedAssets)-1].Ref.PartID)
 	}
-	preparedSearchPack, err := prepareColumnHNSWSearchPackAsset(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows)
+	preparedSearchPack, err := prepareColumnHNSWSearchPackAssetWithStableWriter(assetRootDir, cfg, def, graph, manifest.Generation, searchPackPartID, rows, writer)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}

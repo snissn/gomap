@@ -15,6 +15,10 @@ type columnHNSWSearchPackPreparedAsset struct {
 }
 
 func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnHNSWSearchPackPreparedAsset, error) {
+	return prepareColumnHNSWSearchPackAssetWithStableWriter(assetRootDir, cfg, def, graph, generation, partID, rows, nil)
+}
+
+func prepareColumnHNSWSearchPackAssetWithStableWriter(assetRootDir string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, generation, partID uint64, rows []columnVectorGraphAssetRow, writer *standaloneColumnStableAssetWriter) (columnHNSWSearchPackPreparedAsset, error) {
 	if assetRootDir == "" {
 		return columnHNSWSearchPackPreparedAsset{}, errors.New("collections: hnsw search pack requires asset root dir")
 	}
@@ -35,18 +39,21 @@ func prepareColumnHNSWSearchPackAsset(assetRootDir string, cfg ColumnStoreConfig
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
 	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, cfg)
+	var ref ColumnAssetRef
+	if writer != nil {
+		ref, err = writer.appendKind(cfg, columnPhysicalAssetAppendItem{payload: raw, kind: ColumnAssetKindTCS1HNSWSearchPack, generation: generation, partID: partID})
+	} else {
+		appender, openErr := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, cfg)
+		if openErr != nil {
+			return columnHNSWSearchPackPreparedAsset{}, openErr
+		}
+		alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1HNSWSearchPack, cfg)
+		var appendErr error
+		ref, appendErr = appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, generation, partID, alignment)
+		err = errors.Join(appendErr, appender.close())
+	}
 	if err != nil {
 		return columnHNSWSearchPackPreparedAsset{}, err
-	}
-	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1HNSWSearchPack, cfg)
-	ref, appendErr := appender.appendKindWithAlignment(raw, ColumnAssetKindTCS1HNSWSearchPack, generation, partID, alignment)
-	closeErr := appender.close()
-	if appendErr != nil {
-		return columnHNSWSearchPackPreparedAsset{}, errors.Join(appendErr, closeErr)
-	}
-	if closeErr != nil {
-		return columnHNSWSearchPackPreparedAsset{}, closeErr
 	}
 	prepared := columnHNSWSearchPackPreparedAsset{
 		Present:    true,
