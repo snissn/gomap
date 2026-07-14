@@ -203,7 +203,7 @@ func TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations(t *testing.T)
 
 	stableBatchLog, ok := database.leafPageLog.(LeafPageStableBatchLog)
 	if !ok {
-		t.Fatal("leaf page log does not implement LeafPageStableBatchLog")
+		t.Fatalf("leaf-page log %T does not implement LeafPageStableBatchLog", database.leafPageLog)
 	}
 	ptrs, resources, err := stableBatchLog.AppendLeafPagesWithStableResources(pages)
 	if err != nil {
