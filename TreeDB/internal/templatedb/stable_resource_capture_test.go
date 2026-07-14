@@ -458,6 +458,35 @@ func TestCaptureTemplateResourcesRejectsMissingAndMismatchedDefinitionsWithoutPi
 	}
 }
 
+func TestCaptureTemplateResourcesRejectsEscapingDiagnosticPath(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:       t.TempDir(),
+		ChunkSize: 64 * 1024,
+		ValueLog:  backenddb.ValueLogOptions{ForcePointers: true},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer backend.Close()
+	store := New(stableTestKV{db: backend, diagnosticPath: filepath.Join("..", "escape.vlog")}, Config{})
+	definition := bytes.Repeat([]byte("escaping-path-template|"), 64)
+	templateID := template.TemplateID(definition, 0)
+	if err := seedPointerTemplate(backend, templateID, definition); err != nil {
+		t.Fatalf("seed pointer template: %v", err)
+	}
+	resources, err := store.CaptureTemplateResources(context.Background(), templateID)
+	if resources != nil {
+		resources.Release()
+		t.Fatal("capture with escaping diagnostic path returned resources")
+	}
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("capture error=%v want unresolved resource", err)
+	}
+	if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
+		t.Fatalf("pins after rejected path=%d want 0", got)
+	}
+}
+
 func TestCaptureTemplateResourcesBlocksVacuumUntilRelease(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ChunkSize: 64 * 1024})
 	if err != nil {

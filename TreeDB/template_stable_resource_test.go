@@ -132,6 +132,12 @@ func TestTemplateKVStableCaptureSerializesConcurrentCloseThroughTokenConstructio
 	if result.resources == nil {
 		t.Fatal("capture during concurrent close returned nil resources")
 	}
+	select {
+	case closeErr := <-closeDone:
+		result.resources.Release()
+		t.Fatalf("close crossed live stable template resources: %v", closeErr)
+	case <-time.After(50 * time.Millisecond):
+	}
 	result.resources.Release()
 	if closeErr := <-closeDone; closeErr != nil {
 		t.Fatalf("close after stable capture: %v", closeErr)

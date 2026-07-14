@@ -7,6 +7,7 @@ import (
 	"math"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/template"
@@ -77,7 +78,12 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: templatedb stable snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
-	defer snapshot.ReleaseCaptureLease()
+	captureLeaseTransferred := false
+	defer func() {
+		if !captureLeaseTransferred {
+			snapshot.ReleaseCaptureLease()
+		}
+	}()
 	snapshotOwned := false
 	defer func() {
 		if !snapshotOwned {
@@ -124,13 +130,16 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 			logical,
 		},
 		ContentSynced: true,
+		OnRelease:     snapshot.ReleaseCaptureLease,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("templatedb: capture template %d index: %w", templateID, err)
 	}
 	// A successful index token owns the snapshot maintenance lease even if a
-	// later builder/value-log operation fails.
+	// later builder/value-log operation fails. It also owns the capture lease so
+	// the backing DB cannot close while the returned physical authority is live.
 	snapshotOwned = true
+	captureLeaseTransferred = true
 	if err := builder.Add(indexToken); err != nil {
 		indexToken.Release()
 		return nil, fmt.Errorf("templatedb: add template %d index: %w", templateID, err)
@@ -144,7 +153,8 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		if err != nil {
 			return nil, fmt.Errorf("templatedb: resolve template %d value-log path: %w", templateID, err)
 		}
-		if diagnosticPath == "" || diagnosticPath == "." || filepath.IsAbs(diagnosticPath) {
+		if diagnosticPath == "" || diagnosticPath == "." || filepath.IsAbs(diagnosticPath) ||
+			diagnosticPath == ".." || strings.HasPrefix(diagnosticPath, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("%w: templatedb template %d has invalid value-log path", rootpublication.ErrUnresolvedResource, templateID)
 		}
 		valueLogToken, err := snapshot.NewStableValueLogResourceToken(entry.FileID, rootpublication.StableResourceSpec{
