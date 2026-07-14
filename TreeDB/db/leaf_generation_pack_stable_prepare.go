@@ -490,10 +490,10 @@ func (db *DB) PrepareLeafGenerationPackStableClosure(ctx context.Context, leafPa
 	seqAlloc, ridAlloc := db.leafGenerationPackAllocators(1, 1, nil)
 	writer = newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
 	writer.ConfigureLeafLog(stagingLeafDir, rewriteLeafLogLaneID, 1)
-	writer.configureLeafStaging()
+	writer.configureLeafStaging(stagingRoot)
 	writer.setLeafPageLogSeqAllocator(seqAlloc)
 	writer.setLeafPageLogRIDAllocator(ridAlloc)
-	authority, err = newLeafGenerationPackPromotionAuthority(db, stagingLeafDir, layout.leafVLogDir)
+	authority, err = newLeafGenerationPackPromotionAuthority(db, stagingRoot, stagingLeafDir, layout.leafVLogDir)
 	if err != nil {
 		return nil, err
 	}

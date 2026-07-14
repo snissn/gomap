@@ -2433,13 +2433,22 @@ func (db *DB) runInternalTeardownHooksMaintenanceLocked() error {
 // hooks, these callbacks must not run until every admitted producer has
 // released its lease.
 func (db *DB) registerCaptureTeardownHook(hook func() error) func() {
+	cancel, _ := db.tryRegisterCaptureTeardownHook(hook)
+	return cancel
+}
+
+// tryRegisterCaptureTeardownHook reports whether the hook was accepted. A
+// producer holding teardownMu for reading must always observe accepted=true;
+// the explicit result lets lease-backed callers fail closed if that invariant
+// is ever violated.
+func (db *DB) tryRegisterCaptureTeardownHook(hook func() error) (func(), bool) {
 	if db == nil || hook == nil {
-		return func() {}
+		return func() {}, false
 	}
 	db.captureTeardownHooksMu.Lock()
 	defer db.captureTeardownHooksMu.Unlock()
 	if db.captureTeardownHooksClosed {
-		return func() {}
+		return func() {}, false
 	}
 	idx := len(db.captureTeardownHooks)
 	db.captureTeardownHooks = append(db.captureTeardownHooks, hook)
@@ -2453,7 +2462,7 @@ func (db *DB) registerCaptureTeardownHook(hook func() error) func() {
 			}
 			db.captureTeardownHooksMu.Unlock()
 		})
-	}
+	}, true
 }
 
 // runCaptureTeardownHooksLocked runs after Close owns teardownMu exclusively.

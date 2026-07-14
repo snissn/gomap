@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -30,17 +31,51 @@ type StableTemplateResourceProvider interface {
 // resource closure. Close waits for admitted captures before tearing down
 // resources and clearing the DB lifetime's namespace-sync proofs.
 type StableResourceCaptureLease struct {
-	db       *DB
-	released atomic.Bool
+	db *DB
+
+	mu       sync.Mutex
+	released bool
 }
 
 // Release ends an admitted stable-resource capture. It is safe to call more
 // than once.
 func (lease *StableResourceCaptureLease) Release() {
-	if lease == nil || lease.db == nil || !lease.released.CompareAndSwap(false, true) {
+	if lease == nil || lease.db == nil {
 		return
 	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.released {
+		return
+	}
+	lease.released = true
 	lease.db.teardownMu.RUnlock()
+}
+
+// RetainStableResourceCaptureRecovery transfers exact producer rollback
+// authority into DB teardown while this admission lease is still live. The
+// ambiguous producer mutation poisons later publication immediately; teardown
+// retries cleanup after every admitted capture has released its lease.
+func (lease *StableResourceCaptureLease) RetainStableResourceCaptureRecovery(cleanup func() error) error {
+	if lease == nil || lease.db == nil || cleanup == nil {
+		return ErrClosed
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.released {
+		return ErrClosed
+	}
+	lease.db.publicationPoisoned.Store(true)
+	_, registered := lease.db.tryRegisterCaptureTeardownHook(func() error {
+		if err := cleanup(); err != nil {
+			return errors.Join(err, ErrRecoveryRequired)
+		}
+		return nil
+	})
+	if !registered {
+		return errors.Join(ErrClosed, ErrRecoveryRequired)
+	}
+	return nil
 }
 
 // AcquireStableResourceCaptureLease admits DB-external producers that use the
@@ -55,6 +90,10 @@ func (db *DB) AcquireStableResourceCaptureLease() (*StableResourceCaptureLease, 
 	if db.closing.Load() {
 		db.teardownMu.RUnlock()
 		return nil, ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		db.teardownMu.RUnlock()
+		return nil, err
 	}
 	return &StableResourceCaptureLease{db: db}, nil
 }

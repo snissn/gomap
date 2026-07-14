@@ -17,6 +17,13 @@ type StableColumnPhysicalAssetAppend struct {
 	PartID     uint64
 }
 
+// StableResourceCaptureRecoveryRetainer accepts exact rollback authority while
+// a DB capture lease still excludes teardown. Implementations must poison later
+// publication and run the callback during DB shutdown.
+type StableResourceCaptureRecoveryRetainer interface {
+	RetainStableResourceCaptureRecovery(func() error) error
+}
+
 // AppendColumnPhysicalAssetsWithStableResources executes the same physical
 // append session used by column publication and transfers its already-open
 // stable resource set to the caller. Returned refs and authority are validated
@@ -27,9 +34,13 @@ func AppendColumnPhysicalAssetsWithStableResources(
 	fileID uint32,
 	items []StableColumnPhysicalAssetAppend,
 	registry *rootpublication.IdentityPinRegistry,
+	recoveryRetainer StableResourceCaptureRecoveryRetainer,
 ) ([]ColumnAssetRef, *rootpublication.StableResourceSet, error) {
 	if registry == nil {
 		return nil, nil, errors.New("collections: stable column physical append requires identity pin registry")
+	}
+	if recoveryRetainer == nil {
+		return nil, nil, errors.New("collections: stable column physical append requires capture recovery retainer")
 	}
 	if len(items) == 0 {
 		return nil, nil, nil
@@ -41,23 +52,19 @@ func AppendColumnPhysicalAssetsWithStableResources(
 			generation: items[i].Generation, partID: items[i].PartID,
 		}
 	}
-	session := newColumnPhysicalAssetAppendSessionWithStableResources(rootDir, cfg, registry)
+	session := newColumnPhysicalAssetAppendSessionWithStableResources(rootDir, cfg, registry, recoveryRetainer)
 	refs, err := session.appendKinds(fileID, internal)
 	if err != nil {
 		return nil, nil, errors.Join(err, session.abort())
-	}
-	_, resources, err := session.closeWithStableResources()
-	if err != nil {
-		return nil, nil, err
 	}
 	prepared := make([]ColumnPreparedAsset, len(refs))
 	for i := range refs {
 		prepared[i] = ColumnPreparedAsset{Ref: refs[i], Bytes: refs[i].Length}
 	}
-	if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
-		if resources != nil {
-			resources.Release()
-		}
+	_, resources, err := session.closeWithStableResourcesValidated(func(captured *rootpublication.StableResourceSet) error {
+		return validateStableColumnResourcesMatchPrepared(prepared, captured)
+	})
+	if err != nil {
 		return nil, nil, err
 	}
 	return refs, resources, nil

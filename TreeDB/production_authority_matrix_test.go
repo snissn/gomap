@@ -432,11 +432,16 @@ func captureProductionColumnAssetAuthority(t productionAuthorityContext, kind co
 	if err != nil {
 		return nil, err
 	}
+	lease, err := database.AcquireStableResourceCaptureLease()
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
 	_, resources, err := collections.AppendColumnPhysicalAssetsWithStableResources(
 		database.ColumnAssetRootDir(), cfg, fileID,
 		[]collections.StableColumnPhysicalAssetAppend{{
 			Payload: []byte(strings.Repeat("production-column-asset-", 32)), Kind: kind, Generation: 11, PartID: 13,
-		}}, database.StableResourceIdentityPinRegistry(),
+		}}, database.StableResourceIdentityPinRegistry(), lease,
 	)
 	return resources, err
 }

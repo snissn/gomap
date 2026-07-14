@@ -101,6 +101,50 @@ func TestCaptureTeardownHookRegisteredDuringCloseWaitsForLease(t *testing.T) {
 	}
 }
 
+func TestStableResourceCaptureLeaseRetainSerializesWithRelease(t *testing.T) {
+	for iteration := 0; iteration < 1000; iteration++ {
+		database := &DB{}
+		lease, err := database.AcquireStableResourceCaptureLease()
+		if err != nil {
+			t.Fatalf("iteration %d AcquireStableResourceCaptureLease: %v", iteration, err)
+		}
+		start := make(chan struct{})
+		releaseDone := make(chan struct{})
+		retainDone := make(chan error, 1)
+		hookRuns := 0
+		go func() {
+			<-start
+			lease.Release()
+			close(releaseDone)
+		}()
+		go func() {
+			<-start
+			retainDone <- lease.RetainStableResourceCaptureRecovery(func() error {
+				hookRuns++
+				return nil
+			})
+		}()
+		close(start)
+		retainErr := <-retainDone
+		<-releaseDone
+
+		database.teardownMu.Lock()
+		hookErr := database.runCaptureTeardownHooksLocked()
+		database.teardownMu.Unlock()
+		if hookErr != nil {
+			t.Fatalf("iteration %d runCaptureTeardownHooksLocked: %v", iteration, hookErr)
+		}
+		switch {
+		case retainErr == nil && hookRuns != 1:
+			t.Fatalf("iteration %d successful retention ran %d hooks want 1", iteration, hookRuns)
+		case errors.Is(retainErr, ErrClosed) && hookRuns != 0:
+			t.Fatalf("iteration %d rejected retention ran %d hooks want 0", iteration, hookRuns)
+		case retainErr != nil && !errors.Is(retainErr, ErrClosed):
+			t.Fatalf("iteration %d retention error=%v want nil or ErrClosed", iteration, retainErr)
+		}
+	}
+}
+
 func TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on Windows")

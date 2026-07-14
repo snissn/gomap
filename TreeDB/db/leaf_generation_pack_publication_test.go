@@ -223,7 +223,7 @@ func TestLeafGenerationPack_ClosesStagingReaderBeforePromotion(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPack_PostPromotionCreateCutStopsNamespaceCleanup(t *testing.T) {
+func TestLeafGenerationPack_PostPromotionCreateCutRollsBackExactly(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer func() {
@@ -231,6 +231,7 @@ func TestLeafGenerationPack_PostPromotionCreateCutStopsNamespaceCleanup(t *testi
 		_ = leafLog.Close()
 	}()
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+	beforePages := db.idx.Load().pager.PageCount()
 
 	cutErr := errors.New("injected post-promotion create cut")
 	var (
@@ -256,23 +257,33 @@ func TestLeafGenerationPack_PostPromotionCreateCutStopsNamespaceCleanup(t *testi
 	})
 	restore()
 
-	if !errors.Is(err, cutErr) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("LeafGenerationPack error=%v, want injected cut and ErrRecoveryRequired", err)
+	if !errors.Is(err, cutErr) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack error=%v, want injected cut after exact rollback", err)
 	}
-	if !db.publicationPoisoned.Load() {
-		t.Fatal("post-promotion create cut did not poison DB")
+	if db.publicationPoisoned.Load() {
+		t.Fatal("exactly rolled-back promotion poisoned DB")
 	}
 	if promotedPath == "" {
 		t.Fatalf("namespace events=%#v, want promoted create", namespaceEvents)
 	}
-	if _, statErr := os.Stat(promotedPath); statErr != nil {
-		t.Fatalf("promoted path stat=%v, want retained candidate", statErr)
+	if _, statErr := os.Stat(promotedPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("promoted path survived exact rollback: %v", statErr)
 	}
-	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceCreate || got.NewPath != promotedPath {
-		t.Fatalf("last namespace event=%#v, want promotion create as final mutation", got)
+	if got := namespaceEvents[len(namespaceEvents)-1]; got.Namespace != durabilitycut.NamespaceUnlink || got.OldPath != promotedPath {
+		t.Fatalf("last namespace event=%#v, want exact promotion unlink", got)
 	}
-	if err := db.SetSync([]byte("after-promotion-cut"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("SetSync after promotion cut error=%v, want ErrRecoveryRequired", err)
+	if got := db.idx.Load().pager.PageCount(); got != beforePages {
+		t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
+	}
+	if _, statErr := os.Stat(candidate.sourcePath); statErr != nil {
+		t.Fatalf("source removed after promotion rollback: %v", statErr)
+	}
+	staging, globErr := filepath.Glob(filepath.Join(LeafLogDirPath(dir), ".leaf-pack-copy-*"))
+	if globErr != nil || len(staging) != 0 {
+		t.Fatalf("exact rollback staging dirs=%v err=%v", staging, globErr)
+	}
+	if err := db.SetSync([]byte("after-promotion-cut"), []byte("allowed")); err != nil {
+		t.Fatalf("SetSync after exact promotion rollback: %v", err)
 	}
 }
 
@@ -362,7 +373,7 @@ func TestLeafGenerationPack_PostPublicationCleanupFailureIsReportedOutOfBand(t *
 	}
 }
 
-func TestLeafGenerationPack_PromotedDirectorySyncCutPoisonsAndRetainsCandidates(t *testing.T) {
+func TestLeafGenerationPack_PromotedDirectorySyncCutRollsBackExactly(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
@@ -373,7 +384,11 @@ func TestLeafGenerationPack_PromotedDirectorySyncCutPoisonsAndRetainsCandidates(
 	var failOnce atomic.Bool
 	failOnce.Store(true)
 	leafDir := filepath.Clean(LeafLogDirPath(dir))
+	var promotedPath string
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace == durabilitycut.NamespaceCreate && event.Resource == durabilitycut.ResourceOuterLeaf && filepath.Clean(filepath.Dir(event.NewPath)) == leafDir {
+			promotedPath = event.NewPath
+		}
 		if event.Point == durabilitycut.BeforeNewFileDirectorySync && filepath.Clean(event.Path) == leafDir && failOnce.CompareAndSwap(true, false) {
 			return testErr
 		}
@@ -385,11 +400,11 @@ func TestLeafGenerationPack_PromotedDirectorySyncCutPoisonsAndRetainsCandidates(
 		GenerationIDs: []uint64{candidate.generation.GenerationID},
 		Force:         true,
 	})
-	if !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("LeafGenerationPack error=%v want directory sync cut and recovery-required", err)
+	if !errors.Is(err, testErr) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack error=%v want directory sync cut after exact rollback", err)
 	}
-	if !db.publicationPoisoned.Load() {
-		t.Fatal("post-mutation directory sync cut did not poison DB")
+	if db.publicationPoisoned.Load() {
+		t.Fatal("exactly rolled-back directory sync cut poisoned DB")
 	}
 	if got := db.idx.Load().pager.PageCount(); got != beforePages {
 		t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
@@ -397,8 +412,18 @@ func TestLeafGenerationPack_PromotedDirectorySyncCutPoisonsAndRetainsCandidates(
 	if _, err := os.Stat(candidate.sourcePath); err != nil {
 		t.Fatalf("source removed after directory sync failure: %v", err)
 	}
-	if err := db.SetSync([]byte("after-directory-sync-failure"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("SetSync after ambiguous directory sync error=%v want recovery-required", err)
+	if promotedPath == "" {
+		t.Fatal("directory sync cut did not observe promoted path")
+	}
+	if _, statErr := os.Stat(promotedPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("promoted path survived directory sync rollback: %v", statErr)
+	}
+	staging, globErr := filepath.Glob(filepath.Join(LeafLogDirPath(dir), ".leaf-pack-copy-*"))
+	if globErr != nil || len(staging) != 0 {
+		t.Fatalf("directory sync rollback staging dirs=%v err=%v", staging, globErr)
+	}
+	if err := db.SetSync([]byte("after-directory-sync-failure"), []byte("allowed")); err != nil {
+		t.Fatalf("SetSync after exact directory sync rollback: %v", err)
 	}
 }
 
