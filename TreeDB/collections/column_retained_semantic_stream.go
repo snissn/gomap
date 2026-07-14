@@ -47,6 +47,80 @@ var (
 
 var columnRetainedSemanticStreamV1RawBlockScratchPool = make(chan []byte, columnRetainedSemanticStreamV1RawBlockScratchPoolSlots)
 
+// The pool retains at most one encoder per preparation worker. Each idle
+// encoder retains at most columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes
+// of raw scratch, so the total retained scratch is bounded by the worker cap.
+var columnRetainedSemanticStreamV1StoredBlockEncoderPool = newColumnRetainedSemanticStreamV1EncoderPool(
+	columnRetainedSemanticStreamV1PrepareMaxWorkers,
+	newColumnRetainedSemanticStreamV1StoredBlockEncoder,
+	func(encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) { encoder.close() },
+)
+
+type columnRetainedSemanticStreamV1EncoderPool[T any] struct {
+	slots chan struct{}
+
+	mu    sync.Mutex
+	idle  []T
+	new   func() (T, error)
+	close func(T)
+}
+
+func newColumnRetainedSemanticStreamV1EncoderPool[T any](max int, newEncoder func() (T, error), closeEncoder func(T)) *columnRetainedSemanticStreamV1EncoderPool[T] {
+	return &columnRetainedSemanticStreamV1EncoderPool[T]{
+		slots: make(chan struct{}, max),
+		idle:  make([]T, 0, max),
+		new:   newEncoder,
+		close: closeEncoder,
+	}
+}
+
+func (p *columnRetainedSemanticStreamV1EncoderPool[T]) borrow() (T, time.Duration, error) {
+	p.slots <- struct{}{}
+	p.mu.Lock()
+	if n := len(p.idle); n > 0 {
+		encoder := p.idle[n-1]
+		p.idle = p.idle[:n-1]
+		p.mu.Unlock()
+		return encoder, 0, nil
+	}
+	p.mu.Unlock()
+	setupStart := time.Now()
+	encoder, err := p.new()
+	if err != nil {
+		<-p.slots
+		var zero T
+		return zero, 0, err
+	}
+	return encoder, time.Since(setupStart), nil
+}
+
+func (p *columnRetainedSemanticStreamV1EncoderPool[T]) release(encoder T, reusable bool) {
+	if reusable {
+		p.mu.Lock()
+		p.idle = append(p.idle, encoder)
+		p.mu.Unlock()
+	} else {
+		p.close(encoder)
+	}
+	<-p.slots
+}
+
+func (p *columnRetainedSemanticStreamV1EncoderPool[T]) idleCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.idle)
+}
+
+func (p *columnRetainedSemanticStreamV1EncoderPool[T]) closeIdle() {
+	p.mu.Lock()
+	idle := p.idle
+	p.idle = nil
+	p.mu.Unlock()
+	for _, encoder := range idle {
+		p.close(encoder)
+	}
+}
+
 type columnRetainedSemanticStreamPath struct {
 	segments                []string
 	rows                    []uint64
@@ -623,6 +697,32 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	declaredPathTrie *columnRetainedSemanticStreamV1DeclaredPathTrie,
 	useSemanticParserDeclaredRows bool,
 ) (columnRetainedSemanticStreamV1PreparedBlock, error) {
+	storedBlockEncoder, encoderSetup, err := columnRetainedSemanticStreamV1StoredBlockEncoderPool.borrow()
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	reusable := false
+	defer func() { columnRetainedSemanticStreamV1StoredBlockEncoderPool.release(storedBlockEncoder, reusable) }()
+	prepared, err := prepareColumnRetainedSemanticStreamV1StorageBlockWithEncoderAndIDs(cfg, ids, documents, start, end, rootPlan, useRootFastPath, retainedSkipTrie, declaredPathTrie, useSemanticParserDeclaredRows, storedBlockEncoder, encoderSetup)
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	reusable = true
+	return prepared, nil
+}
+
+func prepareColumnRetainedSemanticStreamV1StorageBlockWithEncoderAndIDs(
+	cfg ColumnStoreConfig,
+	ids, documents [][]byte,
+	start, end int,
+	rootPlan columnRetainedSemanticStreamV1RootFastPathPlan,
+	useRootFastPath bool,
+	retainedSkipTrie *columnRetainedSemanticStreamV1RetainedSkipTrie,
+	declaredPathTrie *columnRetainedSemanticStreamV1DeclaredPathTrie,
+	useSemanticParserDeclaredRows bool,
+	storedBlockEncoder *columnRetainedSemanticStreamV1StoredBlockEncoder,
+	encoderSetup time.Duration,
+) (columnRetainedSemanticStreamV1PreparedBlock, error) {
 	rows := end - start
 	var metrics columnRetainedSemanticStreamV1PrepareMetrics
 	streams := newColumnRetainedSemanticStreamStreams()
@@ -678,13 +778,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 		}
 	}
 	metrics.BlockCollect = time.Since(collectStart)
-	encoderStart := time.Now()
-	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
-	if err != nil {
-		return columnRetainedSemanticStreamV1PreparedBlock{}, err
-	}
-	metrics.BlockEncoderSetup = time.Since(encoderStart)
-	defer storedBlockEncoder.close()
+	metrics.BlockEncoderSetup = encoderSetup
 	block, rawEncode, storedEncode, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoderMeasured(rows, streams, storedBlockEncoder)
 	if err != nil {
 		return columnRetainedSemanticStreamV1PreparedBlock{}, err

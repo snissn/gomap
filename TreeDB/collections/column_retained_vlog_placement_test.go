@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -477,6 +479,227 @@ func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderReuse(t *testing
 		if !bytes.Equal(decoded, raw) {
 			t.Fatalf("decoded reused block %s differs from raw block", name)
 		}
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1StoredBlockEncoderPoolLifecycle(t *testing.T) {
+	type pooledState struct {
+		inUse   atomic.Bool
+		scratch []byte
+	}
+
+	newPool := func() (*columnRetainedSemanticStreamV1EncoderPool[*pooledState], *atomic.Int32, *atomic.Int32) {
+		var constructed atomic.Int32
+		var closed atomic.Int32
+		return newColumnRetainedSemanticStreamV1EncoderPool(
+			columnRetainedSemanticStreamV1PrepareMaxWorkers,
+			func() (*pooledState, error) {
+				constructed.Add(1)
+				return &pooledState{scratch: make([]byte, 16)}, nil
+			},
+			func(*pooledState) { closed.Add(1) },
+		), &constructed, &closed
+	}
+
+	runCanonicalPreparation := func(pool *columnRetainedSemanticStreamV1EncoderPool[*pooledState], failBlock int) error {
+		var started sync.WaitGroup
+		started.Add(4)
+		return columnRetainedSemanticStreamV1RunPrepareWorkers(4, 4, func(blockIdx int) (err error) {
+			state, _, err := pool.borrow()
+			if err != nil {
+				return err
+			}
+			if !state.inUse.CompareAndSwap(false, true) {
+				pool.release(state, false)
+				return errors.New("pooled encoder shared concurrently")
+			}
+			defer func() {
+				state.inUse.Store(false)
+				pool.release(state, err == nil)
+			}()
+			started.Done()
+			started.Wait()
+			if blockIdx == failBlock {
+				return errors.New("injected block error")
+			}
+			return nil
+		})
+	}
+
+	t.Run("sequential canonical preparations reuse four encoders", func(t *testing.T) {
+		pool, constructed, closed := newPool()
+		if err := runCanonicalPreparation(pool, -1); err != nil {
+			t.Fatalf("first canonical preparation: %v", err)
+		}
+		if err := runCanonicalPreparation(pool, -1); err != nil {
+			t.Fatalf("second canonical preparation: %v", err)
+		}
+		if got := constructed.Load(); got != 4 {
+			t.Fatalf("constructed encoders=%d want four reused across two four-block preparations, not eight", got)
+		}
+		if got := pool.idleCount(); got != 4 {
+			t.Fatalf("idle pool occupancy=%d want 4", got)
+		}
+		if got := closed.Load(); got != 0 {
+			t.Fatalf("closed encoders=%d want 0 after successful returns", got)
+		}
+		if got := pool.idleCount() * 16; got != 4*16 {
+			t.Fatalf("idle scratch capacity=%d want bounded 64", got)
+		}
+	})
+
+	t.Run("error discards and replaces encoder", func(t *testing.T) {
+		pool, constructed, closed := newPool()
+		err := runCanonicalPreparation(pool, 0)
+		if err == nil || !strings.Contains(err.Error(), "injected block error") {
+			t.Fatalf("canonical preparation error=%v want injected block error", err)
+		}
+		if got := pool.idleCount(); got != 3 {
+			t.Fatalf("idle pool occupancy after error=%d want 3", got)
+		}
+		if got := closed.Load(); got != 1 {
+			t.Fatalf("closed encoders after error=%d want 1 discarded encoder", got)
+		}
+		if err := runCanonicalPreparation(pool, -1); err != nil {
+			t.Fatalf("replacement canonical preparation: %v", err)
+		}
+		if got := constructed.Load(); got != 5 {
+			t.Fatalf("constructed encoders after replacement=%d want 5", got)
+		}
+		if got := pool.idleCount(); got != 4 {
+			t.Fatalf("idle pool occupancy after replacement=%d want 4", got)
+		}
+	})
+
+	t.Run("concurrent preparations remain within pool capacity", func(t *testing.T) {
+		pool, constructed, _ := newPool()
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- runCanonicalPreparation(pool, -1)
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent canonical preparation: %v", err)
+			}
+		}
+		if got := constructed.Load(); got > columnRetainedSemanticStreamV1PrepareMaxWorkers {
+			t.Fatalf("constructed encoders=%d exceeds pool capacity=%d", got, columnRetainedSemanticStreamV1PrepareMaxWorkers)
+		}
+		if got := pool.idleCount(); got > columnRetainedSemanticStreamV1PrepareMaxWorkers {
+			t.Fatalf("idle pool occupancy=%d exceeds pool capacity=%d", got, columnRetainedSemanticStreamV1PrepareMaxWorkers)
+		}
+	})
+
+	t.Run("constructor failure releases its slot", func(t *testing.T) {
+		var attempts atomic.Int32
+		pool := newColumnRetainedSemanticStreamV1EncoderPool(
+			1,
+			func() (*pooledState, error) {
+				if attempts.Add(1) == 1 {
+					return nil, errors.New("injected constructor error")
+				}
+				return &pooledState{}, nil
+			},
+			func(*pooledState) {},
+		)
+		if _, _, err := pool.borrow(); err == nil || !strings.Contains(err.Error(), "injected constructor error") {
+			t.Fatalf("first borrow error=%v want injected constructor error", err)
+		}
+		state, _, err := pool.borrow()
+		if err != nil {
+			t.Fatalf("borrow after constructor failure: %v", err)
+		}
+		pool.release(state, true)
+		if got := attempts.Load(); got != 2 {
+			t.Fatalf("constructor attempts=%d want 2", got)
+		}
+	})
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderPoolAcrossPreparations(t *testing.T) {
+	previousPool := columnRetainedSemanticStreamV1StoredBlockEncoderPool
+	var constructed atomic.Int32
+	pool := newColumnRetainedSemanticStreamV1EncoderPool(
+		columnRetainedSemanticStreamV1PrepareMaxWorkers,
+		func() (*columnRetainedSemanticStreamV1StoredBlockEncoder, error) {
+			constructed.Add(1)
+			return newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+		},
+		func(encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) { encoder.close() },
+	)
+	columnRetainedSemanticStreamV1StoredBlockEncoderPool = pool
+	t.Cleanup(func() {
+		pool.closeIdle()
+		columnRetainedSemanticStreamV1StoredBlockEncoderPool = previousPool
+	})
+
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids, docs := retainedSemanticStreamDocuments(columnRetainedSemanticStreamV1BlockRows * 4)
+	for preparation := 0; preparation < 2; preparation++ {
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
+		if err != nil {
+			t.Fatalf("prepare canonical batch %d: %v", preparation, err)
+		}
+		resetCollectionRunTable(prepared.semanticStreamBlocks)
+	}
+	if got := constructed.Load(); got != 4 {
+		t.Fatalf("constructed encoders=%d want four reused across two canonical preparations", got)
+	}
+	if got := pool.idleCount(); got != 4 {
+		t.Fatalf("idle pool occupancy=%d want 4", got)
+	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderPoolRawFallbackOwnership(t *testing.T) {
+	pool := newColumnRetainedSemanticStreamV1EncoderPool(
+		1,
+		newColumnRetainedSemanticStreamV1StoredBlockEncoder,
+		func(encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) { encoder.close() },
+	)
+	defer pool.closeIdle()
+	_, docsA := retainedSemanticStreamDocuments(96)
+	_, docsB := retainedSemanticStreamDocumentsFrom(96, 96)
+	streamsA := retainedSemanticStreamTestStreamsFromDocuments(t, docsA)
+	streamsB := retainedSemanticStreamTestStreamsFromDocuments(t, docsB)
+
+	encoder, _, err := pool.borrow()
+	if err != nil {
+		t.Fatalf("borrow encoder A: %v", err)
+	}
+	blockA, err := encoder.encodeStreamsWithRawLimit(len(docsA), streamsA, 1)
+	pool.release(encoder, err == nil)
+	if err != nil {
+		t.Fatalf("encode raw fallback A: %v", err)
+	}
+	blockACopy := append([]byte(nil), blockA...)
+
+	encoder, _, err = pool.borrow()
+	if err != nil {
+		t.Fatalf("borrow encoder B: %v", err)
+	}
+	_, err = encoder.encodeStreamsWithRawLimit(len(docsB), streamsB, 1)
+	pool.release(encoder, err == nil)
+	if err != nil {
+		t.Fatalf("encode raw fallback B: %v", err)
+	}
+	if !bytes.Equal(blockA, blockACopy) {
+		t.Fatal("raw fallback output aliases pooled encoder scratch after release")
 	}
 }
 
