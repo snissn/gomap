@@ -322,6 +322,15 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 			namespace.Release()
 		}
 	}()
+	for i := range authority.segments {
+		segment := &authority.segments[i]
+		name := filepath.Base(segment.created.path)
+		if err := authority.db.valueLogIdentityPins.RememberStableNamespaceLink(
+			authority.destinationParent, segment.handle, name,
+		); err != nil {
+			return fail(err)
+		}
+	}
 	for _, parent := range []string{authority.stagingDir, authority.destinationDir} {
 		if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, parent, parent); err != nil {
 			return fail(err)
@@ -395,6 +404,7 @@ func (authority *leafGenerationPackPromotionAuthority) retainForRecovery() {
 			cleanupErr = cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
 				authority.destinationParent,
 				authority.recoveryCleanup,
+				authority.db.valueLogIdentityPins,
 			)
 			if cleanupErr == nil {
 				authority.recoveryCleanup = nil

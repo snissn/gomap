@@ -237,6 +237,7 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 	registry := database.StableResourceIdentityPinRegistry()
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
+	baselineLinks := registry.ActiveStableNamespaceLinks()
 	before := *database.State()
 
 	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
@@ -265,6 +266,10 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 	if got := registry.ActivePins(); got != baselinePins+observed.Segments {
 		closure.Release()
 		t.Fatalf("active pins after packed prepare=%d want %d", got, baselinePins+observed.Segments)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != baselineLinks+len(segments) {
+		closure.Release()
+		t.Fatalf("active stable namespace links after packed prepare=%d want %d", got, baselineLinks+len(segments))
 	}
 	for _, segment := range segments {
 		if _, registered := database.valueLogManager.StableSegmentIdentity(segment.FileID); registered {
@@ -319,6 +324,9 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 	if got := registry.ActiveIdentities(); got != baselineIdentities {
 		t.Fatalf("active identities after release=%d want %d", got, baselineIdentities)
 	}
+	if got := registry.ActiveStableNamespaceLinks(); got != baselineLinks+len(segments) {
+		t.Fatalf("transferred stable namespace links=%d want %d", got, baselineLinks+len(segments))
+	}
 	for _, segment := range segments {
 		if _, err := os.Stat(segment.Path); err != nil {
 			t.Fatalf("transferred segment %q no longer exists: %v", segment.Path, err)
@@ -338,6 +346,7 @@ func TestLeafGenerationPackStablePreparedClosureAbandonRemovesPromotedChildren(t
 	registry := database.StableResourceIdentityPinRegistry()
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
+	baselineLinks := registry.ActiveStableNamespaceLinks()
 	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
 		buildLeafGenerationPackStablePage(t, 'e'),
 		buildLeafGenerationPackStablePage(t, 'f'),
@@ -368,6 +377,9 @@ func TestLeafGenerationPackStablePreparedClosureAbandonRemovesPromotedChildren(t
 	}
 	if got := registry.ActiveIdentities(); got != baselineIdentities {
 		t.Fatalf("active identities after abandon=%d want %d", got, baselineIdentities)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != baselineLinks {
+		t.Fatalf("active stable namespace links after abandon=%d want %d", got, baselineLinks)
 	}
 }
 

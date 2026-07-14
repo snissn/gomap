@@ -109,6 +109,7 @@ type LeafGenerationPackStablePreparedClosure struct {
 	segments     []LeafPageLogSegment
 	promoted     []rewriteCreatedSegment
 	cleanupDir   *os.File
+	cleanupPins  *rootpublication.IdentityPinRegistry
 	pointers     []page.LeafLogPtr
 	observations LeafGenerationPackStableObservations
 	consumed     bool
@@ -158,6 +159,7 @@ func (closure *LeafGenerationPackStablePreparedClosure) TakeStableResources() (*
 	closure.resources = nil
 	cleanupDir := closure.cleanupDir
 	closure.cleanupDir = nil
+	closure.cleanupPins = nil
 	closure.promoted = nil
 	closure.consumed = true
 	if cleanupDir != nil {
@@ -184,19 +186,21 @@ func (closure *LeafGenerationPackStablePreparedClosure) Release() error {
 	closure.promoted = nil
 	cleanupDir := closure.cleanupDir
 	closure.cleanupDir = nil
+	cleanupPins := closure.cleanupPins
+	closure.cleanupPins = nil
 	closure.consumed = true
 	closure.mu.Unlock()
 	if resources != nil {
 		resources.Release()
 	}
-	return cleanupLeafGenerationPackStablePreparedSegments(cleanupDir, promoted)
+	return cleanupLeafGenerationPackStablePreparedSegments(cleanupDir, promoted, cleanupPins)
 }
 
 // Abandon is an explicit alias for Release on pre-visibility failure.
 func (closure *LeafGenerationPackStablePreparedClosure) Abandon() error { return closure.Release() }
 
-func cleanupLeafGenerationPackStablePreparedSegments(parent *os.File, promoted []rewriteCreatedSegment) error {
-	err := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent, promoted)
+func cleanupLeafGenerationPackStablePreparedSegments(parent *os.File, promoted []rewriteCreatedSegment, registry *rootpublication.IdentityPinRegistry) error {
+	err := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent, promoted, registry)
 	if parent != nil {
 		err = errors.Join(err, parent.Close())
 	}
@@ -210,7 +214,7 @@ func cleanupLeafGenerationPackStablePreparedSegments(parent *os.File, promoted [
 // intentionally idempotent and never consumes parent. A caller that must
 // preserve cleanup authority after an ambiguous attempt can retain the same
 // exact directory handle and retry during DB teardown.
-func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.File, promoted []rewriteCreatedSegment) error {
+func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.File, promoted []rewriteCreatedSegment, registry *rootpublication.IdentityPinRegistry) error {
 	if parent == nil {
 		if len(promoted) == 0 {
 			return nil
@@ -222,6 +226,18 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 	}
 	var errs []error
 	diagnosticDir := parent.Name()
+	parentIdentity, parentIdentityErr := rootpublication.StableIdentityFromFile(parent)
+	if parentIdentityErr != nil {
+		return errors.Join(parentIdentityErr, ErrRecoveryRequired)
+	}
+	forgetProof := func(segment rewriteCreatedSegment, name string) {
+		if registry == nil {
+			return
+		}
+		if err := registry.ForgetStableNamespaceLinkIdentity(parentIdentity, segment.identity, name); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for _, segment := range promoted {
 		name := filepath.Base(segment.path)
 		if name == "." || name == "" || segment.identity == (rootpublication.StableIdentity{}) {
@@ -231,6 +247,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 		child, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
 		if err != nil {
 			if os.IsNotExist(err) {
+				forgetProof(segment, name)
 				continue
 			}
 			errs = append(errs, fmt.Errorf("open promoted packed segment %q for abandonment: %w", name, err))
@@ -241,6 +258,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 		if identityErr != nil || linkErr != nil || !rootpublication.SamePhysicalIdentity(identity, segment.identity) {
 			_ = child.Close()
 			if identityErr == nil && linkErr == nil {
+				forgetProof(segment, name)
 				identityErr = fmt.Errorf("%w: promoted packed path %q was rebound", rootpublication.ErrResourceConflict, name)
 			}
 			errs = append(errs, errors.Join(identityErr, linkErr, ErrRecoveryRequired))
@@ -251,6 +269,7 @@ func cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(parent *os.F
 			errs = append(errs, fmt.Errorf("unlink promoted packed segment %q: %w", name, err))
 			continue
 		}
+		forgetProof(segment, name)
 		if err := observeNamespaceMutation(durabilitycut.NamespaceUnlink, durabilitycut.ResourceOuterLeaf, diagnosticDir, segment.path, ""); err != nil {
 			errs = append(errs, err)
 		}
@@ -289,7 +308,9 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		// exact identity-verified abandonment before releasing producer
 		// authority. If abandonment is ambiguous, preserve that same parent,
 		// every exact child handle, and the pins for a teardown retry.
-		cleanupErr := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(authority.destinationParent, promoted)
+		cleanupErr := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
+			authority.destinationParent, promoted, authority.db.valueLogIdentityPins,
+		)
 		if cleanupErr != nil {
 			authority.retainPromotedCleanupForRecovery(promoted, stagingRoot)
 			return nil, errors.Join(validationErr, cleanupErr, ErrRecoveryRequired)
@@ -371,11 +392,12 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		segments[i] = LeafPageLogSegment{Path: promoted[i].path, FileID: promoted[i].fileID}
 	}
 	closure := &LeafGenerationPackStablePreparedClosure{
-		resources:  authority.resources,
-		segments:   segments,
-		promoted:   append([]rewriteCreatedSegment(nil), promoted...),
-		cleanupDir: authority.destinationParent,
-		pointers:   append([]page.LeafLogPtr(nil), pointers...),
+		resources:   authority.resources,
+		segments:    segments,
+		promoted:    append([]rewriteCreatedSegment(nil), promoted...),
+		cleanupDir:  authority.destinationParent,
+		cleanupPins: authority.db.valueLogIdentityPins,
+		pointers:    append([]page.LeafLogPtr(nil), pointers...),
 		observations: LeafGenerationPackStableObservations{
 			Segments: uint64(len(promoted)), ContentSyncs: contentSyncs, NamespaceSyncs: namespaceSyncs,
 			NamespaceObligations: namespaceObligations,
