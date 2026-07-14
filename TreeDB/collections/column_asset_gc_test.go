@@ -11,8 +11,16 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func requireColumnAssetExactDestructiveGCTest(tb testing.TB) {
+	tb.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		tb.Skip("destructive column asset GC requires exact relative namespace authority")
+	}
+}
 
 func TestColumnAssetGCDryRunReportsReclaimableButDoesNotDeleteM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
@@ -173,6 +181,7 @@ func TestColumnAssetGCDryRunSummaryReportsEligibleWithoutSegmentEntriesM15B(t *t
 }
 
 func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -274,6 +283,7 @@ func TestColumnAssetGCRetainsPreparedUnpublishedSegmentAfterReopenM15C(t *testin
 }
 
 func TestColumnAssetGCTreatsMissingEligibleSegmentAsDeletedM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -329,6 +339,7 @@ func TestColumnAssetGCTreatsMissingEligibleSegmentAsDeletedM15B(t *testing.T) {
 }
 
 func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -476,6 +487,7 @@ func TestColumnAssetGCProtectsPinnedCandidateM15B(t *testing.T) {
 }
 
 func TestColumnAssetGCRetainsStablePublicationPinThenDeletesM15B(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -542,6 +554,7 @@ func TestColumnAssetGCRetainsStablePublicationPinThenDeletesM15B(t *testing.T) {
 }
 
 func TestColumnAssetGCConsumesLifecyclePinSet1954(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -598,6 +611,7 @@ func TestColumnAssetGCConsumesLifecyclePinSet1954(t *testing.T) {
 }
 
 func TestColumnAssetGCQuarantineRegistrySegmentsFailClosed1954(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -654,6 +668,7 @@ func TestColumnAssetGCQuarantineRegistrySegmentsFailClosed1954(t *testing.T) {
 }
 
 func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -721,6 +736,7 @@ func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
 }
 
 func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *testing.T) {
+	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()

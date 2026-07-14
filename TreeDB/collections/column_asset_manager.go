@@ -687,29 +687,73 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 }
 
 type columnPhysicalAssetSegmentAppender struct {
-	cfg                       ColumnStoreConfig
-	namespace                 columnAssetManagerNamespace
-	fileID                    uint32
-	assetPath                 string
-	file                      *os.File
-	offset                    int64
-	failed                    bool
-	lock                      *sync.Mutex
-	syncDirOnClose            bool
-	closeFile                 bool
-	unlockLock                bool
-	created                   bool
-	stableParent              *os.File
-	stableRegistry            *rootpublication.IdentityPinRegistry
-	stableChildName           string
-	stableNamespaceNeedsSync  bool
-	stableNamespaceProofAdded bool
-	stableParentIdentity      rootpublication.StableIdentity
-	stableChildIdentity       rootpublication.StableIdentity
-	stableRefs                []ColumnAssetRef
-	stableNamespaceRef        *ColumnAssetRef
-	stableResources           *rootpublication.StableResourceSet
-	closeStats                columnPhysicalAssetSegmentCloseStats
+	cfg                        ColumnStoreConfig
+	namespace                  columnAssetManagerNamespace
+	fileID                     uint32
+	assetPath                  string
+	file                       *os.File
+	offset                     int64
+	failed                     bool
+	lock                       *sync.Mutex
+	syncDirOnClose             bool
+	closeFile                  bool
+	unlockLock                 bool
+	created                    bool
+	stableParent               *os.File
+	stableRegistry             *rootpublication.IdentityPinRegistry
+	stableChildName            string
+	stableNamespaceNeedsSync   bool
+	stableNamespaceProofAdded  bool
+	stableParentIdentity       rootpublication.StableIdentity
+	stableChildIdentity        rootpublication.StableIdentity
+	stableConstructionPin      *rootpublication.IdentityPin
+	stableConstructionObserved bool
+	stableRefs                 []ColumnAssetRef
+	stableNamespaceRef         *ColumnAssetRef
+	stableResources            *rootpublication.StableResourceSet
+	closeStats                 columnPhysicalAssetSegmentCloseStats
+}
+
+var (
+	stableColumnAssetConstructionHookMu sync.RWMutex
+	stableColumnAssetConstructionHook   func(uint32)
+	stableColumnAssetBeforeObserveHook  func(*os.File, *os.File, string)
+)
+
+func columnAssetStableConstructionHook() func(uint32) {
+	stableColumnAssetConstructionHookMu.RLock()
+	defer stableColumnAssetConstructionHookMu.RUnlock()
+	return stableColumnAssetConstructionHook
+}
+
+func columnAssetStableBeforeObserveHook() func(*os.File, *os.File, string) {
+	stableColumnAssetConstructionHookMu.RLock()
+	defer stableColumnAssetConstructionHookMu.RUnlock()
+	return stableColumnAssetBeforeObserveHook
+}
+
+func setColumnAssetStableConstructionTestHook(hook func(uint32)) func() {
+	stableColumnAssetConstructionHookMu.Lock()
+	previous := stableColumnAssetConstructionHook
+	stableColumnAssetConstructionHook = hook
+	stableColumnAssetConstructionHookMu.Unlock()
+	return func() {
+		stableColumnAssetConstructionHookMu.Lock()
+		stableColumnAssetConstructionHook = previous
+		stableColumnAssetConstructionHookMu.Unlock()
+	}
+}
+
+func setColumnAssetStableBeforeObserveTestHook(hook func(*os.File, *os.File, string)) func() {
+	stableColumnAssetConstructionHookMu.Lock()
+	previous := stableColumnAssetBeforeObserveHook
+	stableColumnAssetBeforeObserveHook = hook
+	stableColumnAssetConstructionHookMu.Unlock()
+	return func() {
+		stableColumnAssetConstructionHookMu.Lock()
+		stableColumnAssetBeforeObserveHook = previous
+		stableColumnAssetConstructionHookMu.Unlock()
+	}
 }
 
 type columnPhysicalAssetAppendItem struct {
@@ -1103,36 +1147,55 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string
 		appender.releaseLock()
 		return nil, err
 	}
-	offset, err := file.Seek(0, io.SeekEnd)
-	if err != nil {
-		_ = file.Close()
-		_ = parent.Close()
-		appender.releaseLock()
-		return nil, err
-	}
 	appender.file = file
-	appender.offset = offset
 	appender.syncDirOnClose = namespaceNeedsSync
 	appender.closeFile = true
 	appender.created = created
 	appender.stableParent = parent
 	appender.stableChildName = filepath.Base(assetPath)
+	appender.stableParentIdentity, err = rootpublication.StableIdentityFromFile(parent)
+	if err != nil {
+		return nil, errors.Join(err, appender.abort())
+	}
+	appender.stableChildIdentity, err = rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		return nil, errors.Join(err, appender.abort())
+	}
+	if hook := columnAssetStableBeforeObserveHook(); hook != nil {
+		hook(parent, file, appender.stableChildName)
+	}
+	if err := registry.Observe(appender.stableChildIdentity); err != nil {
+		return nil, errors.Join(err, appender.abort())
+	}
+	appender.stableConstructionObserved = true
+	appender.stableConstructionPin, err = registry.Pin(appender.stableChildIdentity)
+	if err != nil {
+		return nil, errors.Join(err, appender.abort())
+	}
+	if err := rootpublication.ValidateStableChildLink(parent, file, appender.stableChildName); err != nil {
+		return nil, errors.Join(err, appender.abort())
+	}
+	offset, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, errors.Join(err, appender.abort())
+	}
+	appender.offset = offset
 	// A cold/unknown exact binding remains conservative. Once this DB-scoped
 	// registry has proof for the same parent identity, child identity, and name,
 	// ordinary appends can skip the structural namespace sync.
 	if !created && namespaceNeedsSync {
 		known, knownErr := registry.StableNamespaceLinkKnown(parent, file, appender.stableChildName)
 		if knownErr != nil {
-			_ = file.Close()
-			_ = parent.Close()
-			appender.releaseLock()
-			return nil, knownErr
+			return nil, errors.Join(knownErr, appender.abort())
 		}
 		namespaceNeedsSync = !known
 	}
 	appender.stableNamespaceNeedsSync = namespaceNeedsSync
 	if created {
 		clearColumnAssetSegmentDirSyncKnown(assetPath)
+	}
+	if hook := columnAssetStableConstructionHook(); hook != nil {
+		hook(fileID)
 	}
 	return appender, nil
 }
@@ -1472,7 +1535,31 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		builder.Abandon()
 		return nil, err
 	}
+	// Final immutable tokens already own their identity pins. Drop the
+	// construction pin only after Freeze so GC never observes an authority gap.
+	if err := a.releaseStableConstructionAuthority(); err != nil {
+		resources.Release()
+		return nil, err
+	}
 	return resources, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) releaseStableConstructionAuthority() error {
+	if a == nil {
+		return nil
+	}
+	if a.stableConstructionPin != nil {
+		a.stableConstructionPin.Release()
+		a.stableConstructionPin = nil
+	}
+	if !a.stableConstructionObserved {
+		return nil
+	}
+	if err := a.stableRegistry.Unobserve(a.stableChildIdentity); err != nil {
+		return err
+	}
+	a.stableConstructionObserved = false
+	return nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) close() error {
@@ -1485,6 +1572,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	var fileSyncErr error
 	var fileCloseErr error
 	var stableCaptureErr error
+	var constructionReleaseErr error
 	if a.failed {
 		appenderErr = errors.New("collections: column physical asset appender is failed")
 	}
@@ -1508,6 +1596,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		a.closeFile = false
 		a.file = nil
 	}
+	constructionReleaseErr = a.releaseStableConstructionAuthority()
 	var dirSyncErr error
 	if a.syncDirOnClose && a.stableRegistry == nil && appenderErr == nil && fileSyncErr == nil && fileCloseErr == nil {
 		start := time.Now()
@@ -1528,7 +1617,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		parentCloseErr = a.stableParent.Close()
 		a.stableParent = nil
 	}
-	closeErr := errors.Join(appenderErr, fileSyncErr, stableCaptureErr, fileCloseErr, dirSyncErr, parentCloseErr)
+	closeErr := errors.Join(appenderErr, fileSyncErr, stableCaptureErr, fileCloseErr, dirSyncErr, constructionReleaseErr, parentCloseErr)
 	if closeErr != nil && a.stableResources != nil {
 		a.stableResources.Release()
 		a.stableResources = nil
@@ -1559,6 +1648,13 @@ func (a *columnPhysicalAssetSegmentAppender) abort() error {
 	if a.stableResources != nil {
 		a.stableResources.Release()
 		a.stableResources = nil
+	}
+	closeErr = errors.Join(closeErr, a.releaseStableConstructionAuthority())
+	if a.stableNamespaceProofAdded {
+		closeErr = errors.Join(closeErr, a.stableRegistry.ForgetStableNamespaceLinkIdentity(
+			a.stableParentIdentity, a.stableChildIdentity, a.stableChildName,
+		))
+		a.stableNamespaceProofAdded = false
 	}
 	if a.stableParent != nil {
 		closeErr = errors.Join(closeErr, a.stableParent.Close())

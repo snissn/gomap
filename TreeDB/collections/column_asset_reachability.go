@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // ColumnAssetReachabilityOptions controls protect-only reachability planning.
@@ -180,15 +181,17 @@ type ColumnAssetReachabilityRefEntry struct {
 }
 
 type ColumnAssetReachabilitySegmentEntry struct {
-	Namespace        string
-	FileID           uint32
-	Path             string
-	Bytes            int64
-	Status           ColumnAssetReachabilitySegmentStatus
-	ProtectedBytes   int64
-	ReclaimableBytes int64
-	UnknownBytes     int64
-	RefCount         int
+	Namespace             string
+	FileID                uint32
+	Path                  string
+	Bytes                 int64
+	Status                ColumnAssetReachabilitySegmentStatus
+	ProtectedBytes        int64
+	ReclaimableBytes      int64
+	UnknownBytes          int64
+	RefCount              int
+	plannedParentIdentity rootpublication.StableIdentity
+	plannedChildIdentity  rootpublication.StableIdentity
 }
 
 type columnAssetReachabilityRefBuilder struct {
@@ -279,10 +282,12 @@ type columnAssetReachabilityInterval struct {
 }
 
 type columnAssetReachabilitySegment struct {
-	fileID uint32
-	name   string
-	path   string
-	bytes  int64
+	fileID         uint32
+	name           string
+	path           string
+	bytes          int64
+	parentIdentity rootpublication.StableIdentity
+	childIdentity  rootpublication.StableIdentity
 }
 
 const columnAssetReachabilityContextCheckInterval = 256
@@ -942,15 +947,17 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		}
 		if input.detailed || input.segmentDetails {
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
-				Namespace:        input.namespace,
-				FileID:           segment.fileID,
-				Path:             columnAssetReachabilitySegmentPath(namespace.SegmentDir, segment.name),
-				Bytes:            segment.bytes,
-				Status:           segmentPlan.status,
-				ProtectedBytes:   segmentPlan.protectedBytes,
-				ReclaimableBytes: segmentPlan.reclaimableBytes,
-				UnknownBytes:     segmentPlan.unknownBytes,
-				RefCount:         rangeSet.count,
+				Namespace:             input.namespace,
+				FileID:                segment.fileID,
+				Path:                  columnAssetReachabilitySegmentPath(namespace.SegmentDir, segment.name),
+				Bytes:                 segment.bytes,
+				Status:                segmentPlan.status,
+				ProtectedBytes:        segmentPlan.protectedBytes,
+				ReclaimableBytes:      segmentPlan.reclaimableBytes,
+				UnknownBytes:          segmentPlan.unknownBytes,
+				RefCount:              rangeSet.count,
+				plannedParentIdentity: segment.parentIdentity,
+				plannedChildIdentity:  segment.childIdentity,
 			})
 		}
 	}
@@ -1295,7 +1302,10 @@ func columnAssetReachabilitySourceMaskCount(mask columnAssetReachabilitySourceMa
 	return bits.OnesCount64(uint64(mask))
 }
 
-func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
+func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) (_ []columnAssetReachabilitySegment, retErr error) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return listColumnAssetReachabilitySegmentsLegacy(ctx, segmentDir)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1309,17 +1319,14 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		}
 		return nil, err
 	}
-	infos, readErr := dir.Readdir(-1)
-	// Close before handling readErr so failed directory reads do not leak an fd.
-	closeErr := dir.Close()
-	if readErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(readErr, closeErr)
-		}
-		return nil, readErr
+	defer func() { retErr = errors.Join(retErr, dir.Close()) }()
+	parentIdentity, err := rootpublication.StableIdentityFromFile(dir)
+	if err != nil {
+		return nil, err
 	}
-	if closeErr != nil {
-		return nil, closeErr
+	infos, readErr := dir.Readdir(-1)
+	if readErr != nil {
+		return nil, readErr
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1332,27 +1339,43 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			}
 		}
 		name := info.Name()
-		path := columnAssetReachabilitySegmentPath(segmentDir, name)
-		info, err := os.Lstat(path)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, err
-		}
 		fileID, ok := columnAssetReachabilitySegmentFileID(name)
-		appendSegment := func(bytes int64) {
+		path := columnAssetReachabilitySegmentPath(segmentDir, name)
+		appendSegment := func(bytes int64, childIdentity rootpublication.StableIdentity) {
 			if ok {
-				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, path: path, bytes: bytes})
+				segments = append(segments, columnAssetReachabilitySegment{
+					fileID: fileID, name: name, path: path, bytes: bytes,
+					parentIdentity: parentIdentity, childIdentity: childIdentity,
+				})
 			} else {
-				segments = append(segments, columnAssetReachabilitySegment{name: name, path: path, bytes: bytes})
+				segments = append(segments, columnAssetReachabilitySegment{
+					name: name, path: path, bytes: bytes,
+					parentIdentity: parentIdentity, childIdentity: childIdentity,
+				})
 			}
 		}
 		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			appendSegment(0)
+			appendSegment(0, rootpublication.StableIdentity{})
 			continue
 		}
-		appendSegment(info.Size())
+		resource, err := rootpublication.OpenStableChildFile(dir, name, os.O_RDONLY, 0)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		exactInfo, statErr := resource.Stat()
+		childIdentity, identityErr := rootpublication.StableIdentityFromFile(resource)
+		closeErr := resource.Close()
+		if err := errors.Join(statErr, identityErr, closeErr); err != nil {
+			return nil, err
+		}
+		if !exactInfo.Mode().IsRegular() {
+			appendSegment(0, rootpublication.StableIdentity{})
+			continue
+		}
+		appendSegment(exactInfo.Size(), childIdentity)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1373,6 +1396,71 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		return 0
 	})
 	return segments, nil
+}
+
+// listColumnAssetReachabilitySegmentsLegacy keeps pre-#3679 read-only
+// reporting available where exact relative namespace primitives do not exist.
+// It deliberately returns no stable identities and therefore cannot authorize
+// destructive GC.
+func listColumnAssetReachabilitySegmentsLegacy(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dir, err := os.Open(segmentDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	infos, readErr := dir.Readdir(-1)
+	closeErr := dir.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, err
+	}
+	segments := make([]columnAssetReachabilitySegment, 0, len(infos))
+	for i, info := range infos {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		name := info.Name()
+		path := columnAssetReachabilitySegmentPath(segmentDir, name)
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		fileID, ok := columnAssetReachabilitySegmentFileID(name)
+		appendSegment := func(bytes int64) {
+			segment := columnAssetReachabilitySegment{name: name, path: path, bytes: bytes}
+			if ok {
+				segment.fileID = fileID
+			}
+			segments = append(segments, segment)
+		}
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			appendSegment(0)
+			continue
+		}
+		appendSegment(info.Size())
+	}
+	slices.SortFunc(segments, func(a, b columnAssetReachabilitySegment) int {
+		if a.fileID < b.fileID {
+			return -1
+		}
+		if a.fileID > b.fileID {
+			return 1
+		}
+		return strings.Compare(a.name, b.name)
+	})
+	return segments, ctx.Err()
 }
 
 func columnAssetReachabilitySegmentPath(segmentDir, name string) string {

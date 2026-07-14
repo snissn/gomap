@@ -1467,10 +1467,14 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand: %v", err)
 	}
-	if prepared.stableResources == nil {
-		t.Fatal("production preparation returned no stable resources")
+	if ordinaryColumnStableAuthorityEnabled() {
+		if prepared.stableResources == nil || !prepared.stableResourcesRequired {
+			t.Fatalf("production preparation stable resources=%v required=%t want active stable authority", prepared.stableResources, prepared.stableResourcesRequired)
+		}
+		defer prepared.stableResources.Release()
+	} else if prepared.stableResources != nil || prepared.stableResourcesRequired {
+		t.Fatalf("production preparation stable resources=%v required=%t want legacy pre-cutover path", prepared.stableResources, prepared.stableResourcesRequired)
 	}
-	defer prepared.stableResources.Release()
 	want := []struct {
 		kind   ColumnAssetKind
 		partID uint64
@@ -1562,10 +1566,14 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	if err != nil {
 		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand: %v", err)
 	}
-	if prepared.stableResources == nil {
-		t.Fatal("production preparation returned no stable resources")
+	if ordinaryColumnStableAuthorityEnabled() {
+		if prepared.stableResources == nil || !prepared.stableResourcesRequired {
+			t.Fatalf("production preparation stable resources=%v required=%t want active stable authority", prepared.stableResources, prepared.stableResourcesRequired)
+		}
+		defer prepared.stableResources.Release()
+	} else if prepared.stableResources != nil || prepared.stableResourcesRequired {
+		t.Fatalf("production preparation stable resources=%v required=%t want legacy pre-cutover path", prepared.stableResources, prepared.stableResourcesRequired)
 	}
-	defer prepared.stableResources.Release()
 	directFileID, err := directViewTypedColumnSegmentFileID(1)
 	if err != nil {
 		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)

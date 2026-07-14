@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 type columnWritePublishInput struct {
@@ -674,7 +675,8 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				prepared.stableResources.Release()
 				prepared.stableResources = nil
 			}
-			if len(cleanupAssets) != 0 {
+			retainStableOrphans := prepared.stableResourcesRequired && columnPreparedAssetsRequireOrphanRetention(cleanupAssets)
+			if len(cleanupAssets) != 0 && !retainStableOrphans {
 				if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
 					retErr = errors.Join(retErr, cleanupErr)
 				}
@@ -753,11 +755,19 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendFileSyncCount int
 		var appendSyncEpochCount int
 		if needsAppender {
-			prepared.stableResourcesRequired = true
 			appendStart := time.Now()
-			session = newColumnPhysicalAssetAppendSessionWithStableResources(
-				c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.StableResourceIdentityPinRegistry(),
-			)
+			if ordinaryColumnStableAuthorityEnabled() {
+				prepared.stableResourcesRequired = true
+				session = newColumnPhysicalAssetAppendSessionWithStableResources(
+					c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.StableResourceIdentityPinRegistry(),
+				)
+			} else {
+				// Pre-#3679 compatibility boundary: platforms without exact
+				// relative namespace persistence keep the legacy publication path
+				// and do not claim stable authority. Explicit stable APIs still
+				// fail closed with ErrNamespacePersistenceUnsupported.
+				session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
+			}
 			appendOpenDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
@@ -866,15 +876,26 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		if session != nil {
 			appendStart := time.Now()
-			closeStats, resources, err := session.closeWithStableResources()
-			if err != nil {
-				return err
+			var closeStats columnPhysicalAssetSegmentCloseStats
+			if prepared.stableResourcesRequired {
+				var resources *rootpublication.StableResourceSet
+				var err error
+				closeStats, resources, err = session.closeWithStableResources()
+				if err != nil {
+					return err
+				}
+				if prepared.stableResources != nil {
+					resources.Release()
+					return errors.New("collections: column physical asset preparation produced more than one stable resource set")
+				}
+				prepared.stableResources = resources
+			} else {
+				var err error
+				closeStats, err = session.close()
+				if err != nil {
+					return err
+				}
 			}
-			if prepared.stableResources != nil {
-				resources.Release()
-				return errors.New("collections: column physical asset preparation produced more than one stable resource set")
-			}
-			prepared.stableResources = resources
 			closed = true
 			appendCloseDuration += time.Since(appendStart)
 			appendFileSyncDuration += closeStats.FileSync
@@ -1152,6 +1173,24 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	}
 	cleanupAssets = nil
 	return prepared, nil
+}
+
+func ordinaryColumnStableAuthorityEnabled() bool {
+	return rootpublication.StableRelativeNamespaceSupported()
+}
+
+// Stable-authoritative bytes remain persistent storage even when publication
+// fails. Once their exact identity authority is released, pathname cleanup
+// could target a same-name replacement, so retain them for reachability GC.
+// Query-ready assets remain rebuildable and keep their existing cleanup path.
+func columnPreparedAssetsRequireOrphanRetention(assets []ColumnPreparedAsset) bool {
+	for _, asset := range assets {
+		_, _, classification, err := stableColumnAssetResourceClassification(asset.Ref.Kind)
+		if err != nil || classification != "rebuildable-non-authoritative" {
+			return true
+		}
+	}
+	return false
 }
 
 func columnPublishDurationShare(total time.Duration, partBytes, totalBytes int64) time.Duration {

@@ -3,6 +3,8 @@
 package collections
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +12,66 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestOrdinaryColumnWriteUsesLegacyPreCutoverPathOnWindows(t *testing.T) {
+	if ordinaryColumnStableAuthorityEnabled() {
+		t.Fatal("ordinary stable column authority unexpectedly enabled on Windows")
+	}
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	doc := []byte(`{"time_us":1,"kind":"like","did":"did:windows"}`)
+	if _, err := col.Insert([]byte("windows-legacy"), doc); err != nil {
+		t.Fatalf("ordinary legacy column Insert: %v", err)
+	}
+	got, err := col.Get([]byte("windows-legacy"))
+	if err != nil {
+		t.Fatalf("ordinary legacy column Get: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("ordinary legacy column Get=%s want %s", got, doc)
+	}
+	registry := d.StableResourceIdentityPinRegistry()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("ordinary legacy publication active stable pins=%d want 0", got)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != 0 {
+		t.Fatalf("ordinary legacy publication stable namespace proofs=%d want 0", got)
+	}
+}
+
+func TestColumnAssetGCDestructiveFailsClosedOnWindowsBeforeUnlink(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("windows-gc-candidate")
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 119, payload)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed: true, CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("destructive GC error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("destructive unsupported GC stats=%+v want eligible untouched", stats)
+	}
+	got, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("unsupported GC candidate=%q want %q", got, payload)
+	}
+}
 
 func TestStableColumnAssetCaptureFailsClosedWithoutRelativeParentOpen(t *testing.T) {
 	dir := t.TempDir()

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -21,6 +22,33 @@ type ColumnStoreCompactOptions struct {
 	// materialize the latest-visible row set. The zero value uses the default
 	// column-asset read policy.
 	ReadIntegrity ColumnAssetReadIntegrity
+}
+
+var (
+	columnStoreCompactionAfterPrepareHookMu sync.RWMutex
+	columnStoreCompactionAfterPrepareHook   func(ColumnPublishPreparedAssets) error
+)
+
+func runColumnStoreCompactionAfterPrepareHook(prepared ColumnPublishPreparedAssets) error {
+	columnStoreCompactionAfterPrepareHookMu.RLock()
+	hook := columnStoreCompactionAfterPrepareHook
+	columnStoreCompactionAfterPrepareHookMu.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(prepared)
+}
+
+func setColumnStoreCompactionAfterPrepareTestHook(hook func(ColumnPublishPreparedAssets) error) func() {
+	columnStoreCompactionAfterPrepareHookMu.Lock()
+	previous := columnStoreCompactionAfterPrepareHook
+	columnStoreCompactionAfterPrepareHook = hook
+	columnStoreCompactionAfterPrepareHookMu.Unlock()
+	return func() {
+		columnStoreCompactionAfterPrepareHookMu.Lock()
+		columnStoreCompactionAfterPrepareHook = previous
+		columnStoreCompactionAfterPrepareHookMu.Unlock()
+	}
 }
 
 // ColumnStoreCompactStats summarizes a logical column-store compaction.
@@ -122,9 +150,6 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 
 	prepared, err := c.prepareColumnStoreCompactionAssets(state, rows)
 	if err != nil {
-		if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
-			return stats, errors.Join(err, cleanupErr)
-		}
 		return stats, err
 	}
 	releasePrepared := func() {
@@ -136,12 +161,22 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	defer releasePrepared()
 	cleanupPrepared := func(baseErr error) error {
 		releasePrepared()
-		if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
-			return errors.Join(baseErr, cleanupErr)
+		if !prepared.stableResourcesRequired {
+			if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
+				return errors.Join(baseErr, cleanupErr)
+			}
 		}
+		// Stable-authoritative compaction assets remain as reachability-GC
+		// orphans. After releasing authority a pathname truncate could hit a
+		// rebound segment. The legacy pre-cutover path keeps its old cleanup.
 		return baseErr
 	}
-	if err := validateStableColumnResourcesMatchPrepared(prepared.Assets, prepared.stableResources); err != nil {
+	if prepared.stableResourcesRequired || prepared.stableResources != nil {
+		if err := validateStableColumnResourcesMatchPrepared(prepared.Assets, prepared.stableResources); err != nil {
+			return stats, cleanupPrepared(err)
+		}
+	}
+	if err := runColumnStoreCompactionAfterPrepareHook(prepared); err != nil {
 		return stats, cleanupPrepared(err)
 	}
 	if err := ctx.Err(); err != nil {
