@@ -641,6 +641,18 @@ func (token *StableResourceToken) ReadAt(dst []byte, offset int64) (int, error) 
 	return token.pinned.ReadAt(dst, offset)
 }
 
+// WithPinnedFile scopes access to the exact retained resource handle. It is
+// intended for platform adapters, such as the pager's mapped-page durability
+// primitive, that must pair an already-validated identity pin with an
+// operation unavailable through ordinary file Sync. Callers must not retain
+// or close the handle after fn returns.
+func (token *StableResourceToken) WithPinnedFile(fn func(*os.File) error) error {
+	if token == nil || fn == nil || token.released.Load() || token.pinned == nil {
+		return ErrResourceOwnership
+	}
+	return fn(token.pinned)
+}
+
 func (token *StableResourceToken) Release() {
 	if token == nil || !token.owner.CompareAndSwap(uint32(ResourceOwnerToken), uint32(ResourceOwnerReleased)) {
 		return

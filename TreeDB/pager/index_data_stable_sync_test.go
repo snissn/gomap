@@ -109,3 +109,44 @@ func TestSyncIndexDataWithStableFileDrainsLiveMappingsAndSurvivesClose(t *testin
 		t.Fatalf("retained stable-file barrier after pager close: %v", err)
 	}
 }
+
+func TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+	p, err := Open(path, syncPagesTestChunkSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Write(0, bytes.Repeat([]byte{0x6d}, page.PageSize)); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	moved := filepath.Join(dir, "index.original")
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Close()
+	if err := replacement.Truncate(int64(2 * page.PageSize)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.SyncPagesWithStableFile(replacement, []uint64{0}); err == nil {
+		t.Fatal("replacement handle unexpectedly crossed mapped-page barrier")
+	}
+	if err := p.SyncPagesWithStableFile(pinned, []uint64{0}); err != nil {
+		t.Fatalf("pinned mapped-page barrier after path replacement: %v", err)
+	}
+}
