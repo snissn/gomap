@@ -925,7 +925,7 @@ func TestServiceBenchmarkResetDeletesCompatibleNativeIndex(t *testing.T) {
 }
 
 func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "bench", Dimension: 2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}})
@@ -958,6 +958,12 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	}
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("pre-optimize benchmark vector search err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		// Keep the metadata, request-validation, deferred-upsert, and missing-asset
+		// fail-closed assertions active on unsupported platforms. Only the
+		// production optimization boundary requires stable namespace authority.
+		return
 	}
 	if _, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex bench: %v", err)
