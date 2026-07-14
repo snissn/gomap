@@ -637,6 +637,7 @@ func TestColumnAssetRewriteSkipsSegmentWhenManifestRefAlsoProtectedByPinnedSourc
 }
 
 func TestColumnAssetRewriteSkipsPreparedRunnerLifecyclePin1954(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -691,6 +692,7 @@ func TestColumnAssetRewriteSkipsPreparedRunnerLifecyclePin1954(t *testing.T) {
 }
 
 func TestColumnAssetRewriteAutomaticMappedResourcePinSkipsSegment1788(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -925,6 +927,7 @@ func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
 }
 
 func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -1008,6 +1011,7 @@ func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *tes
 }
 
 func TestColumnAssetRewriteRetainsCopiedOrphanOnPublishPreflightRaceM15C(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()

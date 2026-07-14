@@ -50,6 +50,70 @@ func TestStandaloneColumnStableWriterRejectsChildRebindAndPreservesReplacement(t
 	}
 }
 
+func TestStandaloneColumnStableAllocatorRejectsStaleCachedFileID(t *testing.T) {
+	root := t.TempDir()
+	cfg := persistentOrphanColumnStoreConfig(t, "standalone-authority-stale-cache")
+	registry := rootpublication.NewIdentityPinRegistry()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatal(err)
+	}
+	const staleFileID = uint32(9)
+	existingRef := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    staleFileID,
+		Length:    1,
+	}
+	existingPath, err := columnAssetSegmentPath(root, existingRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := []byte("existing-segment-must-not-be-reopened")
+	if err := os.WriteFile(existingPath, sentinel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanSegmentDir := filepath.Clean(namespace.SegmentDir)
+	allocatorIndex := columnAssetSegmentAllocationLockIndex(cleanSegmentDir)
+	allocatorLock := &columnAssetSegmentAllocationLocks[allocatorIndex]
+	allocatorCache := &columnAssetSegmentAllocationCaches[allocatorIndex]
+	allocatorLock.Lock()
+	previousCache := *allocatorCache
+	*allocatorCache = columnAssetSegmentAllocationCache{
+		segmentDir: cleanSegmentDir,
+		nextFileID: staleFileID,
+		valid:      true,
+	}
+	allocatorLock.Unlock()
+	t.Cleanup(func() {
+		allocatorLock.Lock()
+		*allocatorCache = previousCache
+		allocatorLock.Unlock()
+	})
+
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(root, cfg, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appender.fileID != staleFileID+1 {
+		_ = appender.abort()
+		t.Fatalf("allocated file_id=%d want %d after stale cached collision", appender.fileID, staleFileID+1)
+	}
+	if err := appender.abort(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(existingPath); err != nil || !bytes.Equal(got, sentinel) {
+		t.Fatalf("existing segment=%q err=%v want %q", got, err, sentinel)
+	}
+	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		t.Fatalf("allocator leaked pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
 func TestStandaloneVectorRebuildRetainsAuthorityUntilBackendPublicationReturns(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

@@ -636,7 +636,7 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 	for {
 		var appender *columnPhysicalAssetSegmentAppender
 		if registry != nil {
-			appender, err = newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir, cfg, fileID, registry)
+			appender, err = newColumnPhysicalAssetSegmentAppendWriterWithExclusiveStableResources(rootDir, cfg, fileID, registry)
 		} else {
 			appender, err = newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
 		}
@@ -1112,6 +1112,14 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 }
 
 func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
+	return newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir, cfg, fileID, registry, false)
+}
+
+func newColumnPhysicalAssetSegmentAppendWriterWithExclusiveStableResources(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
+	return newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir, cfg, fileID, registry, true)
+}
+
+func newColumnPhysicalAssetSegmentAppendWriterWithStableResourcesMode(rootDir string, cfg ColumnStoreConfig, fileID uint32, registry *rootpublication.IdentityPinRegistry, exclusive bool) (*columnPhysicalAssetSegmentAppender, error) {
 	if registry == nil {
 		return nil, errors.New("collections: stable column physical asset append requires identity pin registry")
 	}
@@ -1150,7 +1158,15 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string
 		appender.releaseLock()
 		return nil, err
 	}
-	file, namespaceNeedsSync, created, err := openColumnAssetSegmentAppendFileAt(parent, assetPath)
+	var file *os.File
+	var namespaceNeedsSync, created bool
+	if exclusive {
+		file, err = rootpublication.OpenStableChildFile(parent, filepath.Base(assetPath), os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
+		namespaceNeedsSync = err == nil
+		created = err == nil
+	} else {
+		file, namespaceNeedsSync, created, err = openColumnAssetSegmentAppendFileAt(parent, assetPath)
+	}
 	if err != nil {
 		_ = parent.Close()
 		appender.releaseLock()

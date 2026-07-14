@@ -19,8 +19,11 @@ func TestStandaloneVectorRebuildFailsClosedBeforeAssetVisibilityOnWindows(t *tes
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0, 1, 0}},
 	}
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	_, d, col, def := openColumnGraphRebuildTestCollectionUncheckedV2A(t, 3, 1, rows)
 	defer func() { _ = d.Close() }()
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
 	before := columnAssetSegmentNamesM15C(t, d, col)
 	if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 		t.Fatalf("RebuildVectorIndex error=%v want ErrNamespacePersistenceUnsupported", err)
@@ -28,9 +31,8 @@ func TestStandaloneVectorRebuildFailsClosedBeforeAssetVisibilityOnWindows(t *tes
 	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
 		t.Fatalf("unsupported vector rebuild exposed segments after=%v before=%v", after, before)
 	}
-	registry := d.StableResourceIdentityPinRegistry()
-	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
-		t.Fatalf("unsupported vector rebuild leaked pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	if registry.ActivePins() != baselinePins || registry.ActiveIdentities() != baselineIdentities {
+		t.Fatalf("unsupported vector rebuild changed registry pins=%d identities=%d want baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
 	}
 }
 
@@ -43,6 +45,9 @@ func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing
 		t.Fatal(err)
 	}
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
 	before := columnAssetSegmentNamesM15C(t, d, col)
 	if _, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}}); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 		t.Fatalf("ColumnAssetRewrite error=%v want ErrNamespacePersistenceUnsupported", err)
@@ -50,9 +55,8 @@ func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing
 	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
 		t.Fatalf("unsupported rewrite exposed segments after=%v before=%v", after, before)
 	}
-	registry := d.StableResourceIdentityPinRegistry()
-	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
-		t.Fatalf("unsupported rewrite leaked pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	if registry.ActivePins() != baselinePins || registry.ActiveIdentities() != baselineIdentities {
+		t.Fatalf("unsupported rewrite changed registry pins=%d identities=%d want baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
 	}
 }
 

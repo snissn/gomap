@@ -17,8 +17,13 @@ import (
 
 func requireColumnAssetExactDestructiveGCTest(tb testing.TB) {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
+}
+
+func requireStandaloneColumnProductionAuthorityTest(tb testing.TB) {
+	tb.Helper()
 	if !rootpublication.StableRelativeNamespaceSupported() {
-		tb.Skip("destructive column asset GC requires exact relative namespace authority")
+		tb.Skip("standalone column production authority requires exact relative namespace support")
 	}
 }
 

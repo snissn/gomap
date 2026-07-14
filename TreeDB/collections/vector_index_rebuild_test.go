@@ -1550,6 +1550,12 @@ type columnGraphRebuildScannedRowV2A struct {
 
 func openColumnGraphRebuildTestCollectionV2A(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
+	return openColumnGraphRebuildTestCollectionUncheckedV2A(tb, dims, m, rows)
+}
+
+func openColumnGraphRebuildTestCollectionUncheckedV2A(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)

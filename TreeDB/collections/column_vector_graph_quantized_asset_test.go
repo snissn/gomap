@@ -1793,6 +1793,7 @@ func attachScalarU8QuantizedAssetForReader1926(tb testing.TB, reader *columnVect
 
 func openColumnGraphQuantizedTestCollection1926(tb testing.TB, rows []columnGraphRebuildInputRowV2A, quantizedIndexes []QuantizedVectorIndexDefinition) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	requireStandaloneColumnProductionAuthorityTest(tb)
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
