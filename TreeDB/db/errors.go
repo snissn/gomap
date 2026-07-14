@@ -5,6 +5,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 var (
@@ -46,4 +47,11 @@ var (
 	// ErrCommandWALSegmentSeqExhausted indicates the command WAL segment sequence
 	// number space has no strictly higher segment available.
 	ErrCommandWALSegmentSeqExhausted = errors.New("treedb: command wal segment sequence exhausted")
+	// ErrNoRecoverableMeta reports that neither independently decoded durable
+	// root slot closed over a complete bounded recovery inventory.
+	ErrNoRecoverableMeta = errors.New("treedb: no recoverable durable meta")
+	// ErrLegacyFormatRebuildRequired distinguishes a pre-cutover TreeDB index
+	// from corruption. TreeDB is pre-alpha; the supported transition is to
+	// rebuild the database directory rather than run an in-place migration.
+	ErrLegacyFormatRebuildRequired = page.ErrDurableMetaLegacyFormat
 )

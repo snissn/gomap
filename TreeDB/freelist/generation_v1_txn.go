@@ -74,6 +74,18 @@ func (g *FreelistGenerationV1) HighWater() uint64 {
 	}
 	return g.highWater
 }
+func (g *FreelistGenerationV1) FreeCount() uint64 {
+	if g == nil || g.root == nil {
+		return 0
+	}
+	return g.root.freeCount
+}
+func (g *FreelistGenerationV1) RetiredCount() uint64 {
+	if g == nil || g.root == nil {
+		return 0
+	}
+	return g.root.retiredCount
+}
 func (g *FreelistGenerationV1) GenerationRef() GenerationRefV1 {
 	if g == nil {
 		return GenerationRefV1{}
