@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 type rewriteStableOuterLeafCapture struct {
@@ -14,6 +15,37 @@ type rewriteStableOuterLeafCapture struct {
 	builder          *rootpublication.StableResourceSetBuilder
 	tokens           []*rootpublication.StableResourceToken
 	parentGeneration uint64
+	templateIDs      map[uint64]struct{}
+}
+
+func (capture *rewriteStableOuterLeafCapture) captureTemplatePayload(store templ.Store, payload []byte) error {
+	if capture == nil || !templ.IsEncodedPayload(payload) {
+		return nil
+	}
+	templateID, err := templ.EncodedPayloadTemplateID(payload)
+	if err != nil {
+		return err
+	}
+	if _, ok := capture.templateIDs[templateID]; ok {
+		return nil
+	}
+	provider, ok := store.(StableTemplateResourceProvider)
+	if !ok {
+		return fmt.Errorf("%w: template %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, templateID)
+	}
+	resources, err := captureStableTemplateResources(provider, store, templateID)
+	if err != nil {
+		return err
+	}
+	if err := capture.builder.Merge(resources); err != nil {
+		resources.Release()
+		return err
+	}
+	if capture.templateIDs == nil {
+		capture.templateIDs = make(map[uint64]struct{})
+	}
+	capture.templateIDs[templateID] = struct{}{}
+	return nil
 }
 
 func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOuterLeafCapture, error) {

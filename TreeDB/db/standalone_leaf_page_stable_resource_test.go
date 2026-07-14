@@ -12,7 +12,220 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
+
+func stableLeafTemplateFixture(t *testing.T, pageBytes []byte) (templ.Config, *testStableTemplateProvider) {
+	t.Helper()
+	compact, _, err := valuelog.MaybeCompactLeafLogPayload(pageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compact) < 64 {
+		t.Fatalf("compact leaf fixture too small: %d", len(compact))
+	}
+	definition, err := templ.EncodeTemplateDef(templ.TemplateDef{
+		Kind: templ.TemplateAnchors,
+		Anchors: [][]byte{
+			append([]byte(nil), compact[:24]...),
+			append([]byte(nil), compact[len(compact)-24:]...),
+		},
+	}, templ.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return templ.Config{
+		MinSavingsBytes: 1, FingerprintK: 8, FingerprintW: 8,
+		MaxFingerprints: 32, MaxFPReads: 32, MaxCandidatesPerFP: 8, MaxTemplateFetch: 8,
+	}, newTestStableTemplateProvider(t, definition)
+}
+
+func TestStandaloneStableLeafRewriteMergesTemplateClosure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBytes := buildRewriteLeafPageFixture(t, "stable-template")
+	cfg, provider := stableLeafTemplateFixture(t, pageBytes)
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.SetTemplateCompression(templ.TemplateOnly, cfg, provider)
+	db.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = db.Close()
+		_ = writer.Close()
+	})
+
+	stable := db.leafPageLog.(LeafPageStableLog)
+	_, resources, err := stable.AppendLeafPageWithStableResources(pageBytes)
+	if err != nil {
+		t.Fatalf("stable template rewrite: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable template rewrite returned nil resources")
+	}
+	defer resources.Release()
+	var hasTemplate, hasOuterLeaf bool
+	for _, descriptor := range resources.Descriptors() {
+		for _, field := range descriptor.ReachabilityFields() {
+			switch field {
+			case rootpublication.ReachabilityTemplateGeneration:
+				hasTemplate = true
+			case rootpublication.ReachabilityOuterLeafRawPointer:
+				hasOuterLeaf = true
+			}
+		}
+	}
+	if !hasTemplate || !hasOuterLeaf || provider.captureCalls.Load() != 1 {
+		t.Fatalf("stable rewrite closure template=%v outer-leaf=%v captureCalls=%d", hasTemplate, hasOuterLeaf, provider.captureCalls.Load())
+	}
+}
+
+func TestStandaloneStableLeafRewriteBatchDeduplicatesTemplateClosure(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBytes := buildRewriteLeafPageFixture(t, "stable-template-batch")
+	cfg, provider := stableLeafTemplateFixture(t, pageBytes)
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.SetTemplateCompression(templ.TemplateOnly, cfg, provider)
+	database.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = database.Close()
+		_ = writer.Close()
+	})
+
+	stable := database.leafPageLog.(LeafPageStableBatchLog)
+	pages := [][]byte{pageBytes, append([]byte(nil), pageBytes...), append([]byte(nil), pageBytes...)}
+	ptrs, resources, err := stable.AppendLeafPagesWithStableResources(pages)
+	if err != nil {
+		t.Fatalf("stable template batch rewrite: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable template batch rewrite returned nil resources")
+	}
+	defer resources.Release()
+	if len(ptrs) != len(pages) {
+		t.Fatalf("stable template batch ptrs=%d want %d", len(ptrs), len(pages))
+	}
+	if got := provider.captureCalls.Load(); got != 1 {
+		t.Fatalf("stable template batch capture calls=%d want 1", got)
+	}
+}
+
+func TestStandaloneStableLeafRewriteRejectsTemplateAuthorityBeforeFileCreation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBytes := buildRewriteLeafPageFixture(t, "stable-template-failure")
+	cfg, provider := stableLeafTemplateFixture(t, pageBytes)
+	injected := errors.New("injected template authority failure")
+	provider.captureErr = injected
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.SetTemplateCompression(templ.TemplateOnly, cfg, provider)
+	db.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = db.Close()
+		_ = writer.Close()
+	})
+	before, err := os.ReadDir(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := db.leafPageLog.(LeafPageStableLog)
+	_, resources, err := stable.AppendLeafPageWithStableResources(pageBytes)
+	if resources != nil {
+		resources.Release()
+		t.Fatal("failed template authority returned resources")
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("stable template error=%v want injected failure", err)
+	}
+	after, err := os.ReadDir(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) || writer.leafW != nil {
+		t.Fatalf("template authority failure mutated leaf namespace: before=%d after=%d writer=%v", len(before), len(after), writer.leafW)
+	}
+}
+
+func TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBytes := buildRewriteLeafPageFixture(t, "tda")
+	pages := [][]byte{
+		pageBytes,
+		buildRewriteLeafPageFixture(t, "tdb"),
+		buildRewriteLeafPageFixture(t, "tdc"),
+	}
+	compact := make([][]byte, len(pages))
+	for i := range pages {
+		compact[i], _, err = valuelog.MaybeCompactLeafLogPayload(pages[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	const dictID = uint64(7303)
+	dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID: uint32(dictID), Contents: compact, History: append([]byte(nil), compact[0]...),
+		Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dictionaryProvider := newTestStableDictionaryProvider(t, dictID, dictionary)
+	db.SetStableDictionaryResourceProvider(dictionaryProvider)
+	templateCfg, templateProvider := stableLeafTemplateFixture(t, pageBytes)
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.blockCompression = true
+	writer.SetLeafDictMode(dictID, dictionary, false)
+	writer.SetTemplateCompression(templ.TemplatePrepass, templateCfg, templateProvider)
+	db.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = db.Close()
+		_ = writer.Close()
+	})
+
+	stable := db.leafPageLog.(LeafPageStableLog)
+	_, resources, err := stable.AppendLeafPageWithStableResources(pageBytes)
+	if err != nil {
+		t.Fatalf("stable dictionary+template rewrite: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable dictionary+template rewrite returned nil resources")
+	}
+	defer resources.Release()
+	fields := make(map[rootpublication.ReachabilityField]bool)
+	for _, descriptor := range resources.Descriptors() {
+		for _, field := range descriptor.ReachabilityFields() {
+			fields[field] = true
+		}
+	}
+	for _, field := range []rootpublication.ReachabilityField{
+		rootpublication.ReachabilityDictionaryGeneration,
+		rootpublication.ReachabilityTemplateGeneration,
+		rootpublication.ReachabilityOuterLeafRawPointer,
+	} {
+		if !fields[field] {
+			t.Fatalf("stable dictionary+template closure missing %s: %v", field, fields)
+		}
+	}
+	if dictionaryProvider.captureCalls.Load() != 1 || templateProvider.captureCalls.Load() != 1 {
+		t.Fatalf("capture calls dictionary=%d template=%d want 1 each", dictionaryProvider.captureCalls.Load(), templateProvider.captureCalls.Load())
+	}
+}
 
 func TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure(t *testing.T) {
 	dir := t.TempDir()

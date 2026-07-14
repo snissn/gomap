@@ -140,6 +140,12 @@ func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpubl
 			}
 			continue
 		}
+		if fields[0] == rootpublication.ReachabilityTemplateGeneration {
+			if descriptor.Kind() != rootpublication.ResourceTemplate || len(descriptor.LogicalObligations()) == 0 {
+				return fmt.Errorf("%w: leaf append returned incomplete template authority", rootpublication.ErrUnresolvedResource)
+			}
+			continue
+		}
 		if fields[0] != rootpublication.ReachabilityOuterLeafRawPointer || descriptor.Kind() != rootpublication.ResourceOuterLeafLog {
 			return fmt.Errorf("%w: leaf append returned unsupported stable kind %q reachability %v", rootpublication.ErrResourceConflict, descriptor.Kind(), fields)
 		}

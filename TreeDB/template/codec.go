@@ -30,6 +30,19 @@ func IsEncodedPayload(payload []byte) bool {
 		payload[3]&flagEncoded != 0
 }
 
+// EncodedPayloadTemplateID returns the immutable template generation selected
+// by an encoded payload without resolving or decoding its definition.
+func EncodedPayloadTemplateID(payload []byte) (uint64, error) {
+	if !IsEncodedPayload(payload) {
+		return 0, ErrCorrupt
+	}
+	templateID, n := binary.Uvarint(payload[payloadHeader:])
+	if n <= 0 || templateID == 0 {
+		return 0, ErrCorrupt
+	}
+	return templateID, nil
+}
+
 // EncodePayload builds a TemplateValue payload from template ID and gaps.
 func EncodePayload(templateID uint64, gaps [][]byte) ([]byte, error) {
 	gapCount := len(gaps)

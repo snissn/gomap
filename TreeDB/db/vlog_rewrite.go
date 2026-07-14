@@ -2945,6 +2945,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if opts.Dir == "" {
 		return stats, errors.New("db dir required")
 	}
+	if opts.ValueLog.TemplateMode != template.TemplateOff {
+		return stats, fmt.Errorf("%w: offline template rewrite requires dependency-closed rewritten-root publication (#3679)", rootpublication.ErrUnresolvedResource)
+	}
 	if err := applyFormatConfigForMaintenance(&opts); err != nil {
 		return stats, err
 	}
@@ -4012,9 +4015,6 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 		}
 		return ptrs, nil
 	}
-	if err := w.ensureLeafWriterCapture(capture); err != nil {
-		return nil, err
-	}
 	if cap(w.leafBatchRecords) < len(leafPages) {
 		w.leafBatchRecords = make([]valuelog.Record, len(leafPages))
 	}
@@ -4071,6 +4071,16 @@ func (w *rewriteWriter) appendLeafPagesWithRIDStartCapture(startRID uint64, leaf
 			rawPayloadBytes += len(records[i].Value)
 		}
 	}
+	if capture != nil {
+		for i := range records {
+			if err := capture.captureTemplatePayload(w.templateStore, records[i].Value); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := w.ensureLeafWriterCapture(capture); err != nil {
+		return nil, err
+	}
 	if err := w.maybeRotateLeafForEstimateCapture(rewriteDictFrameRecordLen(rawPayloadBytes, len(records)), capture); err != nil {
 		return nil, err
 	}
@@ -4110,13 +4120,18 @@ func (w *rewriteWriter) appendLeafPageSplit(rid uint64, leafPage []byte) (page.L
 }
 
 func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, capture *rewriteStableOuterLeafCapture) (page.LeafLogPtr, error) {
-	if err := w.ensureLeafWriterCapture(capture); err != nil {
-		return page.LeafLogPtr{}, err
-	}
 	dictID := w.leafDictID
 	dict := w.leafDict
 	if w.blockCompression && dictID != 0 && len(dict) > 0 && rewriteAllowDictForSmallPayload(leafPage) {
 		dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, dictID, dict, leafPage)
+		if capture != nil {
+			if err := capture.captureTemplatePayload(w.templateStore, leafPage); err != nil {
+				return page.LeafLogPtr{}, err
+			}
+		}
+		if err := w.ensureLeafWriterCapture(capture); err != nil {
+			return page.LeafLogPtr{}, err
+		}
 		if err := w.maybeRotateLeafForEstimateCapture(rewriteDictFrameRecordLen(len(leafPage), 1), capture); err != nil {
 			return page.LeafLogPtr{}, err
 		}
@@ -4131,6 +4146,14 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 	dictID, dict, leafPage = w.applyTemplateCompression(rewriteTemplateClassOuterLeaf, 0, nil, leafPage)
 	if dictID != 0 || len(dict) != 0 {
 		return page.LeafLogPtr{}, fmt.Errorf("vlog-rewrite: unexpected outer-leaf dict/template state")
+	}
+	if capture != nil {
+		if err := capture.captureTemplatePayload(w.templateStore, leafPage); err != nil {
+			return page.LeafLogPtr{}, err
+		}
+	}
+	if err := w.ensureLeafWriterCapture(capture); err != nil {
+		return page.LeafLogPtr{}, err
 	}
 	if err := w.maybeRotateLeafForEstimateCapture(int64(valuelog.HeaderSize+len(leafPage)), capture); err != nil {
 		return page.LeafLogPtr{}, err

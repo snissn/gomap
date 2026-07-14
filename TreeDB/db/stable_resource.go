@@ -8,12 +8,19 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 // StableDictionaryResourceProvider captures the exact durable transitive
 // closure needed to decode one dictionary generation.
 type StableDictionaryResourceProvider interface {
 	CaptureDictionaryResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
+}
+
+// StableTemplateResourceProvider captures the exact durable transitive closure
+// needed to decode one template generation.
+type StableTemplateResourceProvider interface {
+	CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
 }
 
 // ValidateStableDictionaryResourceClosure binds the bytes selected by an
@@ -57,6 +64,57 @@ func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableRe
 	return nil
 }
 
+// ValidateStableTemplateResourceClosure binds the immutable definition selected
+// by an encoder to every physical resource returned by a template provider.
+func ValidateStableTemplateResourceClosure(resources *rootpublication.StableResourceSet, templateID uint64, definition []byte) error {
+	if resources == nil || templateID == 0 || len(definition) == 0 {
+		return fmt.Errorf("%w: incomplete template resource closure", rootpublication.ErrUnresolvedResource)
+	}
+	validID := false
+	for salt := 0; salt <= 255; salt++ {
+		if templ.TemplateID(definition, byte(salt)) == templateID {
+			validID = true
+			break
+		}
+	}
+	if !validID {
+		return fmt.Errorf("%w: template %d does not identify the selected definition", rootpublication.ErrResourceConflict, templateID)
+	}
+	digest := sha256.Sum256(definition)
+	expectedLength := int64(len(definition))
+	foundTemplateResource := false
+	for _, descriptor := range resources.Descriptors() {
+		isTemplateResource := false
+		for _, field := range descriptor.ReachabilityFields() {
+			if field == rootpublication.ReachabilityTemplateGeneration {
+				isTemplateResource = true
+				foundTemplateResource = true
+				break
+			}
+		}
+		if !isTemplateResource {
+			continue
+		}
+		matched := false
+		for _, obligation := range descriptor.LogicalObligations() {
+			if obligation.Generation == templateID && obligation.FileID == templateID &&
+				obligation.Offset == 0 && obligation.Length == expectedLength &&
+				obligation.Reachability == rootpublication.ReachabilityTemplateGeneration &&
+				obligation.Digest == digest {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%w: template %d definition does not match captured resource closure", rootpublication.ErrResourceConflict, templateID)
+		}
+	}
+	if !foundTemplateResource {
+		return fmt.Errorf("%w: template %d closure has no template resource", rootpublication.ErrUnresolvedResource, templateID)
+	}
+	return nil
+}
+
 // SetStableDictionaryResourceProvider installs the authority provider used by
 // rewrite and packed-generation producers. It is separate from DictLookup:
 // bytes alone do not prove durable reachability or deletion safety.
@@ -91,6 +149,28 @@ func captureStableDictionaryResources(provider StableDictionaryResourceProvider,
 		return nil, err
 	}
 	if err := ValidateStableDictionaryResourceClosure(resources, dictID, dictionary); err != nil {
+		resources.Release()
+		return nil, err
+	}
+	return resources, nil
+}
+
+func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64) (*rootpublication.StableResourceSet, error) {
+	if templateID == 0 {
+		return nil, nil
+	}
+	if provider == nil || store == nil {
+		return nil, fmt.Errorf("%w: template %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, templateID)
+	}
+	definition, err := store.GetTemplateDef(context.Background(), templateID)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := provider.CaptureTemplateResources(context.Background(), templateID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateStableTemplateResourceClosure(resources, templateID, definition); err != nil {
 		resources.Release()
 		return nil, err
 	}
