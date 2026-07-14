@@ -5,12 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type leafGenerationPackStablePrepareResult struct {
@@ -18,13 +19,32 @@ type leafGenerationPackStablePrepareResult struct {
 	err     error
 }
 
+func buildLeafGenerationPackStablePage(t testing.TB, tag byte) []byte {
+	t.Helper()
+	buf := make([]byte, page.PageSize)
+	builder := node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		key := []byte{'p', 'a', 'c', 'k', '-', tag, '-', byte('a' + i)}
+		value := []byte{'v', 'a', 'l', 'u', 'e', '-', tag, '-', byte('a' + i)}
+		if err := builder.AddLeafEntry(key, value, node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	builder.FinishNoNode()
+	return buf
+}
+
 func TestPrepareLeafGenerationPackStableClosureCloseAdmission(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() || !rootpublication.StableCrossParentMoveNoReplaceSupported() {
 		t.Skip("stable packed promotion requires exact relative cross-parent namespace support")
 	}
 	leafPages := [][]byte{
-		[]byte(strings.Repeat("packed-close-admission-a-", 128)),
-		[]byte(strings.Repeat("packed-close-admission-b-", 128)),
+		buildLeafGenerationPackStablePage(t, 'a'),
+		buildLeafGenerationPackStablePage(t, 'b'),
 	}
 
 	t.Run("close-wins-before-admission", func(t *testing.T) {
@@ -219,8 +239,8 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 	before := *database.State()
 
 	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
-		[]byte(strings.Repeat("packed-prepare-a-", 128)),
-		[]byte(strings.Repeat("packed-prepare-b-", 128)),
+		buildLeafGenerationPackStablePage(t, 'c'),
+		buildLeafGenerationPackStablePage(t, 'd'),
 	})
 	if err != nil {
 		t.Fatalf("PrepareLeafGenerationPackStableClosure: %v", err)
@@ -257,6 +277,34 @@ func TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce(t *t
 		closure.Release()
 		t.Fatalf("TakeStableResources: %v", err)
 	}
+	descriptors := make(map[uint64]rootpublication.StableResourceDescriptor, len(segments))
+	for _, descriptor := range resources.Descriptors() {
+		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack {
+			descriptors[descriptor.Generation()] = descriptor
+		}
+	}
+	if len(descriptors) != len(segments) {
+		resources.Release()
+		t.Fatalf("packed descriptors=%d want promoted segments=%d", len(descriptors), len(segments))
+	}
+	for _, segment := range segments {
+		descriptor, ok := descriptors[uint64(segment.FileID)]
+		if !ok || descriptor.Identity().Generation != uint64(segment.FileID) {
+			resources.Release()
+			t.Fatalf("packed segment %d has no generation-bound descriptor", segment.FileID)
+		}
+		promoted, openErr := os.Open(segment.Path)
+		if openErr != nil {
+			resources.Release()
+			t.Fatalf("open promoted segment %q: %v", segment.Path, openErr)
+		}
+		identity, identityErr := rootpublication.StableIdentityFromFile(promoted)
+		closeErr := promoted.Close()
+		if identityErr != nil || closeErr != nil || descriptor.Identity() == identity || !rootpublication.SamePhysicalIdentity(descriptor.Identity(), identity) {
+			resources.Release()
+			t.Fatalf("packed segment %d descriptor identity must be generation-bound and physically match exact promoted child: identity_err=%v close_err=%v", segment.FileID, identityErr, closeErr)
+		}
+	}
 	if _, err := closure.TakeStableResources(); !errors.Is(err, ErrLeafGenerationPackStablePreparedClosureConsumed) {
 		resources.Release()
 		t.Fatalf("second TakeStableResources error=%v want consumed", err)
@@ -290,8 +338,8 @@ func TestLeafGenerationPackStablePreparedClosureAbandonRemovesPromotedChildren(t
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
-		[]byte(strings.Repeat("packed-abandon-a-", 128)),
-		[]byte(strings.Repeat("packed-abandon-b-", 128)),
+		buildLeafGenerationPackStablePage(t, 'e'),
+		buildLeafGenerationPackStablePage(t, 'f'),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +388,7 @@ func TestLeafGenerationPackStablePrepareLateCleanupErrorReturnsNoAuthority(t *te
 	removeLeafGenerationPackStagingDirFn = func(string) error { return sentinel }
 	t.Cleanup(func() { removeLeafGenerationPackStagingDirFn = originalRemove })
 	closure, err := database.PrepareLeafGenerationPackStableClosure(context.Background(), [][]byte{
-		[]byte(strings.Repeat("packed-late-cleanup-", 128)),
+		buildLeafGenerationPackStablePage(t, 'g'),
 	})
 	if closure != nil {
 		_ = closure.Release()

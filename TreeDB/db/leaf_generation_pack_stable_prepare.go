@@ -237,9 +237,16 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	if authority == nil || authority.resources == nil || authority.released {
 		return nil, rootpublication.ErrResourceOwnership
 	}
+	// Token construction binds the producer's logical file generation into the
+	// captured physical identity. The authority's pre-token identity came
+	// directly from fstat and therefore has generation zero. Key only by physical
+	// identity here, then validate the descriptor's logical generation below.
 	want := make(map[rootpublication.StableIdentity]uint32, len(authority.segments))
 	for i := range authority.segments {
-		want[authority.segments[i].identity] = authority.segments[i].created.fileID
+		segment := &authority.segments[i]
+		identity := segment.identity
+		identity.Generation = 0
+		want[identity] = segment.created.fileID
 	}
 	seen := make(map[rootpublication.StableIdentity]struct{}, len(want))
 	frontiers := make(map[uint32]uint64, len(want))
@@ -252,11 +259,13 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		if fields := descriptor.ReachabilityFields(); len(fields) != 1 || fields[0] != rootpublication.ReachabilityOuterLeafPackedPointer {
 			return nil, fmt.Errorf("%w: packed descriptor reachability=%q", rootpublication.ErrUnresolvedResource, fields)
 		}
-		fileID, ok := want[descriptor.Identity()]
+		identity := descriptor.Identity()
+		identity.Generation = 0
+		fileID, ok := want[identity]
 		if !ok || descriptor.Generation() != uint64(fileID) || descriptor.Frontier().Bytes == 0 {
 			return nil, fmt.Errorf("%w: packed descriptor does not match promoted segment", rootpublication.ErrResourceConflict)
 		}
-		seen[descriptor.Identity()] = struct{}{}
+		seen[identity] = struct{}{}
 		frontiers[page.ValueLogSegmentID(fileID)] = descriptor.Frontier().Bytes
 		namespaceObligations++
 	}
