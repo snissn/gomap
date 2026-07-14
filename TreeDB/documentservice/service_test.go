@@ -11,7 +11,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
@@ -49,7 +48,7 @@ func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
 }
 
 func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
@@ -155,7 +154,7 @@ func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
 }
 
 func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -205,7 +204,7 @@ func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
 }
 
 func TestServiceConcurrentFilterDeleteAndUpsertPreservesReplacement(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -264,7 +263,7 @@ func TestServiceConcurrentFilterDeleteAndUpsertPreservesReplacement(t *testing.T
 }
 
 func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -313,7 +312,7 @@ func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *test
 }
 
 func TestServiceKeywordSearchRankedLexicalResultsAndTieOrder(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
@@ -367,7 +366,7 @@ func TestServiceKeywordSearchRankedLexicalResultsAndTieOrder(t *testing.T) {
 }
 
 func TestServiceHybridSearchTextVectorAndOverlap(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -422,7 +421,7 @@ func TestServiceHybridSearchTextVectorAndOverlap(t *testing.T) {
 }
 
 func TestServiceKeywordHybridFiltersAndMissingIndexesFailClosed(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
@@ -557,9 +556,6 @@ func TestServiceOpenedIncompatibleTextVectorSchemasFailClosed(t *testing.T) {
 }
 
 func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("document service vector publication requires exact relative namespace support")
-	}
 	dir := t.TempDir()
 	ctx := context.Background()
 	db, err := backenddb.Open(testBackendOptions(dir))
@@ -602,7 +598,7 @@ func TestServicePersistenceReopenDocumentsAndEmbeddings(t *testing.T) {
 }
 
 func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
@@ -764,7 +760,7 @@ func TestServiceIndexCapabilitiesIncludeScalarU8PerGranuleAlphaRerank2844(t *tes
 }
 
 func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
@@ -799,7 +795,7 @@ func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.
 }
 
 func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
@@ -837,7 +833,7 @@ func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 }
 
 func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	vectorOptions := &BenchmarkVectorIndexOptions{
@@ -959,12 +955,6 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("pre-optimize benchmark vector search err=%v code=%s", err, ErrorCodeOf(err))
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		// Keep the metadata, request-validation, deferred-upsert, and missing-asset
-		// fail-closed assertions active on unsupported platforms. Only the
-		// production optimization boundary requires stable namespace authority.
-		return
-	}
 	if _, err := svc.OptimizeIndex(ctx, "bench", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex bench: %v", err)
 	}
@@ -1061,14 +1051,6 @@ func newTestService(t testing.TB) (*Service, *backenddb.DB) {
 		t.Fatalf("open db: %v", err)
 	}
 	return New(collections.NewCollectionManager(db)), db
-}
-
-func newStandaloneVectorTestService(t testing.TB) (*Service, *backenddb.DB) {
-	t.Helper()
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		t.Skip("document service vector publication requires exact relative namespace support")
-	}
-	return newTestService(t)
 }
 
 func testBackendOptions(dir string) backenddb.Options {

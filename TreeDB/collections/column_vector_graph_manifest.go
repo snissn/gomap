@@ -8,6 +8,7 @@ import (
 	"os"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -94,11 +95,15 @@ type columnVectorGraphAssetRow struct {
 }
 
 type columnVectorGraphPreparedPhysicalAsset struct {
-	AssetRootDir string
-	Config       ColumnStoreConfig
-	Ref          ColumnAssetRef
-	Bytes        int64
-	RowCount     int
+	AssetRootDir         string
+	Config               ColumnStoreConfig
+	Ref                  ColumnAssetRef
+	Bytes                int64
+	RowCount             int
+	stableResources      *rootpublication.StableResourceSet
+	stableSegments       uint64
+	stableContentSyncs   uint64
+	stableNamespaceSyncs uint64
 }
 
 func columnVectorGraphManifestHasPhysicalAsset(snapshot columnVectorGraphManifestSnapshot) bool {

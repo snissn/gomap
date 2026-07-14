@@ -341,7 +341,6 @@ func TestPredicateQualifiedAggregateMetadataExactPredicateCoverage1951(t *testin
 }
 
 func TestPredicateQualifiedAggregateMetadataColumnAssetRewriteRoundTrip1951(t *testing.T) {
-	requireStandaloneColumnProductionAuthorityTest(t)
 	d, col, closeFn := openPredicateAggregateMetadataFixture1951(t, [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBatchA1950(), columnPhysicalQ5DenseBatchB1950()})
 	defer closeFn()
 

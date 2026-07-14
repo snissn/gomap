@@ -14,28 +14,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestStandaloneVectorRebuildFailsClosedBeforeAssetVisibilityOnWindows(t *testing.T) {
-	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-a", vector: []float32{1, 0, 0}},
-		{id: "doc-b", vector: []float32{0, 1, 0}},
-	}
-	_, d, col, def := openColumnGraphRebuildTestCollectionUncheckedV2A(t, 3, 1, rows)
-	defer func() { _ = d.Close() }()
-	registry := d.StableResourceIdentityPinRegistry()
-	baselinePins := registry.ActivePins()
-	baselineIdentities := registry.ActiveIdentities()
-	before := columnAssetSegmentNamesM15C(t, d, col)
-	if _, err := col.RebuildVectorIndex(def.Name); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		t.Fatalf("RebuildVectorIndex error=%v want ErrNamespacePersistenceUnsupported", err)
-	}
-	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
-		t.Fatalf("unsupported vector rebuild exposed segments after=%v before=%v", after, before)
-	}
-	if registry.ActivePins() != baselinePins || registry.ActiveIdentities() != baselineIdentities {
-		t.Fatalf("unsupported vector rebuild changed registry pins=%d identities=%d want baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
-	}
-}
-
 func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -183,5 +161,34 @@ func TestStableColumnAppendSessionFailsClosedBeforeSegmentVisibility(t *testing.
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
 		t.Fatalf("unsupported stable session active identities=%d want 0", got)
+	}
+}
+
+func TestStableFreshColumnAssetSegmentFailsClosedBeforeVisibility(t *testing.T) {
+	dir := t.TempDir()
+	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
+		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_fresh_segment",
+	}}
+	registry := rootpublication.NewIdentityPinRegistry()
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(dir, cfg, registry)
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		if appender != nil {
+			_ = appender.abort()
+		}
+		t.Fatalf("stable fresh segment error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	if appender != nil {
+		_ = appender.abort()
+		t.Fatalf("unsupported stable fresh segment returned appender=%v", appender)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unsupported stable fresh segment exposed entries=%v", entries)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("unsupported stable fresh segment active identities=%d want 0", got)
 	}
 }

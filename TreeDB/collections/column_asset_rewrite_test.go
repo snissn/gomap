@@ -473,6 +473,57 @@ func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(refs) == 0 {
+		t.Fatal("manifest refs empty, test requires stable rewrite inputs")
+	}
+	cfg := *col.Meta().Options.ColumnStore
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
+	const cycles = 16
+	for cycle := 0; cycle < cycles; cycle++ {
+		func() {
+			remap, err := col.copyColumnAssetRewriteRefs(context.Background(), cfg, refs)
+			if err != nil {
+				t.Fatalf("copy cycle %d: %v", cycle, err)
+			}
+			defer remap.releaseStableResources()
+			if remap.stableSegments != 1 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != 1 || remap.stablePinHighWater != 1 {
+				t.Fatalf("copy cycle %d stable counters segments=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want all=1", cycle, remap.stableSegments, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
+			}
+			if got := len(remap.stableResources.Descriptors()); got != 1 {
+				t.Fatalf("copy cycle %d descriptors=%d want 1", cycle, got)
+			}
+			if got := registry.ActivePins(); got != baselinePins+1 {
+				t.Fatalf("copy cycle %d active pins=%d want %d", cycle, got, baselinePins+1)
+			}
+			if got := registry.ActiveIdentities(); got != baselineIdentities+1 {
+				t.Fatalf("copy cycle %d active identities=%d want %d", cycle, got, baselineIdentities+1)
+			}
+		}()
+		if got := registry.ActivePins(); got != baselinePins {
+			t.Fatalf("copy cycle %d released pins=%d want baseline %d", cycle, got, baselinePins)
+		}
+		if got := registry.ActiveIdentities(); got != baselineIdentities {
+			t.Fatalf("copy cycle %d released identities=%d want baseline %d", cycle, got, baselineIdentities)
+		}
+	}
+	t.Logf("stable rewrite copy: cycles=%d segments_per_cycle=1 content_syncs_per_cycle=1 namespace_syncs_per_cycle=1 descriptor_pin_high_water=1", cycles)
+}
+
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)

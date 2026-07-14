@@ -78,10 +78,10 @@ type columnVectorGraphInvNormStateSource struct {
 }
 
 func prepareColumnVectorGraphInvNormStateAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnVectorGraphPreparedInvNormStateAsset, error) {
-	return prepareColumnVectorGraphInvNormStateAssetWithStableWriter(assetRootDir, collection, base, def, generation, partID, rows, nil)
+	return prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection, base, def, generation, partID, rows, nil)
 }
 
-func prepareColumnVectorGraphInvNormStateAssetWithStableWriter(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow, writer *standaloneColumnStableAssetWriter) (columnVectorGraphPreparedInvNormStateAsset, error) {
+func prepareColumnVectorGraphInvNormStateAssetWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) (columnVectorGraphPreparedInvNormStateAsset, error) {
 	payload, err := prepareColumnVectorGraphInvNormStatePayload(collection, base, def, partID, rows)
 	if err != nil {
 		return columnVectorGraphPreparedInvNormStateAsset{}, err
@@ -95,21 +95,18 @@ func prepareColumnVectorGraphInvNormStateAssetWithStableWriter(assetRootDir, col
 	if generation == 0 || partID == 0 {
 		return columnVectorGraphPreparedInvNormStateAsset{}, errors.New("collections: column_graph inv_norm state requires generation and part_id")
 	}
-	var ref ColumnAssetRef
-	if writer != nil {
-		ref, err = writer.appendKind(payload.Config, columnPhysicalAssetAppendItem{payload: payload.Payload, kind: ColumnAssetKindTCS1TypedColumnPart, generation: generation, partID: partID})
-	} else {
-		appender, openErr := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payload.Config)
-		if openErr != nil {
-			return columnVectorGraphPreparedInvNormStateAsset{}, openErr
-		}
-		var appendErr error
-		alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
-		ref, appendErr = appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
-		err = errors.Join(appendErr, appender.close())
-	}
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payload.Config, authority)
 	if err != nil {
 		return columnVectorGraphPreparedInvNormStateAsset{}, err
+	}
+	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
+	ref, appendErr := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
+	if appendErr != nil {
+		return columnVectorGraphPreparedInvNormStateAsset{}, errors.Join(appendErr, closeErr)
+	}
+	if closeErr != nil {
+		return columnVectorGraphPreparedInvNormStateAsset{}, closeErr
 	}
 	if err := validateColumnVectorGraphPreparedInvNormStateRef(payload, ref, generation); err != nil {
 		return columnVectorGraphPreparedInvNormStateAsset{}, err

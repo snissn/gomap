@@ -1735,7 +1735,6 @@ func TestTypedColumnSnapshotReadsOldRefsAndReachabilityPinsCandidates(t *testing
 }
 
 func runTypedColumnSnapshotReadsOldRefsAndReachabilityPinsCandidates1778(t *testing.T) {
-	requireStandaloneColumnProductionAuthorityTest(t)
 	d, col, firstRef := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
 	oldSnap := d.AcquireSnapshot()

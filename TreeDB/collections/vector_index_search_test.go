@@ -1951,7 +1951,6 @@ func TestNativeRuntimeVectorIndexRejectsQuantizedQueryMode1926(t *testing.T) {
 
 func openColumnGraphQuantizedGuardrailTestCollection1926(tb testing.TB, rows []columnGraphRebuildInputRowV2A) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
-	requireStandaloneColumnProductionAuthorityTest(tb)
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)

@@ -69,20 +69,27 @@ prepared refs, or active mappedresource pins. Rewrite preserves logical asset
 identity: kind, namespace, generation, part id, length, and checksum are
 unchanged while file id and offset may change.
 
-Standalone vector/HNSW rebuild and `ColumnAssetRewrite` acquire DB-scoped
-stable-resource authority before mutating a segment. Authority includes the
-exact child and parent handles, physical frontier, and namespace durability
-obligations. Physical identity may be coalesced, but every logical ref remains
-an immutable obligation through publication. The active rebuild closure
-includes adjacency state, inverse norms, row refs, document ids, quantized
-assets, and the HNSW search pack; physical-graph and legacy-adjacency sources
-must be added to that closure if a future writer emits them again.
+On platforms with exact relative-namespace persistence, standalone vector/HNSW
+rebuild and `ColumnAssetRewrite` acquire DB-scoped stable-resource authority
+before mutating a segment. Authority includes the exact child and parent
+handles, physical frontier, and namespace durability obligations. Physical
+identity may be coalesced, but every logical ref remains an immutable
+obligation through publication. The active rebuild closure includes adjacency
+state, inverse norms, row refs, document ids, quantized assets, and the HNSW
+search pack; physical-graph and legacy-adjacency sources must be added to that
+closure if a future writer emits them again.
 
-Authority remains held until the publication backend returns. Failure releases
-pins exactly once but retains copied or newly appended segments as persistent
-GC orphans; failure cleanup must not remove a pathname that may have been
-rebound. Platforms that cannot prove the required namespace durability fail
-closed before asset visibility.
+Authority remains held until the publication backend returns. A command-WAL
+retry prepares and pins its successor before releasing the prior attempt, so a
+failed replacement leaves the prior authority intact. Failure releases pins
+exactly once but retains copied or newly appended segments as persistent GC
+orphans; failure cleanup must not remove a pathname that may have been rebound.
+
+Explicit stable-authority operations and destructive rewrite fail with the
+typed unsupported-platform error before visibility when exact namespace
+persistence is unavailable. Until strict stable-authority activation in the
+publication closeout, ordinary vector rebuild retains its legacy compatibility
+path on those platforms and makes no stable-resource certification claim.
 
 Maintenance never deletes or rewrites bytes protected by active handles,
 snapshots, pending/prepared/prepared-query state, quarantine records, or

@@ -9,6 +9,7 @@ import (
 	"math"
 	"path/filepath"
 	"slices"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -322,11 +323,15 @@ type columnAssetRewriteManifestState struct {
 }
 
 type columnAssetRewriteCopyResult struct {
-	oldRefs         []ColumnAssetRef
-	newRefs         []ColumnAssetRef
-	byOldRef        map[ColumnAssetRef]ColumnAssetRef
-	segmentFileID   uint32
-	stableResources *rootpublication.StableResourceSet
+	oldRefs              []ColumnAssetRef
+	newRefs              []ColumnAssetRef
+	byOldRef             map[ColumnAssetRef]ColumnAssetRef
+	segmentFileID        uint32
+	stableResources      *rootpublication.StableResourceSet
+	stableSegments       uint64
+	stableContentSyncs   uint64
+	stableNamespaceSyncs uint64
+	stablePinHighWater   uint64
 }
 
 func (result *columnAssetRewriteCopyResult) releaseStableResources() {
@@ -459,6 +464,19 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	appender.stableResources = nil
 	if out.stableResources == nil {
 		return columnAssetRewriteCopyResult{}, errors.New("collections: column asset rewrite copy returned no stable authority")
+	}
+	out.stableSegments = uint64(len(out.stableResources.Descriptors()))
+	out.stableContentSyncs = uint64(appender.closeStats.FileSyncCount)
+	for _, stats := range out.stableResources.Stats(time.Now()) {
+		out.stableNamespaceSyncs += stats.NamespaceSyncs
+	}
+	// This rewrite transaction owns one newly-created segment and holds one
+	// exact identity pin for it through publication. Treat any divergence as a
+	// failed stable-resource preparation rather than certifying weaker evidence.
+	out.stablePinHighWater = out.stableSegments
+	if out.stableSegments != 1 || out.stableContentSyncs != 1 || out.stableNamespaceSyncs != 1 || out.stablePinHighWater != 1 {
+		out.releaseStableResources()
+		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable counters segments=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want all=1", rootpublication.ErrUnresolvedResource, out.stableSegments, out.stableContentSyncs, out.stableNamespaceSyncs, out.stablePinHighWater)
 	}
 	assets := make([]ColumnPreparedAsset, len(out.newRefs))
 	for i, ref := range out.newRefs {

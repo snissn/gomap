@@ -145,10 +145,10 @@ func columnVectorGraphRowRefStateColumnStoreConfig(collection string, base Colum
 }
 
 func prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
-	return prepareColumnVectorGraphRowRefStateAssetsWithStableWriter(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
+	return prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
 }
 
-func prepareColumnVectorGraphRowRefStateAssetsWithStableWriter(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, writer *standaloneColumnStableAssetWriter) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
+func prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
 	payloads, err := prepareColumnVectorGraphRowRefStatePayloads(collection, base, def, generation, firstPartID, rows)
 	if err != nil {
 		return nil, err
@@ -159,30 +159,12 @@ func prepareColumnVectorGraphRowRefStateAssetsWithStableWriter(assetRootDir, col
 	if assetRootDir == "" {
 		return nil, errors.New("collections: column_graph row-ref state requires asset root dir")
 	}
-	if writer != nil {
-		items := make([]columnPhysicalAssetAppendItem, len(payloads))
-		for i, payload := range payloads {
-			items[i] = columnPhysicalAssetAppendItem{payload: payload.Payload, kind: ColumnAssetKindTCS1TypedColumnPart, generation: generation, partID: payload.PartID}
-		}
-		refs, err := writer.appendKinds(payloads[0].Config, items)
-		if err != nil {
-			return nil, err
-		}
-		assets := make([]columnVectorGraphPreparedRowRefStateAsset, len(payloads))
-		for i, payload := range payloads {
-			if err := validateColumnVectorGraphPreparedRowRefStateRef(payload, refs[i], generation); err != nil {
-				return nil, err
-			}
-			assets[i] = columnVectorGraphPreparedRowRefStateAsset{Field: payload.Field, Config: payload.Config, Ref: refs[i], Bytes: refs[i].Length, Rows: payload.Rows, PaddingBytes: payload.PaddingBytes, SchemaHash: payload.SchemaHash}
-		}
-		return assets, nil
-	}
-	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payloads[0].Config)
+	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payloads[0].Config, authority)
 	if err != nil {
 		return nil, err
 	}
 	assets, appendErr := appendColumnVectorGraphRowRefStatePayloads(appender, generation, payloads)
-	closeErr := appender.close()
+	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
 		return nil, errors.Join(appendErr, closeErr)
 	}

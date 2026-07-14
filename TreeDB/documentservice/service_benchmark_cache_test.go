@@ -9,7 +9,7 @@ import (
 )
 
 func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	createBenchmarkColumnGraphIndex(t, svc, "bench_cache")
@@ -44,7 +44,7 @@ func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 }
 
 func TestServiceBenchmarkVectorSearchCacheConcurrentReuse(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	createBenchmarkColumnGraphIndex(t, svc, "bench_concurrent")
@@ -89,7 +89,7 @@ func TestServiceBenchmarkVectorSearchCacheConcurrentReuse(t *testing.T) {
 }
 
 func TestServiceBenchmarkVectorSearchCacheInvalidatesOnLifecycleEvents(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	createBenchmarkColumnGraphIndex(t, svc, "bench_lifecycle")
@@ -130,7 +130,7 @@ func TestServiceBenchmarkVectorSearchCacheInvalidatesOnLifecycleEvents(t *testin
 }
 
 func TestServiceBenchmarkVectorSearchCacheInvalidatesOnDeleteResetAndClose(t *testing.T) {
-	svc, db := newStandaloneVectorTestService(t)
+	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
 	createBenchmarkColumnGraphIndex(t, svc, "bench_delete")
