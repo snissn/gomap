@@ -18,8 +18,9 @@ A complete restorable root-layout backup includes:
   external-ref protection metadata;
 - `maindb/leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
   manifests/indexes when outer leaves are enabled;
-- all external-ref payload files and future column files referenced by roots or
-  non-cleaned command WAL frames;
+- future typed external-ref payload files referenced by non-cleaned command WAL
+  frames, once #3718 activates their authority contract, plus future column
+  files referenced by roots;
 - `dictdb/**` and `templatedb/**`, including each side store's `index.db`,
   `format.json`, `wal/`, `value_vlog/`, `leaf_vlog/`, and cleanup metadata,
   when those stores are enabled;
@@ -36,6 +37,12 @@ recovery.
 Copying only `maindb/index.db` is not a backup. Copying only `maindb` is not a
 complete root-layout backup when `dictdb`, `templatedb`, command-WAL external
 refs, or future column external-ref files are enabled.
+
+The typed `CommandEnvelope.ExternalRefs` section is currently dormant: V1 and
+V2 reject every non-empty section before journal mutation. The external-ref
+prepare, protection, restore, and quarantine steps below define the contract
+for the future #3718 activation; they do not describe authority accepted by the
+current codecs.
 
 ## 2. Live Backup Support
 
@@ -54,7 +61,8 @@ Procedure:
 
 1. `BeginBackupBarrier(mode=CleanCheckpoint)`.
 2. Fence new command-WAL writers.
-3. Wait for admitted command-WAL writes and external-ref prepares.
+3. Wait for admitted command-WAL writes and, once activated, typed external-ref
+   prepares.
 4. Drain async collection publish and `FlushAll`.
 5. Publish root descriptors and `AppliedLSN`.
 6. Force backend checkpoint/meta durability boundary.
@@ -74,12 +82,13 @@ Procedure:
 
 1. `BeginBackupBarrier(mode=WALSnapshot)`.
 2. Fence command-WAL admission at a cut.
-3. Wait for external-ref prepares before the cut to commit/protect or
-   abort/classify.
-4. Rotate/seal WAL, value-log, leaf-log, and external-ref payload files needed
-   by the cut, or record exact byte ranges plus checksums for active tails.
-5. Fsync every manifest-listed WAL segment/range and external-ref payload to the
-   selected durability boundary.
+3. Once typed external refs are activated, wait for prepares before the cut to
+   commit/protect or abort/classify.
+4. Rotate/seal WAL, value-log, leaf-log, and any activated typed external-ref
+   payload files needed by the cut, or record exact byte ranges plus checksums
+   for active tails.
+5. Fsync every manifest-listed WAL segment/range and activated typed
+   external-ref payload to the selected durability boundary.
 6. Write and fsync the backup manifest.
 7. Release writers after the filesystem snapshot is taken, or keep manifest
    retention pins until `EndBackupBarrier` after file copy completes.
@@ -100,32 +109,38 @@ Restore/open validation before serving reads:
 3. discover commit-log command WAL segments and cleanup metadata;
 4. treat missing commit-log segments as valid only when covered by durable cleanup
    metadata or by the backup manifest's cleaned-range proof;
-5. rebuild protected external-ref index from all committed non-cleaned command
-   WAL frames;
+5. once typed external refs are activated, rebuild their protected-ref index
+   from all committed non-cleaned command WAL frames; current codecs instead
+   reject every frame with a non-empty typed section;
 6. for every complete typed command frame not covered by `AppliedLSN` plus
    cleanup:
    - validate frame checksum and command assertions;
    - validate command kind, scope, catalog/schema epochs, preconditions, and
      result assertions;
    - decode the canonical command payload;
-   - compare declared external refs to command-derived refs where applicable;
-   - verify every required external ref exists, has expected size/checksum/class,
-     and has dictionary/template/column dependency closure;
-7. stop open before serving reads on any missing or corrupt required external ref;
+   - after typed external-ref activation, compare declared refs to
+     command-derived refs where applicable;
+   - after activation, verify every required external ref exists, has expected
+     size/checksum/class, and has dictionary/template/column dependency closure;
+7. stop open before serving reads on any dormant non-empty typed external-ref
+   section or, after activation, any missing or corrupt required external ref;
 8. replay unapplied commands and publish recovered roots plus `AppliedLSN`
    atomically;
-9. classify uncommitted prepared/final external-ref payload files;
+9. after activation, classify uncommitted prepared/final typed external-ref
+   payload files;
 10. quarantine, but do not immediately purge, files proven orphaned.
 
-Backup/restore validation fails closed on missing required command-WAL external
-refs. A restore may accept a missing commit-log segment only when durable cleanup
-metadata or the backup manifest proves the exact segment/range was safely
-cleaned.
+Backup/restore validation currently fails closed on every non-empty typed
+command-WAL external-ref section. After #3718 activation it also fails closed
+on any missing required ref. A restore may accept a missing commit-log segment
+only when durable cleanup metadata or the backup manifest proves the exact
+segment/range was safely cleaned.
 
 ## 4. Quarantine and Purge
 
-Quarantine records must be durable before external-ref payload files are moved,
-hidden, or made unavailable for normal recovery. A quarantine manifest records
+After typed external-ref authority is activated, quarantine records must be
+durable before those payload files are moved, hidden, or made unavailable for
+normal recovery. A quarantine manifest records
 source class, source registry path, `FileID`/part id, size, checksum,
 classification reason, recovery generation, and the proof that no committed WAL,
 published root, snapshot, read view, or backup manifest references the file.
