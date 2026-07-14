@@ -1109,6 +1109,81 @@ func TestStableColumnPreparedValidationRejectsMissingAuthoritativeResources(t *t
 	}
 }
 
+func TestStableColumnPreparedValidationRejectsEachMissingProductionObligation(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable column production authority requires exact relative namespace support")
+	}
+	kinds := []ColumnAssetKind{
+		ColumnAssetKindTCS1PartImage,
+		ColumnAssetKindTCS1TypedColumnPart,
+		ColumnAssetKindTCS1Int64Values,
+		ColumnAssetKindTCS1DictionaryCodes,
+		ColumnAssetKindTCS1HNSWSearchPack,
+	}
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := columnRetainedSemanticStreamV1JSONCursorTestConfig()
+	cfg.AssetManager = &ColumnAssetManagerConfig{
+		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "production-omission-matrix",
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	sources := make([]*rootpublication.StableResourceSet, 0, len(kinds))
+	expected := make([]ColumnPreparedAsset, 0, len(kinds))
+	for i, kind := range kinds {
+		session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+		refs, err := session.appendKinds(uint32(i+1), []columnPhysicalAssetAppendItem{{
+			payload: []byte("production-child-" + string(kind)), kind: kind, generation: 1, partID: uint64(i + 1),
+		}})
+		if err != nil {
+			_ = session.abort()
+			t.Fatal(err)
+		}
+		_, resources, err := session.closeWithStableResources()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resources == nil || len(refs) != 1 {
+			t.Fatalf("kind %s refs=%d resources=%v", kind, len(refs), resources)
+		}
+		sources = append(sources, resources)
+		expected = append(expected, ColumnPreparedAsset{Ref: refs[0]})
+	}
+	full, err := rootpublication.UnionStableResourceSets(sources...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStableColumnResourcesMatchPrepared(expected, full); err != nil {
+		t.Fatalf("complete production closure: %v", err)
+	}
+	for omitted := range sources {
+		partialSources := append([]*rootpublication.StableResourceSet(nil), sources[:omitted]...)
+		partialSources = append(partialSources, sources[omitted+1:]...)
+		partial, err := rootpublication.UnionStableResourceSets(partialSources...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantField := stableColumnLogicalObligation(expected[omitted].Ref, mustStableColumnReachability(t, expected[omitted].Ref.Kind)).Reachability
+		err = validateStableColumnResourcesMatchPrepared(expected, partial)
+		if !errors.Is(err, rootpublication.ErrUnresolvedResource) || !strings.Contains(err.Error(), string(wantField)) {
+			t.Fatalf("omitted production child %s error=%v want typed missing field %s", kinds[omitted], err, wantField)
+		}
+	}
+	for _, resources := range sources {
+		resources.Release()
+	}
+	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
+		t.Fatalf("production omission release pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
+func mustStableColumnReachability(t *testing.T, kind ColumnAssetKind) rootpublication.ReachabilityField {
+	t.Helper()
+	_, field, _, err := stableColumnAssetResourceClassification(kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return field
+}
+
 func TestStableLegacyVectorResourceTokenIsExcluded(t *testing.T) {
 	_, err := NewStableLegacyVectorResourceToken(rootpublication.StableResourceSpec{
 		Reachability: rootpublication.ReachabilityLegacyVectorSnapshot,
@@ -1690,14 +1765,27 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable-central-append-benchmark",
 	}}
 	registry := rootpublication.NewIdentityPinRegistry()
-	payload := []byte("stable-central-column-append-payload")
+	items := []columnPhysicalAssetAppendItem{
+		{payload: []byte("column-manifest"), kind: ColumnAssetKindTCS1PartImage},
+		{payload: []byte("typed-multipart"), kind: ColumnAssetKindTCS1TypedColumnPart},
+		{payload: []byte("typed-value"), kind: ColumnAssetKindTCS1Int64Values},
+		{payload: []byte("typed-code"), kind: ColumnAssetKindTCS1DictionaryCodes},
+		{payload: []byte("hnsw-search-pack"), kind: ColumnAssetKindTCS1HNSWSearchPack},
+	}
+	var payloadBytes int64
+	for _, item := range items {
+		payloadBytes += int64(len(item.payload))
+	}
 
 	appendAndClose := func(generation uint64) (columnPhysicalAssetSegmentCloseStats, *rootpublication.StableResourceSet, uint64) {
 		b.Helper()
 		session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
-		if _, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
-			payload: payload, kind: ColumnAssetKindTCS1PartImage, generation: generation, partID: generation,
-		}}); err != nil {
+		iterationItems := append([]columnPhysicalAssetAppendItem(nil), items...)
+		for i := range iterationItems {
+			iterationItems[i].generation = generation
+			iterationItems[i].partID = uint64(i + 1)
+		}
+		if _, err := session.appendKinds(columnAssetM12ASegmentFileID, iterationItems); err != nil {
 			_ = session.abort()
 			b.Fatal(err)
 		}
@@ -1723,15 +1811,21 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 	primeResources.Release()
 
 	b.ReportAllocs()
-	b.SetBytes(int64(len(payload)))
+	b.SetBytes(payloadBytes)
 	b.ResetTimer()
 	var contentSyncs uint64
 	var namespaceSyncs uint64
 	var pinHighWater uint64
+	var descriptors uint64
+	var logicalObligations uint64
 	for i := 0; i < b.N; i++ {
 		closeStats, resources, iterationNamespaceSyncs := appendAndClose(uint64(i + 2))
 		contentSyncs += uint64(closeStats.FileSyncCount)
 		namespaceSyncs += iterationNamespaceSyncs
+		descriptors += uint64(len(resources.Descriptors()))
+		for _, descriptor := range resources.Descriptors() {
+			logicalObligations += uint64(len(descriptor.LogicalObligations()))
+		}
 		for _, stats := range resources.Stats(time.Now()) {
 			if stats.PinHighWater > pinHighWater {
 				pinHighWater = stats.PinHighWater
@@ -1750,10 +1844,16 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 	if pinHighWater != 1 {
 		b.Fatalf("pin high-water=%d want 1", pinHighWater)
 	}
+	const descriptorsPerIteration = 3 // column, typed-column, and HNSW resource kinds
+	if descriptors != uint64(b.N*descriptorsPerIteration) || logicalObligations != uint64(b.N*len(items)) {
+		b.Fatalf("descriptors=%d logical obligations=%d want %d/%d", descriptors, logicalObligations, b.N*descriptorsPerIteration, b.N*len(items))
+	}
 	if got := registry.ActivePins(); got != 0 {
 		b.Fatalf("active pins after benchmark=%d want 0", got)
 	}
 	b.ReportMetric(float64(contentSyncs)/float64(b.N), "content_syncs/op")
 	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace_syncs/op")
 	b.ReportMetric(float64(pinHighWater), "pin_high_water")
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(logicalObligations)/float64(b.N), "logical_obligations/op")
 }

@@ -573,7 +573,11 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 		{FileID: fileIDs[0], RIDs: []uint64{9, 2, 9}, Digest: sha256.Sum256([]byte("segment-1"))},
 		{FileID: fileIDs[1], RIDs: []uint64{14, 4}, Digest: sha256.Sum256([]byte("segment-2"))},
 	}
-	resources, err := manager.CaptureStableExternalRIDFence(children)
+	fence, err := NewStableExternalRIDFence([]uint64{14, 9, 4, 2, 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := manager.CaptureStableExternalRIDFence(fence, children)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,13 +596,55 @@ func TestCaptureStableExternalRIDFenceRequiresEveryManagerChild(t *testing.T) {
 	}
 
 	for omitted := range children {
+		t.Run(fmt.Sprintf("segment-%d", omitted), func(t *testing.T) {
+			missing := append([]StableExternalRIDSegment(nil), children[:omitted]...)
+			missing = append(missing, children[omitted+1:]...)
+			if resources, err := manager.CaptureStableExternalRIDFence(fence, missing); !errors.Is(err, rootpublication.ErrUnresolvedResource) || resources != nil {
+				if resources != nil {
+					resources.Release()
+				}
+				t.Fatalf("omitted external-RID segment %d resources=%v err=%v want ErrUnresolvedResource", omitted, resources, err)
+			}
+			if got := registry.ActivePins(); got != 0 {
+				t.Fatalf("external-RID pins after omitted segment %d=%d want 0", omitted, got)
+			}
+		})
+	}
+	for childIndex := range children {
+		for ridIndex := range children[childIndex].RIDs {
+			t.Run(fmt.Sprintf("segment-%d-rid-%d", childIndex, ridIndex), func(t *testing.T) {
+				missing := append([]StableExternalRIDSegment(nil), children...)
+				missing[childIndex].RIDs = append([]uint64(nil), children[childIndex].RIDs...)
+				missing[childIndex].RIDs = append(missing[childIndex].RIDs[:ridIndex], missing[childIndex].RIDs[ridIndex+1:]...)
+				resources, err := manager.CaptureStableExternalRIDFence(fence, missing)
+				// A duplicate occurrence is not an omitted logical RID; the unique
+				// fence remains complete and must still capture successfully.
+				if children[childIndex].RIDs[ridIndex] == 9 && len(missing[childIndex].RIDs) == 2 {
+					if err != nil || resources == nil {
+						t.Fatalf("deduplicated RID occurrence resources=%v err=%v", resources, err)
+					}
+					resources.Release()
+				} else if !errors.Is(err, rootpublication.ErrUnresolvedResource) || resources != nil {
+					if resources != nil {
+						resources.Release()
+					}
+					t.Fatalf("omitted external RID child=%d rid=%d resources=%v err=%v want ErrUnresolvedResource", childIndex, ridIndex, resources, err)
+				}
+				if got := registry.ActivePins(); got != 0 {
+					t.Fatalf("external-RID pins after RID omission child=%d rid=%d: %d", childIndex, ridIndex, got)
+				}
+			})
+		}
+	}
+
+	for omitted := range children {
 		missing := append([]StableExternalRIDSegment(nil), children...)
 		missingID, err := EncodeFileID(2, uint32(omitted+1))
 		if err != nil {
 			t.Fatal(err)
 		}
 		missing[omitted].FileID = missingID
-		if resources, err := manager.CaptureStableExternalRIDFence(missing); err == nil || resources != nil || !strings.Contains(err.Error(), fmt.Sprintf("child %d", missingID)) {
+		if resources, err := manager.CaptureStableExternalRIDFence(fence, missing); err == nil || resources != nil || !strings.Contains(err.Error(), fmt.Sprintf("child %d", missingID)) {
 			if resources != nil {
 				resources.Release()
 			}
@@ -641,13 +687,17 @@ func BenchmarkStableValueLogExternalRIDFenceClosure(b *testing.B) {
 		{FileID: fileIDs[0], RIDs: []uint64{1, 101, 1}, Digest: sha256.Sum256([]byte("external-rid-segment-1"))},
 		{FileID: fileIDs[1], RIDs: []uint64{2, 102, 2}, Digest: sha256.Sum256([]byte("external-rid-segment-2"))},
 	}
+	fence, err := NewStableExternalRIDFence([]uint64{102, 1, 2, 101})
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
 	var pinHighWater uint64
 	for i := 0; i < b.N; i++ {
-		resources, err := manager.CaptureStableExternalRIDFence(children)
+		resources, err := manager.CaptureStableExternalRIDFence(fence, children)
 		if err != nil {
 			b.Fatal(err)
 		}

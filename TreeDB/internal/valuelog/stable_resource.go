@@ -1,6 +1,8 @@
 package valuelog
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -246,12 +248,62 @@ type StableExternalRIDSegment struct {
 	Digest [32]byte
 }
 
-// CaptureStableExternalRIDFence captures every requested manager-owned value-
-// log segment as one deterministic transitive resource set. The manager fixes
-// the producer, reachability field, exact handles, and shared deletion gate;
-// callers cannot substitute paths or identity overrides.
-func (m *Manager) CaptureStableExternalRIDFence(segments []StableExternalRIDSegment) (*rootpublication.StableResourceSet, error) {
-	if m == nil || len(segments) == 0 {
+// StableExternalRIDFence is the independently derived command-payload fence
+// that a physical value-log closure must satisfy. #3718 will derive the same
+// count/digest from the durable command payload when it activates the consumer.
+type StableExternalRIDFence struct {
+	Count  uint32
+	Digest [32]byte
+}
+
+// NewStableExternalRIDFence canonicalizes the command payload's complete RID
+// set without accepting any physical segment assignment.
+func NewStableExternalRIDFence(rids []uint64) (StableExternalRIDFence, error) {
+	canonical, err := canonicalStableExternalRIDs(rids)
+	if err != nil {
+		return StableExternalRIDFence{}, err
+	}
+	if uint64(len(canonical)) > uint64(^uint32(0)) {
+		return StableExternalRIDFence{}, fmt.Errorf("%w: external-RID fence exceeds uint32 count", rootpublication.ErrResourceConflict)
+	}
+	h := sha256.New()
+	var encoded [8]byte
+	for _, rid := range canonical {
+		binary.LittleEndian.PutUint64(encoded[:], rid)
+		_, _ = h.Write(encoded[:])
+	}
+	var fence StableExternalRIDFence
+	fence.Count = uint32(len(canonical))
+	copy(fence.Digest[:], h.Sum(nil))
+	return fence, nil
+}
+
+func canonicalStableExternalRIDs(rids []uint64) ([]uint64, error) {
+	canonical := append([]uint64(nil), rids...)
+	for _, rid := range canonical {
+		if rid == 0 {
+			return nil, fmt.Errorf("%w: external-RID fence contains zero RID", rootpublication.ErrUnresolvedResource)
+		}
+	}
+	sort.Slice(canonical, func(i, j int) bool { return canonical[i] < canonical[j] })
+	unique := canonical[:0]
+	for _, rid := range canonical {
+		if len(unique) == 0 || unique[len(unique)-1] != rid {
+			unique = append(unique, rid)
+		}
+	}
+	if len(unique) == 0 {
+		return nil, fmt.Errorf("%w: external-RID fence has no RIDs", rootpublication.ErrUnresolvedResource)
+	}
+	return unique, nil
+}
+
+// CaptureStableExternalRIDFence captures every manager-owned value-log child
+// needed by the independently derived fence. The manager fixes the producer,
+// reachability field, exact handles, and shared deletion gate; callers cannot
+// omit a segment/RID, substitute paths, or provide identity overrides.
+func (m *Manager) CaptureStableExternalRIDFence(fence StableExternalRIDFence, segments []StableExternalRIDSegment) (*rootpublication.StableResourceSet, error) {
+	if m == nil || fence.Count == 0 || len(segments) == 0 {
 		return nil, fmt.Errorf("%w: external-RID fence has no value-log children", rootpublication.ErrUnresolvedResource)
 	}
 	ordered := append([]StableExternalRIDSegment(nil), segments...)
@@ -266,6 +318,24 @@ func (m *Manager) CaptureStableExternalRIDFence(segments []StableExternalRIDSegm
 		if ordered[i-1].FileID == ordered[i].FileID {
 			return nil, fmt.Errorf("%w: duplicate external-RID value-log child %d", rootpublication.ErrResourceConflict, ordered[i].FileID)
 		}
+	}
+	physicalRIDs := make([]uint64, 0)
+	ridOwners := make(map[uint64]uint32)
+	for _, child := range ordered {
+		for _, rid := range child.RIDs {
+			if owner, exists := ridOwners[rid]; exists && owner != child.FileID {
+				return nil, fmt.Errorf("%w: external RID %d is assigned to value-log children %d and %d", rootpublication.ErrResourceConflict, rid, owner, child.FileID)
+			}
+			ridOwners[rid] = child.FileID
+			physicalRIDs = append(physicalRIDs, rid)
+		}
+	}
+	actualFence, err := NewStableExternalRIDFence(physicalRIDs)
+	if err != nil {
+		return nil, err
+	}
+	if actualFence != fence {
+		return nil, fmt.Errorf("%w: external-RID physical closure count=%d digest=%x does not satisfy expected count=%d digest=%x", rootpublication.ErrUnresolvedResource, actualFence.Count, actualFence.Digest, fence.Count, fence.Digest)
 	}
 
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALExternalRIDFence)

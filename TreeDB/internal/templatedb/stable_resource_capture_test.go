@@ -503,6 +503,49 @@ func TestCaptureTemplateResourcesRejectsMissingAndMismatchedDefinitionsWithoutPi
 	}
 }
 
+func TestCaptureTemplateResourcesRejectsEachMissingPointerChild(t *testing.T) {
+	for _, omitted := range []templateStablePhysicalRole{templateStableIndexRole, templateStableValueLogRole} {
+		t.Run(string(omitted), func(t *testing.T) {
+			backend, err := backenddb.Open(backenddb.Options{
+				Dir: t.TempDir(), ChunkSize: 64 * 1024, ValueLog: backenddb.ValueLogOptions{ForcePointers: true},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			definition := bytes.Repeat([]byte("pointer-template-child-omission|"), 64)
+			templateID := template.TemplateID(definition, 0)
+			if err := seedPointerTemplate(backend, templateID, definition); err != nil {
+				t.Fatal(err)
+			}
+			store := New(stableTestKV{db: backend}, Config{})
+			var withheld []*rootpublication.StableResourceToken
+			previous := addTemplateStableResourceToken
+			addTemplateStableResourceToken = func(builder *rootpublication.StableResourceSetBuilder, token *rootpublication.StableResourceToken, role templateStablePhysicalRole) error {
+				if role == omitted {
+					withheld = append(withheld, token)
+					return nil
+				}
+				return builder.Add(token)
+			}
+			resources, captureErr := store.CaptureTemplateResources(context.Background(), templateID)
+			addTemplateStableResourceToken = previous
+			for _, token := range withheld {
+				token.Release()
+			}
+			if resources != nil {
+				resources.Release()
+			}
+			if !errors.Is(captureErr, rootpublication.ErrUnresolvedResource) || resources != nil {
+				t.Fatalf("omitted %s resources=%v err=%v want ErrUnresolvedResource", omitted, resources, captureErr)
+			}
+			if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
+				t.Fatalf("omitted %s active pins=%d want 0", omitted, got)
+			}
+		})
+	}
+}
+
 func TestCaptureTemplateResourcesBlocksVacuumUntilRelease(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ChunkSize: 64 * 1024})
 	if err != nil {

@@ -18,6 +18,17 @@ var (
 	templateValueLogPhysicalDigest = sha256.Sum256([]byte("templatedb-value-log-v1"))
 )
 
+type templateStablePhysicalRole string
+
+const (
+	templateStableIndexRole    templateStablePhysicalRole = "index"
+	templateStableValueLogRole templateStablePhysicalRole = "value-log"
+)
+
+var addTemplateStableResourceToken = func(builder *rootpublication.StableResourceSetBuilder, token *rootpublication.StableResourceToken, _ templateStablePhysicalRole) error {
+	return builder.Add(token)
+}
+
 // StablePhysicalEntry is the storage placement of one template definition in
 // a stable snapshot. RecordLength is the exact encoded value-log record size.
 type StablePhysicalEntry struct {
@@ -132,7 +143,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	// A successful index token owns the snapshot maintenance lease even if a
 	// later builder/value-log operation fails.
 	snapshotOwned = true
-	if err := builder.Add(indexToken); err != nil {
+	if err := addTemplateStableResourceToken(builder, indexToken, templateStableIndexRole); err != nil {
 		indexToken.Release()
 		return nil, fmt.Errorf("templatedb: add template %d index: %w", templateID, err)
 	}
@@ -167,7 +178,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		if err != nil {
 			return nil, fmt.Errorf("templatedb: capture template %d value-log: %w", templateID, err)
 		}
-		if err := builder.Add(valueLogToken); err != nil {
+		if err := addTemplateStableResourceToken(builder, valueLogToken, templateStableValueLogRole); err != nil {
 			valueLogToken.Release()
 			return nil, fmt.Errorf("templatedb: add template %d value-log: %w", templateID, err)
 		}
@@ -177,7 +188,47 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	if err != nil {
 		return nil, fmt.Errorf("templatedb: freeze template %d resources: %w", templateID, err)
 	}
+	if err := validateCapturedTemplatePhysicalClosure(resources, entry.Pointer); err != nil {
+		resources.Release()
+		return nil, fmt.Errorf("templatedb: validate template %d physical closure: %w", templateID, err)
+	}
 	return resources, nil
+}
+
+func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+	if resources == nil {
+		return fmt.Errorf("%w: template capture returned no physical closure", rootpublication.ErrUnresolvedResource)
+	}
+	var index, valueLog bool
+	for _, descriptor := range resources.Descriptors() {
+		if descriptor.Kind() != rootpublication.ResourceTemplate {
+			return fmt.Errorf("%w: template closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind())
+		}
+		switch descriptor.Digest() {
+		case templateIndexPhysicalDigest:
+			if index {
+				return fmt.Errorf("%w: template closure contains duplicate index authority", rootpublication.ErrResourceConflict)
+			}
+			index = true
+		case templateValueLogPhysicalDigest:
+			if valueLog {
+				return fmt.Errorf("%w: template closure contains duplicate value-log authority", rootpublication.ErrResourceConflict)
+			}
+			valueLog = true
+		default:
+			return fmt.Errorf("%w: template closure contains unknown physical role", rootpublication.ErrResourceConflict)
+		}
+	}
+	if !index {
+		return fmt.Errorf("%w: template closure omitted index authority", rootpublication.ErrUnresolvedResource)
+	}
+	if pointer && !valueLog {
+		return fmt.Errorf("%w: pointer template closure omitted value-log authority", rootpublication.ErrUnresolvedResource)
+	}
+	if !pointer && valueLog {
+		return fmt.Errorf("%w: inline template closure contains value-log authority", rootpublication.ErrResourceConflict)
+	}
+	return nil
 }
 
 func templateIDMatchesDefinition(templateID uint64, definition []byte, maxAttempts int) bool {
