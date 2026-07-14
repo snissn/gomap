@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"testing"
 
@@ -1127,6 +1128,53 @@ func TestCommandJournalValidationFailureDoesNotConsumeLSN(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("LSN after validation failure=%d, want 1", got)
+	}
+}
+
+func TestCommandJournalDormantExternalRefRejectionDoesNotMutateJournal(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
+	if lsn, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil || lsn != 1 {
+		t.Fatalf("seed append LSN=%d error=%v, want LSN 1", lsn, err)
+	}
+	pathBefore, bytesBefore := j.ActiveSegmentSnapshot()
+	nextBefore := j.NextLSN()
+	segmentsBefore, err := filepath.Glob(filepath.Join(dir, "commit-l*-*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lsn, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		ExternalRefs:  []ExternalRef{{Class: ExternalRefValueLog, FileID: 1, Length: 1}},
+	})
+	if !errors.Is(err, ErrCommandWALUnsupportedExternalRef) || lsn != 0 {
+		t.Fatalf("rejected append LSN=%d error=%v, want LSN 0 and ErrCommandWALUnsupportedExternalRef", lsn, err)
+	}
+	pathAfter, bytesAfter := j.ActiveSegmentSnapshot()
+	if pathAfter != pathBefore || bytesAfter != bytesBefore {
+		t.Fatalf("active segment mutated: before=(%q,%d) after=(%q,%d)", pathBefore, bytesBefore, pathAfter, bytesAfter)
+	}
+	if got := j.NextLSN(); got != nextBefore {
+		t.Fatalf("NextLSN=%d after rejection, want unchanged %d", got, nextBefore)
+	}
+	segmentsAfter, err := filepath.Glob(filepath.Join(dir, "commit-l*-*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(segmentsAfter, segmentsBefore) {
+		t.Fatalf("segment family changed: before=%v after=%v", segmentsBefore, segmentsAfter)
 	}
 }
 

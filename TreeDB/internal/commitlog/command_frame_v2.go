@@ -80,6 +80,9 @@ func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
 	if err := validateCommandEnvelopeV2Identity(env); err != nil {
 		return nil, err
 	}
+	if err := validateExternalRefs(env.ExternalRefs); err != nil {
+		return nil, err
+	}
 	if err := validateCommandEnvelopePayloadV2(env); err != nil {
 		return nil, err
 	}
@@ -183,6 +186,9 @@ func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 	var err error
 	env.ExternalRefs, err = decodeExternalRefs(frame[off : off+int(extRefsLen)])
 	if err != nil {
+		return env, err
+	}
+	if err := validateExternalRefs(env.ExternalRefs); err != nil {
 		return env, err
 	}
 	off += int(extRefsLen)

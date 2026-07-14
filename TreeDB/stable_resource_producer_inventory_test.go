@@ -33,7 +33,6 @@ func TestEveryRegisterableInventoryFieldHasConcreteExactHandleProducer(t *testin
 		rootpublication.ReachabilityTypedColumnCode:            collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityHNSWSearchPack:             collections.NewStableColumnAssetResourceToken,
 		rootpublication.ReachabilityVectorGraphPack:            collections.NewStableColumnAssetResourceToken,
-		rootpublication.ReachabilityLegacyVectorSnapshot:       collections.NewStableLegacyVectorResourceToken,
 		rootpublication.ReachabilityCommandWALActive:           commitlog.NewStableCommandWALResourceToken,
 		rootpublication.ReachabilityCommandWALRotated:          commitlog.NewStableCommandWALResourceToken,
 		rootpublication.ReachabilityCommandWALExternalRIDFence: valuelog.NewStableValueLogResourceToken,

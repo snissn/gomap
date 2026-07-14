@@ -48,6 +48,7 @@ var (
 	ErrCommandWALV2TailIdentityUnavailable     = errors.New("commitlog: command wal V2 terminal tail identity unavailable")
 	ErrCommandWALUnsupportedKind               = errors.New("commitlog: command wal unsupported kind")
 	ErrCommandWALUnsupportedCriticalFlag       = errors.New("commitlog: command wal unsupported critical flag")
+	ErrCommandWALUnsupportedExternalRef        = errors.New("commitlog: command wal external refs are reserved until V2 activation")
 	ErrCommandWALDuplicateLSN                  = errors.New("commitlog: command wal duplicate lsn")
 	ErrCommandWALStaleSegment                  = errors.New("commitlog: command wal stale segment")
 	ErrCommandWALSegmentSeqExhausted           = errors.New("commitlog: command wal segment sequence exhausted")

@@ -2062,6 +2062,9 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 		return env, err
 	}
 	env.ExternalRefs = extRefs
+	if err := validateExternalRefs(env.ExternalRefs); err != nil {
+		return env, err
+	}
 	off += int(extRefsLen)
 	preconditions, err := decodeCommandExtensions(frame[off : off+int(preconditionsLen)])
 	if err != nil {
@@ -2090,7 +2093,21 @@ func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
 	if err := validateCommandEnvelopeIdentity(env); err != nil {
 		return err
 	}
+	if err := validateExternalRefs(env.ExternalRefs); err != nil {
+		return err
+	}
 	return validateCommandEnvelopePayload(env)
+}
+
+// validateExternalRefs keeps the dormant typed external-reference wire section
+// fail-closed until #3718 activates its producer, pin, sync, recovery, and
+// deletion-owner closure. RawKV SetRID references use the separate V2
+// ExternalRefFenceV1 contract and are intentionally unaffected.
+func validateExternalRefs(refs []ExternalRef) error {
+	if len(refs) != 0 {
+		return ErrCommandWALUnsupportedExternalRef
+	}
+	return nil
 }
 
 func validateCommandEnvelopeIdentity(env CommandEnvelope) error {

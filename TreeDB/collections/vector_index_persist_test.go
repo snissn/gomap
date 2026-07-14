@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -3917,6 +3918,141 @@ func TestCollectionVectorIndexPruneOldSnapshots(t *testing.T) {
 	}
 	if loaded == nil || !status.Loaded || status.Epoch != second.Epoch {
 		t.Fatalf("unexpected load after prune loaded=%v status=%+v", loaded != nil, status)
+	}
+}
+
+func TestCollectionLegacyVectorSnapshotSaveSerializesPruneAfterEpochRename(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	opts := VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine}
+	index, err := col.BuildVectorIndex(opts)
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	first, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save first snapshot: %v", err)
+	}
+	if first.ManifestPath == "" {
+		t.Fatalf("first save did not use legacy sidecar: %+v", first)
+	}
+
+	secondCol, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	pruneIndex, err := newVectorIndex(secondCol, opts)
+	if err != nil {
+		t.Fatalf("new second-handle vector index: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	restore := setLegacyVectorSnapshotPostEpochRenameHookForTest(func() {
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+	})
+	defer restore()
+	var releaseOnce sync.Once
+	defer func() { releaseOnce.Do(func() { close(release) }) }()
+
+	saveDone := make(chan struct {
+		status VectorIndexLoadStatus
+		err    error
+	}, 1)
+	go func() {
+		status, err := index.SaveSnapshot()
+		saveDone <- struct {
+			status VectorIndexLoadStatus
+			err    error
+		}{status, err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second save did not reach post-epoch-rename hook")
+	}
+
+	pruneLockAttempted := make(chan struct{})
+	var pruneLockAttemptedOnce sync.Once
+	restoreBeforeLock := setLegacyVectorSidecarBeforeLockHookForTest(func() {
+		pruneLockAttemptedOnce.Do(func() { close(pruneLockAttempted) })
+	})
+	defer restoreBeforeLock()
+
+	pruneDone := make(chan struct {
+		status VectorIndexPruneStatus
+		err    error
+	}, 1)
+	go func() {
+		status, err := pruneIndex.PruneOldSnapshots(1)
+		pruneDone <- struct {
+			status VectorIndexPruneStatus
+			err    error
+		}{status, err}
+	}()
+	select {
+	case <-pruneLockAttempted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prune did not attempt to acquire the legacy sidecar lock")
+	}
+	select {
+	case got := <-pruneDone:
+		t.Fatalf("prune completed while save was paused after epoch rename: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	var second struct {
+		status VectorIndexLoadStatus
+		err    error
+	}
+	select {
+	case second = <-saveDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second save did not complete after release")
+	}
+	if second.err != nil {
+		t.Fatalf("save second snapshot: %v", second.err)
+	}
+	var pruned struct {
+		status VectorIndexPruneStatus
+		err    error
+	}
+	select {
+	case pruned = <-pruneDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prune did not complete after save release")
+	}
+	if pruned.err != nil {
+		t.Fatalf("prune after save: %v", pruned.err)
+	}
+	if pruned.status.RemovedEpochs != 1 {
+		t.Fatalf("prune status=%+v, want one old epoch removed", pruned.status)
+	}
+
+	loaded, status, err := secondCol.LoadVectorIndexSnapshot(opts)
+	if err != nil {
+		t.Fatalf("load published legacy snapshot: %v", err)
+	}
+	if loaded == nil || !status.Loaded || status.Epoch != second.status.Epoch {
+		t.Fatalf("loaded=%v status=%+v, want second epoch %d", loaded != nil, status, second.status.Epoch)
+	}
+	epochs, err := vectorIndexEpochDirs(filepath.Dir(second.status.ManifestPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEpoch := fmt.Sprintf("epoch-%020d", second.status.Epoch)
+	if len(epochs) != 1 || epochs[0] != wantEpoch {
+		t.Fatalf("epochs=%v, want only %q", epochs, wantEpoch)
 	}
 }
 
