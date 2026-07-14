@@ -508,7 +508,18 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 			}
 		}
 	}
+	if err == nil && sync {
+		db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
+	}
 	return err
+}
+
+func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
+	if db == nil || lsn == 0 {
+		return
+	}
+	commandWALStoreMax(&db.commandWALDurableLSN, lsn)
+	db.commandWALDebt.releaseThrough(lsn)
 }
 
 func (db *DB) rejectUnloggedCommandWALRootPublish() error {
@@ -1686,8 +1697,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		return lsn, flushErr
 	}
 	if sync {
-		commandWALStoreMax(&db.commandWALDurableLSN, lsn)
-		db.commandWALDebt.releaseThrough(lsn)
+		db.closeCommandWALDurablePrefixThrough(lsn)
 	}
 	if requestTiming != nil {
 		postAppendStart = time.Now()

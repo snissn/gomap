@@ -242,6 +242,46 @@ func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend
 	}
 }
 
+func TestPublicCommandWALCheckpointReleasesCoveredRotationDebtBeforeNextBarrier(t *testing.T) {
+	dir := t.TempDir()
+	opts := relaxedCommandWALDurablePrefixOptions(dir)
+	opts.CommandWALSegmentTargetBytes = 1
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("relaxed-a"), []byte("value-a")); err != nil {
+		t.Fatalf("Set relaxed-a: %v", err)
+	}
+	if err := db.Set([]byte("relaxed-b"), []byte("value-b")); err != nil {
+		t.Fatalf("Set relaxed-b: %v", err)
+	}
+	if got := db.Stats()["treedb.command_wal.dependency_debt.entries"]; got != "2" {
+		t.Fatalf("pending debt entries before checkpoint=%q, want 2", got)
+	}
+
+	before := publicCommandWALSegmentNames(t, dir)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	after := publicCommandWALSegmentNames(t, dir)
+	if len(after) >= len(before) {
+		t.Fatalf("command WAL segments before=%v after=%v, want covered segment deletion", before, after)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn after checkpoint=%q, want covered LSN 2", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries after checkpoint=%q, want 0", got)
+	}
+	if err := writeEmptyPublicCommandWALSync(db); err != nil {
+		t.Fatalf("empty WriteSync after checkpoint cleanup: %v", err)
+	}
+}
+
 func TestPublicCommandWALRelaxedRotationSyncCutsRetainDebtForBarrierRetry(t *testing.T) {
 	points := []durabilitycut.Point{
 		durabilitycut.BeforeDependencyFileSync,

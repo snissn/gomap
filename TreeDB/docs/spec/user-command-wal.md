@@ -273,7 +273,10 @@ as one format boundary:
   issuing a stable sync;
 - a durable command or empty barrier syncs the coalesced dependency prefix and
   successor namespaces before appending, then syncs the WAL before releasing
-  debt; and
+  debt;
+- a successful synced checkpoint cleanup releases debt through its durable
+  `AppliedCommandLSN`, so a later barrier cannot reopen a covered segment that
+  cleanup deleted; and
 - pre-append failures are retryable, while ambiguous post-append/sync failures
   poison the handle and require recovery.
 

@@ -1877,11 +1877,15 @@ the exact dependency handles, required byte/RID frontiers, and any rotated
 command-WAL file and successor-name obligations. A later durable command or
 barrier deterministically coalesces debt through its assigned prefix, syncs the
 exact files, stabilizes the retained namespaces, appends the durable V2 frame,
-and then syncs the command WAL. Only that successful final WAL sync advances the
-in-memory durable WAL LSN and releases covered debt. A failure before the frame
-append retains the debt for retry; a failure after append or during the final
-WAL sync is commit-ambiguous and poisons the open handle with
-`ErrRecoveryRequired`.
+and then syncs the command WAL. That successful final WAL sync advances the
+in-memory durable WAL LSN and releases covered debt. A successful synced
+checkpoint cleanup may also advance and release through the already-durable
+`AppliedCommandLSN`: durable root coverage has superseded those command frames,
+and cleanup may already have deleted their segments. Cleanup or directory-sync
+failure retains the debt; a later barrier must never reopen a deleted segment
+through an obsolete rotation token. A failure before a durable frame append
+retains the debt for retry; a failure after append or during the final WAL sync
+is commit-ambiguous and poisons the open handle with `ErrRecoveryRequired`.
 
 Every V2 `RawKVBatch` frame containing at least one `SetRID` operation has
 exactly one `ExternalRefFenceV1` precondition. Frames without `SetRID` have no
