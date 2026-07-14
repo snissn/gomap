@@ -1,12 +1,101 @@
 package db
 
 import (
+	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+// StableDictionaryResourceProvider captures the exact durable transitive
+// closure needed to decode one dictionary generation.
+type StableDictionaryResourceProvider interface {
+	CaptureDictionaryResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
+}
+
+// ValidateStableDictionaryResourceClosure binds the bytes selected by an
+// encoder to every physical resource returned by a dictionary provider.
+func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableResourceSet, dictID uint64, dictionary []byte) error {
+	if resources == nil || dictID == 0 || len(dictionary) == 0 {
+		return fmt.Errorf("%w: incomplete dictionary resource closure", rootpublication.ErrUnresolvedResource)
+	}
+	digest := sha256.Sum256(dictionary)
+	expectedLength := int64(len(dictionary))
+	foundDictionaryResource := false
+	for _, descriptor := range resources.Descriptors() {
+		isDictionaryResource := false
+		for _, field := range descriptor.ReachabilityFields() {
+			if field == rootpublication.ReachabilityDictionaryGeneration {
+				isDictionaryResource = true
+				foundDictionaryResource = true
+				break
+			}
+		}
+		if !isDictionaryResource {
+			continue
+		}
+		matched := false
+		for _, obligation := range descriptor.LogicalObligations() {
+			if obligation.Generation == dictID && obligation.FileID == dictID &&
+				obligation.Offset == 0 && obligation.Length == expectedLength &&
+				obligation.Reachability == rootpublication.ReachabilityDictionaryGeneration &&
+				obligation.Digest == digest {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%w: dictionary %d bytes do not match captured resource closure", rootpublication.ErrResourceConflict, dictID)
+		}
+	}
+	if !foundDictionaryResource {
+		return fmt.Errorf("%w: dictionary %d closure has no dictionary resource", rootpublication.ErrUnresolvedResource, dictID)
+	}
+	return nil
+}
+
+// SetStableDictionaryResourceProvider installs the authority provider used by
+// rewrite and packed-generation producers. It is separate from DictLookup:
+// bytes alone do not prove durable reachability or deletion safety.
+func (db *DB) SetStableDictionaryResourceProvider(provider StableDictionaryResourceProvider) {
+	if db == nil {
+		return
+	}
+	db.stableDictionaryResourcesMu.Lock()
+	db.stableDictionaryResources = provider
+	db.stableDictionaryResourcesMu.Unlock()
+}
+
+func (db *DB) stableDictionaryResourceProvider() StableDictionaryResourceProvider {
+	if db == nil {
+		return nil
+	}
+	db.stableDictionaryResourcesMu.RLock()
+	provider := db.stableDictionaryResources
+	db.stableDictionaryResourcesMu.RUnlock()
+	return provider
+}
+
+func captureStableDictionaryResources(provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte) (*rootpublication.StableResourceSet, error) {
+	if dictID == 0 || len(dictionary) == 0 {
+		return nil, nil
+	}
+	if provider == nil {
+		return nil, fmt.Errorf("%w: dictionary %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, dictID)
+	}
+	resources, err := provider.CaptureDictionaryResources(context.Background(), dictID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateStableDictionaryResourceClosure(resources, dictID, dictionary); err != nil {
+		resources.Release()
+		return nil, err
+	}
+	return resources, nil
+}
 
 func (generation *indexGen) stableIndexNamespaceToken(dir string) (*rootpublication.StableNamespaceToken, error) {
 	if generation == nil || generation.pager == nil || dir == "" {

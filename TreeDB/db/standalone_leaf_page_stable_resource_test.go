@@ -4,13 +4,119 @@ package db
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestStandaloneStableLeafRewriteMergesDictionaryClosure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageBytes := buildRewriteLeafPageFixture(t, "stable-a")
+	pages := [][]byte{
+		pageBytes,
+		buildRewriteLeafPageFixture(t, "stable-b"),
+		buildRewriteLeafPageFixture(t, "stable-c"),
+	}
+	compact := make([][]byte, len(pages))
+	for i := range pages {
+		compact[i], _, err = valuelog.MaybeCompactLeafLogPayload(pages[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	const dictID = uint64(7301)
+	dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID: uint32(dictID), Contents: compact, History: append([]byte(nil), compact[0]...),
+		Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
+	db.SetStableDictionaryResourceProvider(provider)
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.blockCompression = true
+	writer.SetLeafDictMode(dictID, dictionary, false)
+	db.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = db.Close()
+		_ = writer.Close()
+	})
+
+	stable := db.leafPageLog.(LeafPageStableLog)
+	_, resources, err := stable.AppendLeafPageWithStableResources(pageBytes)
+	if err != nil {
+		t.Fatalf("stable dictionary rewrite: %v", err)
+	}
+	if resources == nil {
+		t.Fatal("stable dictionary rewrite returned nil resources")
+	}
+	defer resources.Release()
+	var hasDictionary, hasOuterLeaf bool
+	for _, descriptor := range resources.Descriptors() {
+		for _, field := range descriptor.ReachabilityFields() {
+			switch field {
+			case rootpublication.ReachabilityDictionaryGeneration:
+				hasDictionary = true
+			case rootpublication.ReachabilityOuterLeafRawPointer:
+				hasOuterLeaf = true
+			}
+		}
+	}
+	if !hasDictionary || !hasOuterLeaf || provider.captureCalls.Load() != 1 {
+		t.Fatalf("stable rewrite closure dictionary=%v outer-leaf=%v captureCalls=%d", hasDictionary, hasOuterLeaf, provider.captureCalls.Load())
+	}
+}
+
+func TestStandaloneStableLeafRewriteRejectsDictionaryAuthorityMismatchBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const dictID = uint64(7302)
+	provider := newTestStableDictionaryProvider(t, dictID, []byte("different-provider-dictionary"))
+	db.SetStableDictionaryResourceProvider(provider)
+	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	writer.blockCompression = true
+	writer.SetLeafDictMode(dictID, []byte("writer-selected-dictionary"), false)
+	db.SetLeafPageLog(writer)
+	t.Cleanup(func() {
+		_ = db.Close()
+		_ = writer.Close()
+	})
+	before, err := os.ReadDir(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := db.leafPageLog.(LeafPageStableLog)
+	_, resources, err := stable.AppendLeafPageWithStableResources(buildRewriteLeafPageFixture(t, "mismatch"))
+	if resources != nil {
+		resources.Release()
+		t.Fatal("dictionary mismatch returned resources")
+	}
+	if !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("stable mismatch error=%v want resource conflict", err)
+	}
+	after, err := os.ReadDir(LeafLogDirPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) || writer.leafW != nil {
+		t.Fatalf("dictionary mismatch mutated leaf writer: before=%d after=%d writer=%v", len(before), len(after), writer.leafW)
+	}
+}
 
 func standaloneStableLeafPages(count, size int) [][]byte {
 	pages := make([][]byte, count)

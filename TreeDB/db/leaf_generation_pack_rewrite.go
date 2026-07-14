@@ -1200,6 +1200,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: prepare packed promotion authority: %w", err)
 	}
+	if err := authority.captureDictionary(writer.leafDictID, writer.leafDict); err != nil {
+		_ = authority.release()
+		return 0, 0, fmt.Errorf("vlog-rewrite: capture packed dictionary authority: %w", err)
+	}
 	defer func() {
 		if !authority.retainedForRecovery {
 			err = errors.Join(err, authority.release())

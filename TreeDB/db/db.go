@@ -153,6 +153,8 @@ type DB struct {
 	valueLogDictPut                func(context.Context, []byte) (uint64, error)
 	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
 	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
+	stableDictionaryResourcesMu    sync.RWMutex
+	stableDictionaryResources      StableDictionaryResourceProvider
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32

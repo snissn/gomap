@@ -4349,6 +4349,12 @@ func (db *DB) SetDictStore(store DictStore) {
 		return
 	}
 	db.dictStore = store
+	if setter, ok := db.backend.(interface {
+		SetStableDictionaryResourceProvider(backenddb.StableDictionaryResourceProvider)
+	}); ok {
+		provider, _ := store.(backenddb.StableDictionaryResourceProvider)
+		setter.SetStableDictionaryResourceProvider(provider)
+	}
 	db.dictCurrentCached.Store(0)
 	db.dictCurrentOps.Store(0)
 	for class := 0; class < vlogDictClassCount; class++ {
@@ -17078,7 +17084,7 @@ func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, record
 		if captureErr != nil {
 			return nil, nil, captureErr
 		}
-		if captureErr := validateCapturedDictionaryResources(dictionaryResources, dictID, dict); captureErr != nil {
+		if captureErr := backenddb.ValidateStableDictionaryResourceClosure(dictionaryResources, dictID, dict); captureErr != nil {
 			dictionaryResources.Release()
 			return nil, nil, captureErr
 		}

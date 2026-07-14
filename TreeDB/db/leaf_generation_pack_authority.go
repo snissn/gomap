@@ -39,11 +39,24 @@ type leafGenerationPackPromotionAuthority struct {
 	destinationParent     *os.File
 	destinationGeneration uint64
 	segments              []leafGenerationPackAuthoritySegment
+	dictionaryResources   *rootpublication.StableResourceSet
 	resources             *rootpublication.StableResourceSet
 	namespaceSyncNanos    int64
 	retainedForRecovery   bool
 	released              bool
 	moveNoReplace         func(*os.File, *os.File, string, *os.File, string) (bool, error)
+}
+
+func (authority *leafGenerationPackPromotionAuthority) captureDictionary(dictID uint64, dictionary []byte) error {
+	if authority == nil || authority.released || authority.dictionaryResources != nil || len(authority.segments) != 0 {
+		return rootpublication.ErrResourceOwnership
+	}
+	resources, err := captureStableDictionaryResources(authority.db.stableDictionaryResourceProvider(), dictID, dictionary)
+	if err != nil {
+		return err
+	}
+	authority.dictionaryResources = resources
+	return nil
 }
 
 func leafGenerationPackPromotionPreflight() error {
@@ -312,6 +325,13 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		}
 	}
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafPackedPointer)
+	if authority.dictionaryResources != nil {
+		if err := builder.Merge(authority.dictionaryResources); err != nil {
+			builder.Abandon()
+			return fail(err)
+		}
+		authority.dictionaryResources = nil
+	}
 	for i := range authority.segments {
 		segment := &authority.segments[i]
 		relativePath, err := filepath.Rel(authority.db.dir, segment.created.path)
@@ -377,6 +397,10 @@ func (authority *leafGenerationPackPromotionAuthority) releaseCaptured() {
 	if authority.resources != nil {
 		authority.resources.Release()
 		authority.resources = nil
+	}
+	if authority.dictionaryResources != nil {
+		authority.dictionaryResources.Release()
+		authority.dictionaryResources = nil
 	}
 	for i := range authority.segments {
 		segment := &authority.segments[i]
