@@ -18,8 +18,9 @@ A complete restorable root-layout backup includes:
   external-ref protection metadata;
 - `maindb/leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
   manifests/indexes when outer leaves are enabled;
-- all external-ref payload files and future column files referenced by roots or
-  non-cleaned command WAL frames;
+- future external-ref payload files and future column files referenced by roots
+  or non-cleaned command WAL frames, once their authority contracts are
+  activated (payload-file class `3` is currently reserved and rejected);
 - `dictdb/**` and `templatedb/**`, including each side store's `index.db`,
   `format.json`, `wal/`, `value_vlog/`, `leaf_vlog/`, and cleanup metadata,
   when those stores are enabled;
@@ -75,11 +76,13 @@ Procedure:
 1. `BeginBackupBarrier(mode=WALSnapshot)`.
 2. Fence command-WAL admission at a cut.
 3. Wait for external-ref prepares before the cut to commit/protect or
-   abort/classify.
-4. Rotate/seal WAL, value-log, leaf-log, and external-ref payload files needed
-   by the cut, or record exact byte ranges plus checksums for active tails.
-5. Fsync every manifest-listed WAL segment/range and external-ref payload to the
-   selected durability boundary.
+   abort/classify. This includes payload-file prepares only after that reserved
+   class is activated.
+4. Rotate/seal WAL, value-log, leaf-log, and any activated external-ref payload
+   files needed by the cut, or record exact byte ranges plus checksums for
+   active tails.
+5. Fsync every manifest-listed WAL segment/range and activated external-ref
+   payload to the selected durability boundary.
 6. Write and fsync the backup manifest.
 7. Release writers after the filesystem snapshot is taken, or keep manifest
    retention pins until `EndBackupBarrier` after file copy completes.
@@ -114,7 +117,8 @@ Restore/open validation before serving reads:
 7. stop open before serving reads on any missing or corrupt required external ref;
 8. replay unapplied commands and publish recovered roots plus `AppliedLSN`
    atomically;
-9. classify uncommitted prepared/final external-ref payload files;
+9. classify uncommitted prepared/final external-ref payload files for activated
+   classes;
 10. quarantine, but do not immediately purge, files proven orphaned.
 
 Backup/restore validation fails closed on missing required command-WAL external
@@ -124,8 +128,9 @@ cleaned.
 
 ## 4. Quarantine and Purge
 
-Quarantine records must be durable before external-ref payload files are moved,
-hidden, or made unavailable for normal recovery. A quarantine manifest records
+Once payload-file authority is activated, quarantine records must be durable
+before those external-ref payload files are moved, hidden, or made unavailable
+for normal recovery. A quarantine manifest records
 source class, source registry path, `FileID`/part id, size, checksum,
 classification reason, recovery generation, and the proof that no committed WAL,
 published root, snapshot, read view, or backup manifest references the file.

@@ -2171,7 +2171,7 @@ sections so PR1 can harden framing before replay uses them. The PR1 external-ref
 section starts with `u32 Count`; each ref is:
 
 ```text
-u16 Class          // 1=value-log, 2=leaf-log, 3=payload file
+u16 Class          // 1=value-log, 2=leaf-log; 3=reserved payload file
 u16 Flags
 u32 PathLen
 u64 FileID
@@ -2180,6 +2180,11 @@ u64 Length
 bytes[32] Digest
 bytes Path[PathLen]
 ```
+
+Class `3` is reserved for a future payload-file authority contract. It is
+currently quarantined: encoders and both V1 and V2 readers reject it as corrupt
+until production identity, synchronization, recovery, and deletion ownership
+are defined. Unknown classes likewise fail closed.
 
 Precondition and result-assertion sections each start with `u32 Count`; every
 entry is:
