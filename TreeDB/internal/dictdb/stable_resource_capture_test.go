@@ -6,8 +6,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
+	"os"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -192,5 +196,251 @@ func TestCaptureDictionaryResourcesInlineDefinitionNeedsOnlyPinnedIndexGeneratio
 	tokens := resources.Tokens()
 	if len(tokens) != 1 || tokens[0].DiagnosticPath() != "index.db" {
 		t.Fatalf("inline closure tokens=%v want index.db", tokens)
+	}
+}
+
+func TestCaptureDictionaryResourcesUnionMultiplePointerIDsIsDeterministic(t *testing.T) {
+	store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	firstPayload := bytes.Repeat([]byte("first-shared-dictionary-"), 256)
+	secondPayload := bytes.Repeat([]byte("second-shared-dictionary-"), 256)
+	put := func(payload []byte) uint64 {
+		t.Helper()
+		id, err := store.PutDictBytes(context.Background(), payload)
+		if err != nil {
+			t.Fatalf("put dictionary: %v", err)
+		}
+		return id
+	}
+	firstID, secondID := put(firstPayload), put(secondPayload)
+	capture := func(id uint64) *rootpublication.StableResourceSet {
+		t.Helper()
+		resources, err := store.CaptureDictionaryResources(context.Background(), id)
+		if err != nil {
+			t.Fatalf("capture dictionary %d: %v", id, err)
+		}
+		return resources
+	}
+	firstForward, secondForward := capture(firstID), capture(secondID)
+	firstReverse, secondReverse := capture(firstID), capture(secondID)
+	defer firstForward.Release()
+	defer secondForward.Release()
+	defer firstReverse.Release()
+	defer secondReverse.Release()
+
+	union := func(first, second *rootpublication.StableResourceSet) *rootpublication.StableResourceSet {
+		t.Helper()
+		builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
+		defer builder.Abandon()
+		if err := builder.Merge(first); err != nil {
+			t.Fatalf("merge first dictionary: %v", err)
+		}
+		if err := builder.Merge(second); err != nil {
+			t.Fatalf("merge second dictionary sharing physical storage: %v", err)
+		}
+		resources, err := builder.Freeze()
+		if err != nil {
+			t.Fatalf("freeze dictionary union: %v", err)
+		}
+		return resources
+	}
+	forward := union(firstForward, secondForward)
+	reverse := union(secondReverse, firstReverse)
+	defer forward.Release()
+	defer reverse.Release()
+	if got := forward.Len(); got != 2 {
+		t.Fatalf("forward union physical resources=%d want one index and one shared value-log segment", got)
+	}
+	if got := reverse.Len(); got != 2 {
+		t.Fatalf("reverse union physical resources=%d want one index and one shared value-log segment", got)
+	}
+	if !reflect.DeepEqual(forward.Descriptors(), reverse.Descriptors()) {
+		t.Fatalf("dictionary union descriptors depend on merge order:\nforward=%+v\nreverse=%+v", forward.Descriptors(), reverse.Descriptors())
+	}
+
+	want := map[uint64][32]byte{
+		firstID:  sha256.Sum256(firstPayload),
+		secondID: sha256.Sum256(secondPayload),
+	}
+	for _, descriptor := range forward.Descriptors() {
+		obligations := descriptor.LogicalObligations()
+		if len(obligations) != len(want) {
+			t.Fatalf("descriptor generation %d obligations=%d want %d", descriptor.Generation(), len(obligations), len(want))
+		}
+		seen := make(map[uint64]struct{}, len(obligations))
+		for _, obligation := range obligations {
+			digest, ok := want[obligation.Generation]
+			if !ok || obligation.FileID != obligation.Generation || obligation.Digest != digest ||
+				obligation.Reachability != rootpublication.ReachabilityDictionaryGeneration {
+				t.Fatalf("union lost or changed dictionary obligation: %+v", obligation)
+			}
+			seen[obligation.Generation] = struct{}{}
+		}
+		if len(seen) != len(want) {
+			t.Fatalf("descriptor generation %d retained %d dictionary IDs want %d", descriptor.Generation(), len(seen), len(want))
+		}
+	}
+
+	forward.Release()
+	reverse.Release()
+	firstForward.Release()
+	secondForward.Release()
+	firstReverse.Release()
+	secondReverse.Release()
+	if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
+		t.Fatalf("dictionary union release left active value-log pins=%d", got)
+	}
+	if err := store.backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("dictionary union release left online-vacuum fence: %v", err)
+	}
+}
+
+func TestCaptureDictionaryResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing.T) {
+	const iterations = 320
+	store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+	payload := bytes.Repeat([]byte("dedupe-resource-plateau-"), 256)
+	dictID, err := store.PutDictBytes(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	warm, err := store.CaptureDictionaryResources(context.Background(), dictID)
+	if err != nil {
+		t.Fatalf("warm capture: %v", err)
+	}
+	if got := warm.Len(); got != 2 {
+		warm.Release()
+		t.Fatalf("warm resources=%d want index+value-log closure", got)
+	}
+	warm.Release()
+	registry := store.backend.StableResourceIdentityPinRegistry()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("warm release left active pins=%d", got)
+	}
+
+	beforeFDs, fdErr := os.ReadDir("/dev/fd")
+	checkFDs := fdErr == nil
+	for i := 0; i < iterations; i++ {
+		reusedID, err := store.PutDictBytes(context.Background(), payload)
+		if err != nil {
+			t.Fatalf("dedupe put %d: %v", i, err)
+		}
+		if reusedID != dictID {
+			t.Fatalf("dedupe put %d id=%d want %d", i, reusedID, dictID)
+		}
+		resources, err := store.CaptureDictionaryResources(context.Background(), reusedID)
+		if err != nil {
+			t.Fatalf("dedupe capture %d: %v", i, err)
+		}
+		if got := resources.Len(); got != 2 {
+			resources.Release()
+			t.Fatalf("dedupe %d resources=%d want index+value-log closure", i, got)
+		}
+		if got := registry.ActivePins(); got != 1 {
+			resources.Release()
+			t.Fatalf("dedupe %d active value-log pins=%d want 1", i, got)
+		}
+		resources.Release()
+		if got := registry.ActivePins(); got != 0 {
+			t.Fatalf("dedupe %d left active pins=%d", i, got)
+		}
+	}
+	if checkFDs {
+		afterFDs, err := os.ReadDir("/dev/fd")
+		if err != nil {
+			t.Fatalf("read descriptor directory after stress: %v", err)
+		}
+		if len(afterFDs) > len(beforeFDs)+2 {
+			t.Fatalf("descriptor count grew from %d to %d after %d captures", len(beforeFDs), len(afterFDs), iterations)
+		}
+	}
+	if err := store.backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("dedupe release left online-vacuum fence: %v", err)
+	}
+}
+
+func BenchmarkCaptureDictionaryResources(b *testing.B) {
+	ctx := context.Background()
+	cases := []struct {
+		name    string
+		payload []byte
+		unique  bool
+	}{
+		{name: "inline-dedupe", payload: []byte("bench-inline-dictionary")},
+		{name: "pointer-dedupe", payload: bytes.Repeat([]byte("bench-pointer-dictionary-"), 256)},
+		{name: "pointer-create", payload: bytes.Repeat([]byte("bench-pointer-create-"), 256), unique: true},
+	}
+	for _, benchmark := range cases {
+		b.Run(benchmark.name, func(b *testing.B) {
+			store, err := Open(b.TempDir(), db.Options{ChunkSize: 64 * 1024})
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer store.Close()
+			warmID, err := store.PutDictBytes(ctx, benchmark.payload)
+			if err != nil {
+				b.Fatal(err)
+			}
+			warm, err := store.CaptureDictionaryResources(ctx, warmID)
+			if err != nil {
+				b.Fatal(err)
+			}
+			resourcesPerOp := warm.Len()
+			var pinHighWater uint64
+			for _, stats := range warm.Stats(time.Now()) {
+				if stats.PinHighWater > pinHighWater {
+					pinHighWater = stats.PinHighWater
+				}
+			}
+			warm.Release()
+			var beforeFileSyncs, beforeNamespaceSyncs uint64
+			if store.vlog != nil {
+				stats := store.vlog.DurabilityStats()
+				beforeFileSyncs = stats.FileSyncCalls
+				beforeNamespaceSyncs = stats.DirectorySyncCalls
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				payload := benchmark.payload
+				if benchmark.unique {
+					payload = make([]byte, len(benchmark.payload)+8)
+					copy(payload, benchmark.payload)
+					binary.LittleEndian.PutUint64(payload[len(benchmark.payload):], uint64(i+1))
+				}
+				dictID, err := store.PutDictBytes(ctx, payload)
+				if err != nil {
+					b.Fatal(err)
+				}
+				resources, err := store.CaptureDictionaryResources(ctx, dictID)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if resources.Len() != resourcesPerOp {
+					resources.Release()
+					b.Fatalf("dictionary closure resources=%d want %d", resources.Len(), resourcesPerOp)
+				}
+				resources.Release()
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(resourcesPerOp), "descriptors/op")
+			b.ReportMetric(float64(pinHighWater), "pin_high_water")
+			if store.vlog != nil {
+				stats := store.vlog.DurabilityStats()
+				b.ReportMetric(float64(stats.FileSyncCalls-beforeFileSyncs)/float64(b.N), "vlog_file_syncs/op")
+				b.ReportMetric(float64(stats.DirectorySyncCalls-beforeNamespaceSyncs)/float64(b.N), "vlog_namespace_syncs/op")
+			} else {
+				b.ReportMetric(0, "vlog_file_syncs/op")
+				b.ReportMetric(0, "vlog_namespace_syncs/op")
+			}
+		})
 	}
 }
