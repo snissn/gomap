@@ -21,6 +21,7 @@ import (
 type leafPackAuthorityFixture struct {
 	db          *DB
 	registry    *rootpublication.IdentityPinRegistry
+	stagingRoot string
 	stagingDir  string
 	destination string
 	path        string
@@ -66,7 +67,7 @@ func newLeafPackAuthorityFixture(tb testing.TB) leafPackAuthorityFixture {
 	}
 	registry := rootpublication.NewIdentityPinRegistry()
 	return leafPackAuthorityFixture{
-		db: &DB{dir: root, valueLogIdentityPins: registry}, registry: registry,
+		db: &DB{dir: root, valueLogIdentityPins: registry}, registry: registry, stagingRoot: filepath.Dir(stagingDir),
 		stagingDir: stagingDir, destination: destination, path: path, fileID: fileID, writer: writer,
 		created: rewriteCreatedSegment{path: path, fileID: fileID, identity: identity}, pointer: pointer,
 	}
@@ -125,7 +126,7 @@ func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		fixture := newLeafPackAuthorityFixture(b)
-		authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+		authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -176,7 +177,7 @@ func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
 func TestLeafGenerationPackPromotionAuthorityRetainsExactPackedResourceThroughRegistration(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +265,7 @@ func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *t
 	dictionary := []byte("packed dictionary authority")
 	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
 	fixture.db.SetStableDictionaryResourceProvider(provider)
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,14 +301,14 @@ func TestLeafGenerationPackPromotionAuthorityMergesAndOwnsDictionaryClosure(t *t
 	}
 }
 
-func TestLeafGenerationPackPromotionAuthorityRetainsDictionaryAcrossPostLinkPoison(t *testing.T) {
+func TestLeafGenerationPackPromotionAuthorityRollsBackPostLinkPoisonAndRetainsDictionaryUntilRelease(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
 	const dictID = uint64(7402)
 	dictionary := []byte("poisoned packed dictionary authority")
 	provider := newTestStableDictionaryProvider(t, dictID, dictionary)
 	fixture.db.SetStableDictionaryResourceProvider(provider)
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,14 +320,22 @@ func TestLeafGenerationPackPromotionAuthorityRetainsDictionaryAcrossPostLinkPois
 	}
 	fixture.close(t)
 	poison := errors.New("post-link poison")
-	authority.moveNoReplace = func(*os.File, *os.File, string, *os.File, string) (bool, error) {
+	authority.moveNoReplace = func(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+		installed, err := rootpublication.MoveStableChildFileNoReplace(sourceParent, expected, oldName, destinationParent, newName)
+		if err != nil || !installed {
+			return installed, err
+		}
 		return true, poison
 	}
-	if _, mutated, err := authority.promote(); !mutated || !errors.Is(err, poison) || !errors.Is(err, ErrRecoveryRequired) {
+	if _, mutated, err := authority.promote(); mutated || !errors.Is(err, poison) || errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("poisoned promote mutated=%v err=%v", mutated, err)
 	}
-	if !authority.retainedForRecovery || provider.releaseCalls.Load() != 0 {
+	if authority.retainedForRecovery || provider.releaseCalls.Load() != 0 {
 		t.Fatalf("poisoned authority retained=%v dictionary releases=%d", authority.retainedForRecovery, provider.releaseCalls.Load())
+	}
+	destination := filepath.Join(fixture.destination, filepath.Base(fixture.path))
+	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("poisoned destination survived exact rollback: %v", statErr)
 	}
 	if err := authority.release(); err != nil {
 		t.Fatal(err)
@@ -370,7 +379,7 @@ func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t 
 	}
 	secondCreated := rewriteCreatedSegment{path: secondPath, fileID: secondFileID, identity: secondIdentity}
 
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +441,7 @@ func TestLeafGenerationPackPromotionAuthorityMultipleSegmentsShareParentSyncs(t 
 func TestLeafGenerationPackPromotionAuthorityRejectsExistingDestinationBeforeMutation(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +470,7 @@ func TestLeafGenerationPackPromotionAuthorityRejectsExistingDestinationBeforeMut
 func TestLeafGenerationPackPromotionAuthorityRejectsReboundSourceBeforeMutation(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,37 +623,77 @@ func TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles(t *tes
 func TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	secondCreated, secondPointer, secondWriter := newLeafPackAuthorityFixtureSegment(t, &fixture, 2)
+	defer secondWriter.Close()
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer authority.release()
-	if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
+	if err := authority.capture(
+		[]rewriteCreatedSegment{fixture.created, secondCreated},
+		[]page.LeafLogPtr{fixture.pointer, secondPointer},
+	); err != nil {
 		t.Fatal(err)
 	}
 	fixture.close(t)
+	if err := secondWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
 	testErr := errors.New("post-install source identity ambiguity")
-	authority.moveNoReplace = func(*os.File, *os.File, string, *os.File, string) (bool, error) {
+	authority.moveNoReplace = func(sourceParent, expected *os.File, oldName string, destinationParent *os.File, newName string) (bool, error) {
+		installed, err := rootpublication.MoveStableChildFileNoReplace(sourceParent, expected, oldName, destinationParent, newName)
+		if err != nil || !installed {
+			return installed, err
+		}
 		return true, testErr
 	}
+	deletionSyncErr := errors.New("injected promoted cleanup deletion sync failure")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeDeletionDirectorySync {
+			return deletionSyncErr
+		}
+		return nil
+	})
 	promoted, mutated, err := authority.promote()
-	if !mutated || !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
+	restore()
+	if !mutated || !errors.Is(err, testErr) || !errors.Is(err, deletionSyncErr) || !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("promote mutated=%v err=%v want ambiguous recovery", mutated, err)
 	}
-	if len(promoted) != 1 || promoted[0] != fixture.created {
-		t.Fatalf("ambiguous cleanup state=%+v want original %+v", promoted, fixture.created)
+	destination := filepath.Join(fixture.destination, filepath.Base(fixture.path))
+	if len(promoted) != 2 || promoted[0].path != destination || promoted[1] != secondCreated {
+		t.Fatalf("ambiguous cleanup state=%+v want exact destination %q", promoted, destination)
 	}
 	if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
 		t.Fatalf("ambiguous authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
 	}
+	if len(authority.recoveryCleanup) != 1 || authority.recoveryCleanup[0].path != destination || authority.recoveryStagingRoot != fixture.stagingRoot {
+		t.Fatalf("retained cleanup=%+v staging_root=%q want exact child and %q", authority.recoveryCleanup, authority.recoveryStagingRoot, fixture.stagingRoot)
+	}
+	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("ambiguous cleanup left destination linked: %v", statErr)
+	}
+	secondDestination := filepath.Join(fixture.destination, filepath.Base(secondCreated.path))
+	if _, statErr := os.Stat(secondDestination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("uninstalled second segment became a cleanup target: %v", statErr)
+	}
+	if err := fixture.db.runCaptureTeardownHooksLocked(); err != nil {
+		t.Fatalf("teardown retry: %v", err)
+	}
+	if _, statErr := os.Stat(fixture.stagingRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("teardown retained staging root: %v", statErr)
+	}
+	if stats := fixture.registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 {
+		t.Fatalf("teardown retained registry state: %+v", stats)
+	}
 }
 
-func TestLeafGenerationPackPromotionAuthorityRetainsCumulativePartialInstall(t *testing.T) {
+func TestLeafGenerationPackPromotionAuthorityRollsBackCumulativePartialInstall(t *testing.T) {
 	fixture := newLeafPackAuthorityFixture(t)
 	defer fixture.close(t)
 	secondCreated, secondPointer, secondWriter := newLeafPackAuthorityFixtureSegment(t, &fixture, 2)
 	defer secondWriter.Close()
-	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+	authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,25 +719,25 @@ func TestLeafGenerationPackPromotionAuthorityRetainsCumulativePartialInstall(t *
 		return false, testErr
 	}
 	promoted, mutated, err := authority.promote()
-	if moveCalls != 2 || !mutated || !errors.Is(err, testErr) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("promote calls=%d mutated=%v err=%v want cumulative recovery failure", moveCalls, mutated, err)
+	if moveCalls != 2 || mutated || !errors.Is(err, testErr) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("promote calls=%d mutated=%v err=%v want exact cumulative rollback", moveCalls, mutated, err)
 	}
-	if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
+	if authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
 		t.Fatalf("partial-install authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
 	}
 	firstDestination := filepath.Join(fixture.destination, filepath.Base(fixture.created.path))
 	if len(promoted) != 2 || promoted[0].path != firstDestination || promoted[1] != secondCreated {
 		t.Fatalf("partial promoted state=%+v want first destination and second original", promoted)
 	}
-	if err := rootpublication.ValidateStableChildLink(authority.destinationParent, authority.segments[0].handle, filepath.Base(firstDestination)); err != nil {
-		t.Fatalf("first installed identity: %v", err)
+	if _, statErr := os.Stat(firstDestination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("first destination survived exact rollback: %v", statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(fixture.destination, filepath.Base(secondCreated.path))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("second destination unexpectedly installed: %v", statErr)
 	}
 }
 
-func TestLeafGenerationPackPromotionAuthorityRetainsPostInstallCutFailures(t *testing.T) {
+func TestLeafGenerationPackPromotionAuthorityRollsBackPostInstallCutFailures(t *testing.T) {
 	tests := []struct {
 		name  string
 		match func(durabilitycut.Event) bool
@@ -701,7 +750,7 @@ func TestLeafGenerationPackPromotionAuthorityRetainsPostInstallCutFailures(t *te
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newLeafPackAuthorityFixture(t)
 			defer fixture.close(t)
-			authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+			authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -722,11 +771,15 @@ func TestLeafGenerationPackPromotionAuthorityRetainsPostInstallCutFailures(t *te
 			})
 			_, mutated, promoteErr := authority.promote()
 			restore()
-			if cutCalls != 1 || !mutated || !errors.Is(promoteErr, testErr) || !errors.Is(promoteErr, ErrRecoveryRequired) {
-				t.Fatalf("promote cuts=%d mutated=%v err=%v want retained post-install failure", cutCalls, mutated, promoteErr)
+			if cutCalls != 1 || mutated || !errors.Is(promoteErr, testErr) || errors.Is(promoteErr, ErrRecoveryRequired) {
+				t.Fatalf("promote cuts=%d mutated=%v err=%v want exact post-install rollback", cutCalls, mutated, promoteErr)
 			}
-			if !authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
+			if authority.retainedForRecovery || fixture.registry.ActivePins() == 0 {
 				t.Fatalf("post-install authority retained=%v pins=%d", authority.retainedForRecovery, fixture.registry.ActivePins())
+			}
+			destination := filepath.Join(fixture.destination, filepath.Base(fixture.path))
+			if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("post-install destination survived exact rollback: %v", statErr)
 			}
 		})
 	}
@@ -747,7 +800,7 @@ func TestLeafGenerationPackPromotionAuthorityRejectsMalformedPointers(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newLeafPackAuthorityFixture(t)
 			defer fixture.close(t)
-			authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
+			authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingRoot, fixture.stagingDir, fixture.destination)
 			if err != nil {
 				t.Fatal(err)
 			}

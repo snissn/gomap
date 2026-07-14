@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -432,75 +433,256 @@ func TestColumnVectorGraphStableAuthorityRejectsEachMissingTransitiveChild(t *te
 	if !rootpublication.StableRelativeNamespaceSupported() {
 		t.Skip("stable vector authority requires exact relative namespace support")
 	}
-	roles := []ColumnAssetKind{
-		ColumnAssetKindTCS1TypedColumnPart,
-		ColumnAssetKindTCS1Int64Values,
-		ColumnAssetKindTCS1HNSWSearchPack,
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, -1}},
+		{id: "doc-b", vector: []float32{0.5, -0.5, 0.25}},
+		{id: "doc-c", vector: []float32{-0.25, 0.75, 0}},
 	}
-	for omitted := range roles {
-		t.Run(string(roles[omitted]), func(t *testing.T) {
-			cfg := testColumnStoreConfig(nil)
-			normalized, err := normalizeColumnStoreConfig("vector-missing-child-"+string(roles[omitted]), cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			registry := rootpublication.NewIdentityPinRegistry()
-			authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
-			if err != nil {
-				t.Fatal(err)
-			}
-			appender, err := authority.newAppender(t.TempDir(), *normalized)
-			if err != nil {
-				authority.abandon()
-				t.Fatal(err)
-			}
-			items := make([]columnPhysicalAssetAppendItem, 0, len(roles)-1)
-			for i, kind := range roles {
-				if i == omitted {
-					continue
-				}
-				items = append(items, columnPhysicalAssetAppendItem{payload: []byte("child-" + string(kind)), kind: kind, generation: 1, partID: uint64(i + 1)})
-			}
-			refs, err := appender.appendKinds(items)
-			if err != nil {
-				_ = appender.abort()
-				authority.abandon()
-				t.Fatal(err)
-			}
-			if err := authority.closeAppender(appender); err != nil {
-				authority.abandon()
-				t.Fatal(err)
-			}
-			resources, err := authority.builder.Freeze()
-			if err != nil {
-				authority.abandon()
-				t.Fatal(err)
-			}
-			authority.builder = nil
-			defer resources.Release()
 
-			expected := make([]ColumnPreparedAsset, 0, len(roles))
-			for _, ref := range refs {
-				expected = append(expected, ColumnPreparedAsset{Ref: ref})
-			}
-			last := refs[len(refs)-1]
-			missing := last
-			missing.Kind = roles[omitted]
-			missing.PartID = uint64(omitted + 1)
-			missing.Offset = last.Offset + last.Length
-			missing.Length = 1
-			missing.Checksum++
-			expected = append(expected, ColumnPreparedAsset{Ref: missing})
-			err = validateStableVectorGraphResourcesMatchPrepared(expected, resources)
-			if err == nil || !strings.Contains(err.Error(), string(rootpublication.ReachabilityVectorGraphPack)) {
-				t.Fatalf("missing %s error=%v want exact %s field", roles[omitted], err, rootpublication.ReachabilityVectorGraphPack)
-			}
+	// First obtain the complete closure from the public producer API. The hook
+	// observes the exact state.Assets list produced by the same preparation; it
+	// does not construct substitute refs or snapshots.
+	openFixture := func(t testing.TB) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+		t.Helper()
+		_, d, collection, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{
+			scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha"),
+		})
+		return d, collection, def
+	}
+	baselineDB, baselineCollection, def := openFixture(t)
+	registry := baselineDB.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
+	var assets []columnVectorIndexStateAssetSnapshot
+	restoreObserve := setColumnVectorGraphStableAuthorityTestHook(func(_ *rootpublication.StableResourceSet, got []columnVectorIndexStateAssetSnapshot) error {
+		assets = append([]columnVectorIndexStateAssetSnapshot(nil), got...)
+		return nil
+	})
+	closure, err := baselineCollection.PrepareVectorIndexStableClosure(def.Name)
+	restoreObserve()
+	if err != nil {
+		_ = baselineDB.Close()
+		t.Fatalf("PrepareVectorIndexStableClosure complete closure: %v", err)
+	}
+	resources, err := closure.TakeStableResources()
+	if err != nil {
+		closure.Release()
+		_ = baselineDB.Close()
+		t.Fatalf("TakeStableResources complete closure: %v", err)
+	}
+	descriptors := resources.Descriptors()
+	obligations := make([]rootpublication.StableLogicalObligation, 0, len(assets))
+	for _, descriptor := range descriptors {
+		obligations = append(obligations, descriptor.LogicalObligations()...)
+	}
+	if len(descriptors) != 7 || len(obligations) != 11 || len(assets) != 11 {
+		resources.Release()
+		_ = baselineDB.Close()
+		t.Fatalf("complete production closure descriptors=%d obligations=%d assets=%d want 7/11/11", len(descriptors), len(obligations), len(assets))
+	}
+	wantRoles := map[string]int{
+		columnVectorIndexStateAssetRoleAdjacency:      2,
+		columnVectorIndexStateAssetRoleInverseNorm:    1,
+		columnVectorIndexStateAssetRoleRowRefs:        4,
+		columnVectorIndexStateAssetRoleDocumentIDs:    1,
+		columnVectorIndexStateAssetRoleQuantizedCodes: 1,
+		columnVectorIndexStateAssetRoleQuantizedAlpha: 1,
+		columnVectorIndexStateAssetRoleHNSWSearchPack: 1,
+	}
+	gotRoles := make(map[string]int, len(wantRoles))
+	wantObligations := make(map[rootpublication.StableLogicalObligation]columnVectorIndexStateAssetSnapshot, len(assets))
+	for _, asset := range assets {
+		gotRoles[asset.Role]++
+		obligation := stableColumnLogicalObligation(asset.Ref, rootpublication.ReachabilityVectorGraphPack)
+		if _, duplicate := wantObligations[obligation]; duplicate {
 			resources.Release()
-			if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
-				t.Fatalf("missing %s release pins=%d identities=%d", roles[omitted], registry.ActivePins(), registry.ActiveIdentities())
+			_ = baselineDB.Close()
+			t.Fatalf("duplicate producer asset obligation role=%q id=%q ref=%+v", asset.Role, asset.AssetID, asset.Ref)
+		}
+		wantObligations[obligation] = asset
+	}
+	if !reflect.DeepEqual(gotRoles, wantRoles) {
+		resources.Release()
+		_ = baselineDB.Close()
+		t.Fatalf("complete production closure role multiset=%v want %v", gotRoles, wantRoles)
+	}
+	// Keep the accepted-role registry independent of the produced-role
+	// multiset. All eight manifest roles are classified here; normalized
+	// vectors are the sole role intentionally deferred by the current producer.
+	declaredRoles := []string{
+		columnVectorIndexStateAssetRoleAdjacency,
+		columnVectorIndexStateAssetRoleInverseNorm,
+		columnVectorIndexStateAssetRoleNormalizedVectors,
+		columnVectorIndexStateAssetRoleRowRefs,
+		columnVectorIndexStateAssetRoleDocumentIDs,
+		columnVectorIndexStateAssetRoleQuantizedCodes,
+		columnVectorIndexStateAssetRoleQuantizedAlpha,
+		columnVectorIndexStateAssetRoleHNSWSearchPack,
+	}
+	for _, role := range declaredRoles {
+		if role == columnVectorIndexStateAssetRoleNormalizedVectors {
+			if gotRoles[role] != 0 {
+				resources.Release()
+				_ = baselineDB.Close()
+				t.Fatalf("deferred role %q unexpectedly produced %d assets", role, gotRoles[role])
 			}
+			continue
+		}
+		if _, ok := wantRoles[role]; !ok {
+			resources.Release()
+			_ = baselineDB.Close()
+			t.Fatalf("declared role %q is neither produced nor explicitly deferred", role)
+		}
+	}
+	if len(declaredRoles) != len(wantRoles)+1 {
+		resources.Release()
+		_ = baselineDB.Close()
+		t.Fatalf("declared roles=%d produced roles=%d want exactly one deferred role", len(declaredRoles), len(wantRoles))
+	}
+	for _, obligation := range obligations {
+		if _, ok := wantObligations[obligation]; !ok {
+			resources.Release()
+			_ = baselineDB.Close()
+			t.Fatalf("complete production closure contains obligation absent from real state.Assets: %+v", obligation)
+		}
+	}
+	baselineNamespaces := stableColumnVectorGraphNamespaceTokens(resources)
+	resources.Release()
+	assertStableColumnVectorGraphAuthorityReleased(t, registry, baselineNamespaces, baselinePins, baselineIdentities, "complete closure release")
+	if err := baselineDB.Close(); err != nil {
+		t.Fatalf("close complete-closure DB: %v", err)
+	}
+	assertStableColumnVectorGraphRegistryZero(t, registry, "complete closure DB close")
+
+	runOmission := func(t *testing.T, name string, wantOmitted int, decide func(rootpublication.StableLogicalObligation) columnAssetStableCaptureTestDecision) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			d, collection, def := openFixture(t)
+			registry := d.StableResourceIdentityPinRegistry()
+			baselinePins := registry.ActivePins()
+			baselineIdentities := registry.ActiveIdentities()
+			visibleRootBefore := columnVectorGraphStableVisibleManifestRoot(t, d)
+			var omitted int
+			var omittedNamespaces []*rootpublication.StableNamespaceToken
+			restoreOmission := setColumnAssetStableObligationTestHook(func(_ ColumnAssetRef, obligation rootpublication.StableLogicalObligation, namespace *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision {
+				if namespace != nil {
+					omittedNamespaces = append(omittedNamespaces, namespace)
+				}
+				decision := decide(obligation)
+				if decision != columnAssetStableCaptureKeep {
+					omitted++
+				}
+				return decision
+			})
+			missingClosure, prepareErr := collection.PrepareVectorIndexStableClosure(def.Name)
+			restoreOmission()
+			if missingClosure != nil {
+				missingClosure.Release()
+				_ = d.Close()
+				t.Fatal("missing production child returned a closure")
+			}
+			if !errors.Is(prepareErr, rootpublication.ErrUnresolvedResource) ||
+				!strings.Contains(prepareErr.Error(), "missing prepared obligation") ||
+				!strings.Contains(prepareErr.Error(), string(rootpublication.ReachabilityVectorGraphPack)) {
+				_ = d.Close()
+				t.Fatalf("%s error=%v want exact unresolved %s obligation", name, prepareErr, rootpublication.ReachabilityVectorGraphPack)
+			}
+			if omitted != wantOmitted {
+				_ = d.Close()
+				t.Fatalf("%s omitted=%d want %d real producer tokens/obligations", name, omitted, wantOmitted)
+			}
+			if got := columnVectorGraphStableVisibleManifestRoot(t, d); got != visibleRootBefore {
+				_ = d.Close()
+				t.Fatalf("%s published manifest root=%d before=%d", name, got, visibleRootBefore)
+			}
+			if len(omittedNamespaces) != len(descriptors) {
+				_ = d.Close()
+				t.Fatalf("%s namespace authorities=%d want segments=%d", name, len(omittedNamespaces), len(descriptors))
+			}
+			assertStableColumnVectorGraphAuthorityReleased(t, registry, omittedNamespaces, baselinePins, baselineIdentities, "missing "+name)
+			if err := d.Close(); err != nil {
+				t.Fatalf("close missing-child DB: %v", err)
+			}
+			assertStableColumnVectorGraphRegistryZero(t, registry, "missing "+name+" DB close")
 		})
 	}
+
+	for _, targetObligation := range obligations {
+		targetObligation := targetObligation
+		targetAsset := wantObligations[targetObligation]
+		name := "logical/" + string(targetAsset.Role) + "/" + targetAsset.AssetID
+		runOmission(t, name, 1, func(obligation rootpublication.StableLogicalObligation) columnAssetStableCaptureTestDecision {
+			if obligation == targetObligation {
+				return columnAssetStableCaptureOmitObligation
+			}
+			return columnAssetStableCaptureKeep
+		})
+	}
+	for descriptorIndex, descriptor := range descriptors {
+		targets := make(map[rootpublication.StableLogicalObligation]struct{}, len(descriptor.LogicalObligations()))
+		for _, obligation := range descriptor.LogicalObligations() {
+			targets[obligation] = struct{}{}
+		}
+		name := fmt.Sprintf("physical/segment-%d", descriptorIndex)
+		runOmission(t, name, len(targets), func(obligation rootpublication.StableLogicalObligation) columnAssetStableCaptureTestDecision {
+			if _, ok := targets[obligation]; ok {
+				return columnAssetStableCaptureOmitToken
+			}
+			return columnAssetStableCaptureKeep
+		})
+	}
+}
+
+func stableColumnVectorGraphNamespaceTokens(resources *rootpublication.StableResourceSet) []*rootpublication.StableNamespaceToken {
+	if resources == nil {
+		return nil
+	}
+	namespaces := make([]*rootpublication.StableNamespaceToken, 0, resources.Len())
+	for _, token := range resources.Tokens() {
+		if namespace := token.Namespace(); namespace != nil {
+			namespaces = append(namespaces, namespace)
+		}
+	}
+	return namespaces
+}
+
+func assertStableColumnVectorGraphAuthorityReleased(t *testing.T, registry *rootpublication.IdentityPinRegistry, namespaces []*rootpublication.StableNamespaceToken, wantPins uint64, wantIdentities int, context string) {
+	t.Helper()
+	if got := registry.ActivePins(); got != wantPins {
+		t.Fatalf("%s active pins=%d want baseline=%d", context, got, wantPins)
+	}
+	if got := registry.ActiveIdentities(); got != wantIdentities {
+		t.Fatalf("%s active identities=%d want baseline=%d", context, got, wantIdentities)
+	}
+	for i, namespace := range namespaces {
+		if err := namespace.Stabilize(); !errors.Is(err, rootpublication.ErrResourceOwnership) {
+			t.Fatalf("%s namespace[%d] stabilization after release=%v want ErrResourceOwnership", context, i, err)
+		}
+	}
+}
+
+func assertStableColumnVectorGraphRegistryZero(t *testing.T, registry *rootpublication.IdentityPinRegistry, context string) {
+	t.Helper()
+	if pins, identities := registry.ActivePins(), registry.ActiveIdentities(); pins != 0 || identities != 0 {
+		t.Fatalf("%s active pins=%d identities=%d want zero", context, pins, identities)
+	}
+}
+
+func columnVectorGraphStableVisibleManifestRoot(t *testing.T, d *backenddb.DB) uint64 {
+	t.Helper()
+	snapshot := d.AcquireSnapshot()
+	if snapshot == nil {
+		t.Fatal("acquire collection snapshot for visibility check")
+	}
+	defer func() { _ = snapshot.Close() }()
+	catalog, err := loadCollectionCatalog(snapshot, "docs")
+	if err != nil {
+		t.Fatalf("load collection catalog for visibility check: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("collection catalog missing for visibility check")
+	}
+	return catalog.rootID(collectionColumnManifestRootName("docs"))
 }
 
 func BenchmarkColumnVectorGraphStableResourceCapture(b *testing.B) {

@@ -34,6 +34,7 @@ type leafGenerationPackAuthoritySegment struct {
 // publication-seal authority tracked by #3679.
 type leafGenerationPackPromotionAuthority struct {
 	db                    *DB
+	stagingRoot           string
 	stagingDir            string
 	destinationDir        string
 	stagingParent         *os.File
@@ -44,6 +45,8 @@ type leafGenerationPackPromotionAuthority struct {
 	resources             *rootpublication.StableResourceSet
 	namespaceSyncNanos    int64
 	retainedForRecovery   bool
+	recoveryCleanup       []rewriteCreatedSegment
+	recoveryStagingRoot   string
 	released              bool
 	moveNoReplace         func(*os.File, *os.File, string, *os.File, string) (bool, error)
 }
@@ -84,9 +87,18 @@ func leafGenerationPackPromotionTargetPreflight(destinationDir string) error {
 	return nil
 }
 
-func newLeafGenerationPackPromotionAuthority(db *DB, stagingDir, destinationDir string) (*leafGenerationPackPromotionAuthority, error) {
+func newLeafGenerationPackPromotionAuthority(db *DB, stagingRoot, stagingDir, destinationDir string) (*leafGenerationPackPromotionAuthority, error) {
 	if db == nil || db.valueLogIdentityPins == nil {
 		return nil, fmt.Errorf("%w: leaf pack requires DB-scoped identity pins", rootpublication.ErrUnresolvedResource)
+	}
+	stagingRoot = filepath.Clean(stagingRoot)
+	stagingDir = filepath.Clean(stagingDir)
+	if stagingRoot == "." || stagingRoot == string(filepath.Separator) {
+		return nil, fmt.Errorf("%w: leaf pack requires an explicit outer staging root", rootpublication.ErrUnresolvedResource)
+	}
+	relativeStagingDir, err := filepath.Rel(stagingRoot, stagingDir)
+	if err != nil || relativeStagingDir == "." || relativeStagingDir == ".." || filepath.IsAbs(relativeStagingDir) || len(relativeStagingDir) >= 3 && relativeStagingDir[:3] == ".."+string(filepath.Separator) {
+		return nil, fmt.Errorf("%w: leaf pack staging directory %q is not contained by staging root %q", rootpublication.ErrUnresolvedResource, stagingDir, stagingRoot)
 	}
 	if err := leafGenerationPackPromotionPreflight(); err != nil {
 		return nil, err
@@ -107,7 +119,7 @@ func newLeafGenerationPackPromotionAuthority(db *DB, stagingDir, destinationDir 
 		return nil, err
 	}
 	return &leafGenerationPackPromotionAuthority{
-		db: db, stagingDir: filepath.Clean(stagingDir), destinationDir: filepath.Clean(destinationDir),
+		db: db, stagingRoot: stagingRoot, stagingDir: stagingDir, destinationDir: filepath.Clean(destinationDir),
 		stagingParent: stagingParent, destinationParent: destinationParent,
 		destinationGeneration: destinationGeneration,
 		moveNoReplace:         rootpublication.MoveStableChildFileNoReplace,
@@ -262,11 +274,31 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 	for i := range authority.segments {
 		promoted[i] = authority.segments[i].created
 	}
+	installedSegments := make([]rewriteCreatedSegment, 0, len(authority.segments))
 	mutated := false
 	fail := func(err error) ([]rewriteCreatedSegment, bool, error) {
 		if mutated {
-			authority.retainForRecovery()
-			err = errors.Join(err, ErrRecoveryRequired)
+			// No root or alternate meta page references these children yet. Try
+			// exact identity-verified rollback immediately. If deletion durability
+			// is ambiguous, retain the same parent, children, pins, and staging
+			// root so DB teardown can retry idempotently.
+			cleanupErr := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
+				authority.destinationParent,
+				installedSegments,
+				authority.db.valueLogIdentityPins,
+			)
+			if cleanupErr != nil {
+				authority.retainPromotedCleanupForRecovery(
+					installedSegments,
+					authority.stagingRoot,
+				)
+				err = errors.Join(err, cleanupErr, ErrRecoveryRequired)
+			} else {
+				// A namespace mutation happened, but exact rollback proved that no
+				// live destination child remains. Report no outstanding mutation so
+				// callers take their ordinary staging cleanup path.
+				mutated = false
+			}
 		}
 		return promoted, mutated, err
 	}
@@ -274,17 +306,27 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 		segment := &authority.segments[i]
 		name := filepath.Base(segment.created.path)
 		installed, err := authority.moveNoReplace(authority.stagingParent, segment.handle, name, authority.destinationParent, name)
-		mutated = mutated || installed
+		if installed {
+			mutated = true
+			destination := filepath.Join(authority.destinationDir, name)
+			segment.created.path = destination
+			promoted[i] = segment.created
+			installedSegments = append(installedSegments, segment.created)
+		}
 		if err != nil {
 			return fail(err)
 		}
-		destination := filepath.Join(authority.destinationDir, name)
-		segment.created.path = destination
-		promoted[i] = segment.created
+		if !installed {
+			return fail(fmt.Errorf("%w: packed promotion reported no installed child %q", rootpublication.ErrUnresolvedResource, name))
+		}
+		destination := segment.created.path
 		if err := rootpublication.ValidateStableChildLink(authority.destinationParent, segment.handle, name); err != nil {
 			return fail(err)
 		}
-		if err := observeNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, authority.destinationDir, "", destination); err != nil {
+		// This authority can still remove the exact installed child before any
+		// root becomes visible. Preserve the observer error itself here; fail()
+		// adds recovery debt only when exact rollback is ambiguous.
+		if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, authority.destinationDir, "", destination); err != nil {
 			return fail(err)
 		}
 	}
@@ -320,6 +362,15 @@ func (authority *leafGenerationPackPromotionAuthority) promote() ([]rewriteCreat
 			namespace.Release()
 		}
 	}()
+	for i := range authority.segments {
+		segment := &authority.segments[i]
+		name := filepath.Base(segment.created.path)
+		if err := authority.db.valueLogIdentityPins.RememberStableNamespaceLink(
+			authority.destinationParent, segment.handle, name,
+		); err != nil {
+			return fail(err)
+		}
+	}
 	for _, parent := range []string{authority.stagingDir, authority.destinationDir} {
 		if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, parent, parent); err != nil {
 			return fail(err)
@@ -386,9 +437,42 @@ func (authority *leafGenerationPackPromotionAuthority) retainForRecovery() {
 		return
 	}
 	authority.retainedForRecovery = true
-	authority.db.registerInternalTeardownHook(func() error {
-		return authority.release()
+	authority.db.registerCaptureTeardownHook(func() error {
+		var cleanupErr error
+		stagingRoot := authority.recoveryStagingRoot
+		if len(authority.recoveryCleanup) != 0 {
+			cleanupErr = cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
+				authority.destinationParent,
+				authority.recoveryCleanup,
+				authority.db.valueLogIdentityPins,
+			)
+			if cleanupErr == nil {
+				authority.recoveryCleanup = nil
+			}
+		}
+		releaseErr := authority.release()
+		if cleanupErr != nil {
+			return errors.Join(cleanupErr, releaseErr, ErrRecoveryRequired)
+		}
+		if releaseErr != nil {
+			return errors.Join(releaseErr, ErrRecoveryRequired)
+		}
+		if stagingRoot != "" {
+			if err := removeLeafGenerationPackStagingDirFn(stagingRoot); err != nil {
+				return errors.Join(err, ErrRecoveryRequired)
+			}
+		}
+		return nil
 	})
+}
+
+func (authority *leafGenerationPackPromotionAuthority) retainPromotedCleanupForRecovery(promoted []rewriteCreatedSegment, stagingRoot string) {
+	if authority == nil || authority.released || len(promoted) == 0 {
+		return
+	}
+	authority.recoveryCleanup = append(authority.recoveryCleanup[:0], promoted...)
+	authority.recoveryStagingRoot = stagingRoot
+	authority.retainForRecovery()
 }
 
 func (authority *leafGenerationPackPromotionAuthority) releaseCaptured() {
@@ -423,6 +507,8 @@ func (authority *leafGenerationPackPromotionAuthority) release() error {
 		return nil
 	}
 	authority.released = true
+	authority.recoveryCleanup = nil
+	authority.recoveryStagingRoot = ""
 	authority.releaseCaptured()
 	var err error
 	if authority.stagingParent != nil {

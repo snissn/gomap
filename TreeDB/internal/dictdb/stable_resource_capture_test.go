@@ -48,8 +48,8 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 	if got := resources.Len(); got != 2 {
 		t.Fatalf("resource closure len=%d want index+value-log", got)
 	}
-	if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 1 {
-		t.Fatalf("active value-log identity pins=%d want 1", got)
+	if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 2 {
+		t.Fatalf("active index/value-log identity pins=%d want 2", got)
 	}
 
 	wantDigest := sha256.Sum256(payload)
@@ -383,9 +383,9 @@ func TestCaptureDictionaryResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing
 			resources.Release()
 			t.Fatalf("dedupe %d resources=%d want index+value-log closure", i, got)
 		}
-		if got := registry.ActivePins(); got != 1 {
+		if got := registry.ActivePins(); got != 2 {
 			resources.Release()
-			t.Fatalf("dedupe %d active value-log pins=%d want 1", i, got)
+			t.Fatalf("dedupe %d active index/value-log pins=%d want 2", i, got)
 		}
 		resources.Release()
 		if got := registry.ActivePins(); got != 0 {

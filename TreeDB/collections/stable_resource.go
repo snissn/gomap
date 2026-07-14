@@ -187,12 +187,24 @@ func stableVectorGraphResourceTokenWithRegistry(file *os.File, ref ColumnAssetRe
 		rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityVectorGraphPack, nil)
 }
 
+var errColumnAssetStableTokenOmittedForTest = errors.New("collections: stable column token omitted by capture fault hook")
+
 func stableColumnAssetResourceTokenWithPolicy(file *os.File, ref ColumnAssetRef, namespace *rootpublication.StableNamespaceToken, registry *rootpublication.IdentityPinRegistry, resourceKind rootpublication.ResourceKind, reachability rootpublication.ReachabilityField, policyErr error) (*rootpublication.StableResourceToken, error) {
 	if policyErr != nil {
 		return nil, policyErr
 	}
 	if ref.Generation == 0 || ref.Offset < 0 || ref.Length <= 0 || ref.Offset > int64(^uint64(0)>>1)-ref.Length {
 		return nil, errors.New("collections: invalid stable column asset ref frontier")
+	}
+	logicalObligation := stableColumnLogicalObligation(ref, reachability)
+	logicalObligations := []rootpublication.StableLogicalObligation{logicalObligation}
+	if hook := columnAssetStableObligationHook(); hook != nil {
+		switch hook(ref, logicalObligation, namespace) {
+		case columnAssetStableCaptureOmitObligation:
+			logicalObligations = nil
+		case columnAssetStableCaptureOmitToken:
+			return nil, errColumnAssetStableTokenOmittedForTest
+		}
 	}
 	var identity rootpublication.StableIdentity
 	var err error
@@ -211,7 +223,7 @@ func stableColumnAssetResourceTokenWithPolicy(file *os.File, ref ColumnAssetRef,
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
-		LogicalObligations: []rootpublication.StableLogicalObligation{stableColumnLogicalObligation(ref, reachability)},
+		LogicalObligations: logicalObligations,
 		PinRegistry:        registry,
 		SyncThrough:        syncStableColumnAssetResourceForPublish,
 		OnRelease: func() {

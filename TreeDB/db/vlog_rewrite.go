@@ -3404,6 +3404,7 @@ type rewriteWriter struct {
 	stableRegistryErr                error
 	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
 	leafStaging                      bool
+	leafStagingRoot                  string
 	lastLeafRecordLen                uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
@@ -3518,9 +3519,10 @@ func (w *rewriteWriter) bindStableDictionaryResourceProvider(provider func() Sta
 	return nil
 }
 
-func (w *rewriteWriter) configureLeafStaging() {
+func (w *rewriteWriter) configureLeafStaging(stagingRoot string) {
 	if w != nil {
 		w.leafStaging = true
+		w.leafStagingRoot = filepath.Clean(stagingRoot)
 	}
 }
 
@@ -3567,6 +3569,7 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.leafDir = w.leafDir
 	clone.leafLane = w.leafLane
 	clone.leafStaging = w.leafStaging
+	clone.leafStagingRoot = w.leafStagingRoot
 	clone.leafSeqAllocator = seqAlloc
 	clone.ridAlloc = ridAlloc
 	clone.stableResourcePins = w.stableResourcePins

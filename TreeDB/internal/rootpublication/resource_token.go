@@ -416,11 +416,13 @@ type StableResourceSpec struct {
 }
 
 type resourceTokenMetrics struct {
-	flushes         atomic.Uint64
-	flushNanos      atomic.Uint64
-	syncs           atomic.Uint64
-	syncNanos       atomic.Uint64
-	registeredNanos int64
+	flushes               atomic.Uint64
+	flushNanos            atomic.Uint64
+	syncs                 atomic.Uint64
+	syncNanos             atomic.Uint64
+	physicalFileSyncs     atomic.Uint64
+	physicalFileSyncNanos atomic.Uint64
+	registeredNanos       int64
 }
 
 type StableResourceToken struct {
@@ -531,6 +533,9 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
 		token.hasSyncedFrontier = true
+		// ContentSynced is producer certification that the exact registered
+		// file frontier crossed a physical durability barrier before capture.
+		token.metrics.physicalFileSyncs.Store(1)
 	}
 	token.owner.Store(uint32(ResourceOwnerToken))
 	token.metrics.registeredNanos = time.Now().UnixNano()
@@ -596,7 +601,12 @@ func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
 	started := time.Now()
 	var err error
 	if !token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier) {
+		physicalStarted := time.Now()
 		err = token.sync(token.pinned, frontier)
+		if err == nil {
+			token.metrics.physicalFileSyncs.Add(1)
+			token.metrics.physicalFileSyncNanos.Add(uint64(time.Since(physicalStarted)))
+		}
 	}
 	token.metrics.syncs.Add(1)
 	token.metrics.syncNanos.Add(uint64(time.Since(started)))
@@ -1399,10 +1409,15 @@ type ResourceKindStats struct {
 	FlushDuration          time.Duration
 	Syncs                  uint64
 	SyncDuration           time.Duration
-	NamespaceSyncs         uint64
-	NamespaceSyncDuration  time.Duration
-	ActivePins             uint64
-	PinHighWater           uint64
+	// PhysicalFileSyncs counts successful producer-certified file barriers.
+	// Unlike Syncs, it does not increase when SyncThrough is skipped because an
+	// already-synced frontier covers the request.
+	PhysicalFileSyncs        uint64
+	PhysicalFileSyncDuration time.Duration
+	NamespaceSyncs           uint64
+	NamespaceSyncDuration    time.Duration
+	ActivePins               uint64
+	PinHighWater             uint64
 }
 
 var _ io.ReaderAt = (*StableResourceToken)(nil)

@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -22,6 +24,78 @@ type StableDictionaryResourceProvider interface {
 // needed to decode one template generation.
 type StableTemplateResourceProvider interface {
 	CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
+}
+
+// StableResourceCaptureLease admits a producer that must retain DB-scoped
+// physical identity and namespace authority while it constructs a stable
+// resource closure. Close waits for admitted captures before tearing down
+// resources and clearing the DB lifetime's namespace-sync proofs.
+type StableResourceCaptureLease struct {
+	db *DB
+
+	mu       sync.Mutex
+	released bool
+}
+
+// Release ends an admitted stable-resource capture. It is safe to call more
+// than once.
+func (lease *StableResourceCaptureLease) Release() {
+	if lease == nil || lease.db == nil {
+		return
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.released {
+		return
+	}
+	lease.released = true
+	lease.db.teardownMu.RUnlock()
+}
+
+// RetainStableResourceCaptureRecovery transfers exact producer rollback
+// authority into DB teardown while this admission lease is still live. The
+// ambiguous producer mutation poisons later publication immediately; teardown
+// retries cleanup after every admitted capture has released its lease.
+func (lease *StableResourceCaptureLease) RetainStableResourceCaptureRecovery(cleanup func() error) error {
+	if lease == nil || lease.db == nil || cleanup == nil {
+		return ErrClosed
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.released {
+		return ErrClosed
+	}
+	lease.db.publicationPoisoned.Store(true)
+	_, registered := lease.db.tryRegisterCaptureTeardownHook(func() error {
+		if err := cleanup(); err != nil {
+			return errors.Join(err, ErrRecoveryRequired)
+		}
+		return nil
+	})
+	if !registered {
+		return errors.Join(ErrClosed, ErrRecoveryRequired)
+	}
+	return nil
+}
+
+// AcquireStableResourceCaptureLease admits DB-external producers that use the
+// DB-scoped stable identity registry. A successful lease excludes final DB
+// teardown until Release; an acquisition that loses the race with Close fails
+// with ErrClosed before the producer can add fresh namespace-sync proofs.
+func (db *DB) AcquireStableResourceCaptureLease() (*StableResourceCaptureLease, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	db.teardownMu.RLock()
+	if db.closing.Load() {
+		db.teardownMu.RUnlock()
+		return nil, ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		db.teardownMu.RUnlock()
+		return nil, err
+	}
+	return &StableResourceCaptureLease{db: db}, nil
 }
 
 // ValidateStableDictionaryResourceClosure binds the bytes selected by an
@@ -285,8 +359,8 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 	}
 	if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
 		pager := snapshot.idx.pager
-		spec.SyncThrough = func(*os.File, rootpublication.DurableFrontier) error {
-			return pager.SyncIndexData()
+		spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
+			return pager.SyncIndexDataWithStableFile(file)
 		}
 	}
 	database := snapshot.db
@@ -305,11 +379,20 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		if err != nil {
 			return err
 		}
+		registry := database.StableResourceIdentityPinRegistry()
+		identity, err := rootpublication.StableIdentityFromFile(file)
+		if err != nil {
+			return err
+		}
+		if err := registry.Observe(identity); err != nil {
+			return err
+		}
 		spec.File = file
 		spec.Generation = snapshot.idx.id
 		spec.DiagnosticPath = indexFileName
 		spec.Frontier.Bytes = uint64(info.Size())
 		spec.Namespace = namespace
+		spec.PinRegistry = registry
 		callerRelease := spec.OnRelease
 		spec.OnRelease = func() {
 			_ = snapshot.Close()
@@ -321,6 +404,14 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 			}
 		}
 		token, err = constructor(spec)
+		unobserveErr := registry.Unobserve(identity)
+		if unobserveErr != nil {
+			if token != nil {
+				token.Release()
+				token = nil
+			}
+			return errors.Join(err, unobserveErr)
+		}
 		return err
 	})
 	if err != nil {

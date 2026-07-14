@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -45,6 +48,100 @@ func TestOpenSharesValueLogIdentityPinRegistryWithManager(t *testing.T) {
 	}
 	if got := database.valueLogManager.StableResourcePinRegistry(); got != registry {
 		t.Fatalf("value-log manager registry = %p, DB registry = %p", got, registry)
+	}
+}
+
+func TestCaptureTeardownHookRegisteredDuringCloseWaitsForLease(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := database.AcquireStableResourceCaptureLease()
+	if err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- database.Close() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !database.IsClosing() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !database.IsClosing() {
+		lease.Release()
+		t.Fatal("Close did not reach teardown while capture lease was held")
+	}
+
+	hookRan := make(chan struct{})
+	database.registerCaptureTeardownHook(func() error {
+		close(hookRan)
+		return nil
+	})
+	select {
+	case <-hookRan:
+		lease.Release()
+		t.Fatal("capture teardown hook ran before the admitted lease drained")
+	default:
+	}
+	lease.Release()
+
+	select {
+	case closeErr := <-closed:
+		if closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not finish after the capture lease drained")
+	}
+	select {
+	case <-hookRan:
+	default:
+		t.Fatal("Close did not run the late capture teardown hook")
+	}
+}
+
+func TestStableResourceCaptureLeaseRetainSerializesWithRelease(t *testing.T) {
+	for iteration := 0; iteration < 1000; iteration++ {
+		database := &DB{}
+		lease, err := database.AcquireStableResourceCaptureLease()
+		if err != nil {
+			t.Fatalf("iteration %d AcquireStableResourceCaptureLease: %v", iteration, err)
+		}
+		start := make(chan struct{})
+		releaseDone := make(chan struct{})
+		retainDone := make(chan error, 1)
+		hookRuns := 0
+		go func() {
+			<-start
+			lease.Release()
+			close(releaseDone)
+		}()
+		go func() {
+			<-start
+			retainDone <- lease.RetainStableResourceCaptureRecovery(func() error {
+				hookRuns++
+				return nil
+			})
+		}()
+		close(start)
+		retainErr := <-retainDone
+		<-releaseDone
+
+		database.teardownMu.Lock()
+		hookErr := database.runCaptureTeardownHooksLocked()
+		database.teardownMu.Unlock()
+		if hookErr != nil {
+			t.Fatalf("iteration %d runCaptureTeardownHooksLocked: %v", iteration, hookErr)
+		}
+		switch {
+		case retainErr == nil && hookRuns != 1:
+			t.Fatalf("iteration %d successful retention ran %d hooks want 1", iteration, hookRuns)
+		case errors.Is(retainErr, ErrClosed) && hookRuns != 0:
+			t.Fatalf("iteration %d rejected retention ran %d hooks want 0", iteration, hookRuns)
+		case retainErr != nil && !errors.Is(retainErr, ErrClosed):
+			t.Fatalf("iteration %d retention error=%v want nil or ErrClosed", iteration, retainErr)
+		}
 	}
 }
 
@@ -171,6 +268,65 @@ func TestCaptureStableIndexFileResourceProductionWitness(t *testing.T) {
 		if got := database.stableIndexCaptures.Load(); got != 0 {
 			t.Fatalf("capture %d stable-index leases=%d want 0", i, got)
 		}
+	}
+}
+
+func TestCaptureStableIndexFileResourceSyncThroughSurvivesDBClose(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable index namespace capture unsupported on Windows")
+	}
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := database.AcquireStableSnapshot()
+	if snapshot == nil {
+		_ = database.Close()
+		t.Fatal("AcquireStableSnapshot returned nil")
+	}
+	token, err := snapshot.CaptureStableIndexFileResource()
+	if err != nil {
+		_ = snapshot.Close()
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	defer token.Release()
+
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceIndex {
+			events = append(events, event)
+		}
+		return nil
+	})
+	if err := token.SyncThrough(); err != nil {
+		restore()
+		t.Fatalf("sync exact index handle after DB close: %v", err)
+	}
+	restore()
+	points := make([]durabilitycut.Point, len(events))
+	for i, event := range events {
+		if event.Root != dir || event.Path != filepath.Join(dir, indexFileName) {
+			t.Fatalf("index durability event root=%q path=%q", event.Root, event.Path)
+		}
+		points[i] = event.Point
+	}
+	if got, want := points, []durabilitycut.Point{durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync}; !slices.Equal(got, want) {
+		t.Fatalf("index durability points=%v want %v", got, want)
+	}
+
+	token.Release()
+	token.Release()
+	if got := database.stableIndexCaptures.Load(); got != 0 {
+		t.Fatalf("stable-index leases=%d want 0", got)
 	}
 }
 

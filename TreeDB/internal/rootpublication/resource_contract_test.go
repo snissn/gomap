@@ -2117,11 +2117,47 @@ func testStableResourceMetricsSeparateFileAndNamespaceOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats := set.Stats(time.Now())
-	if len(stats) != 1 || stats[0].Flushes != 1 || stats[0].Syncs != 1 || stats[0].NamespaceSyncs != 1 {
+	if len(stats) != 1 || stats[0].Flushes != 1 || stats[0].Syncs != 1 || stats[0].PhysicalFileSyncs != 1 || stats[0].NamespaceSyncs != 1 {
 		t.Fatalf("resource stats=%+v", stats)
 	}
 	if flushes.Load() != 1 || syncs.Load() != 1 {
 		t.Fatalf("callbacks flush=%d sync=%d", flushes.Load(), syncs.Load())
+	}
+	set.Release()
+}
+
+func TestStableResourceMetricsDistinguishCoveredSyncAttemptFromPhysicalFileSync(t *testing.T) {
+	resource := writeStableResourceFixture(t, t.TempDir(), "covered.vlog", "covered-resource-bytes")
+	var callbacks atomic.Uint64
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "covered", Generation: 1,
+		DiagnosticPath: "covered.vlog", File: resource, Frontier: DurableFrontier{Bytes: 4},
+		Digest: sha256.Sum256([]byte("covered")), Reachability: ReachabilityValueLogPointer,
+		ContentSynced: true,
+		SyncThrough: func(*os.File, DurableFrontier) error {
+			callbacks.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SyncThrough(); err != nil {
+		set.Release()
+		t.Fatal(err)
+	}
+	stats := set.Stats(time.Now())
+	if len(stats) != 1 || stats[0].Syncs != 1 || stats[0].PhysicalFileSyncs != 1 || callbacks.Load() != 0 {
+		set.Release()
+		t.Fatalf("covered frontier stats=%+v callbacks=%d", stats, callbacks.Load())
 	}
 	set.Release()
 }

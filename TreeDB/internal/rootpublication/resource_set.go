@@ -521,6 +521,36 @@ func (set *StableResourceSet) Tokens() []*StableResourceToken {
 	return tokens
 }
 
+// IdentityPinRegistryStats reports the exact DB-scoped registries retained by
+// this closure's physical pins. Registries are de-duplicated, including when
+// several logical obligations coalesce onto one physical resource.
+func (set *StableResourceSet) IdentityPinRegistryStats() []IdentityPinRegistryStats {
+	if set == nil {
+		return nil
+	}
+	set.mu.Lock()
+	registries := make(map[*IdentityPinRegistry]struct{})
+	for _, entry := range set.entries {
+		tokens := entry.pins
+		if len(tokens) == 0 {
+			tokens = []*StableResourceToken{entry.token}
+		}
+		for _, token := range tokens {
+			if token == nil || token.identityPin == nil || token.identityPin.registry == nil {
+				continue
+			}
+			registries[token.identityPin.registry] = struct{}{}
+		}
+	}
+	set.mu.Unlock()
+
+	stats := make([]IdentityPinRegistryStats, 0, len(registries))
+	for registry := range registries {
+		stats = append(stats, registry.Stats())
+	}
+	return stats
+}
+
 // Descriptors returns immutable-by-copy views of the coalesced physical
 // obligations. Callers that need publication or recovery metadata should use
 // these views rather than representative Tokens.
@@ -780,6 +810,8 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		stats.FlushDuration += time.Duration(token.metrics.flushNanos.Load())
 		stats.Syncs += token.metrics.syncs.Load()
 		stats.SyncDuration += time.Duration(token.metrics.syncNanos.Load())
+		stats.PhysicalFileSyncs += token.metrics.physicalFileSyncs.Load()
+		stats.PhysicalFileSyncDuration += time.Duration(token.metrics.physicalFileSyncNanos.Load())
 		if token.namespace != nil {
 			syncs, duration := token.namespace.physicalSyncStats()
 			stats.NamespaceSyncs += syncs

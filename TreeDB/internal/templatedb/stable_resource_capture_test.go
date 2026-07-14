@@ -84,8 +84,8 @@ func TestCaptureTemplateResourcesPointerDefinitionReturnsExactTransitiveClosure(
 	if got := resources.Len(); got != 2 {
 		t.Fatalf("closure len=%d want index+value-log", got)
 	}
-	if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 1 {
-		t.Fatalf("value-log identity pins=%d want 1", got)
+	if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 2 {
+		t.Fatalf("index/value-log identity pins=%d want 2", got)
 	}
 	paths := make(map[string]bool, 2)
 	for _, token := range resources.Tokens() {
@@ -397,9 +397,9 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 			resources.Release()
 			t.Fatalf("iteration %d merged descriptors=%d want index+shared value-log", i, got)
 		}
-		if got := registry.ActivePins(); got != 1 {
+		if got := registry.ActivePins(); got != 2 {
 			resources.Release()
-			t.Fatalf("iteration %d coalesced value-log identity pins=%d want 1", i, got)
+			t.Fatalf("iteration %d coalesced index/value-log identity pins=%d want 2", i, got)
 		}
 		tokens := resources.Tokens()
 		descriptors := resources.Descriptors()
@@ -635,9 +635,9 @@ func TestCaptureTemplateResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing.T
 			resources.Release()
 			t.Fatalf("dedupe %d resources=%d want index+value-log closure", i, got)
 		}
-		if got := registry.ActivePins(); got != 1 {
+		if got := registry.ActivePins(); got != 2 {
 			resources.Release()
-			t.Fatalf("dedupe %d active value-log pins=%d want 1", i, got)
+			t.Fatalf("dedupe %d active index/value-log pins=%d want 2", i, got)
 		}
 		resources.Release()
 		if got := registry.ActivePins(); got != 0 {

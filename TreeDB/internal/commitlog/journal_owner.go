@@ -223,6 +223,7 @@ type CommandJournal struct {
 	captureStableResources bool
 	pendingStableRotations []*CommandJournalStableRotation
 	pendingStableSuccessor *pendingCommandWALSuccessor
+	stableResourcePins     *rootpublication.IdentityPinRegistry
 }
 
 type pendingCommandWALSuccessor struct {
@@ -326,6 +327,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		stableParent:           stableParent,
 		stableParentErr:        stableParentErr,
 		captureStableResources: opts.CaptureStableResources,
+		stableResourcePins:     rootpublication.NewIdentityPinRegistry(),
 	}, nil
 }
 
@@ -703,15 +705,33 @@ func NewStableCommandWALResourceToken(spec rootpublication.StableResourceSpec) (
 }
 
 func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken, contentSynced bool) (*rootpublication.StableResourceToken, error) {
+	if j == nil || j.stableResourcePins == nil {
+		return nil, fmt.Errorf("%w: command-WAL identity registry unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if err := j.stableResourcePins.Observe(identity); err != nil {
+		return nil, err
+	}
 	digest := sha256.Sum256([]byte(fmt.Sprintf("command-wal/lane=%d/segment=%d", j.lane, seq)))
 	spec := rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceCommandWAL, LogicalLane: fmt.Sprintf("lane-%d", j.lane),
 		ResourceID: fmt.Sprintf("%d:%d", j.lane, seq), Generation: seq,
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
-		ContentSynced: contentSynced,
+		ContentSynced: contentSynced, PinRegistry: j.stableResourcePins,
 	}
-	return NewStableCommandWALResourceToken(spec)
+	token, tokenErr := NewStableCommandWALResourceToken(spec)
+	unobserveErr := j.stableResourcePins.Unobserve(identity)
+	if unobserveErr != nil {
+		if token != nil {
+			token.Release()
+		}
+		return nil, errors.Join(tokenErr, unobserveErr)
+	}
+	return token, tokenErr
 }
 
 func (j *CommandJournal) recordAppendedLSNLocked(lsn uint64) {

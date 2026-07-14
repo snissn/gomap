@@ -338,7 +338,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		}
 		writer := newRewriteWriter(layout.valueVLogDir, 0, 0, 0)
 		writer.ConfigureLeafLog(privateLeafDir, rewriteLeafLogLaneID, leafStartSeq)
-		writer.configureLeafStaging()
+		writer.configureLeafStaging(stagingDir)
 		writer.setLeafPageLogSeqAllocator(seqAlloc)
 		writer.setLeafPageLogRIDAllocator(ridAlloc)
 		writer.blockCompression = blockCompression

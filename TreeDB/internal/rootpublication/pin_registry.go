@@ -23,6 +23,14 @@ type IdentityPinRegistry struct {
 	activePins  uint64
 }
 
+// IdentityPinRegistryStats is an atomic snapshot of the live physical-identity
+// and namespace-proof state retained by one DB-scoped registry.
+type IdentityPinRegistryStats struct {
+	ActivePins                 uint64
+	ActiveIdentities           int
+	ActiveStableNamespaceLinks int
+}
+
 // stableNamespaceLink records that an exact parent/child/name binding has
 // already survived the required parent-directory sync. Pathnames alone are
 // insufficient because either component can be rebound between appends.
@@ -297,6 +305,22 @@ func (registry *IdentityPinRegistry) ActiveIdentities() int {
 	return len(registry.states)
 }
 
+// Stats reports one internally consistent snapshot for lifecycle and leak
+// gates. Prefer this to reading the individual counters when producers may be
+// shutting down concurrently.
+func (registry *IdentityPinRegistry) Stats() IdentityPinRegistryStats {
+	if registry == nil {
+		return IdentityPinRegistryStats{}
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return IdentityPinRegistryStats{
+		ActivePins:                 registry.activePins,
+		ActiveIdentities:           len(registry.states),
+		ActiveStableNamespaceLinks: len(registry.stableLinks),
+	}
+}
+
 func stableNamespaceLinkFromFiles(parent, child *os.File, name string) (stableNamespaceLink, error) {
 	if name == "" {
 		return stableNamespaceLink{}, fmt.Errorf("%w: empty stable child name", ErrUnresolvedResource)
@@ -409,6 +433,18 @@ func (registry *IdentityPinRegistry) ActiveStableNamespaceLinks() int {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	return len(registry.stableLinks)
+}
+
+// ClearStableNamespaceLinks retires DB-lifetime namespace-sync proofs during
+// producer shutdown. Exact resource tokens retain their own parent handles and
+// remain usable; a later DB instance must establish fresh namespace evidence.
+func (registry *IdentityPinRegistry) ClearStableNamespaceLinks() {
+	if registry == nil {
+		return
+	}
+	registry.mu.Lock()
+	clear(registry.stableLinks)
+	registry.mu.Unlock()
 }
 
 func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) *identityPinState {

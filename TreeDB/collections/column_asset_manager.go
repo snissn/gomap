@@ -746,6 +746,7 @@ type columnPhysicalAssetSegmentAppender struct {
 	assetPath                  string
 	file                       *os.File
 	offset                     int64
+	appendStart                int64
 	failed                     bool
 	lock                       *sync.Mutex
 	syncDirOnClose             bool
@@ -765,6 +766,13 @@ type columnPhysicalAssetSegmentAppender struct {
 	stableNamespaceRef         *ColumnAssetRef
 	stableResources            *rootpublication.StableResourceSet
 	stableVectorGraphAuthority bool
+	stableRollbackHookRan      bool
+	stableRollbackTruncated    bool
+	stableRollbackContentSync  bool
+	stableRollbackUnlinked     bool
+	stableRollbackParentSync   bool
+	stableRecoveryRetained     bool
+	stableRecoveryRetainer     StableResourceCaptureRecoveryRetainer
 	closeStats                 columnPhysicalAssetSegmentCloseStats
 }
 
@@ -772,6 +780,21 @@ var (
 	stableColumnAssetConstructionHookMu sync.RWMutex
 	stableColumnAssetConstructionHook   func(uint32)
 	stableColumnAssetBeforeObserveHook  func(*os.File, *os.File, string)
+	stableColumnAssetObligationHook     func(ColumnAssetRef, rootpublication.StableLogicalObligation, *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision
+	stableColumnAssetBeforeRollbackHook func(*os.File, *os.File, string)
+
+	truncateStableColumnAssetForRollback = func(file *os.File, size int64) error { return file.Truncate(size) }
+	syncStableColumnAssetForRollback     = func(file *os.File) error { return file.Sync() }
+	removeStableColumnAssetForRollback   = rootpublication.RemoveStableChildFile
+	syncStableColumnAssetParentRollback  = func(parent *os.File) error { return parent.Sync() }
+)
+
+type columnAssetStableCaptureTestDecision uint8
+
+const (
+	columnAssetStableCaptureKeep columnAssetStableCaptureTestDecision = iota
+	columnAssetStableCaptureOmitObligation
+	columnAssetStableCaptureOmitToken
 )
 
 func columnAssetStableConstructionHook() func(uint32) {
@@ -784,6 +807,22 @@ func columnAssetStableBeforeObserveHook() func(*os.File, *os.File, string) {
 	stableColumnAssetConstructionHookMu.RLock()
 	defer stableColumnAssetConstructionHookMu.RUnlock()
 	return stableColumnAssetBeforeObserveHook
+}
+
+// columnAssetStableObligationHook is a fault-injection seam at the real token
+// capture boundary. It can omit the producer-created logical obligation or the
+// exact token/ref while retaining ordinary construction and cleanup behavior,
+// so closure validation must fail before publication can make the ref visible.
+func columnAssetStableObligationHook() func(ColumnAssetRef, rootpublication.StableLogicalObligation, *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision {
+	stableColumnAssetConstructionHookMu.RLock()
+	defer stableColumnAssetConstructionHookMu.RUnlock()
+	return stableColumnAssetObligationHook
+}
+
+func columnAssetStableBeforeRollbackTestHook() func(*os.File, *os.File, string) {
+	stableColumnAssetConstructionHookMu.RLock()
+	defer stableColumnAssetConstructionHookMu.RUnlock()
+	return stableColumnAssetBeforeRollbackHook
 }
 
 func setColumnAssetStableConstructionTestHook(hook func(uint32)) func() {
@@ -806,6 +845,30 @@ func setColumnAssetStableBeforeObserveTestHook(hook func(*os.File, *os.File, str
 	return func() {
 		stableColumnAssetConstructionHookMu.Lock()
 		stableColumnAssetBeforeObserveHook = previous
+		stableColumnAssetConstructionHookMu.Unlock()
+	}
+}
+
+func setColumnAssetStableObligationTestHook(hook func(ColumnAssetRef, rootpublication.StableLogicalObligation, *rootpublication.StableNamespaceToken) columnAssetStableCaptureTestDecision) func() {
+	stableColumnAssetConstructionHookMu.Lock()
+	previous := stableColumnAssetObligationHook
+	stableColumnAssetObligationHook = hook
+	stableColumnAssetConstructionHookMu.Unlock()
+	return func() {
+		stableColumnAssetConstructionHookMu.Lock()
+		stableColumnAssetObligationHook = previous
+		stableColumnAssetConstructionHookMu.Unlock()
+	}
+}
+
+func setColumnAssetStableBeforeRollbackTestHook(hook func(*os.File, *os.File, string)) func() {
+	stableColumnAssetConstructionHookMu.Lock()
+	previous := stableColumnAssetBeforeRollbackHook
+	stableColumnAssetBeforeRollbackHook = hook
+	stableColumnAssetConstructionHookMu.Unlock()
+	return func() {
+		stableColumnAssetConstructionHookMu.Lock()
+		stableColumnAssetBeforeRollbackHook = previous
 		stableColumnAssetConstructionHookMu.Unlock()
 	}
 }
@@ -893,14 +956,15 @@ func (s columnPhysicalAssetSegmentCloseStatBucket) CleanupDuration() time.Durati
 }
 
 type columnPhysicalAssetAppendSession struct {
-	rootDir        string
-	cfg            ColumnStoreConfig
-	active         *columnPhysicalAssetSegmentAppender
-	activeFile     uint32
-	closeStats     columnPhysicalAssetSegmentCloseStats
-	closeErr       error
-	stableRegistry *rootpublication.IdentityPinRegistry
-	stableBuilder  *rootpublication.StableResourceSetBuilder
+	rootDir                string
+	cfg                    ColumnStoreConfig
+	active                 *columnPhysicalAssetSegmentAppender
+	activeFile             uint32
+	closeStats             columnPhysicalAssetSegmentCloseStats
+	closeErr               error
+	stableRegistry         *rootpublication.IdentityPinRegistry
+	stableBuilder          *rootpublication.StableResourceSetBuilder
+	stableRecoveryRetainer StableResourceCaptureRecoveryRetainer
 }
 
 func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) *columnPhysicalAssetAppendSession {
@@ -910,12 +974,17 @@ func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) 
 	}
 }
 
-func newColumnPhysicalAssetAppendSessionWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry) *columnPhysicalAssetAppendSession {
+func newColumnPhysicalAssetAppendSessionWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry, recoveryRetainers ...StableResourceCaptureRecoveryRetainer) *columnPhysicalAssetAppendSession {
+	var recoveryRetainer StableResourceCaptureRecoveryRetainer
+	if len(recoveryRetainers) != 0 {
+		recoveryRetainer = recoveryRetainers[0]
+	}
 	return &columnPhysicalAssetAppendSession{
-		rootDir:        rootDir,
-		cfg:            cfg,
-		stableRegistry: registry,
-		stableBuilder:  rootpublication.NewStableResourceSetBuilder(),
+		rootDir:                rootDir,
+		cfg:                    cfg,
+		stableRegistry:         registry,
+		stableBuilder:          rootpublication.NewStableResourceSetBuilder(),
+		stableRecoveryRetainer: recoveryRetainer,
 	}
 }
 
@@ -942,6 +1011,7 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 	if err != nil {
 		return nil, err
 	}
+	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
 	s.active = appender
 	s.activeFile = fileID
 	return appender, nil
@@ -976,10 +1046,14 @@ func (s *columnPhysicalAssetAppendSession) close() (columnPhysicalAssetSegmentCl
 }
 
 func (s *columnPhysicalAssetAppendSession) closeWithStableResources() (columnPhysicalAssetSegmentCloseStats, *rootpublication.StableResourceSet, error) {
+	return s.closeWithStableResourcesValidated(nil)
+}
+
+func (s *columnPhysicalAssetAppendSession) closeWithStableResourcesValidated(validate func(*rootpublication.StableResourceSet) error) (columnPhysicalAssetSegmentCloseStats, *rootpublication.StableResourceSet, error) {
 	if s == nil {
 		return columnPhysicalAssetSegmentCloseStats{}, nil, nil
 	}
-	_ = s.closeActive()
+	_ = s.closeActiveWithStableValidation(validate)
 	if s.closeErr != nil {
 		if s.stableBuilder != nil {
 			s.stableBuilder.Abandon()
@@ -1016,6 +1090,10 @@ func (s *columnPhysicalAssetAppendSession) abort() error {
 }
 
 func (s *columnPhysicalAssetAppendSession) closeActive() error {
+	return s.closeActiveWithStableValidation(nil)
+}
+
+func (s *columnPhysicalAssetAppendSession) closeActiveWithStableValidation(validate func(*rootpublication.StableResourceSet) error) error {
 	if s == nil || s.active == nil {
 		return nil
 	}
@@ -1023,7 +1101,7 @@ func (s *columnPhysicalAssetAppendSession) closeActive() error {
 	activeFile := s.activeFile
 	s.active = nil
 	s.activeFile = 0
-	err := appender.close()
+	err := appender.closeWithStableValidation(validate)
 	s.closeStats.AddSegment(activeFile, appender.closeStats)
 	if err == nil && appender.stableResources != nil {
 		if s.stableBuilder == nil {
@@ -1303,6 +1381,7 @@ func initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender *columnPhys
 		return nil, errors.Join(err, appender.abort())
 	}
 	appender.offset = offset
+	appender.appendStart = offset
 	// A cold/unknown exact binding remains conservative. Once this DB-scoped
 	// registry has proof for the same parent identity, child identity, and name,
 	// ordinary appends can skip the structural namespace sync.
@@ -1654,6 +1733,9 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		} else {
 			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, tokenNamespace, a.stableRegistry)
 		}
+		if errors.Is(err, errColumnAssetStableTokenOmittedForTest) {
+			continue
+		}
 		if err != nil {
 			builder.Abandon()
 			return nil, err
@@ -1669,12 +1751,10 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		builder.Abandon()
 		return nil, err
 	}
-	// Final immutable tokens already own their identity pins. Drop the
-	// construction pin only after Freeze so GC never observes an authority gap.
-	if err := a.releaseStableConstructionAuthority(); err != nil {
-		resources.Release()
-		return nil, err
-	}
+	// Keep construction authority until the caller has validated this complete
+	// resource set. A fault-injected or future partial capture can freeze an
+	// empty set, so the final tokens alone cannot protect the pre-visibility
+	// rollback interval.
 	return resources, nil
 }
 
@@ -1697,6 +1777,10 @@ func (a *columnPhysicalAssetSegmentAppender) releaseStableConstructionAuthority(
 }
 
 func (a *columnPhysicalAssetSegmentAppender) close() error {
+	return a.closeWithStableValidation(nil)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) closeWithStableValidation(validate func(*rootpublication.StableResourceSet) error) error {
 	if a == nil {
 		return nil
 	}
@@ -1706,6 +1790,10 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	var fileSyncErr error
 	var fileCloseErr error
 	var stableCaptureErr error
+	var stableValidationErr error
+	var stableRollbackErr error
+	var stableRollbackAttempted bool
+	var stableRollbackComplete bool
 	var constructionReleaseErr error
 	if a.failed {
 		appenderErr = errors.New("collections: column physical asset appender is failed")
@@ -1724,13 +1812,29 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 				a.closeStats.DirSync += time.Since(start)
 			}
 		}
-		start := time.Now()
-		fileCloseErr = a.file.Close()
-		a.closeStats.FileClose += time.Since(start)
-		a.closeFile = false
-		a.file = nil
+		if validate != nil {
+			if fileSyncErr == nil && stableCaptureErr == nil {
+				stableValidationErr = validate(a.stableResources)
+			}
+			if fileSyncErr != nil || stableCaptureErr != nil || stableValidationErr != nil {
+				stableRollbackAttempted = true
+				stableRollbackComplete, stableRollbackErr = a.rollbackStableAppend()
+				if !stableRollbackComplete {
+					stableRollbackErr = errors.Join(stableRollbackErr, a.retainStableRollbackForRecovery())
+				}
+			}
+		}
+		if !a.stableRecoveryRetained {
+			start := time.Now()
+			fileCloseErr = a.file.Close()
+			a.closeStats.FileClose += time.Since(start)
+			a.closeFile = false
+			a.file = nil
+		}
 	}
-	constructionReleaseErr = a.releaseStableConstructionAuthority()
+	if !a.stableRecoveryRetained {
+		constructionReleaseErr = a.releaseStableConstructionAuthority()
+	}
 	var dirSyncErr error
 	if a.syncDirOnClose && a.stableRegistry == nil && appenderErr == nil && fileSyncErr == nil && fileCloseErr == nil {
 		start := time.Now()
@@ -1747,23 +1851,150 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
 	}
 	var parentCloseErr error
-	if a.stableParent != nil {
+	if a.stableParent != nil && !a.stableRecoveryRetained {
 		parentCloseErr = a.stableParent.Close()
 		a.stableParent = nil
 	}
-	closeErr := errors.Join(appenderErr, fileSyncErr, stableCaptureErr, fileCloseErr, dirSyncErr, constructionReleaseErr, parentCloseErr)
+	closeErr := errors.Join(appenderErr, fileSyncErr, stableCaptureErr, stableValidationErr, stableRollbackErr, fileCloseErr, dirSyncErr, constructionReleaseErr, parentCloseErr)
 	if closeErr != nil && a.stableResources != nil {
 		a.stableResources.Release()
 		a.stableResources = nil
 	}
-	if closeErr != nil && a.stableNamespaceProofAdded {
+	if closeErr != nil && !stableRollbackAttempted && a.stableNamespaceProofAdded {
 		closeErr = errors.Join(closeErr, a.stableRegistry.ForgetStableNamespaceLinkIdentity(
 			a.stableParentIdentity, a.stableChildIdentity, a.stableChildName,
 		))
 		a.stableNamespaceProofAdded = false
 	}
-	a.releaseLock()
+	if !a.stableRecoveryRetained {
+		a.releaseLock()
+	}
 	return closeErr
+}
+
+func (a *columnPhysicalAssetSegmentAppender) rollbackStableAppend() (bool, error) {
+	if a == nil || a.file == nil || a.stableParent == nil || a.stableRegistry == nil || a.stableChildName == "" {
+		return false, errors.Join(
+			fmt.Errorf("%w: stable column rollback lacks exact child or parent authority", rootpublication.ErrResourceOwnership),
+			ErrRecoveryRequired,
+		)
+	}
+	if a.appendStart < 0 || a.offset < a.appendStart {
+		return false, errors.Join(
+			fmt.Errorf("%w: stable column rollback frontier start=%d end=%d", rootpublication.ErrUnresolvedResource, a.appendStart, a.offset),
+			ErrRecoveryRequired,
+		)
+	}
+	if !a.stableRollbackHookRan {
+		a.stableRollbackHookRan = true
+		if hook := columnAssetStableBeforeRollbackTestHook(); hook != nil {
+			hook(a.stableParent, a.file, a.stableChildName)
+		}
+	}
+	info, err := a.file.Stat()
+	if err != nil {
+		return false, errors.Join(err, ErrRecoveryRequired)
+	}
+	expectedSize := a.offset
+	if a.stableRollbackTruncated {
+		expectedSize = a.appendStart
+	}
+	if info.Size() != expectedSize {
+		return false, errors.Join(
+			fmt.Errorf("%w: stable column rollback frontier changed from %d to %d", rootpublication.ErrResourceConflict, expectedSize, info.Size()),
+			ErrRecoveryRequired,
+		)
+	}
+	if !a.stableRollbackTruncated {
+		if err := truncateStableColumnAssetForRollback(a.file, a.appendStart); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		a.stableRollbackTruncated = true
+	}
+	if !a.stableRollbackContentSync {
+		if err := syncStableColumnAssetForRollback(a.file); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		a.stableRollbackContentSync = true
+	}
+	if !a.created {
+		if err := rootpublication.ValidateStableChildLink(a.stableParent, a.file, a.stableChildName); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		return true, nil
+	}
+	if !a.stableRollbackUnlinked {
+		if err := rootpublication.ValidateStableChildLink(a.stableParent, a.file, a.stableChildName); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		if err := removeStableColumnAssetForRollback(a.stableParent, a.stableChildName); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		a.stableRollbackUnlinked = true
+		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
+	}
+	if !a.stableRollbackParentSync {
+		if err := syncStableColumnAssetParentRollback(a.stableParent); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		a.stableRollbackParentSync = true
+	}
+	if a.stableNamespaceProofAdded {
+		if err := a.stableRegistry.ForgetStableNamespaceLinkIdentity(
+			a.stableParentIdentity, a.stableChildIdentity, a.stableChildName,
+		); err != nil {
+			return false, errors.Join(err, ErrRecoveryRequired)
+		}
+		a.stableNamespaceProofAdded = false
+	}
+	return true, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) retainStableRollbackForRecovery() error {
+	if a == nil || a.stableRegistry == nil || a.stableRecoveryRetained {
+		return nil
+	}
+	if a.stableRecoveryRetainer == nil {
+		return errors.Join(
+			fmt.Errorf("%w: stable column rollback lacks DB recovery retainer", rootpublication.ErrResourceOwnership),
+			ErrRecoveryRequired,
+		)
+	}
+	err := a.stableRecoveryRetainer.RetainStableResourceCaptureRecovery(func() error {
+		complete, rollbackErr := a.rollbackStableAppend()
+		if complete {
+			rollbackErr = nil
+		}
+		return errors.Join(rollbackErr, a.releaseStableRollbackRecoveryAuthority())
+	})
+	if err != nil {
+		return errors.Join(
+			err,
+			ErrRecoveryRequired,
+		)
+	}
+	a.stableRecoveryRetained = true
+	return nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) releaseStableRollbackRecoveryAuthority() error {
+	if a == nil {
+		return nil
+	}
+	var err error
+	if a.file != nil && a.closeFile {
+		err = errors.Join(err, a.file.Close())
+		a.closeFile = false
+		a.file = nil
+	}
+	err = errors.Join(err, a.releaseStableConstructionAuthority())
+	if a.stableParent != nil {
+		err = errors.Join(err, a.stableParent.Close())
+		a.stableParent = nil
+	}
+	a.stableRecoveryRetained = false
+	a.releaseLock()
+	return err
 }
 
 func (a *columnPhysicalAssetSegmentAppender) abort() error {

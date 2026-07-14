@@ -1196,7 +1196,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := ctx.Err(); err != nil {
 		return 0, 0, err
 	}
-	authority, err := newLeafGenerationPackPromotionAuthority(db, writer.leafDir, resolveStorageLayout(db.dir).leafVLogDir)
+	authority, err := newLeafGenerationPackPromotionAuthority(db, writer.leafStagingRoot, writer.leafDir, resolveStorageLayout(db.dir).leafVLogDir)
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: prepare packed promotion authority: %w", err)
 	}
@@ -1518,7 +1518,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
 	}
 	promotionStarted := time.Now()
-	promotedSegments, promotionMutated, promoteErr := authority.promote()
+	promotedSegments, _, promoteErr := authority.promote()
 	if runStats != nil {
 		runStats.ApplyStages.PromotionTimeNanos += time.Since(promotionStarted).Nanoseconds()
 		runStats.ApplyStages.DirectorySyncTimeNanos += authority.namespaceSyncNanos
@@ -1552,13 +1552,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return copied, copiedBytes, cleanupErr
 	}
 	if promoteErr != nil {
-		if promotionMutated && !errors.Is(promoteErr, ErrRecoveryRequired) {
-			promoteErr = errors.Join(promoteErr, ErrRecoveryRequired)
-		}
 		promoteErr = fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr)
-		if errors.Is(promoteErr, ErrRecoveryRequired) {
+		if authority.retainedForRecovery {
+			promoteErr = errors.Join(promoteErr, ErrRecoveryRequired)
 			db.publicationPoisoned.Store(true)
-			authority.retainForRecovery()
 			unlockPublish()
 			return 0, 0, promoteErr
 		}
