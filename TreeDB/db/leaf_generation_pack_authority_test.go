@@ -123,15 +123,19 @@ func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
 	var pinHighWater uint64
 	var namespaceSyncNanos int64
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
 		fixture := newLeafPackAuthorityFixture(b)
 		authority, err := newLeafGenerationPackPromotionAuthority(fixture.db, fixture.stagingDir, fixture.destination)
 		if err != nil {
 			b.Fatal(err)
 		}
+		b.StartTimer()
 		if err := authority.capture([]rewriteCreatedSegment{fixture.created}, []page.LeafLogPtr{fixture.pointer}); err != nil {
 			b.Fatal(err)
 		}
+		b.StopTimer()
 		fixture.close(b)
+		b.StartTimer()
 		if _, mutated, err := authority.promote(); err != nil || !mutated {
 			b.Fatalf("promote mutated=%t err=%v", mutated, err)
 		}
@@ -153,6 +157,11 @@ func BenchmarkLeafGenerationPackPromotionAuthority(b *testing.B) {
 		if got := fixture.registry.ActivePins(); got != 0 {
 			b.Fatalf("active packed outer-leaf pins after release=%d want 0", got)
 		}
+		b.StopTimer()
+		if err := os.RemoveAll(fixture.db.dir); err != nil {
+			b.Fatalf("remove fixture %s: %v", fixture.db.dir, err)
+		}
+		b.StartTimer()
 	}
 	b.StopTimer()
 	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")

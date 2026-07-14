@@ -521,6 +521,8 @@ func BenchmarkColumnVectorGraphStableResourceCapture(b *testing.B) {
 	b.SetBytes(int64(len(items[0].payload) + len(items[1].payload)))
 	b.ReportAllocs()
 	b.ResetTimer()
+	var descriptors, obligations, contentSyncs, namespaceSyncs uint64
+	var pinHighWater uint64
 	for i := 0; i < b.N; i++ {
 		authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
 		if err != nil {
@@ -553,15 +555,26 @@ func BenchmarkColumnVectorGraphStableResourceCapture(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		descriptors += uint64(len(resources.Descriptors()))
+		for _, descriptor := range resources.Descriptors() {
+			obligations += uint64(len(descriptor.LogicalObligations()))
+		}
+		for _, stats := range resources.Stats(time.Now()) {
+			contentSyncs += stats.Syncs
+			namespaceSyncs += stats.NamespaceSyncs
+			if stats.PinHighWater > pinHighWater {
+				pinHighWater = stats.PinHighWater
+			}
+		}
 		resources.Release()
 	}
 	b.StopTimer()
 	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
 		b.Fatalf("released vector authority pins=%d identities=%d want 0,0", registry.ActivePins(), registry.ActiveIdentities())
 	}
-	b.ReportMetric(1, "descriptors/op")
-	b.ReportMetric(2, "logical-obligations/op")
-	b.ReportMetric(1, "pin-high-water")
-	b.ReportMetric(1, "content-syncs/op")
-	b.ReportMetric(1, "namespace-syncs/op")
+	b.ReportMetric(float64(descriptors)/float64(b.N), "descriptors/op")
+	b.ReportMetric(float64(obligations)/float64(b.N), "logical-obligations/op")
+	b.ReportMetric(float64(pinHighWater), "pin-high-water")
+	b.ReportMetric(float64(contentSyncs)/float64(b.N), "content-syncs/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace-syncs/op")
 }
