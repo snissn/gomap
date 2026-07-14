@@ -104,6 +104,60 @@ func TestCaptureTemplateResourcesPointerDefinitionReturnsExactTransitiveClosure(
 	}
 }
 
+func TestCaptureTemplateResourcesPointerDefinitionResolvesOmittedGroupedRecordLengthHint(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:       t.TempDir(),
+		ChunkSize: 64 * 1024,
+		ValueLog:  backenddb.ValueLogOptions{ForcePointers: true},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer backend.Close()
+	definition := bytes.Repeat([]byte("grouped-pointer-template-definition|"), 64)
+	templateID := template.TemplateID(definition, 0)
+	wantFrontier, err := seedGroupedPointerTemplateWithOmittedLengthHint(backend, templateID, definition)
+	if err != nil {
+		t.Fatalf("seed grouped pointer template: %v", err)
+	}
+
+	snapshot := backend.AcquireSnapshot()
+	entry, err := snapshot.GetEntryExact(templateKey(templateID))
+	if err != nil {
+		_ = snapshot.Close()
+		t.Fatalf("get grouped pointer entry: %v", err)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatalf("close snapshot: %v", err)
+	}
+	if got := page.ValuePtrRecordLength(entry.ValuePtr); got != 0 {
+		t.Fatalf("grouped pointer length hint=%d want omitted hint", got)
+	}
+
+	store := New(stableTestKV{db: backend}, Config{})
+	resources, err := store.CaptureTemplateResources(context.Background(), templateID)
+	if err != nil {
+		t.Fatalf("capture grouped template: %v", err)
+	}
+	defer resources.Release()
+	if got := resources.Len(); got != 2 {
+		t.Fatalf("closure len=%d want index+value-log", got)
+	}
+	foundValueLog := false
+	for _, token := range resources.Tokens() {
+		if token.DiagnosticPath() == "index.db" {
+			continue
+		}
+		foundValueLog = true
+		if got := token.Frontier().Bytes; got != wantFrontier {
+			t.Fatalf("value-log frontier=%d want header-derived record end %d", got, wantFrontier)
+		}
+	}
+	if !foundValueLog {
+		t.Fatal("grouped template closure missing value-log token")
+	}
+}
+
 type pointerTemplateSeed struct {
 	templateID uint64
 	definition []byte
@@ -149,6 +203,54 @@ func seedPointerTemplates(backend *backenddb.DB, seeds []pointerTemplateSeed) er
 		return err
 	}
 	return backend.RefreshValueLogSet()
+}
+
+func seedGroupedPointerTemplateWithOmittedLengthHint(backend *backenddb.DB, templateID uint64, definition []byte) (uint64, error) {
+	valueLogDir := backenddb.ValueLogDirPath(backend.Dir())
+	if err := os.MkdirAll(valueLogDir, 0700); err != nil {
+		return 0, err
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		return 0, err
+	}
+	path := filepath.Join(valueLogDir, fmt.Sprintf("value-l0-%06d.log", 1))
+	writer, err := valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, backend.StableResourceIdentityPinRegistry())
+	if err != nil {
+		return 0, err
+	}
+	defer writer.Close()
+	ptrs, err := writer.AppendFrame(0, nil, []valuelog.Record{
+		{RID: templateID, Value: definition},
+		{RID: 1, Value: []byte("grouped-sibling")},
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(ptrs) != 2 {
+		return 0, fmt.Errorf("grouped pointer count=%d want 2", len(ptrs))
+	}
+	recordLength := page.ValuePtrRecordLength(ptrs[0])
+	if recordLength == 0 {
+		return 0, fmt.Errorf("grouped writer unexpectedly omitted small record length")
+	}
+	ptr := ptrs[0]
+	ptr.Length = page.ValuePtrMarkGrouped(0, page.ValuePtrSubIndex(ptr))
+	if err := writer.Sync(); err != nil {
+		return 0, err
+	}
+	batch := backend.NewBatch().(*backenddb.Batch)
+	defer batch.Close()
+	if err := batch.SetPointer(templateKey(templateID), ptr); err != nil {
+		return 0, err
+	}
+	if err := batch.WriteSync(); err != nil {
+		return 0, err
+	}
+	if err := backend.RefreshValueLogSet(); err != nil {
+		return 0, err
+	}
+	return ptr.Offset + uint64(recordLength), nil
 }
 
 type templateResourceDescriptorView struct {
