@@ -127,11 +127,22 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		}
 		return stats, err
 	}
+	releasePrepared := func() {
+		if prepared.stableResources != nil {
+			prepared.stableResources.Release()
+			prepared.stableResources = nil
+		}
+	}
+	defer releasePrepared()
 	cleanupPrepared := func(baseErr error) error {
+		releasePrepared()
 		if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
 			return errors.Join(baseErr, cleanupErr)
 		}
 		return baseErr
+	}
+	if err := validateStableColumnResourcesMatchPrepared(prepared.Assets, prepared.stableResources); err != nil {
+		return stats, cleanupPrepared(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return stats, cleanupPrepared(err)

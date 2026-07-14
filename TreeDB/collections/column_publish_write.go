@@ -146,6 +146,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
+	defer func() { plan.releaseStableResources() }()
 	var updatedMeta CollectionMeta
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -160,6 +161,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		if err != nil {
 			return nil, err
 		}
+		plan.releaseStableResources()
 		plan = nextPlan
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		materializeStart := time.Now()
@@ -244,6 +246,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
+	defer func() { plan.releaseStableResources() }()
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
@@ -257,6 +260,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		if err != nil {
 			return nil, err
 		}
+		plan.releaseStableResources()
 		plan = nextPlan
 		recordColumnPublishPlanStats(input.insertStats, plan)
 		materializeStart := time.Now()
@@ -665,9 +669,15 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (_ ColumnPublishPreparedAssets, retErr error) {
 	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
 	defer func() {
-		if retErr != nil && len(cleanupAssets) != 0 {
-			if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
-				retErr = errors.Join(retErr, cleanupErr)
+		if retErr != nil {
+			if prepared.stableResources != nil {
+				prepared.stableResources.Release()
+				prepared.stableResources = nil
+			}
+			if len(cleanupAssets) != 0 {
+				if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), cleanupAssets); cleanupErr != nil {
+					retErr = errors.Join(retErr, cleanupErr)
+				}
 			}
 		}
 	}()
@@ -743,8 +753,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendFileSyncCount int
 		var appendSyncEpochCount int
 		if needsAppender {
+			prepared.stableResourcesRequired = true
 			appendStart := time.Now()
-			session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
+			session = newColumnPhysicalAssetAppendSessionWithStableResources(
+				c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.StableResourceIdentityPinRegistry(),
+			)
 			appendOpenDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
@@ -853,10 +866,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		if session != nil {
 			appendStart := time.Now()
-			closeStats, err := session.close()
+			closeStats, resources, err := session.closeWithStableResources()
 			if err != nil {
 				return err
 			}
+			if prepared.stableResources != nil {
+				resources.Release()
+				return errors.New("collections: column physical asset preparation produced more than one stable resource set")
+			}
+			prepared.stableResources = resources
 			closed = true
 			appendCloseDuration += time.Since(appendStart)
 			appendFileSyncDuration += closeStats.FileSync

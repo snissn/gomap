@@ -64,6 +64,9 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if beforeView.mutationParts == 0 || len(oldRefs) == 0 {
 		t.Fatalf("before compaction manifest mutation_parts=%d refs=%d want mutation-bearing refs", beforeView.mutationParts, len(oldRefs))
 	}
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineIdentities := registry.ActiveIdentities()
 
 	stats, err := col.ColumnStoreCompact(context.Background(), ColumnStoreCompactOptions{})
 	if err != nil {
@@ -74,6 +77,15 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	}
 	if got := col.Meta().Options.ColumnStore.PhysicalMutationParts; got != 0 {
 		t.Fatalf("PhysicalMutationParts=%d want reset after compaction", got)
+	}
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("stable asset pins after compaction publish=%d want baseline %d", got, baselinePins)
+	}
+	if got := registry.ActiveIdentities(); got != baselineIdentities {
+		t.Fatalf("stable asset identities after compaction publish=%d want baseline %d", got, baselineIdentities)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got == 0 {
+		t.Fatal("successful compaction publish retained no exact namespace sync proof")
 	}
 
 	after, err := col.RunColumnPhysicalQuery(req)

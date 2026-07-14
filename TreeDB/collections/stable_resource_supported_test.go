@@ -36,6 +36,18 @@ func TestStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 	testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t)
 }
 
+func TestStableColumnAppendSessionNamespaceSyncProofTracksExactIdentity(t *testing.T) {
+	testStableColumnAppendSessionNamespaceSyncProofTracksExactIdentity(t)
+}
+
+func TestStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t *testing.T) {
+	testStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t)
+}
+
+func TestColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
+	testColumnCommandWALPublishReleasesStableAssetAuthority(t)
+}
+
 func TestColumnAssetStableDeletePreservesReboundEntry(t *testing.T) {
 	testColumnAssetStableDeletePreservesReboundEntry(t)
 }

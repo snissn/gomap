@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
@@ -41,9 +44,133 @@ type ColumnAssetGCStats struct {
 
 var (
 	columnAssetGCTestHookMu             sync.RWMutex
-	removeColumnAssetGCSegment          = os.Remove
-	syncColumnAssetGCDeletedSegmentsDir = syncColumnAssetDir
+	removeColumnAssetGCSegment          func(string) error
+	syncColumnAssetGCDeletedSegmentsDir func(string) error
+	columnAssetStableDeleteBeforeUnlink func()
 )
+
+type columnAssetStableSegmentDeleter struct {
+	segmentDir string
+	parent     *os.File
+	registry   *rootpublication.IdentityPinRegistry
+	leases     []*rootpublication.IdentityDeleteLease
+	removed    bool
+}
+
+func newColumnAssetStableSegmentDeleter(segmentDir string, registry *rootpublication.IdentityPinRegistry) (*columnAssetStableSegmentDeleter, error) {
+	if registry == nil {
+		return nil, errors.New("collections: stable column segment delete requires identity pin registry")
+	}
+	parent, err := os.Open(segmentDir)
+	if err != nil {
+		return nil, err
+	}
+	return &columnAssetStableSegmentDeleter{segmentDir: segmentDir, parent: parent, registry: registry}, nil
+}
+
+func (deleter *columnAssetStableSegmentDeleter) delete(fileID uint32) (bool, error) {
+	if deleter == nil || deleter.parent == nil || fileID == 0 {
+		return false, errors.New("collections: incomplete stable column segment delete")
+	}
+	name := columnAssetSegmentFileName(fileID)
+	resource, err := rootpublication.OpenStableChildFile(deleter.parent, name, os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer resource.Close()
+	identity, err := rootpublication.StableIdentityFromFile(resource)
+	if err != nil {
+		return false, err
+	}
+	namespace := filepath.ToSlash(filepath.Join(filepath.Clean(deleter.segmentDir), name))
+	lease, err := deleter.registry.BeginDeleteAt(identity, namespace)
+	if err != nil {
+		return false, err
+	}
+	abort := true
+	defer func() {
+		if abort {
+			lease.Abort()
+		}
+	}()
+	removeHook, _, beforeUnlink := columnAssetStableDeleteHooks()
+	if beforeUnlink != nil {
+		beforeUnlink()
+	}
+	if err := rootpublication.ValidateStableChildLink(deleter.parent, resource, name); err != nil {
+		return false, err
+	}
+	if removeHook != nil {
+		err = removeHook(filepath.Join(deleter.segmentDir, name))
+	} else {
+		err = rootpublication.RemoveStableChildFile(deleter.parent, name)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := deleter.registry.ForgetStableNamespaceLink(deleter.parent, resource, name); err != nil {
+		return false, err
+	}
+	abort = false
+	deleter.leases = append(deleter.leases, lease)
+	deleter.removed = true
+	return true, nil
+}
+
+func (deleter *columnAssetStableSegmentDeleter) finish(cause error) error {
+	if deleter == nil {
+		return cause
+	}
+	var syncErr error
+	if deleter.removed {
+		_, syncHook, _ := columnAssetStableDeleteHooks()
+		if syncHook != nil {
+			syncErr = syncHook(deleter.segmentDir)
+		} else if deleter.parent != nil {
+			syncErr = deleter.parent.Sync()
+		}
+	}
+	for _, lease := range deleter.leases {
+		lease.Commit()
+	}
+	deleter.leases = nil
+	var closeErr error
+	if deleter.parent != nil {
+		closeErr = deleter.parent.Close()
+		deleter.parent = nil
+	}
+	return errors.Join(cause, syncErr, closeErr)
+}
+
+func deleteColumnAssetSegmentWithStableLease(segmentDir string, fileID uint32, registry *rootpublication.IdentityPinRegistry) (bool, error) {
+	deleter, err := newColumnAssetStableSegmentDeleter(segmentDir, registry)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := deleter.delete(fileID)
+	return deleted, deleter.finish(err)
+}
+
+func columnAssetStableDeleteHooks() (func(string) error, func(string) error, func()) {
+	columnAssetGCTestHookMu.RLock()
+	defer columnAssetGCTestHookMu.RUnlock()
+	return removeColumnAssetGCSegment, syncColumnAssetGCDeletedSegmentsDir, columnAssetStableDeleteBeforeUnlink
+}
+
+func setColumnAssetStableDeleteBeforeUnlinkTestHook(hook func()) func() {
+	columnAssetGCTestHookMu.Lock()
+	previous := columnAssetStableDeleteBeforeUnlink
+	columnAssetStableDeleteBeforeUnlink = hook
+	columnAssetGCTestHookMu.Unlock()
+	return func() {
+		columnAssetGCTestHookMu.Lock()
+		columnAssetStableDeleteBeforeUnlink = previous
+		columnAssetGCTestHookMu.Unlock()
+	}
+}
 
 // ColumnAssetGC reclaims only complete, canonical column asset segments that
 // M15A reachability proves wholly reclaimable. Mixed segments remain rewrite
@@ -175,32 +302,33 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	if len(eligible) == 0 {
 		return stats, nil
 	}
-	removeSegment := removeColumnAssetGCSegmentFunc()
-	syncDeletedSegmentsDirFn := syncColumnAssetGCDeletedSegmentsDirFunc()
-	syncDeletedSegmentsDir := func(retErr error) error {
-		if stats.SegmentsDeleted == 0 {
-			return retErr
-		}
-		syncErr := syncDeletedSegmentsDirFn(namespace.SegmentDir)
-		if retErr != nil {
-			return errors.Join(retErr, syncErr)
-		}
-		return syncErr
+	deleter, err := newColumnAssetStableSegmentDeleter(namespace.SegmentDir, c.db.StableResourceIdentityPinRegistry())
+	if err != nil {
+		return stats, err
 	}
 
 	for _, entry := range eligible {
 		if err := ctx.Err(); err != nil {
-			return stats, syncDeletedSegmentsDir(err)
+			return stats, deleter.finish(err)
 		}
-		if err := removeSegment(entry.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return stats, syncDeletedSegmentsDir(err)
+		deleted, err := deleter.delete(entry.FileID)
+		if err != nil {
+			// A publication owner can pin an otherwise unreachable segment
+			// between planning and deletion. Retain it for a later GC pass.
+			if errors.Is(err, rootpublication.ErrResourcePinned) {
+				continue
+			}
+			return stats, deleter.finish(err)
+		}
+		if !deleted {
+			continue
 		}
 		stats.SegmentsDeleted++
 		stats.BytesDeleted = addColumnAssetReachabilityBytes(stats.BytesDeleted, entry.ReclaimableBytes)
 		stats.SegmentsRetained--
 		stats.BytesRetained = subColumnAssetReachabilityBytesFloor(stats.BytesRetained, entry.ReclaimableBytes)
 	}
-	if err := syncDeletedSegmentsDir(nil); err != nil {
+	if err := deleter.finish(nil); err != nil {
 		return stats, err
 	}
 	return stats, nil
@@ -251,20 +379,6 @@ func columnAssetGCPlanForDetail(plan ColumnAssetReachabilityPlan, detailed, segm
 		plan.SegmentEntries = nil
 	}
 	return plan
-}
-
-func removeColumnAssetGCSegmentFunc() func(string) error {
-	columnAssetGCTestHookMu.RLock()
-	fn := removeColumnAssetGCSegment
-	columnAssetGCTestHookMu.RUnlock()
-	return fn
-}
-
-func syncColumnAssetGCDeletedSegmentsDirFunc() func(string) error {
-	columnAssetGCTestHookMu.RLock()
-	fn := syncColumnAssetGCDeletedSegmentsDir
-	columnAssetGCTestHookMu.RUnlock()
-	return fn
 }
 
 func setColumnAssetGCTestHooks(remove func(string) error, syncDeletedDir func(string) error) func() {
