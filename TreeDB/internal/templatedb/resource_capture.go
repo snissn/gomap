@@ -7,6 +7,7 @@ import (
 	"math"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/template"
@@ -144,7 +145,9 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		if err != nil {
 			return nil, fmt.Errorf("templatedb: resolve template %d value-log path: %w", templateID, err)
 		}
-		if diagnosticPath == "" || diagnosticPath == "." || filepath.IsAbs(diagnosticPath) {
+		cleanDiagnosticPath := filepath.Clean(diagnosticPath)
+		if diagnosticPath == "" || cleanDiagnosticPath == "." || filepath.IsAbs(diagnosticPath) ||
+			cleanDiagnosticPath == ".." || strings.HasPrefix(cleanDiagnosticPath, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("%w: templatedb template %d has invalid value-log path", rootpublication.ErrUnresolvedResource, templateID)
 		}
 		valueLogToken, err := snapshot.NewStableValueLogResourceToken(entry.FileID, rootpublication.StableResourceSpec{

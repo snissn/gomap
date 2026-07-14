@@ -104,6 +104,51 @@ func TestCaptureTemplateResourcesPointerDefinitionReturnsExactTransitiveClosure(
 	}
 }
 
+func TestCaptureTemplateResourcesRejectsParentEscapingDiagnosticPath(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:       t.TempDir(),
+		ChunkSize: 64 * 1024,
+		ValueLog:  backenddb.ValueLogOptions{ForcePointers: true},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer backend.Close()
+	definition := bytes.Repeat([]byte("parent-escaping-template-definition|"), 64)
+	templateID := template.TemplateID(definition, 0)
+	if err := seedPointerTemplate(backend, templateID, definition); err != nil {
+		t.Fatalf("seed pointer template: %v", err)
+	}
+	for _, diagnosticPath := range []string{
+		filepath.Join("..", "outside.log"),
+		filepath.FromSlash("safe/../../outside.log"),
+	} {
+		t.Run(filepath.ToSlash(diagnosticPath), func(t *testing.T) {
+			valueLogTokenCalls := 0
+			store := New(stableTestKV{
+				db:                     backend,
+				diagnosticPathOverride: diagnosticPath,
+				valueLogTokenCalls:     &valueLogTokenCalls,
+			}, Config{})
+
+			resources, err := store.CaptureTemplateResources(context.Background(), templateID)
+			if resources != nil {
+				resources.Release()
+				t.Fatal("parent-escaping capture returned resources")
+			}
+			if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+				t.Fatalf("parent-escaping capture error=%v want ErrUnresolvedResource", err)
+			}
+			if valueLogTokenCalls != 0 {
+				t.Fatalf("parent-escaping path reached token construction %d times, want 0", valueLogTokenCalls)
+			}
+			if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
+				t.Fatalf("parent-escaping capture left identity pins=%d want 0", got)
+			}
+		})
+	}
+}
+
 func TestCaptureTemplateResourcesPointerDefinitionResolvesOmittedGroupedRecordLengthHint(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:       t.TempDir(),

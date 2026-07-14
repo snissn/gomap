@@ -35,6 +35,60 @@ func TestTemplateKVStableCaptureSeesSynchronousPublication(t *testing.T) {
 	resources.Release()
 }
 
+func TestTemplateKVStableCaptureResourcesOutliveDatabaseClose(t *testing.T) {
+	opts := Options{Dir: t.TempDir()}
+	opts.ValueLog.ForcePointers = true
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = database.Close()
+		}
+	})
+	registry := database.backend.StableResourceIdentityPinRegistry()
+	store := templatedb.New(templateKV{db: database}, templatedb.Config{})
+	definition := make([]byte, 4096)
+	if _, err := rand.New(rand.NewSource(2)).Read(definition); err != nil {
+		t.Fatalf("prepare template: %v", err)
+	}
+	templateID, err := store.PutTemplateDef(context.Background(), definition, nil)
+	if err != nil {
+		t.Fatalf("put template: %v", err)
+	}
+	resources, err := store.CaptureTemplateResources(context.Background(), templateID)
+	if err != nil {
+		t.Fatalf("capture template: %v", err)
+	}
+	if got := registry.ActivePins(); got != 1 {
+		resources.Release()
+		t.Fatalf("captured value-log identity pins=%d want 1", got)
+	}
+
+	if err := database.Close(); err != nil {
+		resources.Release()
+		t.Fatalf("close with live stable resources: %v", err)
+	}
+	closed = true
+	if got := registry.ActivePins(); got != 1 {
+		resources.Release()
+		t.Fatalf("identity pins after database close=%d want 1", got)
+	}
+	for _, token := range resources.Tokens() {
+		buf := make([]byte, 1)
+		if n, err := token.ReadAt(buf, 0); err != nil || n != len(buf) {
+			resources.Release()
+			t.Fatalf("read retained %q after database close: n=%d err=%v", token.DiagnosticPath(), n, err)
+		}
+	}
+	resources.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("identity pins after resource release=%d want 0", got)
+	}
+}
+
 func TestTemplateKVStableCaptureResolvesOmittedGroupedRecordLength(t *testing.T) {
 	opts := Options{Dir: t.TempDir()}
 	opts.ValueLog.ForcePointers = true

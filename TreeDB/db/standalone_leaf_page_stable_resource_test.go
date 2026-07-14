@@ -201,7 +201,11 @@ func TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations(t *testing.T)
 		_ = writer.Close()
 	})
 
-	ptrs, resources, err := database.leafPageLog.(LeafPageStableBatchLog).AppendLeafPagesWithStableResources(pages)
+	stableBatchLog, ok := database.leafPageLog.(LeafPageStableBatchLog)
+	if !ok {
+		t.Fatal("leaf page log does not implement LeafPageStableBatchLog")
+	}
+	ptrs, resources, err := stableBatchLog.AppendLeafPagesWithStableResources(pages)
 	if err != nil {
 		t.Fatalf("stable multi-template batch rewrite: %v", err)
 	}
