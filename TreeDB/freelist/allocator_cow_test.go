@@ -1,6 +1,7 @@
 package freelist
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -51,6 +52,40 @@ func TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages(t *testing.T) {
 	}
 	if prepared.Candidate().Generation().HighWater() <= aux[1] {
 		t.Fatalf("high-water=%d does not cover auxiliary page %d", prepared.Candidate().Generation().HighWater(), aux[1])
+	}
+}
+
+func TestAllocatorCOWAuxiliaryPagesStayContiguousAboveReusableHoles(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(12); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	base := MustNewFreelistGenerationV1(1, 12, []uint64{3, 7, 9}, nil)
+	if err := allocator.EnableCOWV1(base, NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidateID CandidateIDV1
+	candidateID[0] = 9
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateID, capability, 3, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prepared.AuxiliaryPageIDs(); len(got) != 3 || got[0] != 12 || got[1] != 13 || got[2] != 14 {
+		t.Fatalf("auxiliary pages=%v, want contiguous [12 13 14]", got)
+	}
+	var other CandidateIDV1
+	other[0] = 10
+	if _, err := allocator.PrepareCOWCandidateV1(3, 3, other, capability, 3, NewMemoryPageStoreV1()); !errors.Is(err, ErrCOWCandidatePrepared) {
+		t.Fatalf("mismatched prepare error=%v, want ErrCOWCandidatePrepared", err)
 	}
 }
 

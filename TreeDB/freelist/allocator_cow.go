@@ -143,21 +143,24 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 		return nil, ErrGenerationFormat
 	}
 	if a.cow.prepared != nil {
+		generation := a.cow.prepared.candidate.Generation()
+		if generation == nil || generation.GenerationID() != generationID || generation.CommitSeq() != commitSeq ||
+			a.cow.prepared.candidateID != candidateID || len(a.cow.prepared.auxiliary) != auxiliaryPageCount {
+			return nil, ErrCOWCandidatePrepared
+		}
 		return a.cow.prepared, nil
 	}
 	a.cow.txn.PruneWithCapability(capability)
-	auxiliary := make([]uint64, 0, auxiliaryPageCount)
-	for i := 0; i < auxiliaryPageCount; i++ {
-		id, err := a.cow.txn.Allocate(0)
-		if err != nil {
-			return nil, err
-		}
+	auxiliary, err := a.cow.txn.allocateAppendedRange(auxiliaryPageCount)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range auxiliary {
 		if id >= a.pager.PageCount() {
 			if err := a.pager.Truncate(id + 1); err != nil {
 				return nil, err
 			}
 		}
-		auxiliary = append(auxiliary, id)
 	}
 	candidate, err := a.cow.txn.MaterializeCandidate(generationID, commitSeq, candidateID, sink)
 	if err != nil {

@@ -285,6 +285,55 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 	return id, nil
 }
 
+// allocateAppendedRange reserves one contiguous data-page extent above the
+// transaction high-water. Durable dependency manifests use this for their
+// positional page chain; ordinary allocations should continue to use
+// Allocate so reusable pages remain available to index writers.
+func (t *FreelistTxn) allocateAppendedRange(count int) ([]uint64, error) {
+	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	if count < 0 {
+		return nil, ErrGenerationFormat
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	width := uint64(count)
+	start := t.highWater
+	for {
+		candidate, ok := t.ledger.firstUnreservedAtOrAfter(start)
+		if !ok || candidate > math.MaxUint64-width {
+			return nil, ErrNoAllocatablePage
+		}
+		conflict := uint64(0)
+		for id := candidate; id < candidate+width; id++ {
+			if t.ledger.Reserved(id) {
+				conflict = id
+				break
+			}
+		}
+		if conflict != 0 {
+			if conflict == math.MaxUint64 {
+				return nil, ErrNoAllocatablePage
+			}
+			start = conflict + 1
+			continue
+		}
+		if candidate > t.highWater {
+			t.abandonedAppends = appendReservationRange(t.abandonedAppends, t.highWater, candidate-t.highWater, ReservationAbandonedAppend, 0)
+		}
+		ids := make([]uint64, count)
+		for i := range ids {
+			ids[i] = candidate + uint64(i)
+			t.allocated = append(t.allocated, allocatedPage{ids[i], ReservationAppendedData})
+		}
+		t.highWater = candidate + width
+		t.stats.AppendAllocations += width
+		return ids, nil
+	}
+}
+
 func (t *FreelistTxn) ReservePage(id uint64) error {
 	if err := t.valid(); err != nil {
 		return err
