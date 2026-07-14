@@ -743,3 +743,150 @@ func testStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 		t.Fatalf("pinned token read %q after path replacement", got)
 	}
 }
+
+func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "stable-session",
+		},
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	session := newColumnPhysicalAssetAppendSessionWithStableResources(root, cfg, registry)
+	refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{
+		{payload: []byte("row-image"), kind: ColumnAssetKindTCS1PartImage, generation: 7, partID: 1},
+		{payload: []byte("dictionary-codes"), kind: ColumnAssetKindTCS1DictionaryCodes, generation: 7, partID: 2},
+		{payload: []byte("hnsw-search-pack"), kind: ColumnAssetKindTCS1HNSWSearchPack, generation: 7, partID: 3},
+		{payload: []byte("int64-values"), kind: ColumnAssetKindTCS1Int64Values, generation: 7, partID: 4},
+	})
+	if err != nil {
+		_ = session.abort()
+		t.Fatal(err)
+	}
+	closeStats, resources, err := session.closeWithStableResources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resources == nil {
+		t.Fatal("stable append session returned nil resources")
+	}
+	defer resources.Release()
+	if closeStats.FileSyncCount != 1 || closeStats.SyncEpochCount != 1 {
+		t.Fatalf("stable append close stats=%+v want one content sync epoch", closeStats)
+	}
+	descriptors := resources.Descriptors()
+	if len(descriptors) != 2 {
+		t.Fatalf("stable descriptors=%d want typed-column and vector resource kinds", len(descriptors))
+	}
+	byKind := make(map[rootpublication.ResourceKind]rootpublication.StableResourceDescriptor, len(descriptors))
+	for _, descriptor := range descriptors {
+		byKind[descriptor.Kind()] = descriptor
+	}
+	typed := byKind[rootpublication.ResourceTypedColumnAsset]
+	if got, want := typed.Frontier().Bytes, uint64(refs[3].Offset+refs[3].Length); got != want {
+		t.Fatalf("typed-column coalesced frontier=%d want %d", got, want)
+	}
+	vector := byKind[rootpublication.ResourceVectorGraphPack]
+	if got, want := vector.Frontier().Bytes, uint64(refs[2].Offset+refs[2].Length); got != want {
+		t.Fatalf("vector frontier=%d want %d", got, want)
+	}
+	var obligations []rootpublication.StableLogicalObligation
+	for _, descriptor := range descriptors {
+		obligations = append(obligations, descriptor.LogicalObligations()...)
+	}
+	if len(obligations) != len(refs) {
+		t.Fatalf("logical obligations=%d want %d across resource kinds", len(obligations), len(refs))
+	}
+	for _, ref := range refs {
+		found := false
+		for _, obligation := range obligations {
+			if obligation.Kind == string(ref.Kind) && obligation.Offset == ref.Offset && obligation.Length == ref.Length && obligation.Checksum == ref.Checksum {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("logical obligations=%+v missing ref=%+v", obligations, ref)
+		}
+	}
+	if got := registry.ActivePins(); got != 2 {
+		t.Fatalf("active kind-scoped pins=%d want 2", got)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(root, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentDir := namespace.SegmentDir
+	if _, err := deleteColumnAssetSegmentWithStableLease(segmentDir, refs[0].FileID, registry); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("delete pinned segment error=%v want ErrResourcePinned", err)
+	}
+	resources.Release()
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("active physical pins after release=%d want 0", got)
+	}
+	deleted, err := deleteColumnAssetSegmentWithStableLease(segmentDir, refs[0].FileID, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("stable delete reported no deletion")
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("active registry identities after delete=%d want 0", got)
+	}
+}
+
+func testColumnAssetStableDeletePreservesReboundEntry(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "column-assets")
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		AssetManager: &ColumnAssetManagerConfig{
+			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "rebound-delete",
+		},
+	}
+	ref, err := writeColumnAssetToManager(root, cfg, []byte("original"), ColumnAssetKindTCS1PartImage, 7, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segmentPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedPath := segmentPath + ".rotated"
+	originalHook := columnAssetStableDeleteBeforeUnlink
+	columnAssetStableDeleteBeforeUnlink = func() {
+		if err := os.Rename(segmentPath, rotatedPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(segmentPath, []byte("replacement"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { columnAssetStableDeleteBeforeUnlink = originalHook })
+	registry := rootpublication.NewIdentityPinRegistry()
+	deleted, err := deleteColumnAssetSegmentWithStableLease(filepath.Dir(segmentPath), ref.FileID, registry)
+	if !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("rebound delete error=%v want ErrResourceConflict", err)
+	}
+	if deleted {
+		t.Fatal("rebound delete reported deletion")
+	}
+	replacement, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(replacement) != "replacement" {
+		t.Fatalf("rebound entry=%q want replacement", replacement)
+	}
+	original, err := os.ReadFile(rotatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(original) != "original" {
+		t.Fatalf("rotated original=%q want original", original)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("active registry identities after aborted delete=%d want 0", got)
+	}
+}

@@ -31,3 +31,11 @@ func TestStableColumnAssetTokensCoalesceCreationNamespaceInEitherOrder(t *testin
 func TestStableColumnAssetTokenBindsExactSegmentAndRange(t *testing.T) {
 	testStableColumnAssetTokenBindsExactSegmentAndRange(t)
 }
+
+func TestStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) {
+	testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t)
+}
+
+func TestColumnAssetStableDeletePreservesReboundEntry(t *testing.T) {
+	testColumnAssetStableDeletePreservesReboundEntry(t)
+}
