@@ -31,6 +31,21 @@ func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return os.NewFile(uintptr(fd), parent.Name()+string(os.PathSeparator)+name), nil
 }
 
+func openOrCreateStableChildDirectory(parent *os.File, name string, perm os.FileMode) (*os.File, error) {
+	if parent == nil {
+		return nil, os.ErrInvalid
+	}
+	err := unix.Mkdirat(int(parent.Fd()), name, uint32(perm.Perm()))
+	if err != nil && err != unix.EEXIST {
+		return nil, err
+	}
+	fd, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), parent.Name()+string(os.PathSeparator)+name), nil
+}
+
 func removeStableChildFile(parent *os.File, name string) error {
 	if parent == nil {
 		return os.ErrInvalid

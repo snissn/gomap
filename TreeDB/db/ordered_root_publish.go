@@ -1642,6 +1642,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	lockStart := time.Now()
 	db.writeMu.Lock()
@@ -1790,7 +1792,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	var post finalizeCommitPost
 	post, err = db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil,
-		finalizeCommitOptions{}, releaseWrite, nil,
+		finalizeCommitOptions{closeTeardownPinned: true}, releaseWrite, nil,
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
@@ -2158,6 +2160,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	if db.closing.Load() {
 		return 0, nil, preApplyErr(ErrClosed)
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	rawPublishLocked := !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false)
 	if rawPublishLocked {
@@ -2348,6 +2352,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
@@ -2551,6 +2557,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		durableResources = nil
 	}
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
 	post, err := db.finalizeCommitReleasingRootSerialization(
@@ -2782,6 +2789,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	if db.closing.Load() {
 		return 0, nil, false, ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	rootsObserved := 0
@@ -3031,6 +3040,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			true, vlogRefDelta, nil, nil,
 			finalizeCommitOptions{
 				skipPrePublishFlush:      true,
+				closeTeardownPinned:      true,
 				expectedBaseCommitSeq:    curSeq,
 				hasExpectedBaseCommitSeq: true,
 				releaseRootSerialization: func() {
@@ -3076,6 +3086,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false) {
 		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
@@ -3260,6 +3272,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
@@ -3468,6 +3482,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		durableResources = nil
 	}
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
 	post, err := db.finalizeCommitReleasingRootSerialization(
@@ -3515,6 +3530,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		finalizeOpts := finalizeCommitOptions{
 			durableResources:            opts.durableResources,
 			durableResourceRequirements: opts.durableResourceRequirements,
+			closeTeardownPinned:         true,
 		}
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
@@ -3542,6 +3558,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 	}
 	commitLocked := true
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
+	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = opts.durableResources
 	finalizeOpts.durableResourceRequirements = opts.durableResourceRequirements
 	post, err := db.finalizeCommitReleasingRootSerialization(
@@ -3578,6 +3595,8 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	db.writeMu.Lock()
 	writeLocked := true
@@ -3712,7 +3731,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments,
-		true, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		true, vlogRefDelta, nil, nil, finalizeCommitOptions{closeTeardownPinned: true},
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

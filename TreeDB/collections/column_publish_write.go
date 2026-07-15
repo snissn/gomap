@@ -1222,7 +1222,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 }
 
 func ordinaryColumnStableAuthorityEnabled() bool {
-	return rootpublication.StableRelativeNamespaceSupported()
+	return rootpublication.StableNamespaceCreationSupported()
 }
 
 // Stable-authoritative bytes remain persistent storage even when publication

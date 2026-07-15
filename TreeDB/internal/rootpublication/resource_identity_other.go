@@ -14,6 +14,10 @@ func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }
 
+func openOrCreateStableChildDirectory(*os.File, string, os.FileMode) (*os.File, error) {
+	return nil, ErrNamespacePersistenceUnsupported
+}
+
 func removeStableChildFile(*os.File, string) error {
 	return ErrNamespacePersistenceUnsupported
 }

@@ -1276,6 +1276,57 @@ func OpenStableParent(path string) (*os.File, error) {
 	return openStableParent(path)
 }
 
+// EnsureStableChildDirectory opens or creates name relative to the exact
+// already-open parent and establishes the child link's namespace durability
+// before returning it. The returned handle is the authority for constructing
+// deeper descendants; callers must not replace it with a pathname reopen.
+//
+// Unix stabilizes the retained parent directory. Windows uses its narrower
+// create-through-child contract and flushes the exact child directory handle.
+func EnsureStableChildDirectory(parent *os.File, name string, perm os.FileMode, registry *IdentityPinRegistry) (*os.File, error) {
+	if parent == nil || !stableChildBaseName(name) {
+		return nil, fmt.Errorf("%w: stable child directory requires a base name and exact parent handle", ErrUnresolvedResource)
+	}
+	child, err := openOrCreateStableChildDirectory(parent, name, perm)
+	if err != nil {
+		return nil, err
+	}
+	info, err := child.Stat()
+	if err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	if !info.IsDir() {
+		_ = child.Close()
+		return nil, fmt.Errorf("%w: stable child %q is not a directory", ErrResourceConflict, name)
+	}
+	if registry != nil {
+		known, err := registry.StableDirectoryLinkKnown(parent, child, name)
+		if err != nil {
+			_ = child.Close()
+			return nil, err
+		}
+		if known {
+			return child, nil
+		}
+	}
+	persistence := parent
+	if stableNamespaceCreationPersistsThroughChild() {
+		persistence = child
+	}
+	if err := syncStableNamespace(persistence); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	if registry != nil {
+		if err := registry.RememberStableDirectoryLink(parent, child, name); err != nil {
+			_ = child.Close()
+			return nil, err
+		}
+	}
+	return child, nil
+}
+
 // RemoveStableChildFile unlinks name relative to the exact already-open parent
 // directory. Callers remain responsible for syncing parent after the unlink.
 func RemoveStableChildFile(parent *os.File, name string) error {

@@ -125,6 +125,51 @@ func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return file, nil
 }
 
+func openOrCreateStableChildDirectory(parent *os.File, name string, perm os.FileMode) (*os.File, error) {
+	if parent == nil {
+		return nil, os.ErrInvalid
+	}
+	_ = perm // Windows applies ACLs inherited from the exact parent namespace.
+
+	objectName, err := windows.NewNTUnicodeString(name)
+	if err != nil {
+		return nil, &os.PathError{Op: "mkdirat", Path: name, Err: err}
+	}
+	attributes := windows.OBJECT_ATTRIBUTES{
+		RootDirectory: windows.Handle(parent.Fd()),
+		ObjectName:    objectName,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE,
+	}
+	attributes.Length = uint32(unsafe.Sizeof(attributes))
+	var (
+		handle windows.Handle
+		status windows.IO_STATUS_BLOCK
+	)
+	err = windows.NtCreateFile(
+		&handle,
+		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE,
+		&attributes,
+		&status,
+		nil,
+		windows.FILE_ATTRIBUTE_DIRECTORY,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		windows.FILE_OPEN_IF,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT|windows.FILE_WRITE_THROUGH|windows.FILE_OPEN_REPARSE_POINT,
+		0,
+		0,
+	)
+	runtime.KeepAlive(parent)
+	if err != nil {
+		return nil, &os.PathError{Op: "mkdirat", Path: name, Err: stableWindowsNTError(err)}
+	}
+	file := os.NewFile(uintptr(handle), parent.Name()+string(os.PathSeparator)+name)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, &os.PathError{Op: "mkdirat", Path: name, Err: errors.New("invalid Windows directory handle")}
+	}
+	return file, nil
+}
+
 func stableWindowsNTError(err error) error {
 	if status, ok := err.(windows.NTStatus); ok {
 		return status.Errno()

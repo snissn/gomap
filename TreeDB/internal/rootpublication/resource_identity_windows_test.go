@@ -109,6 +109,88 @@ func TestOpenStableChildFileUsesExactParentHandleWindows(t *testing.T) {
 	}
 }
 
+func TestEnsureStableChildDirectoryUsesExactParentHandleWindows(t *testing.T) {
+	root := t.TempDir()
+	originalDir := filepath.Join(root, "parent")
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := OpenStableParent(originalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	movedDir := filepath.Join(root, "parent-moved")
+	if err := os.Rename(originalDir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewIdentityPinRegistry()
+	child, err := EnsureStableChildDirectory(parent, "nested", 0o700, registry)
+	if err != nil {
+		t.Fatalf("EnsureStableChildDirectory: %v", err)
+	}
+	defer child.Close()
+	if _, err := os.Stat(filepath.Join(movedDir, "nested")); err != nil {
+		t.Fatalf("captured-parent directory child: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(originalDir, "nested")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement path unexpectedly received directory child: %v", err)
+	}
+	known, err := registry.StableDirectoryLinkKnown(parent, child, "nested")
+	if err != nil || !known {
+		t.Fatalf("stable directory link known=%t err=%v", known, err)
+	}
+	if got := registry.Stats(); got != (IdentityPinRegistryStats{}) {
+		t.Fatalf("directory ancestry polluted stable resource accounting: %+v", got)
+	}
+	if got := registry.CachedStableDirectoryLinks(); got != 1 {
+		t.Fatalf("stable directory cache entries=%d want 1", got)
+	}
+	registry.mu.Lock()
+	var retained stableDirectoryLinkAuthority
+	for _, authority := range registry.stableDirectoryLinks {
+		retained = authority
+		break
+	}
+	registry.mu.Unlock()
+	if retained.parent == nil || retained.child == nil {
+		t.Fatal("stable directory proof did not retain parent and child authority")
+	}
+	if _, err := retained.parent.Stat(); err != nil {
+		t.Fatalf("retained stable directory parent: %v", err)
+	}
+	if _, err := retained.child.Stat(); err != nil {
+		t.Fatalf("retained stable directory child: %v", err)
+	}
+	second, err := EnsureStableChildDirectory(parent, "nested", 0o700, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.CachedStableDirectoryLinks(); got != 1 {
+		t.Fatalf("repeated stable directory cache entries=%d want 1", got)
+	}
+	registry.ClearStableNamespaceLinks()
+	known, err = registry.StableDirectoryLinkKnown(parent, child, "nested")
+	if err != nil || known {
+		t.Fatalf("cleared stable directory link known=%t err=%v", known, err)
+	}
+	if got := registry.CachedStableDirectoryLinks(); got != 0 {
+		t.Fatalf("cleared stable directory cache entries=%d want 0", got)
+	}
+	if _, err := retained.parent.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("cleared stable directory parent authority: %v", err)
+	}
+	if _, err := retained.child.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("cleared stable directory child authority: %v", err)
+	}
+}
+
 func TestStableNamespaceCreationSyncsExactChildWindows(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)

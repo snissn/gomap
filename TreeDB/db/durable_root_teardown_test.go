@@ -3,12 +3,15 @@ package db
 import (
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 	tests := []struct {
-		name string
-		run  func(*testing.T, *DB) error
+		name       string
+		commandWAL bool
+		run        func(*testing.T, *DB) error
 	}{
 		{
 			name: "Commit",
@@ -33,6 +36,93 @@ func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 			},
 		},
 		{
+			name: "PublishOrderedRootGroup",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootGroup(
+					mustFrozenSystemMemtable(t, "group/system", "value").NewIterator(nil, nil),
+					nil,
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaGroupWithSystemBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaGroupWithSystemBuilder(
+					nil,
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/system-builder", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaGroupWithSystemDeltaBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(
+					nil,
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/system-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name:       "PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder",
+			commandWAL: true,
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					mustRawKVCommandWALIntent(t, database, "command-wal/group", "value"),
+					func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/command-wal-system-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(
+					nil,
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/system-batch-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(
+					nil,
+					func() error { return nil },
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/serialized-system-batch-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name:       "PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder",
+			commandWAL: true,
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					mustRawKVCommandWALIntent(t, database, "command-wal/batch-group", "value"),
+					func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/command-wal-system-batch-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
 			name: "PublishCommandWALRoots",
 			run: func(_ *testing.T, database *DB) error {
 				state := database.State()
@@ -50,7 +140,11 @@ func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+			dir := t.TempDir()
+			if test.commandWAL {
+				enableCommandWALFormat(t, dir)
+			}
+			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)
 			}
