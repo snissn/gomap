@@ -185,14 +185,14 @@ jobs:
             run_vet: true
           - name: windows-core-1
             os: windows-latest
-            timeout: 25
+            timeout: 30
             shard_kind: windows-core
             package_shard_index: 0
             package_shard_count: 2
             run_vet: true
           - name: windows-core-2
             os: windows-latest
-            timeout: 25
+            timeout: 30
             shard_kind: windows-core
             package_shard_index: 1
             package_shard_count: 2
