@@ -35,11 +35,27 @@ class TreeDBCIContractTests(unittest.TestCase):
             r"(?ms)^  push:\s*\n    branches:\s*\n      - main\s*$",
         )
 
-    def test_normal_tests_checkout_the_event_sha(self) -> None:
-        test_job = block(self.source, "  test:\n", "\n  race:\n")
-        checkout = block(test_job, "      - name: Checkout\n", "\n      - name: Setup Go\n")
-        self.assertIn("uses: actions/checkout@v4", checkout)
-        self.assertNotIn("ref:", checkout)
+    def test_required_test_jobs_checkout_the_event_sha(self) -> None:
+        required_jobs = (
+            ("test", "race"),
+            ("race", "perf"),
+            ("perf", "snapshot-iterator-perf"),
+            ("snapshot-iterator-perf", "required"),
+        )
+        for job, next_job in required_jobs:
+            with self.subTest(job=job):
+                job_source = block(
+                    self.source,
+                    f"  {job}:\n",
+                    f"\n  {next_job}:\n",
+                )
+                checkout = block(
+                    job_source,
+                    "      - name: Checkout\n",
+                    "\n      - name: Setup Go\n",
+                )
+                self.assertIn("uses: actions/checkout@v4", checkout)
+                self.assertNotIn("ref:", checkout)
 
     def test_mvcc_attribution_uses_pull_request_base_and_head(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")
@@ -50,7 +66,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ steps.scope.outputs.head_sha }}", mvcc)
         self.assertIn('if [[ "$EVENT_NAME" != "pull_request" ]]', mvcc)
         self.assertIn('git diff --name-only "$BASE_SHA...$HEAD_SHA"', mvcc)
-        self.assertNotIn('/pulls/${PR_NUMBER}', mvcc)
+        self.assertNotRegex(mvcc, r"/pulls/\$\{(?:PR_NUMBER|pr_number)\}")
 
     def test_required_gate_aggregates_every_tree_job(self) -> None:
         required = block(self.source, "  required:\n")
