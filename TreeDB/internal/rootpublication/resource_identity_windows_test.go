@@ -9,42 +9,29 @@ import (
 	"testing"
 )
 
-func TestOpenStableChildFileUsesExactParentHandleWindows(t *testing.T) {
-	dir := t.TempDir()
-	parent, err := os.Open(dir)
+func TestOpenStableChildFileFailsTypedWhenRelativePrimitiveUnavailable(t *testing.T) {
+	parent, err := os.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer parent.Close()
 	child, err := OpenStableChildFile(parent, "child", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("OpenStableChildFile: %v", err)
+	if !errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		if child != nil {
+			_ = child.Close()
+		}
+		t.Fatalf("OpenStableChildFile error=%v want ErrNamespacePersistenceUnsupported", err)
 	}
-	if _, err := child.Write([]byte("stable")); err != nil {
+	if child != nil {
 		_ = child.Close()
-		t.Fatalf("write stable child: %v", err)
+		t.Fatal("unsupported relative open returned a child handle")
 	}
-	if err := child.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := os.ReadFile(filepath.Join(dir, "child")); err != nil || string(got) != "stable" {
-		t.Fatalf("read stable child got=%q err=%v", got, err)
-	}
-	if duplicate, err := OpenStableChildFile(parent, "child", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600); !errors.Is(err, os.ErrExist) {
-		if duplicate != nil {
-			_ = duplicate.Close()
-		}
-		t.Fatalf("duplicate OpenStableChildFile error=%v want os.ErrExist", err)
-	}
-	if missing, err := OpenStableChildFile(parent, "missing", os.O_RDONLY, 0); !errors.Is(err, os.ErrNotExist) {
-		if missing != nil {
-			_ = missing.Close()
-		}
-		t.Fatalf("missing OpenStableChildFile error=%v want os.ErrNotExist", err)
+	if _, err := os.Stat(filepath.Join(parent.Name(), "child")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsupported relative open exposed child: %v", err)
 	}
 }
 
-func TestStableNamespaceRegistrationSyncsExactParentWindows(t *testing.T) {
+func TestStableNamespaceRegistrationFailsTypedBeforeCertification(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -60,51 +47,19 @@ func TestStableNamespaceRegistrationSyncsExactParentWindows(t *testing.T) {
 		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
 		NewName: "child", DiagnosticPath: "segments",
 	})
-	if err != nil {
-		t.Fatalf("NewStableNamespaceToken: %v", err)
+	if !errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		if namespace != nil {
+			namespace.Release()
+		}
+		t.Fatalf("NewStableNamespaceToken error=%v want ErrNamespacePersistenceUnsupported", err)
 	}
-	defer namespace.Release()
-	if err := namespace.Stabilize(); err != nil {
-		t.Fatalf("Stabilize: %v", err)
-	}
-}
-
-func TestStableResourceTokenSyncsAppendOnlyExactHandleWindows(t *testing.T) {
-	dir := t.TempDir()
-	parent, err := os.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer parent.Close()
-	child, err := OpenStableChildFile(parent, "append-only.log", os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		t.Fatalf("OpenStableChildFile append-only: %v", err)
-	}
-	defer child.Close()
-	const payload = "stable append frontier"
-	if _, err := child.Write([]byte(payload)); err != nil {
-		t.Fatalf("write append-only child: %v", err)
-	}
-	token, err := NewStableResourceToken(StableResourceSpec{
-		Kind:           ResourceValueLog,
-		LogicalLane:    "test/windows-append-only",
-		ResourceID:     "append-only",
-		Generation:     1,
-		DiagnosticPath: "append-only.log",
-		File:           child,
-		Frontier:       DurableFrontier{Bytes: uint64(len(payload))},
-		Reachability:   ReachabilityValueLogPointer,
-	})
-	if err != nil {
-		t.Fatalf("NewStableResourceToken: %v", err)
-	}
-	defer token.Release()
-	if err := token.SyncThrough(); err != nil {
-		t.Fatalf("SyncThrough append-only stable pin: %v", err)
+	if namespace != nil {
+		namespace.Release()
+		t.Fatal("unsupported namespace registration returned a certifying token")
 	}
 }
 
-func TestStableNamespaceCreationProofSyncsExactParentWindows(t *testing.T) {
+func TestStableNamespaceCreationProofFailsTypedOnWindows(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {
@@ -117,10 +72,13 @@ func TestStableNamespaceCreationProofSyncsExactParentWindows(t *testing.T) {
 	}
 	defer child.Close()
 	proof, err := NewStableNamespaceCreationProof(parent, child, "child-proof")
-	if err != nil {
-		t.Fatalf("NewStableNamespaceCreationProof: %v", err)
+	if proof != nil {
+		proof.Release()
+		t.Fatal("unsupported namespace creation returned a proof")
 	}
-	proof.Release()
+	if !errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("NewStableNamespaceCreationProof error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
 }
 
 func TestRenameStableChildFileFailsTypedWithoutVisibilityWindows(t *testing.T) {
