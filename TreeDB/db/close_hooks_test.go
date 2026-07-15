@@ -231,7 +231,7 @@ func TestCloseWaitsForStandaloneCloseHookDrain(t *testing.T) {
 	}
 }
 
-func TestCloseHookMayRunOnlineVacuum(t *testing.T) {
+func TestCloseHookMayObserveOnlineVacuumRecoverableRootSetFence(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -244,7 +244,11 @@ func TestCloseHookMayRunOnlineVacuum(t *testing.T) {
 	}
 
 	d.RegisterCloseHook(func() error {
-		return d.VacuumIndexOnline(context.Background())
+		err := d.VacuumIndexOnline(context.Background())
+		if !errors.Is(err, ErrVacuumRecoverableRootSetRequired) {
+			return err
+		}
+		return nil
 	})
 	done := make(chan error, 1)
 	go func() { done <- d.Close() }()

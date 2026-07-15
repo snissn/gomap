@@ -175,12 +175,12 @@ func TestStableIndexResourceTokenOwnsVacuumFenceAfterSnapshotClose(t *testing.T)
 	if err := snapshot.Close(); err != nil {
 		t.Fatalf("Close transferred snapshot: %v", err)
 	}
-	if err := database.VacuumIndexOnline(t.Context()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+	if err := database.vacuumIndexOnlineLegacyForTest(t.Context()); !errors.Is(err, rootpublication.ErrResourcePinned) {
 		token.Release()
 		t.Fatalf("vacuum with live index token error=%v want ErrResourcePinned", err)
 	}
 	token.Release()
-	if err := database.VacuumIndexOnline(t.Context()); err != nil {
+	if err := database.vacuumIndexOnlineLegacyForTest(t.Context()); err != nil {
 		t.Fatalf("vacuum after index token release: %v", err)
 	}
 }

@@ -80,7 +80,7 @@ func TestCheckpointSyncBoundaryDoesNotAdvanceCommitSeq(t *testing.T) {
 	}
 }
 
-func TestEmptyBatchWriteSyncUsesCheckpointBoundary(t *testing.T) {
+func TestEmptyBatchWriteSyncWaitsExistingDurableFrontierWithoutInventingDependencies(t *testing.T) {
 	d, err := Open(Options{
 		Dir:       t.TempDir(),
 		ChunkSize: 64 * 1024,
@@ -104,8 +104,8 @@ func TestEmptyBatchWriteSyncUsesCheckpointBoundary(t *testing.T) {
 	if got := d.State().CommitSeq; got != seq {
 		t.Fatalf("empty WriteSync advanced CommitSeq: got=%d want=%d", got, seq)
 	}
-	if got := leafLog.syncs.Load(); got != 1 {
-		t.Fatalf("leaf log syncs=%d want 1", got)
+	if got := leafLog.syncs.Load(); got != 0 {
+		t.Fatalf("leaf log syncs=%d want 0 for an unreferenced log installed after the durable frontier", got)
 	}
 	if got := leafLog.flushes.Load(); got != 0 {
 		t.Fatalf("leaf log flushes=%d want 0", got)

@@ -177,7 +177,13 @@ func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *value
 		return nil, false, nil
 	}
 	tracker.mu.RLock()
-	if !tracker.valid || tracker.commitSeq != db.durableRoot.record.CommitSeq {
+	// The reachability tracker follows the visible root, not the last stable
+	// meta slot. Once root publication is activated several visible generations
+	// may legitimately be queued behind one durable generation. The candidate's
+	// predecessor sequence is the exact projection base and avoids sampling
+	// db.meta under a second lock while the tracker is pinned.
+	expectedBaseCommitSeq := next.CommitSeq - 1
+	if !tracker.valid || tracker.commitSeq != expectedBaseCommitSeq {
 		tracker.mu.RUnlock()
 		return nil, false, nil
 	}
@@ -495,6 +501,17 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // producer-owned exact closure for resources made reachable by this publish
 // and is consumed on both success and failure.
 func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, valueLogPublicationLocked bool) (*rootpublication.StableResourceSet, error) {
+	selected := db.durableRoot.slotResources[db.durableRoot.slot]
+	return db.captureDurableRootResourcesFromBaseV1(idx, next, delta, selected, additional, requirements, valueLogPublicationLocked)
+}
+
+// captureDurableRootResourcesFromBaseV1 is the common closure builder for
+// synchronous durable publication and queued visible publication. Synchronous
+// callers pass the currently selected durable-slot closure. The coordinator
+// path passes its independently owned visible-root closure so a candidate
+// built while an earlier group is syncing inherits every transitive resource
+// that remains reachable from the immediately preceding visible root.
+func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, valueLogPublicationLocked bool) (*rootpublication.StableResourceSet, error) {
 	if additional != nil {
 		defer additional.Release()
 	}
@@ -516,10 +533,9 @@ func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBod
 		return nil
 	}
 
-	selected := db.durableRoot.slotResources[db.durableRoot.slot]
 	exactPackedFileIDs := make(map[uint32]struct{})
 	hasReplacementManifest := false
-	for _, resources := range []*rootpublication.StableResourceSet{selected, additional} {
+	for _, resources := range []*rootpublication.StableResourceSet{base, additional} {
 		for _, descriptor := range resources.Descriptors() {
 			switch descriptor.Kind() {
 			case rootpublication.ResourceOuterLeafPack:
@@ -541,15 +557,15 @@ func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBod
 		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafManifest)
 	}
 	inherited, err := rootpublication.CloneStableResourceSetForLogicalObligations(
-		selected,
+		base,
 		requirements,
 		excludedInheritedKinds...,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("clone selected durable-root resources: %w", err)
+		return nil, fmt.Errorf("clone base durable-root resources: %w", err)
 	}
 	if err := merge(inherited); err != nil {
-		return nil, fmt.Errorf("merge selected durable-root resources: %w", err)
+		return nil, fmt.Errorf("merge base durable-root resources: %w", err)
 	}
 	fresh, err := db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked)
 	if err != nil {
@@ -825,12 +841,19 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	next.TotalPages = generation.HighWater()
 	next.FreelistHeadID = 0
 	recordPageID := auxiliary[len(auxiliary)-1]
+	if current.record.DurableSeq == ^uint64(0) {
+		return nil, errors.New("durable root publication sequence overflow")
+	}
+	durableSeq := current.record.DurableSeq + 1
+	if durableSeq > next.CommitSeq {
+		return nil, errors.New("durable root publication sequence exceeds commit frontier")
+	}
 	manifestRef, err := manifest.Materialize(auxiliary[0], freelist.NewMemoryPageStoreV1())
 	if err != nil {
 		return nil, err
 	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: next.CommitSeq, DurableSeq: next.CommitSeq,
+		CommitSeq: next.CommitSeq, DurableSeq: durableSeq,
 		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
 		TotalPages: next.TotalPages, MaxEntryRevision: next.MaxEntryRevision,
 		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
@@ -838,13 +861,13 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		Manifest:           manifestRef,
 		ParentRecordPageID: current.meta.RootRecordPageID, ParentCommitSeq: current.meta.CommitSeq,
 		ParentRecordDigest:   current.meta.RootRecordDigest,
-		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, next.CommitSeq, recordPageID),
+		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
 	}
 	_, recordDigest, err := record.EncodePage(recordPageID)
 	if err != nil {
 		return nil, err
 	}
-	meta, err := page.NewDurableMetaV1(next.CommitSeq, next.CommitSeq, recordPageID, recordDigest)
+	meta, err := page.NewDurableMetaV1(next.CommitSeq, durableSeq, recordPageID, recordDigest)
 	if err != nil {
 		return nil, err
 	}

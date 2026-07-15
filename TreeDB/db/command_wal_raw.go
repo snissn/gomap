@@ -469,12 +469,17 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
-	state := db.state.Load()
-	if state == nil || state.AppliedCommandLSN == 0 {
+	// Cleanup authority is the recovery-selectable root, never the newer
+	// visible frontier that may still be queued behind asynchronous root
+	// publication.
+	db.durablePublishMu.Lock()
+	durableAppliedLSN := db.durableRoot.record.AppliedCommandLSN
+	db.durablePublishMu.Unlock()
+	if durableAppliedLSN == 0 {
 		return nil
 	}
 	scanStart := time.Now()
-	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, durableAppliedLSN, db.walMaxSegmentBytes)
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
@@ -529,7 +534,7 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		}
 	}
 	if err == nil && sync {
-		db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
+		db.closeCommandWALDurablePrefixThrough(durableAppliedLSN)
 	}
 	return err
 }
@@ -1518,12 +1523,21 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		return ErrCommandWALUnsupported
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
+	builder, err := db.acquireRootPublicationBuilderV1()
+	if err != nil {
+		return err
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 	durablePublishLocked := false
-	defer func() {
+	releaseDurablePublish := func() {
 		if durablePublishLocked {
 			db.durablePublishMu.Unlock()
+			durablePublishLocked = false
 		}
-	}()
+	}
+	defer releaseDurablePublish()
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		db.writeMu.Unlock()
@@ -1563,6 +1577,10 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
 	finalizeOpts.skipPrePublishFlush = true
 	finalizeOpts.durablePublishLocked = true
+	finalizeOpts.durablePublishRelease = releaseDurablePublish
+	finalizeOpts.rootPublicationBuilder = builder
+	finalizeOpts.expectedBaseCommitSeq = baseSeq
+	finalizeOpts.hasExpectedBaseCommitSeq = true
 	finalizeOpts.releaseRootSerialization = func() {}
 	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, finalizeOpts)
 	if err != nil {
@@ -1572,8 +1590,6 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
 		return err
 	}
-	db.durablePublishMu.Unlock()
-	durablePublishLocked = false
 	db.finalizeCommitPostWork(post)
 	intent.inner.staged = false
 	return nil

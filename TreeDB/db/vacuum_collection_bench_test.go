@@ -30,7 +30,7 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := db.VacuumIndexOnline(context.Background()); err != nil {
+				if err := db.vacuumIndexOnlineLegacyForTest(context.Background()); err != nil {
 					b.Fatalf("vacuum: %v", err)
 				}
 				stats := db.vacuumOnlineStatsSnapshot()
@@ -122,7 +122,7 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 						<-warmed
 					})
 				}
-				vacuumErr := db.VacuumIndexOnline(context.Background())
+				vacuumErr := db.vacuumIndexOnlineLegacyForTest(context.Background())
 				db.vacuumPagerSyncHook = nil
 				startOnce.Do(func() { close(start) })
 				close(stop)
