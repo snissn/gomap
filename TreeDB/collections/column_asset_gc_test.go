@@ -842,8 +842,21 @@ func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *te
 	if err != nil {
 		t.Fatalf("ColumnAssetGC after snapshot drain: %v", err)
 	}
+	if drainedStats.SegmentsEligible != 1 || drainedStats.SegmentsDeleted != 0 {
+		t.Fatalf("drained GC stats=%+v want old mixed segment retained by fallback durable generation", drainedStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("old segment removed before fallback generation advance: %v", err)
+	}
+	advanceColumnAssetDurableFallbackM15C(t, d)
+	drainedStats, err = col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: candidates,
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after fallback advance: %v", err)
+	}
 	if drainedStats.SegmentsDeleted != 1 || drainedStats.BytesDeleted == 0 {
-		t.Fatalf("drained GC stats=%+v want old mixed segment deleted", drainedStats)
+		t.Fatalf("drained GC stats=%+v want old mixed segment deleted after fallback advance", drainedStats)
 	}
 	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old segment still exists after snapshot drain or unexpected stat error: %v", err)

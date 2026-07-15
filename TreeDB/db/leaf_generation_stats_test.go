@@ -114,6 +114,7 @@ func TestStats_LeafGenerationLifecycle(t *testing.T) {
 	if got := db.leafGenerationPinCountForTesting(gen1.GenerationID); got != 0 {
 		t.Fatalf("pin count after close=%d, want 0", got)
 	}
+	advancePastRetainedDurableSlotForTest(t, db)
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC after close: %v", err)
 	}

@@ -350,6 +350,13 @@ func TestLeafGenerationPack_SourcePinnedUntilPublishThenGCReadable(t *testing.T)
 	case <-time.After(15 * time.Second):
 		t.Fatal("GC did not finish after pack publish")
 	}
+	if _, err := os.Stat(candidate.sourcePath); err != nil {
+		t.Fatalf("older recoverable slot did not retain source segment: %v", err)
+	}
+	advanceLeafGenerationPackDurableRootHorizon(t, db, "concurrent-gc")
+	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC after horizon advance: %v", err)
+	}
 	if err := waitForPathRemoval(candidate.sourcePath, 5*time.Second); err != nil {
 		t.Fatalf("source GC: %v", err)
 	}
@@ -465,6 +472,7 @@ func TestLeafGenerationPack_CheckpointReopenPreservesLeafRefsAndValuePointers(t 
 	}); err != nil {
 		t.Fatalf("LeafGenerationPack: %v", err)
 	}
+	advanceLeafGenerationPackDurableRootHorizon(t, db, "checkpoint-reopen")
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}

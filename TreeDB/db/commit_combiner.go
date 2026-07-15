@@ -66,6 +66,9 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 	if db.readOnly {
 		return true, ErrReadOnly
 	}
+	if err := db.publicationPoisonedError(); err != nil {
+		return true, err
+	}
 
 	db.combineMu.RLock()
 	reqCh := db.combineReqCh

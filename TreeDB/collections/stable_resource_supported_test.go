@@ -65,9 +65,9 @@ func TestStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t *testin
 	testStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t)
 }
 
-func TestColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
+func TestColumnCommandWALPublishRetainsStableAssetAuthorityInDurableSlots(t *testing.T) {
 	requireStableColumnAuthorityTest(t)
-	testColumnCommandWALPublishReleasesStableAssetAuthority(t)
+	testColumnCommandWALPublishRetainsStableAssetAuthorityInDurableSlots(t)
 }
 
 func TestColumnAssetStableDeletePreservesReboundEntry(t *testing.T) {

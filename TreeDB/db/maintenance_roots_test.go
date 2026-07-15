@@ -188,15 +188,16 @@ func TestMaintenanceRoots_IncludesCollectionOverlayRootDescriptors(t *testing.T)
 	requireMaintenanceRootCount(t, roots, maintenanceRootCollection, 3)
 }
 
-func TestMaintenanceRoots_MalformedCollectionDescriptorFails(t *testing.T) {
+func TestPublishSystemRootIterator_RejectsMalformedCollectionDescriptor(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = d.Close() }()
 
-	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, []byte("bad")).NewIterator(nil, nil)); err != nil {
-		t.Fatalf("publish malformed descriptor: %v", err)
+	beforeSeq := d.currentCommitSeq()
+	if _, err := d.PublishSystemRootIterator(mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, []byte("bad")).NewIterator(nil, nil)); err == nil {
+		t.Fatal("published malformed collection descriptor")
 	}
 
 	snap := d.AcquireSnapshot()
@@ -205,8 +206,11 @@ func TestMaintenanceRoots_MalformedCollectionDescriptorFails(t *testing.T) {
 	}
 	defer func() { _ = snap.Close() }()
 
-	if _, err := maintenanceRootsForSnapshot(snap); err == nil {
-		t.Fatal("maintenanceRootsForSnapshot succeeded with malformed collection descriptor")
+	if snap.state.CommitSeq != beforeSeq {
+		t.Fatalf("commit sequence advanced after rejected descriptor: got=%d want=%d", snap.state.CommitSeq, beforeSeq)
+	}
+	if _, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(maintenanceTestCollectionRootKey)); err == nil {
+		t.Fatal("rejected malformed collection descriptor became visible")
 	}
 }
 
@@ -492,6 +496,7 @@ func TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval(t *testing.T) {
 		t.Fatal("expected descriptor removal to invalidate value-log ref tracker")
 	}
 
+	advancePastRetainedDurableSlotForTest(t, d)
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
@@ -538,6 +543,7 @@ func TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval(t *testing
 		t.Fatal("expected grouped descriptor removal to invalidate value-log ref tracker")
 	}
 
+	advancePastRetainedDurableSlotForTest(t, d)
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
@@ -589,6 +595,7 @@ func TestValueLogGC_RemovesSegmentAfterDeltaGroupSystemDescriptorRemoval(t *test
 		t.Fatal("expected delta group descriptor removal to invalidate value-log ref tracker")
 	}
 
+	advancePastRetainedDurableSlotForTest(t, d)
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)

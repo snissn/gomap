@@ -342,7 +342,7 @@ func TestColumnPhysicalSerialScannerUsesSnapshotCatalogM13A(t *testing.T) {
 	assertColumnPhysicalScanRowM13A(t, rows[1], ColumnPublishOperationInsert, "e2", false, int64(2), "")
 }
 
-func TestColumnPhysicalSerialScannerFailsClosedMissingAssetM13A(t *testing.T) {
+func TestColumnPhysicalSerialScannerUsesSelectedClosureWhenOtherAssetMissingM13A(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
 	if err != nil {
@@ -355,13 +355,18 @@ func TestColumnPhysicalSerialScannerFailsClosedMissingAssetM13A(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	_, err = reopened.scanColumnPhysicalRows(columnPhysicalScanRequest{})
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("scan missing asset err=%v want os.ErrNotExist", err)
+	var rows []columnPhysicalScanRowForTest
+	diag, err := reopened.scanColumnPhysicalRows(columnPhysicalScanRequest{Visitor: func(row columnPhysicalScanRowView) error {
+		rows = append(rows, copyColumnPhysicalScanRowForTest(row))
+		return nil
+	}})
+	if err != nil || diag.RowsScanned != 1 || len(rows) != 1 {
+		t.Fatalf("scan after missing non-selected asset rows=%+v diagnostics=%+v err=%v want selected valid closure", rows, diag, err)
 	}
+	assertColumnPhysicalScanRowM13A(t, rows[0], ColumnPublishOperationInsert, "e1", false, int64(1), "like")
 }
 
-func TestColumnPhysicalSerialScannerFailsClosedCorruptAssetM13A(t *testing.T) {
+func TestColumnPhysicalSerialScannerUsesSelectedClosureWhenOtherAssetCorruptM13A(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
 	if err != nil {
@@ -382,10 +387,15 @@ func TestColumnPhysicalSerialScannerFailsClosedCorruptAssetM13A(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	_, err = reopened.scanColumnPhysicalRows(columnPhysicalScanRequest{})
-	if err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("scan corrupt asset err=%v want checksum failure", err)
+	var rows []columnPhysicalScanRowForTest
+	diag, err := reopened.scanColumnPhysicalRows(columnPhysicalScanRequest{Visitor: func(row columnPhysicalScanRowView) error {
+		rows = append(rows, copyColumnPhysicalScanRowForTest(row))
+		return nil
+	}})
+	if err != nil || diag.RowsScanned != 1 || len(rows) != 1 {
+		t.Fatalf("scan after corrupt non-selected asset rows=%+v diagnostics=%+v err=%v want selected valid closure", rows, diag, err)
 	}
+	assertColumnPhysicalScanRowM13A(t, rows[0], ColumnPublishOperationInsert, "e1", false, int64(1), "like")
 }
 
 func TestColumnPhysicalSerialScannerDoesNotEnableAutomaticPlannerRoutingM14B(t *testing.T) {

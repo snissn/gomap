@@ -1,0 +1,203 @@
+package db
+
+import (
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+)
+
+func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
+	tests := []struct {
+		name       string
+		commandWAL bool
+		run        func(*testing.T, *DB) error
+	}{
+		{
+			name: "Commit",
+			run: func(_ *testing.T, database *DB) error {
+				return database.Commit(database.State().RootPageID)
+			},
+		},
+		{
+			name: "CompactIndex",
+			run: func(_ *testing.T, database *DB) error {
+				return database.CompactIndex()
+			},
+		},
+		{
+			name: "PublishOrderedRootIterator",
+			run: func(t *testing.T, database *DB) error {
+				_, err := database.PublishOrderedRootIterator(
+					0,
+					mustFrozenSystemMemtable(t, "ordered/root", "value").NewIterator(nil, nil),
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootGroup",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootGroup(
+					mustFrozenSystemMemtable(t, "group/system", "value").NewIterator(nil, nil),
+					nil,
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaGroupWithSystemBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaGroupWithSystemBuilder(
+					nil,
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/system-builder", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaGroupWithSystemDeltaBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(
+					nil,
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/system-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name:       "PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder",
+			commandWAL: true,
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					mustRawKVCommandWALIntent(t, database, "command-wal/group", "value"),
+					func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/command-wal-system-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(
+					nil,
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/system-batch-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder",
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(
+					nil,
+					func() error { return nil },
+					func([]uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/serialized-system-batch-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name:       "PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder",
+			commandWAL: true,
+			run: func(t *testing.T, database *DB) error {
+				_, _, err := database.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					mustRawKVCommandWALIntent(t, database, "command-wal/batch-group", "value"),
+					func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenSystemMemtable(t, "group/command-wal-system-batch-delta", "value").NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "PublishCommandWALRoots",
+			run: func(_ *testing.T, database *DB) error {
+				state := database.State()
+				next := state.AppliedCommandLSN + 1
+				return database.publishCommandWALRoots(
+					state.RootPageID,
+					state.SystemRootPageID,
+					next,
+					[]CommandWALLSNRange{{First: next, Last: next}},
+					true,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if test.commandWAL {
+				enableCommandWALFormat(t, dir)
+			}
+			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := database.SetSync([]byte("seed"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+
+			prepared := make(chan struct{})
+			releasePublish := make(chan struct{})
+			database.testDurableRootCandidatePreparedHook = func() {
+				close(prepared)
+				<-releasePublish
+			}
+			teardownEntered := make(chan struct{})
+			database.registerCaptureTeardownHook(func() error {
+				close(teardownEntered)
+				return nil
+			})
+
+			publishDone := make(chan error, 1)
+			go func() { publishDone <- test.run(t, database) }()
+			select {
+			case <-prepared:
+			case <-time.After(5 * time.Second):
+				t.Fatal("publication did not reach prepared candidate")
+			}
+
+			missingTeardownLease := database.teardownMu.TryLock()
+			if missingTeardownLease {
+				database.teardownMu.Unlock()
+			}
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- database.Close() }()
+			close(releasePublish)
+			if err := <-publishDone; err != nil {
+				t.Fatalf("publication: %v", err)
+			}
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Close did not finish after publication released its teardown lease")
+			}
+			if missingTeardownLease {
+				t.Fatal("prepared publication did not hold a teardown read lease through post-work")
+			}
+			select {
+			case <-teardownEntered:
+			default:
+				t.Fatal("Close did not run capture teardown after publication completed")
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // CutPoint is a stable identifier emitted by the durability harness.
@@ -72,8 +73,9 @@ var CutPoints = []CutPoint{
 }
 
 type inode struct {
-	volatile []byte
-	stable   []byte
+	volatile       []byte
+	stable         []byte
+	stableIdentity rootpublication.StableIdentity
 }
 
 type ByteRange struct{ Offset, Length int64 }
@@ -86,8 +88,8 @@ type Model struct {
 	inodes           map[uint64]*inode
 	volatile         map[string]uint64
 	stable           map[string]uint64
-	volatileDirs     map[string]struct{}
-	stableDirs       map[string]struct{}
+	volatileDirs     map[string]rootpublication.StableIdentity
+	stableDirs       map[string]rootpublication.StableIdentity
 	excludeLockFiles bool
 	trace            []string
 }
@@ -142,8 +144,12 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 			return nil
 		}
 		if entry.IsDir() {
-			m.volatileDirs[rel] = struct{}{}
-			m.stableDirs[rel] = struct{}{}
+			identity, err := captureStableIdentity(path)
+			if err != nil {
+				return err
+			}
+			m.volatileDirs[rel] = identity
+			m.stableDirs[rel] = identity
 			return nil
 		}
 		if !entry.Type().IsRegular() {
@@ -153,7 +159,11 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 		if err != nil {
 			return err
 		}
-		id := m.allocate(data, data)
+		identity, err := captureStableIdentity(path)
+		if err != nil {
+			return err
+		}
+		id := m.allocateWithIdentity(data, data, identity)
 		m.volatile[rel] = id
 		m.stable[rel] = id
 		return nil
@@ -169,14 +179,22 @@ func newModel() *Model {
 		inodes:       make(map[uint64]*inode),
 		volatile:     make(map[string]uint64),
 		stable:       make(map[string]uint64),
-		volatileDirs: map[string]struct{}{".": {}},
-		stableDirs:   map[string]struct{}{".": {}},
+		volatileDirs: map[string]rootpublication.StableIdentity{".": {}},
+		stableDirs:   map[string]rootpublication.StableIdentity{".": {}},
 	}
 }
 
 func (m *Model) allocate(volatile, stable []byte) uint64 {
+	return m.allocateWithIdentity(volatile, stable, rootpublication.StableIdentity{})
+}
+
+func (m *Model) allocateWithIdentity(volatile, stable []byte, identity rootpublication.StableIdentity) uint64 {
 	m.nextID++
-	m.inodes[m.nextID] = &inode{volatile: clone(volatile), stable: clone(stable)}
+	m.inodes[m.nextID] = &inode{
+		volatile:       clone(volatile),
+		stable:         clone(stable),
+		stableIdentity: physicalStableIdentity(identity),
+	}
 	return m.nextID
 }
 
@@ -186,7 +204,11 @@ func (m *Model) Clone() *Model {
 	out.nextID = m.nextID
 	out.excludeLockFiles = m.excludeLockFiles
 	for id, node := range m.inodes {
-		out.inodes[id] = &inode{volatile: clone(node.volatile), stable: clone(node.stable)}
+		out.inodes[id] = &inode{
+			volatile:       clone(node.volatile),
+			stable:         clone(node.stable),
+			stableIdentity: node.stableIdentity,
+		}
 	}
 	for path, id := range m.volatile {
 		out.volatile[path] = id
@@ -194,11 +216,11 @@ func (m *Model) Clone() *Model {
 	for path, id := range m.stable {
 		out.stable[path] = id
 	}
-	for path := range m.volatileDirs {
-		out.volatileDirs[path] = struct{}{}
+	for path, identity := range m.volatileDirs {
+		out.volatileDirs[path] = identity
 	}
-	for path := range m.stableDirs {
-		out.stableDirs[path] = struct{}{}
+	for path, identity := range m.stableDirs {
+		out.stableDirs[path] = identity
 	}
 	out.trace = append([]string(nil), m.trace...)
 	return out
@@ -230,7 +252,7 @@ func (m *Model) PathStable(root, path string) (bool, error) {
 // No stable bytes or names change until SyncFile or SyncDir is called.
 func (m *Model) Overlay(root string) error {
 	seenFiles := make(map[string]struct{})
-	seenDirs := map[string]struct{}{".": {}}
+	seenDirs := make(map[string]rootpublication.StableIdentity)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -247,7 +269,11 @@ func (m *Model) Overlay(root string) error {
 			return nil
 		}
 		if entry.IsDir() {
-			seenDirs[rel] = struct{}{}
+			identity, err := captureStableIdentity(path)
+			if err != nil {
+				return err
+			}
+			seenDirs[rel] = identity
 			return nil
 		}
 		if !entry.Type().IsRegular() {
@@ -257,11 +283,24 @@ func (m *Model) Overlay(root string) error {
 		if err != nil {
 			return err
 		}
+		identity, err := captureStableIdentity(path)
+		if err != nil {
+			return err
+		}
 		seenFiles[rel] = struct{}{}
 		if id, ok := m.volatile[rel]; ok {
-			m.inodes[id].volatile = clone(data)
+			node := m.inodes[id]
+			switch {
+			case !validStableIdentity(node.stableIdentity):
+				node.stableIdentity = physicalStableIdentity(identity)
+				node.volatile = clone(data)
+			case validStableIdentity(identity) && !rootpublication.SamePhysicalIdentity(node.stableIdentity, identity):
+				m.volatile[rel] = m.allocateWithIdentity(data, nil, identity)
+			default:
+				node.volatile = clone(data)
+			}
 		} else {
-			m.volatile[rel] = m.allocate(data, nil)
+			m.volatile[rel] = m.allocateWithIdentity(data, nil, identity)
 		}
 		return nil
 	})
@@ -377,7 +416,11 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
 		}
-		return m.Create(path, data)
+		identity, err := captureStableIdentity(event.NewPath)
+		if err != nil {
+			return err
+		}
+		return m.createWithIdentity(path, data, identity)
 	case durabilitycut.NamespaceRename:
 		oldPath, err := rel(event.OldPath)
 		if err != nil {
@@ -486,6 +529,10 @@ func (m *Model) Write(path string, data []byte) error {
 
 // Create creates a volatile file and any volatile parent directories.
 func (m *Model) Create(path string, data []byte) error {
+	return m.createWithIdentity(path, data, rootpublication.StableIdentity{})
+}
+
+func (m *Model) createWithIdentity(path string, data []byte, identity rootpublication.StableIdentity) error {
 	var err error
 	path, err = normalize(path)
 	if err != nil {
@@ -498,7 +545,7 @@ func (m *Model) Create(path string, data []byte) error {
 		return fmt.Errorf("powerlossoracle: file already exists %q", path)
 	}
 	m.ensureVolatileParents(path)
-	m.volatile[path] = m.allocate(data, nil)
+	m.volatile[path] = m.allocateWithIdentity(data, nil, identity)
 	m.trace = append(m.trace, "create:"+path)
 	return nil
 }
@@ -643,9 +690,9 @@ func (m *Model) SyncDir(dir string) error {
 			}
 		}
 	}
-	for child := range m.volatileDirs {
+	for child, identity := range m.volatileDirs {
 		if child != "." && cleanInternal(pathpkg.Dir(child)) == dir {
-			m.stableDirs[child] = struct{}{}
+			m.stableDirs[child] = identity
 		}
 	}
 	m.trace = append(m.trace, "sync-dir:"+dir)
@@ -659,9 +706,9 @@ func (m *Model) Crash() {
 		m.volatile[path] = id
 		m.inodes[id].volatile = clone(m.inodes[id].stable)
 	}
-	m.volatileDirs = make(map[string]struct{}, len(m.stableDirs))
-	for dir := range m.stableDirs {
-		m.volatileDirs[dir] = struct{}{}
+	m.volatileDirs = make(map[string]rootpublication.StableIdentity, len(m.stableDirs))
+	for dir, identity := range m.stableDirs {
+		m.volatileDirs[dir] = identity
 	}
 	m.trace = append(m.trace, "crash")
 }
@@ -709,6 +756,30 @@ func (m *Model) MaterializeStable(root string) error {
 	return nil
 }
 
+// InstallStableIdentityOverrides installs the model's original physical
+// identities for a materialized stable image. A real power loss preserves
+// those identities; recreating the same stable bytes in a temporary directory
+// does not. Callers must release the returned scope after closing the image.
+func (m *Model) InstallStableIdentityOverrides(root string) (func(), error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	overrides := make(map[string]rootpublication.StableIdentity, len(m.stable)+len(m.stableDirs))
+	for dir, identity := range m.stableDirs {
+		if validStableIdentity(identity) {
+			overrides[filepath.Join(root, filepath.FromSlash(dir))] = physicalStableIdentity(identity)
+		}
+	}
+	for path, id := range m.stable {
+		identity := m.inodes[id].stableIdentity
+		if validStableIdentity(identity) {
+			overrides[filepath.Join(root, filepath.FromSlash(path))] = physicalStableIdentity(identity)
+		}
+	}
+	return rootpublication.InstallStableIdentityOverridesForTesting(overrides)
+}
+
 // StablePaths returns stable regular-file paths in deterministic order.
 func (m *Model) StablePaths() []string {
 	paths := make([]string, 0, len(m.stable))
@@ -752,11 +823,38 @@ func (m *Model) StableFingerprint() string {
 
 func (m *Model) ensureVolatileParents(path string) {
 	for dir := cleanInternal(pathpkg.Dir(path)); ; dir = cleanInternal(pathpkg.Dir(dir)) {
-		m.volatileDirs[dir] = struct{}{}
+		if _, exists := m.volatileDirs[dir]; !exists {
+			m.volatileDirs[dir] = rootpublication.StableIdentity{}
+		}
 		if dir == "." {
 			return
 		}
 	}
+}
+
+func captureStableIdentity(path string) (rootpublication.StableIdentity, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	defer file.Close()
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
+		return rootpublication.StableIdentity{}, nil
+	}
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	return physicalStableIdentity(identity), nil
+}
+
+func validStableIdentity(identity rootpublication.StableIdentity) bool {
+	return identity.Platform != "" && identity.ObjectID != [16]byte{}
+}
+
+func physicalStableIdentity(identity rootpublication.StableIdentity) rootpublication.StableIdentity {
+	identity.Generation = 0
+	return identity
 }
 
 func normalize(name string) (string, error) {

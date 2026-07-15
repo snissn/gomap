@@ -443,7 +443,7 @@ func (tx *ConditionalTxn) validateReadSetOnly() error {
 	}
 	tx.db.writeMu.RLock()
 	defer tx.db.writeMu.RUnlock()
-	if err := tx.db.checkWriteAdmissionLocked(); err != nil {
+	if err := tx.db.checkReadAdmissionLocked(); err != nil {
 		return err
 	}
 	tx.db.commitMu.Lock()

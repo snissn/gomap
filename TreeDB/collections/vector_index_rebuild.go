@@ -25,6 +25,34 @@ var (
 	errColumnVectorGraphInvNormOutOfRange     = errors.New("collections: column_graph vector inverse norm must be finite and fit float32")
 )
 
+func takeColumnVectorGraphDurablePublication(prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string) (*rootpublication.StableResourceSet, rootpublication.StableLogicalObligationRequirements, error) {
+	if err := runColumnVectorGraphStablePublishTestHook(prepared); err != nil {
+		return nil, rootpublication.StableLogicalObligationRequirements{}, err
+	}
+	requirements, err := stableColumnManifestDurableRequirements(records, activeGeneration, namespace)
+	if err != nil {
+		return nil, rootpublication.StableLogicalObligationRequirements{}, err
+	}
+	if prepared == nil || prepared.stableResources == nil {
+		return nil, rootpublication.StableLogicalObligationRequirements{}, fmt.Errorf("%w: column_graph rebuild produced no exact durable resources", rootpublication.ErrUnresolvedResource)
+	}
+	resources := prepared.stableResources
+	prepared.stableResources = nil
+	return resources, requirements, nil
+}
+
+func registerColumnVectorGraphDurablePublication(ctx backenddb.CommandWALPublishContext, prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string) error {
+	resources, requirements, err := takeColumnVectorGraphDurablePublication(prepared, records, activeGeneration, namespace)
+	if err != nil {
+		return err
+	}
+	if err := ctx.RegisterDurableLogicalObligationRequirements(requirements); err != nil {
+		resources.Release()
+		return err
+	}
+	return ctx.RegisterDurableResources(resources)
+}
+
 func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err
@@ -179,6 +207,9 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 				return nil, metaErr
 			}
 			updatedMeta = updated
+			if err := registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
+				return nil, err
+			}
 			return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
 		}
 		buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -188,9 +219,6 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			if updatedMeta.Name == "" {
 				return nil, errors.New("collections: column_graph rebuild did not prepare updated metadata")
 			}
-			if err := runColumnVectorGraphStablePublishTestHook(&prepared); err != nil {
-				return nil, err
-			}
 			return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		}
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta)
@@ -199,41 +227,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		}
 		c.meta = updatedMeta
 	} else {
-		prepared, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifestForPublication(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, manifest.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry())
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		defer func() { prepared.releaseStableResources() }()
-		delta := ColumnManifestRootDelta{
-			RootName:       rootName,
-			BaseRootID:     baseManifestRootID,
-			StoragePolicy:  cfg.ManifestRoot.StoragePolicy,
-			Identity:       nextIdentity,
-			IdentityRecord: encodeColumnManifestIdentityRecordArray(nextIdentity),
-			Records:        deltaRecords,
-		}
-		ordered, err := delta.OrderedRootDeltaPublishInput()
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		updatedMeta, err := columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity, manifest.AppliedCommandLSN)
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			if err := runColumnVectorGraphStablePublishTestHook(&prepared); err != nil {
-				return nil, err
-			}
-			return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-		}
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{ordered}, buildSystemDelta)
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		if prepared.RowCount != len(rows) {
-			return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
-		}
-		c.meta = updatedMeta
+		return VectorIndexStatus{}, fmt.Errorf("%w: column_graph rebuild for %q requires command WAL to publish exact durable resources", backenddb.ErrCommandWALRejected, name)
 	}
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		return VectorIndexStatus{}, unexpectedOrderedRootCountError(baseMeta.Name, 1, len(rootIDs))
@@ -287,14 +281,14 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 		if err != nil {
 			return nil, err
 		}
+		if err := registerColumnVectorGraphDurablePublication(ctx, &prepared, deltaRecords, nextIdentity.Generation, cfg.AssetManager.Namespace); err != nil {
+			return nil, err
+		}
 		return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if updatedMeta.Name == "" {
 			return nil, errors.New("collections: empty column_graph rebuild did not prepare updated metadata")
-		}
-		if err := runColumnVectorGraphStablePublishTestHook(&prepared); err != nil {
-			return nil, err
 		}
 		return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	}

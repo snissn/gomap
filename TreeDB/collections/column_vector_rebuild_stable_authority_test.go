@@ -293,11 +293,13 @@ func TestColumnVectorGraphRebuildStableAuthorityMatchesEveryPublishedAsset(t *te
 	if publishHookCalls != 1 {
 		t.Fatalf("stable publication hook calls=%d want 1", publishHookCalls)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("active pins after publish=%d want baseline=%d", got, baselinePins)
+	// Manager ownership plus the prior and newly published selectable slots are
+	// all live until the alternate slot is replaced.
+	if got, want := registry.ActivePins(), baselinePins*2+uint64(wantPublishedSegments); got != want {
+		t.Fatalf("active pins after publish=%d want manager+two-slot closures=%d", got, want)
 	}
-	if got := registry.ActiveIdentities(); got != baselineIdentities {
-		t.Fatalf("active identities after publish=%d want baseline=%d", got, baselineIdentities)
+	if got, want := registry.ActiveIdentities(), baselineIdentities+wantPublishedSegments; got != want {
+		t.Fatalf("active identities after publish=%d want baseline+new segments=%d", got, want)
 	}
 }
 
@@ -389,11 +391,11 @@ func TestColumnVectorGraphRebuildStableAuthorityIncludesCalibratedScalarU8Alpha(
 	if hookCalls != 1 || publishHookCalls != 1 {
 		t.Fatalf("stable authority hook calls=%d publication hook calls=%d want 1 each", hookCalls, publishHookCalls)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("active pins after publish=%d want baseline=%d", got, baselinePins)
+	if got, want := registry.ActivePins(), baselinePins*2+wantSegments; got != want {
+		t.Fatalf("active pins after publish=%d want manager+two-slot closures=%d", got, want)
 	}
-	if got := registry.ActiveIdentities(); got != baselineIdentities {
-		t.Fatalf("active identities after publish=%d want baseline=%d", got, baselineIdentities)
+	if got, want := registry.ActiveIdentities(), baselineIdentities+wantSegments; got != want {
+		t.Fatalf("active identities after publish=%d want baseline+new segments=%d", got, want)
 	}
 }
 
@@ -595,9 +597,9 @@ func TestColumnVectorGraphStableAuthorityRejectsEachMissingTransitiveChild(t *te
 				_ = d.Close()
 				t.Fatalf("%s published manifest root=%d before=%d", name, got, visibleRootBefore)
 			}
-			if len(omittedNamespaces) != len(descriptors) {
+			if len(omittedNamespaces) != len(obligations) {
 				_ = d.Close()
-				t.Fatalf("%s namespace authorities=%d want segments=%d", name, len(omittedNamespaces), len(descriptors))
+				t.Fatalf("%s namespace authorities=%d want logical obligations=%d", name, len(omittedNamespaces), len(obligations))
 			}
 			assertStableColumnVectorGraphAuthorityReleased(t, registry, omittedNamespaces, baselinePins, baselineIdentities, "missing "+name)
 			if err := d.Close(); err != nil {

@@ -252,7 +252,7 @@ func TestVacuumReservedAllocatorUsesAndReclaimsReservedPages(t *testing.T) {
 	}
 }
 
-func TestVacuumIndexOnlinePrecutoverSyncRunsOutsideWriteMu(t *testing.T) {
+func TestVacuumIndexOnlinePagerSyncRunsOutsideWriteMu(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -280,8 +280,8 @@ func TestVacuumIndexOnlinePrecutoverSyncRunsOutsideWriteMu(t *testing.T) {
 			}
 		case vacuumPagerSyncFinal:
 			finalCalls++
-			if writeMuAvailable && hookErr == nil {
-				hookErr = errors.New("final pager sync ran outside writeMu")
+			if !writeMuAvailable && hookErr == nil {
+				hookErr = errors.New("final pager sync ran under writeMu")
 			}
 		default:
 			if hookErr == nil {
@@ -305,6 +305,75 @@ func TestVacuumIndexOnlinePrecutoverSyncRunsOutsideWriteMu(t *testing.T) {
 	}
 	if stats.CutoverCloneTraversalPages != 0 {
 		t.Fatalf("cutover clone traversal pages=%d want 0", stats.CutoverCloneTraversalPages)
+	}
+}
+
+func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	opts := Options{Dir: dir, ChunkSize: 64 << 10}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.SetSync([]byte("before-cutover"), []byte("o")); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed: %v", err)
+	}
+
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	db.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
+		if phase == vacuumPagerSyncFinal {
+			once.Do(func() {
+				close(reached)
+				<-release
+			})
+		}
+	}
+	vacuumErr := make(chan error, 1)
+	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
+	waitVacuumTestSignal(t, reached, "vacuum final sync")
+
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- db.SetSync([]byte("during-final-sync"), []byte("n"))
+	}()
+	select {
+	case err := <-writeErr:
+		close(release)
+		<-vacuumErr
+		_ = db.Close()
+		t.Fatalf("writer passed active cutover gate: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(release)
+	if err := <-vacuumErr; err != nil {
+		_ = db.Close()
+		t.Fatalf("vacuum: %v", err)
+	}
+	if err := <-writeErr; err != nil {
+		_ = db.Close()
+		t.Fatalf("writer after cutover: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	value, err := reopened.Get([]byte("during-final-sync"))
+	if err != nil {
+		t.Fatalf("get writer value after reopen: %v", err)
+	}
+	if string(value) != "n" {
+		t.Fatalf("writer value after reopen=%q, want n", value)
 	}
 }
 
@@ -716,7 +785,7 @@ func TestVacuumIndexOnlineCollectionCatalogTransitionsAreExact(t *testing.T) {
 	assertVacuumSnapshotTransitionCatalog(t, reopened, 1)
 }
 
-func TestVacuumIndexOnlineMalformedCollectionDescriptorAbortsBeforeRename(t *testing.T) {
+func TestPublishMalformedCollectionDescriptorAbortsBeforeVacuumArtifacts(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -727,11 +796,9 @@ func TestVacuumIndexOnlineMalformedCollectionDescriptorAbortsBeforeRename(t *tes
 		t.Fatalf("open: %v", err)
 	}
 	malformed := []byte{1, 2, 3}
-	if _, err := db.PublishSystemRootIterator(mustFrozenSystemMemtable(t, vacuumSnapshotPrimaryKey, string(malformed)).NewIterator(nil, nil)); err != nil {
-		t.Fatalf("publish malformed descriptor: %v", err)
-	}
-	if err := db.VacuumIndexOnline(context.Background()); err == nil {
-		t.Fatal("vacuum accepted malformed collection descriptor")
+	beforeSeq := db.currentCommitSeq()
+	if _, err := db.PublishSystemRootIterator(mustFrozenSystemMemtable(t, vacuumSnapshotPrimaryKey, string(malformed)).NewIterator(nil, nil)); err == nil {
+		t.Fatal("published malformed collection descriptor")
 	}
 	for _, name := range []string{indexNewFileName, indexReadyFileName} {
 		if _, statErr := os.Stat(filepath.Join(dir, name)); !errors.Is(statErr, os.ErrNotExist) {
@@ -740,11 +807,13 @@ func TestVacuumIndexOnlineMalformedCollectionDescriptorAbortsBeforeRename(t *tes
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
-		t.Fatal("AcquireSnapshot returned nil after malformed abort")
+		t.Fatal("AcquireSnapshot returned nil after rejected publication")
 	}
-	got, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(vacuumSnapshotPrimaryKey))
-	if err != nil || !bytes.Equal(got, malformed) {
-		t.Fatalf("old authoritative descriptor=%x err=%v", got, err)
+	if snap.state.CommitSeq != beforeSeq {
+		t.Fatalf("commit sequence advanced after rejected descriptor: got=%d want=%d", snap.state.CommitSeq, beforeSeq)
+	}
+	if got, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(vacuumSnapshotPrimaryKey)); err == nil {
+		t.Fatalf("rejected malformed descriptor became visible: %x", got)
 	}
 	if err := snap.Close(); err != nil {
 		t.Fatalf("close snapshot: %v", err)

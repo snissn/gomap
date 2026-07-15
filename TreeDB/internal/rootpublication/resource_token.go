@@ -13,10 +13,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 var (
 	ErrStableIdentityUnsupported       = errors.New("stable resource identity unsupported")
+	ErrFilePersistenceUnsupported      = stableio.ErrFilePersistenceUnsupported
 	ErrNamespacePersistenceUnsupported = errors.New("namespace persistence unsupported")
 	ErrNamespaceUnstable               = errors.New("stable resource namespace unresolved")
 	ErrFrontierBeyondResource          = errors.New("stable resource frontier beyond file length")
@@ -528,7 +531,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	}
 	syncThrough := spec.SyncThrough
 	if syncThrough == nil {
-		syncThrough = func(file *os.File, _ DurableFrontier) error { return syncStableFile(file) }
+		syncThrough = func(file *os.File, _ DurableFrontier) error { return stableio.SyncFile(file) }
 	}
 	token := &StableResourceToken{
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
@@ -647,6 +650,18 @@ func (token *StableResourceToken) ReadAt(dst []byte, offset int64) (int, error) 
 		return 0, ErrResourceOwnership
 	}
 	return token.pinned.ReadAt(dst, offset)
+}
+
+// WithPinnedFile scopes access to the exact retained resource handle. It is
+// intended for platform adapters, such as the pager's mapped-page durability
+// primitive, that must pair an already-validated identity pin with an
+// operation unavailable through ordinary file Sync. Callers must not retain
+// or close the handle after fn returns.
+func (token *StableResourceToken) WithPinnedFile(fn func(*os.File) error) error {
+	if token == nil || fn == nil || token.released.Load() || token.pinned == nil {
+		return ErrResourceOwnership
+	}
+	return fn(token.pinned)
 }
 
 func (token *StableResourceToken) Release() {
@@ -803,6 +818,15 @@ func (nativeNamespaceAdapter) ValidateIdentity(parent *os.File, identity StableI
 func (nativeNamespaceAdapter) Sync(file *os.File) error {
 	return syncStableNamespace(file)
 }
+
+// SyncStableFile executes the platform's physical file durability barrier.
+// Unsupported or weaker-only platforms fail closed with
+// ErrFilePersistenceUnsupported.
+func SyncStableFile(file *os.File) error { return stableio.SyncFile(file) }
+
+// SyncStableNamespace executes the platform's exact directory/namespace
+// durability barrier. Unsupported platforms fail closed.
+func SyncStableNamespace(parent *os.File) error { return syncStableNamespace(parent) }
 
 type StableNamespaceSpec struct {
 	Parent           *os.File
@@ -1151,6 +1175,24 @@ func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, e
 	return newStableNamespaceToken(spec, nativeNamespaceAdapter{})
 }
 
+// NewRecoveredStableNamespaceToken reconstructs an already-durable namespace
+// proof during bounded root recovery. It validates the exact parent identity
+// and current parent/child link but deliberately does not issue a new sync: the
+// selected durable meta is itself the evidence that this namespace operation
+// crossed its barrier before publication.
+func NewRecoveredStableNamespaceToken(spec StableNamespaceSpec, expectedParent StableIdentity) (*StableNamespaceToken, error) {
+	token, err := newStableNamespaceToken(spec, nativeNamespaceAdapter{})
+	if err != nil {
+		return nil, err
+	}
+	if token.parentIdentity.Generation != expectedParent.Generation || !SamePhysicalIdentity(token.parentIdentity, expectedParent) {
+		token.Release()
+		return nil, fmt.Errorf("%w: recovered namespace parent identity differs from manifest", ErrResourceConflict)
+	}
+	token.state.Store(namespaceStable)
+	return token, nil
+}
+
 func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersistenceAdapter) (*StableNamespaceToken, error) {
 	if spec.Parent == nil || spec.ParentGeneration == 0 || spec.Operation == NamespaceNone || spec.NewName == "" || adapter == nil {
 		return nil, fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
@@ -1234,6 +1276,57 @@ func OpenStableParent(path string) (*os.File, error) {
 	return openStableParent(path)
 }
 
+// EnsureStableChildDirectory opens or creates name relative to the exact
+// already-open parent and establishes the child link's namespace durability
+// before returning it. The returned handle is the authority for constructing
+// deeper descendants; callers must not replace it with a pathname reopen.
+//
+// Unix stabilizes the retained parent directory. Windows uses its narrower
+// create-through-child contract and flushes the exact child directory handle.
+func EnsureStableChildDirectory(parent *os.File, name string, perm os.FileMode, registry *IdentityPinRegistry) (*os.File, error) {
+	if parent == nil || !stableChildBaseName(name) {
+		return nil, fmt.Errorf("%w: stable child directory requires a base name and exact parent handle", ErrUnresolvedResource)
+	}
+	child, err := openOrCreateStableChildDirectory(parent, name, perm)
+	if err != nil {
+		return nil, err
+	}
+	info, err := child.Stat()
+	if err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	if !info.IsDir() {
+		_ = child.Close()
+		return nil, fmt.Errorf("%w: stable child %q is not a directory", ErrResourceConflict, name)
+	}
+	if registry != nil {
+		known, err := registry.StableDirectoryLinkKnown(parent, child, name)
+		if err != nil {
+			_ = child.Close()
+			return nil, err
+		}
+		if known {
+			return child, nil
+		}
+	}
+	persistence := parent
+	if stableNamespaceCreationPersistsThroughChild() {
+		persistence = child
+	}
+	if err := syncStableNamespace(persistence); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	if registry != nil {
+		if err := registry.RememberStableDirectoryLink(parent, child, name); err != nil {
+			_ = child.Close()
+			return nil, err
+		}
+	}
+	return child, nil
+}
+
 // RemoveStableChildFile unlinks name relative to the exact already-open parent
 // directory. Callers remain responsible for syncing parent after the unlink.
 func RemoveStableChildFile(parent *os.File, name string) error {
@@ -1282,6 +1375,14 @@ func stableChildBaseName(name string) bool {
 // creating a temporary child or exposing any stable-mode visibility.
 func StableRelativeNamespaceSupported() bool {
 	return stableRelativeNamespaceSupported()
+}
+
+// StableNamespaceCreationSupported reports whether the platform can persist
+// an exact retained-parent child creation. Windows supports this narrower
+// contract by flushing the exact child even though rename, removal, and parent
+// directory sync remain unsupported.
+func StableNamespaceCreationSupported() bool {
+	return stableRelativeNamespaceSupported() || stableNamespaceCreationPersistsThroughChild()
 }
 
 func validateStableChildLink(parent, resource *os.File, name string) error {
@@ -1509,6 +1610,42 @@ func (token *StableNamespaceToken) validateStable() error {
 	default:
 		return ErrNamespaceUnstable
 	}
+}
+
+// cloneStable duplicates the exact retained parent handle of an already
+// stable namespace proof. It never resolves DiagnosticPath. The clone starts
+// stable because the source proof's parent/child binding and namespace sync
+// have already crossed their durability barrier; publication of a later root
+// may therefore retain that same immutable proof without performing another
+// parent-directory sync.
+func (token *StableNamespaceToken) cloneStable() (*StableNamespaceToken, error) {
+	if token == nil {
+		return nil, nil
+	}
+	if err := token.validateStable(); err != nil {
+		return nil, err
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() || token.state.Load() != namespaceStable || token.parent == nil {
+		return nil, ErrResourceOwnership
+	}
+	pinned, err := duplicateStableFile(token.parent)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate stable namespace handle: %w", err)
+	}
+	clone := &StableNamespaceToken{
+		parent: pinned, parentIdentity: token.parentIdentity,
+		linkedResourceIdentity: token.linkedResourceIdentity,
+		hasLinkedResource:      token.hasLinkedResource,
+		operation:              token.operation,
+		oldName:                token.oldName,
+		newName:                token.newName,
+		diagnosticPath:         token.diagnosticPath,
+		adapter:                token.adapter,
+	}
+	clone.state.Store(namespaceStable)
+	return clone, nil
 }
 
 func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool {

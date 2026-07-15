@@ -718,6 +718,7 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 		t.Fatalf("generation1 state=%q, want %q", got, want)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	stats1, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC first: %v", err)
@@ -976,7 +977,20 @@ func TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen(t *test
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer func() { _ = reopened.Close() }()
+	reopenedLeafLog, err := NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{
+		MaxSegmentBytes: 32 << 10,
+		Compression:     ValueLogCompressionOff,
+	})
+	if err != nil {
+		_ = reopened.Close()
+		t.Fatalf("reopen leaf log: %v", err)
+	}
+	reopened.SetLeafPageLog(reopenedLeafLog)
+	defer func() {
+		_ = reopened.Close()
+		_ = reopenedLeafLog.Close()
+	}()
+	advancePastRetainedDurableSlotForTest(t, reopened)
 	reclaimableMid := leafGenerationReclaimableRawFileIDsForTest(t, reopened, midOnly)
 	if len(reclaimableMid) < 2 {
 		t.Fatalf("reclaimable mid-generation lane segments=%d want >=2 (midOnly=%v)", len(reclaimableMid), midOnly)
@@ -1407,6 +1421,7 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 		t.Fatalf("pin count after close=%d, want 0", got)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	stats2, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC after close: %v", err)

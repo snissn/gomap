@@ -93,6 +93,7 @@ func TestValueLogGC_IgnoresLeafVlogSegmentsInSplitMode(t *testing.T) {
 		t.Fatalf("expected current leaf segment to remain, stat err=%v", err)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	leafStats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)

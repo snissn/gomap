@@ -209,15 +209,26 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(manifest.Identity)
 	deltaIter := columnStoreCompactionManifestDeltaIterator(identityRecord, state.records, manifest.Records)
+	durableRequirements, err := stableColumnManifestDurableRequirements(manifest.Records, manifest.Identity.Generation, state.cfg.AssetManager.Namespace)
+	if err != nil {
+		_ = deltaIter.Close()
+		return stats, cleanupPrepared(fmt.Errorf("collections: compaction durable requirements: %w", err))
+	}
 	rootNames := []string{state.rootName}
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	preflight := c.columnStoreCompactionRootDescriptorPreflight(state, rootNames, baseRootIDs)
+	// The maintenance publisher owns and releases the producer closure once it
+	// is attached to the candidate durable slot.
+	durableResources := prepared.stableResources
+	prepared.stableResources = nil
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
 		[]backenddb.StorageMaintenanceRootDeltaPublishInput{{
-			BaseRoot:      state.baseRoot,
-			Iter:          deltaIter,
-			StoragePolicy: policy,
+			BaseRoot:                    state.baseRoot,
+			Iter:                        deltaIter,
+			StoragePolicy:               policy,
+			DurableResources:            durableResources,
+			DurableResourceRequirements: durableRequirements,
 		}},
 		preflight,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {

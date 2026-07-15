@@ -217,7 +217,7 @@ func TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError(t 
 	}
 }
 
-func TestStableLeafGenerationManifestReplacementPinnedOldIdentityBlocksOverwrite(t *testing.T) {
+func TestStableLeafGenerationManifestReplacementRetainsPinnedOlderRevision(t *testing.T) {
 	leafDir := t.TempDir()
 	registry := rootpublication.NewIdentityPinRegistry()
 	firstStore := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
@@ -229,14 +229,22 @@ func TestStableLeafGenerationManifestReplacementPinnedOldIdentityBlocksOverwrite
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := secondStore.Replace(manifest.clone()); !errors.Is(err, rootpublication.ErrResourcePinned) {
-		t.Fatalf("Replace while retained error=%v want ErrResourcePinned", err)
-	}
-	retained.Release()
 	next, err := secondStore.Replace(manifest.clone())
 	if err != nil {
-		t.Fatalf("Replace after release: %v", err)
+		t.Fatalf("Replace while older revision retained: %v", err)
 	}
+	if rootpublication.SamePhysicalIdentity(retained.Identity(), next.Identity()) || retained.Generation() == next.Generation() {
+		t.Fatalf("manifest revisions coalesced identities old=%+v new=%+v", retained.Identity(), next.Identity())
+	}
+	for _, token := range []*rootpublication.StableResourceToken{retained, next} {
+		if err := token.WithPinnedFile(func(file *os.File) error {
+			_, err := file.Stat()
+			return err
+		}); err != nil {
+			t.Fatalf("retained revision %d: %v", token.Generation(), err)
+		}
+	}
+	retained.Release()
 	next.Release()
 }
 
@@ -342,10 +350,18 @@ func TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence(
 	store.Close()
 	loaded, ok, err := loadLeafGenerationManifest(leafDir)
 	if err != nil || !ok {
-		t.Fatalf("reopen coherent post-rename manifest: ok=%v err=%v", ok, err)
+		t.Fatalf("reopen compatibility manifest: ok=%v err=%v", ok, err)
 	}
-	if loaded.ManifestRevision != 2 {
-		t.Fatalf("reopened ManifestRevision=%d want complete new revision 2", loaded.ManifestRevision)
+	if loaded.ManifestRevision != 1 {
+		t.Fatalf("compatibility ManifestRevision=%d want prior complete revision 1", loaded.ManifestRevision)
+	}
+	durableBytes, err := os.ReadFile(filepath.Join(leafDir, leafGenerationDurableManifestFileName(2)))
+	if err != nil {
+		t.Fatalf("retained ambiguous durable revision: %v", err)
+	}
+	durable, err := decodeLeafGenerationManifest(durableBytes, leafGenerationDurableManifestFileName(2))
+	if err != nil || durable.ManifestRevision != 2 {
+		t.Fatalf("durable revision=%v err=%v want revision 2", durable, err)
 	}
 	if registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
 		t.Fatalf("close leak pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities())
@@ -363,7 +379,7 @@ func TestStableLeafGenerationManifestDestinationRebindFailsClosed(t *testing.T) 
 	}
 	first.Release()
 	store.hooks.BeforeDestinationValidation = func() error {
-		path := leafGenerationManifestPath(leafDir)
+		path := filepath.Join(leafDir, leafGenerationDurableManifestFileName(2))
 		if err := os.Rename(path, path+".displaced"); err != nil {
 			return err
 		}
