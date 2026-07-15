@@ -3431,6 +3431,24 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	}
 }
 
+// finalizeAcceptedCommitPostWorkOnError completes the non-serialized work for
+// a candidate whose ownership and visible-state activation already crossed the
+// point of no return, even though a later admission or durability wait failed.
+//
+// The value-log ref delta remains producer-owned on every error return. Clear
+// it from this post-work copy so the producer's existing error cleanup releases
+// it exactly once; all other accepted-publication work belongs to the DB and
+// must not be deferred to a later durability retry.
+func (db *DB) finalizeAcceptedCommitPostWorkOnError(post finalizeCommitPost) finalizeCommitPost {
+	if !post.accepted {
+		return post
+	}
+	post.vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
+	commitSeq := post.commitSeq
+	return finalizeCommitPost{accepted: true, commitSeq: commitSeq}
+}
+
 // finalizeCommit handles durability and state updates.
 func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) error {
 	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)

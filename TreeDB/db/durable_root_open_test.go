@@ -581,6 +581,62 @@ func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testi
 	}
 }
 
+func TestDurableRootPublicationAcceptedWaitFailureRunsPostWork(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                    t.TempDir(),
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		database.testFailWriteMeta.Store(false)
+		_ = database.Close()
+	}()
+
+	if err := database.SetSync([]byte("seed"), []byte("seed-value")); err != nil {
+		t.Fatalf("seed SetSync: %v", err)
+	}
+	oldState := database.state.Load()
+	if oldState == nil || oldState.ValueLogSet == nil {
+		t.Fatal("seed publication did not install a value-log set")
+	}
+	oldSet := oldState.ValueLogSet
+	if got := oldSet.RefCount.Load(); got != 1 {
+		t.Fatalf("seed value-log set refs=%d, want state ownership only", got)
+	}
+	baseVisible := database.currentCommitSeq()
+
+	database.testFailWriteMeta.Store(true)
+	err = database.SetSync([]byte("accepted"), []byte("visible-before-durable"))
+	database.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted wait error=%v unexpectedly requires recovery", err)
+	}
+	if got := database.currentCommitSeq(); got != baseVisible+1 {
+		t.Fatalf("visible commit after accepted wait error=%d, want %d", got, baseVisible+1)
+	}
+	if got, getErr := database.Get([]byte("accepted")); getErr != nil || string(got) != "visible-before-durable" {
+		t.Fatalf("accepted value=(%q,%v), want visible value", got, getErr)
+	}
+	if got := oldSet.RefCount.Load(); got != 0 {
+		t.Fatalf("superseded value-log set refs after accepted wait error=%d, want 0", got)
+	}
+	if tracker := database.valueLogRefTracker; tracker != nil {
+		tracker.mu.RLock()
+		trackerSeq := tracker.commitSeq
+		trackerValid := tracker.valid
+		tracker.mu.RUnlock()
+		if !trackerValid || trackerSeq != baseVisible+1 {
+			t.Fatalf("value-log ref tracker after accepted wait error=(valid=%t seq=%d), want (true,%d)", trackerValid, trackerSeq, baseVisible+1)
+		}
+	}
+}
+
 func TestDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T) {
 	dir := t.TempDir()
 	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
