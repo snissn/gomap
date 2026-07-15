@@ -636,7 +636,9 @@ Coverage:
   SHA-256 digests from all six actual row-producing benchmark binaries; mixed,
   missing, or malformed binary evidence cannot override a failed measurement.
   Raw and adapter gates require balanced even AB/BA sample counts and default
-  to eight samples per revision.
+  to eight samples per revision. The raw-gate timing verdict uses the median
+  per-pair candidate/base relative delta; base/head timing medians remain
+  reported as context.
 - The `performance-observation-only` PR label is the narrow exception for a
   ticket whose frozen performance class explicitly replaces the raw-path
   percentage budget with matched observational fixtures. CI still runs the
