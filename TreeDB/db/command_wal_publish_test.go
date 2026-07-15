@@ -1047,7 +1047,7 @@ func TestCommandWALCheckpointCleanupReleasesCoveredDebtBeforeUnlink(t *testing.T
 			}
 			db.commandWALDebt.mu.Lock()
 			pendingAfterRemoveFailure := len(db.commandWALDebt.entries)
-			coveredPhysicalReleased := len(db.commandWALDebt.entries[0].resources) == 0 && len(db.commandWALDebt.entries[0].rotationFiles) == 0
+			coveredPhysicalReleased := pendingAfterRemoveFailure > 0 && len(db.commandWALDebt.entries[0].resources) == 0 && len(db.commandWALDebt.entries[0].rotationFiles) == 0
 			db.commandWALDebt.mu.Unlock()
 			if pendingAfterRemoveFailure != 2 || !coveredPhysicalReleased {
 				t.Fatalf("remove failure debt entries=%d coveredPhysicalReleased=%t, want 2 and true", pendingAfterRemoveFailure, coveredPhysicalReleased)
