@@ -7,14 +7,13 @@ import (
 	"context"
 	"errors"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing.T) {
+func TestColumnAssetRewriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -27,14 +26,29 @@ func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	before := columnAssetSegmentNamesM15C(t, d, col)
-	if _, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}}); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		t.Fatalf("ColumnAssetRewrite error=%v want ErrNamespacePersistenceUnsupported", err)
+	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("ColumnAssetRewrite: %v", err)
 	}
-	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
-		t.Fatalf("unsupported rewrite exposed segments after=%v before=%v", after, before)
+	if stats.SegmentsRewritten != 1 || stats.RefsRemapped == 0 || len(stats.SupersededRefs) != stats.RefsRemapped {
+		t.Fatalf("ColumnAssetRewrite stats=%+v want one rewritten segment and matched remap", stats)
 	}
-	if registry.ActivePins() != baselinePins || registry.ActiveIdentities() != baselineIdentities {
-		t.Fatalf("unsupported rewrite changed registry pins=%d identities=%d want baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
+	after := columnAssetSegmentNamesM15C(t, d, col)
+	if len(after) != len(before)+1 {
+		t.Fatalf("create-only rewrite segments after=%v before=%v want one fresh segment", after, before)
+	}
+	if stats.RemapSegmentFileID == 0 || stats.RemapSegmentFileID == candidate.FileID {
+		t.Fatalf("create-only rewrite remap file_id=%d source=%d", stats.RemapSegmentFileID, candidate.FileID)
+	}
+	sourcePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Fatalf("create-only rewrite removed source %q: %v", sourcePath, err)
+	}
+	if registry.ActivePins() <= baselinePins || registry.ActiveIdentities() <= baselineIdentities {
+		t.Fatalf("create-only rewrite retained pins=%d identities=%d want above baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
 	}
 }
 
