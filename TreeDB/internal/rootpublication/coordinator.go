@@ -14,6 +14,11 @@ type Options struct {
 	Publisher                  Publisher
 	InitialDurableFrontier     Frontier
 	OldestRecoverableCommitSeq uint64
+	// DurableRootLineage and DurableRootSequence seed an already-open durable
+	// allocator lineage. Both must be zero for legacy/dormant callers or both
+	// must identify InitialDurableFrontier.
+	DurableRootLineage  DurableRootLineageID
+	DurableRootSequence uint64
 }
 
 type pendingEntry struct {
@@ -82,7 +87,10 @@ type Coordinator struct {
 	resourceConflicts    uint64
 	rejectedCandidates   uint64
 	recoverySets         []*StableResourceSet
+	recoveryDurableRoots []*DurableRootTransaction
 	resourcePinHighWater map[ResourceKind]uint64
+	durableRootLineage   DurableRootLineageID
+	durableRootSequence  uint64
 }
 
 // PublishAttempt is an opaque identity for exactly one captured callback.
@@ -104,6 +112,11 @@ func New(options Options) (*Coordinator, error) {
 		return nil, fmt.Errorf("root publication: oldest recoverable sequence %d exceeds durable sequence %d",
 			options.OldestRecoverableCommitSeq, options.InitialDurableFrontier.commitSeq)
 	}
+	if (options.DurableRootLineage == (DurableRootLineageID{})) != (options.DurableRootSequence == 0) ||
+		(options.DurableRootSequence != 0 && options.DurableRootSequence != options.InitialDurableFrontier.commitSeq) {
+		return nil, fmt.Errorf("root publication: durable-root lineage sequence %d does not match durable frontier %d",
+			options.DurableRootSequence, options.InitialDurableFrontier.commitSeq)
+	}
 	clock := options.Clock
 	if clock == nil {
 		clock = realClock{}
@@ -113,7 +126,8 @@ func New(options Options) (*Coordinator, error) {
 		clock: clock, publisher: options.Publisher, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
-		oldestRecoverable: options.OldestRecoverableCommitSeq,
+		oldestRecoverable:  options.OldestRecoverableCommitSeq,
+		durableRootLineage: options.DurableRootLineage, durableRootSequence: options.DurableRootSequence,
 	}
 	if c.oldestRecoverable == 0 {
 		c.oldestRecoverable = c.durable.commitSeq
@@ -154,6 +168,11 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 		c.mu.Unlock()
 		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
 	}
+	if err := c.preflightDurableRootLocked(candidate); err != nil {
+		c.rejectedCandidates++
+		c.mu.Unlock()
+		return err
+	}
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
 		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
 		for _, entry := range c.pending {
@@ -180,6 +199,26 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 			return fmt.Errorf("%w: enqueue resource transfer: %w", ErrInvalidCandidate, err)
 		}
 	}
+	if err := transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
+		if candidateSet := candidate.resourceSet(); candidateSet != nil {
+			_ = candidateSet.transfer(ResourceOwnerCoordinator, ResourceOwnerCandidate)
+		}
+		c.rejectedCandidates++
+		c.mu.Unlock()
+		return fmt.Errorf("%w: enqueue durable-root transfer: %w", ErrInvalidCandidate, err)
+	}
+	if err := activateDurableRootGroup(candidate.durableRootGroup()); err != nil {
+		_ = transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCoordinator, ResourceOwnerCandidate)
+		if candidateSet := candidate.resourceSet(); candidateSet != nil {
+			_ = candidateSet.transfer(ResourceOwnerCoordinator, ResourceOwnerCandidate)
+		}
+		c.rejectedCandidates++
+		c.mu.Unlock()
+		return fmt.Errorf("%w: activate durable-root transaction: %w", ErrInvalidCandidate, err)
+	}
+	// Activation is the final fallible enqueue step. From here through pending
+	// append and visible-frontier advance the coordinator only mutates owned
+	// in-memory state and must commit the accepted debt.
 	wasEmpty := len(c.pending) == 0
 	entryBytes := candidate.OwnedBytes()
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
@@ -206,6 +245,67 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 		return nil
 	}
 	return c.waitForAdmission(ctx, seq, failureGeneration)
+}
+
+func (c *Coordinator) preflightDurableRootLocked(candidate *PreparedRootCandidate) error {
+	group := candidate.durableRootGroup()
+	if len(group.members) == 0 {
+		if c.durableRootSequence != 0 {
+			return fmt.Errorf("%w: candidate %d is missing the next durable-root transaction", ErrDurableRootLineage, candidate.frontier.commitSeq)
+		}
+		for _, entry := range c.pending {
+			if entry.candidate.DurableRoot() != nil {
+				return fmt.Errorf("%w: candidate %d is missing the pending durable-root lineage", ErrDurableRootLineage, candidate.frontier.commitSeq)
+			}
+		}
+		return nil
+	}
+	if len(group.members) != 1 || group.members[0].Owner() != ResourceOwnerCandidate {
+		return ErrDurableRootOwnership
+	}
+	next := group.members[0]
+	for i := len(c.pending) - 1; i >= 0; i-- {
+		previous := c.pending[i].candidate.DurableRoot()
+		if previous != nil {
+			return validateConsecutiveDurableRootTransactions(previous, next)
+		}
+	}
+	if len(c.pending) != 0 {
+		return fmt.Errorf("%w: cannot start durable-root lineage %d behind rootless pending debt", ErrDurableRootLineage, next.Sequence())
+	}
+	if c.durableRootSequence == 0 {
+		return nil
+	}
+	if next.Lineage() != c.durableRootLineage || c.durableRootSequence == ^uint64(0) || next.Sequence() != c.durableRootSequence+1 {
+		return fmt.Errorf("%w: durable lineage sequence=%d candidate=%d", ErrDurableRootLineage, c.durableRootSequence, next.Sequence())
+	}
+	return nil
+}
+
+func transferDurableRootGroup(group durableRootGroupExtension, from, to ResourceOwnerState) error {
+	transferred := 0
+	for _, transaction := range group.members {
+		if err := transaction.transfer(from, to); err != nil {
+			for i := transferred - 1; i >= 0; i-- {
+				_ = group.members[i].transfer(to, from)
+			}
+			return err
+		}
+		transferred++
+	}
+	return nil
+}
+
+func activateDurableRootGroup(group durableRootGroupExtension) error {
+	if len(group.members) > 1 {
+		return ErrDurableRootOwnership
+	}
+	for _, transaction := range group.members {
+		if err := transaction.activateFromCoordinator(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Coordinator) waitForAdmission(ctx context.Context, seq, failureGeneration uint64) error {
@@ -550,6 +650,20 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 				fmt.Errorf("oldest recoverable sequence %d outside monotonic range [%d,%d]", oldest, c.oldestRecoverable, durableSeq)), c.activeAttempt)
 			return
 		}
+		group := candidate.durableRootGroup()
+		if err := consumeDurableRootGroup(group); err != nil {
+			cause := errors.Join(ErrPublisherProtocol, fmt.Errorf("consume durable-root lineage: %w", err))
+			if failErr := failDurableRootGroup(group, cause); failErr != nil {
+				cause = errors.Join(cause, failErr)
+			}
+			c.poison = errors.Join(ErrRecoveryRequired, cause)
+			c.retryAttempt = PublishAttempt{}
+			c.failWaitersLocked(c.poison)
+			c.clearPublishRequestLocked()
+			c.notifyLocked()
+			c.signal()
+			return
+		}
 		remove := int(groupSize)
 		if remove > len(c.pending) {
 			remove = len(c.pending)
@@ -570,6 +684,10 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		c.durable = candidate.frontier
 		c.durable.commitSeq = durableSeq
 		c.oldestRecoverable = oldest
+		if latest := (DurableRootGroup{members: group.members}).Latest(); latest != nil {
+			c.durableRootLineage = latest.Lineage()
+			c.durableRootSequence = latest.Sequence()
+		}
 		c.lastGroupSize = groupSize
 		c.lastService = service
 		if c.ewmaService == 0 {
@@ -588,6 +706,9 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		if err == nil {
 			err = errors.New("ambiguous target-meta mutation")
 		}
+		if failErr := failDurableRootGroup(candidate.durableRootGroup(), err); failErr != nil {
+			err = errors.Join(err, failErr)
+		}
 		c.poison = errors.Join(ErrRecoveryRequired, err)
 		c.retryAttempt = PublishAttempt{}
 		c.failWaitersLocked(c.poison)
@@ -597,6 +718,25 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 	}
 	c.notifyLocked()
 	c.signal()
+}
+
+func consumeDurableRootGroup(group durableRootGroupExtension) error {
+	for _, transaction := range group.members {
+		if err := transaction.consumeFromCoordinator(); err != nil {
+			return fmt.Errorf("sequence %d: %w", transaction.Sequence(), err)
+		}
+	}
+	return nil
+}
+
+func failDurableRootGroup(group durableRootGroupExtension, cause error) error {
+	var errs []error
+	for _, transaction := range group.members {
+		if err := transaction.failFromCoordinator(cause); err != nil {
+			errs = append(errs, fmt.Errorf("fail durable-root sequence %d: %w", transaction.Sequence(), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Coordinator) recordRetryableLocked(err error, attempt PublishAttempt) {
@@ -894,6 +1034,34 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 			seen[set] = struct{}{}
 		}
 	}
+	seenRoots := make(map[*DurableRootTransaction]struct{}, len(c.recoveryDurableRoots)+len(c.pending))
+	for _, transaction := range c.recoveryDurableRoots {
+		seenRoots[transaction] = struct{}{}
+	}
+	cause := c.poison
+	if cause == nil {
+		cause = ErrPublicationStopped
+	}
+	for _, entry := range c.pending {
+		for _, transaction := range entry.candidate.durableRootGroup().members {
+			if transaction == nil || transaction.Owner() != ResourceOwnerCoordinator {
+				continue
+			}
+			if _, ok := seenRoots[transaction]; ok {
+				continue
+			}
+			if err := transaction.failFromCoordinator(cause); err != nil {
+				failure := errors.Join(ErrRecoveryRequired, fmt.Errorf("retain durable-root sequence %d: %w", transaction.Sequence(), err))
+				if c.poison != nil {
+					c.poison = errors.Join(c.poison, failure)
+				} else {
+					c.stopErr = errors.Join(c.stopErr, failure)
+				}
+			}
+			c.recoveryDurableRoots = append(c.recoveryDurableRoots, transaction)
+			seenRoots[transaction] = struct{}{}
+		}
+	}
 	c.pending = nil
 	c.pendingBytes = 0
 	c.firstPendingAt = time.Time{}
@@ -902,8 +1070,9 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 // RecoveryResourceHandoff owns pins retained after shutdown or ambiguous
 // publication. Reopen/recovery consumes the evidence and then releases it.
 type RecoveryResourceHandoff struct {
-	sets []*StableResourceSet
-	once sync.Once
+	sets         []*StableResourceSet
+	durableRoots []*DurableRootTransaction
+	once         sync.Once
 }
 
 func (handoff *RecoveryResourceHandoff) Len() int {
@@ -920,6 +1089,22 @@ func (handoff *RecoveryResourceHandoff) Sets() []*StableResourceSet {
 	return append([]*StableResourceSet(nil), handoff.sets...)
 }
 
+func (handoff *RecoveryResourceHandoff) DurableRootLen() int {
+	if handoff == nil {
+		return 0
+	}
+	return len(handoff.durableRoots)
+}
+
+// DurableRoots returns the ordered exact allocator transactions retained for
+// recovery. The returned slice is a copy; ownership stays with the handoff.
+func (handoff *RecoveryResourceHandoff) DurableRoots() []*DurableRootTransaction {
+	if handoff == nil {
+		return nil
+	}
+	return append([]*DurableRootTransaction(nil), handoff.durableRoots...)
+}
+
 func (handoff *RecoveryResourceHandoff) Release() {
 	if handoff == nil {
 		return
@@ -928,7 +1113,11 @@ func (handoff *RecoveryResourceHandoff) Release() {
 		for _, set := range handoff.sets {
 			set.releaseFrom(ResourceOwnerRecovery)
 		}
+		for _, transaction := range handoff.durableRoots {
+			transaction.releaseFromRecovery()
+		}
 		handoff.sets = nil
+		handoff.durableRoots = nil
 	})
 }
 
@@ -946,6 +1135,7 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 	}
 	c.captureRecoveryResourcesLocked()
 	sets := append([]*StableResourceSet(nil), c.recoverySets...)
+	durableRoots := append([]*DurableRootTransaction(nil), c.recoveryDurableRoots...)
 	transferred := make([]*StableResourceSet, 0, len(sets))
 	for _, set := range sets {
 		if err := set.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
@@ -956,6 +1146,20 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 		}
 		transferred = append(transferred, set)
 	}
+	transferredRoots := make([]*DurableRootTransaction, 0, len(durableRoots))
+	for _, transaction := range durableRoots {
+		if err := transaction.transfer(ResourceOwnerCoordinator, ResourceOwnerRecovery); err != nil {
+			for i := len(transferredRoots) - 1; i >= 0; i-- {
+				_ = transferredRoots[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			}
+			for i := len(transferred) - 1; i >= 0; i-- {
+				_ = transferred[i].transfer(ResourceOwnerRecovery, ResourceOwnerCoordinator)
+			}
+			return nil, fmt.Errorf("%w: durable-root recovery ownership transfer: %w", ErrDurableRootOwnership, err)
+		}
+		transferredRoots = append(transferredRoots, transaction)
+	}
 	c.recoverySets = nil
-	return &RecoveryResourceHandoff{sets: transferred}, nil
+	c.recoveryDurableRoots = nil
+	return &RecoveryResourceHandoff{sets: transferred, durableRoots: transferredRoots}, nil
 }
