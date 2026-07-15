@@ -600,33 +600,53 @@ func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
 }
 
 func (l *ReservationLedger) Publish(c CandidateIDV1) error {
+	return l.PublishBatch([]CandidateIDV1{c})
+}
+
+// PublishBatch atomically consumes an ordered set of candidates after one
+// durable root makes all of them recoverable. Validation happens before any
+// owner or burned-tail state is changed, so a malformed prefix cannot be
+// partially published.
+func (l *ReservationLedger) PublishBatch(candidates []CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[c]
-	if r == nil {
-		return fmt.Errorf("unknown candidate %x", c)
-	}
-	for _, id := range r.ids {
-		delete(l.owners, id)
-	}
-	if len(r.abandonedCoverage) != 0 {
-		kept := l.burnedTails[:0]
-		for _, burned := range l.burnedTails {
-			covered := false
-			for _, abandoned := range r.abandonedCoverage {
-				if burned.start >= abandoned.start && burned.start-abandoned.start < abandoned.count && burned.count <= abandoned.count-(burned.start-abandoned.start) {
-					covered = true
-					break
-				}
-			}
-			if covered {
-				continue
-			}
-			kept = append(kept, burned)
+	seen := make(map[CandidateIDV1]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == (CandidateIDV1{}) {
+			return ErrGenerationFormat
 		}
-		l.burnedTails = kept
+		if _, duplicate := seen[candidate]; duplicate {
+			return fmt.Errorf("duplicate candidate %x", candidate)
+		}
+		seen[candidate] = struct{}{}
+		if l.candidates[candidate] == nil {
+			return fmt.Errorf("unknown candidate %x", candidate)
+		}
 	}
-	delete(l.candidates, c)
+	for _, candidate := range candidates {
+		r := l.candidates[candidate]
+		for _, id := range r.ids {
+			delete(l.owners, id)
+		}
+		if len(r.abandonedCoverage) != 0 {
+			kept := l.burnedTails[:0]
+			for _, burned := range l.burnedTails {
+				covered := false
+				for _, abandoned := range r.abandonedCoverage {
+					if burned.start >= abandoned.start && burned.start-abandoned.start < abandoned.count && burned.count <= abandoned.count-(burned.start-abandoned.start) {
+						covered = true
+						break
+					}
+				}
+				if covered {
+					continue
+				}
+				kept = append(kept, burned)
+			}
+			l.burnedTails = kept
+		}
+		delete(l.candidates, candidate)
+	}
 	return nil
 }
 

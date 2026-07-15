@@ -15,8 +15,10 @@ func materializeAllocatorCOWCandidateForTest(t *testing.T, p *pager.Pager, prepa
 	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
 		t.Fatal("missing prepared COW candidate")
 	}
-	if err := p.Truncate(prepared.Candidate().Generation().HighWater()); err != nil {
-		t.Fatal(err)
+	if target := prepared.Candidate().Generation().HighWater(); p.PageCount() < target {
+		if err := p.Truncate(target); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, image := range prepared.Candidate().Pages() {
 		if err := p.Write(image.PageID, image.Data); err != nil {
@@ -158,6 +160,123 @@ func TestAllocatorCOWCandidateMustBeMaterializedBeforePublish(t *testing.T) {
 	materializeAllocatorCOWCandidateForTest(t, p, prepared)
 	if err := allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
 		t.Fatalf("publish materialized candidate: %v", err)
+	}
+}
+
+func TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	ledger := NewReservationLedger()
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), ledger); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstData, err := allocator.Alloc(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("visible-first"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(first); err != nil {
+		t.Fatalf("activate first: %v", err)
+	}
+
+	secondData, err := allocator.Alloc(0)
+	if err != nil {
+		t.Fatalf("allocation behind visible undurable generation: %v", err)
+	}
+	if secondData <= firstData {
+		t.Fatalf("second data page=%d want above first=%d", secondData, firstData)
+	}
+	second, err := allocator.PrepareCOWCandidateV1(3, 3, candidateIDFromString("visible-second"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(second); err != nil {
+		t.Fatalf("activate second: %v", err)
+	}
+
+	materializeAllocatorCOWCandidateForTest(t, p, first)
+	materializeAllocatorCOWCandidateForTest(t, p, second)
+	if err := allocator.PublishActivatedCOWThroughV1(second, capability); err != nil {
+		t.Fatalf("publish activated prefix: %v", err)
+	}
+	if !first.published || !second.published {
+		t.Fatalf("published flags first=%v second=%v", first.published, second.published)
+	}
+	if got := len(allocator.cow.activated); got != 0 {
+		t.Fatalf("activated debt=%d want 0", got)
+	}
+}
+
+func TestAllocatorActivatedCOWFailurePoisonsAndWakesAllocation(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("visible-failure"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(prepared); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("visible durable-root publication failed")
+	if err := allocator.FailCOWCandidateV1(prepared, want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allocator.Alloc(0); !errors.Is(err, want) {
+		t.Fatalf("allocation error=%v want %v", err, want)
+	}
+}
+
+func TestReservationLedgerPublishBatchValidatesBeforeMutation(t *testing.T) {
+	ledger := NewReservationLedger()
+	first := candidateIDFromString("batch-first")
+	second := candidateIDFromString("batch-second")
+	missing := candidateIDFromString("batch-missing")
+	if err := ledger.reserve(first, []uint64{10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.reserve(second, []uint64{11}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.PublishBatch([]CandidateIDV1{first, missing, second}); err == nil {
+		t.Fatal("PublishBatch unexpectedly accepted an unknown middle candidate")
+	}
+	if !ledger.Reserved(10) || !ledger.Reserved(11) {
+		t.Fatal("failed batch validation partially released reservations")
+	}
+	if err := ledger.PublishBatch([]CandidateIDV1{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Reserved(10) || ledger.Reserved(11) {
+		t.Fatal("successful batch publication retained reservations")
 	}
 }
 
