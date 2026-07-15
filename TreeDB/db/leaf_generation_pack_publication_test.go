@@ -207,8 +207,12 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 			if db.publicationPoisoned.Load() {
 				t.Fatal("pre-meta failure poisoned DB")
 			}
-			if got := db.idx.Load().pager.PageCount(); got != beforePages {
-				t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
+			afterFailurePages := db.idx.Load().pager.PageCount()
+			if phase < leafGenerationPackAfterDirectorySync && afterFailurePages != beforePages {
+				t.Fatalf("PageCount=%d before committed-page allocation want %d", afterFailurePages, beforePages)
+			}
+			if afterFailurePages < beforePages {
+				t.Fatalf("PageCount=%d shrank below pre-publication count %d", afterFailurePages, beforePages)
 			}
 			if _, err := os.Stat(candidate.sourcePath); err != nil {
 				t.Fatalf("source removed on pre-meta failure: %v", err)
@@ -224,6 +228,9 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 			}
 			if err := db.SetSync([]byte("after-failure"), []byte("ok")); err != nil {
 				t.Fatalf("SetSync after pre-meta failure: %v", err)
+			}
+			if got, want := db.idx.Load().pager.PageCount(), db.meta.TotalPages; got != want {
+				t.Fatalf("post-failure publish pages=%d durable total=%d", got, want)
 			}
 		})
 	}
@@ -932,6 +939,11 @@ func TestLeafGenerationPack_SyncFalseStillDurablyPublishesBeforeGC(t *testing.T)
 		Sync:          false,
 	}); err != nil {
 		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	// The immediately older recoverable root still owns the source generation.
+	// Advance the alternate slot once before expecting generation GC to unlink it.
+	if err := db.SetSync([]byte("post-pack-horizon"), []byte("advance")); err != nil {
+		t.Fatalf("SetSync after pack: %v", err)
 	}
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
