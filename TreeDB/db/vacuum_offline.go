@@ -218,7 +218,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 	}
 
-	if err := writeRebuiltDurableRootV1(newPager, meta, durableResources); err != nil {
+	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err

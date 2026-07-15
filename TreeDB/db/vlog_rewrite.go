@@ -3378,7 +3378,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 	defer durableResources.Release()
-	if err := writeRebuiltDurableRootV1(newPager, meta, durableResources); err != nil {
+	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err

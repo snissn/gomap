@@ -877,7 +877,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			hook(vacuumPagerSyncFinal)
 		}
 		finalSyncStarted := time.Now()
-		finalSyncErr := writeRebuiltDurableRootV1(newPager, nextMeta, durableResources)
+		finalSyncErr := writeRebuiltDurableRootV1(db.dir, newPath, newPager, nextMeta, durableResources)
 		runStats.FinalPagerSyncDuration += time.Since(finalSyncStarted)
 		db.writeMu.Lock()
 		cutoverLocked = true

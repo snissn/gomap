@@ -919,57 +919,124 @@ func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidat
 	return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
 }
 
+type durableRootStorageTransactionV1 struct {
+	resources       *rootpublication.StableResourceSet
+	materialize     func() error
+	syncIndex       func() error
+	sink            freelist.AppendPageSink
+	target          uint64
+	meta            page.DurableMetaV1
+	syncMeta        func() error
+	dir             string
+	indexPath       string
+	beforeMetaWrite func() error
+	beforeMetaSync  func() error
+}
+
+// executeDurableRootStorageTransactionV1 is the only V1 durable-meta mutation
+// implementation. Live commits, initialization, and replacement-index
+// maintenance all pass through the same dependency -> index -> meta ordering.
+// metaMutated becomes true immediately before the one meta write, allowing a
+// live caller to distinguish retryable pre-meta failures from ambiguous ones.
+func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) (metaMutated bool, err error) {
+	if tx.sink == nil || tx.target > 1 || tx.syncIndex == nil || tx.syncMeta == nil {
+		return false, errors.New("invalid durable-root storage transaction")
+	}
+	if tx.resources != nil {
+		if err := tx.resources.FlushThrough(); err != nil {
+			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
+		}
+		if err := tx.resources.SyncThrough(); err != nil {
+			return false, fmt.Errorf("sync durable-root external dependencies: %w", err)
+		}
+	}
+	if tx.materialize != nil {
+		if err := tx.materialize(); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.syncIndex(); err != nil {
+		return false, fmt.Errorf("sync durable-root index: %w", err)
+	}
+
+	metaOffset := int64(tx.target) * int64(page.PageSize)
+	if tx.dir != "" {
+		if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, tx.dir, tx.indexPath, metaOffset, int64(page.PageSize)); err != nil {
+			return false, err
+		}
+	}
+	if tx.beforeMetaWrite != nil {
+		if err := tx.beforeMetaWrite(); err != nil {
+			return false, err
+		}
+	}
+
+	metaMutated = true
+	if err := writeDurableMetaSlotV1(tx.sink, tx.target, tx.meta); err != nil {
+		return true, err
+	}
+	if tx.dir != "" {
+		if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, tx.dir, tx.indexPath, metaOffset, int64(page.PageSize)); err != nil {
+			return true, err
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, tx.dir, tx.indexPath); err != nil {
+			return true, err
+		}
+	}
+	if tx.beforeMetaSync != nil {
+		if err := tx.beforeMetaSync(); err != nil {
+			return true, err
+		}
+	}
+	if err := tx.syncMeta(); err != nil {
+		return true, err
+	}
+	if tx.dir != "" {
+		if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, tx.dir, tx.indexPath); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
 func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandidateV1) (page.MetaPageBody, error) {
 	if candidate == nil || candidate.released || candidate.metaMutated {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("durable-root candidate is not retryable"), true)
 	}
-	if err := candidate.resources.FlushThrough(); err != nil {
-		return db.retainDurableRootRetryV1(candidate, fmt.Errorf("flush durable-root external dependencies: %w", err))
-	}
-	if err := candidate.resources.SyncThrough(); err != nil {
-		return db.retainDurableRootRetryV1(candidate, fmt.Errorf("sync durable-root external dependencies: %w", err))
-	}
-	if err := db.materializeDurableRootCandidateV1(candidate); err != nil {
+	metaPath := filepath.Join(db.dir, indexFileName)
+	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		resources:   candidate.resources,
+		materialize: func() error { return db.materializeDurableRootCandidateV1(candidate) },
+		syncIndex:   candidate.token.SyncThrough,
+		sink:        durablePagerSinkV1{pager: candidate.idx.pager},
+		target:      candidate.target,
+		meta:        candidate.meta,
+		syncMeta: func() error {
+			return candidate.token.WithPinnedFile(func(file *os.File) error {
+				return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})
+			})
+		},
+		dir:       db.dir,
+		indexPath: metaPath,
+		beforeMetaWrite: func() error {
+			if db.testFailWriteMeta.Load() {
+				return errTestWriteMetaFailpoint
+			}
+			return nil
+		},
+		beforeMetaSync: func() error {
+			if db.testFailSyncMeta.Load() {
+				return errTestSyncMetaFailpoint
+			}
+			return nil
+		},
+	})
+	candidate.metaMutated = mutated
+	if err != nil {
+		if mutated {
+			return db.poisonDurableRootCandidateV1(candidate, err)
+		}
 		return db.retainDurableRootRetryV1(candidate, err)
-	}
-	if err := candidate.token.SyncThrough(); err != nil {
-		return db.retainDurableRootRetryV1(candidate, fmt.Errorf("sync durable-root index: %w", err))
-	}
-
-	metaPath := ""
-	if durabilitycut.Enabled() {
-		metaPath = filepath.Join(db.dir, indexFileName)
-	}
-	metaOffset := int64(candidate.target) * int64(page.PageSize)
-	if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return db.retainDurableRootRetryV1(candidate, err)
-	}
-	if db.testFailWriteMeta.Load() {
-		return db.retainDurableRootRetryV1(candidate, errTestWriteMetaFailpoint)
-	}
-
-	// The outcome becomes ambiguous as soon as the target-meta mutation starts,
-	// including a write call that returns an error after a partial page update.
-	candidate.metaMutated = true
-	if err := writeDurableMetaSlotV1(durablePagerSinkV1{pager: candidate.idx.pager}, candidate.target, candidate.meta); err != nil {
-		return db.poisonDurableRootCandidateV1(candidate, err)
-	}
-	if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return db.poisonDurableRootCandidateV1(candidate, err)
-	}
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-		return db.poisonDurableRootCandidateV1(candidate, err)
-	}
-	if db.testFailSyncMeta.Load() {
-		return db.poisonDurableRootCandidateV1(candidate, errTestSyncMetaFailpoint)
-	}
-	if err := candidate.token.WithPinnedFile(func(file *os.File) error {
-		return candidate.idx.pager.SyncPagesWithStableFile(file, []uint64{candidate.target})
-	}); err != nil {
-		return db.poisonDurableRootCandidateV1(candidate, err)
-	}
-	if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-		return db.poisonDurableRootCandidateV1(candidate, err)
 	}
 	if err := candidate.idx.allocator.PublishCOWCandidateV1(candidate.prepared, candidate.capability); err != nil {
 		return db.poisonDurableRootCandidateV1(candidate, fmt.Errorf("publish COW generation: %w", err))
@@ -1151,10 +1218,17 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err != nil {
 		return err
 	}
-	if err := writeDurableMetaSlotV1(sink, MetaPage0ID, meta); err != nil {
-		return err
-	}
-	if err := p.Sync(); err != nil {
+	if _, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		syncIndex: p.Sync,
+		sink:      sink,
+		target:    MetaPage0ID,
+		meta:      meta,
+		syncMeta: func() error {
+			return p.SyncPages([]uint64{MetaPage0ID})
+		},
+		dir:       db.dir,
+		indexPath: filepath.Join(db.dir, indexFileName),
+	}); err != nil {
 		return err
 	}
 	if err := idx.allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
@@ -1187,18 +1261,10 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 // already materialized replacement index (offline vacuum/rewrite). The caller
 // owns resources; this function only flushes/syncs their exact frontiers before
 // the replacement index and its sole valid meta slot become durable.
-func writeRebuiltDurableRootV1(p *pager.Pager, meta page.MetaPageBody, resources *rootpublication.StableResourceSet) error {
+func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.MetaPageBody, resources *rootpublication.StableResourceSet) error {
 	if p == nil || meta.CommitSeq == 0 || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 ||
 		meta.UserRootPageID >= p.PageCount() || meta.SystemRootPageID >= p.PageCount() {
 		return errors.New("invalid rebuilt durable-root input")
-	}
-	if resources != nil {
-		if err := resources.FlushThrough(); err != nil {
-			return fmt.Errorf("flush rebuilt durable-root dependencies: %w", err)
-		}
-		if err := resources.SyncThrough(); err != nil {
-			return fmt.Errorf("sync rebuilt durable-root dependencies: %w", err)
-		}
 	}
 	manifest, err := durableManifestFromResourcesV1(resources)
 	if err != nil {
@@ -1264,10 +1330,19 @@ func writeRebuiltDurableRootV1(p *pager.Pager, meta page.MetaPageBody, resources
 	if err != nil {
 		return err
 	}
-	if err := writeDurableMetaSlotV1(sink, MetaPage0ID, durableMeta); err != nil {
-		return err
-	}
-	return p.Sync()
+	_, err = executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		resources: resources,
+		syncIndex: p.Sync,
+		sink:      sink,
+		target:    MetaPage0ID,
+		meta:      durableMeta,
+		syncMeta: func() error {
+			return p.SyncPages([]uint64{MetaPage0ID})
+		},
+		dir:       dir,
+		indexPath: indexPath,
+	})
+	return err
 }
 
 func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {

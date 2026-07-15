@@ -2758,11 +2758,22 @@ func (db *DB) recover() error {
 	if err != nil {
 		return err
 	}
+	selectionInstalled := false
+	defer func() {
+		if selectionInstalled {
+			return
+		}
+		for i := range selected.SlotResources {
+			selected.SlotResources[i].Release()
+			selected.SlotResources[i] = nil
+		}
+	}()
 	p.SetPageCount(selected.Record.TotalPages)
 	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
 		return fmt.Errorf("enable recovered COW freelist: %w", err)
 	}
 	db.installDurableRootSelectionV1(selected)
+	selectionInstalled = true
 	return nil
 }
 
