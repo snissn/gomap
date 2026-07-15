@@ -1016,8 +1016,28 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		if err := tx.resources.FlushThrough(); err != nil {
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
+		dependencyPaths, err := durableRootDependencyObservationPathsV1(tx.resources, tx.dir)
+		if err != nil {
+			return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
+		}
+		if len(dependencyPaths) != 0 {
+			if err := durabilitycut.Emit(durabilitycut.Event{
+				Point: durabilitycut.BeforeDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
+				Root: tx.dir, Paths: dependencyPaths,
+			}); err != nil {
+				return false, err
+			}
+		}
 		if err := tx.resources.SyncThrough(); err != nil {
 			return false, fmt.Errorf("sync durable-root external dependencies: %w", err)
+		}
+		if len(dependencyPaths) != 0 {
+			if err := durabilitycut.Emit(durabilitycut.Event{
+				Point: durabilitycut.AfterDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
+				Root: tx.dir, Paths: dependencyPaths,
+			}); err != nil {
+				return false, err
+			}
 		}
 	}
 	if tx.materialize != nil {
@@ -1067,6 +1087,47 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		}
 	}
 	return true, nil
+}
+
+// durableRootDependencyObservationPathsV1 exposes only the names attached to
+// the exact handles already retained by the candidate. It never reopens a
+// diagnostic path. The list is collected only while the deterministic cut
+// observer is active, so the production-disabled path remains allocation-free.
+func durableRootDependencyObservationPathsV1(resources *rootpublication.StableResourceSet, root string) ([]string, error) {
+	if resources == nil || root == "" || !durabilitycut.Enabled() {
+		return nil, nil
+	}
+	paths := make([]string, 0, resources.Len())
+	for _, token := range resources.Tokens() {
+		if token == nil || token.Kind() == rootpublication.ResourceIndex {
+			continue
+		}
+		var path string
+		if err := token.WithPinnedFile(func(file *os.File) error {
+			path = file.Name()
+			for strings.HasSuffix(path, "#stable-pin") {
+				path = strings.TrimSuffix(path, "#stable-pin")
+			}
+			if path == "" {
+				return errors.New("stable resource handle has no observation name")
+			}
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(root, path)
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	unique := paths[:0]
+	for _, path := range paths {
+		if len(unique) == 0 || unique[len(unique)-1] != path {
+			unique = append(unique, path)
+		}
+	}
+	return unique, nil
 }
 
 func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandidateV1) (page.MetaPageBody, error) {

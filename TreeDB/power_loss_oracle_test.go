@@ -830,8 +830,8 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantTargetMetaOnly},
 			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 				powerlossoracle.VariantSyncedOnly:     powerlossoracle.ExpectedOldRoot,
-				powerlossoracle.VariantTargetMetaOnly: powerlossoracle.ExpectedCorruption,
-				powerlossoracle.VariantFullWriteback:  powerlossoracle.ExpectedCorruption,
+				powerlossoracle.VariantTargetMetaOnly: powerlossoracle.ExpectedNewRoot,
+				powerlossoracle.VariantFullWriteback:  powerlossoracle.ExpectedNewRoot,
 			},
 		},
 		{
@@ -1020,8 +1020,9 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
 }
 
-// This family is the stable witness for Checkpoint, flushSyncRequested, and
-// chunked cached flush apply exposing an intermediate incomplete root.
+// This family retains its stable witness name while proving that Checkpoint,
+// flushSyncRequested, and chunked cached apply publish only the final complete
+// root. No intermediate chunk is recovery-selectable.
 func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
@@ -1084,8 +1085,8 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantFullWriteback},
 		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 			powerlossoracle.VariantSyncedOnly:     powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantTargetMetaOnly: powerlossoracle.ExpectedCorruption,
-			powerlossoracle.VariantFullWriteback:  powerlossoracle.ExpectedCorruption,
+			powerlossoracle.VariantTargetMetaOnly: powerlossoracle.ExpectedNewRoot,
+			powerlossoracle.VariantFullWriteback:  powerlossoracle.ExpectedNewRoot,
 		},
 	})
 	if err != nil {
@@ -1128,36 +1129,18 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 			if variant.Family != powerlossoracle.VariantTargetMetaOnly && variant.Family != powerlossoracle.VariantFullWriteback {
 				t.Fatalf("unclassified generated family %s", variant.Family)
 			}
-			first, firstErr := reopened.Get([]byte("chunk/000"))
-			if firstErr != nil || !bytes.Equal(first, []byte("value-000")) {
-				t.Fatalf("actual cut selected the wholly old root instead of an intermediate chunk: first=%q err=%v commit=%d", first, firstErr, result.CommitSeq)
+			if result.CommitSeq <= baseSequence {
+				t.Fatalf("complete checkpoint commit=%d want newer than base=%d", result.CommitSeq, baseSequence)
 			}
-			expected := map[string]map[string]string{"chunk/": {}}
-			observed := map[string]map[string]string{"chunk/": {}}
 			for i := 0; i < 64; i++ {
 				key := fmt.Sprintf("chunk/%03d", i)
 				value := fmt.Sprintf("value-%03d", i)
-				expected["chunk/"][key] = value
-				if got, err := reopened.Get([]byte(key)); err == nil {
-					observed["chunk/"][key] = string(got)
+				got, err := reopened.Get([]byte(key))
+				if err != nil || !bytes.Equal(got, []byte(value)) {
+					t.Fatalf("complete root %q=%q err=%v want %q", key, got, err, value)
 				}
 			}
-			scenario := powerlossoracle.Scenario{
-				Name:                      "actual-chunked-sync-intermediate-root",
-				Cut:                       powerlossoracle.AfterMetaWrite,
-				Generations:               []powerlossoracle.Generation{{Sequence: result.CommitSeq, Recoverable: true, Resources: completePowerLossClosure("chunk"), AppliedLSN: result.AppliedLSN}},
-				LatestSealedSequence:      result.CommitSeq,
-				SelectedSequence:          result.CommitSeq,
-				OpenedSequence:            result.CommitSeq,
-				OpenedAppliedLSN:          result.AppliedLSN,
-				ExpectedKeyValuesByPrefix: expected,
-				ObservedKeyValuesByPrefix: observed,
-				ReopenAttempted:           true,
-			}
-			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantKeyStateMismatch); err != nil {
-				t.Fatalf("successful public Open did not produce intermediate-root diagnosis: %v", err)
-			}
-			requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantKeyStateMismatch}, bound)
+			requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedNewRoot}, bound)
 		})
 	}
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)

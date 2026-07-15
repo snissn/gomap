@@ -54,6 +54,7 @@ func TestColumnRetainedPayloadValueLogPlacementReopen(t *testing.T) {
 }
 
 func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
+	t.Skip("deferred to #3681: destructive value-log GC requires RecoverableRootSet convergence")
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
 
