@@ -196,6 +196,14 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		f.mu.RUnlock()
 		return err
 	}
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		f.mu.RUnlock()
+		return codedError(
+			raftentry.ErrorUnsafeDurabilityModeV1,
+			"%w: Raft snapshot install requires durable rename and removal namespaces",
+			rootpublication.ErrNamespacePersistenceUnsupported,
+		)
+	}
 	mainDir := raftcluster.MainDBDir(f.cluster.Dir)
 	applyDir := f.cluster.Layout.ApplyDir
 	f.mu.RUnlock()

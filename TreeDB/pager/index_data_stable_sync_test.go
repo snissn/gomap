@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -132,6 +133,9 @@ func TestSyncPagesWithStableFileUsesPinnedIdentityAfterPathReplacement(t *testin
 	defer pinned.Close()
 	moved := filepath.Join(dir, "index.original")
 	if err := os.Rename(path, moved); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("Windows open index handles prevent path replacement: %v", err)
+		}
 		t.Fatal(err)
 	}
 	replacement, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
