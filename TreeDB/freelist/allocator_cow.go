@@ -23,6 +23,7 @@ type allocatorCOWStateV1 struct {
 	txn        *FreelistTxn
 	ledger     *ReservationLedger
 	prepared   *PreparedCOWCandidateV1
+	activated  []*PreparedCOWCandidateV1
 	waitErr    error
 	ready      *sync.Cond
 }
@@ -45,6 +46,8 @@ type PreparedCOWCandidateV1 struct {
 	auxiliary     []uint64
 	rollbackTxn   *FreelistTxn
 	rollbackStats Stats
+	activated     bool
+	published     bool
 }
 
 func (prepared *PreparedCOWCandidateV1) Candidate() *FreelistCandidateV1 {
@@ -315,6 +318,95 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 	return nil
 }
 
+// ActivateCOWCandidateV1 makes a prepared allocator generation visible to
+// subsequent builders without claiming that its durable root has published.
+// The exact candidate remains ledger-owned until PublishActivatedCOWThroughV1
+// consumes it. This split is what permits several visible COW generations to
+// accumulate behind one dependency-closed durable-root publication.
+func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
+	if a == nil || prepared == nil || prepared.candidate == nil || prepared.candidate.Generation() == nil {
+		return ErrGenerationFormat
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow == nil || a.cow.prepared != prepared || prepared.activated || prepared.published {
+		return ErrCandidateConsumed
+	}
+	if a.cow.waitErr != nil {
+		return a.cow.waitErr
+	}
+	generation := prepared.candidate.Generation()
+	next, err := BeginCandidateV1(generation, generation.GenerationRef(), a.cow.ledger)
+	if err != nil {
+		return err
+	}
+	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
+		return err
+	}
+	a.cow.generation = generation
+	a.cow.txn = next
+	a.cow.prepared = nil
+	a.cow.activated = append(a.cow.activated, prepared)
+	prepared.rollbackTxn = nil
+	prepared.activated = true
+	a.stats.FreeIDs = generation.FreeCount()
+	a.cow.ready.Broadcast()
+	return nil
+}
+
+// PublishActivatedCOWThroughV1 consumes the ordered visible prefix ending at
+// through after the matching durable meta is stable. Newer activated
+// generations, if any, remain reserved and continue to protect their pages.
+func (a *Allocator) PublishActivatedCOWThroughV1(prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
+	if a == nil || prepared == nil || !prepared.activated || prepared.published {
+		return ErrGenerationFormat
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow == nil {
+		return ErrCandidateConsumed
+	}
+	if a.cow.waitErr != nil {
+		return a.cow.waitErr
+	}
+	through := -1
+	for i, candidate := range a.cow.activated {
+		if candidate == prepared {
+			through = i
+			break
+		}
+	}
+	if through < 0 {
+		return ErrCandidateConsumed
+	}
+	generation := prepared.candidate.Generation()
+	if generation == nil {
+		return ErrGenerationFormat
+	}
+	if pageCount := a.pager.PageCount(); pageCount < generation.HighWater() {
+		return fmt.Errorf("%w: pager pages %d do not cover activated generation high-water %d", ErrGenerationFormat, pageCount, generation.HighWater())
+	}
+	ids := make([]CandidateIDV1, through+1)
+	for i, candidate := range a.cow.activated[:through+1] {
+		ids[i] = candidate.candidateID
+	}
+	if err := a.cow.ledger.PublishBatch(ids); err != nil {
+		return err
+	}
+	for _, candidate := range a.cow.activated[:through+1] {
+		candidate.published = true
+	}
+	copy(a.cow.activated, a.cow.activated[through+1:])
+	clear(a.cow.activated[len(a.cow.activated)-(through+1):])
+	a.cow.activated = a.cow.activated[:len(a.cow.activated)-(through+1)]
+	// The live transaction may already be based on a newer visible generation.
+	// Pruning it with the newly advanced recovery horizon is conservative and
+	// does not alter any immutable activated generation.
+	a.cow.txn.PruneWithCapability(nextCapability)
+	a.cow.ready.Broadcast()
+	return nil
+}
+
 // FailCOWCandidateV1 preserves the exact prepared candidate for close/reopen
 // ownership while failing and waking allocator calls that were already
 // admitted before durable-root publication became unrecoverable in-process.
@@ -325,7 +417,19 @@ func (a *Allocator) FailCOWCandidateV1(prepared *PreparedCOWCandidateV1, cause e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.cow == nil || a.cow.prepared != prepared {
+	if a.cow == nil {
+		return ErrCandidateConsumed
+	}
+	owned := a.cow.prepared == prepared
+	if !owned {
+		for _, candidate := range a.cow.activated {
+			if candidate == prepared {
+				owned = true
+				break
+			}
+		}
+	}
+	if !owned {
 		return ErrCandidateConsumed
 	}
 	if a.cow.waitErr == nil {
@@ -341,7 +445,7 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.cow == nil || a.cow.prepared != prepared {
+	if a.cow == nil || a.cow.prepared != prepared || prepared.activated || prepared.published {
 		return ErrCandidateConsumed
 	}
 	if a.cow.waitErr != nil {
@@ -366,6 +470,8 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	a.cow.txn = next
 	a.cow.prepared = nil
 	prepared.rollbackTxn = nil
+	prepared.activated = true
+	prepared.published = true
 	a.cow.waitErr = nil
 	a.stats.FreeIDs = a.cow.generation.FreeCount()
 	a.cow.ready.Broadcast()
