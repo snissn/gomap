@@ -46,6 +46,44 @@ func TestConditionalTxnRejectsExistingReadOverwrite(t *testing.T) {
 	}
 }
 
+func TestConditionalTxnRejectsVisibleWriteAfterAcceptedDurabilityError(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("guard"), []byte("before")); err != nil {
+		t.Fatalf("seed guard: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		t.Fatalf("txn GetVersioned guard: %v", err)
+	}
+
+	d.testFailWriteMeta.Store(true)
+	writeErr := d.SetSync([]byte("guard"), []byte("visible-before-durable"))
+	d.testFailWriteMeta.Store(false)
+	if !errors.Is(writeErr, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted write error=%v, want retryable meta failpoint", writeErr)
+	}
+	if got, getErr := d.Get([]byte("guard")); getErr != nil || string(got) != "visible-before-durable" {
+		t.Fatalf("visible guard after accepted error=(%q,%v)", got, getErr)
+	}
+	if err := tx.Set([]byte("target"), []byte("stale")); err != nil {
+		t.Fatalf("txn Set target: %v", err)
+	}
+	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("txn Commit error=%v, want ErrConcurrentModification", err)
+	}
+	if got, err := d.Get([]byte("target")); err != nil || got != nil {
+		t.Fatalf("target after rejected commit=(%q,%v), want missing", got, err)
+	}
+}
+
 func TestConditionalTxnRejectsDeleteConflict(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

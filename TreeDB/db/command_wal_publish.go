@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -24,6 +25,16 @@ var (
 type CommandWALLSNRange struct {
 	First uint64
 	Last  uint64
+}
+
+type conditionalCommitMutation struct {
+	entries    []batchpkg.Entry
+	ranges     []batchpkg.DeleteRange
+	ownerTxnID uint64
+}
+
+func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
+	db.conditionalRecordCommittedEntries(mutation.entries, mutation.ranges, mutation.ownerTxnID, commitSeq)
 }
 
 type finalizeCommitOptions struct {
@@ -67,6 +78,11 @@ type finalizeCommitOptions struct {
 	// acquires that same fence before stopping and draining the recorder, so a
 	// visible old-generation commit cannot fall between publication and capture.
 	recordVacuumMutation func()
+	// conditionalMutation installs exact point/range conflict evidence at
+	// the same visibility cut as the new root. It runs while db.mu still excludes
+	// readers from sampling that root, so a conditional transaction cannot
+	// validate in the gap between root visibility and oracle publication.
+	conditionalMutation conditionalCommitMutation
 	// durableResources transfers producer-owned exact external handles into the
 	// candidate root's dependency manifest. The finalizer consumes the set.
 	durableResources *rootpublication.StableResourceSet

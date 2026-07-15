@@ -3274,6 +3274,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	opts.conditionalMutation.record(db, nextMeta.CommitSeq)
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
 		if post.oldState != nil {

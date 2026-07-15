@@ -70,6 +70,7 @@ type rootPublicationVisibleInstallV1 struct {
 	oldUserRootID               uint64
 	newUserRootID               uint64
 	recordVacuumMutation        func()
+	conditionalMutation         conditionalCommitMutation
 	activated                   bool
 	postActivationCompleted     bool
 }
@@ -250,6 +251,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		oldUserRootID:               oldUserRootID,
 		newUserRootID:               newUserRootID,
 		recordVacuumMutation:        opts.recordVacuumMutation,
+		conditionalMutation:         opts.conditionalMutation,
 	}
 	if db.valueLogManager != nil {
 		install.valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
@@ -351,6 +353,7 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	install.conditionalMutation.record(db, install.next.CommitSeq)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
 		if install.post.oldState != nil {
