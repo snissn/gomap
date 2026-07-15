@@ -69,20 +69,22 @@ func TestNativewireYCSBForcedPointerPublicationReadability(t *testing.T) {
 }
 
 func TestForcedPointerYCSBNativewirePhaseContextsAreIndependent(t *testing.T) {
-	phaseOne, cancelPhaseOne := newForcedPointerYCSBNativewirePhaseContext(t)
-	cancelPhaseOne()
+	var phaseOne context.Context
+	runForcedPointerYCSBNativewirePhase(t, func(ctx context.Context) {
+		phaseOne = ctx
+	})
 	if !errors.Is(phaseOne.Err(), context.Canceled) {
 		t.Fatalf("phase one context err=%v want context canceled", phaseOne.Err())
 	}
 
-	phaseTwo, cancelPhaseTwo := newForcedPointerYCSBNativewirePhaseContext(t)
-	defer cancelPhaseTwo()
-	if phaseTwo == phaseOne {
-		t.Fatal("phase two reused phase one context")
-	}
-	if err := phaseTwo.Err(); err != nil {
-		t.Fatalf("phase two inherited phase one cancellation: %v", err)
-	}
+	runForcedPointerYCSBNativewirePhase(t, func(phaseTwo context.Context) {
+		if phaseTwo == phaseOne {
+			t.Fatal("phase two reused phase one context")
+		}
+		if err := phaseTwo.Err(); err != nil {
+			t.Fatalf("phase two inherited phase one cancellation: %v", err)
+		}
+	})
 }
 
 func TestNativewireYCSBCurrentWritableValueLogReadBarrier(t *testing.T) {
@@ -92,9 +94,7 @@ func TestNativewireYCSBCurrentWritableValueLogReadBarrier(t *testing.T) {
 	keys, docs := forcedPointerYCSBDocuments(t, docCount)
 	samples := []int{0, docCount - 1}
 
-	func() {
-		ctx, cancel := newForcedPointerYCSBNativewirePhaseContext(t)
-		defer cancel()
+	runForcedPointerYCSBNativewirePhase(t, func(ctx context.Context) {
 		env := newForcedPointerYCSBNativewireCurrentWritableEnv(t, opts, true)
 		defer func() {
 			if err := env.cleanup(); err != nil {
@@ -106,11 +106,9 @@ func TestNativewireYCSBCurrentWritableValueLogReadBarrier(t *testing.T) {
 		loadForcedPointerYCSBThroughNativewire(t, ctx, clients, handles, keys, docs)
 		requirePublishedValueLogFiles(t, env.server.backend)
 		requireNativewireYCSBReadable(t, ctx, clients[0], handles[0], keys, docs, samples, "current-writable before flush")
-	}()
+	})
 
-	func() {
-		ctx, cancel := newForcedPointerYCSBNativewirePhaseContext(t)
-		defer cancel()
+	runForcedPointerYCSBNativewirePhase(t, func(ctx context.Context) {
 		faultDir := t.TempDir()
 		faultOpts := forcedPointerYCSBNativewireOptions(faultDir)
 		faultEnv := newForcedPointerYCSBNativewireCurrentWritableEnv(t, faultOpts, true)
@@ -157,12 +155,14 @@ func TestNativewireYCSBCurrentWritableValueLogReadBarrier(t *testing.T) {
 		if calls := barrierCalls.Load(); calls == 0 {
 			t.Fatalf("current-writable read barrier was not reached")
 		}
-	}()
+	})
 }
 
-func newForcedPointerYCSBNativewirePhaseContext(t testing.TB) (context.Context, context.CancelFunc) {
+func runForcedPointerYCSBNativewirePhase(t testing.TB, phase func(context.Context)) {
 	t.Helper()
-	return context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	phase(ctx)
 }
 
 func forcedPointerYCSBNativewireOptions(dir string) treedb.Options {
