@@ -413,6 +413,12 @@ type Stats struct {
 	Poisoned                   bool
 	WakeReason                 WakeReason
 	PublishCalls               uint64
+	TimerPublishes             uint64
+	WaiterPublishes            uint64
+	SoftBytesPublishes         uint64
+	HardAdmissionPublishes     uint64
+	RetryPublishes             uint64
+	DrainPublishes             uint64
 	ResourceCoalesces          uint64
 	ResourceConflicts          uint64
 	RejectedCandidates         uint64

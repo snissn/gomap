@@ -10,8 +10,12 @@ import (
 )
 
 type Options struct {
-	Clock                      Clock
-	Publisher                  Publisher
+	Clock     Clock
+	Publisher Publisher
+	// FixedPublishDelay runs the normal coordinator contract with a fixed
+	// timer delay. Zero keeps the adaptive 20x-service-time policy. The fixed
+	// mode exists for deterministic safety-equivalent benchmark matrices.
+	FixedPublishDelay          time.Duration
 	InitialDurableFrontier     Frontier
 	OldestRecoverableCommitSeq uint64
 	// DurableRootLineage and DurableRootSequence seed an already-open durable
@@ -40,13 +44,14 @@ type drainRequest struct {
 type Coordinator struct {
 	mu sync.Mutex
 
-	clock     Clock
-	publisher Publisher
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wake      chan struct{}
-	changed   chan struct{}
-	done      chan struct{}
+	clock             Clock
+	publisher         Publisher
+	fixedPublishDelay time.Duration
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wake              chan struct{}
+	changed           chan struct{}
+	done              chan struct{}
 
 	pending         []pendingEntry
 	pendingBytes    uint64
@@ -69,20 +74,26 @@ type Coordinator struct {
 	activeBuilders    uint64
 	preparing         bool
 
-	ewmaService        time.Duration
-	lastService        time.Duration
-	lastGroupSize      uint64
-	admissionWaits     uint64
-	preMetaFailures    uint64
-	retries            uint64
-	publishCalls       uint64
-	failureGeneration  uint64
-	lastRetryableError error
-	lastFailureSeq     uint64
-	nextAttemptID      uint64
-	activeAttempt      PublishAttempt
-	retryAttempt       PublishAttempt
-	reportingAttempt   bool
+	ewmaService            time.Duration
+	lastService            time.Duration
+	lastGroupSize          uint64
+	admissionWaits         uint64
+	preMetaFailures        uint64
+	retries                uint64
+	publishCalls           uint64
+	timerPublishes         uint64
+	waiterPublishes        uint64
+	softBytesPublishes     uint64
+	hardAdmissionPublishes uint64
+	retryPublishes         uint64
+	drainPublishes         uint64
+	failureGeneration      uint64
+	lastRetryableError     error
+	lastFailureSeq         uint64
+	nextAttemptID          uint64
+	activeAttempt          PublishAttempt
+	retryAttempt           PublishAttempt
+	reportingAttempt       bool
 
 	resourceCoalesces    uint64
 	resourceConflicts    uint64
@@ -109,6 +120,11 @@ func New(options Options) (*Coordinator, error) {
 	if options.Publisher == nil {
 		return nil, errors.New("root publication: nil publisher")
 	}
+	if options.FixedPublishDelay != 0 &&
+		(options.FixedPublishDelay < minPublishDelay || options.FixedPublishDelay > maxPublishDelay) {
+		return nil, fmt.Errorf("root publication: fixed publish delay %s outside [%s,%s]",
+			options.FixedPublishDelay, minPublishDelay, maxPublishDelay)
+	}
 	if options.OldestRecoverableCommitSeq > options.InitialDurableFrontier.commitSeq {
 		return nil, fmt.Errorf("root publication: oldest recoverable sequence %d exceeds durable sequence %d",
 			options.OldestRecoverableCommitSeq, options.InitialDurableFrontier.commitSeq)
@@ -124,7 +140,7 @@ func New(options Options) (*Coordinator, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Coordinator{
-		clock: clock, publisher: options.Publisher, ctx: ctx, cancel: cancel,
+		clock: clock, publisher: options.Publisher, fixedPublishDelay: options.FixedPublishDelay, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
@@ -557,6 +573,9 @@ func (c *Coordinator) Stats() Stats {
 		ActiveBuilders: c.activeBuilders, WaiterCount: uint64(len(c.waiters)),
 		PreMetaFailures: c.preMetaFailures, Retries: c.retries, Poisoned: c.poison != nil,
 		WakeReason: c.wakeReason, PublishCalls: c.publishCalls,
+		TimerPublishes: c.timerPublishes, WaiterPublishes: c.waiterPublishes,
+		SoftBytesPublishes: c.softBytesPublishes, HardAdmissionPublishes: c.hardAdmissionPublishes,
+		RetryPublishes: c.retryPublishes, DrainPublishes: c.drainPublishes,
 		ResourceCoalesces: c.resourceCoalesces, ResourceConflicts: c.resourceConflicts,
 		RejectedCandidates: c.rejectedCandidates, Resources: c.resourceStatsLocked(),
 	}
@@ -594,6 +613,7 @@ func (c *Coordinator) run() {
 				c.mu.Unlock()
 				continue
 			}
+			c.recordPublishTriggerLocked(c.wakeReason)
 			c.publishNow = false
 			c.wakeReason = WakeNone
 			c.publishing = true
@@ -926,6 +946,9 @@ func (c *Coordinator) terminalErrorLocked() error {
 }
 
 func (c *Coordinator) publishDelayLocked() time.Duration {
+	if c.fixedPublishDelay != 0 {
+		return c.fixedPublishDelay
+	}
 	delay := 20 * c.ewmaService
 	if delay < minPublishDelay {
 		return minPublishDelay
@@ -934,6 +957,23 @@ func (c *Coordinator) publishDelayLocked() time.Duration {
 		return maxPublishDelay
 	}
 	return delay
+}
+
+func (c *Coordinator) recordPublishTriggerLocked(reason WakeReason) {
+	switch reason {
+	case WakeTimer:
+		c.timerPublishes++
+	case WakeWaiter:
+		c.waiterPublishes++
+	case WakeSoftBytes:
+		c.softBytesPublishes++
+	case WakeHardAdmission:
+		c.hardAdmissionPublishes++
+	case WakeRetry:
+		c.retryPublishes++
+	case WakeDrain:
+		c.drainPublishes++
+	}
 }
 
 func (c *Coordinator) installTimerLocked() {

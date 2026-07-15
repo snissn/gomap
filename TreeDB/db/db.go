@@ -169,12 +169,13 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu               sync.RWMutex
-	writeMu          sync.RWMutex
-	teardownMu       sync.RWMutex // Pins Close-sensitive resources outside writeMu.
-	commitMu         sync.Mutex
-	durablePublishMu sync.Mutex
-	rootPublication  *rootPublicationRuntimeV1
+	mu                        sync.RWMutex
+	writeMu                   sync.RWMutex
+	teardownMu                sync.RWMutex // Pins Close-sensitive resources outside writeMu.
+	commitMu                  sync.Mutex
+	durablePublishMu          sync.Mutex
+	rootPublication           *rootPublicationRuntimeV1
+	rootPublicationFixedDelay time.Duration
 	// rootReuseMu seals acquisition of a visible root generation while durable
 	// publication converts retired COW pages into reusable pages. Existing
 	// readers remain concurrent; only new generation captures wait for the
@@ -1105,6 +1106,10 @@ type Options struct {
 	//
 	// The default (zero) is DurabilityDurable.
 	Durability DurabilityMode
+	// rootPublicationFixedDelay is a package-local benchmark control. Zero uses
+	// the adaptive production policy; non-zero values run the same coordinator
+	// and publisher path with a fixed timer delay.
+	rootPublicationFixedDelay time.Duration
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
 	// behavior). When false (default), a bounded background pruner frees pages
 	// asynchronously to reduce commit latency under churn.
@@ -2081,6 +2086,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
+		rootPublicationFixedDelay:      opts.rootPublicationFixedDelay,
 		commandWAL:                     opts.CommandWAL,
 		commandWALStatsScan:            opts.CommandWALStatsScan,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
