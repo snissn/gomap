@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
@@ -512,7 +513,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 				if !ok {
 					return fmt.Errorf("manager missing stable identity %d", id)
 				}
-				promotedIdentities[id] = identity
+				promotedIdentities[page.ValueLogSegmentID(id)] = identity
 				if _, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
 					return fmt.Errorf("delete race for %d error=%v want pinned", id, err)
 				}
