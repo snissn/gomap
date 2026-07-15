@@ -98,6 +98,7 @@ func TestValueLogRewriteOnline_DoesNotLoseConcurrentWrites(t *testing.T) {
 	if err := wA.Close(); err != nil {
 		t.Fatalf("closeA: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, pathA, idA)
 
 	pathB := filepath.Join(walDir, "value-l0-000002.log")
 	idB, err := valuelog.EncodeFileID(0, 2)
@@ -121,6 +122,7 @@ func TestValueLogRewriteOnline_DoesNotLoseConcurrentWrites(t *testing.T) {
 	if err := wB.Close(); err != nil {
 		t.Fatalf("closeB: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, pathB, idB)
 
 	db, err := Open(Options{
 		Dir:                        dir,

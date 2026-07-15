@@ -515,6 +515,14 @@ func captureCommandWALReplayRelaxedDependencies(db *DB, frames []commandWALRepla
 	segments := make([]valuelog.StableExternalRIDSegment, 0)
 	for _, entry := range entries {
 		if len(segments) == 0 || segments[len(segments)-1].FileID != entry.ptr.FileID {
+			// Durable-root recovery registers only the selected generation's
+			// manifest closure. A relaxed command-WAL suffix may legitimately
+			// reference a newer value-log child that is not reachable from that
+			// root yet, so bind the already-scanned RID pointer to its canonical
+			// manager identity before asking the producer to capture and sync it.
+			if err := db.registerReplayValueLogPointer(entry.ptr); err != nil {
+				return nil, fmt.Errorf("register command WAL replay dependency: %w", err)
+			}
 			segments = append(segments, valuelog.StableExternalRIDSegment{
 				FileID: entry.ptr.FileID,
 				Digest: stableExternalRIDSegmentDigest(entry.ptr.FileID),
@@ -785,6 +793,31 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 	return ridMap, nil
 }
 
+// registerReplayValueLogPointer makes the exact physical segment resolved from
+// an RID-bearing recovery record available to bounded durable-root publication.
+// Recovery first proves the RID-to-pointer mapping by reading the segment and
+// then registers that single canonical identity. This is not a publisher
+// discovery fallback: no candidate path is statted or scanned after the pointer
+// becomes reachable.
+func (db *DB) registerReplayValueLogPointer(ptr page.ValuePtr) error {
+	if db == nil || db.valueLogManager == nil || ptr.FileID == 0 {
+		return nil
+	}
+	if db.valueLogManager.HasSegment(ptr.FileID) {
+		return nil
+	}
+	lane, _ := valuelog.DecodeFileID(ptr.FileID)
+	dir := ValueLogDirPath(db.dir)
+	if lane == valuelog.ReservedLeafLogLaneID {
+		dir = LeafLogDirPath(db.dir)
+	}
+	path := valuelog.SegmentPath(dir, ptr.FileID)
+	if err := db.valueLogManager.RegisterSegment(path, ptr.FileID); err != nil {
+		return fmt.Errorf("register replay value-log file %d: %w", ptr.FileID, err)
+	}
+	return nil
+}
+
 func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) error {
 	type commitBatch struct {
 		seq     uint64
@@ -1041,6 +1074,9 @@ func (a *replayInlineAppender) appendLocked(value []byte) (page.ValuePtr, error)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
+	if err := a.registerProducedPointerLocked(ptr); err != nil {
+		return page.ValuePtr{}, err
+	}
 	a.dirty = true
 	return ptr, nil
 }
@@ -1065,6 +1101,9 @@ func (a *replayInlineAppender) AppendValues(values [][]byte) ([]page.ValuePtr, e
 	for i := range values {
 		ptr, err := a.writer.appendValue(startRID+uint64(i), values[i])
 		if err != nil {
+			return nil, err
+		}
+		if err := a.registerProducedPointerLocked(ptr); err != nil {
 			return nil, err
 		}
 		ptrs[i] = ptr
@@ -1131,8 +1170,26 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr,
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
+	if err := a.registerProducedPointerLocked(leafPtr.ValuePtr()); err != nil {
+		return page.LeafLogPtr{}, err
+	}
 	a.dirty = true
 	return leafPtr, nil
+}
+
+func (a *replayInlineAppender) registerProducedPointerLocked(ptr page.ValuePtr) error {
+	if a == nil || a.db == nil || a.db.valueLogManager == nil || ptr.FileID == 0 {
+		return nil
+	}
+	lane, _ := valuelog.DecodeFileID(ptr.FileID)
+	dir := ValueLogDirPath(a.db.dir)
+	if lane == valuelog.ReservedLeafLogLaneID {
+		dir = LeafLogDirPath(a.db.dir)
+	}
+	if err := a.db.RegisterValueLogSegment(valuelog.SegmentPath(dir, ptr.FileID), ptr.FileID); err != nil {
+		return fmt.Errorf("register produced replay value-log file %d: %w", ptr.FileID, err)
+	}
+	return nil
 }
 
 func (a *replayInlineAppender) LastLeafPageRecordLength() uint32 {
@@ -1373,6 +1430,9 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 			ptr, ok := ridMap[rec.RID]
 			if !ok {
 				return fmt.Errorf("commitlog: missing rid %d", rec.RID)
+			}
+			if err := db.registerReplayValueLogPointer(ptr); err != nil {
+				return err
 			}
 			if !hasPtrBatch {
 				return fmt.Errorf("commitlog: pointer batch unavailable")

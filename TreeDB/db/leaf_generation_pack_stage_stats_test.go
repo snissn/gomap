@@ -25,14 +25,25 @@ func TestLeafGenerationPack_ApplyStageAccounting(t *testing.T) {
 	if copyAttributed > stats.CopyTimeNanos {
 		t.Fatalf("copy stages=%d exceed copy wall=%d: %+v", copyAttributed, stats.CopyTimeNanos, stages)
 	}
+	// Promotion runs under the publication visibility gate so a concurrent
+	// Refresh cannot discover and pin an uncommitted segment.
+	if stages.PromotionTimeNanos <= 0 {
+		t.Fatalf("promotion timing was not populated: %+v", stages)
+	}
 	publishAttributed := stages.RevalidateTimeNanos + stages.PromotionTimeNanos + stages.RelocationTimeNanos +
 		stages.PageSyncTimeNanos + stages.DirectorySyncWaitTimeNanos + stages.RegistrationTimeNanos +
-		stages.CollectionPublishTimeNanos + stages.FinalizeTimeNanos
+		stages.CollectionPublishTimeNanos
 	if publishAttributed <= 0 {
 		t.Fatalf("publish stage timings were not populated: %+v", stages)
 	}
 	if publishAttributed > stats.PublishHoldNanos {
 		t.Fatalf("exclusive publish stages=%d exceed publish hold=%d: %+v", publishAttributed, stats.PublishHoldNanos, stages)
+	}
+	// Finalization prepares the durable-root candidate under the root lock, then
+	// performs stable-resource and metadata I/O after releasing that lock. Its
+	// full wall time is therefore observable but not additive to PublishHold.
+	if stages.FinalizeTimeNanos <= 0 {
+		t.Fatalf("finalize timing was not populated: %+v", stages)
 	}
 	// DirectorySyncTimeNanos is measured inside the async worker, while the
 	// wait includes channel delivery and timer quantization. In particular,

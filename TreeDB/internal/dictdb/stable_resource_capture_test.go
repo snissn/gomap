@@ -39,6 +39,8 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 	if reusedID != dictID {
 		t.Fatalf("reused id=%d want %d", reusedID, dictID)
 	}
+	registry := store.backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 
 	resources, err := store.CaptureDictionaryResources(ctx, reusedID)
 	if err != nil {
@@ -48,8 +50,8 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 	if got := resources.Len(); got != 2 {
 		t.Fatalf("resource closure len=%d want index+value-log", got)
 	}
-	if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 2 {
-		t.Fatalf("active index/value-log identity pins=%d want 2", got)
+	if got := registry.ActivePins(); got != baselinePins+2 {
+		t.Fatalf("active index/value-log identity pins=%d want baseline %d + 2 capture pins", got, baselinePins)
 	}
 
 	wantDigest := sha256.Sum256(payload)
@@ -82,8 +84,8 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 		t.Fatalf("sync closure: %v", err)
 	}
 	resources.Release()
-	if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
-		t.Fatalf("active value-log identity pins after release=%d want 0", got)
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("active identity pins after release=%d want baseline %d", got, baselinePins)
 	}
 }
 
@@ -161,6 +163,8 @@ func TestCaptureDictionaryResourcesRejectsEachMissingPointerChild(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
+			registry := store.backend.StableResourceIdentityPinRegistry()
+			baselinePins := registry.ActivePins()
 			var withheld []*rootpublication.StableResourceToken
 			previous := addDictionaryStableResourceToken
 			addDictionaryStableResourceToken = func(builder *rootpublication.StableResourceSetBuilder, token *rootpublication.StableResourceToken, role dictionaryStablePhysicalRole) error {
@@ -181,8 +185,8 @@ func TestCaptureDictionaryResourcesRejectsEachMissingPointerChild(t *testing.T) 
 			if !errors.Is(captureErr, rootpublication.ErrUnresolvedResource) || resources != nil {
 				t.Fatalf("omitted %s resources=%v err=%v want ErrUnresolvedResource", omitted, resources, captureErr)
 			}
-			if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
-				t.Fatalf("omitted %s active pins=%d want 0", omitted, got)
+			if got := registry.ActivePins(); got != baselinePins {
+				t.Fatalf("omitted %s active pins=%d want baseline %d", omitted, got, baselinePins)
 			}
 		})
 	}
@@ -257,6 +261,8 @@ func TestCaptureDictionaryResourcesUnionMultiplePointerIDsIsDeterministic(t *tes
 		return id
 	}
 	firstID, secondID := put(firstPayload), put(secondPayload)
+	registry := store.backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 	capture := func(id uint64) *rootpublication.StableResourceSet {
 		t.Helper()
 		resources, err := store.CaptureDictionaryResources(context.Background(), id)
@@ -331,8 +337,8 @@ func TestCaptureDictionaryResourcesUnionMultiplePointerIDsIsDeterministic(t *tes
 	secondForward.Release()
 	firstReverse.Release()
 	secondReverse.Release()
-	if got := store.backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
-		t.Fatalf("dictionary union release left active value-log pins=%d", got)
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("dictionary union release left active pins=%d want baseline %d", got, baselinePins)
 	}
 	if err := store.backend.VacuumIndexOnline(context.Background()); err != nil {
 		t.Fatalf("dictionary union release left online-vacuum fence: %v", err)
@@ -351,6 +357,8 @@ func TestCaptureDictionaryResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing
 	if err != nil {
 		t.Fatalf("put: %v", err)
 	}
+	registry := store.backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 	warm, err := store.CaptureDictionaryResources(context.Background(), dictID)
 	if err != nil {
 		t.Fatalf("warm capture: %v", err)
@@ -360,14 +368,16 @@ func TestCaptureDictionaryResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing
 		t.Fatalf("warm resources=%d want index+value-log closure", got)
 	}
 	warm.Release()
-	registry := store.backend.StableResourceIdentityPinRegistry()
-	if got := registry.ActivePins(); got != 0 {
-		t.Fatalf("warm release left active pins=%d", got)
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("warm release left active pins=%d want baseline %d", got, baselinePins)
 	}
 
 	beforeFDs, fdErr := os.ReadDir("/dev/fd")
 	checkFDs := fdErr == nil
 	for i := 0; i < iterations; i++ {
+		if got := registry.ActivePins(); got != baselinePins {
+			t.Fatalf("dedupe %d pre-capture active pins=%d want baseline %d", i, got, baselinePins)
+		}
 		reusedID, err := store.PutDictBytes(context.Background(), payload)
 		if err != nil {
 			t.Fatalf("dedupe put %d: %v", i, err)
@@ -383,13 +393,13 @@ func TestCaptureDictionaryResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing
 			resources.Release()
 			t.Fatalf("dedupe %d resources=%d want index+value-log closure", i, got)
 		}
-		if got := registry.ActivePins(); got != 2 {
+		if got := registry.ActivePins(); got != baselinePins+2 {
 			resources.Release()
-			t.Fatalf("dedupe %d active index/value-log pins=%d want 2", i, got)
+			t.Fatalf("dedupe %d active index/value-log pins=%d want baseline %d + 2 capture pins", i, got, baselinePins)
 		}
 		resources.Release()
-		if got := registry.ActivePins(); got != 0 {
-			t.Fatalf("dedupe %d left active pins=%d", i, got)
+		if got := registry.ActivePins(); got != baselinePins {
+			t.Fatalf("dedupe %d left active pins=%d want baseline %d", i, got, baselinePins)
 		}
 	}
 	if checkFDs {

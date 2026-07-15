@@ -22,6 +22,7 @@ import (
 	. "github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T) {
@@ -485,6 +486,9 @@ func TestHashicorpRaftProviderReadIndexRejectsTargetMismatch(t *testing.T) {
 }
 
 func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("Raft snapshot rejoin requires durable rename and removal namespaces")
+	}
 	cluster := newHashicorpRaftDBCluster(t)
 	leader := cluster.waitForLeaderReady(t)
 	lagging := cluster.firstFollower(t, leader.id)

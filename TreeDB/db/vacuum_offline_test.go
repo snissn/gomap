@@ -120,8 +120,8 @@ func TestVacuumIndexOffline_CommandWALPreservesDataAndShrinksFile(t *testing.T) 
 	if err != nil {
 		t.Fatalf("stat before: %v", err)
 	}
-	if beforeInfo.Size() != chunkSize {
-		t.Fatalf("index.db before=%d want chunk floor %d", beforeInfo.Size(), chunkSize)
+	if beforeInfo.Size() < chunkSize || beforeInfo.Size()%chunkSize != 0 {
+		t.Fatalf("index.db before=%d want a positive multiple of chunk size %d", beforeInfo.Size(), chunkSize)
 	}
 
 	if err := VacuumIndexOffline(Options{Dir: dir, KeepRecent: 1}); err != nil {

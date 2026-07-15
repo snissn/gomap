@@ -528,6 +528,10 @@ func testStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "captured_parent",
 		},
 	}
+	namespace, err := columnAssetManagerNamespaceForRoot(dir, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var fileSyncs atomic.Uint64
 	originalFileSync := syncColumnAssetSegmentFileForPublish
 	syncColumnAssetSegmentFileForPublish = func(file *os.File) error {
@@ -538,15 +542,15 @@ func testStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 		return nil
 	}
 	defer func() { syncColumnAssetSegmentFileForPublish = originalFileSync }()
-	var movedDir, replacementDir string
+	var movedAnchor, replacementAnchor string
 	originalOpenParent := openStableColumnAssetParent
 	openStableColumnAssetParent = func(path string) (*os.File, error) {
 		parent, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		movedDir, replacementDir = path+"-moved", path
-		if err := os.Rename(path, movedDir); err != nil {
+		movedAnchor, replacementAnchor = path+"-moved", path
+		if err := os.Rename(path, movedAnchor); err != nil {
 			_ = parent.Close()
 			return nil, err
 		}
@@ -561,15 +565,20 @@ func testStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	relSegmentDir, err := filepath.Rel(replacementAnchor, namespace.SegmentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedSegmentDir := filepath.Join(movedAnchor, relSegmentDir)
 	defer token.Release()
 	segmentPath, err := columnAssetSegmentPath(dir, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(movedDir, filepath.Base(segmentPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(movedSegmentDir, filepath.Base(segmentPath))); err != nil {
 		t.Fatalf("captured-parent column segment: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(replacementDir, filepath.Base(segmentPath))); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(segmentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replacement path unexpectedly received column segment: %v", err)
 	}
 	if got := fileSyncs.Load(); got != 1 {
@@ -625,14 +634,15 @@ func testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	}
 	clearColumnAssetSegmentDirSyncKnown(segmentPath)
 
-	movedDir := namespace.SegmentDir + "-moved"
+	var capturedAnchor, movedAnchor string
 	originalOpenParent := openStableColumnAssetParent
 	openStableColumnAssetParent = func(path string) (*os.File, error) {
 		parent, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		if err := os.Rename(path, movedDir); err != nil {
+		capturedAnchor, movedAnchor = path, path+"-moved"
+		if err := os.Rename(path, movedAnchor); err != nil {
 			_ = parent.Close()
 			return nil, err
 		}
@@ -648,6 +658,11 @@ func testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	if err != nil {
 		t.Fatal(err)
 	}
+	relSegmentDir, err := filepath.Rel(capturedAnchor, namespace.SegmentDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedSegmentDir := filepath.Join(movedAnchor, relSegmentDir)
 	defer token.Release()
 	if token.Namespace() == nil {
 		t.Fatal("existing segment with unknown directory stability missing namespace token")
@@ -658,7 +673,7 @@ func testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	if _, err := os.Stat(namespace.SegmentDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("original segment path unexpectedly exists: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(movedDir, filepath.Base(segmentPath)))
+	got, err := os.ReadFile(filepath.Join(movedSegmentDir, filepath.Base(segmentPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +685,10 @@ func testStableColumnAssetExistingUnknownNamespaceStabilizesThroughCapturedParen
 	}
 
 	openStableColumnAssetParent = originalOpenParent
-	if err := os.Mkdir(namespace.SegmentDir, 0o700); err != nil {
+	if err := os.Mkdir(capturedAnchor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(segmentPath, []byte("replacement-prefix"), 0o600); err != nil {
@@ -805,7 +823,7 @@ func testStableColumnAssetCaptureFailureInvalidatesPathSyncCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	movedDir := namespace.SegmentDir + "-moved"
+	var capturedAnchor, movedAnchor, movedSegmentDir string
 	replacementPrefix := []byte("replacement-prefix")
 	var retainedParent *os.File
 	originalOpenParent := openStableColumnAssetParent
@@ -816,7 +834,8 @@ func testStableColumnAssetCaptureFailureInvalidatesPathSyncCache(t *testing.T) {
 			return nil, err
 		}
 		retainedParent = parent
-		if err := os.Rename(path, movedDir); err != nil {
+		capturedAnchor, movedAnchor = path, path+"-moved"
+		if err := os.Rename(path, movedAnchor); err != nil {
 			_ = parent.Close()
 			return nil, err
 		}
@@ -824,10 +843,20 @@ func testStableColumnAssetCaptureFailureInvalidatesPathSyncCache(t *testing.T) {
 			_ = parent.Close()
 			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(path, filepath.Base(assetPath)), replacementPrefix, 0o600); err != nil {
+		if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
 			_ = parent.Close()
 			return nil, err
 		}
+		if err := os.WriteFile(assetPath, replacementPrefix, 0o600); err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		relSegmentDir, err := filepath.Rel(capturedAnchor, namespace.SegmentDir)
+		if err != nil {
+			_ = parent.Close()
+			return nil, err
+		}
+		movedSegmentDir = filepath.Join(movedAnchor, relSegmentDir)
 		return parent, nil
 	}
 	t.Cleanup(func() {
@@ -920,7 +949,7 @@ func testStableColumnAssetCaptureFailureInvalidatesPathSyncCache(t *testing.T) {
 	if finalRef == (ColumnAssetRef{}) || !columnAssetSegmentDirSyncKnown(assetPath) {
 		t.Fatalf("successful replacement retry did not publish synced path: ref=%+v known=%v", finalRef, columnAssetSegmentDirSyncKnown(assetPath))
 	}
-	if _, err := os.Stat(filepath.Join(movedDir, filepath.Base(assetPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(movedSegmentDir, filepath.Base(assetPath))); err != nil {
 		t.Fatalf("failed stable append did not remain bound to moved parent: %v", err)
 	}
 }
@@ -1659,18 +1688,17 @@ func testStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t *testin
 	}
 }
 
-func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
+func testColumnCommandWALPublishRetainsStableAssetAuthorityInDurableSlots(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
 	registry := d.StableResourceIdentityPinRegistry()
 	baselinePins := registry.ActivePins()
 	if _, err := col.Insert([]byte("stable-publish"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("active stable asset pins after command-WAL publish=%d want baseline %d", got, baselinePins)
+	if got := registry.ActivePins(); got <= baselinePins {
+		t.Fatalf("active stable asset pins after command-WAL publish=%d want greater than baseline %d", got, baselinePins)
 	}
 	cfg := col.Meta().Options.ColumnStore
 	if cfg == nil || cfg.AssetManager == nil {
@@ -1685,6 +1713,7 @@ func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	segments := 0
+	var identities []rootpublication.StableIdentity
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), columnAssetSegmentFilePrefix) ||
 			!strings.HasSuffix(entry.Name(), columnAssetSegmentFileSuffix) {
@@ -1703,11 +1732,12 @@ func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
 		if closeErr != nil {
 			t.Fatal(closeErr)
 		}
-		if got := registry.PinCount(identity); got != 0 {
-			t.Fatalf("column segment %q pins after command-WAL publish=%d want 0", entry.Name(), got)
+		identities = append(identities, identity)
+		if got := registry.PinCount(identity); got == 0 {
+			t.Fatalf("column segment %q pins after command-WAL publish=%d want retained durable-slot authority", entry.Name(), got)
 		}
-		if got := registry.ObserverCount(identity); got != 0 {
-			t.Fatalf("column segment %q observers after command-WAL publish=%d want 0", entry.Name(), got)
+		if got := registry.ObserverCount(identity); got == 0 {
+			t.Fatalf("column segment %q observers after command-WAL publish=%d want retained durable-slot authority", entry.Name(), got)
 		}
 	}
 	if segments == 0 {
@@ -1715,6 +1745,17 @@ func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
 	}
 	if got := registry.ActiveStableNamespaceLinks(); got == 0 {
 		t.Fatal("successful command-WAL publish retained no exact namespace sync proof")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range identities {
+		if got := registry.PinCount(identity); got != 0 {
+			t.Fatalf("column segment pins after DB close=%d want 0", got)
+		}
+		if got := registry.ObserverCount(identity); got != 0 {
+			t.Fatalf("column segment observers after DB close=%d want 0", got)
+		}
 	}
 }
 
@@ -1815,10 +1856,11 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 		return closeStats, resources, namespaceSyncs
 	}
 
+	const descriptorsPerIteration = 3 // column, typed-column, and HNSW resource kinds
 	primeStats, primeResources, primeNamespaceSyncs := appendAndClose(1)
 	if primeStats.FileSyncCount != 1 || primeNamespaceSyncs != 1 {
 		primeResources.Release()
-		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content and namespace sync", primeStats, primeNamespaceSyncs)
+		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content sync and one shared namespace sync", primeStats, primeNamespaceSyncs)
 	}
 	primeResources.Release()
 
@@ -1856,7 +1898,6 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 	if pinHighWater != 1 {
 		b.Fatalf("pin high-water=%d want 1", pinHighWater)
 	}
-	const descriptorsPerIteration = 3 // column, typed-column, and HNSW resource kinds
 	if descriptors != uint64(b.N*descriptorsPerIteration) || logicalObligations != uint64(b.N*len(items)) {
 		b.Fatalf("descriptors=%d logical obligations=%d want %d/%d", descriptors, logicalObligations, b.N*descriptorsPerIteration, b.N*len(items))
 	}

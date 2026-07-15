@@ -2,8 +2,12 @@
 
 package pager
 
-import "os"
+import (
+	"os"
+
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
+)
 
 func syncPageFileData(file *os.File) error {
-	return file.Sync()
+	return stableio.SyncFile(file)
 }

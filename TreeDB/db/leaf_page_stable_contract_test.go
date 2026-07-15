@@ -56,6 +56,7 @@ type stableContractDescriptor struct {
 	kind         rootpublication.ResourceKind
 	reachability rootpublication.ReachabilityField
 	frontier     uint64
+	onRelease    func()
 }
 
 func stableContractResourceSet(t *testing.T, descriptors ...stableContractDescriptor) *rootpublication.StableResourceSet {
@@ -78,7 +79,7 @@ func stableContractResourceSet(t *testing.T, descriptors ...stableContractDescri
 			Kind: descriptor.kind, LogicalLane: "test-leaf", ResourceID: fmt.Sprintf("segment-%d", i),
 			Generation: descriptor.generation, DiagnosticPath: fmt.Sprintf("leaf_vlog/test-%d.vlog", i),
 			File: file, Frontier: rootpublication.DurableFrontier{Bytes: descriptor.frontier},
-			Reachability: descriptor.reachability,
+			Reachability: descriptor.reachability, OnRelease: descriptor.onRelease,
 		})
 		if err != nil {
 			t.Fatalf("create stable token %d: %v", i, err)

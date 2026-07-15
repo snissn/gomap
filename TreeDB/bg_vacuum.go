@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,6 +10,10 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func backgroundIndexVacuumShouldReport(err error) bool {
+	return err != nil && !errors.Is(err, backenddb.ErrVacuumConcurrentMutation)
+}
 
 const (
 	defaultBackgroundIndexVacuumSpanRatioPPM                uint32 = 1_200_000
@@ -302,7 +307,12 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	if err := db.VacuumIndexOnline(context.Background()); err != nil {
 		w.retryProbe = true
 		w.finishRun(now, err.Error())
-		db.reportError(err)
+		// A bounded online-vacuum pass may lose its cutover race to foreground
+		// mutations. That is expected retry control flow: retain it in worker
+		// diagnostics and retry the probe without poisoning the database handle.
+		if backgroundIndexVacuumShouldReport(err) {
+			db.reportError(err)
+		}
 		return
 	}
 

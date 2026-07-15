@@ -1664,6 +1664,11 @@ func TestTypedColumnMultipartPartSetRefsRewriteAndGCSafe1787(t *testing.T) {
 	if _, ok := typedColumnMultipartPartRefByPartID1787(t, reopened, reopenedCol, 3); !ok {
 		t.Fatalf("reopened manifest lost multipart ref part_id=3")
 	}
+	// Publish a root-only catalog change so the alternate selectable slot no
+	// longer retains the pre-rewrite column-asset closure.
+	if _, err := NewCollectionManager(reopened).CreateCollection(&CollectionMeta{Name: "slot_rollover"}); err != nil {
+		t.Fatalf("CreateCollection slot rollover after multipart rewrite: %v", err)
+	}
 	gcStats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
 	})
@@ -1899,6 +1904,11 @@ func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
 		t.Fatalf("reopened Get e1 after rewrite: %v", err)
 	}
 	assertJSONEqualM13C(t, reopenedGot, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`))
+	// Publish a root-only catalog change so the alternate selectable slot no
+	// longer retains the pre-rewrite column-asset closure.
+	if _, err := NewCollectionManager(reopened).CreateCollection(&CollectionMeta{Name: "slot_rollover"}); err != nil {
+		t.Fatalf("CreateCollection slot rollover after rewrite: %v", err)
+	}
 	gcStats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
 	})

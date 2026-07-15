@@ -8085,6 +8085,10 @@ type valueLogIdentityPinRegistryProvider interface {
 	ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry
 }
 
+type backendStorageDirProvider interface {
+	Dir() string
+}
+
 // ValueLogIdentityPinRegistry lets nested wrappers share the same physical
 // deletion gate as the backend and cache value-log managers.
 func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
@@ -12119,10 +12123,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Ensure split log dirs exist.
+	// Ensure split log dirs exist. Cached redo/command WAL ownership belongs to
+	// the caching directory. Persistent value and outer-leaf logs belong to the
+	// TreeDB backend whose recovery-selectable roots reference them. Keeping
+	// those dependencies below the backend root lets a standalone backend reopen
+	// resolve the exact durable manifest without depending on this wrapper.
 	walDir := filepath.Join(dir, "wal")
-	valueLogDir := filepath.Join(dir, "value_vlog")
-	leafLogDir := filepath.Join(dir, "leaf_vlog")
+	persistentLogRoot := dir
+	if provider, ok := backend.(backendStorageDirProvider); ok {
+		if backendDir := provider.Dir(); backendDir != "" {
+			persistentLogRoot = backendDir
+		}
+	}
+	valueLogDir := backenddb.ValueLogDirPath(persistentLogRoot)
+	leafLogDir := backenddb.LeafLogDirPath(persistentLogRoot)
 	for _, path := range []string{walDir, valueLogDir, leafLogDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return nil, err

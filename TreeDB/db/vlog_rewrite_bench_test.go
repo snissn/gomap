@@ -168,6 +168,7 @@ func appendPointersInNewSegmentBench(tb testing.TB, dir string, lane, seq uint32
 	if err := w.Close(); err != nil {
 		tb.Fatalf("close writer: %v", err)
 	}
+	registerTestValueLogProducer(tb, dir, path, fileID)
 	return ptrs
 }
 

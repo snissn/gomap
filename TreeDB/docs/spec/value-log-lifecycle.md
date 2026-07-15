@@ -263,10 +263,10 @@ Leaf-generation pack uses a two-phase copy/publish state machine:
    meta page, and only then make committed retired pages reclaimable. On
    platforms that require
    an explicit mapped-view flush, its address and length are aligned to the
-   platform mapping granularity. Linux relies on `fsync`; every platform ends
-   with the file-wide `os.File.Sync` durability fence. `SyncPages` therefore
-   promises durability of the requested pages, not that only those bytes reach
-   stable storage.
+   platform mapping granularity. Linux finishes with `fdatasync`; Darwin uses
+   `F_FULLFSYNC`, Windows uses `FlushFileBuffers`, and unsupported stable-file
+   adapters fail closed. `SyncPages` therefore promises durability of the
+   requested pages, not that only those bytes reach stable storage.
 
 If exact revalidation fails, the in-memory staging pager and staged records are
 discarded and a full copy retries once; no private page or retired-page list is reused. A failure

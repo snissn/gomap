@@ -8,6 +8,14 @@ func TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing
 	testStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t)
 }
 
+func TestCloneStableResourceSetUsesExactHandlesAndIndependentPins(t *testing.T) {
+	testCloneStableResourceSetUsesExactHandlesAndIndependentPins(t)
+}
+
+func TestCloneStableResourceSetFiltersExactLogicalObligationClosure(t *testing.T) {
+	testCloneStableResourceSetFiltersExactLogicalObligationClosure(t)
+}
+
 func TestStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
 	testStableResourceSetRejectsDataStableNamespaceUnstable(t)
 }

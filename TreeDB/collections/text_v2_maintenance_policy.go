@@ -240,7 +240,7 @@ func (c *Collection) MaintainTextIndex(ctx context.Context, indexName string, op
 	}
 	stats.CollectionName = c.collectionName()
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
-	idx, err := c.maintainTextIndex(ctx, indexName, opts)
+	idx, err := c.maintainTextIndexWithRetry(ctx, indexName, opts)
 	if err != nil {
 		return stats, err
 	}
@@ -281,7 +281,7 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 			stats.IndexesSkipped++
 			break
 		}
-		idx, err := c.maintainTextIndex(ctx, def.Name, opts)
+		idx, err := c.maintainTextIndexWithRetry(ctx, def.Name, opts)
 		if err != nil {
 			return stats, err
 		}
@@ -318,6 +318,25 @@ func textIndexDefinitionIsTextV2MaintenanceCandidate(def TextIndexDefinition) bo
 		version = TextIndexVersionV2
 	}
 	return version == TextIndexVersionV2
+}
+
+func (c *Collection) maintainTextIndexWithRetry(ctx context.Context, indexName string, opts TextIndexMaintenanceOptions) (TextIndexMaintenanceIndexStats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		stats, err := c.maintainTextIndex(ctx, indexName, opts)
+		if !isRetriableCollectionMutationError(err) {
+			return stats, err
+		}
+		lastErr = err
+		if err := ctx.Err(); err != nil {
+			return TextIndexMaintenanceIndexStats{}, err
+		}
+		waitBeforeCollectionMutationRetry(attempt)
+	}
+	return TextIndexMaintenanceIndexStats{}, collectionMutationRetryExhausted(lastErr)
 }
 
 func (c *Collection) maintainTextIndex(ctx context.Context, indexName string, opts TextIndexMaintenanceOptions) (TextIndexMaintenanceIndexStats, error) {
