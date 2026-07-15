@@ -1146,20 +1146,22 @@ func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTe
 func (c *hashicorpRaftTestCluster) waitForLeaderReady(tb testing.TB) *hashicorpRaftTestNode {
 	tb.Helper()
 	deadline := time.Now().Add(15 * time.Second)
+	readinessCtx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
 	var previous leaderReadinessObservation
 	var lastErr error
-	for time.Now().Before(deadline) {
+	for readinessCtx.Err() == nil {
 		leader := c.waitForSingleLeader()
 		if leader == nil {
 			previous = leaderReadinessObservation{}
-			time.Sleep(20 * time.Millisecond)
+			waitForLeaderReadinessPoll(readinessCtx)
 			continue
 		}
-		term, ok := HashicorpRaftTestLeaderReady(leader.provider)
-		if !ok {
-			lastErr = errors.New("leader failed live-term quorum verification")
+		term, err := HashicorpRaftTestLeaderReady(readinessCtx, leader.provider)
+		if err != nil {
+			lastErr = err
 			previous = leaderReadinessObservation{}
-			time.Sleep(20 * time.Millisecond)
+			waitForLeaderReadinessPoll(readinessCtx)
 			continue
 		}
 		current := leaderReadinessObservation{nodeID: leader.id, term: term, valid: true}
@@ -1167,10 +1169,17 @@ func (c *hashicorpRaftTestCluster) waitForLeaderReady(tb testing.TB) *hashicorpR
 			return leader
 		}
 		previous = current
-		time.Sleep(20 * time.Millisecond)
+		waitForLeaderReadinessPoll(readinessCtx)
 	}
-	tb.Fatalf("timed out waiting for leader-ready stable term; last_read_index_err=%v states=%s", lastErr, c.admissionSummary())
+	tb.Fatalf("timed out waiting for leader-ready stable term; last_readiness_err=%v states=%s", lastErr, c.admissionSummary())
 	return nil
+}
+
+func waitForLeaderReadinessPoll(ctx context.Context) {
+	select {
+	case <-time.After(20 * time.Millisecond):
+	case <-ctx.Done():
+	}
 }
 
 type leaderReadinessObservation struct {
