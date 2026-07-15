@@ -27,7 +27,7 @@ import (
 
 func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
-	leader := cluster.waitForLeader(t)
+	leader := cluster.waitForLeaderReady(t)
 
 	entry := testClusterCreateCollectionEntry(t, 7)
 	leaderCtx, leaderCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1149,7 +1149,11 @@ func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTe
 // under test.
 func (c *hashicorpRaftTestCluster) waitForLeaderReady(tb testing.TB) *hashicorpRaftTestNode {
 	tb.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	// Opening three durable test nodes can consume most of the old 15-second
+	// budget on a contended Windows runner. Keep failure bounded, but leave
+	// enough time for an election before requiring the state-based quorum/term
+	// barrier below.
+	deadline := time.Now().Add(30 * time.Second)
 	readinessCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	var previous leaderReadinessObservation
