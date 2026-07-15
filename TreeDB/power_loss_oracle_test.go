@@ -525,11 +525,23 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		Path:   filepath.ToSlash(relIndex),
 		Ranges: metaChanged,
 	}
-	// Persist half of the changed four-byte checksum without the body it
-	// authenticates. This is a real meta-format tear and invalidates the
-	// alternate page, forcing public Open to select the older valid meta.
-	if meta.Length >= 12 {
-		target.Torn = []powerlossoracle.TornBoundary{{ID: "meta-body", Format: powerlossoracle.FormatMeta, Offset: meta.Offset + 8, Length: 4, Persisted: 2}}
+	// Persist only a prefix of one actual changed run inside the meta page. CRC
+	// bytes can coincidentally match the prior generation, so a hard-coded
+	// four-byte checksum boundary is not always a changed range. This remains a
+	// real meta-format tear and forces public Open to select the older valid meta.
+	for _, changed := range metaChanged {
+		if changed.Length < 2 {
+			continue
+		}
+		length := min(changed.Length, int64(8))
+		target.Torn = []powerlossoracle.TornBoundary{{
+			ID: "meta-body", Format: powerlossoracle.FormatMeta,
+			Offset: changed.Offset, Length: length, Persisted: length / 2,
+		}}
+		break
+	}
+	if len(target.Torn) == 0 {
+		t.Fatalf("target meta changed ranges have no tearable run: %v", metaChanged)
 	}
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:               "checkpoint-generation-2",
