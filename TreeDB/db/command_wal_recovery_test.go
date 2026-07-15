@@ -1275,6 +1275,57 @@ func TestAppendCommandWALIntentNoAppendSkipsRawPublishBarriers(t *testing.T) {
 	}
 }
 
+func TestAppendCommandWALIntentExistingRelaxedSyncRunsRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "existing-relaxed", "value")
+	lsn, err := db.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent relaxed: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatal("AppendCommandWALIntent relaxed lsn=0")
+	}
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	got, err := db.AppendCommandWALIntent(intent, true)
+	if !errors.Is(err, barrierErr) {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync error=%v, want %v", err, barrierErr)
+	}
+	if got != lsn {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync lsn=%d, want original %d before barrier append", got, lsn)
+	}
+	if !barrierCalled.Load() {
+		t.Fatal("AppendCommandWALIntent existing relaxed sync skipped raw publish barriers")
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d after raw publish barrier failure, want 0", got)
+	}
+	unregister()
+
+	got, err = db.AppendCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync retry: %v", err)
+	}
+	if got != lsn {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync retry lsn=%d, want original %d", got, lsn)
+	}
+	if err := db.PublishCommandWALNoop(intent, false); err != nil {
+		t.Fatalf("PublishCommandWALNoop after durable barrier: %v", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn+1 {
+		t.Fatalf("AppliedCommandLSN=%d, want relaxed frame plus barrier %d", got, lsn+1)
+	}
+}
+
 func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 	db := &DB{commandWAL: true}
 	var calls []int

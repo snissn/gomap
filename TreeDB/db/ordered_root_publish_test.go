@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -380,6 +381,76 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextWaitsBeforeWriteM
 	}
 	if got := db.State().AppliedCommandLSN; got != lsn+1 {
 		t.Fatalf("AppliedCommandLSN after context publish=%d, want %d", got, lsn+1)
+	}
+}
+
+func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	appended := mustRawKVCommandWALIntent(t, db, "coverage-relaxed", "value")
+	lsn, err := db.AppendCommandWALIntent(appended, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent relaxed: %v", err)
+	}
+	coverage, err := NewCommandWALCoverageIntent(lsn, CommandWALLSNRange{First: lsn, Last: lsn})
+	if err != nil {
+		t.Fatalf("NewCommandWALCoverageIntent: %v", err)
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	err = db.finalizeOrderedRootPublishWithCommandWAL(
+		userRoot,
+		systemRoot,
+		nil,
+		true,
+		adaptive.Metrics{},
+		nil,
+		false,
+		nil,
+		nil,
+		nil,
+		coverage,
+	)
+	if !errors.Is(err, barrierErr) {
+		t.Fatalf("finalize existing coverage sync error=%v, want %v", err, barrierErr)
+	}
+	if !barrierCalled.Load() {
+		t.Fatal("finalize existing coverage sync skipped raw publish barriers")
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d after raw publish barrier failure, want 0", got)
+	}
+	unregister()
+
+	if err := db.finalizeOrderedRootPublishWithCommandWAL(
+		userRoot,
+		systemRoot,
+		nil,
+		true,
+		adaptive.Metrics{},
+		nil,
+		false,
+		nil,
+		nil,
+		nil,
+		coverage,
+	); err != nil {
+		t.Fatalf("finalize existing coverage sync retry: %v", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn+1 {
+		t.Fatalf("AppliedCommandLSN=%d, want coverage plus barrier %d", got, lsn+1)
 	}
 }
 

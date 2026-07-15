@@ -1211,6 +1211,22 @@ func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
 	return intent != nil && intent.inner.lsn != 0
 }
 
+// commandWALIntentNeedsPublicAppendLock reports whether appendPublicCommandWALIntent
+// can append either the command frame itself or a durable-prefix barrier and
+// therefore needs the barrier-aware raw publish lock. A staged intent inherits
+// that lock from its caller. An already-appended relaxed coverage intent does
+// not need the lock until a sync request would extend it with a barrier; its
+// higher-level coordinator remains responsible for publication ordering.
+func (db *DB) commandWALIntentNeedsPublicAppendLock(intent *CommandWALIntent, sync bool) bool {
+	if intent == nil || intent.staged() {
+		return false
+	}
+	if !commandWALIntentFrameAlreadyAppended(intent) {
+		return true
+	}
+	return !intent.inner.fromReplay && sync && db.commandWALDurableLSN.Load() < intent.inner.lsn
+}
+
 // AppendCommandWALIntent appends a deterministic command frame without
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.
@@ -1220,12 +1236,12 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
-	if intent == nil || commandWALIntentFrameAlreadyAppended(intent) {
+	if !db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
 		return db.appendPublicCommandWALIntent(intent, sync)
 	}
 	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
-		return 0, err
+		return intent.AssignedLSN(), err
 	}
 	defer unlockCommandWALPublish()
 	return db.appendPublicCommandWALIntent(intent, sync)
