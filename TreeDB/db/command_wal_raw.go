@@ -344,7 +344,7 @@ func (db *DB) finishCommandWALAppendFlush(path commandWALAppendStatsPath, actual
 
 func (db *DB) publicationPoisonedError() error {
 	if db != nil && db.publicationPoisoned.Load() {
-		return fmt.Errorf("%w: root publication outcome is ambiguous; reopen required", ErrRecoveryRequired)
+		return fmt.Errorf("%w: root publication cannot safely progress; reopen required", ErrRecoveryRequired)
 	}
 	return nil
 }
@@ -1554,32 +1554,62 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		return ErrCommandWALUnsupported
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
+	durablePublishLocked := false
+	defer func() {
+		if durablePublishLocked {
+			db.durablePublishMu.Unlock()
+		}
+	}()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()
+		db.writeMu.Unlock()
 		return err
 	}
+	if hook := db.testCommandWALBeforeDurablePublishLockHook; hook != nil {
+		hook()
+	}
+	db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	// The intent is root-neutral. Capture the roots only after entering the
+	// durable publish gate so a publication that completed while this caller
+	// waited cannot be rolled back when the applied LSN advances.
 	db.mu.RLock()
 	baseSeq := db.meta.CommitSeq
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(intent))
+	db.commitMu.Unlock()
+	db.writeMu.Unlock()
+	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
-		db.commitMu.Unlock()
 		return err
 	}
-	db.commitMu.Unlock()
+	defer publishPrepareGuard.Release()
+	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
+	finalizeOpts.skipPrePublishFlush = true
+	finalizeOpts.durablePublishLocked = true
+	finalizeOpts.releaseRootSerialization = func() {}
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, finalizeOpts)
+	if err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		return err
+	}
+	db.durablePublishMu.Unlock()
+	durablePublishLocked = false
 	db.finalizeCommitPostWork(post)
 	intent.inner.staged = false
 	return nil
@@ -1941,6 +1971,9 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			ptr, ok := ridMap[entry.RID]
 			if !ok {
 				return fmt.Errorf("%w: %d", ErrCommandWALMissingValueLogRID, entry.RID)
+			}
+			if err := db.registerReplayValueLogPointer(ptr); err != nil {
+				return err
 			}
 			if err := b.SetPointerWithRevision(entry.Key, ptr, revision); err != nil {
 				return err

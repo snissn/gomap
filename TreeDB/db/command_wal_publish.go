@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -33,25 +34,128 @@ type finalizeCommitOptions struct {
 	syncMetaPageOnly            bool
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
+	durablePublishLocked        bool
+	// closeTeardownPinned proves the caller acquired teardownMu for reading
+	// before Close could revoke write admission and will retain that lease
+	// through commit post-work. It permits an already-admitted publication to
+	// finish capturing its stable index identity after Close has set closing.
+	closeTeardownPinned bool
+	// durableIndex is the exact index generation against which the caller built
+	// its roots. Root-releasing callers capture it before dropping construction
+	// serialization so an online vacuum cannot redirect publication to a
+	// replacement file with coincident page IDs.
+	durableIndex *indexGen
+	// expectedBaseCommitSeq binds a constructed root to the visible generation
+	// it was derived from. Page IDs alone are ABA-unsafe once COW reuse begins.
+	expectedBaseCommitSeq    uint64
+	hasExpectedBaseCommitSeq bool
+	// releaseRootSerialization transfers an already-prepared candidate from
+	// root construction to the synchronous durability transaction. The callback
+	// must release every DB/write/commit/root-build lock held by the caller and
+	// is invoked exactly once, immediately before external/index/meta I/O.
+	releaseRootSerialization func()
+	// recordVacuumMutation transfers a successful primary-tree mutation into the
+	// online-vacuum tail before durablePublishMu can pass to cutover. Cutover
+	// acquires that same fence before stopping and draining the recorder, so a
+	// visible old-generation commit cannot fall between publication and capture.
+	recordVacuumMutation func()
+	// durableResources transfers producer-owned exact external handles into the
+	// candidate root's dependency manifest. The finalizer consumes the set.
+	durableResources *rootpublication.StableResourceSet
+	// leafManifestAlreadyPersistent marks an exact immutable manifest revision
+	// already carried by durableResources. Post-work may build rebuildable
+	// record-length indexes, but must not create a second manifest revision after
+	// the meta has selected the producer's exact one.
+	leafManifestAlreadyPersistent bool
+	// durableResourceRequirements scopes exact logical obligations for external
+	// resources whose physical files can outlive several root generations.
+	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
+	// valueLogPublicationLocked proves the caller already owns the exclusive
+	// valueLogPublicationMu lease. Candidate dependency capture must reuse that
+	// lease instead of recursively acquiring its read side.
+	valueLogPublicationLocked bool
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false)
+}
+
+func (db *DB) publishCurrentCommandWALRoots(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true)
+}
+
+func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool) error {
+	if db == nil {
+		return ErrClosed
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	durablePublishLocked := false
+	defer func() {
+		if durablePublishLocked {
+			db.durablePublishMu.Unlock()
+		}
+	}()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 
-	db.mu.RLock()
-	baseSeq := db.meta.CommitSeq
-	rootsUnchanged := newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
-	db.mu.RUnlock()
-
+	var (
+		baseSeq        uint64
+		rootsUnchanged bool
+	)
+	if !currentRoots {
+		db.mu.RLock()
+		baseSeq = db.meta.CommitSeq
+		rootsUnchanged = newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
+		db.mu.RUnlock()
+	}
+	if hook := db.testCommandWALBeforeDurablePublishLockHook; hook != nil {
+		hook()
+	}
+	db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	if currentRoots {
+		// Applied-LSN-only publications carry no constructed root candidate.
+		// Bind them to the latest roots only after entering the durable publish
+		// gate so a maintenance/manual publication that won the gate cannot be
+		// overwritten by roots captured before the wait.
+		db.mu.RLock()
+		baseSeq = db.meta.CommitSeq
+		newRootID = db.meta.UserRootPageID
+		sysRootID = db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		rootsUnchanged = true
+	}
 	var vlogRefDelta *valueLogRefDelta
 	if rootsUnchanged {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
+	db.writeMu.Unlock()
+	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
+	if err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
+		return err
+	}
+	defer publishPrepareGuard.Release()
 
+	finalizeOpts := finalizeCommitOptions{
+		commandWALPublish:        true,
+		appliedCommandLSN:        appliedLSN,
+		appliedRanges:            covered,
+		skipPrePublishFlush:      true,
+		durablePublishLocked:     true,
+		closeTeardownPinned:      true,
+		releaseRootSerialization: func() {},
+	}
+	if !currentRoots {
+		finalizeOpts.expectedBaseCommitSeq = baseSeq
+		finalizeOpts.hasExpectedBaseCommitSeq = true
+	}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
 		sysRootID,
@@ -63,12 +167,10 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		vlogRefDelta,
 		nil,
 		nil,
-		finalizeCommitOptions{
-			commandWALPublish: true,
-			appliedCommandLSN: appliedLSN,
-			appliedRanges:     covered,
-		},
+		finalizeOpts,
 	)
+	db.durablePublishMu.Unlock()
+	durablePublishLocked = false
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -88,11 +190,7 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	}
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer unlockCommandWALPublish()
-	state, ok := db.StateToken()
-	if !ok {
-		return ErrClosed
-	}
-	return db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, appliedLSN, covered, sync)
+	return db.publishCurrentCommandWALRoots(appliedLSN, covered, sync)
 }
 
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {

@@ -173,6 +173,12 @@ type DB struct {
 	writeMu          sync.RWMutex
 	teardownMu       sync.RWMutex // Pins Close-sensitive resources outside writeMu.
 	commitMu         sync.Mutex
+	durablePublishMu sync.Mutex
+	// rootReuseMu seals acquisition of a visible root generation while durable
+	// publication converts retired COW pages into reusable pages. Existing
+	// readers remain concurrent; only new generation captures wait for the
+	// matching durable and visible root install.
+	rootReuseMu      sync.RWMutex
 	publishPrepareMu sync.RWMutex
 	// valueLogPublicationMu prevents snapshots and RefreshValueLogSet from
 	// observing segments while maintenance is promoting/registering them before
@@ -184,14 +190,27 @@ type DB struct {
 	updateLocks                     keyupdate.Locks
 	maintenanceMu                   sync.Mutex
 	stableIndexCaptures             atomic.Int64
+	durableCandidateIndexCaptures   atomic.Int64
 	combineMu                       sync.RWMutex
 	combineReqCh                    chan *commitCombineReq
 	combineStopCh                   chan struct{}
 	combineDoneCh                   chan struct{}
 	vacuumInProgress                atomic.Bool
-	vacuum                          vacuumRecorder
-	systemRootPublishEpoch          atomic.Uint64
-	vacuumOnlineLast                atomic.Pointer[VacuumOnlineStats]
+	// vacuumCutoverInProgress is narrower than vacuumInProgress: online vacuum
+	// keeps accepting ordinary durable publications while it builds the
+	// replacement, then raises this gate only while it seals and installs the
+	// replacement namespace.
+	vacuumCutoverInProgress atomic.Bool
+	// vacuumCutoverGateMu protects the completion channel for the narrow online
+	// vacuum cutover. A writer that acquires writeMu while the replacement pager
+	// is being synced drops writeMu, waits for this channel, then retries
+	// admission. That lets the cutover perform dependency/index/meta sync with no
+	// DB write lock held without exposing an old-generation mutation window.
+	vacuumCutoverGateMu    sync.Mutex
+	vacuumCutoverDone      chan struct{}
+	vacuum                 vacuumRecorder
+	systemRootPublishEpoch atomic.Uint64
+	vacuumOnlineLast       atomic.Pointer[VacuumOnlineStats]
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook       func(int)
@@ -199,6 +218,7 @@ type DB struct {
 	vacuumPreflushHook            func() error
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
+	durableRoot                   durableRootRuntimeV1
 	entryRevisionFloor            atomic.Uint64
 	commandJournal                *commitlog.CommandJournal
 	conditionalActiveTxnCount     atomic.Int64
@@ -506,10 +526,21 @@ type DB struct {
 	testFailWriteMeta atomic.Bool
 	// testFailSyncMeta fails after the alternate meta page has been written but
 	// before its durability outcome is known.
-	testFailSyncMeta                               atomic.Bool
+	testFailSyncMeta atomic.Bool
+	// testFailDurableRootVisibleInstall fails after the alternate meta page is
+	// durably selected but before the matching in-memory state is installed.
+	// The writable handle must poison because recovery now owns reconciliation.
+	testFailDurableRootVisibleInstall atomic.Bool
+	// testFailDurableRootAfterCOWPrepare fails after allocator preparation but
+	// before the DB candidate owns that prepared state. Preparation must abort
+	// atomically so a later publication cannot inherit stale retirements.
+	testFailDurableRootAfterCOWPrepare             atomic.Bool
 	testFailCommandWALFlush                        atomic.Bool
+	testAfterOptimisticBaseCaptureHook             func()
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
+	testCommandWALBeforeDurablePublishLockHook     func()
+	testDurableRootCandidatePreparedHook           func()
 	testCheckpointAfterPoisonPreflightHook         func()
 	testConditionalReadOnlyAfterClosePreflight     func()
 	testOrderedRootBatchAfterClosePreflightHook    func()
@@ -527,7 +558,8 @@ type DB struct {
 	commandWALFlushPoisoned atomic.Bool
 	commandWALDurableLSN    atomic.Uint64
 	commandWALDebt          CommandWALDependencyDebt
-	// publicationPoisoned is set after an outcome-ambiguous root/meta publish.
+	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
+	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
 	publicationPoisoned              atomic.Bool
 	commandWALStatsMu                sync.Mutex
@@ -587,6 +619,13 @@ type DB struct {
 	closing                          atomic.Bool
 }
 
+// These hooks let package tests attach producer-side fixtures to the exact DB
+// handle that owns their value-log manager. Production leaves them nil.
+var (
+	testDBOpenHook  func(*DB) error
+	testDBCloseHook func(*DB)
+)
+
 type valueLogRewriteLiveBytesKey struct {
 	commitSeq  uint64
 	rootID     uint64
@@ -627,6 +666,8 @@ var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush fail
 var errTestCommandWALRecoveryDependencySyncFailpoint = errors.New("treedb: command wal recovery dependency sync failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 var errTestSyncMetaFailpoint = errors.New("treedb: sync meta failpoint")
+var errTestDurableRootVisibleInstallFailpoint = errors.New("treedb: durable root visible install failpoint")
+var errTestDurableRootAfterCOWPrepareFailpoint = errors.New("treedb: durable root post-COW-prepare failpoint")
 
 const (
 	commandWALWriterBufferSize              = 16 << 20
@@ -1399,6 +1440,7 @@ type Snapshot struct {
 	registryShardHint             int
 	stableIndexCapture            bool
 	stableIndexCaptureTransferred bool
+	stableIndexCaptureCounter     *atomic.Int64
 }
 
 type snapshotRootTree struct {
@@ -1455,6 +1497,21 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	db.valueLogPublicationMu.RLock()
 	defer db.valueLogPublicationMu.RUnlock()
+	return db.acquireSnapshotWithValueLogPublicationLockHeld()
+}
+
+// acquireSnapshotWithValueLogPublicationLockHeld captures a normal snapshot
+// when the caller already owns either side of valueLogPublicationMu. It exists
+// for publication paths that hold the exclusive side while sealing a candidate;
+// recursively taking RLock on sync.RWMutex would deadlock. All other snapshot
+// lifetime, root-reuse, value-log, and generation pins remain identical to
+// AcquireSnapshot.
+func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
+	if db == nil {
+		return nil
+	}
+	db.rootReuseMu.RLock()
+	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
 		return nil
 	}
@@ -1585,6 +1642,25 @@ func (db *DB) AcquireStableSnapshot() *Snapshot {
 	}
 	db.stableIndexCaptures.Add(1)
 	snapshot.stableIndexCapture = true
+	snapshot.stableIndexCaptureCounter = &db.stableIndexCaptures
+	return snapshot
+}
+
+// acquireStableSnapshotWithMaintenanceLockHeld captures the same stable-index
+// lease as AcquireStableSnapshot when the caller already owns maintenanceMu.
+// Maintenance operations must use this path to avoid recursively locking the
+// non-reentrant maintenance gate during durable-root candidate preparation.
+func (db *DB) acquireStableSnapshotWithMaintenanceLockHeld() *Snapshot {
+	if db == nil {
+		return nil
+	}
+	snapshot := db.AcquireSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	db.stableIndexCaptures.Add(1)
+	snapshot.stableIndexCapture = true
+	snapshot.stableIndexCaptureCounter = &db.stableIndexCaptures
 	return snapshot
 }
 
@@ -1649,12 +1725,13 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 		}
 	}
 	s.releaseLeafGenerationPins()
-	if s.stableIndexCapture && s.db != nil && !s.stableIndexCaptureTransferred {
-		s.db.stableIndexCaptures.Add(-1)
+	if s.stableIndexCapture && s.stableIndexCaptureCounter != nil && !s.stableIndexCaptureTransferred {
+		s.stableIndexCaptureCounter.Add(-1)
 	}
 	if s.stableIndexCapture {
 		s.stableIndexCapture = false
 	}
+	s.stableIndexCaptureCounter = nil
 	if s.db != nil {
 		s.db.snapPool.Put(s)
 	}
@@ -1765,6 +1842,12 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		_ = lock.Close()
 		return nil, err
+	}
+	if testDBOpenHook != nil {
+		if err := testDBOpenHook(db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	return db, nil
 }
@@ -1924,12 +2007,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
-	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
+	vm, err := valuelog.NewManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		p.Close()
 		return nil, err
 	}
-	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		p.Close()
 		return nil, err
@@ -2149,16 +2232,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 
-	// Recovery and WAL/value-log replay may touch the manager's file set. Reapply
-	// decode hooks and refresh before publishing the initial snapshot so
-	// read-write opens decode dict/template-backed values the same way as
-	// read-only opens and offline maintenance helpers.
+	// Recovery registers the exact resource paths named by each viable durable
+	// manifest, and replay producers register newly created segments directly.
+	// Reapply decode hooks without replacing that bounded inventory with a
+	// directory-wide discovery pass.
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
-	if err := vm.Refresh(); err != nil {
-		db.Close()
-		return nil, err
-	}
 	recoverySet := vm.CurrentSetNoRefresh()
 	reader := newValueReader(recoverySet)
 	releaseRecoverySet := func() error {
@@ -2169,7 +2248,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		recoverySet = nil
 		return err
 	}
-	recoveredLeafReset, err := recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq, releaseRecoverySet, vm.EvictSegment)
+	_, err = recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq, releaseRecoverySet, vm.EvictSegment)
 	if releaseErr := releaseRecoverySet(); err == nil && releaseErr != nil {
 		err = releaseErr
 	}
@@ -2177,14 +2256,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if recoveredLeafReset {
-		if err := vm.Refresh(); err != nil {
-			db.Close()
-			return nil, err
-		}
-	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
+		manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
+		if err == nil && !selectedExact {
+			manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, false, db.leafGenerationManifestStore)
+		}
 		if err != nil {
 			db.Close()
 			return nil, err
@@ -2199,7 +2275,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
-		ValueLogSet:                vm.CurrentSet(),
+		ValueLogSet:                vm.CurrentSetNoRefresh(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
@@ -2547,6 +2623,9 @@ func (db *DB) Close() error {
 
 func (db *DB) closeAfterHooksOnce() error {
 	db.closeTeardownOnce.Do(func() {
+		if testDBCloseHook != nil {
+			testDBCloseHook(db)
+		}
 		db.closeTeardownErr = db.closeAfterHooks()
 	})
 	return db.closeTeardownErr
@@ -2620,6 +2699,7 @@ func (db *DB) closeAfterHooks() error {
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
+	db.releaseDurableRootResourcesV1()
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
@@ -2724,115 +2804,29 @@ func (db *DB) recover() error {
 		if db.readOnly {
 			return errors.New("read-only open requires an existing index with meta pages")
 		}
-		if _, err := p.Alloc(2); err != nil {
-			return err
-		}
-		db.meta = page.MetaPageBody{}
-		db.metaPageID = MetaPage1ID
-
-		rootID, err := p.Alloc(1)
-		if err != nil {
-			return err
-		}
-		data, err := p.GetForWrite(rootID)
-		if err != nil {
-			return err
-		}
-		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		b.SetPageID(rootID)
-		b.Finish()
-
-		db.meta.UserRootPageID = rootID
-
-		// Init System Root
-		sysRootID, err := p.Alloc(1)
-		if err != nil {
-			return err
-		}
-		dataSys, err := p.GetForWrite(sysRootID)
-		if err != nil {
-			return err
-		}
-		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		bSys.SetPageID(sysRootID)
-		bSys.Finish()
-
-		db.meta.SystemRootPageID = sysRootID
-		db.meta.CommitSeq = 0
-
-		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
-			return err
-		}
-		if err := db.writeMeta(MetaPage1ID, db.meta); err != nil {
-			return err
-		}
-		db.metaPageID = MetaPage0ID
-		return nil
+		return db.initializeDurableRootV1(idx)
 	}
 
-	m0, valid0 := db.readMeta(MetaPage0ID)
-	m1, valid1 := db.readMeta(MetaPage1ID)
-
-	type metaCandidate struct {
-		id   uint64
-		meta page.MetaPageBody
+	selected, err := selectDurableRootV1(p, p.PageCount(), db.validateDurableDependencyManifestV1)
+	if err != nil {
+		return err
 	}
-	var candidates []metaCandidate
-	if valid0 {
-		candidates = append(candidates, metaCandidate{id: MetaPage0ID, meta: m0})
-	}
-	if valid1 {
-		candidates = append(candidates, metaCandidate{id: MetaPage1ID, meta: m1})
-	}
-	if len(candidates) == 0 {
-		return errors.New("both meta pages corrupted")
-	}
-	if len(candidates) == 2 && candidates[0].meta.CommitSeq < candidates[1].meta.CommitSeq {
-		candidates[0], candidates[1] = candidates[1], candidates[0]
-	}
-
-	var chosen *metaCandidate
-	for i := range candidates {
-		c := &candidates[i]
-
-		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
-			continue
+	selectionInstalled := false
+	defer func() {
+		if selectionInstalled {
+			return
 		}
-		if !db.freelistHeadValid(p, c.meta.FreelistHeadID) {
-			continue
+		for i := range selected.SlotResources {
+			selected.SlotResources[i].Release()
+			selected.SlotResources[i] = nil
 		}
-
-		chosen = c
-		break
+	}()
+	p.SetPageCount(selected.Record.TotalPages)
+	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+		return fmt.Errorf("enable recovered COW freelist: %w", err)
 	}
-	if chosen == nil {
-		return errors.New("no valid meta page")
-	}
-
-	db.meta = chosen.meta
-	db.metaPageID = chosen.id
-
-	if chosen.meta.TotalPages > 0 {
-		p.SetPageCount(chosen.meta.TotalPages)
-	}
-
-	// Update Allocator Head and best-effort seed cheap freelist debt counters used
-	// by background vacuum trigger reports. Keep open behavior tolerant: if the
-	// optional seed walk fails, the trigger treats absent reclaimable counts as
-	// no debt and FragmentationReport can still surface the detailed error.
-	idx.allocator.SetHead(chosen.meta.FreelistHeadID)
-	_ = idx.allocator.RefreshStats(chosen.meta.TotalPages)
-
+	db.installDurableRootSelectionV1(selected)
+	selectionInstalled = true
 	return nil
 }
 
@@ -2915,32 +2909,11 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	return page.DecodeMetaBodyCommandWALV1(body), true
 }
 
-func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
-	idx := db.idx.Load()
-	if idx == nil || idx.pager == nil {
-		return errors.New("missing pager")
-	}
-	if db.testFailWriteMeta.Load() {
-		return errTestWriteMetaFailpoint
-	}
-
-	data, err := idx.pager.GetForWrite(pageID)
-	if err != nil {
-		return err
-	}
-	meta.Encode(data[page.PageHeaderSize:])
-	n := node.NewNode(data)
-	n.SetPageID(pageID)
-	n.SetType(page.PageTypeMeta)
-	n.SetCount(0)
-	n.UpdateChecksum()
-	return nil
-}
-
 type finalizeCommitPost struct {
 	oldState                          *DBState
 	metrics                           adaptive.Metrics
 	vlogRefDelta                      *valueLogRefDelta
+	vlogRefTrackerAdvanced            bool
 	commitSeq                         uint64
 	kickPrune                         bool
 	doPrune                           bool
@@ -2951,6 +2924,7 @@ type finalizeCommitPost struct {
 	durMeta                           time.Duration
 	durSync2                          time.Duration
 	persistLeafGenerationManifest     bool
+	persistLeafGenerationIndexesOnly  bool
 	persistLeafGenerationManifestView *leafGenerationManifest
 	persistLeafGenerationStateView    *leafGenerationView
 	persistLeafGenerationRawFileIDs   []uint32
@@ -2969,6 +2943,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
+	// Producer closures are move-only inputs. Merge transfers their handles to
+	// the durable candidate; every earlier exit releases them here.
+	defer opts.durableResources.Release()
 	prePublishErr := func(err error) error {
 		return wrapFinalizeCommitError(err, true)
 	}
@@ -2978,7 +2955,35 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if err := db.commandWALPoisonedError(); err != nil {
 		return post, err
 	}
-	idx := db.idx.Load()
+	// Serialize before reading the visible meta projection. A preceding
+	// publication may already have synced its durable meta while it is still
+	// installing the matching in-memory state; preparing nextMeta before this
+	// gate would then reuse the just-published commit sequence.
+	if !opts.durablePublishLocked {
+		db.durablePublishMu.Lock()
+		defer db.durablePublishMu.Unlock()
+		opts.durablePublishLocked = true
+	}
+	// A publication that owned the durable gate while this caller waited may
+	// have crossed an outcome-ambiguous cut and poisoned the open handle. The
+	// admission check above cannot authorize work after that predecessor, and
+	// dependency capture is allowed to use projections that take no snapshot.
+	// Recheck while serialized before deriving or materializing another meta.
+	if err := db.commandWALPoisonedError(); err != nil {
+		return post, err
+	}
+	if opts.hasExpectedBaseCommitSeq {
+		db.mu.RLock()
+		currentCommitSeq := db.meta.CommitSeq
+		db.mu.RUnlock()
+		if currentCommitSeq != opts.expectedBaseCommitSeq {
+			return post, wrapFinalizeCommitError(fmt.Errorf("%w: base=%d current=%d", errDurableRootCandidateStale, opts.expectedBaseCommitSeq, currentCommitSeq), true)
+		}
+	}
+	idx := opts.durableIndex
+	if idx == nil {
+		idx = db.idx.Load()
+	}
 	if idx == nil {
 		return post, errors.New("missing index")
 	}
@@ -3047,138 +3052,110 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		nextMeta.MaxEntryRevision = uint64(opts.maxEntryRevision)
 	}
 
-	targetPageID := uint64(0)
-	if db.metaPageID == 0 {
-		targetPageID = 1
-	}
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 
-	leafPageSegmentRegistered := false
-	valueLogSegmentRegistered := false
-	valueLogSegmentRegistrationAttempted := false
 	if db.testFailFinalizeCommit.Load() {
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
-	if forceValueLogRefresh && db.valueLogManager != nil {
-		if err := durabilitycut.EmitBasic(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
+	// Every newly reachable external segment must be registered before the
+	// immutable manifest captures its exact identity. Visible-state installation
+	// consumes that bounded registered inventory without a directory scan.
+	if db.valueLogManager != nil {
+		if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
 			return post, prePublishErr(err)
 		}
-		registered, err := db.registerLeafPageLogSegmentsForPublish()
-		if err != nil {
-			return post, prePublishErr(err)
-		}
-		leafPageSegmentRegistered = registered
 		if valueLogAppender != nil {
 			path, fileID, ok := valueLogAppender.CurrentValueLogSegment()
 			if ok && path != "" && fileID != 0 {
-				valueLogSegmentRegistrationAttempted = true
-				registered, err := db.ensureValueLogSegmentRegisteredAt(path, fileID)
-				if err != nil {
+				if _, err := db.ensureValueLogSegmentRegisteredAt(path, fileID); err != nil {
 					return post, prePublishErr(err)
 				}
-				valueLogSegmentRegistered = registered
 			}
-		}
-		if err := durabilitycut.EmitBasic(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
-			return post, prePublishErr(err)
 		}
 	}
 
-	// 3. Write Meta - No DB Lock
+	// 3. Materialize the COW inventory, sync the exact index identity, write the
+	// alternate durable-meta slot once, and sync that slot. The durable-root
+	// publisher owns the only V1 meta mutation path.
 	t0 := time.Now()
-	var metaPath string
-	if durabilitycut.Enabled() {
-		metaPath = filepath.Join(db.dir, "index.db")
-	}
-	metaOffset := int64(targetPageID) * int64(page.PageSize)
-	if err := durabilitycut.EmitRange(durabilitycut.BeforeMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return post, prePublishErr(err)
-	}
-	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
-		return post, prePublishErr(err)
-	}
-	postMetaWriteErr := func(err error) error {
-		if err == nil {
-			return nil
+	var err error
+	// Capture the candidate's external closure before taking rootReuseMu. The
+	// full-scan fallback uses an ordinary snapshot, which must enter through the
+	// reader side of that gate. Root serialization and durablePublishMu keep the
+	// logical candidate fixed while the closure is captured; the exclusive gate
+	// below then seals new old-generation readers before reuse is sampled.
+	var durableResources *rootpublication.StableResourceSet
+	if db.durableRoot.pending == nil {
+		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.valueLogPublicationLocked)
+		if err != nil {
+			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
-		// The target meta page has been dirtied. Any failure from this point
-		// leaves publication outcome ambiguous until the database is reopened.
-		db.publicationPoisoned.Store(true)
-		return wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+	} else if opts.durableResources != nil {
+		opts.durableResources.Release()
+		return post, wrapFinalizeCommitError(errors.New("durable-root retry received replacement producer resources"), true)
 	}
-	if err := durabilitycut.EmitRange(durabilitycut.AfterMetaWrite, durabilitycut.ResourceMeta, db.dir, metaPath, metaOffset, int64(page.PageSize)); err != nil {
-		return post, postMetaWriteErr(err)
+	// Seal new base-generation captures before the reuse capability is sampled.
+	// The gate remains held until publishSnapshotView exposes the same root that
+	// the durable meta and allocator generation make authoritative.
+	db.rootReuseMu.Lock()
+	rootReuseLocked := true
+	defer func() {
+		if rootReuseLocked {
+			db.rootReuseMu.Unlock()
+		}
+	}()
+	candidate, prepareErr := db.prepareOrResumeDurableRootCandidateV1(idx, nextMeta, retired, durableResources, opts.closeTeardownPinned)
+	if prepareErr != nil {
+		return post, wrapFinalizeCommitError(prepareErr, !errors.Is(prepareErr, ErrRecoveryRequired))
+	}
+	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
+		// The immutable candidate now owns its allocator reservations and exact
+		// resource handles. No root-serialization lock is needed by the remaining
+		// flush/sync/meta transaction or the visible-state install below.
+		releaseRootSerialization()
+	}
+	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
+		hook()
+	}
+	nextMeta, err = db.executeDurableRootCandidateWithRetryV1(candidate)
+	if err != nil {
+		return post, err
+	}
+	poisonVisibleInstall := func(err error) (finalizeCommitPost, error) {
+		db.publicationPoisoned.Store(true)
+		return post, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+	}
+	if db.testFailDurableRootVisibleInstall.Load() {
+		return poisonVisibleInstall(errTestDurableRootVisibleInstallFailpoint)
 	}
 	if debugTiming {
 		durMeta = time.Since(t0)
 	}
 
-	// 4. Sync Meta - No DB Lock
-	if sync {
-		t1 := time.Now()
-		var err error
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-			return post, postMetaWriteErr(err)
-		}
-		if db.testFailSyncMeta.Load() {
-			err = errTestSyncMetaFailpoint
-		} else if opts.syncMetaPageOnly {
-			err = idx.pager.SyncPages([]uint64{targetPageID})
-		} else {
-			err = idx.pager.Sync()
-		}
-		if err != nil {
-			return post, postMetaWriteErr(err)
-		}
-		if err := durabilitycut.EmitPath(durabilitycut.AfterMetaSync, durabilitycut.ResourceMeta, db.dir, metaPath); err != nil {
-			return post, postMetaWriteErr(err)
-		}
-		if debugTiming {
-			durSync2 = time.Since(t1)
-		}
-	}
-
-	// 5. Update visible state and retire pages.
+	// 4. Update visible state. Page retirement is part of the COW generation
+	// sealed by publishDurableRootV1, never an in-memory graveyard side effect.
 	lockStart = time.Now()
 	db.mu.Lock()
 	watermarkWait += time.Since(lockStart)
 	holdStart = time.Now()
 	db.meta = nextMeta
 	db.advanceEntryRevisionFloor(page.EntryRevision(nextMeta.MaxEntryRevision))
-	db.metaPageID = targetPageID
-	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
+	db.metaPageID = db.durableRoot.slot
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		needRefresh := false
-		if len(touchedValueLogSegments) > 0 {
-			for _, id := range touchedValueLogSegments {
-				if !db.valueLogManager.HasSegment(id) {
-					needRefresh = true
-					break
-				}
-			}
-		}
-		if forceValueLogRefresh && (!leafPageSegmentRegistered || (valueLogSegmentRegistrationAttempted && !valueLogSegmentRegistered)) {
-			// If no registration path is available, force one refresh as a
-			// safety fallback before publishing the new state.
-			needRefresh = true
-		}
-		if needRefresh {
-			if err := db.valueLogManager.Refresh(); err != nil {
-				db.mu.Unlock()
-				return post, err
-			}
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		} else {
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		}
+		// The exact durable-root closure has already resolved and retained every
+		// reachable external segment, and unresolved producer registrations fail
+		// before the alternate meta is mutated. A broad directory scan here would
+		// add unrelated files rather than strengthen the candidate closure.
+		valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	var leafGenerationView *leafGenerationView
 	if leafManifest != nil {
 		db.leafGenerationManifest = leafManifest
-		post.persistLeafGenerationManifest = true
+		post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
+		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
 		post.persistLeafGenerationManifestView = leafManifest
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
@@ -3187,7 +3164,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		stagedLeafManifest, err := db.stagedLeafGenerationManifestWithPendingResult(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
-			return post, err
+			return poisonVisibleInstall(err)
 		}
 		if stagedLeafManifest.changed {
 			leafGenerationView = db.leafGenerationViewForManifest(stagedLeafManifest.manifest)
@@ -3229,9 +3206,26 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()
+	db.rootReuseMu.Unlock()
+	rootReuseLocked = false
 	watermarkHold += time.Since(holdStart)
 	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
 
+	// The reachability tracker is publication input for the next durable
+	// candidate, so advance it before durablePublishMu can pass to another
+	// publisher. Deferring this to caller post-work permits out-of-order deltas
+	// and can make a sequence-current tracker carry counts from an older root.
+	if db.valueLogRefTracker != nil {
+		if post.vlogRefDelta != nil {
+			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
+				db.valueLogRefTracker.invalidate()
+				db.reportError(err)
+			}
+		} else {
+			db.valueLogRefTracker.invalidate()
+		}
+		post.vlogRefTrackerAdvanced = true
+	}
 	post.kickPrune = db.pruner.Enabled()
 	post.doPrune = !post.kickPrune
 	if debugTiming {
@@ -3245,6 +3239,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if !opts.skipConditionalRootConflict {
 		db.conditionalRecordRootCommit(oldUserRootID, newRootID, post.commitSeq)
 	}
+	if opts.recordVacuumMutation != nil {
+		opts.recordVacuumMutation()
+	}
 
 	return post, nil
 }
@@ -3255,7 +3252,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.vlogRefDelta != nil {
 		defer releaseValueLogRefDelta(post.vlogRefDelta)
 	}
-	if db.valueLogRefTracker != nil {
+	if db.valueLogRefTracker != nil && !post.vlogRefTrackerAdvanced {
 		if post.vlogRefDelta != nil {
 			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
 				db.valueLogRefTracker.invalidate()
@@ -3280,7 +3277,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.oldState != nil {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
-	if post.persistLeafGenerationManifest || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
+	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
 		var (
 			persistErr        error
 			pendingErr        error
@@ -3313,6 +3310,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 					}
 				}
 			}
+		} else if post.persistLeafGenerationIndexesOnly {
+			db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
 		} else if len(post.clearLeafGenerationPendingFileIDs) > 0 {
 			clearPending = true
 		}
@@ -3360,6 +3359,64 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	return nil
 }
 
+// finalizeCommitReleasingRootSerialization transfers a completed root build to
+// the durable publisher. The caller must hold every lock named by release. The
+// helper acquires publication serialization in root-lock order, releases those
+// locks before legacy dependency preparation, and keeps the durable publisher
+// locked through candidate preparation, exact I/O, and visible-state install.
+func (db *DB) finalizeCommitReleasingRootSerialization(
+	newRootID uint64,
+	sysRootID uint64,
+	retired []uint64,
+	sync bool,
+	metrics adaptive.Metrics,
+	touchedValueLogSegments []uint32,
+	forceValueLogRefresh bool,
+	vlogRefDelta *valueLogRefDelta,
+	leafManifest *leafGenerationManifest,
+	leafManifestRawFileIDs []uint32,
+	opts finalizeCommitOptions,
+	release func(),
+	onError func(error),
+) (finalizeCommitPost, error) {
+	if release == nil {
+		return finalizeCommitPost{}, errors.New("missing root-serialization release")
+	}
+	if opts.durableIndex == nil {
+		opts.durableIndex = db.idx.Load()
+	}
+	if !opts.hasExpectedBaseCommitSeq {
+		db.mu.RLock()
+		opts.expectedBaseCommitSeq = db.meta.CommitSeq
+		db.mu.RUnlock()
+		opts.hasExpectedBaseCommitSeq = true
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	release()
+
+	guard, err := db.prepareFinalizeCommitDurability(sync)
+	if err != nil {
+		if onError != nil {
+			onError(err)
+		}
+		return finalizeCommitPost{}, err
+	}
+	defer guard.Release()
+
+	opts.skipPrePublishFlush = true
+	opts.durablePublishLocked = true
+	opts.releaseRootSerialization = func() {}
+	post, err := db.finalizeCommitLockedWithOptions(
+		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
+		forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, opts,
+	)
+	if err != nil && onError != nil {
+		onError(err)
+	}
+	return post, err
+}
+
 // Commit persists the new root (Sync=true by default).
 // Note: This is usually called internally by Batch.Write or externally if manual root management.
 // If manual, retired pages are unknown? `Commit` signature assumes manual root.
@@ -3369,13 +3426,20 @@ func (db *DB) Commit(newRootID uint64) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
 	// Public Commit assumes the caller has built a new tree.
 	// We need to serialize with other writers.
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		return err
 	}
@@ -3390,7 +3454,20 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
+		finalizeCommitOptions{closeTeardownPinned: true},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	db.finalizeCommitPostWork(post)
+	return nil
 }
 
 // Checkpoint forces a durable boundary for previously-published backend state.
@@ -3705,12 +3782,77 @@ func (db *DB) IsClosing() bool {
 	return db == nil || db.closing.Load()
 }
 
-// checkWriteAdmissionLocked rejects writers that lost the race with Close.
-// Callers must hold writeMu for reading or writing so a successful admission
-// remains valid until their write-critical section completes.
+// beginVacuumCutoverGateLocked starts the narrow interval in which online
+// vacuum has stopped recording old-generation mutations but deliberately does
+// not hold writeMu while syncing the replacement. The caller holds writeMu.
+func (db *DB) beginVacuumCutoverGateLocked() {
+	db.vacuumCutoverGateMu.Lock()
+	defer db.vacuumCutoverGateMu.Unlock()
+	if db.vacuumCutoverDone != nil || db.vacuumCutoverInProgress.Load() {
+		panic("treedb: vacuum cutover gate already active")
+	}
+	db.vacuumCutoverDone = make(chan struct{})
+	db.vacuumCutoverInProgress.Store(true)
+}
+
+// endVacuumCutoverGateLocked releases writers after the replacement has either
+// been installed or abandoned. The caller holds writeMu, so awakened writers
+// cannot pass admission until the final cutover state is visible.
+func (db *DB) endVacuumCutoverGateLocked() {
+	db.vacuumCutoverGateMu.Lock()
+	done := db.vacuumCutoverDone
+	db.vacuumCutoverDone = nil
+	db.vacuumCutoverInProgress.Store(false)
+	if done != nil {
+		close(done)
+	}
+	db.vacuumCutoverGateMu.Unlock()
+}
+
+// waitForVacuumCutoverWriteLocked keeps ordinary writers blocked while online
+// vacuum syncs a replacement pager without writeMu. The caller must hold
+// writeMu exclusively; it returns with writeMu held exclusively.
+func (db *DB) waitForVacuumCutoverWriteLocked() {
+	for db != nil && db.vacuumCutoverInProgress.Load() {
+		db.vacuumCutoverGateMu.Lock()
+		done := db.vacuumCutoverDone
+		active := db.vacuumCutoverInProgress.Load() && done != nil
+		db.vacuumCutoverGateMu.Unlock()
+		if !active {
+			return
+		}
+		db.writeMu.Unlock()
+		<-done
+		db.writeMu.Lock()
+	}
+}
+
+// checkWriteAdmissionLocked rejects writers that lost the race with Close and
+// waits out the sync-without-writeMu interval of an online-vacuum cutover.
+// Callers must hold writeMu exclusively so a successful admission remains
+// valid until their write-critical section completes.
 func (db *DB) checkWriteAdmissionLocked() error {
+	if db == nil {
+		return ErrClosed
+	}
+	db.waitForVacuumCutoverWriteLocked()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if err := db.publicationPoisonedError(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkReadAdmissionLocked is the read-lock counterpart used by validation and
+// optimistic build phases that do not mutate the selected generation.
+func (db *DB) checkReadAdmissionLocked() error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
+	}
+	if err := db.publicationPoisonedError(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -3857,8 +3999,15 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 // Note: This operation causes file growth as old pages are not immediately reclaimed
 // (they are leaked to the freelist but not reused during this append-only build).
 func (db *DB) CompactIndex() error {
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		return err
 	}
@@ -3891,7 +4040,7 @@ func (db *DB) CompactIndex() error {
 	defer iter.Close()
 
 	// Build new tree sequentially
-	alloc := &pagerAllocator{p: idx.pager}
+	alloc := appendOnlyPageAllocator{alloc: idx.allocator}
 	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
@@ -3911,7 +4060,20 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil)
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
+		finalizeCommitOptions{closeTeardownPinned: true},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	db.finalizeCommitPostWork(post)
+	return nil
 }
 
 type pagerAllocator struct {

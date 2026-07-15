@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -12,6 +13,16 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
+
+func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
+	concurrentMutation := fmt.Errorf("wrapped vacuum result: %w", backenddb.ErrVacuumConcurrentMutation)
+	if backgroundIndexVacuumShouldReport(concurrentMutation) {
+		t.Fatal("concurrent-mutation abort classified as permanent background error")
+	}
+	if !backgroundIndexVacuumShouldReport(errors.New("vacuum I/O failure")) {
+		t.Fatal("ordinary vacuum failure classified as retry-only")
+	}
+}
 
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
 	dir := t.TempDir()

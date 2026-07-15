@@ -575,6 +575,30 @@ func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 	return nil
 }
 
+// RollbackPreVisible removes an unpublished candidate if it exists. A tail
+// whose sink accepted a write remains burned, matching Fail; callers may use
+// this after a staged allocator preparation error without first determining
+// how far materialization progressed.
+func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.candidates[c]
+	if r == nil {
+		return nil
+	}
+	if r.state != CandidatePreVisible {
+		return fmt.Errorf("candidate %x is visible", c)
+	}
+	for _, id := range r.ids {
+		delete(l.owners, id)
+	}
+	if r.tailReserved && r.tailWriteAttempted {
+		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
+	}
+	delete(l.candidates, c)
+	return nil
+}
+
 func (l *ReservationLedger) Publish(c CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

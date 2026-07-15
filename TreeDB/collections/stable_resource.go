@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -10,6 +11,110 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+var stableColumnDurableRequirementFields = []rootpublication.ReachabilityField{
+	rootpublication.ReachabilityColumnManifest,
+	rootpublication.ReachabilityTypedColumnMultipart,
+	rootpublication.ReachabilityTypedColumnValue,
+	rootpublication.ReachabilityTypedColumnCode,
+	rootpublication.ReachabilityHNSWSearchPack,
+	rootpublication.ReachabilityVectorGraphPack,
+}
+
+// stableColumnManifestDurableRequirements derives the complete authoritative
+// external-reference closure from the exact candidate manifest records. It
+// includes retained older generations as well as newly prepared assets so the
+// DB can clone only still-reachable fallback-slot pins.
+func stableColumnManifestDurableRequirements(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationRequirements, error) {
+	requirements := rootpublication.StableLogicalObligationRequirements{
+		ScopedFields: append([]rootpublication.ReachabilityField(nil), stableColumnDurableRequirementFields...),
+	}
+	appendRef := func(ref ColumnAssetRef, reachability rootpublication.ReachabilityField) error {
+		if ref.Namespace != expectedNamespace || ref.Generation == 0 || ref.Generation > activeGeneration {
+			return fmt.Errorf("collections: durable column ref namespace/generation %+v outside candidate manifest", ref)
+		}
+		if err := validateColumnAssetRefForPlan(ref); err != nil {
+			return err
+		}
+		requirements.Obligations = append(requirements.Obligations, stableColumnLogicalObligation(ref, reachability))
+		return nil
+	}
+	appendClassified := func(ref ColumnAssetRef) error {
+		_, reachability, classification, err := stableColumnAssetResourceClassification(ref.Kind)
+		if err != nil {
+			return err
+		}
+		if classification == "rebuildable-non-authoritative" {
+			return nil
+		}
+		return appendRef(ref, reachability)
+	}
+	for _, record := range records {
+		switch {
+		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
+			part, err := decodeColumnManifestPartRecord(record.value)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			if err := appendClassified(part.AssetRef); err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			asset, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			if err := appendClassified(asset.AssetRef); err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+			asset, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			if err := appendClassified(asset.AssetRef); err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			asset, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			if err := appendClassified(asset.AssetRef); err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+		case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
+			graph, err := decodeColumnVectorGraphManifestRecord(record.value)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			refs, err := columnVectorGraphManifestAssetRefsForScan(graph, activeGeneration, expectedNamespace)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			for _, ref := range refs {
+				if err := appendRef(ref, rootpublication.ReachabilityVectorGraphPack); err != nil {
+					return rootpublication.StableLogicalObligationRequirements{}, err
+				}
+			}
+		case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
+			state, err := decodeColumnVectorIndexStateRecord(record.value)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			refs, err := columnVectorIndexStateManifestAssetRefsForScan(state, activeGeneration, expectedNamespace)
+			if err != nil {
+				return rootpublication.StableLogicalObligationRequirements{}, err
+			}
+			for _, ref := range refs {
+				if err := appendRef(ref, rootpublication.ReachabilityVectorGraphPack); err != nil {
+					return rootpublication.StableLogicalObligationRequirements{}, err
+				}
+			}
+		}
+	}
+	return rootpublication.NormalizeStableLogicalObligationRequirements(requirements)
+}
 
 var syncStableColumnAssetResourceForPublish = func(file *os.File, _ rootpublication.DurableFrontier) error {
 	return file.Sync()
@@ -245,11 +350,22 @@ func stableColumnAssetNamespaceToken(parent, resource *os.File, ref ColumnAssetR
 	if parent == nil || resource == nil {
 		return nil, fmt.Errorf("%w: column asset namespace requires exact parent and resource handles", rootpublication.ErrUnresolvedResource)
 	}
-	return rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
+	return rootpublication.NewStableNamespaceToken(stableColumnAssetNamespaceSpec(parent, resource, ref))
+}
+
+func stableColumnAssetKnownNamespaceToken(registry *rootpublication.IdentityPinRegistry, parent, resource *os.File, ref ColumnAssetRef) (*rootpublication.StableNamespaceToken, error) {
+	if registry == nil || parent == nil || resource == nil {
+		return nil, fmt.Errorf("%w: known column asset namespace requires registry and exact handles", rootpublication.ErrUnresolvedResource)
+	}
+	return registry.NewStableNamespaceTokenForKnownLink(stableColumnAssetNamespaceSpec(parent, resource, ref))
+}
+
+func stableColumnAssetNamespaceSpec(parent, resource *os.File, ref ColumnAssetRef) rootpublication.StableNamespaceSpec {
+	return rootpublication.StableNamespaceSpec{
 		Parent: parent, LinkedResource: resource, ParentGeneration: uint64(ref.FileID), Operation: rootpublication.NamespaceCreate,
 		NewName:        filepath.Base(stableColumnAssetDiagnosticPath(ref)),
 		DiagnosticPath: filepath.Dir(stableColumnAssetDiagnosticPath(ref)),
-	})
+	}
 }
 
 func validateStableColumnResourcesMatchPrepared(assets []ColumnPreparedAsset, resources *rootpublication.StableResourceSet) error {

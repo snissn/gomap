@@ -13,6 +13,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -26,7 +27,7 @@ func mainIndexPath(rootDir string) string {
 	return filepath.Join(rootDir, "index.db")
 }
 
-func readMainMeta(t *testing.T, rootDir string) page.MetaPageBody {
+func readMainMeta(t *testing.T, rootDir string) rootpublication.DurableRootRecordV1 {
 	t.Helper()
 	indexPath := mainIndexPath(rootDir)
 	p, err := pager.OpenReadOnly(indexPath, 256*1024)
@@ -35,34 +36,46 @@ func readMainMeta(t *testing.T, rootDir string) page.MetaPageBody {
 	}
 	defer func() { _ = p.Close() }()
 
-	readMetaAt := func(id uint64) (page.MetaPageBody, bool) {
+	readMetaAt := func(id uint64) (page.DurableMetaV1, bool) {
 		data, err := p.Get(id)
 		if err != nil {
-			return page.MetaPageBody{}, false
+			return page.DurableMetaV1{}, false
 		}
 		n := node.NewNodeView(data)
 		if !n.VerifyChecksum() || n.Type() != page.PageTypeMeta {
-			return page.MetaPageBody{}, false
+			return page.DurableMetaV1{}, false
 		}
-		return page.DecodeMetaBody(data[page.PageHeaderSize:]), true
+		meta, err := page.DecodeDurableMetaV1(data[page.PageHeaderSize:])
+		return meta, err == nil
 	}
 
 	m0, ok0 := readMetaAt(0)
 	m1, ok1 := readMetaAt(1)
+	var selected page.DurableMetaV1
 	switch {
 	case ok0 && ok1:
 		if m1.CommitSeq > m0.CommitSeq {
-			return m1
+			selected = m1
+		} else {
+			selected = m0
 		}
-		return m0
 	case ok0:
-		return m0
+		selected = m0
 	case ok1:
-		return m1
+		selected = m1
 	default:
-		t.Fatalf("no valid meta pages found in %s", indexPath)
-		return page.MetaPageBody{}
+		t.Fatalf("no valid durable-root meta pages found in %s", indexPath)
 	}
+
+	image, err := p.Get(selected.RootRecordPageID)
+	if err != nil {
+		t.Fatalf("read durable-root record page %d: %v", selected.RootRecordPageID, err)
+	}
+	record, err := rootpublication.DecodeDurableRootRecordV1(image, selected.RootRecordPageID, selected.RootRecordDigest)
+	if err != nil {
+		t.Fatalf("decode durable-root record page %d: %v", selected.RootRecordPageID, err)
+	}
+	return record
 }
 
 func requireMainRootLeafLogChildren(t *testing.T, rootDir string, rootID uint64) {

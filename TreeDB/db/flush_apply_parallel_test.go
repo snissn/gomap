@@ -121,7 +121,7 @@ func openFlushApplyLeafLogTestDBWithSpanNative(t *testing.T, concurrency int, sp
 		t.Fatalf("Open leaf-log(concurrency=%d): %v", concurrency, err)
 	}
 	leafLog := newRewriteWriter(ValueLogDirPath(d.dir), 0, 0, 64<<20)
-	leafLog.ConfigureLeafLog(ValueLogDirPath(d.dir), rewriteLeafLogLaneID, 0)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(d.dir), rewriteLeafLogLaneID, 0)
 	lockedLeafLog := &lockedRewriteLeafPageLog{inner: leafLog}
 	d.SetLeafPageLog(lockedLeafLog)
 	t.Cleanup(func() { closeNoErr(t, lockedLeafLog) })

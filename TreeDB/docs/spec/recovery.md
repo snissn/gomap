@@ -83,36 +83,60 @@ semantics.
 
 ## 2. Backend Index Recovery
 
-## 2.1 New DB bootstrap
+### 2.1 New DB bootstrap
 
 If page count is less than 2:
 
 - allocate two meta pages,
 - allocate empty user root leaf,
 - allocate empty system root leaf,
-- write both meta pages,
-- initialize commit sequence to zero.
+- materialize the initial COW freelist, dependency manifest, and durable-root
+  record,
+- seal the first durable-meta slot and leave the alternate slot unsealed until
+  the next successful publication.
 
-## 2.2 Existing DB meta selection
+Legacy non-empty meta bodies are not migrated in this pre-alpha format. Open
+returns `ErrLegacyFormatRebuildRequired`; callers must rebuild the DB directory.
 
-- Read both meta pages (`MetaPage0`, `MetaPage1`).
-- Validate page checksum and page type.
-- Build candidate set from valid pages.
-- Sort by descending `CommitSeq`.
-- Pick first candidate passing structural checks:
-  - user root page valid,
-  - system root page valid,
-  - freelist head valid (or zero).
+### 2.2 Existing DB bounded selection
 
-If neither candidate is valid, open fails.
+- Read exactly the two fixed meta pages (`MetaPage0`, `MetaPage1`).
+- Validate each page's checksum, type, durable-meta V1 header, scalar bounds,
+  and meta-projection digest.
+- Sort valid candidates by descending `CommitSeq`, with slot ID as the stable
+  tie-breaker.
+- Validate each candidate independently without recursing through the B-tree or
+  scanning value-log contents:
+  - load the exact durable-root-record page and verify both its page checksum
+    and SHA-256 digest from the meta,
+  - require its commit/durable sequences and projection digest to match the
+    meta and its durable extent not to exceed the physical file,
+  - load the checksummed COW freelist generation and verify its digest and
+    recorded free/retired counts,
+  - load the bounded dependency-manifest page chain and validate the exact
+    external resource identities, digests, frontiers, reachability fields, and
+    namespace obligations,
+  - checksum and type-check the user and system root pages.
+- Select the newest complete candidate while retaining the independently
+  complete older slot as the one-generation fallback and ownership pin.
 
-## 2.3 State install
+If the newest candidate is incomplete or corrupt, selection falls back to the
+older complete slot. If neither slot is complete, open fails with
+`ErrNoRecoverableMeta` and stable per-slot rejection reasons. Normal recovery
+never follows the parent-record chain and never repairs a candidate by combining
+fields or resources from the other slot.
 
-From chosen meta:
+### 2.3 State install
+
+From the chosen durable-root tuple:
 
 - set active meta page id,
-- set pager page count from `TotalPages` when non-zero,
-- set allocator head from `FreelistHeadID`.
+- install the user/system roots, applied command LSN, maximum entry revision,
+  and commit/durable sequences from the same record,
+- set the pager extent from `TotalPages`,
+- install the selected COW freelist generation,
+- retain the exact external-resource closures and auxiliary-page inventories
+  for both independently complete slots.
 
 ## 3. WAL Segment Discovery
 

@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -125,6 +128,168 @@ func TestCommandWALAppliedLSNOnlyPublishPreservesValueLogRefTracker(t *testing.T
 	}
 	if disk.commitSeq != afterSeq {
 		t.Fatalf("metadata seq after close=%d, want %d", disk.commitSeq, afterSeq)
+	}
+}
+
+func TestCommandWALAppliedLSNOnlyPublishRebindsRootsAfterDurableGateWait(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.SetSync([]byte("seed"), []byte("one")); err != nil {
+		t.Fatalf("seed SetSync: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("missing state before concurrent publications")
+	}
+
+	candidatePrepared := make(chan struct{})
+	releaseCandidate := make(chan struct{})
+	var candidateOnce sync.Once
+	db.testDurableRootCandidatePreparedHook = func() {
+		candidateOnce.Do(func() {
+			close(candidatePrepared)
+			<-releaseCandidate
+		})
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- db.SetSync([]byte("new-root"), []byte("two"))
+	}()
+	select {
+	case <-candidatePrepared:
+	case <-time.After(5 * time.Second):
+		t.Fatal("root-changing publication did not reach the durable candidate gate")
+	}
+
+	commandBeforeGate := make(chan struct{})
+	var commandOnce sync.Once
+	db.testCommandWALBeforeDurablePublishLockHook = func() {
+		commandOnce.Do(func() { close(commandBeforeGate) })
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- db.PublishCommandWALAppliedLSN(1, []CommandWALLSNRange{{First: 1, Last: 1}}, true)
+	}()
+	select {
+	case <-commandBeforeGate:
+	case <-time.After(5 * time.Second):
+		close(releaseCandidate)
+		t.Fatal("applied-LSN publication did not reach the durable publish gate")
+	}
+
+	close(releaseCandidate)
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("root-changing SetSync: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("root-changing publication did not finish")
+	}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("PublishCommandWALAppliedLSN: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("applied-LSN publication did not finish")
+	}
+
+	db.testDurableRootCandidatePreparedHook = nil
+	db.testCommandWALBeforeDurablePublishLockHook = nil
+	after := db.State()
+	if after == nil {
+		t.Fatal("missing state after concurrent publications")
+	}
+	if after.RootPageID == before.RootPageID {
+		t.Fatalf("root rolled back to pre-publication root %d", before.RootPageID)
+	}
+	if after.AppliedCommandLSN != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", after.AppliedCommandLSN)
+	}
+	got, err := db.Get([]byte("new-root"))
+	if err != nil || string(got) != "two" {
+		t.Fatalf("Get(new-root)=(%q, %v), want (two, nil)", got, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	if state := reopened.State(); state == nil || state.RootPageID != after.RootPageID || state.AppliedCommandLSN != 1 {
+		t.Fatalf("reopened state=%+v, want root=%d applied_lsn=1", state, after.RootPageID)
+	}
+	got, err = reopened.Get([]byte("new-root"))
+	if err != nil || string(got) != "two" {
+		t.Fatalf("reopened Get(new-root)=(%q, %v), want (two, nil)", got, err)
+	}
+}
+
+func TestCommandWALAppliedLSNOnlyPublishRechecksPoisonAfterDurableGateWait(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.State()
+	if before == nil {
+		t.Fatal("missing state before publication")
+	}
+	beforeGate := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	db.testCommandWALBeforeDurablePublishLockHook = func() {
+		once.Do(func() {
+			close(beforeGate)
+			<-release
+		})
+	}
+	db.durablePublishMu.Lock()
+	gateLocked := true
+	defer func() {
+		if gateLocked {
+			db.durablePublishMu.Unlock()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.PublishCommandWALAppliedLSN(
+			before.AppliedCommandLSN+1,
+			[]CommandWALLSNRange{{First: before.AppliedCommandLSN + 1, Last: before.AppliedCommandLSN + 1}},
+			true,
+		)
+	}()
+	select {
+	case <-beforeGate:
+	case <-time.After(5 * time.Second):
+		t.Fatal("applied-LSN publication did not reach the durable publish gate")
+	}
+	db.publicationPoisoned.Store(true)
+	close(release)
+	db.durablePublishMu.Unlock()
+	gateLocked = false
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("PublishCommandWALAppliedLSN error=%v, want ErrRecoveryRequired", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("poisoned publication did not return")
+	}
+	if after := db.State(); after == nil || after.CommitSeq != before.CommitSeq || after.AppliedCommandLSN != before.AppliedCommandLSN {
+		t.Fatalf("state changed after poisoned gate wait: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -245,7 +410,7 @@ func TestCommandWALAppliedCommandLSNAlternatingMetaPages(t *testing.T) {
 	}
 }
 
-func TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes(t *testing.T) {
+func TestCommandWALDurableMetaRejectsProjectionTampering(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -256,14 +421,9 @@ func TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes(t *testing.T) 
 		t.Fatalf("Close: %v", err)
 	}
 
-	writeLegacyMetaReservedBytes(t, dir, activeMetaPage, 12345)
-	reopen, err := Open(Options{Dir: dir})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer reopen.Close()
-	if got := reopen.State().AppliedCommandLSN; got != 0 {
-		t.Fatalf("AppliedCommandLSN=%d, want 0 without command WAL V1 in-page marker", got)
+	tamperDurableMetaProjectionBytes(t, dir, activeMetaPage, 12345)
+	if _, err := Open(Options{Dir: dir}); !errors.Is(err, ErrNoRecoverableMeta) || !strings.Contains(err.Error(), page.ErrDurableMetaProjection.Error()) {
+		t.Fatalf("reopen error=%v, want no recoverable meta with projection mismatch", err)
 	}
 }
 
@@ -1540,7 +1700,7 @@ func corruptIndexPageByte(t *testing.T, dir string, pageID uint64) {
 	}
 }
 
-func writeLegacyMetaReservedBytes(t *testing.T, dir string, pageID uint64, reserved uint64) {
+func tamperDurableMetaProjectionBytes(t *testing.T, dir string, pageID uint64, value uint64) {
 	t.Helper()
 	f, err := os.OpenFile(filepath.Join(dir, indexFileName), os.O_RDWR, 0)
 	if err != nil {
@@ -1552,7 +1712,7 @@ func writeLegacyMetaReservedBytes(t *testing.T, dir string, pageID uint64, reser
 	if _, err := f.ReadAt(buf, off); err != nil {
 		t.Fatalf("ReadAt meta page: %v", err)
 	}
-	binary.LittleEndian.PutUint64(buf[page.PageHeaderSize+60:page.PageHeaderSize+68], reserved)
+	binary.LittleEndian.PutUint64(buf[page.PageHeaderSize+60:page.PageHeaderSize+68], value)
 	node.NewNode(buf).UpdateChecksum()
 	if _, err := f.WriteAt(buf, off); err != nil {
 		t.Fatalf("WriteAt meta page: %v", err)

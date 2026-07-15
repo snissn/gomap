@@ -22,6 +22,11 @@ func TestBackgroundPruneMakesProgress(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = d.Close() }()
+	initialStats := d.Stats()
+	initialFreePages, err := strconv.ParseUint(initialStats["treedb.freelist.free_pages_total"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse initial freelist free pages: %v", err)
+	}
 
 	const (
 		commits = 6
@@ -47,8 +52,11 @@ func TestBackgroundPruneMakesProgress(t *testing.T) {
 	for time.Now().Before(deadline) {
 		stats := d.Stats()
 		if stats["treedb.prune.enabled"] == "true" {
-			n, err := strconv.ParseUint(stats["treedb.prune.pages_freed"], 10, 64)
-			if err == nil && n > 0 {
+			pruned, pruneErr := strconv.ParseUint(stats["treedb.prune.pages_freed"], 10, 64)
+			freePages, freeErr := strconv.ParseUint(stats["treedb.freelist.free_pages_total"], 10, 64)
+			// Durable-root COW generations seal retired pages into the freelist
+			// directly; legacy graveyard work still increments prune.pages_freed.
+			if pruneErr == nil && freeErr == nil && (pruned > 0 || freePages > initialFreePages) {
 				return
 			}
 		}
@@ -56,7 +64,7 @@ func TestBackgroundPruneMakesProgress(t *testing.T) {
 	}
 
 	stats := d.Stats()
-	t.Fatalf("expected background prune to free pages; stats=%v", stats)
+	t.Fatalf("expected retired-page reclamation progress; prune_enabled=%q prune_pages_freed=%q freelist_free_pages=%q initial_freelist_free_pages=%d", stats["treedb.prune.enabled"], stats["treedb.prune.pages_freed"], stats["treedb.freelist.free_pages_total"], initialFreePages)
 }
 
 func TestBackgroundPruneStopsOnClose(t *testing.T) {

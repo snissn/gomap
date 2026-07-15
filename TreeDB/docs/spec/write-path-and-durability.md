@@ -25,13 +25,13 @@ Recoverable(Meta[N]) =>
   Stable(AppliedWALCoverage[N])
 ```
 
-`PublicationSeal[N]` is part of the target contract, not a claim about the
-current on-disk format. TreeDB does not yet write an on-disk publication seal.
-The oracle's `before-publication-seal-write` and
-`after-publication-seal-write` cut names are logical placeholders at the
-current publication-registration boundary; DUR-09
-[#3679](https://github.com/snissn/gomap/issues/3679) will retarget them to the
-real seal write.
+`PublicationSeal[N]` is the immutable `DurableRootRecordV1` page bound by the
+selected meta, together with its `DependencyManifestV1` and COW closure. The
+oracle's `before-publication-seal-write` and
+`after-publication-seal-write` cuts bracket the exact root-record page write.
+The record becomes stable only with the subsequent exact-index sync and becomes
+recovery-selectable only after the alternate meta is written and synced. These
+events describe ordered writes; they are not claims that an fsync happened.
 
 `Stable` means present in the modeled image after process-volatile file bytes
 and unsynced namespace mutations have been discarded. `Write`, mapped dirtying,
@@ -423,9 +423,10 @@ Stable split-leaf manifest replacement is a separately certified dependency
 operation: exactly one sync persists the encoded manifest file and exactly one
 retained-parent sync persists its rename. A token captured after those steps is
 already content-synced, so `SyncThrough` must not repeat the file sync. Until
-#3679 transfers that token into the selected root publication candidate, the
-replacement does not by itself make the manifest a root or `AppliedLSN`
-dependency and does not change the broader publication ordering.
+durable-root publication transfers that exact token into the selected
+candidate's `DependencyManifestV1`, the replacement does not by itself make the
+manifest a root or `AppliedLSN` dependency and does not change the broader
+publication ordering.
 
 Under the user-command WAL target, `DB.Checkpoint()` success must cover command
 WAL. A checkpoint that cannot publish `AppliedLSN` covering pre-cut command

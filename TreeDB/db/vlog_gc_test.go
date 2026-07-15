@@ -257,6 +257,7 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if err := w1.Close(); err != nil {
 		t.Fatalf("close1: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path1, id1)
 
 	path2 := filepath.Join(walDir, "value-l0-000002.log")
 	id2, err := valuelog.EncodeFileID(0, 2)
@@ -274,6 +275,7 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if err := w2.Close(); err != nil {
 		t.Fatalf("close2: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path2, id2)
 
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {
@@ -297,6 +299,7 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 		t.Fatalf("delete k1: %v", err)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
@@ -957,6 +960,7 @@ func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *
 	if err := w1.Close(); err != nil {
 		t.Fatalf("close1: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path1, id1)
 
 	path2 := filepath.Join(walDir, "value-l100-000002.log")
 	id2, err := valuelog.EncodeFileID(lane, 2)
@@ -974,6 +978,7 @@ func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *
 	if err := w2.Close(); err != nil {
 		t.Fatalf("close2: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path2, id2)
 
 	db, err := Open(Options{
 		Dir:                        dir,
@@ -1353,6 +1358,7 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("delete k1: %v", err)
 	}
+	advancePastRetainedDurableSlotForTest(t, db)
 	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
@@ -1484,7 +1490,86 @@ func valueLogRefSetFromCounts(counts map[uint32]uint64) map[uint32]struct{} {
 	return out
 }
 
+// testValueLogProducers models the producer side of tests that construct raw
+// value-log segments. #3679 deliberately removed publisher path discovery, so
+// the fixture that owns the writer must register its exact segment before a
+// pointer can become reachable. Segments created before Open are handed to the
+// first matching DB handle; registrations are never carried across reopen.
+var testValueLogProducers = struct {
+	sync.Mutex
+	databases map[string]*DB
+	pending   map[string]map[uint32]string
+}{
+	databases: make(map[string]*DB),
+	pending:   make(map[string]map[uint32]string),
+}
+
+func init() {
+	testDBOpenHook = func(database *DB) error {
+		dir, err := filepath.Abs(database.dir)
+		if err != nil {
+			return err
+		}
+		dir = filepath.Clean(dir)
+		testValueLogProducers.Lock()
+		testValueLogProducers.databases[dir] = database
+		pending := testValueLogProducers.pending[dir]
+		delete(testValueLogProducers.pending, dir)
+		testValueLogProducers.Unlock()
+		for fileID, path := range pending {
+			if err := database.RegisterValueLogSegment(path, fileID); err != nil {
+				return fmt.Errorf("register test value-log producer file %d: %w", fileID, err)
+			}
+		}
+		return nil
+	}
+	testDBCloseHook = func(database *DB) {
+		dir, err := filepath.Abs(database.dir)
+		if err != nil {
+			return
+		}
+		dir = filepath.Clean(dir)
+		testValueLogProducers.Lock()
+		if testValueLogProducers.databases[dir] == database {
+			delete(testValueLogProducers.databases, dir)
+		}
+		testValueLogProducers.Unlock()
+	}
+}
+
+func registerTestValueLogProducer(tb testing.TB, dir, path string, fileID uint32) {
+	tb.Helper()
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		tb.Fatalf("absolute test value-log producer directory: %v", err)
+	}
+	absDir = filepath.Clean(absDir)
+	testValueLogProducers.Lock()
+	database := testValueLogProducers.databases[absDir]
+	if database == nil {
+		pending := testValueLogProducers.pending[absDir]
+		if pending == nil {
+			pending = make(map[uint32]string)
+			testValueLogProducers.pending[absDir] = pending
+		}
+		pending[fileID] = path
+		testValueLogProducers.Unlock()
+		return
+	}
+	testValueLogProducers.Unlock()
+	if err := database.RegisterValueLogSegment(path, fileID); err != nil {
+		tb.Fatalf("register test value-log producer file %d: %v", fileID, err)
+	}
+}
+
 func appendPointersInNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
+	t.Helper()
+	ptrs, path, fileID := appendPointersInUnregisteredNewSegment(t, dir, lane, seq, ridBase, n, valueAt)
+	registerTestValueLogProducer(t, dir, path, fileID)
+	return ptrs
+}
+
+func appendPointersInUnregisteredNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) ([]page.ValuePtr, string, uint32) {
 	t.Helper()
 	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -1510,5 +1595,5 @@ func appendPointersInNewSegment(t *testing.T, dir string, lane, seq uint32, ridB
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
-	return ptrs
+	return ptrs, path, fileID
 }

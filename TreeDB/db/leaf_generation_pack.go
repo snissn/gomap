@@ -623,6 +623,15 @@ func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leaf
 	if err := db.replaceLeafGenerationManifest(manifest); err != nil {
 		return err
 	}
+	db.persistLeafGenerationRecordLengthIndexes(rawFileIDs)
+	return nil
+}
+
+func (db *DB) persistLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
+	if db == nil {
+		return
+	}
+	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
 	var firstErr error
 	var firstRawFileID uint32
 	failedCount := 0
@@ -647,7 +656,6 @@ func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leaf
 		// manifest authoritative and surface the failure out-of-band.
 		db.reportError(reportErr)
 	}
-	return nil
 }
 
 func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint32) error {

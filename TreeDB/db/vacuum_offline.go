@@ -197,16 +197,13 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	meta.FreelistHeadID = 0
 	meta.TotalPages = newPager.PageCount()
 
-	if err := writeMetaToPager(newPager, MetaPage0ID, meta); err != nil {
+	durableResources, err := d.captureRebuiltIndexDurableResourcesV1(newPager, meta)
+	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err
 	}
-	if err := writeMetaToPager(newPager, MetaPage1ID, meta); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return err
-	}
+	defer durableResources.Release()
 	outputHasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(newPager, reader, userRoot, sysRoot)
 	if err != nil {
 		_ = newPager.Close()
@@ -221,7 +218,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 	}
 
-	if err := newPager.Sync(); err != nil {
+	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return err
@@ -496,18 +493,4 @@ func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, re
 		return true, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
 	}
 	return false, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
-}
-
-func writeMetaToPager(p *pager.Pager, pageID uint64, meta page.MetaPageBody) error {
-	data, err := p.GetForWrite(pageID)
-	if err != nil {
-		return err
-	}
-	meta.Encode(data[page.PageHeaderSize:])
-	n := node.NewNode(data)
-	n.SetPageID(pageID)
-	n.SetType(page.PageTypeMeta)
-	n.SetCount(0)
-	n.UpdateChecksum()
-	return nil
 }

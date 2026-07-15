@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
@@ -28,6 +29,53 @@ func leafGenerationPackPublicationTestOptions(dir string) Options {
 		LeafPrefixCompression:      true,
 		IndexColumnarLeaves:        true,
 		IndexPackedValuePtr:        true,
+	}
+}
+
+func TestLeafGenerationPackPublishAllocatorSharesCOWHighWater(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(12); err != nil {
+		t.Fatal(err)
+	}
+	allocator := freelist.New(p, 0)
+	base := freelist.MustNewFreelistGenerationV1(1, 12, []uint64{5}, nil)
+	if err := allocator.EnableCOWV1(base, freelist.NewReservationLedger()); err != nil {
+		t.Fatalf("EnableCOWV1: %v", err)
+	}
+	idx := &indexGen{pager: p, allocator: allocator}
+	publish := newLeafGenerationPackPublishAllocator(idx, 1)
+	for range 2 {
+		if _, err := publish.Alloc(0); err != nil {
+			t.Fatalf("publish Alloc: %v", err)
+		}
+	}
+	if got := publish.Pages(); len(got) != 2 || got[0] != 12 || got[1] != 13 {
+		t.Fatalf("publish pages=%v want [12 13]", got)
+	}
+	publishedPages := publish.Pages()
+	if err := publish.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	capability, err := freelist.NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatalf("NewReuseCapability: %v", err)
+	}
+	var candidateID freelist.CandidateIDV1
+	candidateID[0] = 7
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateID, capability, 1, freelist.NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatalf("PrepareCOWCandidateV1: %v", err)
+	}
+	if got := prepared.AuxiliaryPageIDs(); len(got) != 1 || got[0] <= 13 {
+		t.Fatalf("durable-root auxiliary pages=%v overlap rolled-back publish pages %v", got, publishedPages)
+	}
+	if got := prepared.Candidate().Generation().RetiredCount(); got != 2 {
+		t.Fatalf("retired unpublished pages=%d want 2", got)
 	}
 }
 
@@ -109,8 +157,8 @@ func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.
 	if err != nil {
 		t.Fatalf("allocator Stats after reopen: %v", err)
 	}
-	if afterStats.Head != beforeStats.Head || afterStats.Pages != beforeStats.Pages || afterStats.FreeIDs != beforeStats.FreeIDs {
-		t.Fatalf("freelist changed across reopen: before=%+v after=%+v", beforeStats, afterStats)
+	if afterStats.ReclaimablePages() <= beforeStats.ReclaimablePages() {
+		t.Fatalf("retired unpublished pages were not recoverable after reopen: before=%+v after=%+v", beforeStats, afterStats)
 	}
 	for i := 1; i <= 2; i++ {
 		got, err := reopened.Get([]byte(fmt.Sprintf("retry-conflict-%d", i)))
@@ -160,8 +208,12 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 			if db.publicationPoisoned.Load() {
 				t.Fatal("pre-meta failure poisoned DB")
 			}
-			if got := db.idx.Load().pager.PageCount(); got != beforePages {
-				t.Fatalf("PageCount=%d want rollback to %d", got, beforePages)
+			afterFailurePages := db.idx.Load().pager.PageCount()
+			if phase < leafGenerationPackAfterDirectorySync && afterFailurePages != beforePages {
+				t.Fatalf("PageCount=%d before committed-page allocation want %d", afterFailurePages, beforePages)
+			}
+			if afterFailurePages < beforePages {
+				t.Fatalf("PageCount=%d shrank below pre-publication count %d", afterFailurePages, beforePages)
 			}
 			if _, err := os.Stat(candidate.sourcePath); err != nil {
 				t.Fatalf("source removed on pre-meta failure: %v", err)
@@ -178,7 +230,131 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 			if err := db.SetSync([]byte("after-failure"), []byte("ok")); err != nil {
 				t.Fatalf("SetSync after pre-meta failure: %v", err)
 			}
+			if got, want := db.idx.Load().pager.PageCount(), db.meta.TotalPages; got != want {
+				t.Fatalf("post-failure publish pages=%d durable total=%d", got, want)
+			}
 		})
+	}
+}
+
+func TestLeafGenerationPack_PromotionBlocksRefreshUntilRollbackCompletes(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	wantErr := errors.New("fail after packed promotion")
+	promoted := make(chan struct{})
+	releasePromotion := make(chan struct{})
+	var created []uint32
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackAfterPromotion {
+			return nil
+		}
+		created = append(created, event.FileIDs...)
+		close(promoted)
+		<-releasePromotion
+		return wantErr
+	})
+	defer unregister()
+
+	packDone := make(chan error, 1)
+	go func() {
+		_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+			GenerationIDs: []uint64{candidate.generation.GenerationID},
+			Force:         true,
+		})
+		packDone <- err
+	}()
+	select {
+	case <-promoted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("leaf pack did not reach post-promotion hook")
+	}
+	if db.valueLogPublicationMu.TryRLock() {
+		db.valueLogPublicationMu.RUnlock()
+		t.Fatal("post-promotion hook did not hold value-log publication gate")
+	}
+
+	refreshStarted := make(chan struct{})
+	refreshDone := make(chan error, 1)
+	go func() {
+		close(refreshStarted)
+		refreshDone <- db.RefreshValueLogSet()
+	}()
+	<-refreshStarted
+	select {
+	case err := <-refreshDone:
+		t.Fatalf("RefreshValueLogSet completed before promotion rollback: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releasePromotion)
+	select {
+	case err := <-packDone:
+		if !errors.Is(err, wantErr) || errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("LeafGenerationPack error=%v want exact rollback failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("LeafGenerationPack did not finish after releasing hook")
+	}
+	select {
+	case err := <-refreshDone:
+		if err != nil {
+			t.Fatalf("RefreshValueLogSet after rollback: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RefreshValueLogSet remained blocked after rollback")
+	}
+	if db.publicationPoisoned.Load() {
+		t.Fatal("exact post-promotion rollback poisoned DB")
+	}
+	for _, id := range created {
+		if db.valueLogManager.HasSegment(id) {
+			t.Fatalf("rolled-back segment %d remained registered", id)
+		}
+	}
+}
+
+func TestLeafGenerationPack_ManifestPreparationRunsBeforePublicationLocks(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	var observed atomic.Bool
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackAfterManifestPreparation {
+			return nil
+		}
+		if !db.writeMu.TryLock() {
+			return errors.New("manifest preparation retained writeMu")
+		}
+		db.writeMu.Unlock()
+		if !db.commitMu.TryLock() {
+			return errors.New("manifest preparation retained commitMu")
+		}
+		db.commitMu.Unlock()
+		if !db.publishPrepareMu.TryLock() {
+			return errors.New("manifest preparation retained publishPrepareMu")
+		}
+		db.publishPrepareMu.Unlock()
+		if !db.valueLogPublicationMu.TryLock() {
+			return errors.New("manifest preparation retained valueLogPublicationMu")
+		}
+		db.valueLogPublicationMu.Unlock()
+		observed.Store(true)
+		return nil
+	})
+	defer unregister()
+
+	if _, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID},
+		Force:         true,
+	}); err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if !observed.Load() {
+		t.Fatal("manifest preparation hook was not observed")
 	}
 }
 
@@ -443,6 +619,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 	baselinePins := db.valueLogIdentityPins.ActivePins()
 	seen := make(map[leafGenerationPackPublishPhase]bool)
+	promotedIdentities := make(map[uint32]rootpublication.StableIdentity)
 	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
 		switch event.Phase {
 		case leafGenerationPackAfterPromotion, leafGenerationPackAfterRegistration, leafGenerationPackBeforeMetaWrite:
@@ -457,6 +634,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 				if !ok {
 					return fmt.Errorf("manager missing stable identity %d", id)
 				}
+				promotedIdentities[page.ValueLogSegmentID(id)] = identity
 				if _, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
 					return fmt.Errorf("delete race for %d error=%v want pinned", id, err)
 				}
@@ -464,7 +642,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 		}
 		return nil
 	})
-	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
 	})
 	unregister()
@@ -476,8 +654,20 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 			t.Fatalf("publication phase %d was not observed", phase)
 		}
 	}
-	if got := db.valueLogIdentityPins.ActivePins(); got != baselinePins {
-		t.Fatalf("packed pins after metadata handoff=%d want baseline %d", got, baselinePins)
+	if len(stats.CreatedFileIDs) == 0 {
+		t.Fatal("successful pack reported no created segment IDs")
+	}
+	for _, id := range stats.CreatedFileIDs {
+		identity, ok := promotedIdentities[id]
+		if !ok {
+			t.Fatalf("publication hook did not capture stable identity %d", id)
+		}
+		if lease, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+			if lease != nil {
+				lease.Abort()
+			}
+			t.Fatalf("packed segment %d after metadata handoff delete error=%v want pinned", id, err)
+		}
 	}
 }
 
@@ -885,6 +1075,11 @@ func TestLeafGenerationPack_SyncFalseStillDurablyPublishesBeforeGC(t *testing.T)
 		Sync:          false,
 	}); err != nil {
 		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	// The immediately older recoverable root still owns the source generation.
+	// Advance the alternate slot once before expecting generation GC to unlink it.
+	if err := db.SetSync([]byte("post-pack-horizon"), []byte("advance")); err != nil {
+		t.Fatalf("SetSync after pack: %v", err)
 	}
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)

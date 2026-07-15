@@ -1286,17 +1286,32 @@ func NewManager(dir string) (*Manager, error) {
 // identity gate before the initial directory scan, so every tracked handle is
 // observed from the moment it becomes deletable.
 func NewManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
-	return newManagerWithStableResourcePinRegistry(dir, registry, true)
+	return newManagerWithStableResourcePinRegistry(dir, registry, true, true)
+}
+
+// NewManagerForBoundedRecoveryWithStableResourcePinRegistry installs the
+// identity gate and reconciles stable-delete intents without enumerating value
+// log segments. Recovery callers must RegisterSegment every exact path named by
+// their bounded durable inventory before taking a CurrentSetNoRefresh snapshot.
+func NewManagerForBoundedRecoveryWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
+	return newManagerWithStableResourcePinRegistry(dir, registry, true, false)
 }
 
 // NewReadOnlyManagerWithStableResourcePinRegistry opens segment handles
 // without reconciling interrupted stable deletions. Pending quarantine intents
 // fail with ErrStableDeleteRecoveryRequired and are left untouched.
 func NewReadOnlyManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
-	return newManagerWithStableResourcePinRegistry(dir, registry, false)
+	return newManagerWithStableResourcePinRegistry(dir, registry, false, true)
 }
 
-func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry, recoverStableDeletes bool) (*Manager, error) {
+// NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry is the
+// read-only counterpart of NewManagerForBoundedRecoveryWithStableResourcePinRegistry.
+// It rejects pending stable-delete intents but does not enumerate segments.
+func NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry) (*Manager, error) {
+	return newManagerWithStableResourcePinRegistry(dir, registry, false, false)
+}
+
+func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry, recoverStableDeletes, refresh bool) (*Manager, error) {
 	m := &Manager{
 		dir:                         dir,
 		files:                       make(map[uint32]*File),
@@ -1309,7 +1324,13 @@ func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublicati
 		stableDeleteRecoveryEnabled: recoverStableDeletes,
 	}
 	m.groupedFrameCacheBudget = newGroupedFrameCacheBudget(defaultGroupedFrameCacheMaxBytes)
-	if err := m.Refresh(); err != nil {
+	var err error
+	if refresh {
+		err = m.Refresh()
+	} else {
+		err = m.prepareScanDir(dir)
+	}
+	if err != nil {
 		return nil, errors.Join(err, m.Close())
 	}
 	return m, nil
@@ -1644,6 +1665,16 @@ func (m *Manager) recoverStableDeleteDirOnce(dir string) error {
 }
 
 func (m *Manager) AddScanDir(dir string) error {
+	return m.addScanDir(dir, true)
+}
+
+// AddScanDirForBoundedRecovery adds a permitted resource namespace and
+// reconciles its stable-delete state without enumerating segment files.
+func (m *Manager) AddScanDirForBoundedRecovery(dir string) error {
+	return m.addScanDir(dir, false)
+}
+
+func (m *Manager) addScanDir(dir string, refresh bool) error {
 	if m == nil || dir == "" || dir == m.dir {
 		return nil
 	}
@@ -1656,7 +1687,20 @@ func (m *Manager) AddScanDir(dir string) error {
 	}
 	m.extraScanDirs = append(m.extraScanDirs, dir)
 	m.mu.Unlock()
-	return m.Refresh()
+	if refresh {
+		return m.Refresh()
+	}
+	return m.prepareScanDir(dir)
+}
+
+func (m *Manager) prepareScanDir(dir string) error {
+	if m == nil {
+		return nil
+	}
+	if m.stableDeleteRecoveryEnabled {
+		return m.recoverStableDeleteDirOnce(dir)
+	}
+	return requireNoStableDeleteQuarantines(dir)
 }
 
 // RegisterSegment registers a newly created segment without scanning the
@@ -1835,7 +1879,9 @@ func (m *Manager) RewriteLaneHint() (lane uint32, startSeq uint32, ok bool) {
 			maxSeq[l] = s
 		}
 	}
-	for l := uint32(lanes - 1); l > 0; l-- {
+	// Lane 255 is the format-reserved outer-leaf namespace and must never be
+	// offered for ordinary value-log rewrites, even when it is currently empty.
+	for l := uint32(ReservedLeafLogLaneID - 1); l > 0; l-- {
 		if !used[l] {
 			return l, 0, true
 		}

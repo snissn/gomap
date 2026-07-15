@@ -99,24 +99,69 @@ func (db *DB) initializeLeafGenerationManifestStore(leafDir string, registry *ro
 }
 
 func (s *leafGenerationManifestStore) Replace(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, error) {
+	token, _, err := s.replace(manifest, false)
+	return token, err
+}
+
+// replaceForPreparedClosure additionally returns the exact compatibility view
+// that preceded the new immutable revision. Durable-root producers retain this
+// rollback material until their candidate owns the revision or abandons it
+// before meta visibility.
+func (s *leafGenerationManifestStore) replaceForPreparedClosure(manifest *leafGenerationManifest) (*rootpublication.StableResourceToken, []byte, error) {
+	return s.replace(manifest, true)
+}
+
+func (s *leafGenerationManifestStore) replace(manifest *leafGenerationManifest, capturePrevious bool) (*rootpublication.StableResourceToken, []byte, error) {
 	if s == nil || s.leafDir == "" {
-		return nil, errors.New("missing leaf_vlog manifest store")
+		return nil, nil, errors.New("missing leaf_vlog manifest store")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, rootpublication.ErrResourceOwnership
+		return nil, nil, rootpublication.ErrResourceOwnership
 	}
 	if s.poisoned {
-		return nil, fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
+		return nil, nil, fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
 	}
 	if s.mode == leafGenerationManifestCompatibility {
-		return s.replaceCompatibility(manifest)
+		token, err := s.replaceCompatibility(manifest)
+		return token, nil, err
 	}
 	if s.mode != leafGenerationManifestStable {
-		return nil, fmt.Errorf("%w: unknown leaf generation manifest replacement mode %d", rootpublication.ErrUnresolvedResource, s.mode)
+		return nil, nil, fmt.Errorf("%w: unknown leaf generation manifest replacement mode %d", rootpublication.ErrUnresolvedResource, s.mode)
 	}
-	return s.replaceStable(manifest)
+	var previous []byte
+	if capturePrevious {
+		var err error
+		previous, err = s.readStableCompatibilityViewLocked()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	token, err := s.replaceStable(manifest)
+	return token, previous, err
+}
+
+func (s *leafGenerationManifestStore) readStableCompatibilityViewLocked() ([]byte, error) {
+	if s == nil || s.parent == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	file, err := rootpublication.OpenStableChildFile(s.parent, leafGenerationManifestFileName, os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decodeLeafGenerationManifest(data, leafGenerationManifestFileName); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (s *leafGenerationManifestStore) Load() (*leafGenerationManifest, bool, error) {
@@ -221,26 +266,22 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		return nil, fmt.Errorf("%w: stable manifest store has no retained parent", rootpublication.ErrResourceOwnership)
 	}
 	parent := s.parent
-	var err error
-	var oldFile, tempFile *os.File
-	var oldIdentity rootpublication.StableIdentity
-	var oldObserved bool
-	var lease *rootpublication.IdentityDeleteLease
-	renamed := false
+	var oldFile, revisionFile *os.File
+	installed := false
 	defer func() {
-		if renamed && retErr != nil {
-			s.evidence = append(s.evidence, &leafGenerationManifestEvidence{old: oldFile, new: tempFile})
-			oldFile, tempFile = nil, nil
+		if installed && errors.Is(retErr, ErrRecoveryRequired) {
+			s.evidence = append(s.evidence, &leafGenerationManifestEvidence{new: revisionFile})
+			revisionFile = nil
 		}
-		if tempFile != nil {
-			_ = tempFile.Close()
+		if revisionFile != nil {
+			_ = revisionFile.Close()
 		}
 		if oldFile != nil {
 			_ = oldFile.Close()
 		}
 	}()
 
-	oldFile, err = rootpublication.OpenStableChildFile(parent, leafGenerationManifestFileName, os.O_RDONLY, 0)
+	oldFile, err := rootpublication.OpenStableChildFile(parent, leafGenerationManifestFileName, os.O_RDONLY, 0)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -251,73 +292,57 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	if err != nil {
 		return nil, err
 	}
-	if oldFile != nil {
-		oldIdentity, err = rootpublication.StableIdentityFromFile(oldFile)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.registry.Observe(oldIdentity); err != nil {
-			return nil, err
-		}
-		oldObserved = true
-		defer func() {
-			if oldObserved {
-				_ = s.registry.Unobserve(oldIdentity)
-			}
-		}()
-		parentIdentity, err := rootpublication.StableIdentityFromFile(parent)
-		if err != nil {
-			return nil, err
-		}
-		namespace := fmt.Sprintf("%s:%d:%x/%s", parentIdentity.Platform, parentIdentity.VolumeID, parentIdentity.ObjectID, leafGenerationManifestFileName)
-		lease, err = s.registry.BeginDeleteAt(oldIdentity, namespace)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			if lease != nil {
-				lease.Abort()
-			}
-		}()
-	}
 
 	if hook := s.hooks.BeforeTempCreate; hook != nil {
 		if err := hook(); err != nil {
 			return nil, err
 		}
 	}
-	const maxTempCreateAttempts = 64
-	var tempName string
-	for attempt := 0; attempt < maxTempCreateAttempts; attempt++ {
-		s.tempSeq++
-		tempName = fmt.Sprintf("%s.tmp.%016x", leafGenerationManifestFileName, s.tempSeq)
-		tempFile, err = rootpublication.OpenStableChildFile(parent, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	// A recovery-selectable slot must retain its exact manifest identity until
+	// normal alternating publication overwrites that slot. Therefore the stable
+	// producer writes one immutable revision child and updates manifest.json only
+	// as a compatibility view. Replacing the pinned compatibility path would
+	// otherwise make the older meta unrecoverable or permanently block the next
+	// manifest publication.
+	const maxRevisionCreateAttempts = 64
+	var revisionName string
+	for attempt := 0; attempt < maxRevisionCreateAttempts; attempt++ {
+		revisionName = leafGenerationDurableManifestFileName(candidate.ManifestRevision)
+		revisionFile, err = rootpublication.OpenStableChildFile(parent, revisionName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		if err == nil {
 			break
 		}
 		if !os.IsExist(err) {
 			return nil, err
 		}
+		if candidate.ManifestRevision == ^uint64(0) {
+			return nil, fmt.Errorf("%w: manifest revision exhausted", ErrLeafGenerationManifestIncompatible)
+		}
+		candidate.ManifestRevision++
+		data, err = json.MarshalIndent(candidate, "", "  ")
+		if err != nil {
+			return nil, err
+		}
 	}
-	if tempFile == nil {
-		return nil, fmt.Errorf("create stable manifest temp: exhausted %d exact-parent names", maxTempCreateAttempts)
+	if revisionFile == nil {
+		return nil, fmt.Errorf("create stable manifest revision: exhausted %d exact-parent names", maxRevisionCreateAttempts)
 	}
-	tempLinked := true
+	revisionLinked := true
 	defer func() {
-		if !renamed && tempLinked {
-			cleanupErr := rootpublication.RemoveStableChildFile(parent, tempName)
+		if !installed && revisionLinked {
+			cleanupErr := rootpublication.RemoveStableChildFile(parent, revisionName)
 			if cleanupErr != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("clean stable manifest temp: %w", cleanupErr))
+				retErr = errors.Join(retErr, fmt.Errorf("clean stable manifest revision: %w", cleanupErr))
 			}
 		}
 	}()
-	if err := tempFile.Chmod(0o600); err != nil {
+	if err := revisionFile.Chmod(0o600); err != nil {
 		return nil, err
 	}
-	if _, err := tempFile.Write(data); err != nil {
+	if _, err := revisionFile.Write(data); err != nil {
 		return nil, err
 	}
-	if err := tempFile.Sync(); err != nil {
+	if err := revisionFile.Sync(); err != nil {
 		return nil, err
 	}
 	s.durabilityCounters.ContentSyncs.Add(1)
@@ -326,33 +351,19 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 			return nil, err
 		}
 	}
-	if err := rootpublication.RenameStableChildFile(parent, tempName, leafGenerationManifestFileName); err != nil {
-		return nil, err
-	}
-	renamed = true
-	tempLinked = false
-	if lease != nil {
-		lease.CommitDeleted()
-		lease = nil
-	}
-	if oldObserved {
-		if err := s.registry.Unobserve(oldIdentity); err != nil {
-			return nil, s.ambiguous(err)
-		}
-		oldObserved = false
-	}
+	installed = true
 	if hook := s.hooks.BeforeDestinationValidation; hook != nil {
 		if err := hook(); err != nil {
 			return nil, s.ambiguous(err)
 		}
 	}
-	if err := rootpublication.ValidateStableChildLink(parent, tempFile, leafGenerationManifestFileName); err != nil {
+	if err := rootpublication.ValidateStableChildLink(parent, revisionFile, revisionName); err != nil {
 		return nil, s.ambiguous(err)
 	}
 	namespace, err := rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
-		Parent: parent, LinkedResource: tempFile, ParentGeneration: candidate.ManifestRevision,
-		Operation: rootpublication.NamespaceRename, OldName: tempName, NewName: leafGenerationManifestFileName,
-		DiagnosticPath: filepath.Join("leaf_vlog", leafGenerationManifestFileName),
+		Parent: parent, LinkedResource: revisionFile, ParentGeneration: candidate.ManifestRevision,
+		Operation: rootpublication.NamespaceCreate, NewName: revisionName,
+		DiagnosticPath: filepath.Join("leaf_vlog", revisionName),
 	})
 	if err != nil {
 		return nil, s.ambiguous(err)
@@ -367,8 +378,15 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		return nil, s.ambiguous(err)
 	}
 	s.durabilityCounters.NamespaceSyncs.Add(1)
+	// Keep the legacy path as an operational/diagnostic view. New-format recovery
+	// never trusts this path: it reads the exact immutable revision retained by
+	// the selected durable-root resource set.
+	if err := s.replaceStableCompatibilityView(parent, data); err != nil {
+		manifest.ManifestRevision = candidate.ManifestRevision
+		return nil, s.ambiguous(err)
+	}
 
-	newIdentity, err := rootpublication.StableIdentityFromFile(tempFile)
+	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
 	if err != nil {
 		return nil, s.ambiguous(err)
 	}
@@ -384,8 +402,8 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	digest := sha256.Sum256(data)
 	token, err := NewStableOuterLeafResourceToken(rootpublication.StableResourceSpec{
 		Kind: rootpublication.ResourceOuterLeafManifest, LogicalLane: "manifest",
-		ResourceID: leafGenerationManifestFileName, Generation: candidate.ManifestRevision,
-		DiagnosticPath: filepath.Join("leaf_vlog", leafGenerationManifestFileName), File: tempFile,
+		ResourceID: revisionName, Generation: candidate.ManifestRevision,
+		DiagnosticPath: filepath.Join("leaf_vlog", revisionName), File: revisionFile,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(len(data))}, Digest: digest,
 		Reachability: rootpublication.ReachabilityOuterLeafGeneration, Namespace: namespace,
 		ContentSynced: true, PinRegistry: s.registry,
@@ -397,6 +415,136 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	newObserved = false
 	manifest.ManifestRevision = candidate.ManifestRevision
 	return token, nil
+}
+
+func leafGenerationDurableManifestFileName(revision uint64) string {
+	return fmt.Sprintf("manifest.durable.%016x.json", revision)
+}
+
+// abandonPreparedStableRevision rolls back a producer revision that never
+// entered a durable-root candidate. The fixed compatibility view is restored
+// only if it still names this exact revision; a later replacement wins.
+func (s *leafGenerationManifestStore) abandonPreparedStableRevision(resourceID string, identity rootpublication.StableIdentity, revision uint64, previousView []byte) error {
+	if s == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.parent == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	if s.poisoned {
+		return fmt.Errorf("%w: leaf generation manifest replacement outcome is ambiguous; reopen required", ErrRecoveryRequired)
+	}
+	if s.mode != leafGenerationManifestStable || resourceID != leafGenerationDurableManifestFileName(revision) || identity == (rootpublication.StableIdentity{}) {
+		return fmt.Errorf("%w: invalid unpublished manifest cleanup authority", rootpublication.ErrResourceOwnership)
+	}
+
+	currentView, err := s.readStableCompatibilityViewLocked()
+	if err != nil {
+		return s.ambiguous(err)
+	}
+	var currentRevision uint64
+	if len(currentView) != 0 {
+		current, decodeErr := decodeLeafGenerationManifest(currentView, leafGenerationManifestFileName)
+		if decodeErr != nil {
+			return s.ambiguous(decodeErr)
+		}
+		currentRevision = current.ManifestRevision
+	}
+	if currentRevision != 0 && currentRevision < revision {
+		return s.ambiguous(fmt.Errorf("%w: compatibility manifest revision=%d precedes abandoned revision=%d", rootpublication.ErrResourceConflict, currentRevision, revision))
+	}
+	if currentRevision == 0 || currentRevision == revision {
+		if len(previousView) != 0 {
+			previous, decodeErr := decodeLeafGenerationManifest(previousView, leafGenerationManifestFileName)
+			if decodeErr != nil || previous.ManifestRevision == 0 || previous.ManifestRevision >= revision {
+				return s.ambiguous(errors.Join(decodeErr, fmt.Errorf("%w: invalid previous manifest view for abandoned revision=%d", rootpublication.ErrResourceConflict, revision)))
+			}
+			if err := s.replaceStableCompatibilityView(s.parent, previousView); err != nil {
+				return s.ambiguous(err)
+			}
+			s.durabilityCounters.ContentSyncs.Add(1)
+			s.durabilityCounters.NamespaceSyncs.Add(1)
+		} else if currentRevision == revision {
+			if err := rootpublication.RemoveStableChildFile(s.parent, leafGenerationManifestFileName); err != nil && !os.IsNotExist(err) {
+				return s.ambiguous(err)
+			}
+			if err := s.parent.Sync(); err != nil {
+				return s.ambiguous(err)
+			}
+			s.durabilityCounters.NamespaceSyncs.Add(1)
+		}
+	}
+
+	cleanupErr := cleanupLeafGenerationPackStablePreparedSegmentsRetainingParent(
+		s.parent,
+		[]rewriteCreatedSegment{{path: filepath.Join(s.leafDir, resourceID), identity: identity}},
+		s.registry,
+	)
+	if cleanupErr != nil {
+		return s.ambiguous(cleanupErr)
+	}
+	s.durabilityCounters.NamespaceSyncs.Add(1)
+	return nil
+}
+
+func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.File, data []byte) (retErr error) {
+	if s == nil || parent == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	const maxTempCreateAttempts = 64
+	var temp *os.File
+	var tempName string
+	for attempt := 0; attempt < maxTempCreateAttempts; attempt++ {
+		s.tempSeq++
+		tempName = fmt.Sprintf("%s.view.%016x", leafGenerationManifestFileName, s.tempSeq)
+		var err error
+		temp, err = rootpublication.OpenStableChildFile(parent, tempName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return err
+		}
+	}
+	if temp == nil {
+		return fmt.Errorf("create stable manifest compatibility view: exhausted %d names", maxTempCreateAttempts)
+	}
+	renamed := false
+	defer func() {
+		_ = temp.Close()
+		if !renamed {
+			retErr = errors.Join(retErr, rootpublication.RemoveStableChildFile(parent, tempName))
+		}
+	}()
+	if _, err := temp.Write(data); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := rootpublication.RenameStableChildFile(parent, tempName, leafGenerationManifestFileName); err != nil {
+		return err
+	}
+	renamed = true
+	if err := rootpublication.ValidateStableChildLink(parent, temp, leafGenerationManifestFileName); err != nil {
+		return err
+	}
+	parentGeneration, err := rootpublication.StableNamespaceParentGeneration(parent)
+	if err != nil {
+		return err
+	}
+	namespace, err := rootpublication.NewStableNamespaceToken(rootpublication.StableNamespaceSpec{
+		Parent: parent, LinkedResource: temp, ParentGeneration: parentGeneration, Operation: rootpublication.NamespaceRename,
+		OldName: tempName, NewName: leafGenerationManifestFileName,
+		DiagnosticPath: filepath.Join("leaf_vlog", leafGenerationManifestFileName),
+	})
+	if err != nil {
+		return err
+	}
+	defer namespace.Release()
+	return namespace.Stabilize()
 }
 
 func (s *leafGenerationManifestStore) prepareReplacement(manifest *leafGenerationManifest, oldFile *os.File, allowPathRead bool) (*leafGenerationManifest, []byte, error) {

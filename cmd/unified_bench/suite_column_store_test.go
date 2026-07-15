@@ -3581,10 +3581,6 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err := insertColumnStoreFixture(collection, events, 8); err != nil {
 		t.Fatalf("insert fixture: %v", err)
 	}
-	rawHashes, err := columnStoreReferenceHashes(events)
-	if err != nil {
-		t.Fatalf("reference hashes: %v", err)
-	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -3608,17 +3604,13 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 		t.Fatalf("remove column asset root: %v", err)
 	}
 	db, err = openColumnStoreSuiteDB(dir)
-	if err != nil {
-		t.Fatalf("reopen after asset removal: %v", err)
+	if err == nil {
+		_ = db.Close()
+		db = nil
+		t.Fatal("reopen after asset removal succeeded, want fail-closed durable-root rejection")
 	}
-	manager = collections.NewCollectionManager(db)
-	collection, err = manager.OpenCollection("events")
-	if err != nil {
-		t.Fatalf("reopen collection after asset removal: %v", err)
-	}
-	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify, nil)
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing physical assets err=%v want os.ErrNotExist without row fallback", err)
+	if !errors.Is(err, backenddb.ErrNoRecoverableMeta) {
+		t.Fatalf("reopen after asset removal err=%v want ErrNoRecoverableMeta", err)
 	}
 }
 
