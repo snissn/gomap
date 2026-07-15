@@ -97,6 +97,12 @@ func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("Delete doc-a: %v", err)
 	}
+	// Advance the alternate durable slot so neither selectable closure retains
+	// doc-a's value-log segment before destructive GC.
+	if _, err := col.InsertBatch([][]byte{[]byte("doc-d")}, [][]byte{retainedPlacementDocument("slot-rollover", 4)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch doc-d slot rollover: %v", err)
+	}
 
 	gcStats, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
 	if err != nil {
@@ -141,20 +147,20 @@ func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
 	} else {
 		assertJSONMapEqual1875(t, got, map[string]any{"row_id": float64(2), "kind": "kind-2", "payload": strings.Repeat("rewrite-live", 10)})
 	}
-	if rewriteStats.SourceSegmentsUnreferenced == 0 {
-		postRewriteGC, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
-		if err != nil {
-			_ = d.Close()
-			t.Fatalf("ValueLogGC after rewrite: %v", err)
-		}
-		if postRewriteGC.SegmentsDeleted == 0 {
-			_ = d.Close()
-			t.Fatalf("rewrite source segment was not reclaimed: rewrite=%+v gc=%+v", rewriteStats, postRewriteGC)
-		}
-	}
-	if _, err := os.Stat(pathB); err == nil || !os.IsNotExist(err) {
+	// The rewrite source is no longer reachable from the current root, but the
+	// other selectable durable slot still owns its exact closure.
+	postRewriteGC, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
+	if err != nil {
 		_ = d.Close()
-		t.Fatalf("rewritten source segment %s stat err=%v, want removed", pathB, err)
+		t.Fatalf("ValueLogGC after rewrite: %v", err)
+	}
+	if postRewriteGC.SegmentsDeleted != 0 || rewriteStats.SourceSegmentsReclaimed != 0 {
+		_ = d.Close()
+		t.Fatalf("rewrite reclaimed fallback-slot source: rewrite=%+v gc=%+v", rewriteStats, postRewriteGC)
+	}
+	if _, err := os.Stat(pathB); err != nil {
+		_ = d.Close()
+		t.Fatalf("fallback-slot rewrite source %s stat err=%v, want retained", pathB, err)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close after rewrite: %v", err)

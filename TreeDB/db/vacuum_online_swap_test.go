@@ -42,6 +42,7 @@ func TestVacuumIndexOnlineRefreshFailureLeavesOldIndexAuthoritative(t *testing.T
 		_ = d.Close()
 		t.Fatalf("ensure leaf writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, leafLog.path, leafLog.fileID)
 	d.SetLeafPageLog(leafLog)
 
 	b := d.NewBatch()

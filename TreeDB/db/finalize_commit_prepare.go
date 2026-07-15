@@ -81,15 +81,10 @@ func (db *DB) flushFinalizeCommitDurability(idx *indexGen, valueLogAppender Valu
 			return err
 		}
 	}
-	// Sync data pages before the meta-page install for synchronous commits. This
-	// can run before the final publish validation: a later mismatch merely leaves
-	// extra unreferenced data pages/records behind, while the root swap still
-	// happens only after validation under commit serialization.
-	if sync {
-		if err := idx.pager.SyncIndexData(); err != nil {
-			return err
-		}
-	}
+	// Index stability belongs exclusively to executeDurableRootCandidateV1.
+	// Keeping the legacy pre-publication pager sync here would issue two index
+	// barriers for one commit and, more importantly, place the first barrier
+	// outside the immutable candidate's ordered data-before-meta transaction.
 	return nil
 }
 

@@ -293,6 +293,7 @@ func TestCommitCombinerFallback_PointerCommitDurableAfterReopen(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("Close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path, fileID)
 
 	b := d.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("kp"), ptr); err != nil {

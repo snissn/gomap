@@ -820,6 +820,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 	stats["treedb.applied_command_lsn"] = fmt.Sprintf("%d", state.AppliedCommandLSN)
 	stats["treedb.max_entry_revision"] = fmt.Sprintf("%d", state.MaxEntryRevision)
+	db.appendDurableRootStats(stats)
 	stats["treedb.command_wal.enabled"] = fmt.Sprintf("%t", db.commandWAL)
 	writeCommandWALStats(stats, db)
 	db.appendConditionalTxnStats(stats)

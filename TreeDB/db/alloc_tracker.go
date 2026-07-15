@@ -14,6 +14,17 @@ type allocTracker struct {
 	pages []uint64
 }
 
+// appendOnlyPageAllocator scopes append-only allocation to a single build.
+// Unlike Allocator.SetPreferAppend, it cannot change the allocation policy of
+// another writer that shares the underlying allocator.
+type appendOnlyPageAllocator struct {
+	alloc *freelist.Allocator
+}
+
+func (a appendOnlyPageAllocator) Alloc(uint64) (uint64, error) {
+	return a.alloc.AllocAppend()
+}
+
 func newAllocTracker(alloc *freelist.Allocator) *allocTracker {
 	return &allocTracker{alloc: alloc}
 }

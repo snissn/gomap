@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -410,7 +411,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 		barrierCalled.Store(true)
 		return barrierErr
 	})
-	err = db.finalizeOrderedRootPublishWithCommandWAL(
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(
 		userRoot,
 		systemRoot,
 		nil,
@@ -422,6 +423,8 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 		nil,
 		nil,
 		coverage,
+		orderedRootCommandWALPublishOptions{},
+		func() {},
 	)
 	if !errors.Is(err, barrierErr) {
 		t.Fatalf("finalize existing coverage sync error=%v, want %v", err, barrierErr)
@@ -434,7 +437,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 	}
 	unregister()
 
-	if err := db.finalizeOrderedRootPublishWithCommandWAL(
+	if err := db.finalizeOrderedRootPublishWithCommandWALOptions(
 		userRoot,
 		systemRoot,
 		nil,
@@ -446,6 +449,8 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 		nil,
 		nil,
 		coverage,
+		orderedRootCommandWALPublishOptions{},
+		func() {},
 	); err != nil {
 		t.Fatalf("finalize existing coverage sync retry: %v", err)
 	}
@@ -600,6 +605,83 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
 	requireCommandWALPublishReady(t, db, "forged maintenance plan rejection")
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceConsumesDurableResourcesOnPreApplyFailure(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	resources := stableContractResourceSet(t, stableContractDescriptor{
+		generation:   1,
+		kind:         rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+		frontier:     4096,
+	})
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		forgedStorageMaintenancePlan{},
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot:         0,
+			Iter:             mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			DurableResources: resources,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for a forged maintenance plan")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
+	}
+	if got := resources.Owner(); got != rootpublication.ResourceOwnerReleased {
+		t.Fatalf("durable resource owner=%v want released after pre-apply failure", got)
+	}
+	requireCommandWALPublishReady(t, db, "durable resource pre-apply rejection")
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceReleasesCollectedDurableResourcesOnPreflightFailure(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	var releases atomic.Int32
+	resources := stableContractResourceSet(t, stableContractDescriptor{
+		generation:   1,
+		kind:         rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+		frontier:     4096,
+		onRelease:    func() { releases.Add(1) },
+	})
+	wantErr := errors.New("maintenance preflight failed")
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewritePlan(),
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot:         0,
+			Iter:             mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			DurableResources: resources,
+		}},
+		func() error { return wantErr },
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run after preflight failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("maintenance publish error=%v want %v", err, wantErr)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want pre-apply marker", err)
+	}
+	if got := resources.Owner(); got != rootpublication.ResourceOwnerTransferred {
+		t.Fatalf("producer resource owner=%v want transferred into collected union", got)
+	}
+	if got := releases.Load(); got != 1 {
+		t.Fatalf("durable resource releases=%d want 1", got)
+	}
+	requireCommandWALPublishReady(t, db, "collected durable resource preflight failure")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsInvalidInputBeforeWriteLock(t *testing.T) {
@@ -961,11 +1043,20 @@ func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreAp
 
 	wantErr := errors.New("maintenance root delta iterator materialization failure")
 	iter := &closeCountingUnsafeIterator{err: wantErr}
+	var resourceReleases atomic.Int32
+	resources := stableContractResourceSet(t, stableContractDescriptor{
+		generation:   1,
+		kind:         rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer,
+		frontier:     4096,
+		onRelease:    func() { resourceReleases.Add(1) },
+	})
 	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
 		[]StorageMaintenanceRootDeltaPublishInput{{
-			BaseRoot: baseRoot,
-			Iter:     iter,
+			BaseRoot:         baseRoot,
+			Iter:             iter,
+			DurableResources: resources,
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -982,6 +1073,12 @@ func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreAp
 	requireCommandWALPublishReady(t, db, "maintenance root delta iterator failure")
 	if iter.closes != 1 {
 		t.Fatalf("root delta iterator closes=%d want 1", iter.closes)
+	}
+	if got := resources.Owner(); got != rootpublication.ResourceOwnerTransferred {
+		t.Fatalf("producer resource owner=%v want transferred into collected union", got)
+	}
+	if got := resourceReleases.Load(); got != 1 {
+		t.Fatalf("root-apply failure durable resource releases=%d want 1", got)
 	}
 }
 

@@ -41,7 +41,8 @@ func TestDBIteratorKeyValueReturnViewsAndCopiesRemainOwned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode file id: %v", err)
 	}
-	vw, err := valuelog.NewWriter(filepath.Join(valueLogDir, "value-l0-000001.log"), fileID)
+	valueLogPath := filepath.Join(valueLogDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valueLogPath, fileID)
 	if err != nil {
 		t.Fatalf("new value log writer: %v", err)
 	}
@@ -58,6 +59,7 @@ func TestDBIteratorKeyValueReturnViewsAndCopiesRemainOwned(t *testing.T) {
 	if err := vw.Close(); err != nil {
 		t.Fatalf("close value log writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, valueLogPath, fileID)
 
 	rawBatch := d.NewBatch()
 	type pointerBatch interface {

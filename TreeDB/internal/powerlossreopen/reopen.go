@@ -22,8 +22,9 @@ type Result struct {
 }
 
 // Stable materializes the model's stable image and passes it through the
-// normal public TreeDB Open path. The returned close callback is a no-op when
-// Open rejects the image.
+// normal public TreeDB Open path. The returned close callback releases the
+// modeled identity scope and removes the materialized image whether Open
+// accepts or rejects it.
 func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
 	dir, err := os.MkdirTemp("", "treedb-powerloss-stable-")
 	if err != nil {
@@ -31,6 +32,11 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 	}
 	cleanup := func() error { return os.RemoveAll(dir) }
 	if err := model.MaterializeStable(dir); err != nil {
+		_ = cleanup()
+		return Result{}, nil, nil, err
+	}
+	releaseIdentities, err := model.InstallStableIdentityOverrides(dir)
+	if err != nil {
 		_ = cleanup()
 		return Result{}, nil, nil, err
 	}
@@ -48,6 +54,7 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		if db != nil {
 			closeErr = db.Close()
 		}
+		releaseIdentities()
 		cleanupErr := cleanup()
 		if closeErr != nil {
 			return closeErr
@@ -55,6 +62,7 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		return cleanupErr
 	}
 	if db == nil && openErr == nil {
+		releaseIdentities()
 		_ = cleanup()
 		return result, nil, nil, fmt.Errorf("powerlossreopen: public Open returned nil DB and nil error")
 	}

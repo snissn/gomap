@@ -142,6 +142,10 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 		_ = writer.Close()
 		t.Fatalf("vlogWriter.Close: %v", err)
 	}
+	if err := writer.RegisterValueLogSegment(filepath.Join(valueLogDir, "value-l0-000001.log"), fileID); err != nil {
+		_ = writer.Close()
+		t.Fatalf("register value-log producer segment: %v", err)
+	}
 
 	batch := writer.NewBatch()
 	ptrBatch, ok := any(batch).(interface {

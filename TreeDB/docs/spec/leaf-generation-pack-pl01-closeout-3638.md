@@ -41,10 +41,11 @@ continue to serialize pack with GC and close.
 
 `Pager.SyncPages` plans granularity-aligned mapped-view ranges using the platform
 mapping allocation granularity. Platforms that require an explicit mapped-view
-flush receive those aligned ranges. Linux relies on its file-wide `fsync`
-contract, and all platforms finish with `os.File.Sync` (`FlushFileBuffers` on
-Windows). The contract is that requested pages are durable; it is not an
-exact-range durability claim, and ordinary dirty-chunk bookkeeping is unchanged.
+flush receive those aligned ranges. Linux finishes with `fdatasync`; Darwin
+uses `F_FULLFSYNC`, Windows uses `FlushFileBuffers`, and unsupported stable-file
+adapters fail closed. The contract is that requested pages are durable; it is
+not an exact-range durability claim, and ordinary dirty-chunk bookkeeping is
+unchanged.
 
 ## Performance fixture
 

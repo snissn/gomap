@@ -442,8 +442,12 @@ func TestCollectPublishedRootValueLogLiveIDsUntil_SkipsCurrentPublishedSystemDes
 	defer db.Close()
 	skipRetainedPrune(db)
 
+	collectionRootID, err := backend.PublishOrderedRootIterator(0, mustFrozenInlineRootTable(t, "collection/current", 4).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish collection root: %v", err)
+	}
 	systemRootID, err := backend.PublishSystemRootIterator(mustFrozenRawRootTable(t,
-		"collections/root/users/current", []byte("bad"),
+		"collections/root/users/current", encodeRootDescriptorID(collectionRootID),
 	).NewIterator(nil, nil))
 	if err != nil {
 		t.Fatalf("PublishSystemRootIterator: %v", err)
@@ -457,11 +461,15 @@ func TestCollectPublishedRootValueLogLiveIDsUntil_SkipsCurrentPublishedSystemDes
 	}
 
 	reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
+	var scanStats valueLogLiveIDScanStats
 	err = db.collectPublishedRootValueLogLiveIDsUntil(context.Background(), backend.Pager(), reader, &publishedRootSet{
 		system: publishedRootRef{rootID: systemRootID},
-	}, state.RootPageID, state.SystemRootPageID, nil, map[uint32]struct{}{}, 0, nil)
+	}, state.RootPageID, state.SystemRootPageID, nil, map[uint32]struct{}{}, 0, &scanStats)
 	if err != nil {
 		t.Fatalf("collectPublishedRootValueLogLiveIDsUntil: %v", err)
+	}
+	if scanStats.Records != 0 {
+		t.Fatalf("current published system descriptor expansion scanned %d records", scanStats.Records)
 	}
 }
 

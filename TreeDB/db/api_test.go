@@ -152,7 +152,8 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode file id: %v", err)
 	}
-	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	vlogPath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(vlogPath, fileID)
 	if err != nil {
 		t.Fatalf("new valuelog writer: %v", err)
 	}
@@ -164,6 +165,7 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 	if err := vw.Close(); err != nil {
 		t.Fatalf("close valuelog writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, vlogPath, fileID)
 	rawBatch := db.NewBatch()
 	type pointerBatch interface {
 		SetPointer(key []byte, ptr page.ValuePtr) error
@@ -369,7 +371,8 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode file id: %v", err)
 	}
-	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	vlogPath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(vlogPath, fileID)
 	if err != nil {
 		t.Fatalf("new valuelog writer: %v", err)
 	}
@@ -382,6 +385,7 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	if err := vw.Close(); err != nil {
 		t.Fatalf("close valuelog writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, vlogPath, fileID)
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("k-pointer"), ptr); err != nil {
 		_ = b.Close()
@@ -627,7 +631,8 @@ func TestGet_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	vlogPath := filepath.Join(walDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(vlogPath, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -639,6 +644,7 @@ func TestGet_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, vlogPath, fileID)
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer(key, ptr); err != nil {
@@ -688,7 +694,8 @@ func TestGetMany_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	vlogPath := filepath.Join(walDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(vlogPath, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -705,6 +712,7 @@ func TestGetMany_RetriesAfterRefreshingStaleValueLogSet(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, vlogPath, fileID)
 
 	b := db.NewBatch().(*Batch)
 	for i := range keys {
@@ -757,7 +765,8 @@ func TestGet_ConcurrentStaleReadRetry_DedupesRefresh(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	vlogPath := filepath.Join(walDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(vlogPath, fileID)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
@@ -769,6 +778,7 @@ func TestGet_ConcurrentStaleReadRetry_DedupesRefresh(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, vlogPath, fileID)
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer(key, ptr); err != nil {
