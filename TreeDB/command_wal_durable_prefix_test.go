@@ -210,6 +210,9 @@ func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 	if got := stats[kindPrefix+"pending_bytes"]; got == "" || got == "0" {
 		t.Fatalf("external-RID pending bytes=%q, want non-zero", got)
 	}
+	if _, ok := stats[kindPrefix+"max_age_ns"]; !ok {
+		t.Fatalf("external-RID pending age missing (stats=%#v)", stats)
+	}
 
 	if err := db.SetSync([]byte("durable-inline"), []byte("value")); err != nil {
 		t.Fatalf("SetSync: %v", err)
@@ -255,8 +258,19 @@ func TestPublicCommandWALRelaxedRotationsStabilizeExactPrefixBeforeBarrierAppend
 			t.Fatalf("ordinary relaxed rotation emitted stable sync event before barrier: %#v", event)
 		}
 	}
-	if got := db.Stats()["treedb.command_wal.dependency_debt.entries"]; got != "2" {
+	statsBeforeBarrier := db.Stats()
+	if got := statsBeforeBarrier["treedb.command_wal.dependency_debt.entries"]; got != "2" {
 		t.Fatalf("pending debt entries before barrier=%q, want 2", got)
+	}
+	rotationKindPrefix := "treedb.command_wal.dependency_debt.kind.command-wal."
+	if got := statMapUint64(t, statsBeforeBarrier, rotationKindPrefix+"pending_count"); got == 0 {
+		t.Fatalf("command-WAL rotation pending count=%d, want non-zero", got)
+	}
+	if got := statMapUint64(t, statsBeforeBarrier, rotationKindPrefix+"pending_bytes"); got == 0 {
+		t.Fatalf("command-WAL rotation pending bytes=%d, want non-zero", got)
+	}
+	if _, ok := statsBeforeBarrier[rotationKindPrefix+"max_age_ns"]; !ok {
+		t.Fatalf("command-WAL rotation pending age missing (stats=%#v)", statsBeforeBarrier)
 	}
 
 	if err := writeEmptyPublicCommandWALSync(db); err != nil {
