@@ -13,6 +13,9 @@ import (
 )
 
 func TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("snapshot rebind requires durable rename and removal namespaces")
+	}
 	source := filepath.Join(t.TempDir(), "source")
 	database, err := Open(Options{Dir: source, ValueLog: ValueLogOptions{PointerThreshold: 1}})
 	if err != nil {
