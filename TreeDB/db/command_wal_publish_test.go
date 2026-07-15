@@ -11,7 +11,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -125,6 +127,109 @@ func TestCommandWALAppliedLSNOnlyPublishPreservesValueLogRefTracker(t *testing.T
 	}
 	if disk.commitSeq != afterSeq {
 		t.Fatalf("metadata seq after close=%d, want %d", disk.commitSeq, afterSeq)
+	}
+}
+
+func TestCommandWALAppliedLSNOnlyPublishRebindsRootsAfterDurableGateWait(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.SetSync([]byte("seed"), []byte("one")); err != nil {
+		t.Fatalf("seed SetSync: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("missing state before concurrent publications")
+	}
+
+	candidatePrepared := make(chan struct{})
+	releaseCandidate := make(chan struct{})
+	var candidateOnce sync.Once
+	db.testDurableRootCandidatePreparedHook = func() {
+		candidateOnce.Do(func() {
+			close(candidatePrepared)
+			<-releaseCandidate
+		})
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- db.SetSync([]byte("new-root"), []byte("two"))
+	}()
+	select {
+	case <-candidatePrepared:
+	case <-time.After(5 * time.Second):
+		t.Fatal("root-changing publication did not reach the durable candidate gate")
+	}
+
+	commandBeforeGate := make(chan struct{})
+	var commandOnce sync.Once
+	db.testCommandWALBeforeDurablePublishLockHook = func() {
+		commandOnce.Do(func() { close(commandBeforeGate) })
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- db.PublishCommandWALAppliedLSN(1, []CommandWALLSNRange{{First: 1, Last: 1}}, true)
+	}()
+	select {
+	case <-commandBeforeGate:
+	case <-time.After(5 * time.Second):
+		close(releaseCandidate)
+		t.Fatal("applied-LSN publication did not reach the durable publish gate")
+	}
+
+	close(releaseCandidate)
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("root-changing SetSync: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("root-changing publication did not finish")
+	}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("PublishCommandWALAppliedLSN: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("applied-LSN publication did not finish")
+	}
+
+	db.testDurableRootCandidatePreparedHook = nil
+	db.testCommandWALBeforeDurablePublishLockHook = nil
+	after := db.State()
+	if after == nil {
+		t.Fatal("missing state after concurrent publications")
+	}
+	if after.RootPageID == before.RootPageID {
+		t.Fatalf("root rolled back to pre-publication root %d", before.RootPageID)
+	}
+	if after.AppliedCommandLSN != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", after.AppliedCommandLSN)
+	}
+	got, err := db.Get([]byte("new-root"))
+	if err != nil || string(got) != "two" {
+		t.Fatalf("Get(new-root)=(%q, %v), want (two, nil)", got, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	if state := reopened.State(); state == nil || state.RootPageID != after.RootPageID || state.AppliedCommandLSN != 1 {
+		t.Fatalf("reopened state=%+v, want root=%d applied_lsn=1", state, after.RootPageID)
+	}
+	got, err = reopened.Get([]byte("new-root"))
+	if err != nil || string(got) != "two" {
+		t.Fatalf("reopened Get(new-root)=(%q, %v), want (two, nil)", got, err)
 	}
 }
 

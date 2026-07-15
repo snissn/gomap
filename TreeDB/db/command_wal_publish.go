@@ -77,6 +77,14 @@ type finalizeCommitOptions struct {
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false)
+}
+
+func (db *DB) publishCurrentCommandWALRoots(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true)
+}
+
+func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool) error {
 	if db == nil {
 		return ErrClosed
 	}
@@ -94,17 +102,37 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		return err
 	}
 
-	db.mu.RLock()
-	baseSeq := db.meta.CommitSeq
-	rootsUnchanged := newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
-	db.mu.RUnlock()
-
+	var (
+		baseSeq        uint64
+		rootsUnchanged bool
+	)
+	if !currentRoots {
+		db.mu.RLock()
+		baseSeq = db.meta.CommitSeq
+		rootsUnchanged = newRootID == db.meta.UserRootPageID && sysRootID == db.meta.SystemRootPageID
+		db.mu.RUnlock()
+	}
+	if hook := db.testCommandWALBeforeDurablePublishLockHook; hook != nil {
+		hook()
+	}
+	db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	if currentRoots {
+		// Applied-LSN-only publications carry no constructed root candidate.
+		// Bind them to the latest roots only after entering the durable publish
+		// gate so a maintenance/manual publication that won the gate cannot be
+		// overwritten by roots captured before the wait.
+		db.mu.RLock()
+		baseSeq = db.meta.CommitSeq
+		newRootID = db.meta.UserRootPageID
+		sysRootID = db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		rootsUnchanged = true
+	}
 	var vlogRefDelta *valueLogRefDelta
 	if rootsUnchanged {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
-	db.durablePublishMu.Lock()
-	durablePublishLocked = true
 	db.writeMu.Unlock()
 	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)
 	if err != nil {
@@ -115,6 +143,19 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 	}
 	defer publishPrepareGuard.Release()
 
+	finalizeOpts := finalizeCommitOptions{
+		commandWALPublish:        true,
+		appliedCommandLSN:        appliedLSN,
+		appliedRanges:            covered,
+		skipPrePublishFlush:      true,
+		durablePublishLocked:     true,
+		closeTeardownPinned:      true,
+		releaseRootSerialization: func() {},
+	}
+	if !currentRoots {
+		finalizeOpts.expectedBaseCommitSeq = baseSeq
+		finalizeOpts.hasExpectedBaseCommitSeq = true
+	}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
 		sysRootID,
@@ -126,15 +167,7 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		vlogRefDelta,
 		nil,
 		nil,
-		finalizeCommitOptions{
-			commandWALPublish:        true,
-			appliedCommandLSN:        appliedLSN,
-			appliedRanges:            covered,
-			skipPrePublishFlush:      true,
-			durablePublishLocked:     true,
-			closeTeardownPinned:      true,
-			releaseRootSerialization: func() {},
-		},
+		finalizeOpts,
 	)
 	db.durablePublishMu.Unlock()
 	durablePublishLocked = false
@@ -157,11 +190,7 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	}
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer unlockCommandWALPublish()
-	state, ok := db.StateToken()
-	if !ok {
-		return ErrClosed
-	}
-	return db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, appliedLSN, covered, sync)
+	return db.publishCurrentCommandWALRoots(appliedLSN, covered, sync)
 }
 
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {

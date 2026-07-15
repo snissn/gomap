@@ -1535,14 +1535,20 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		db.writeMu.Unlock()
 		return err
 	}
+	if hook := db.testCommandWALBeforeDurablePublishLockHook; hook != nil {
+		hook()
+	}
+	db.durablePublishMu.Lock()
+	durablePublishLocked = true
+	// The intent is root-neutral. Capture the roots only after entering the
+	// durable publish gate so a publication that completed while this caller
+	// waited cannot be rolled back when the applied LSN advances.
 	db.mu.RLock()
 	baseSeq := db.meta.CommitSeq
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	vlogRefDelta := db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
-	db.durablePublishMu.Lock()
-	durablePublishLocked = true
 	db.commitMu.Unlock()
 	db.writeMu.Unlock()
 	publishPrepareGuard, err := db.prepareFlushApplyPublish(sync)

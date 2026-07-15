@@ -535,6 +535,7 @@ type DB struct {
 	testAfterOptimisticBaseCaptureHook             func()
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
+	testCommandWALBeforeDurablePublishLockHook     func()
 	testDurableRootCandidatePreparedHook           func()
 	testCheckpointAfterPoisonPreflightHook         func()
 	testConditionalReadOnlyAfterClosePreflight     func()
