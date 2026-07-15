@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"runtime"
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -221,6 +222,9 @@ func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 }
 
 func TestCachingValueLogExternalRefFlusherDefersRotatedCommandFrameSyncToPinnedDebt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("durable command-WAL activation fails closed without stable namespace persistence")
+	}
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                    dir,
