@@ -293,6 +293,35 @@ func TestRemainingTemplateV1MeasurementStorageReconstructsLocalJSONBenchIfReques
 	validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t, source, limit, colgranule.DefaultRowsPerGranule)
 }
 
+func TestRemainingRewriteEvidenceAllowsDurableRootDeferredReclaim(t *testing.T) {
+	// Exact counters from the macOS failure in run 29445375387. The rewrite
+	// completed, but its source segments remained reachable from the older
+	// independently recoverable durable-root slot.
+	result := remainingTreeDBResult{
+		RewriteRecordsCopied: 18,
+		RewriteValueBytes:    1843,
+		RewriteSourceBytes:   1600,
+		RewriteReclaimFiles:  0,
+		RewriteReclaimBytes:  0,
+	}
+	if err := validateRemainingRewriteEvidence(result); err != nil {
+		t.Fatalf("durable-root deferred reclaim rejected: %v", err)
+	}
+}
+
+func TestRemainingRewriteEvidenceRejectsInconsistentReclaimCounters(t *testing.T) {
+	result := remainingTreeDBResult{
+		RewriteRecordsCopied: 1,
+		RewriteValueBytes:    128,
+		RewriteSourceBytes:   256,
+		RewriteReclaimFiles:  1,
+		RewriteReclaimBytes:  0,
+	}
+	if err := validateRemainingRewriteEvidence(result); err == nil {
+		t.Fatal("inconsistent rewrite reclaim counters accepted")
+	}
+}
+
 func validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
 	t.Helper()
 	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
@@ -433,16 +462,32 @@ func validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *t
 	if result.Rows != ds.Rows {
 		t.Fatalf("measured rows=%d want %d", result.Rows, ds.Rows)
 	}
-	if result.RewriteRecordsCopied == 0 {
-		t.Fatalf("remaining measurement copied no value-log records: %+v", result)
-	}
-	if result.RewriteReclaimFiles == 0 || result.RewriteReclaimBytes == 0 {
-		t.Fatalf("remaining measurement did not reclaim rewritten sources through cached fence path: %+v", result)
+	if err := validateRemainingRewriteEvidence(result); err != nil {
+		t.Fatalf("remaining measurement value-log rewrite evidence: %v: %+v", err, result)
 	}
 	// Rewrite reclamation is reported from the files actually deleted. An exact
 	// ingest segment may remain reachable from the independently recoverable
 	// older durable-root slot until a later publication supersedes that slot.
 	validateStoredRemainingCollectionReconstructsJSONBenchRows(t, source, ds, imagePart, dbDir, collections.DocumentFormatTemplateV1)
+}
+
+func validateRemainingRewriteEvidence(result remainingTreeDBResult) error {
+	if result.RewriteRecordsCopied <= 0 {
+		return fmt.Errorf("copied no value-log records")
+	}
+	if result.RewriteValueBytes <= 0 {
+		return fmt.Errorf("copied no value-log bytes")
+	}
+	if result.RewriteSourceBytes <= 0 {
+		return fmt.Errorf("selected no value-log source bytes")
+	}
+	if (result.RewriteReclaimFiles == 0) != (result.RewriteReclaimBytes == 0) {
+		return fmt.Errorf("reported inconsistent reclaim counters: files=%d bytes=%d", result.RewriteReclaimFiles, result.RewriteReclaimBytes)
+	}
+	if result.RewriteReclaimBytes > result.RewriteSourceBytes {
+		return fmt.Errorf("reclaimed %d bytes from %d selected source bytes", result.RewriteReclaimBytes, result.RewriteSourceBytes)
+	}
+	return nil
 }
 
 func buildJSONBenchImagePartForReconstructionTest(t *testing.T, source string, limit int, rowsPerGranule int) (*colgranule.JSONBenchDataset, *colgranule.ColumnPart) {
