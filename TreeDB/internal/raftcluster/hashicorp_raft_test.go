@@ -1155,9 +1155,9 @@ func (c *hashicorpRaftTestCluster) waitForLeaderReady(tb testing.TB) *hashicorpR
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
-		term, ok := HashicorpRaftTestLeaderTerm(leader.provider)
+		term, ok := HashicorpRaftTestLeaderReady(leader.provider)
 		if !ok {
-			lastErr = errors.New("leader has no current term")
+			lastErr = errors.New("leader failed live-term quorum verification")
 			previous = leaderReadinessObservation{}
 			time.Sleep(20 * time.Millisecond)
 			continue
