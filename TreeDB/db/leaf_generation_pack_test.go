@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -37,8 +38,9 @@ func leafGenerationKey(prefix string, i int) []byte {
 
 func advanceLeafGenerationPackDurableRootHorizon(t *testing.T, db *DB, reason string) {
 	t.Helper()
-	if err := db.SetSync([]byte("leaf-generation-pack/horizon/"+reason), []byte("advance")); err != nil {
-		t.Fatalf("advance recoverable-root horizon: %v", err)
+	state := db.State()
+	if err := db.Commit(state.RootPageID); err != nil {
+		t.Fatalf("advance recoverable-root horizon (%s): %v", reason, err)
 	}
 }
 
@@ -292,8 +294,22 @@ func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *test
 		t.Fatalf("bootstrap file count=%d, want retained packed candidate beyond baseline %d", len(afterFiles), len(beforeFiles))
 	}
 	manifestAfter := loadLeafGenerationManifestOrFatal(t, dir)
-	if len(manifestAfter.Generations) != len(manifestBefore.Generations) {
-		t.Fatalf("manifest generations=%d, want %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
+	if len(manifestAfter.Generations) <= len(manifestBefore.Generations) {
+		t.Fatalf("manifest generations=%d, want retained packed revision beyond baseline %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
+	}
+	var retainedManifest, retainedPack bool
+	for _, entry := range pending.manifest.Entries() {
+		for _, field := range entry.Reachability {
+			switch field {
+			case rootpublication.ReachabilityOuterLeafGeneration:
+				retainedManifest = entry.Generation == manifestAfter.ManifestRevision
+			case rootpublication.ReachabilityOuterLeafPackedPointer:
+				retainedPack = true
+			}
+		}
+	}
+	if !retainedManifest || !retainedPack {
+		t.Fatalf("retained candidate manifest revision=%d manifest=%t pack=%t entries=%+v", manifestAfter.ManifestRevision, retainedManifest, retainedPack, pending.manifest.Entries())
 	}
 }
 

@@ -497,6 +497,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 	baselinePins := db.valueLogIdentityPins.ActivePins()
 	seen := make(map[leafGenerationPackPublishPhase]bool)
+	promotedIdentities := make(map[uint32]rootpublication.StableIdentity)
 	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
 		switch event.Phase {
 		case leafGenerationPackAfterPromotion, leafGenerationPackAfterRegistration, leafGenerationPackBeforeMetaWrite:
@@ -511,6 +512,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 				if !ok {
 					return fmt.Errorf("manager missing stable identity %d", id)
 				}
+				promotedIdentities[id] = identity
 				if _, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
 					return fmt.Errorf("delete race for %d error=%v want pinned", id, err)
 				}
@@ -534,9 +536,9 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 		t.Fatal("successful pack reported no created segment IDs")
 	}
 	for _, id := range stats.CreatedFileIDs {
-		identity, ok := db.valueLogManager.StableSegmentIdentity(id)
+		identity, ok := promotedIdentities[id]
 		if !ok {
-			t.Fatalf("manager missing stable identity %d after metadata handoff", id)
+			t.Fatalf("publication hook did not capture stable identity %d", id)
 		}
 		if lease, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
 			if lease != nil {
