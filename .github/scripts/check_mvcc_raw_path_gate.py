@@ -143,9 +143,9 @@ def median_paired_ns_delta_percent(
             raise ValueError(
                 f"paired sample {index}: baseline ns/op must be positive, got {base.ns_per_op}"
             )
-        if not math.isfinite(head.ns_per_op) or head.ns_per_op < 0.0:
+        if not math.isfinite(head.ns_per_op) or head.ns_per_op <= 0.0:
             raise ValueError(
-                f"paired sample {index}: candidate ns/op must be non-negative, got {head.ns_per_op}"
+                f"paired sample {index}: candidate ns/op must be positive, got {head.ns_per_op}"
             )
         deltas.append(((head.ns_per_op / base.ns_per_op) - 1.0) * 100.0)
     return statistics.median(deltas)

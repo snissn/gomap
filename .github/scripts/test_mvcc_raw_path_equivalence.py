@@ -98,6 +98,18 @@ class RawPathEquivalenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "baseline ns/op must be positive"):
             CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
 
+    def test_paired_timing_rejects_non_positive_candidate(self) -> None:
+        baseline, candidate = self.benchmark_sets(
+            [100.0] * 8,
+            [100.0, 100.0, 100.0, 0.0, 100.0, 100.0, 100.0, 100.0],
+        )
+        with self.assertRaisesRegex(ValueError, "candidate ns/op must be positive"):
+            CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+
+        baseline, candidate = self.benchmark_sets([100.0] * 8, [0.0] * 8)
+        with self.assertRaisesRegex(ValueError, "candidate ns/op must be positive"):
+            CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+
     def binary_paths(
         self, equivalent_packages: set[str]
     ) -> dict[str, dict[str, Path]]:
