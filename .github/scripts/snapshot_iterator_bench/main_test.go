@@ -84,4 +84,45 @@ func TestParseRejectsMissingAnnotationAndMalformedMetrics(t *testing.T) {
 	if _, err := parseBenchmarkOutput("# pair=1 order=AB\nBenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek-1 1000 nope ns/op 0 B/op 0 allocs/op\n"); err == nil {
 		t.Fatal("malformed metric passed")
 	}
+	if _, err := parseBenchmarkOutput("# pair=1 order=AB\n# pair=2 order=BA\n"); err == nil {
+		t.Fatal("overwritten annotation passed")
+	}
+}
+func TestEvaluateFailsClosedOnInvalidConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		required int
+		max      float64
+	}{
+		{name: "zero samples", required: 0, max: .05},
+		{name: "odd samples", required: 7, max: .05},
+		{name: "negative threshold", required: 8, max: -.01},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := evaluate(nil, testMeta(), tc.required, tc.max)
+			if rep.Passed || len(rep.Violations) == 0 {
+				t.Fatalf("invalid configuration passed: %+v", rep)
+			}
+		})
+	}
+}
+func TestEvaluateRejectsNonContiguousAndNonAdjacentPairs(t *testing.T) {
+	raw := fixture([]float64{100, 100, 100, 100, 100, 100, 100, 100}, []float64{100, 100, 100, 100, 100, 100, 100, 100})
+	rows, err := parseBenchmarkOutput(strings.ReplaceAll(raw, "# pair=8 order=BA", "# pair=9 order=BA"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep := evaluate(rows, testMeta(), 8, .05); rep.Passed {
+		t.Fatalf("non-contiguous pairs passed: %+v", rep)
+	}
+
+	rows, err = parseBenchmarkOutput(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := rowKey{Keys: 1024, Mode: "public", Operation: "seek"}
+	rows[key][0].Sequence++
+	if rep := evaluate(rows, testMeta(), 8, .05); rep.Passed {
+		t.Fatalf("non-adjacent pair passed: %+v", rep)
+	}
 }

@@ -129,6 +129,9 @@ func parseBenchmarkOutput(raw string) (map[rowKey][]capturedSample, error) {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "# pair=") {
+			if pending != nil {
+				return nil, fmt.Errorf("pair annotation without benchmark row before %q", line)
+			}
 			a, err := parseAnnotation(line)
 			if err != nil {
 				return nil, err
@@ -232,10 +235,16 @@ func evaluate(rows map[rowKey][]capturedSample, meta metadata, required int, max
 	if required < 2 || required%2 != 0 {
 		rep.Violations = append(rep.Violations, "required samples must be a positive even number")
 	}
+	if math.IsNaN(max) || math.IsInf(max, 0) || max < 0 {
+		rep.Violations = append(rep.Violations, "maximum regression must be a finite non-negative number")
+	}
 	for label, value := range map[string]string{"head": meta.Head, "binary_sha256": meta.BinarySHA256, "runner_image": meta.RunnerImage, "cpu": meta.CPU, "affinity": meta.Affinity, "go_version": meta.GoVersion} {
 		if strings.TrimSpace(value) == "" {
 			rep.Violations = append(rep.Violations, "missing metadata "+label)
 		}
+	}
+	if required < 2 || required%2 != 0 || math.IsNaN(max) || math.IsInf(max, 0) || max < 0 {
+		return rep
 	}
 	for _, keys := range []int{1024, 16384} {
 		for _, op := range []string{"seek", "next"} {
@@ -274,9 +283,13 @@ func evaluateCase(keys int, op string, snap, pub []capturedSample, required int,
 		return nil, []string{fmt.Sprintf("%s has %d distinct pairs for %d samples", prefix, len(pairs), required)}
 	}
 	results := make([]pairResult, 0, len(pairs))
-	for id, m := range pairs {
+	for id := 1; id <= required; id++ {
+		m, ok := pairs[id]
+		if !ok {
+			return nil, []string{fmt.Sprintf("%s missing pair=%d", prefix, id)}
+		}
 		a, b := m["snapshot"], m["public"]
-		if a.Pair == 0 || b.Pair == 0 || a.Order != b.Order || (a.Order == "AB" && a.Sequence > b.Sequence) || (a.Order == "BA" && b.Sequence > a.Sequence) {
+		if a.Pair == 0 || b.Pair == 0 || a.Order != b.Order || abs(a.Sequence-b.Sequence) != 1 || (a.Order == "AB" && a.Sequence > b.Sequence) || (a.Order == "BA" && b.Sequence > a.Sequence) {
 			return nil, []string{fmt.Sprintf("%s missing or unbalanced pair=%d", prefix, id)}
 		}
 		if a.Order == "AB" {
@@ -314,6 +327,12 @@ func evaluateCase(keys int, op string, snap, pub []capturedSample, required int,
 		v = append(v, fmt.Sprintf("%s allocation increase: snapshot %.0f B/op %.0f allocs/op; public %.0f B/op %.0f allocs/op", prefix, r.SnapshotMedianBytes, r.SnapshotMedianAllocs, r.PublicMedianBytes, r.PublicMedianAllocs))
 	}
 	return r, v
+}
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 func validSample(s sample) bool {
 	return s.NSPerOp > 0 && s.BytesPerOp >= 0 && s.AllocsPerOp >= 0 && !math.IsNaN(s.NSPerOp) && !math.IsInf(s.NSPerOp, 0) && !math.IsNaN(s.BytesPerOp) && !math.IsInf(s.BytesPerOp, 0) && !math.IsNaN(s.AllocsPerOp) && !math.IsInf(s.AllocsPerOp, 0)
