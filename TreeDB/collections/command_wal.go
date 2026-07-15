@@ -17,7 +17,7 @@ func init() {
 
 // RegisterCommandWALReplayHandlers installs collection command-WAL replay
 // handlers for binaries that want deterministic registration instead of relying
-// on a package side-effect import before opening a command_wal_v1 directory.
+// on a package side-effect import before opening a command_wal_v2 directory.
 func RegisterCommandWALReplayHandlers() {
 	registerCommandWALReplayHandlersOnce.Do(func() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)

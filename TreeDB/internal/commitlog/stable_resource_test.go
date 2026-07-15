@@ -53,7 +53,13 @@ func testCommandJournalStableRotationCreatesThroughCapturedParent(t *testing.T) 
 	if err := builder.Add(rotation.TakeClosed()); err != nil {
 		t.Fatal(err)
 	}
-	if err := builder.Add(rotation.TakeActive()); err != nil {
+	active := rotation.TakeActive()
+	if err := active.Namespace().Stabilize(); err != nil {
+		active.Release()
+		t.Fatal(err)
+	}
+	if err := builder.Add(active); err != nil {
+		active.Release()
 		t.Fatal(err)
 	}
 	set, err := builder.Freeze()
@@ -420,7 +426,14 @@ func benchmarkStableCommandWALRotation(b *testing.B) {
 					rotation.Release()
 					b.Fatal(err)
 				}
-				if err := builder.Add(rotation.TakeActive()); err != nil {
+				active := rotation.TakeActive()
+				if err := active.Namespace().Stabilize(); err != nil {
+					active.Release()
+					rotation.Release()
+					b.Fatal(err)
+				}
+				if err := builder.Add(active); err != nil {
+					active.Release()
 					rotation.Release()
 					b.Fatal(err)
 				}

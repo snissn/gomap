@@ -115,7 +115,7 @@ the helper call.
 | `AppliedLSN` | Highest contiguous command LSN covered by the durable checkpointed TreeDB state. This value is selected atomically with the roots that contain those command effects. |
 | `Checkpoint` | Durable root boundary that syncs required files and records `AppliedLSN`. |
 | `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, target raw KV revision state, and `AppliedLSN` visible together. |
-| `ExternalRef` | Reserved typed reference to bytes outside the command frame. The current V1 and inert V2 codecs reject every non-empty `CommandEnvelope.ExternalRefs` section; #3718 must activate producer, pin, sync, recovery, and deletion ownership atomically before these references can become durable authority. |
+| `ExternalRef` | Reserved typed reference to bytes outside the command frame. The current V1 and active V2 codecs reject every non-empty `CommandEnvelope.ExternalRefs` section. V2 RawKV `SetRID` dependencies use the separate canonical RID fence and exact-handle debt protocol; the general typed section remains quarantined until its producer, sync, recovery, and deletion ownership land atomically. |
 | `State root` | The TreeDB root state selected by meta/system-root recovery. In distributed mode this is not automatically a consensus digest. |
 | `Replay executor` | The same semantic command executor used by the normal write path, constrained to deterministic replay mode. |
 | `DeclarativeUpdateOp` | Versioned update operator whose canonical payload fully defines replay, for example set field to literal, unset field, or a future `$inc`-style operator. |
@@ -212,8 +212,9 @@ must not change replay bytes.
 - The segment frame CRC covers the encoded command frame bytes for physical
   corruption and truncation detection.
 - `ExternalRefs` is a reserved wire section for required bytes outside a
-  command frame. Current V1 and inert V2 encode/decode reject every non-empty
-  section until #3718 activates its complete authority closure.
+  command frame. Current V1 and V2 encode/decode reject every non-empty
+  section. V2 RawKV `SetRID` uses `ExternalRefFenceV1` and exact-handle
+  dependency debt instead of this general section.
 - `Preconditions` make stale or incompatible replay fail closed.
 - `ResultAssertions` allow recovery to detect semantic drift, for example
   expected matched/modified counts or optional document digests.
@@ -257,24 +258,31 @@ Required integration points:
   instead of a physical sidecar record with a separate durability boundary;
 - fail closed on unknown required frame versions or command kinds.
 
-### 5.3.1 Inert Command-Frame V2 Boundary
+### 5.3.1 Active Command-Frame V2 Boundary
 
-The V2 codec and recovery classifier may land before production activation so
-their bytes and failure rules can be reviewed independently. During that phase:
+The `command_wal_v2` required feature activates V2 append, strict scan,
+durable-frontier classification, suffix repair, replay, publication, and cleanup
+as one format boundary:
 
-- `CommandFrameVersion` remains 1 for the public journal owner and public
-  append/reopen path;
-- V2 encode, strict decode, physical scan, classification, and suffix-repair
-  functions are explicit entry points that production `Open` does not call;
+- production command-WAL journals append only V2 frames and strict open rejects
+  V1 with a pre-alpha rebuild-required error;
 - strict V2 scan rejects commit-log segment compression with the typed
   `ErrCommandWALV2CompressedRecordUnsupported`, because a torn compressed
-  record does not expose an authenticated LSN or durability class; #3718 must
-  disable segment compression at activation or first add an uncompressed
-  identity prefix;
-- a production append rejects a caller-supplied V2 envelope without consuming
-  an LSN or mixing versions in the active segment; and
-- #3718 owns the one-time activation of append, dependency preparation, replay,
-  publication, and cleanup.
+  record does not expose an authenticated LSN or durability class;
+- each relaxed frame retains ordered exact-handle dependency debt without
+  issuing a stable sync;
+- a durable command or empty barrier syncs the coalesced dependency prefix and
+  successor namespaces before appending, then syncs the WAL before releasing
+  debt;
+- when an already-appended relaxed staged intent is published through a sync
+  API, its publication covers the contiguous range from the mutation LSN
+  through the appended durable barrier LSN; the mutation keeps its original LSN
+  identity while `AppliedCommandLSN` advances through the barrier;
+- a successful synced checkpoint cleanup releases debt through its durable
+  `AppliedCommandLSN`, so a later barrier cannot reopen a covered segment that
+  cleanup deleted; and
+- pre-append failures are retryable, while ambiguous post-append/sync failures
+  poison the handle and require recovery.
 
 V2 persists `CommandDurabilityClass` in header bytes `[54,56)` (`Durable=1`,
 `Relaxed=2`). It adds the empty durable `DurablePrefixBarrierV1` and requires
@@ -289,9 +297,8 @@ by RawKV `SetRID` payload operations and remains supported while typed
 `ExternalRefs` are rejected.
 
 Recovery first derives the highest valid durable frontier and validates the
-entire prefix through it without mutation. Only a complete contiguous
-dependency-closed relaxed prefix above that frontier is replayable. The first
-incomplete relaxed frame begins a single physical suffix that is repaired in
+entire prefix through it without mutation. Relaxed frames above that frontier
+are not replayable; they form the physical suffix that is repaired in
 reverse global-LSN order, with later file sync/removal and WAL-directory sync
 completed before the anchor truncate/sync. Read-only inspection returns the
 same planned stages in structured `ErrRecoveryRequired` diagnostics without
@@ -352,7 +359,7 @@ commands to have explicit `WAL-supported`, `WAL-rejected`, `WAL-off-only`, or
 
 Collection command replay handlers live in the `TreeDB/collections` package
 because replay must re-enter the normal collection executor. Binaries that may
-open `command_wal_v1` directories containing collection frames must import that
+open `command_wal_v2` directories containing collection frames must import that
 package before `db.Open` recovery runs, or call
 `collections.RegisterCommandWALReplayHandlers()` during startup. A backend-only
 binary without those handlers must fail closed on collection command kinds
@@ -845,7 +852,7 @@ read-only-open test may be deleted unless the implementation PR records one of:
 - a direct command-WAL equivalent test;
 - a renamed test that asserts the same invariant under typed command frames;
 - a documented reason the old test applied only to unsupported legacy raw
-  payload compatibility after `command_wal_v1` activation.
+  payload compatibility after `command_wal_v2` activation.
 
 PR 1 must include a test inventory that maps legacy WAL tests to command-WAL
 coverage buckets. PRs 2 and 3 must keep that inventory current as publish,
@@ -1165,7 +1172,7 @@ Acceptance:
 Deliverables:
 
 - public `treedb.Open` read-write handles no longer fail closed solely because
-  `CommandWAL` or persisted `command_wal_v1` is active;
+  `CommandWAL` or persisted `command_wal_v2` is active;
 - public raw KV `Set`, `Delete`, and `Batch.Write` calls use `RawKVBatch`
   command frames through the cached public command-WAL path;
 - the public command-WAL write path uses cached visibility while disabling the
@@ -1199,7 +1206,7 @@ PR9 initial evidence:
 - `TestPublicCommandWALRawKVWritesUseTypedFrames` opens with public
   `treedb.Open`, writes `Set` plus batch set/delete operations, proves command
   frame/max-LSN stats are non-zero, closes, reopens from persisted
-  `command_wal_v1`, and verifies the final public state;
+  `command_wal_v2`, and verifies the final public state;
 - this PR intentionally routes public command-WAL writes through cached
   visibility plus typed command-WAL frames rather than re-enabling the cached
   legacy redo journal.

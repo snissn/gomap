@@ -3088,11 +3088,13 @@ func writeCollectionCommandWALFrame(t *testing.T, dir string, lsn uint64, kind c
 		t.Fatalf("NewWriter: %v", err)
 	}
 	if err := w.AppendCommand(commitlog.CommandEnvelope{
-		LSN:           lsn,
-		Kind:          kind,
-		Scope:         commandWALScopeForKind(kind),
-		PayloadFormat: format,
-		Payload:       payload,
+		Version:         commitlog.CommandFrameVersionV2,
+		LSN:             lsn,
+		DurabilityClass: commitlog.CommandDurabilityDurable,
+		Kind:            kind,
+		Scope:           commandWALScopeForKind(kind),
+		PayloadFormat:   format,
+		Payload:         payload,
 	}); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendCommand: %v", err)

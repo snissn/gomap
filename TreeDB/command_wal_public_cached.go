@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -242,7 +241,7 @@ func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
 		return
 	}
 	if tdb.backend.CommandWALActiveBytes() > 0 {
-		tdb.commandWALCheckpointCutoverErr = tdb.backend.RotateCommandWALActiveSegment(publicCommandWALPublishSync(tdb.durabilityMode, true))
+		tdb.commandWALCheckpointCutoverErr = tdb.backend.RotateCommandWALActiveSegment(true)
 	}
 }
 
@@ -303,11 +302,7 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
 	}
-	return tdb.backend.CleanupCommandWALCoveredSegments(publicCommandWALPublishSync(tdb.durabilityMode, sync))
-}
-
-func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
-	return sync && strings.HasPrefix(durabilityMode, "wal_on_sync")
+	return tdb.backend.CleanupCommandWALCoveredSegments(sync)
 }
 
 func (tdb *DB) syncPublicCommandWAL() error {
@@ -317,7 +312,11 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	return tdb.backend.FlushCommandWALBarrier(publicCommandWALPublishSync(tdb.durabilityMode, true))
+	lsn, err := tdb.backend.FlushCommandWALBarrierWithLSN(true)
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	return err
 }
 
 type commandWALPublicBatch struct {

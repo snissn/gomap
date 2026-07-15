@@ -29,9 +29,9 @@ const (
 	commandWALAppendStatsPayload
 	commandWALAppendStatsEntryScan
 	commandWALAppendStatsIntent
-	// commandWALAppendStatsBarrier is not an append path. It attributes a
-	// FlushCommandWAL call that has no frame append in the same operation, such
-	// as an empty public WriteSync or checkpoint publication boundary.
+	// commandWALAppendStatsBarrier attributes the flush/sync work for a
+	// DurablePrefixBarrierV1 append, including empty public WriteSync and
+	// checkpoint publication boundaries with no foreground mutation frame.
 	commandWALAppendStatsBarrier
 	commandWALStatsPathCount
 )
@@ -114,6 +114,12 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 	stats["treedb.command_wal.bytes.active"] = "0"
 	stats["treedb.command_wal.active_segment.name"] = ""
 	stats["treedb.command_wal.applied_lsn"] = "0"
+	stats["treedb.command_wal.durable_wal_lsn"] = "0"
+	stats["treedb.command_wal.dependency_debt.entries"] = "0"
+	stats["treedb.command_wal.dependency_debt.pending_count"] = "0"
+	stats["treedb.command_wal.dependency_debt.pending_bytes"] = "0"
+	stats["treedb.command_wal.dependency_debt.max_age_ns"] = "0"
+	stats["treedb.command_wal.dependency_debt.retries_total"] = "0"
 	stats["treedb.command_wal.next_lsn"] = "0"
 	stats["treedb.command_wal.live_accepted_frames"] = "0"
 	stats["treedb.command_wal.live_accepted_max_lsn"] = "0"
@@ -183,6 +189,22 @@ func writeCommandWALLifecycleStats(stats map[string]string, db *DB) {
 		appliedLSN = state.AppliedCommandLSN
 	}
 	stats["treedb.command_wal.applied_lsn"] = fmt.Sprintf("%d", appliedLSN)
+	stats["treedb.command_wal.durable_wal_lsn"] = fmt.Sprintf("%d", db.commandWALDurableLSN.Load())
+	debtStats := db.commandWALDebt.stats(time.Now())
+	stats["treedb.command_wal.dependency_debt.entries"] = fmt.Sprintf("%d", debtStats.entries)
+	stats["treedb.command_wal.dependency_debt.max_age_ns"] = fmt.Sprintf("%d", commandWALDurationNs(debtStats.oldest))
+	stats["treedb.command_wal.dependency_debt.retries_total"] = fmt.Sprintf("%d", debtStats.retries)
+	var pendingCount, pendingBytes uint64
+	for _, kindStats := range debtStats.byKind {
+		pendingCount += kindStats.PendingCount
+		pendingBytes += kindStats.PendingBytes
+		prefix := "treedb.command_wal.dependency_debt.kind." + string(kindStats.Kind) + "."
+		stats[prefix+"pending_count"] = fmt.Sprintf("%d", kindStats.PendingCount)
+		stats[prefix+"pending_bytes"] = fmt.Sprintf("%d", kindStats.PendingBytes)
+		stats[prefix+"max_age_ns"] = fmt.Sprintf("%d", commandWALDurationNs(kindStats.PendingAge))
+	}
+	stats["treedb.command_wal.dependency_debt.pending_count"] = fmt.Sprintf("%d", pendingCount)
+	stats["treedb.command_wal.dependency_debt.pending_bytes"] = fmt.Sprintf("%d", pendingBytes)
 	stats["treedb.command_wal.next_lsn"] = fmt.Sprintf("%d", db.CommandWALNextLSN())
 	stats["treedb.command_wal.bytes.active"] = fmt.Sprintf("%d", db.CommandWALActiveBytes())
 	stats["treedb.command_wal.append.count_total"] = fmt.Sprintf("%d", db.commandWALAppendCount.Load())

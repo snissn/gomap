@@ -468,7 +468,15 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	if !ok {
 		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
 	}
-	pinned, err := duplicateStableFile(spec.File)
+	duplicate := duplicateStableFile
+	if spec.SyncThrough == nil {
+		// The default Windows durability barrier needs a private write-capable
+		// reopen even when the producer retains only a read handle. A custom
+		// sync callback owns its handle contract, so preserve the source access
+		// rights (and support non-disk handles used by custom barriers).
+		duplicate = duplicateStableSyncFile
+	}
+	pinned, err := duplicate(spec.File)
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable resource handle: %w", err)
 	}
@@ -520,7 +528,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	}
 	syncThrough := spec.SyncThrough
 	if syncThrough == nil {
-		syncThrough = func(file *os.File, _ DurableFrontier) error { return file.Sync() }
+		syncThrough = func(file *os.File, _ DurableFrontier) error { return syncStableFile(file) }
 	}
 	token := &StableResourceToken{
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
@@ -829,6 +837,13 @@ func newStableNamespaceBatchTokensWithDuplicate(spec StableNamespaceBatchSpec, a
 	if len(spec.Registrations) == 0 || adapter == nil || duplicate == nil {
 		return nil, fmt.Errorf("%w: empty stable namespace batch", ErrUnresolvedResource)
 	}
+	// A Windows creation proof is persisted through each exact child handle,
+	// not through one shared parent sync. The current batch API also represents
+	// rename and source-parent obligations, so keep that broader contract typed
+	// unsupported instead of certifying it with the create-only primitive.
+	if stableNamespaceCreationPersistsThroughChild() {
+		return nil, fmt.Errorf("%w: batched parent namespace persistence is unavailable", ErrNamespacePersistenceUnsupported)
+	}
 	tokens := make([]*StableNamespaceToken, 0, len(spec.Registrations))
 	releaseTokens := func() {
 		for _, token := range tokens {
@@ -968,6 +983,8 @@ func StableNamespaceParentGeneration(parent *os.File) (uint64, error) {
 type StableNamespaceToken struct {
 	parent                 *os.File
 	parentIdentity         StableIdentity
+	persistence            *os.File
+	persistenceIdentity    StableIdentity
 	linkedResourceIdentity StableIdentity
 	hasLinkedResource      bool
 	operation              NamespaceOperation
@@ -987,19 +1004,21 @@ type StableNamespaceToken struct {
 }
 
 // StableNamespaceCreationProof is an opaque, exact-handle witness that a
-// newly-created child was linked from and durably synced through its retained
-// parent. It exists solely to carry that one creation sync to later resource
-// registration, where the logical parent generation is finally known.
+// newly-created child was linked from its retained parent and durably synced
+// through the platform's exact creation-persistence handle. It exists solely
+// to carry that one creation sync to later resource registration, where the
+// logical parent generation is finally known.
 type StableNamespaceCreationProof struct {
-	parent    *os.File
-	parentID  StableIdentity
-	childID   StableIdentity
-	name      string
-	adapter   namespacePersistenceAdapter
-	released  atomic.Bool
-	syncs     atomic.Uint64
-	syncNanos atomic.Uint64
-	mu        sync.Mutex
+	parent      *os.File
+	persistence *os.File
+	parentID    StableIdentity
+	childID     StableIdentity
+	name        string
+	adapter     namespacePersistenceAdapter
+	released    atomic.Bool
+	syncs       atomic.Uint64
+	syncNanos   atomic.Uint64
+	mu          sync.Mutex
 }
 
 // NewStableNamespaceCreationProof validates the exact parent/child link and
@@ -1030,14 +1049,25 @@ func newStableNamespaceCreationProof(parent, child *os.File, name string, adapte
 	if err != nil {
 		return nil, fmt.Errorf("duplicate namespace proof parent: %w", err)
 	}
+	persistence := pinned
+	if stableNamespaceCreationPersistsThroughChild() {
+		persistence, err = duplicateStableFile(child)
+		if err != nil {
+			_ = pinned.Close()
+			return nil, fmt.Errorf("duplicate namespace proof child: %w", err)
+		}
+	}
 	started := time.Now()
-	err = adapter.Sync(pinned)
+	err = adapter.Sync(persistence)
 	syncNanos := uint64(time.Since(started))
 	if err != nil {
+		if persistence != pinned {
+			_ = persistence.Close()
+		}
 		_ = pinned.Close()
 		return nil, err
 	}
-	proof := &StableNamespaceCreationProof{parent: pinned, parentID: parentID, childID: childID, name: name, adapter: adapter}
+	proof := &StableNamespaceCreationProof{parent: pinned, persistence: persistence, parentID: parentID, childID: childID, name: name, adapter: adapter}
 	proof.syncs.Store(1)
 	proof.syncNanos.Store(syncNanos)
 	return proof, nil
@@ -1083,7 +1113,9 @@ func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneratio
 		return nil, err
 	}
 	parentID.Generation = parentGeneration
-	token := &StableNamespaceToken{parent: pinned, parentIdentity: parentID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: proof.name, diagnosticPath: filepath.ToSlash(diagnosticPath), adapter: proof.adapter}
+	persistenceID := parentID
+	persistenceID.Generation = 0
+	token := &StableNamespaceToken{parent: pinned, parentIdentity: parentID, persistence: pinned, persistenceIdentity: persistenceID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: proof.name, diagnosticPath: filepath.ToSlash(diagnosticPath), adapter: proof.adapter}
 	token.state.Store(namespaceStable)
 	token.syncs.Store(proof.syncs.Load())
 	token.syncNanos.Store(proof.syncNanos.Load())
@@ -1099,9 +1131,13 @@ func (proof *StableNamespaceCreationProof) Release() {
 	if proof.released.Swap(true) {
 		return
 	}
-	if proof.parent != nil {
-		_ = proof.parent.Close()
-		proof.parent = nil
+	parent, persistence := proof.parent, proof.persistence
+	proof.parent, proof.persistence = nil, nil
+	if persistence != nil && persistence != parent {
+		_ = persistence.Close()
+	}
+	if parent != nil {
+		_ = parent.Close()
 	}
 }
 
@@ -1151,8 +1187,25 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 		return nil, err
 	}
 	identity.Generation = spec.ParentGeneration
+	persistence := pinned
+	persistenceIdentity := identity
+	persistenceIdentity.Generation = 0
+	if stableNamespaceCreationPersistsThroughChild() && spec.Operation == NamespaceCreate && spec.LinkedResource != nil {
+		persistence, err = duplicateStableFile(spec.LinkedResource)
+		if err != nil {
+			_ = pinned.Close()
+			return nil, fmt.Errorf("duplicate namespace creation resource: %w", err)
+		}
+		persistenceIdentity, err = adapter.Identity(persistence)
+		if err != nil {
+			_ = persistence.Close()
+			_ = pinned.Close()
+			return nil, err
+		}
+		persistenceIdentity.Generation = 0
+	}
 	return &StableNamespaceToken{
-		parent: pinned, parentIdentity: identity, linkedResourceIdentity: linkedIdentity,
+		parent: pinned, parentIdentity: identity, persistence: persistence, persistenceIdentity: persistenceIdentity, linkedResourceIdentity: linkedIdentity,
 		hasLinkedResource: hasLinkedResource, operation: spec.Operation,
 		oldName: spec.OldName, newName: spec.NewName,
 		diagnosticPath: filepath.ToSlash(spec.DiagnosticPath), adapter: adapter,
@@ -1168,6 +1221,17 @@ func OpenStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 		return nil, fmt.Errorf("%w: stable child requires a base name and exact parent handle", ErrUnresolvedResource)
 	}
 	return openStableChildFile(parent, name, flags, perm)
+}
+
+// OpenStableParent captures a directory for later exact-handle child
+// operations. On Windows the handle explicitly shares delete access so a
+// rename/recreate adversary cannot force later child creation through the
+// rebound diagnostic path.
+func OpenStableParent(path string) (*os.File, error) {
+	if path == "" {
+		return nil, fmt.Errorf("%w: stable parent path is empty", ErrUnresolvedResource)
+	}
+	return openStableParent(path)
 }
 
 // RemoveStableChildFile unlinks name relative to the exact already-open parent
@@ -1265,6 +1329,121 @@ func (token *StableNamespaceToken) physicalSyncStats() (uint64, time.Duration) {
 		time.Duration(token.syncNanos.Load() + token.additionalSyncNanos.Load())
 }
 
+// StabilizeStableNamespaceTokens validates every exact child obligation and
+// syncs each distinct platform persistence handle once. Unix tokens share a
+// retained parent generation; Windows create-only tokens retain their exact
+// child. Unlike construction-time namespace batches, this is intended for
+// obligations accumulated by a relaxed publication protocol and therefore
+// leaves pending tokens retryable when the physical sync itself fails.
+func StabilizeStableNamespaceTokens(tokens ...*StableNamespaceToken) error {
+	type namespaceGroup struct {
+		identity StableIdentity
+		tokens   []*StableNamespaceToken
+	}
+	groups := make([]namespaceGroup, 0, len(tokens))
+	groupByIdentity := make(map[StableIdentity]int, len(tokens))
+	seen := make(map[*StableNamespaceToken]struct{}, len(tokens))
+	for _, token := range tokens {
+		if token == nil {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		identity := token.persistenceIdentity
+		groupIndex, ok := groupByIdentity[identity]
+		if !ok {
+			groupIndex = len(groups)
+			groupByIdentity[identity] = groupIndex
+			groups = append(groups, namespaceGroup{identity: identity})
+		}
+		groups[groupIndex].tokens = append(groups[groupIndex].tokens, token)
+	}
+	for _, group := range groups {
+		pending := make([]*StableNamespaceToken, 0, len(group.tokens))
+		for _, token := range group.tokens {
+			needsSync, err := token.prepareSharedStabilize()
+			if err != nil {
+				return err
+			}
+			if needsSync {
+				pending = append(pending, token)
+			}
+		}
+		if len(pending) == 0 {
+			continue
+		}
+		if err := pending[0].syncSharedPersistence(); err != nil {
+			return err
+		}
+		for _, token := range pending {
+			if err := token.markStableAfterSharedSync(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (token *StableNamespaceToken) prepareSharedStabilize() (bool, error) {
+	if token == nil {
+		return false, nil
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return false, ErrResourceOwnership
+	}
+	if token.state.Load() == namespaceFailed {
+		return false, token.stabilizeErr
+	}
+	if token.hasLinkedResource {
+		if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
+			token.stabilizeErr = err
+			token.state.Store(namespaceFailed)
+			return false, err
+		}
+	}
+	return token.state.Load() != namespaceStable, nil
+}
+
+func (token *StableNamespaceToken) syncSharedPersistence() error {
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return ErrResourceOwnership
+	}
+	if token.state.Load() == namespaceFailed {
+		return token.stabilizeErr
+	}
+	started := time.Now()
+	err := token.adapter.Sync(token.persistence)
+	token.syncs.Add(1)
+	token.syncNanos.Add(uint64(time.Since(started)))
+	return err
+}
+
+func (token *StableNamespaceToken) markStableAfterSharedSync() error {
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return ErrResourceOwnership
+	}
+	if token.state.Load() == namespaceFailed {
+		return token.stabilizeErr
+	}
+	if token.hasLinkedResource {
+		if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
+			token.stabilizeErr = err
+			token.state.Store(namespaceFailed)
+			return err
+		}
+	}
+	token.state.Store(namespaceStable)
+	return nil
+}
+
 func (token *StableNamespaceToken) Stabilize() error {
 	if token == nil || token.released.Load() {
 		return ErrResourceOwnership
@@ -1288,7 +1467,7 @@ func (token *StableNamespaceToken) Stabilize() error {
 			return err
 		}
 	}
-	err := token.adapter.Sync(token.parent)
+	err := token.adapter.Sync(token.persistence)
 	token.syncs.Add(1)
 	token.syncNanos.Add(uint64(time.Since(started)))
 	if err != nil {
@@ -1381,6 +1560,9 @@ func (token *StableNamespaceToken) release() {
 		return
 	}
 	if !token.released.Swap(true) {
+		if token.persistence != nil && token.persistence != token.parent {
+			_ = token.persistence.Close()
+		}
 		_ = token.parent.Close()
 	}
 }
@@ -1393,6 +1575,9 @@ func (token *StableNamespaceToken) Release() {
 	defer token.mu.Unlock()
 	if token.refs.Load() != 0 || token.released.Swap(true) {
 		return
+	}
+	if token.persistence != nil && token.persistence != token.parent {
+		_ = token.persistence.Close()
 	}
 	_ = token.parent.Close()
 }

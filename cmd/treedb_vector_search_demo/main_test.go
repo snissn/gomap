@@ -217,8 +217,8 @@ func TestExecuteMatrixSearchProfileDirUsesCaseSubdirectories(t *testing.T) {
 
 func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
 	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
-	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v1" {
-		t.Fatalf("required features=%v, want command_wal_v1", cfg.RequiredFeatures)
+	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v2" {
+		t.Fatalf("required features=%v, want command_wal_v2", cfg.RequiredFeatures)
 	}
 	if !cfg.IndexOuterLeavesInValueLog || !cfg.LeafPrefixCompression || !cfg.IndexColumnarLeaves || !cfg.IndexPackedValuePtr || cfg.IndexInternalBaseDelta {
 		t.Fatalf("index format config lost bench profile knobs: %+v", cfg)

@@ -14,6 +14,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -223,16 +224,35 @@ func TestCommandWALOpenUsesLaneZeroActiveSegmentWhenOtherLaneHigher(t *testing.T
 	writeCommandWALRawKVFrameForLane(t, dir, 0, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
 	writeCommandWALRawKVFrameForLane(t, dir, 1, 9, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 	lane0Path := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
-	f, err := os.OpenFile(lane0Path, os.O_APPEND|os.O_WRONLY, 0)
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
 	if err != nil {
-		t.Fatalf("OpenFile terminal tail: %v", err)
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
-	if _, err := f.Write([]byte{0x01, 0x02}); err != nil {
-		_ = f.Close()
-		t.Fatalf("Write terminal tail: %v", err)
+	w, err := commitlog.NewWriter(lane0Path)
+	if err != nil {
+		t.Fatalf("NewWriter terminal tail: %v", err)
 	}
-	if err := f.Close(); err != nil {
+	if err := w.AppendCommand(commitlog.CommandEnvelope{
+		Version:         commitlog.CommandFrameVersionV2,
+		DurabilityClass: commitlog.CommandDurabilityRelaxed,
+		LSN:             3,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	}); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendCommand terminal tail: %v", err)
+	}
+	if err := w.Close(); err != nil {
 		t.Fatalf("Close terminal tail writer: %v", err)
+	}
+	info, err := os.Stat(lane0Path)
+	if err != nil {
+		t.Fatalf("Stat terminal tail: %v", err)
+	}
+	if err := os.Truncate(lane0Path, info.Size()-2); err != nil {
+		t.Fatalf("Truncate terminal tail: %v", err)
 	}
 
 	db := openCommandWALDB(t, dir)
@@ -873,8 +893,101 @@ func TestAppendCommandWALIntentPostAppendCutRecordsLSNAndPoisonsHandle(t *testin
 	if lsn != 1 || intent.AssignedLSN() != lsn {
 		t.Fatalf("post-append cut lsn=%d assigned=%d, want 1", lsn, intent.AssignedLSN())
 	}
+	if got := db.Stats()["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("post-append cut debt entries=%q, want appended LSN retained", got)
+	}
 	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishStagedCommandWALNoopSyncFailureRetainsDebtForRetry(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "k", "v")
+	dependency, err := os.Create(filepath.Join(dir, "staged-sync-dependency"))
+	if err != nil {
+		t.Fatalf("create staged sync dependency: %v", err)
+	}
+	defer dependency.Close()
+	if err := dependency.Truncate(1); err != nil {
+		t.Fatalf("truncate staged sync dependency: %v", err)
+	}
+	wantErr := errors.New("injected staged sync dependency failure")
+	failNextSync := true
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+		Kind:           rootpublication.ResourceValueLog,
+		LogicalLane:    "test/staged-sync",
+		ResourceID:     "dependency",
+		Generation:     1,
+		DiagnosticPath: "staged-sync-dependency",
+		File:           dependency,
+		Frontier:       rootpublication.DurableFrontier{Bytes: 1},
+		Reachability:   rootpublication.ReachabilityValueLogPointer,
+		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error {
+			if failNextSync {
+				failNextSync = false
+				return wantErr
+			}
+			return file.Sync()
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStableResourceToken: %v", err)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+	if err := builder.Add(token); err != nil {
+		token.Release()
+		t.Fatalf("add staged sync dependency: %v", err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatalf("freeze staged sync dependency: %v", err)
+	}
+	intent.inner.dependencyResources = resources
+	lsn, err := db.AppendStagedCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent relaxed: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("staged intent lsn=%d, want 1", lsn)
+	}
+
+	err = db.PublishStagedCommandWALNoop(intent, true)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("PublishStagedCommandWALNoop error=%v, want injected dependency failure", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after pre-barrier failure", got)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+		t.Fatalf("durable_wal_lsn=%q, want 0 after pre-barrier failure", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want original staged frame retained", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.retries_total"]; got != "1" {
+		t.Fatalf("pending debt retries=%q, want 1 after pre-barrier failure", got)
+	}
+
+	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop retry: %v", err)
+	}
+	const barrierLSN = uint64(2)
+	if got := db.State().AppliedCommandLSN; got != barrierLSN {
+		t.Fatalf("AppliedCommandLSN=%d, want durable barrier lsn %d after retry", got, barrierLSN)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want barrier lsn 2 after retry", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after retry", got)
 	}
 }
 
@@ -882,16 +995,19 @@ func TestAppendCommandWALIntentPreFlushCutRecordsLSNAndPoisonsHandle(t *testing.
 	tests := []struct {
 		name       string
 		durability DurabilityMode
+		sync       bool
 		point      durabilitycut.Point
 	}{
 		{
 			name:       "strict-sync",
 			durability: DurabilityDurable,
+			sync:       true,
 			point:      durabilitycut.BeforeDependencyFileSync,
 		},
 		{
 			name:       "relaxed-flush",
 			durability: DurabilityWALOnRelaxed,
+			sync:       false,
 			point:      durabilitycut.BeforeUserspaceFlush,
 		},
 	}
@@ -913,7 +1029,7 @@ func TestAppendCommandWALIntentPreFlushCutRecordsLSNAndPoisonsHandle(t *testing.
 				}
 				return nil
 			})
-			lsn, err := db.AppendCommandWALIntent(intent, true)
+			lsn, err := db.AppendCommandWALIntent(intent, tt.sync)
 			restore()
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("AppendCommandWALIntent error=%v, want pre-flush cut", err)
@@ -1159,6 +1275,57 @@ func TestAppendCommandWALIntentNoAppendSkipsRawPublishBarriers(t *testing.T) {
 	}
 }
 
+func TestAppendCommandWALIntentExistingRelaxedSyncRunsRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "existing-relaxed", "value")
+	lsn, err := db.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent relaxed: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatal("AppendCommandWALIntent relaxed lsn=0")
+	}
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	got, err := db.AppendCommandWALIntent(intent, true)
+	if !errors.Is(err, barrierErr) {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync error=%v, want %v", err, barrierErr)
+	}
+	if got != lsn {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync lsn=%d, want original %d before barrier append", got, lsn)
+	}
+	if !barrierCalled.Load() {
+		t.Fatal("AppendCommandWALIntent existing relaxed sync skipped raw publish barriers")
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d after raw publish barrier failure, want 0", got)
+	}
+	unregister()
+
+	got, err = db.AppendCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync retry: %v", err)
+	}
+	if got != lsn {
+		t.Fatalf("AppendCommandWALIntent existing relaxed sync retry lsn=%d, want original %d", got, lsn)
+	}
+	if err := db.PublishCommandWALNoop(intent, false); err != nil {
+		t.Fatalf("PublishCommandWALNoop after durable barrier: %v", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn+1 {
+		t.Fatalf("AppliedCommandLSN=%d, want relaxed frame plus barrier %d", got, lsn+1)
+	}
+}
+
 func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 	db := &DB{commandWAL: true}
 	var calls []int
@@ -1302,7 +1469,7 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	if err := b.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set first: %v", err)
 	}
-	err := b.Write()
+	err := b.WriteSync()
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
 		t.Fatalf("Write first error=%v, want finalize commit failpoint", err)
 	}
@@ -1376,6 +1543,38 @@ func TestCommandWALRIDFencePreservedForRawKVBatch(t *testing.T) {
 	}
 	writeValueLogRID(t, dir, 7, []byte("large-value"))
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("k"), RID: 7}})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "large-value")
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCommandWALRelaxedRIDReplaySyncsDependenciesBeforeRootPublication(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 7, []byte("large-value"))
+	writeCommandWALRawKVFrameWithDurability(t, dir, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetRID, Key: []byte("k"), RID: 7,
+	}})
+
+	_, err := Open(Options{Dir: dir, testCommandWALRecoveryFailBeforeDependencySync: true})
+	if !errors.Is(err, errTestCommandWALRecoveryDependencySyncFailpoint) {
+		t.Fatalf("Open before dependency sync error=%v, want failpoint", err)
+	}
+
+	// If the dependency failure published the replayed root, this second open
+	// would have no unapplied LSN at which to trigger the post-publication cut.
+	_, err = Open(Options{Dir: dir, testCommandWALRecoveryFailAfterLSN: 1})
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Open after dependency-sync retry error=%v, want post-publication failpoint", err)
+	}
 
 	reopen := openCommandWALDB(t, dir)
 	defer reopen.Close()
@@ -1485,92 +1684,55 @@ func (a *commandWALExternalRefLaneFlushTestAppender) FlushValueLogExternalRefs(f
 	return nil
 }
 
-// TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment verifies that
-// flushCommandWALExternalRefs does not sync the active appender segment a
-// second time via the per-fileID loop. With sync=true, exactly one Sync call
-// (from the appender block) should occur; the per-fileID loop skips fileID==17
-// because it equals activeFileID.
-//
-// With sync=false, exactly one Flush call (from the appender block) should
-// occur, and the per-fileID sync loop is skipped entirely.
-func TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment(t *testing.T) {
-	t.Run("sync=true", func(t *testing.T) {
-		dir := t.TempDir()
-		enableCommandWALFormat(t, dir)
-		db := openCommandWALDB(t, dir)
-		defer db.Close()
+// Visibility flush is separate from durability: dependency durability must use
+// the exact stable handle captured after this flush, never Sync or pathname
+// reopen here.
+func TestCommandWALExternalRefFlushDoesNotSync(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
 
-		appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
-		db.SetValueLogAppender(appender)
-		if err := db.flushCommandWALExternalRefs(true, []uint32{17}); err != nil {
-			t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
-		}
-		if appender.syncs.Load() != 1 {
-			t.Fatalf("appender syncs=%d, want 1", appender.syncs.Load())
-		}
-		if appender.flushes.Load() != 0 {
-			t.Fatalf("appender flushes=%d, want 0 for sync=true", appender.flushes.Load())
-		}
-	})
-
-	t.Run("sync=false", func(t *testing.T) {
-		dir := t.TempDir()
-		enableCommandWALFormat(t, dir)
-		db := openCommandWALDB(t, dir)
-		defer db.Close()
-
-		appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
-		db.SetValueLogAppender(appender)
-		// sync=false: only Flush should be called (no per-fileID Sync loop).
-		if err := db.flushCommandWALExternalRefs(false, []uint32{17}); err != nil {
-			t.Fatalf("flushCommandWALExternalRefs sync=false: %v", err)
-		}
-		if appender.flushes.Load() != 1 {
-			t.Fatalf("appender flushes=%d, want 1 for sync=false", appender.flushes.Load())
-		}
-		if appender.syncs.Load() != 0 {
-			t.Fatalf("appender syncs=%d, want 0 for sync=false", appender.syncs.Load())
-		}
-	})
+	appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
+	db.SetValueLogAppender(appender)
+	if err := db.flushCommandWALExternalRefs([]uint32{17}); err != nil {
+		t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
+	}
+	if appender.flushes.Load() != 1 {
+		t.Fatalf("appender flushes=%d, want 1", appender.flushes.Load())
+	}
+	if appender.syncs.Load() != 0 {
+		t.Fatalf("appender syncs=%d, want 0", appender.syncs.Load())
+	}
 }
 
 func TestCommandWALExternalRefFlushUsesReferencedLaneFlusher(t *testing.T) {
 	fileIDs := []uint32{17, 18}
-	for _, tc := range []struct {
-		name string
-		sync bool
-	}{
-		{name: "sync=false", sync: false},
-		{name: "sync=true", sync: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := &DB{}
-			appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
-			db.SetValueLogAppender(appender)
-			if err := db.flushCommandWALExternalRefs(tc.sync, fileIDs); err != nil {
-				t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
-			}
-			if appender.externalFlushes.Load() != 1 {
-				t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
-			}
-			if appender.sync != tc.sync {
-				t.Fatalf("external flush sync=%v, want %v", appender.sync, tc.sync)
-			}
-			if len(appender.fileIDs) != len(fileIDs) {
-				t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
-			}
-			for i := range fileIDs {
-				if appender.fileIDs[i] != fileIDs[i] {
-					t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
-				}
-			}
-			if appender.flushes.Load() != 0 {
-				t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
-			}
-			if appender.syncs.Load() != 0 {
-				t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
-			}
-		})
+	db := &DB{}
+	appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
+	db.SetValueLogAppender(appender)
+	if err := db.flushCommandWALExternalRefs(fileIDs); err != nil {
+		t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
+	}
+	if appender.externalFlushes.Load() != 1 {
+		t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
+	}
+	if appender.sync {
+		t.Fatal("referenced-lane visibility flush unexpectedly requested sync")
+	}
+	if len(appender.fileIDs) != len(fileIDs) {
+		t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+	}
+	for i := range fileIDs {
+		if appender.fileIDs[i] != fileIDs[i] {
+			t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+		}
+	}
+	if appender.flushes.Load() != 0 {
+		t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
+	}
+	if appender.syncs.Load() != 0 {
+		t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
 	}
 }
 
@@ -1591,7 +1753,7 @@ func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 
 func TestCommandWALExternalRefFlushRequiresAppender(t *testing.T) {
 	db := &DB{}
-	if err := db.flushCommandWALExternalRefs(true, nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
+	if err := db.flushCommandWALExternalRefs(nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
 		t.Fatalf("flushCommandWALExternalRefs error=%v, want ErrValueLogAppenderUnavailable", err)
 	}
 }
@@ -1803,10 +1965,20 @@ func commandWALSegmentNamesForTest(t *testing.T, dir string) []string {
 
 func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
 	t.Helper()
-	writeCommandWALRawKVFrameForLane(t, dir, 0, segmentSeq, lsn, ops)
+	writeCommandWALRawKVFrameWithDurability(t, dir, segmentSeq, lsn, commitlog.CommandDurabilityDurable, ops)
+}
+
+func writeCommandWALRawKVFrameWithDurability(t testing.TB, dir string, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
+	t.Helper()
+	writeCommandWALRawKVFrameForLaneWithDurability(t, dir, 0, segmentSeq, lsn, durability, ops)
 }
 
 func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
+	t.Helper()
+	writeCommandWALRawKVFrameForLaneWithDurability(t, dir, lane, segmentSeq, lsn, commitlog.CommandDurabilityDurable, ops)
+}
+
+func writeCommandWALRawKVFrameForLaneWithDurability(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
 	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -1822,11 +1994,13 @@ func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmen
 		t.Fatalf("NewWriter: %v", err)
 	}
 	if err := w.AppendCommand(commitlog.CommandEnvelope{
-		LSN:           lsn,
-		Kind:          commitlog.CommandKindRawKVBatch,
-		Scope:         commitlog.CommandScopeRawKV,
-		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
-		Payload:       payload,
+		Version:         commitlog.CommandFrameVersionV2,
+		DurabilityClass: durability,
+		LSN:             lsn,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		Payload:         payload,
 	}); err != nil {
 		_ = w.Close()
 		t.Fatalf("AppendCommand: %v", err)

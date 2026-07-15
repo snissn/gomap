@@ -31,7 +31,7 @@ var bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.Stabl
 var bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
 	return proof.Bind(parent, parentGeneration, name, diagnosticPath)
 }
-var openStableValueLogParent = os.Open
+var openStableValueLogParent = rootpublication.OpenStableParent
 
 type pendingValueLogSuccessor struct {
 	parent          *os.File
@@ -244,11 +244,11 @@ func (m *Manager) stableResourceTokenLocked(fileID uint32, registration StableRe
 	return stableValueLogResourceToken(file.File, fileID, registration, namespace, false)
 }
 
-// StableExternalRIDSegment describes the exact value-log child required by a
-// dormant command-WAL external-RID fence. Pointers are positionally aligned
+// StableExternalRIDSegment describes the exact value-log child required by an
+// active command-WAL V2 external-RID fence. Pointers are positionally aligned
 // with RIDs and are validated through the manager-owned open handle before the
-// child is pinned. Capturing this producer-side closure does not activate
-// command-WAL ExternalRefs; #3718 still owns that consumer.
+// child is pinned. This producer-side closure is intentionally separate from
+// the still-dormant typed CommandEnvelope.ExternalRefs section.
 type StableExternalRIDSegment struct {
 	FileID   uint32
 	RIDs     []uint64
@@ -257,8 +257,7 @@ type StableExternalRIDSegment struct {
 }
 
 // StableExternalRIDFence is the independently derived command-payload fence
-// that a physical value-log closure must satisfy. #3718 will derive the same
-// count/digest from the durable command payload when it activates the consumer.
+// that a physical value-log closure must satisfy before V2 command-WAL append.
 type StableExternalRIDFence struct {
 	Count  uint32
 	Digest [32]byte

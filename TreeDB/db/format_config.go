@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 const formatConfigFileName = "format.json"
@@ -15,7 +17,13 @@ const formatConfigFileName = "format.json"
 const formatConfigVersion = 2
 const formatConfigRequiredFeaturesVersion = 3
 
-const RequiredFeatureCommandWALV1 = "command_wal_v1"
+const (
+	RequiredFeatureCommandWALV2 = "command_wal_v2"
+	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
+	// during the pre-alpha cutover. Newly persisted configs always require V2.
+	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
+	legacyRequiredFeatureCommandWALV1 = "command_wal_v1"
+)
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -50,6 +58,8 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 	}
 	return false
 }
+
+func (cfg FormatConfig) RequiresCommandWALV2() bool { return cfg.RequiresCommandWALV1() }
 
 func formatConfigPath(dir string) string {
 	if dir == "" {
@@ -260,8 +270,8 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 }
 
 // SaveFormatConfig writes cfg to dir/format.json atomically. A transition into
-// command_wal_v1 validates that legacy WAL state is clean; re-saving a config
-// that already requires command_wal_v1 does not re-run activation validation
+// command_wal_v2 validates that legacy WAL state is clean; re-saving a config
+// that already requires command_wal_v2 does not re-run activation validation
 // because command-WAL segments are expected after activation.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	if cfg.RequiresCommandWALV1() {
@@ -459,8 +469,9 @@ func validateRequiredFormatFeatures(features []string) error {
 		seen[feature] = struct{}{}
 		switch feature {
 		case RequiredFeatureCommandWALV1:
-			// Known by this binary, but DB open still fails closed until the
-			// execution/recovery path is enabled by later command-WAL PRs.
+			// Current durable-prefix command WAL.
+		case legacyRequiredFeatureCommandWALV1:
+			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
 		default:
 			return fmt.Errorf("%w: %s", ErrUnsupportedRequiredFeature, raw)
 		}

@@ -6,6 +6,10 @@ import "os"
 
 func stableRelativeNamespaceSupported() bool { return false }
 
+func stableNamespaceCreationPersistsThroughChild() bool { return false }
+
+func openStableParent(path string) (*os.File, error) { return os.Open(path) }
+
 func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }
@@ -28,10 +32,21 @@ func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }
 
+func duplicateStableSyncFile(file *os.File) (*os.File, error) {
+	return duplicateStableFile(file)
+}
+
 func stableIdentityFromFile(*os.File) (StableIdentity, error) {
 	return StableIdentity{}, ErrStableIdentityUnsupported
 }
 
 func syncStableNamespace(*os.File) error {
 	return ErrNamespacePersistenceUnsupported
+}
+
+func syncStableFile(file *os.File) error {
+	if file == nil {
+		return os.ErrInvalid
+	}
+	return file.Sync()
 }

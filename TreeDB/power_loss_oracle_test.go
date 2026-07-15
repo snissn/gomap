@@ -835,8 +835,9 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 	return generated
 }
 
-// This family is the stable witness for relaxed command-WAL external-RID replay
-// accepting a checksum-valid but dependency-incomplete frame.
+// This family is the stable witness that a checksum-valid relaxed command-WAL
+// frame above the durable prefix is discarded before its absent external RID
+// is treated as a dependency of the recoverable prefix.
 func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)

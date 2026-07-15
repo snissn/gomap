@@ -130,6 +130,7 @@ type DB struct {
 	ghostManager *indexGhostManager
 
 	dir                  string
+	commandWALDir        string
 	columnAssetRootDir   string
 	chunkSize            int64
 	preferAppendAlloc    bool
@@ -505,24 +506,27 @@ type DB struct {
 	testFailWriteMeta atomic.Bool
 	// testFailSyncMeta fails after the alternate meta page has been written but
 	// before its durability outcome is known.
-	testFailSyncMeta                            atomic.Bool
-	testFailCommandWALFlush                     atomic.Bool
-	testAfterOptimisticApplyHook                func()
-	testAfterOptimisticPublishPrepareHook       func()
-	testCheckpointAfterPoisonPreflightHook      func()
-	testConditionalReadOnlyAfterClosePreflight  func()
-	testOrderedRootBatchAfterClosePreflightHook func()
-	testStorageMaintenanceBeforeLockHook        func(string)
-	testStorageMaintenanceAfterLockHook         func(string) error
-	testCommandWALRecoveryFailAfterLSN          atomic.Uint64
-	commandWALReplayLSN                         atomic.Uint64
-	commandWALReplayToken                       atomic.Uint64
-	commandWALReplayTokenSeq                    atomic.Uint64
+	testFailSyncMeta                               atomic.Bool
+	testFailCommandWALFlush                        atomic.Bool
+	testAfterOptimisticApplyHook                   func()
+	testAfterOptimisticPublishPrepareHook          func()
+	testCheckpointAfterPoisonPreflightHook         func()
+	testConditionalReadOnlyAfterClosePreflight     func()
+	testOrderedRootBatchAfterClosePreflightHook    func()
+	testStorageMaintenanceBeforeLockHook           func(string)
+	testStorageMaintenanceAfterLockHook            func(string) error
+	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
+	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
+	commandWALReplayLSN                            atomic.Uint64
+	commandWALReplayToken                          atomic.Uint64
+	commandWALReplayTokenSeq                       atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
 	commandWALFlushPoisoned atomic.Bool
+	commandWALDurableLSN    atomic.Uint64
+	commandWALDebt          CommandWALDependencyDebt
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish.
 	// It is intentionally cleared only by close/reopen.
 	publicationPoisoned              atomic.Bool
@@ -620,6 +624,7 @@ const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
+var errTestCommandWALRecoveryDependencySyncFailpoint = errors.New("treedb: command wal recovery dependency sync failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 var errTestSyncMetaFailpoint = errors.New("treedb: sync meta failpoint")
 
@@ -979,10 +984,10 @@ type Options struct {
 	IgnoreFormatConfig bool
 	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
 	// backend raw KV writes. It is also enabled automatically when format.json
-	// advertises the command_wal_v1 required feature.
+	// advertises the command_wal_v2 required feature.
 	//
 	// Public treedb.Open write handles route raw KV writes through the direct
-	// backend command-WAL path while command_wal_v1 is active, avoiding the
+	// backend command-WAL path while command_wal_v2 is active, avoiding the
 	// legacy cached redo journal until cached writes are converted to typed
 	// command frames.
 	CommandWAL bool
@@ -1306,6 +1311,10 @@ type Options struct {
 	// after the given LSN is published. It is package-private test plumbing so
 	// crash-recovery tests can avoid process-global failpoints.
 	testCommandWALRecoveryFailAfterLSN uint64
+	// testCommandWALRecoveryFailBeforeDependencySync injects a one-shot
+	// recovery failure after exact relaxed-tail dependencies are captured but
+	// before they are synced or any replayed root can be published.
+	testCommandWALRecoveryFailBeforeDependencySync bool
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -1981,6 +1990,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		flushApplySpanNative:           opts.FlushApplySpanNative,
 		flushApplyWorkerPool:           flushApplyWorkerPool,
 		dir:                            opts.Dir,
+		commandWALDir:                  layout.walDir,
 		columnAssetRootDir:             layout.columnAssetDir,
 		chunkSize:                      opts.ChunkSize,
 		preferAppendAlloc:              opts.PreferAppendAlloc,
@@ -2008,6 +2018,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	db.idx.Store(gen)
 	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
 		db.testCommandWALRecoveryFailAfterLSN.Store(opts.testCommandWALRecoveryFailAfterLSN)
+	}
+	if opts.testCommandWALRecoveryFailBeforeDependencySync {
+		db.testCommandWALRecoveryFailBeforeDependencySync.Store(true)
 	}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
@@ -2101,12 +2114,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			OnSegmentRotated:                db.observeCommandWALSegmentRotated,
 			InitialLSN:                      db.meta.AppliedCommandLSN,
 			SegmentSeq:                      commandSegmentSeq,
+			CaptureStableResources:          true,
 		})
 		if err != nil {
 			_ = db.Close()
 			return nil, err
 		}
 		db.commandJournal = journal
+		db.commandWALDurableLSN.Store(db.meta.AppliedCommandLSN)
 		db.refreshCommandWALClosedBytes()
 		db.cacheCommandWALRequiredFeatureStats()
 	} else {
@@ -2613,6 +2628,7 @@ func (db *DB) closeAfterHooks() error {
 			errs = append(errs, err)
 		}
 	}
+	db.commandWALDebt.releaseAll()
 	if vm != nil {
 		if err := vm.Close(); err != nil {
 			errs = append(errs, err)

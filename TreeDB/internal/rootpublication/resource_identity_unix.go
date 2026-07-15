@@ -13,6 +13,13 @@ import (
 
 func stableRelativeNamespaceSupported() bool { return true }
 
+// Unix persists a newly-created directory entry through the retained parent
+// directory. The child file itself is not a substitute for that namespace
+// sync.
+func stableNamespaceCreationPersistsThroughChild() bool { return false }
+
+func openStableParent(path string) (*os.File, error) { return os.Open(path) }
+
 func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
 	if parent == nil {
 		return nil, os.ErrInvalid
@@ -66,6 +73,10 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 	return os.NewFile(uintptr(fd), file.Name()+"#stable-pin"), nil
 }
 
+func duplicateStableSyncFile(file *os.File) (*os.File, error) {
+	return duplicateStableFile(file)
+}
+
 func stableIdentityFromFile(file *os.File) (StableIdentity, error) {
 	if file == nil {
 		return StableIdentity{}, os.ErrInvalid
@@ -102,4 +113,11 @@ func syncStableNamespace(parent *os.File) error {
 		}
 		return err
 	}
+}
+
+func syncStableFile(file *os.File) error {
+	if file == nil {
+		return os.ErrInvalid
+	}
+	return file.Sync()
 }

@@ -13,8 +13,8 @@ import (
 )
 
 // commandWALV2Coordinate identifies the exact physical bytes occupied by a
-// decoded command frame. It is deliberately independent of production V1
-// replay and becomes active only with the #3718 format cutover.
+// decoded command frame. It is the physical coordinate used by the active V2
+// recovery and relaxed-tail repair path.
 type commandWALV2Coordinate struct {
 	Lane            int
 	SegmentSequence uint64
@@ -324,9 +324,9 @@ func commandWALV2FrameFromEnvelope(env commitlog.CommandEnvelope, coordinate com
 	return frame, nil
 }
 
-// repairCommandWALV2Suffix durably removes exactly the classified suffix. It
-// is an explicit inert entry point: production Open does not call it until the
-// #3718 activation boundary.
+// repairCommandWALV2Suffix durably removes exactly the relaxed suffix selected
+// by the active V2 recovery classifier. Read-only opens report the same repair
+// plan without mutating storage.
 func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classification, readOnly bool) (CommandWALV2RecoveryDiagnostic, error) {
 	diagnostic := classification.Diagnostic
 	if len(classification.DiscardSuffix) == 0 {

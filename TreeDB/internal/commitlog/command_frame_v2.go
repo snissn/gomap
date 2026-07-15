@@ -49,8 +49,7 @@ func NewDurablePrefixBarrierV1(lsn, baseAppliedLSN uint64) CommandEnvelope {
 	}
 }
 
-// EncodeCommandFrameV2 encodes the inert V2 format. Production appenders keep
-// using EncodeCommandFrame (V1) until #3718 performs the atomic activation.
+// EncodeCommandFrameV2 encodes the active command-WAL V2 format.
 func EncodeCommandFrameV2(env CommandEnvelope) ([]byte, error) {
 	return EncodeCommandFrameV2To(nil, env)
 }
@@ -58,35 +57,7 @@ func EncodeCommandFrameV2(env CommandEnvelope) ([]byte, error) {
 // EncodeCommandFrameV2To is EncodeCommandFrameV2 with caller-owned capacity.
 // All semantic validation is completed before dst is resized or written.
 func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
-	if !validCommandDurabilityClass(env.DurabilityClass) {
-		return nil, ErrCorrupt
-	}
-	if env.Version == 0 {
-		env.Version = CommandFrameVersionV2
-	}
-	if env.Version != CommandFrameVersionV2 {
-		return nil, ErrCommandWALUnsupportedVersion
-	}
-	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
-		return nil, ErrCommandWALUnsupportedCriticalFlag
-	}
-	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
-		payload, err := EncodeRawKVBatchPayload(nil)
-		if err != nil {
-			return nil, err
-		}
-		env.Payload = payload
-	}
-	if err := validateCommandEnvelopeV2Identity(env); err != nil {
-		return nil, err
-	}
-	if err := validateExternalRefs(env.ExternalRefs); err != nil {
-		return nil, err
-	}
-	if err := validateCommandEnvelopePayloadV2(env); err != nil {
-		return nil, err
-	}
-	preconditions, err := canonicalCommandPreconditionsV2(env)
+	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +110,66 @@ func EncodeCommandFrameV2To(dst []byte, env CommandEnvelope) ([]byte, error) {
 	return frame, nil
 }
 
-// DecodeCommandFrameV2 decodes and fully validates one inert V2 frame.
+func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []CommandExtension, error) {
+	if !validCommandDurabilityClass(env.DurabilityClass) {
+		return CommandEnvelope{}, nil, ErrCorrupt
+	}
+	if env.Version == 0 {
+		env.Version = CommandFrameVersionV2
+	}
+	if env.Version != CommandFrameVersionV2 {
+		return CommandEnvelope{}, nil, ErrCommandWALUnsupportedVersion
+	}
+	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+		return CommandEnvelope{}, nil, ErrCommandWALUnsupportedCriticalFlag
+	}
+	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
+		payload, err := EncodeRawKVBatchPayload(nil)
+		if err != nil {
+			return CommandEnvelope{}, nil, err
+		}
+		env.Payload = payload
+	}
+	if err := validateCommandEnvelopeV2Identity(env); err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	if err := validateExternalRefs(env.ExternalRefs); err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	if err := validateCommandEnvelopePayloadV2(env); err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	preconditions, err := canonicalCommandPreconditionsV2(env)
+	if err != nil {
+		return CommandEnvelope{}, nil, err
+	}
+	return env, preconditions, nil
+}
+
+// commandFrameV2EncodedSize validates a V2 envelope and returns its canonical
+// encoded size without allocating the complete frame. Journal and writer caps
+// use this preflight before rotation, LSN reservation, or frame encoding.
+func commandFrameV2EncodedSize(env CommandEnvelope) (int, error) {
+	env, preconditions, err := prepareCommandFrameV2ForEncode(env)
+	if err != nil {
+		return 0, err
+	}
+	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
+	if err != nil {
+		return 0, err
+	}
+	preconditionsLen, err := commandExtensionsEncodedLen(preconditions)
+	if err != nil {
+		return 0, err
+	}
+	assertionsLen, err := commandExtensionsEncodedLen(env.ResultAssertions)
+	if err != nil {
+		return 0, err
+	}
+	return commandFrameEncodedSizeFromLengths(len(env.Payload), extRefsLen, preconditionsLen, assertionsLen)
+}
+
+// DecodeCommandFrameV2 decodes and fully validates one V2 frame.
 func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 	var env CommandEnvelope
 	if len(frame) < commandFrameHeaderSize {
@@ -216,7 +246,7 @@ func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 }
 
 // ReadCommandFrameV2 reads one length/CRC-bounded segment payload and applies
-// the strict V2 decoder. It never falls back to the production V1 codec.
+// the strict V2 decoder. It never falls back to the legacy V1 codec.
 func (r *Reader) ReadCommandFrameV2() (CommandEnvelope, error) {
 	payload, err := r.readSegmentPayloadWithCompression(true, false)
 	if err != nil {
@@ -225,7 +255,7 @@ func (r *Reader) ReadCommandFrameV2() (CommandEnvelope, error) {
 	return DecodeCommandFrameV2(payload)
 }
 
-// ScanCommandFramesV2 scans one strict-V2 segment without enabling it for the
+// ScanCommandFramesV2 scans one strict-V2 segment using the same codec as the
 // production journal owner.
 func ScanCommandFramesV2(path string, opts Options) ([]CommandEnvelope, error) {
 	r, err := NewReaderWithOptions(path, opts)
@@ -266,8 +296,11 @@ func InspectCommandFrameV2TerminalTail(path string, segmentStart int64) (Command
 	if err != nil {
 		return env, 0, err
 	}
-	if segmentStart < 0 || segmentStart+segmentHeaderSize > info.Size() {
+	if segmentStart < 0 || segmentStart > info.Size() {
 		return env, info.Size(), ErrCorrupt
+	}
+	if segmentStart+segmentHeaderSize > info.Size() {
+		return env, info.Size(), errors.Join(ErrCorrupt, ErrCommandWALV2TailIdentityUnavailable)
 	}
 	var segmentHeader [segmentHeaderSize]byte
 	if _, err := f.ReadAt(segmentHeader[:], segmentStart); err != nil {

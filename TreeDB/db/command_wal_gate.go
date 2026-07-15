@@ -8,12 +8,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 )
 
-var ErrCommandWALDirtyActivation = errors.New("treedb: command_wal_v1 requires clean legacy WAL before activation")
+var ErrCommandWALDirtyActivation = errors.New("treedb: command_wal_v2 requires clean legacy WAL before activation")
 
-// ValidateCommandWALActivationClean enforces the PR1 activation precondition:
-// command_wal_v1 can only be advertised after legacy commit-log debt has been
-// drained by checkpoint/rebuild. Later PRs will add the activator; this guard is
-// production code now so tests and tooling cannot silently enable mixed modes.
+// ValidateCommandWALActivationClean enforces the activation precondition:
+// command_wal_v2 can only be advertised after legacy commit-log debt has been
+// drained by checkpoint/rebuild, so tooling cannot silently enable mixed modes.
 func ValidateCommandWALActivationClean(dir string) error {
 	if err := collectionwal.RequireCleanForOfflineMaintenance(dir); err != nil {
 		return fmt.Errorf("%w: legacy collection WAL: %w", ErrCommandWALDirtyActivation, err)

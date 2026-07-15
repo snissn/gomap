@@ -11,7 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestStableValueLogRotationFailsClosedWithoutSuccessorVisibility(t *testing.T) {
+func TestStableValueLogRotationUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	for _, syncCurrent := range []bool{false, true} {
 		t.Run(map[bool]string{false: "flush", true: "sync"}[syncCurrent], func(t *testing.T) {
 			dir := t.TempDir()
@@ -22,7 +22,7 @@ func TestStableValueLogRotationFailsClosedWithoutSuccessorVisibility(t *testing.
 				t.Fatal(err)
 			}
 			defer writer.Close()
-			if _, err := writer.Append(0, nil, 1, []byte("before-unsupported-rotation")); err != nil {
+			if _, err := writer.Append(0, nil, 1, []byte("before-stable-rotation")); err != nil {
 				t.Fatal(err)
 			}
 			rotation, err := writer.RotateToWithStableResources(secondPath, 2, syncCurrent,
@@ -35,24 +35,21 @@ func TestStableValueLogRotationFailsClosedWithoutSuccessorVisibility(t *testing.
 					Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 2,
 					NamespaceOperation: rootpublication.NamespaceCreate,
 				})
-			if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-				if rotation != nil {
-					rotation.Release()
-				}
-				t.Fatalf("stable rotation error=%v want ErrNamespacePersistenceUnsupported", err)
+			if err != nil {
+				t.Fatalf("stable rotation: %v", err)
 			}
-			if rotation != nil {
-				rotation.Release()
-				t.Fatal("unsupported stable rotation returned owned resources")
+			if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
+				t.Fatalf("stable rotation=%+v want exact closed and active authority", rotation)
 			}
-			if writer.FileID() != 1 || writer.f == nil || writer.f.Name() != firstPath {
-				t.Fatalf("unsupported rotation changed active writer: id=%d file=%v", writer.FileID(), writer.f)
+			defer rotation.Release()
+			if writer.FileID() != 2 || writer.f == nil || writer.f.Name() != secondPath {
+				t.Fatalf("stable rotation active writer: id=%d file=%v", writer.FileID(), writer.f)
 			}
-			if _, err := os.Stat(secondPath); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("unsupported rotation exposed successor %q: %v", secondPath, err)
+			if _, err := os.Stat(secondPath); err != nil {
+				t.Fatalf("stable rotation successor %q: %v", secondPath, err)
 			}
-			if _, err := writer.Append(0, nil, 2, []byte("after-unsupported-rotation")); err != nil {
-				t.Fatalf("old writer append after unsupported rotation: %v", err)
+			if _, err := writer.Append(0, nil, 2, []byte("after-stable-rotation")); err != nil {
+				t.Fatalf("new writer append after stable rotation: %v", err)
 			}
 		})
 	}
@@ -78,7 +75,7 @@ func TestStableValueLogCurrentCreationUsesRetainedParentAndFailsTyped(t *testing
 	}
 }
 
-func TestOrdinaryValueLogRotationRemainsUsableAndStableRotationFailsClosed(t *testing.T) {
+func TestOrdinaryValueLogRotationRefreshesParentForStableWindowsRotation(t *testing.T) {
 	dir := t.TempDir()
 	secondPath := filepath.Join(dir, "000002.vlog")
 	thirdPath := filepath.Join(dir, "000003.vlog")
@@ -103,17 +100,18 @@ func TestOrdinaryValueLogRotationRemainsUsableAndStableRotationFailsClosed(t *te
 			Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 3,
 			NamespaceOperation: rootpublication.NamespaceCreate,
 		})
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || rotation != nil {
-		if rotation != nil {
-			rotation.Release()
-		}
-		t.Fatalf("stable rotation=(%v, %v) want typed unsupported and no tokens", rotation, err)
+	if err != nil {
+		t.Fatalf("stable rotation after ordinary rotation: %v", err)
 	}
-	if writer.FileID() != 2 || writer.f == nil || writer.f.Name() != secondPath {
-		t.Fatalf("failed stable rotation changed ordinary active writer: id=%d file=%v", writer.FileID(), writer.f)
+	if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
+		t.Fatalf("stable rotation=%+v want exact closed and active authority", rotation)
 	}
-	if _, err := os.Stat(thirdPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unsupported stable rotation exposed successor: %v", err)
+	defer rotation.Release()
+	if writer.FileID() != 3 || writer.f == nil || writer.f.Name() != thirdPath {
+		t.Fatalf("stable rotation active writer: id=%d file=%v", writer.FileID(), writer.f)
+	}
+	if _, err := os.Stat(thirdPath); err != nil {
+		t.Fatalf("stable rotation successor: %v", err)
 	}
 }
 

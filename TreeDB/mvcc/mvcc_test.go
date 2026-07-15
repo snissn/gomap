@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 )
 
@@ -430,13 +431,48 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	if err != nil || len(segments) == 0 {
 		t.Fatalf("discover crash WAL segments: files=%v err=%v", segments, err)
 	}
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:  commitlog.RawKVOpDelete,
+		Key: []byte("incomplete-relaxed-suffix"),
+	}})
+	if err != nil {
+		t.Fatalf("encode incomplete relaxed suffix payload: %v", err)
+	}
+	fixturePath := filepath.Join(t.TempDir(), "incomplete-relaxed.log")
+	fixture, err := commitlog.NewWriter(fixturePath)
+	if err != nil {
+		t.Fatalf("create incomplete relaxed suffix fixture: %v", err)
+	}
+	if err := fixture.AppendCommandV2(commitlog.CommandEnvelope{
+		Version:         commitlog.CommandFrameVersionV2,
+		LSN:             2,
+		DurabilityClass: commitlog.CommandDurabilityRelaxed,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	}); err != nil {
+		_ = fixture.Close()
+		t.Fatalf("append incomplete relaxed suffix fixture: %v", err)
+	}
+	if err := fixture.Close(); err != nil {
+		t.Fatalf("close incomplete relaxed suffix fixture: %v", err)
+	}
+	record, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read incomplete relaxed suffix fixture: %v", err)
+	}
+	const classifiablePrefixBytes = 8 + 56
+	if len(record) <= classifiablePrefixBytes {
+		t.Fatalf("incomplete relaxed suffix fixture length=%d, want >%d", len(record), classifiablePrefixBytes)
+	}
 	tail, err := os.OpenFile(segments[len(segments)-1], os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatalf("open crash WAL tail: %v", err)
 	}
-	if _, err := tail.Write([]byte{0x7f, 0x01, 0x02}); err != nil {
+	if _, err := tail.Write(record[:classifiablePrefixBytes]); err != nil {
 		_ = tail.Close()
-		t.Fatalf("append truncated crash WAL tail: %v", err)
+		t.Fatalf("append classifiable incomplete relaxed suffix: %v", err)
 	}
 	if err := tail.Close(); err != nil {
 		t.Fatalf("close crash WAL tail: %v", err)

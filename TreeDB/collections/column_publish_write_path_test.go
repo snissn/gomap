@@ -798,7 +798,7 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
 	}
-	lsn, err := d.AppendCommandWALIntent(intent, false)
+	lsn, err := d.AppendCommandWALIntent(intent, true)
 	if err != nil {
 		_ = d.Close()
 		t.Fatalf("AppendCommandWALIntent: %v", err)
