@@ -119,6 +119,46 @@ func (a *Allocator) allocCOWLocked(hint uint64) (uint64, error) {
 	return id, nil
 }
 
+// AllocAppend allocates one page above the current logical high-water without
+// consulting reusable pages. Unlike toggling SetPreferAppend around Alloc, the
+// choice is scoped to this allocation while the allocator lock is held.
+func (a *Allocator) AllocAppend() (uint64, error) {
+	if a == nil || a.pager == nil {
+		return 0, ErrGenerationFormat
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow == nil {
+		id, err := a.pager.Alloc(1)
+		if err == nil {
+			a.stats.AllocPages++
+			a.stats.AppendAllocPages++
+			a.lastAlloc = id
+		}
+		return id, err
+	}
+	a.waitCOWReadyLocked()
+	if a.cow == nil || a.cow.txn == nil {
+		return 0, ErrGenerationFormat
+	}
+	if a.cow.txn.highWater != a.pager.PageCount() {
+		return 0, fmt.Errorf("%w: append high-water %d does not match pager pages %d", ErrGenerationFormat, a.cow.txn.highWater, a.pager.PageCount())
+	}
+	id, err := a.cow.txn.AllocateAppend()
+	if err != nil {
+		return 0, err
+	}
+	if id >= a.pager.PageCount() {
+		if err := a.pager.Truncate(id + 1); err != nil {
+			return 0, err
+		}
+	}
+	a.stats.AllocPages++
+	a.stats.AppendAllocPages++
+	a.lastAlloc = id
+	return id, nil
+}
+
 func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64) error {
 	a.waitCOWReadyLocked()
 	if a.cow == nil || a.cow.txn == nil || lastReachableCommitSeq == 0 {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -57,29 +58,31 @@ func (a *leafGenerationPackStagingAllocator) Pages() []uint64 {
 	return append([]uint64(nil), a.pages...)
 }
 
-// leafGenerationPackPublishAllocator appends pages only after exact
-// revalidation while writeMu is held. Rollback restores the logical count; the
-// physical file may remain larger, but recovery and later allocation use the
-// committed logical TotalPages boundary.
+// leafGenerationPackPublishAllocator appends pages through the generation-COW
+// allocator after exact revalidation while writeMu is held. Failed publication
+// retires the unpublished pages rather than shrinking the pager behind the
+// allocator's logical high-water.
 type leafGenerationPackPublishAllocator struct {
-	pager *pager.Pager
-	start uint64
-	pages []uint64
+	pager           *pager.Pager
+	allocator       *freelist.Allocator
+	retireCommitSeq uint64
+	pages           []uint64
 }
 
-func newLeafGenerationPackPublishAllocator(p *pager.Pager) *leafGenerationPackPublishAllocator {
-	start := uint64(0)
-	if p != nil {
-		start = p.PageCount()
+func newLeafGenerationPackPublishAllocator(idx *indexGen, retireCommitSeq uint64) *leafGenerationPackPublishAllocator {
+	if idx == nil {
+		return &leafGenerationPackPublishAllocator{retireCommitSeq: retireCommitSeq}
 	}
-	return &leafGenerationPackPublishAllocator{pager: p, start: start}
+	return &leafGenerationPackPublishAllocator{
+		pager: idx.pager, allocator: idx.allocator, retireCommitSeq: retireCommitSeq,
+	}
 }
 
 func (a *leafGenerationPackPublishAllocator) Alloc(uint64) (uint64, error) {
-	if a == nil || a.pager == nil {
-		return 0, errors.New("leaf generation pack: missing publish pager")
+	if a == nil || a.pager == nil || a.allocator == nil {
+		return 0, errors.New("leaf generation pack: missing publish allocator")
 	}
-	id, err := a.pager.Alloc(1)
+	id, err := a.allocator.AllocAppend()
 	if err != nil {
 		return 0, err
 	}
@@ -97,12 +100,18 @@ func (a *leafGenerationPackPublishAllocator) Pages() []uint64 {
 	return append([]uint64(nil), a.pages...)
 }
 
-func (a *leafGenerationPackPublishAllocator) Rollback() {
-	if a == nil || a.pager == nil {
-		return
+func (a *leafGenerationPackPublishAllocator) Rollback() error {
+	if a == nil || len(a.pages) == 0 {
+		return nil
 	}
-	a.pager.SetPageCount(a.start)
+	if a.allocator == nil || a.retireCommitSeq == 0 {
+		return errors.New("leaf generation pack: cannot retire unpublished pages")
+	}
+	if err := a.allocator.RetireCOWV1(a.pages, a.retireCommitSeq); err != nil {
+		return fmt.Errorf("leaf generation pack: retire unpublished pages: %w", err)
+	}
 	a.pages = nil
+	return nil
 }
 
 func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegment) error {
@@ -1472,7 +1481,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	)
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		if publishAlloc != nil {
-			publishAlloc.Rollback()
+			baseErr = errors.Join(baseErr, publishAlloc.Rollback())
 		}
 		if durableResources != nil {
 			durableResources.Release()
@@ -1635,7 +1644,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// can observe or account for this append range because writeMu is held from
 	// allocation through meta publication.
 	relocateStarted := time.Now()
-	publishAlloc = newLeafGenerationPackPublishAllocator(idx.pager)
+	publishAlloc = newLeafGenerationPackPublishAllocator(idx, basis.commitSeq)
 	remap := make(map[uint64]uint64, len(privatePages))
 	publishCollectionReplacements, err := rebaseLeafGenerationPackCollectionReplacements(stagingPager, collectionRootReplacements, publishAlloc, remap)
 	if err != nil {

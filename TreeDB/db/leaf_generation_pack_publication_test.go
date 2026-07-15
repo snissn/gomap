@@ -31,6 +31,53 @@ func leafGenerationPackPublicationTestOptions(dir string) Options {
 	}
 }
 
+func TestLeafGenerationPackPublishAllocatorSharesCOWHighWater(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(12); err != nil {
+		t.Fatal(err)
+	}
+	allocator := freelist.New(p, 0)
+	base := freelist.MustNewFreelistGenerationV1(1, 12, []uint64{5}, nil)
+	if err := allocator.EnableCOWV1(base, freelist.NewReservationLedger()); err != nil {
+		t.Fatalf("EnableCOWV1: %v", err)
+	}
+	idx := &indexGen{pager: p, allocator: allocator}
+	publish := newLeafGenerationPackPublishAllocator(idx, 1)
+	for range 2 {
+		if _, err := publish.Alloc(0); err != nil {
+			t.Fatalf("publish Alloc: %v", err)
+		}
+	}
+	if got := publish.Pages(); len(got) != 2 || got[0] != 12 || got[1] != 13 {
+		t.Fatalf("publish pages=%v want [12 13]", got)
+	}
+	publishedPages := publish.Pages()
+	if err := publish.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	capability, err := freelist.NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatalf("NewReuseCapability: %v", err)
+	}
+	var candidateID freelist.CandidateIDV1
+	candidateID[0] = 7
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateID, capability, 1, freelist.NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatalf("PrepareCOWCandidateV1: %v", err)
+	}
+	if got := prepared.AuxiliaryPageIDs(); len(got) != 1 || got[0] <= 13 {
+		t.Fatalf("durable-root auxiliary pages=%v overlap rolled-back publish pages %v", got, publishedPages)
+	}
+	if got := prepared.Candidate().Generation().RetiredCount(); got != 2 {
+		t.Fatalf("retired unpublished pages=%d want 2", got)
+	}
+}
+
 func openLeafGenerationPackPublicationTestDB(t *testing.T, dir string) (*DB, *rewriteWriter) {
 	t.Helper()
 	requireLeafGenerationPackPromotionSupport(t)

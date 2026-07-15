@@ -127,6 +127,49 @@ func TestAllocatorCOWPreferAppendBypassesReusablePages(t *testing.T) {
 	}
 }
 
+func TestAllocatorCOWAllocAppendIsScopedAndAdvancesCandidateHighWater(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(12); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	base := MustNewFreelistGenerationV1(1, 12, []uint64{5}, nil)
+	if err := allocator.EnableCOWV1(base, NewReservationLedger()); err != nil {
+		t.Fatalf("EnableCOWV1: %v", err)
+	}
+
+	appended, err := allocator.AllocAppend()
+	if err != nil {
+		t.Fatalf("AllocAppend: %v", err)
+	}
+	if appended != 12 {
+		t.Fatalf("AllocAppend=%d want high-water page 12", appended)
+	}
+	reused, err := allocator.Alloc(5)
+	if err != nil {
+		t.Fatalf("Alloc reusable: %v", err)
+	}
+	if reused != 5 {
+		t.Fatalf("Alloc after AllocAppend=%d want reusable page 5", reused)
+	}
+
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatalf("NewReuseCapability: %v", err)
+	}
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("alloc-append"), capability, 1, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatalf("PrepareCOWCandidateV1: %v", err)
+	}
+	if got := prepared.AuxiliaryPageIDs(); len(got) != 1 || got[0] <= appended {
+		t.Fatalf("auxiliary pages=%v overlap appended page %d", got, appended)
+	}
+}
+
 func TestAllocatorCOWDoesNotReuseUntilTwoSlotHorizonAdvances(t *testing.T) {
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
 	if err != nil {
