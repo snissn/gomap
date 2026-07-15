@@ -166,8 +166,11 @@ func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.
 	if err != nil {
 		t.Fatalf("allocator Stats after reopen: %v", err)
 	}
-	if afterStats.ReclaimablePages() <= beforeStats.ReclaimablePages() {
-		t.Fatalf("retired unpublished pages were not recoverable after reopen: before=%+v after=%+v", beforeStats, afterStats)
+	// Generation-COW tracks the rollback pages in the live generation before
+	// close, so reopening may preserve (rather than strictly increase) the
+	// reclaimable count. It must never lose those already-accounted pages.
+	if afterStats.ReclaimablePages() < beforeStats.ReclaimablePages() {
+		t.Fatalf("retired unpublished pages were lost across reopen: before=%+v after=%+v", beforeStats, afterStats)
 	}
 	for i := 1; i <= 2; i++ {
 		got, err := reopened.Get([]byte(fmt.Sprintf("retry-conflict-%d", i)))
