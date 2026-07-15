@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -445,8 +447,58 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 	if err := batch.SetPointer([]byte("retry"), ptrs[0]); err != nil {
 		t.Fatal(err)
 	}
+	blockedBatch := database.NewBatch().(*Batch)
+	if err := blockedBatch.SetPointer([]byte("already-admitted"), ptrs[0]); err != nil {
+		t.Fatal(err)
+	}
+	baseCaptured := make(chan struct{})
+	releaseBase := make(chan struct{})
+	var baseCaptureCount atomic.Int32
+	database.testAfterOptimisticBaseCaptureHook = func() {
+		if baseCaptureCount.Add(1) == 1 {
+			close(baseCaptured)
+			<-releaseBase
+		}
+	}
+	defer func() { database.testAfterOptimisticBaseCaptureHook = nil }()
+	blockedWriteDone := make(chan error, 1)
+	go func() { blockedWriteDone <- blockedBatch.WriteSync() }()
+	select {
+	case <-baseCaptured:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second writer did not capture its base before publication")
+	}
+
+	prepared := make(chan struct{})
+	releasePublish := make(chan struct{})
+	database.testDurableRootCandidatePreparedHook = func() {
+		close(prepared)
+		<-releasePublish
+	}
+	defer func() { database.testDurableRootCandidatePreparedHook = nil }()
 	database.testFailWriteMeta.Store(true)
-	err = batch.WriteSync()
+	firstWriteDone := make(chan error, 1)
+	go func() { firstWriteDone <- batch.WriteSync() }()
+	select {
+	case <-prepared:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first publication did not prepare a durable-root candidate")
+	}
+
+	allocatorWaiting := make(chan struct{})
+	var allocatorWaitingOnce sync.Once
+	freelist.TestHookCOWWaitBeforeSleep = func() {
+		allocatorWaitingOnce.Do(func() { close(allocatorWaiting) })
+	}
+	defer func() { freelist.TestHookCOWWaitBeforeSleep = nil }()
+	close(releaseBase)
+	select {
+	case <-allocatorWaiting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second writer did not block behind the prepared allocator candidate")
+	}
+	close(releasePublish)
+	err = <-firstWriteDone
 	database.testFailWriteMeta.Store(false)
 	if closeErr := batch.Close(); closeErr != nil {
 		t.Fatal(closeErr)
@@ -471,20 +523,26 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 		t.Fatalf("identity pins while retry pending=%d, want value-log plus index", got)
 	}
 
-	writeDone := make(chan error, 1)
-	go func() {
-		writeDone <- database.SetSync([]byte("after-retry-exhaustion"), []byte("blocked"))
-	}()
 	select {
-	case retryErr := <-writeDone:
+	case retryErr := <-blockedWriteDone:
 		if !errors.Is(retryErr, ErrRecoveryRequired) {
-			t.Fatalf("subsequent SetSync error=%v, want ErrRecoveryRequired", retryErr)
+			t.Fatalf("already-admitted SetSync error=%v, want ErrRecoveryRequired", retryErr)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("subsequent SetSync blocked behind the retained COW candidate")
+		t.Fatal("already-admitted SetSync remained blocked behind the failed COW candidate")
 	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := blockedBatch.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- database.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close blocked after retry exhaustion with an already-admitted writer")
 	}
 	if got := registry.ActivePins(); got != 0 {
 		t.Fatalf("identity pins after close=%d, want 0", got)

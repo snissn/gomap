@@ -47,6 +47,7 @@ func TestLeafGenerationPackRunOnce_MovesSparseGeneration(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		expectLeafGenerationValue(t, db, leafGenerationKey("z", i), 'z')
 	}
+	advanceLeafGenerationPackDurableRootHorizon(t, db, "run-once")
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC after run once: %v", err)
 	}

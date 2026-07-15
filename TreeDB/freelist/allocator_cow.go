@@ -13,11 +13,17 @@ var ErrCOWCandidatePrepared = errors.New("COW freelist candidate publication pen
 // allocator lock is released. It should remain nil in production.
 var TestHookRetireCOWBeforeUnlock func()
 
+// TestHookCOWWaitBeforeSleep is a test-only hook that fires after an allocator
+// observes a prepared COW candidate and immediately before it waits for that
+// candidate to publish or fail. It should remain nil in production.
+var TestHookCOWWaitBeforeSleep func()
+
 type allocatorCOWStateV1 struct {
 	generation *FreelistGenerationV1
 	txn        *FreelistTxn
 	ledger     *ReservationLedger
 	prepared   *PreparedCOWCandidateV1
+	waitErr    error
 	ready      *sync.Cond
 }
 
@@ -83,14 +89,23 @@ func (a *Allocator) EnableCOWV1(generation *FreelistGenerationV1, ledger *Reserv
 	return nil
 }
 
-func (a *Allocator) waitCOWReadyLocked() {
-	for a.cow != nil && a.cow.prepared != nil {
+func (a *Allocator) waitCOWReadyLocked() error {
+	for a.cow != nil && a.cow.prepared != nil && a.cow.waitErr == nil {
+		if TestHookCOWWaitBeforeSleep != nil {
+			TestHookCOWWaitBeforeSleep()
+		}
 		a.cow.ready.Wait()
 	}
+	if a.cow != nil && a.cow.waitErr != nil {
+		return a.cow.waitErr
+	}
+	return nil
 }
 
 func (a *Allocator) allocCOWLocked(hint uint64) (uint64, error) {
-	a.waitCOWReadyLocked()
+	if err := a.waitCOWReadyLocked(); err != nil {
+		return 0, err
+	}
 	if a.cow == nil || a.cow.txn == nil {
 		return 0, ErrGenerationFormat
 	}
@@ -137,7 +152,9 @@ func (a *Allocator) AllocAppend() (uint64, error) {
 		}
 		return id, err
 	}
-	a.waitCOWReadyLocked()
+	if err := a.waitCOWReadyLocked(); err != nil {
+		return 0, err
+	}
 	if a.cow == nil || a.cow.txn == nil {
 		return 0, ErrGenerationFormat
 	}
@@ -160,7 +177,9 @@ func (a *Allocator) AllocAppend() (uint64, error) {
 }
 
 func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64) error {
-	a.waitCOWReadyLocked()
+	if err := a.waitCOWReadyLocked(); err != nil {
+		return err
+	}
 	if a.cow == nil || a.cow.txn == nil || lastReachableCommitSeq == 0 {
 		return ErrGenerationFormat
 	}
@@ -198,6 +217,9 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 	if a.cow == nil || a.cow.txn == nil {
 		return nil, ErrGenerationFormat
 	}
+	if a.cow.waitErr != nil {
+		return nil, a.cow.waitErr
+	}
 	if a.cow.prepared != nil {
 		generation := a.cow.prepared.candidate.Generation()
 		if generation == nil || generation.GenerationID() != generationID || generation.CommitSeq() != commitSeq ||
@@ -231,6 +253,26 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 	return prepared, nil
 }
 
+// FailCOWCandidateV1 preserves the exact prepared candidate for close/reopen
+// ownership while failing and waking allocator calls that were already
+// admitted before durable-root publication became unrecoverable in-process.
+// It is idempotent for the same prepared candidate.
+func (a *Allocator) FailCOWCandidateV1(prepared *PreparedCOWCandidateV1, cause error) error {
+	if a == nil || prepared == nil || cause == nil {
+		return ErrGenerationFormat
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow == nil || a.cow.prepared != prepared {
+		return ErrCandidateConsumed
+	}
+	if a.cow.waitErr == nil {
+		a.cow.waitErr = cause
+	}
+	a.cow.ready.Broadcast()
+	return nil
+}
+
 func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
 	if prepared == nil || prepared.candidate == nil || prepared.candidate.Generation() == nil {
 		return ErrGenerationFormat
@@ -239,6 +281,9 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	defer a.mu.Unlock()
 	if a.cow == nil || a.cow.prepared != prepared {
 		return ErrCandidateConsumed
+	}
+	if a.cow.waitErr != nil {
+		return a.cow.waitErr
 	}
 	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
 		return err
@@ -254,6 +299,7 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	a.cow.generation = prepared.candidate.Generation()
 	a.cow.txn = next
 	a.cow.prepared = nil
+	a.cow.waitErr = nil
 	a.stats.FreeIDs = a.cow.generation.FreeCount()
 	a.cow.ready.Broadcast()
 	return nil

@@ -352,6 +352,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	b.db.rootReuseMu.RUnlock()
 
 	defer idx.registry.Unregister(regID)
+	if hook := b.db.testAfterOptimisticBaseCaptureHook; hook != nil {
+		hook()
+	}
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)

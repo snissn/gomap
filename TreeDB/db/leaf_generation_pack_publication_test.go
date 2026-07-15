@@ -156,8 +156,8 @@ func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.
 	if err != nil {
 		t.Fatalf("allocator Stats after reopen: %v", err)
 	}
-	if afterStats.Head != beforeStats.Head || afterStats.Pages != beforeStats.Pages || afterStats.FreeIDs != beforeStats.FreeIDs {
-		t.Fatalf("freelist changed across reopen: before=%+v after=%+v", beforeStats, afterStats)
+	if afterStats.ReclaimablePages() <= beforeStats.ReclaimablePages() {
+		t.Fatalf("retired unpublished pages were not recoverable after reopen: before=%+v after=%+v", beforeStats, afterStats)
 	}
 	for i := 1; i <= 2; i++ {
 		got, err := reopened.Get([]byte(fmt.Sprintf("retry-conflict-%d", i)))
@@ -518,7 +518,7 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 		}
 		return nil
 	})
-	_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{candidate.generation.GenerationID}, Force: true,
 	})
 	unregister()
@@ -530,8 +530,20 @@ func TestLeafGenerationPack_PackedPinsSurvivePromotionRegistrationAndPreMeta(t *
 			t.Fatalf("publication phase %d was not observed", phase)
 		}
 	}
-	if got := db.valueLogIdentityPins.ActivePins(); got != baselinePins {
-		t.Fatalf("packed pins after metadata handoff=%d want baseline %d", got, baselinePins)
+	if len(stats.CreatedFileIDs) == 0 {
+		t.Fatal("successful pack reported no created segment IDs")
+	}
+	for _, id := range stats.CreatedFileIDs {
+		identity, ok := db.valueLogManager.StableSegmentIdentity(id)
+		if !ok {
+			t.Fatalf("manager missing stable identity %d after metadata handoff", id)
+		}
+		if lease, err := db.valueLogIdentityPins.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
+			if lease != nil {
+				lease.Abort()
+			}
+			t.Fatalf("packed segment %d after metadata handoff delete error=%v want pinned", id, err)
+		}
 	}
 }
 

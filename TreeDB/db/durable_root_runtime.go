@@ -927,12 +927,26 @@ func (db *DB) retainDurableRootRetryV1(candidate *durableRootPublishCandidateV1,
 	return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
 }
 
+func failDurableRootAllocatorWaitersV1(candidate *durableRootPublishCandidateV1) error {
+	if candidate == nil || candidate.idx == nil || candidate.idx.allocator == nil || candidate.prepared == nil {
+		return nil
+	}
+	cause := fmt.Errorf("%w: prepared durable-root publication cannot progress on this handle", ErrRecoveryRequired)
+	if err := candidate.idx.allocator.FailCOWCandidateV1(candidate.prepared, cause); err != nil {
+		return fmt.Errorf("fail prepared COW allocator waiters: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) poisonDurableRootCandidateV1(candidate *durableRootPublishCandidateV1, err error) (page.MetaPageBody, error) {
 	current := candidate.base
 	current.pending = nil
 	current.ambiguous = append(current.ambiguous, candidate)
 	db.durableRoot = current
 	db.publicationPoisoned.Store(true)
+	if wakeErr := failDurableRootAllocatorWaitersV1(candidate); wakeErr != nil {
+		err = errors.Join(err, wakeErr)
+	}
 	return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
 }
 
@@ -1102,6 +1116,9 @@ func (db *DB) executeDurableRootCandidateWithRetryV1(candidate *durableRootPubli
 	// Retain its exact ownership until Close and fail the handle closed instead
 	// of allowing a later allocation to wait forever.
 	db.publicationPoisoned.Store(true)
+	if wakeErr := failDurableRootAllocatorWaitersV1(candidate); wakeErr != nil {
+		lastErr = errors.Join(lastErr, wakeErr)
+	}
 	return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(lastErr, ErrRecoveryRequired), true)
 }
 
@@ -1405,10 +1422,11 @@ func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 	db.metaPageID = selected.Slot
 }
 
-// registerDurableManifestValueLogSegmentsV1 resolves only exact value-log
-// identities named by the bounded durable inventory. The physical path is
-// derived from the resource kind and encoded file ID; DiagnosticPath is checked
-// against that derivation and is never used as discovery authority.
+// registerDurableManifestValueLogSegmentsV1 resolves only exact value-log and
+// outer-leaf segment identities named by the bounded durable inventory. The
+// physical path is derived from the resource kind and encoded file ID;
+// DiagnosticPath is checked against that derivation and is never used as
+// discovery authority.
 func (db *DB) registerDurableManifestValueLogSegmentsV1(entries []rootpublication.DependencyManifestEntryV1) error {
 	if db == nil || db.valueLogManager == nil {
 		return fmt.Errorf("%w: value-log manager unavailable", rootpublication.ErrUnresolvedResource)
@@ -1418,7 +1436,7 @@ func (db *DB) registerDurableManifestValueLogSegmentsV1(entries []rootpublicatio
 		switch entry.Kind {
 		case rootpublication.ResourceValueLog:
 			dir = ValueLogDirPath(db.dir)
-		case rootpublication.ResourceOuterLeafLog:
+		case rootpublication.ResourceOuterLeafLog, rootpublication.ResourceOuterLeafPack:
 			dir = LeafLogDirPath(db.dir)
 		default:
 			continue
@@ -1429,7 +1447,8 @@ func (db *DB) registerDurableManifestValueLogSegmentsV1(entries []rootpublicatio
 		}
 		fileID := uint32(fileID64)
 		lane, _ := valuelog.DecodeFileID(fileID)
-		if (entry.Kind == rootpublication.ResourceOuterLeafLog) != (lane == valuelog.ReservedLeafLogLaneID) {
+		outerLeaf := entry.Kind == rootpublication.ResourceOuterLeafLog || entry.Kind == rootpublication.ResourceOuterLeafPack
+		if outerLeaf != (lane == valuelog.ReservedLeafLogLaneID) {
 			return fmt.Errorf("%w: file %d namespace does not match durable kind %q", rootpublication.ErrResourceConflict, fileID, entry.Kind)
 		}
 		path := valuelog.SegmentPath(dir, fileID)

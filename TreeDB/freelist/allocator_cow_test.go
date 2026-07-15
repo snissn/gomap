@@ -3,10 +3,71 @@ package freelist
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/pager"
 )
+
+func TestAllocatorFailedCOWCandidateWakesBlockedAllocation(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidateID CandidateIDV1
+	candidateID[0] = 2
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateID, capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	TestHookCOWWaitBeforeSleep = func() { waitingOnce.Do(func() { close(waiting) }) }
+	defer func() { TestHookCOWWaitBeforeSleep = nil }()
+	allocDone := make(chan error, 1)
+	go func() {
+		_, err := allocator.Alloc(0)
+		allocDone <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("allocation did not wait behind the prepared COW candidate")
+	}
+
+	want := errors.New("durable-root publication failed")
+	if err := allocator.FailCOWCandidateV1(prepared, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.FailCOWCandidateV1(prepared, want); err != nil {
+		t.Fatalf("idempotent candidate failure: %v", err)
+	}
+	select {
+	case err := <-allocDone:
+		if !errors.Is(err, want) {
+			t.Fatalf("blocked allocation error=%v, want %v", err, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("failed COW candidate did not wake blocked allocation")
+	}
+	if err := allocator.PublishCOWCandidateV1(prepared, capability); !errors.Is(err, want) {
+		t.Fatalf("publish failed candidate error=%v, want retained failure %v", err, want)
+	}
+}
 
 func TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages(t *testing.T) {
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)

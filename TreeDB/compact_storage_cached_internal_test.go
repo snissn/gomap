@@ -187,6 +187,13 @@ func TestCompactStorageDefaultPathReclaimsDeadTopSegment(t *testing.T) {
 	if _, err := os.Stat(segment1); err != nil {
 		t.Fatalf("first compact did not retain older-root segment %s: %v (stats=%+v)", segment1, err, firstStats)
 	}
+	// A compact pass is allowed to perform no root publication when every
+	// maintenance candidate is pinned by the older recoverable slot. Advance the
+	// alternating durable-root horizon explicitly so this test does not depend
+	// on a platform-specific vacuum or namespace-maintenance side effect.
+	if err := db.SetSync([]byte("compact-storage/horizon"), []byte("advance")); err != nil {
+		t.Fatalf("advance recoverable-root horizon: %v", err)
+	}
 	secondStats, err := db.CompactStorage(context.Background(), CompactStorageOptions{})
 	if err != nil {
 		t.Fatalf("second CompactStorage: %v", err)

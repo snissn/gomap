@@ -637,6 +637,12 @@ Coverage:
   missing, or malformed binary evidence cannot override a failed measurement.
   Raw and adapter gates require balanced even AB/BA sample counts and default
   to eight samples per revision.
+- The `performance-observation-only` PR label is the narrow exception for a
+  ticket whose frozen performance class explicitly replaces the raw-path
+  percentage budget with matched observational fixtures. CI still runs the
+  exact base/head gate, uploads its artifacts, and reports its measured verdict;
+  only threshold enforcement becomes non-blocking. The linked ticket and PR
+  must document the accepted performance class and replacement evidence.
   `scripts/mvcc_closeout_matrix.sh` runs the pinned CommitAt, GetAt,
   all-version, and pruning depth/durability matrix and captures CPU, peak RSS,
   normalized storage footprint, `B/op`, and `allocs/op`.

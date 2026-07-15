@@ -532,6 +532,7 @@ type DB struct {
 	// The writable handle must poison because recovery now owns reconciliation.
 	testFailDurableRootVisibleInstall              atomic.Bool
 	testFailCommandWALFlush                        atomic.Bool
+	testAfterOptimisticBaseCaptureHook             func()
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
 	testDurableRootCandidatePreparedHook           func()
@@ -3411,6 +3412,8 @@ func (db *DB) Commit(newRootID uint64) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
@@ -3439,7 +3442,7 @@ func (db *DB) Commit(newRootID uint64) error {
 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
-		finalizeCommitOptions{},
+		finalizeCommitOptions{closeTeardownPinned: true},
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -3982,6 +3985,8 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 // Note: This operation causes file growth as old pages are not immediately reclaimed
 // (they are leaked to the freelist but not reused during this append-only build).
 func (db *DB) CompactIndex() error {
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -4045,7 +4050,7 @@ func (db *DB) CompactIndex() error {
 	// Commit new root and retire the old tree pages.
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
-		finalizeCommitOptions{},
+		finalizeCommitOptions{closeTeardownPinned: true},
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

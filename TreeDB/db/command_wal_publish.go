@@ -77,6 +77,11 @@ type finalizeCommitOptions struct {
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	if db == nil {
+		return ErrClosed
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	durablePublishLocked := false
 	defer func() {
 		if durablePublishLocked {
@@ -127,6 +132,7 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 			appliedRanges:            covered,
 			skipPrePublishFlush:      true,
 			durablePublishLocked:     true,
+			closeTeardownPinned:      true,
 			releaseRootSerialization: func() {},
 		},
 	)
