@@ -31,14 +31,29 @@ var (
 )
 
 type DependencyManifestEntryV1 struct {
-	Kind           ResourceKind
-	LogicalLane    string
-	ResourceID     string
+	Kind               ResourceKind
+	LogicalLane        string
+	ResourceID         string
+	DiagnosticPath     string
+	Identity           StableIdentity
+	Generation         uint64
+	Digest             [32]byte
+	Frontier           DurableFrontier
+	Reachability       []ReachabilityField
+	LogicalObligations []StableLogicalObligation
+	Namespace          *DependencyManifestNamespaceV1
+}
+
+// DependencyManifestNamespaceV1 binds a reachable resource to the exact
+// parent namespace generation whose create/rename was made durable before the
+// root. Names are diagnostics and bounded-open validation inputs, never the
+// resource identity itself.
+type DependencyManifestNamespaceV1 struct {
+	ParentIdentity StableIdentity
+	Operation      NamespaceOperation
+	OldName        string
+	NewName        string
 	DiagnosticPath string
-	Identity       StableIdentity
-	Generation     uint64
-	Frontier       DurableFrontier
-	Reachability   []ReachabilityField
 }
 
 type DependencyManifestRefV1 struct {
@@ -114,7 +129,55 @@ func normalizeDependencyManifestEntryV1(entry DependencyManifestEntryV1) (Depend
 			return DependencyManifestEntryV1{}, fmt.Errorf("%w: invalid reachability", ErrDependencyManifestFormat)
 		}
 	}
+	logical, err := normalizeDependencyManifestLogicalObligationsV1(entry.LogicalObligations, entry.Reachability)
+	if err != nil {
+		return DependencyManifestEntryV1{}, err
+	}
+	entry.LogicalObligations = logical
+	if entry.Namespace != nil {
+		namespace := *entry.Namespace
+		if !namespace.ParentIdentity.valid() || namespace.ParentIdentity.Generation == 0 ||
+			(namespace.Operation != NamespaceCreate && namespace.Operation != NamespaceRename) ||
+			!stableChildBaseName(namespace.NewName) ||
+			(namespace.Operation == NamespaceRename && !stableChildBaseName(namespace.OldName)) {
+			return DependencyManifestEntryV1{}, fmt.Errorf("%w: invalid namespace obligation", ErrDependencyManifestFormat)
+		}
+		if err := validateDiagnosticPath(namespace.DiagnosticPath); err != nil {
+			return DependencyManifestEntryV1{}, fmt.Errorf("%w: invalid namespace diagnostic path: %v", ErrDependencyManifestFormat, err)
+		}
+		entry.Namespace = &namespace
+	}
 	return entry, nil
+}
+
+func normalizeDependencyManifestLogicalObligationsV1(obligations []StableLogicalObligation, reachability []ReachabilityField) ([]StableLogicalObligation, error) {
+	if len(obligations) == 0 {
+		return nil, nil
+	}
+	fields := make(map[ReachabilityField]struct{}, len(reachability))
+	for _, field := range reachability {
+		fields[field] = struct{}{}
+	}
+	normalized := append([]StableLogicalObligation(nil), obligations...)
+	for _, obligation := range normalized {
+		if _, ok := fields[obligation.Reachability]; !ok {
+			return nil, fmt.Errorf("%w: logical obligation field %q is absent from resource reachability", ErrDependencyManifestFormat, obligation.Reachability)
+		}
+		if err := validateStableLogicalObligation(obligation, obligation.Reachability); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrDependencyManifestFormat, err)
+		}
+	}
+	sort.Slice(normalized, func(i, j int) bool { return stableLogicalObligationLess(normalized[i], normalized[j]) })
+	for i := 1; i < len(normalized); i++ {
+		if stableLogicalObligationKey(normalized[i-1]) != stableLogicalObligationKey(normalized[i]) {
+			continue
+		}
+		if normalized[i-1] != normalized[i] {
+			return nil, fmt.Errorf("%w: conflicting logical obligation", ErrDependencyManifestFormat)
+		}
+		return nil, fmt.Errorf("%w: duplicate logical obligation", ErrDependencyManifestFormat)
+	}
+	return normalized, nil
 }
 
 func (manifest *DependencyManifestV1) Entries() []DependencyManifestEntryV1 {
@@ -125,6 +188,11 @@ func (manifest *DependencyManifestV1) Entries() []DependencyManifestEntryV1 {
 	for i, entry := range manifest.entries {
 		entry.Frontier = cloneDurableFrontier(entry.Frontier)
 		entry.Reachability = append([]ReachabilityField(nil), entry.Reachability...)
+		entry.LogicalObligations = cloneStableLogicalObligations(entry.LogicalObligations)
+		if entry.Namespace != nil {
+			namespace := *entry.Namespace
+			entry.Namespace = &namespace
+		}
 		out[i] = entry
 	}
 	return out
@@ -246,6 +314,7 @@ func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
 	out = append(out, entry.Identity.ObjectID[:]...)
 	out = appendU64V1(out, entry.Identity.Generation)
 	out = appendU64V1(out, entry.Generation)
+	out = append(out, entry.Digest[:]...)
 	out = appendU64V1(out, entry.Frontier.Bytes)
 	out = appendU64V1(out, entry.Frontier.MaxLSN)
 	rids := entry.Frontier.RIDs()
@@ -256,6 +325,34 @@ func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
 	out = appendU32V1(out, uint32(len(entry.Reachability)))
 	for _, field := range entry.Reachability {
 		out = appendStringV1(out, string(field))
+	}
+	out = appendU32V1(out, uint32(len(entry.LogicalObligations)))
+	for _, obligation := range entry.LogicalObligations {
+		out = appendStringV1(out, obligation.Class)
+		out = appendStringV1(out, obligation.Kind)
+		out = appendStringV1(out, obligation.Namespace)
+		out = appendU64V1(out, obligation.Generation)
+		out = appendU64V1(out, obligation.PartID)
+		out = appendU64V1(out, obligation.FileID)
+		out = appendU64V1(out, uint64(obligation.Offset))
+		out = appendU64V1(out, uint64(obligation.Length))
+		out = appendU32V1(out, obligation.Checksum)
+		out = appendStringV1(out, string(obligation.Reachability))
+		out = append(out, obligation.Digest[:]...)
+	}
+	if entry.Namespace == nil {
+		out = appendU32V1(out, 0)
+	} else {
+		out = appendU32V1(out, 1)
+		namespace := entry.Namespace
+		out = appendStringV1(out, namespace.ParentIdentity.Platform)
+		out = appendU64V1(out, namespace.ParentIdentity.VolumeID)
+		out = append(out, namespace.ParentIdentity.ObjectID[:]...)
+		out = appendU64V1(out, namespace.ParentIdentity.Generation)
+		out = appendU32V1(out, uint32(namespace.Operation))
+		out = appendStringV1(out, namespace.OldName)
+		out = appendStringV1(out, namespace.NewName)
+		out = appendStringV1(out, namespace.DiagnosticPath)
 	}
 	return out
 }
@@ -360,6 +457,12 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 	if !ok {
 		return DependencyManifestEntryV1{}, false
 	}
+	digestBytes, ok := reader.bytes(32)
+	if !ok {
+		return DependencyManifestEntryV1{}, false
+	}
+	var digest [32]byte
+	copy(digest[:], digestBytes)
 	frontierBytes, ok := reader.u64()
 	if !ok {
 		return DependencyManifestEntryV1{}, false
@@ -391,6 +494,103 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 		}
 		reachability[i] = ReachabilityField(field)
 	}
+	logicalCount, ok := reader.u32()
+	if !ok || uint64(logicalCount) > uint64(reader.remaining()/4) {
+		return DependencyManifestEntryV1{}, false
+	}
+	logical := make([]StableLogicalObligation, logicalCount)
+	for i := range logical {
+		class, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		kind, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		namespace, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		logical[i].Generation, fieldOK = reader.u64()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		logical[i].PartID, fieldOK = reader.u64()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		logical[i].FileID, fieldOK = reader.u64()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		offset, fieldOK := reader.u64()
+		if !fieldOK || offset > uint64(^uint64(0)>>1) {
+			return DependencyManifestEntryV1{}, false
+		}
+		length, fieldOK := reader.u64()
+		if !fieldOK || length > uint64(^uint64(0)>>1) {
+			return DependencyManifestEntryV1{}, false
+		}
+		checksum, fieldOK := reader.u32()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		reachabilityField, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		logicalDigest, fieldOK := reader.bytes(32)
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		logical[i].Class, logical[i].Kind, logical[i].Namespace = class, kind, namespace
+		logical[i].Offset, logical[i].Length, logical[i].Checksum = int64(offset), int64(length), checksum
+		logical[i].Reachability = ReachabilityField(reachabilityField)
+		copy(logical[i].Digest[:], logicalDigest)
+	}
+	namespacePresent, ok := reader.u32()
+	if !ok || namespacePresent > 1 {
+		return DependencyManifestEntryV1{}, false
+	}
+	var namespace *DependencyManifestNamespaceV1
+	if namespacePresent == 1 {
+		platform, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		volume, fieldOK := reader.u64()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		object, fieldOK := reader.bytes(16)
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		parentGeneration, fieldOK := reader.u64()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		operation, fieldOK := reader.u32()
+		if !fieldOK || operation > uint32(^uint8(0)) {
+			return DependencyManifestEntryV1{}, false
+		}
+		oldName, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		newName, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		diagnosticPath, fieldOK := reader.str()
+		if !fieldOK {
+			return DependencyManifestEntryV1{}, false
+		}
+		parentIdentity := StableIdentity{Platform: platform, VolumeID: volume, Generation: parentGeneration}
+		copy(parentIdentity.ObjectID[:], object)
+		namespace = &DependencyManifestNamespaceV1{ParentIdentity: parentIdentity, Operation: NamespaceOperation(operation), OldName: oldName, NewName: newName, DiagnosticPath: diagnosticPath}
+	}
 	identity := StableIdentity{Platform: platform, VolumeID: volume, Generation: identityGeneration}
 	copy(identity.ObjectID[:], object)
 	frontier := DurableFrontier{Bytes: frontierBytes, MaxLSN: maxLSN}
@@ -401,7 +601,8 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 	}
 	return DependencyManifestEntryV1{
 		Kind: ResourceKind(kind), LogicalLane: lane, ResourceID: resourceID, DiagnosticPath: path,
-		Identity: identity, Generation: generation, Frontier: frontier, Reachability: reachability,
+		Identity: identity, Generation: generation, Digest: digest, Frontier: frontier, Reachability: reachability,
+		LogicalObligations: logical, Namespace: namespace,
 	}, true
 }
 

@@ -257,6 +257,7 @@ type ColumnPublishPlan struct {
 	Lifecycle                              ColumnPublishLifecycleSummary
 	StageMetrics                           ColumnPublishStageMetrics
 	stableResources                        *rootpublication.StableResourceSet
+	durableResourceRequirements            rootpublication.StableLogicalObligationRequirements
 }
 
 // ColumnManifestRootDelta is the ordered-root publish descriptor for the
@@ -469,6 +470,10 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnManifestRootDeltaForPlan(rootDelta, input.BaseManifestRootID, *cfg, manifest.Identity); err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: invalid column publish root delta: %w", err)
 	}
+	durableResourceRequirements, err := stableColumnManifestDurableRequirements(rootDelta.Records, manifest.Identity.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		return ColumnPublishPlan{}, fmt.Errorf("collections: derive durable column resource closure: %w", err)
+	}
 
 	preparedBytes, err := checkedSumColumnPreparedAssetBytes(manifestPrepared.Assets)
 	if err != nil {
@@ -502,8 +507,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 			PreparedRefs:   len(manifestPrepared.Assets),
 			PreparedBytes:  preparedBytes,
 		},
-		StageMetrics:    metrics,
-		stableResources: stableResources,
+		StageMetrics:                metrics,
+		stableResources:             stableResources,
+		durableResourceRequirements: durableResourceRequirements,
 	}
 
 	if input.Hooks.BuildSystemDelta != nil {
@@ -1217,4 +1223,13 @@ func (plan *ColumnPublishPlan) releaseStableResources() {
 	}
 	plan.stableResources.Release()
 	plan.stableResources = nil
+}
+
+func (plan *ColumnPublishPlan) takeStableResources() *rootpublication.StableResourceSet {
+	if plan == nil {
+		return nil
+	}
+	resources := plan.stableResources
+	plan.stableResources = nil
+	return resources
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -477,6 +478,94 @@ type StableResourceSet struct {
 	createdAt    time.Time
 }
 
+// StableLogicalObligationRequirements scopes an exact logical-reference
+// closure for a later root publication. ScopedFields distinguishes "this
+// publication has no references for this field" from "this publication did
+// not supply requirements for this field". Obligations must belong to one of
+// the scoped fields.
+type StableLogicalObligationRequirements struct {
+	ScopedFields []ReachabilityField
+	Obligations  []StableLogicalObligation
+}
+
+// NormalizeStableLogicalObligationRequirements validates, de-duplicates, and
+// deterministically sorts one exact logical-reference closure.
+func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObligationRequirements) (StableLogicalObligationRequirements, error) {
+	fields := append([]ReachabilityField(nil), requirements.ScopedFields...)
+	sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
+	uniqueFields := fields[:0]
+	for _, field := range fields {
+		if field == "" {
+			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: empty scoped logical-obligation field", ErrUnresolvedResource)
+		}
+		if len(uniqueFields) == 0 || uniqueFields[len(uniqueFields)-1] != field {
+			uniqueFields = append(uniqueFields, field)
+		}
+	}
+	if len(uniqueFields) == 0 {
+		if len(requirements.Obligations) != 0 {
+			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: logical obligations have no scoped fields", ErrUnresolvedResource)
+		}
+		return StableLogicalObligationRequirements{}, nil
+	}
+	scoped := make(map[ReachabilityField]struct{}, len(uniqueFields))
+	byField := make(map[ReachabilityField][]StableLogicalObligation, len(uniqueFields))
+	for _, field := range uniqueFields {
+		scoped[field] = struct{}{}
+	}
+	for _, obligation := range requirements.Obligations {
+		if _, ok := scoped[obligation.Reachability]; !ok {
+			return StableLogicalObligationRequirements{}, fmt.Errorf("%w: logical obligation field %q is not scoped", ErrResourceConflict, obligation.Reachability)
+		}
+		byField[obligation.Reachability] = append(byField[obligation.Reachability], obligation)
+	}
+	normalized := make([]StableLogicalObligation, 0, len(requirements.Obligations))
+	for _, field := range uniqueFields {
+		obligations, err := normalizeStableLogicalObligations(byField[field], field)
+		if err != nil {
+			return StableLogicalObligationRequirements{}, err
+		}
+		normalized = append(normalized, obligations...)
+	}
+	return StableLogicalObligationRequirements{
+		ScopedFields: append([]ReachabilityField(nil), uniqueFields...),
+		Obligations:  append([]StableLogicalObligation(nil), normalized...),
+	}, nil
+}
+
+// MergeStableLogicalObligationRequirements forms the exact union of two
+// independently supplied requirement sets.
+func MergeStableLogicalObligationRequirements(left, right StableLogicalObligationRequirements) (StableLogicalObligationRequirements, error) {
+	return NormalizeStableLogicalObligationRequirements(StableLogicalObligationRequirements{
+		ScopedFields: append(append([]ReachabilityField(nil), left.ScopedFields...), right.ScopedFields...),
+		Obligations:  append(append([]StableLogicalObligation(nil), left.Obligations...), right.Obligations...),
+	})
+}
+
+type stableLogicalObligationRequirementIndex struct {
+	scoped  map[ReachabilityField]struct{}
+	desired map[ReachabilityField]map[StableLogicalObligation]struct{}
+}
+
+func indexStableLogicalObligationRequirements(requirements StableLogicalObligationRequirements) (stableLogicalObligationRequirementIndex, error) {
+	normalized, err := NormalizeStableLogicalObligationRequirements(requirements)
+	if err != nil {
+		return stableLogicalObligationRequirementIndex{}, err
+	}
+	index := stableLogicalObligationRequirementIndex{
+		scoped:  make(map[ReachabilityField]struct{}, len(normalized.ScopedFields)),
+		desired: make(map[ReachabilityField]map[StableLogicalObligation]struct{}, len(normalized.ScopedFields)),
+	}
+	for _, field := range normalized.ScopedFields {
+		index.scoped[field] = struct{}{}
+		index.desired[field] = make(map[StableLogicalObligation]struct{})
+	}
+	for _, obligation := range normalized.Obligations {
+		index.desired[obligation.Reachability][obligation] = struct{}{}
+	}
+	return index, nil
+}
+
 // StableResourceDescriptor is an immutable-by-copy view of one coalesced
 // physical resource obligation. Unlike Tokens, it reports the unioned frontier,
 // every reachability field, and every logical obligation retained by the set.
@@ -491,6 +580,19 @@ type StableResourceDescriptor struct {
 	frontier           DurableFrontier
 	reachability       []ReachabilityField
 	logicalObligations []StableLogicalObligation
+	namespace          *StableNamespaceDescriptor
+}
+
+// StableNamespaceDescriptor is an immutable-by-copy recovery view of the
+// exact parent namespace obligation retained by a resource token. Diagnostic
+// names remain DB-relative metadata; the parent identity and generation are
+// the durable conflict boundary.
+type StableNamespaceDescriptor struct {
+	ParentIdentity StableIdentity
+	Operation      NamespaceOperation
+	OldName        string
+	NewName        string
+	DiagnosticPath string
 }
 
 func (descriptor StableResourceDescriptor) Kind() ResourceKind       { return descriptor.kind }
@@ -515,6 +617,13 @@ func (descriptor StableResourceDescriptor) ReachabilityFields() []ReachabilityFi
 
 func (descriptor StableResourceDescriptor) LogicalObligations() []StableLogicalObligation {
 	return cloneStableLogicalObligations(descriptor.logicalObligations)
+}
+
+func (descriptor StableResourceDescriptor) Namespace() (StableNamespaceDescriptor, bool) {
+	if descriptor.namespace == nil {
+		return StableNamespaceDescriptor{}, false
+	}
+	return *descriptor.namespace, true
 }
 
 func stableResourcePinCounts(entries []stableResourceEntry) map[ResourceKind]uint64 {
@@ -603,8 +712,198 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 			digest: entry.token.digest, frontier: cloneDurableFrontier(entry.frontier), reachability: fields,
 			logicalObligations: logicalObligations,
 		}
+		if namespace := entry.token.namespace; namespace != nil {
+			descriptors[i].namespace = &StableNamespaceDescriptor{
+				ParentIdentity: namespace.parentIdentity,
+				Operation:      namespace.operation,
+				OldName:        namespace.oldName,
+				NewName:        namespace.newName,
+				DiagnosticPath: namespace.diagnosticPath,
+			}
+		}
 	}
 	return descriptors
+}
+
+// CloneStableResourceSetExcludingKinds creates a new independently-owned
+// closure from the exact handles retained by source. Diagnostic paths are
+// never reopened. This is used when a later durable root still references an
+// immutable external resource retained by the currently selected root slot.
+//
+// Excluded kinds let a caller replace mutable resources, such as value-log
+// segments, with a fresh exact reachability scan for the candidate root. The
+// returned set is builder-owned and can be merged into another builder.
+func CloneStableResourceSetExcludingKinds(source *StableResourceSet, excluded ...ResourceKind) (*StableResourceSet, error) {
+	return CloneStableResourceSetForLogicalObligations(source, StableLogicalObligationRequirements{}, excluded...)
+}
+
+// CloneStableResourceSetForLogicalObligations independently retains the exact
+// source handles that still satisfy a candidate root's scoped logical
+// obligations. Unscoped reachability fields are cloned unchanged. For a
+// scoped field, stale obligations are omitted and an empty desired set drops
+// every source token owned only by that field. The caller must validate the
+// final union after merging newly produced resources.
+func CloneStableResourceSetForLogicalObligations(source *StableResourceSet, requirements StableLogicalObligationRequirements, excluded ...ResourceKind) (*StableResourceSet, error) {
+	if source == nil {
+		return nil, nil
+	}
+	requirementIndex, err := indexStableLogicalObligationRequirements(requirements)
+	if err != nil {
+		return nil, err
+	}
+	excludedKinds := make(map[ResourceKind]struct{}, len(excluded))
+	for _, kind := range excluded {
+		if kind != "" {
+			excludedKinds[kind] = struct{}{}
+		}
+	}
+	builder := NewStableResourceSetBuilder()
+	abandon := true
+	defer func() {
+		if abandon {
+			builder.Abandon()
+		}
+	}()
+
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	owner := ResourceOwnerState(source.owner.Load())
+	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+		return nil, ErrResourceOwnership
+	}
+	for _, entry := range source.entries {
+		token := activeEntryToken(entry)
+		if token == nil || token.released.Load() {
+			return nil, ErrResourceOwnership
+		}
+		if _, skip := excludedKinds[token.kind]; skip {
+			continue
+		}
+		fields := make([]ReachabilityField, 0, len(entry.reachability))
+		for field := range entry.reachability {
+			fields = append(fields, field)
+		}
+		sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
+		for _, field := range fields {
+			obligations := make([]StableLogicalObligation, 0, len(entry.logicalObligations))
+			for _, obligation := range entry.logicalObligations {
+				if obligation.Reachability != field {
+					continue
+				}
+				if _, scoped := requirementIndex.scoped[field]; scoped {
+					if _, desired := requirementIndex.desired[field][obligation]; !desired {
+						continue
+					}
+				}
+				obligations = append(obligations, obligation)
+			}
+			if _, scoped := requirementIndex.scoped[field]; scoped && len(obligations) == 0 {
+				continue
+			}
+			namespace, err := token.namespace.cloneStable()
+			if err != nil {
+				return nil, err
+			}
+			var registry *IdentityPinRegistry
+			if token.identityPin != nil {
+				registry = token.identityPin.registry
+				if err := registry.Observe(token.identity); err != nil {
+					namespace.Release()
+					return nil, err
+				}
+			}
+			observed := registry != nil
+			var cloned *StableResourceToken
+			err = token.WithPinnedFile(func(file *os.File) error {
+				var constructErr error
+				cloned, constructErr = NewStableResourceToken(StableResourceSpec{
+					Kind: token.kind, LogicalLane: entry.logicalLane, ResourceID: entry.resourceID,
+					Generation: token.generation, DiagnosticPath: entry.diagnosticPath,
+					File: file, Frontier: cloneDurableFrontier(entry.frontier), Digest: token.digest,
+					Reachability: field, Namespace: namespace, LogicalObligations: obligations,
+					ContentSynced: true, PinRegistry: registry,
+					OnRelease: func() {
+						if registry != nil {
+							_ = registry.Unobserve(token.identity)
+						}
+					},
+				})
+				return constructErr
+			})
+			if err != nil {
+				if observed {
+					_ = registry.Unobserve(token.identity)
+				}
+				namespace.Release()
+				return nil, err
+			}
+			if err := builder.Add(cloned); err != nil {
+				cloned.Release()
+				namespace.Release()
+				return nil, err
+			}
+			namespace.Release()
+		}
+	}
+	cloned, err := builder.Freeze()
+	if err != nil {
+		return nil, err
+	}
+	abandon = false
+	return cloned, nil
+}
+
+// ValidateStableResourceSetLogicalObligations proves that the scoped fields in
+// resources contain exactly the candidate root's desired logical references:
+// no missing obligation and no stale extra obligation.
+func ValidateStableResourceSetLogicalObligations(resources *StableResourceSet, requirements StableLogicalObligationRequirements) error {
+	index, err := indexStableLogicalObligationRequirements(requirements)
+	if err != nil {
+		return err
+	}
+	if len(index.scoped) == 0 {
+		return nil
+	}
+	actual := make(map[ReachabilityField]map[StableLogicalObligation]struct{}, len(index.scoped))
+	for field := range index.scoped {
+		actual[field] = make(map[StableLogicalObligation]struct{})
+	}
+	if resources != nil {
+		for _, descriptor := range resources.Descriptors() {
+			fields := descriptor.ReachabilityFields()
+			obligations := descriptor.LogicalObligations()
+			for _, field := range fields {
+				if _, scoped := index.scoped[field]; !scoped {
+					continue
+				}
+				foundForField := false
+				for _, obligation := range obligations {
+					if obligation.Reachability != field {
+						continue
+					}
+					foundForField = true
+					if _, desired := index.desired[field][obligation]; !desired {
+						return fmt.Errorf("%w: stale logical obligation %+v", ErrResourceConflict, obligation)
+					}
+					if _, duplicate := actual[field][obligation]; duplicate {
+						return fmt.Errorf("%w: duplicate logical obligation %+v", ErrResourceConflict, obligation)
+					}
+					actual[field][obligation] = struct{}{}
+				}
+				if !foundForField {
+					return fmt.Errorf("%w: scoped reachability field %q has no logical obligations", ErrUnresolvedResource, field)
+				}
+			}
+		}
+	}
+	for field, desired := range index.desired {
+		for obligation := range desired {
+			if _, ok := actual[field][obligation]; !ok {
+				return fmt.Errorf("%w: missing logical obligation %+v", ErrUnresolvedResource, obligation)
+			}
+		}
+	}
+	return nil
 }
 
 func (set *StableResourceSet) covers(field ReachabilityField) bool {

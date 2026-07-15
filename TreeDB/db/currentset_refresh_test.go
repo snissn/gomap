@@ -689,7 +689,7 @@ func TestPointerCommitRefreshesValueLogSet(t *testing.T) {
 	}
 }
 
-func TestPublishSystemRootIterator_PointerRefreshesValueLogSet(t *testing.T) {
+func TestPublishSystemRootIterator_PointerRegistersMissingSegmentWithoutRefreshScan(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -709,8 +709,8 @@ func TestPublishSystemRootIterator_PointerRefreshesValueLogSet(t *testing.T) {
 	}
 
 	after := d.valueLogManager.RefreshScanCount()
-	if after <= before {
-		t.Fatalf("system root pointer publish did not refresh value-log set: before=%d after=%d", before, after)
+	if after != before {
+		t.Fatalf("system root pointer publish used a directory refresh instead of bounded registration: before=%d after=%d", before, after)
 	}
 
 	st := d.State()
@@ -1238,6 +1238,10 @@ func TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister(t *testing.
 	leafLog := newMultiReportedLeafPageLog(t, dir)
 	defer func() { _ = leafLog.Close() }()
 	d.SetLeafPageLog(leafLog)
+	beforeState := d.State()
+	if beforeState == nil {
+		t.Fatal("missing state before failed commit")
+	}
 	before := d.valueLogManager.RefreshScanCount()
 	missingFileID, err := valuelog.EncodeFileID(246, 1)
 	if err != nil {
@@ -1261,7 +1265,12 @@ func TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister(t *testing.
 		t.Fatalf("unexpected registration of append segment %d after failure", leafLog.appendSegment.FileID)
 	}
 	st := d.State()
-	if st == nil || st.CommitSeq != 0 {
+	if st == nil || st.CommitSeq != beforeState.CommitSeq ||
+		st.RootPageID != beforeState.RootPageID ||
+		st.SystemRootPageID != beforeState.SystemRootPageID ||
+		st.AppliedCommandLSN != beforeState.AppliedCommandLSN ||
+		st.MaxEntryRevision != beforeState.MaxEntryRevision ||
+		st.LeafGenerationStateVersion != beforeState.LeafGenerationStateVersion {
 		t.Fatalf("state changed after failed commit: %+v", st)
 	}
 	if st != nil && st.ValueLogSet != nil {
@@ -1304,7 +1313,7 @@ func TestOuterLeafWriteLoopSkipsForcedValueLogRefreshScans(t *testing.T) {
 	}
 }
 
-func TestOuterLeafPointerCommitRefreshesWhenLeafSegmentUnreported(t *testing.T) {
+func TestOuterLeafPointerCommitRegistersUnreportedSegmentWithoutRefreshScan(t *testing.T) {
 	dir := t.TempDir()
 	value := bytes.Repeat([]byte("p"), 256)
 	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
@@ -1325,9 +1334,9 @@ func TestOuterLeafPointerCommitRefreshesWhenLeafSegmentUnreported(t *testing.T) 
 	defer func() { _ = leafLog.Close() }()
 	d.SetLeafPageLog(leafLog)
 
-	// Keep touched pointer segments known so this commit would previously skip
-	// refresh and publish an incomplete ValueLogSet when the leaf segment is not
-	// reportable/registered.
+	// Keep touched pointer segments known so this commit proves that the exact
+	// outer-leaf closure, rather than a broad refresh, registers the unreported
+	// leaf segment.
 	pointerPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
 	if err := d.RegisterValueLogSegment(pointerPath, fileID); err != nil {
 		t.Fatalf("RegisterValueLogSegment(pointer): %v", err)
@@ -1344,8 +1353,8 @@ func TestOuterLeafPointerCommitRefreshesWhenLeafSegmentUnreported(t *testing.T) 
 	}
 
 	after := d.valueLogManager.RefreshScanCount()
-	if after <= before {
-		t.Fatalf("expected forced refresh fallback for unreported leaf segment: before=%d after=%d", before, after)
+	if after != before {
+		t.Fatalf("unreported leaf segment triggered a directory refresh: before=%d after=%d", before, after)
 	}
 	if leafLog.fileID == 0 {
 		t.Fatalf("leaf log did not create a segment")

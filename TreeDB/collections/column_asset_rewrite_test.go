@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestColumnAssetRewriteEligibleRefsAreDeterministicM15C(t *testing.T) {
@@ -501,8 +502,8 @@ func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
 				t.Fatalf("copy cycle %d: %v", cycle, err)
 			}
 			defer remap.releaseStableResources()
-			if remap.stableSegments != 1 || remap.stableDescriptors != 2 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != 1 || remap.stablePinHighWater != remap.stableDescriptors {
-				t.Fatalf("copy cycle %d stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want 1,2,1,1,2", cycle, remap.stableSegments, remap.stableDescriptors, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
+			if remap.stableSegments != 1 || remap.stableDescriptors != 2 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != uint64(remap.stableDescriptors) || remap.stablePinHighWater != remap.stableDescriptors {
+				t.Fatalf("copy cycle %d stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want 1,2,1,2,2", cycle, remap.stableSegments, remap.stableDescriptors, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
 			}
 			if got := len(remap.stableResources.Descriptors()); got != 2 {
 				t.Fatalf("copy cycle %d descriptors=%d want 2", cycle, got)
@@ -633,8 +634,21 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	if err != nil {
 		t.Fatalf("ColumnAssetGC after rewrite: %v", err)
 	}
+	if gcStats.SegmentsEligible != 1 || gcStats.SegmentsDeleted != 0 {
+		t.Fatalf("first gc stats=%+v want old mixed segment retained by fallback durable generation", gcStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("first GC removed fallback generation segment: %v", err)
+	}
+	advanceColumnAssetDurableFallbackM15C(t, reopen)
+	gcStats, err = reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: append(append([]ColumnAssetRef(nil), stats.SupersededRefs...), candidate),
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after fallback advance: %v", err)
+	}
 	if gcStats.SegmentsDeleted != 1 || gcStats.BytesDeleted == 0 {
-		t.Fatalf("gc stats=%+v want old mixed segment deleted after remap", gcStats)
+		t.Fatalf("gc stats=%+v want old mixed segment deleted after fallback advance", gcStats)
 	}
 	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old segment still exists or unexpected stat error: %v", err)
@@ -920,8 +934,21 @@ func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ColumnAssetGC after lifecycle rewrite: %v", err)
 	}
+	if gcStats.SegmentsEligible != 1 || gcStats.SegmentsDeleted != 0 {
+		t.Fatalf("first gc stats=%+v want old mixed segment retained by fallback durable generation", gcStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("first GC removed fallback generation segment: %v", err)
+	}
+	advanceColumnAssetDurableFallbackM15C(t, reopen)
+	gcStats, err = reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after fallback advance: %v", err)
+	}
 	if gcStats.SegmentsDeleted != 1 || gcStats.BytesDeleted == 0 {
-		t.Fatalf("gc stats=%+v want old mixed segment deleted after remap", gcStats)
+		t.Fatalf("gc stats=%+v want old mixed segment deleted after fallback advance", gcStats)
 	}
 	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old segment still exists or unexpected stat error: %v", err)
@@ -994,6 +1021,8 @@ func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *tes
 	baselinePins := registry.ActivePins()
 	replacement := []byte("rebound-rewrite-replacement")
 	var copiedPath, displacedPath string
+	var pinsAfterStalePublish uint64
+	var rewriteOwnedPins uint64
 
 	stats, err := col.columnAssetRewriteWithOptions(context.Background(), columnAssetRewriteOptions{
 		ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{
@@ -1002,6 +1031,8 @@ func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *tes
 		afterCopyHookForTest: func() error {
 			if got := registry.ActivePins(); got <= baselinePins {
 				t.Fatalf("rewrite pins before backend publication=%d want > baseline %d", got, baselinePins)
+			} else {
+				rewriteOwnedPins = got - baselinePins
 			}
 			duringSegments := columnAssetSegmentNamesM15C(t, d, col)
 			var copiedName string
@@ -1029,7 +1060,11 @@ func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *tes
 			if writeErr := os.WriteFile(copiedPath, replacement, 0o600); writeErr != nil {
 				t.Fatalf("write replacement segment: %v", writeErr)
 			}
-			return staleColumnAssetRewriteManifestRootM15C(d)
+			staleErr := staleColumnAssetRewriteManifestRootM15C(d)
+			if staleErr == nil {
+				pinsAfterStalePublish = registry.ActivePins()
+			}
+			return staleErr
 		},
 	})
 	if err == nil {
@@ -1041,8 +1076,12 @@ func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *tes
 	if stats.BytesCopied != 0 {
 		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("rewrite stale preflight leaked pins=%d want baseline %d", got, baselinePins)
+	if pinsAfterStalePublish <= baselinePins {
+		t.Fatalf("stale publication pins=%d want more than baseline %d for retained fallback generation", pinsAfterStalePublish, baselinePins)
+	}
+	wantPins := pinsAfterStalePublish - rewriteOwnedPins
+	if got := registry.ActivePins(); got != wantPins {
+		t.Fatalf("rewrite stale preflight pins=%d want %d after releasing %d rewrite-owned pins from post-stale-publication %d", got, wantPins, rewriteOwnedPins, pinsAfterStalePublish)
 	}
 	afterSegments := columnAssetSegmentNamesM15C(t, d, col)
 	if len(afterSegments) != len(beforeSegments)+2 {
@@ -1194,6 +1233,32 @@ func staleColumnAssetRewriteManifestRootM15C(d *backenddb.DB) error {
 		})
 	})
 	return err
+}
+
+func advanceColumnAssetDurableFallbackM15C(t *testing.T, d *backenddb.DB) {
+	t.Helper()
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("column/rewrite/durable-fallback-advance"),
+		Value: []byte("1"),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload fallback advance: %v", err)
+	}
+	intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent fallback advance: %v", err)
+	}
+	emptySystemDelta, err := memtable.NewWithCapacityMode(1, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new empty system delta fallback advance: %v", err)
+	}
+	emptySystemDelta.Freeze()
+	if _, _, err := d.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(_ backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
+		return emptySystemDelta.NewIterator(nil, nil), nil
+	}); err != nil {
+		t.Fatalf("publish fallback advance: %v", err)
+	}
 }
 
 func TestColumnAssetRewriteRejectsReadOnlyM15C(t *testing.T) {

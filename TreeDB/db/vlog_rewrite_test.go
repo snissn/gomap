@@ -2116,6 +2116,7 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 		t.Fatalf("active source should remain without reclaim option, stat=%v", err)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	reclaimStats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
 		ObservedSourceFileIDs:            rewriteStats.SourceFileIDsUnreferenced,
 		ObservedSourceAssumeUnreferenced: true,

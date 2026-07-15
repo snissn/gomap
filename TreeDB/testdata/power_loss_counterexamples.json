@@ -126,18 +126,17 @@
     {
       "id": "older-meta-live-page-reused",
       "invariant": "recoverable-page-reused",
-      "producer_operation": "freelist allocation overwrites a page reachable from the older selectable meta",
-      "cut_id": "cut/older-meta-live-page-reuse/after-meta-write/001",
-      "cut_point": "after-meta-write",
-      "variant_id": "cut/older-meta-live-page-reuse/after-meta-write/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page",
-      "seed": 2709795578759783962,
+      "producer_operation": "freelist allocation reuses a page only after its last selectable meta is displaced",
+      "cut_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001",
+      "cut_point": "before-index-data-sync",
+      "variant_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page",
+      "seed": 6916576305815329643,
       "variant_families": ["old-page-reuse"],
-      "expected_result": "corruption",
-      "observed_result": "corruption",
-      "owner": "#3678",
-      "disposition": "known-counterexample",
-      "known_violation": {"kind": "named-invariant", "invariant": "recoverable-page-reused"},
-      "replay": {"package": "./TreeDB/db", "test_name": "TestPowerLossOracleCounterexampleRecoverablePageReuse", "cut_id": "cut/older-meta-live-page-reuse/after-meta-write/001", "variant_id": "cut/older-meta-live-page-reuse/after-meta-write/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page", "seed": 2709795578759783962}
+      "expected_result": "old-root",
+      "observed_result": "old-root",
+      "owner": "#3679",
+      "disposition": "resolved",
+      "replay": {"package": "./TreeDB/db", "test_name": "TestPowerLossOracleCounterexampleRecoverablePageReuse", "cut_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001", "variant_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page", "seed": 6916576305815329643}
     }
   ]
 }

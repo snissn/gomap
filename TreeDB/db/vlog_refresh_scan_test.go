@@ -36,10 +36,9 @@ func writeValueLogSegment(t *testing.T, dir string, lane, seq uint32) (path stri
 	return path, fileID
 }
 
-func TestValueLogGC_DoesNotRescanWhenSetAlreadyPopulated(t *testing.T) {
+func TestValueLogGC_RefreshesFullInventoryWhenSetAlreadyPopulated(t *testing.T) {
 	dir := t.TempDir()
-	path1, id1 := writeValueLogSegment(t, dir, 0, 1)
-	_, _ = writeValueLogSegment(t, dir, 0, 2)
+	path1, id1 := writeValueLogSegment(t, dir, 7, 1)
 
 	d, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -53,6 +52,15 @@ func TestValueLogGC_DoesNotRescanWhenSetAlreadyPopulated(t *testing.T) {
 	if !d.valueLogManager.HasSegment(id1) {
 		t.Fatalf("expected segment %d to be registered at open", id1)
 	}
+	// Simulate siblings created outside the open handle after its manager set was
+	// populated. Full GC must discover them; otherwise the older unreferenced
+	// sibling remains invisible forever. The newest lane segment is retained as
+	// the active-segment safety guard.
+	path2, id2 := writeValueLogSegment(t, dir, 7, 2)
+	path3, id3 := writeValueLogSegment(t, dir, 7, 3)
+	if d.valueLogManager.HasSegment(id2) || d.valueLogManager.HasSegment(id3) {
+		t.Fatal("externally created siblings unexpectedly registered before GC")
+	}
 	before := d.valueLogManager.RefreshScanCount()
 
 	_, err = d.ValueLogGC(context.Background(), ValueLogGCOptions{})
@@ -60,11 +68,19 @@ func TestValueLogGC_DoesNotRescanWhenSetAlreadyPopulated(t *testing.T) {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
 	after := d.valueLogManager.RefreshScanCount()
-	if after != before {
-		t.Fatalf("ValueLogGC triggered value-log refresh scan: before=%d after=%d", before, after)
+	if after != before+1 {
+		t.Fatalf("ValueLogGC refresh scans=%d want exactly one (before=%d after=%d)", after-before, before, after)
 	}
-	if _, err := os.Stat(path1); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected GC to remove eligible segment %q, err=%v", path1, err)
+	for _, path := range []string{path1, path2} {
+		if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
+			t.Fatalf("expected GC to remove eligible segment %q, err=%v", path, err)
+		}
+	}
+	if _, err := os.Stat(path3); err != nil {
+		t.Fatalf("expected GC to retain active segment %q: %v", path3, err)
+	}
+	if !d.valueLogManager.HasSegment(id3) {
+		t.Fatalf("expected GC refresh to register retained segment %d", id3)
 	}
 }
 

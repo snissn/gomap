@@ -1127,6 +1127,24 @@ func NewStableNamespaceToken(spec StableNamespaceSpec) (*StableNamespaceToken, e
 	return newStableNamespaceToken(spec, nativeNamespaceAdapter{})
 }
 
+// NewRecoveredStableNamespaceToken reconstructs an already-durable namespace
+// proof during bounded root recovery. It validates the exact parent identity
+// and current parent/child link but deliberately does not issue a new sync: the
+// selected durable meta is itself the evidence that this namespace operation
+// crossed its barrier before publication.
+func NewRecoveredStableNamespaceToken(spec StableNamespaceSpec, expectedParent StableIdentity) (*StableNamespaceToken, error) {
+	token, err := newStableNamespaceToken(spec, nativeNamespaceAdapter{})
+	if err != nil {
+		return nil, err
+	}
+	if token.parentIdentity.Generation != expectedParent.Generation || !SamePhysicalIdentity(token.parentIdentity, expectedParent) {
+		token.Release()
+		return nil, fmt.Errorf("%w: recovered namespace parent identity differs from manifest", ErrResourceConflict)
+	}
+	token.state.Store(namespaceStable)
+	return token, nil
+}
+
 func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersistenceAdapter) (*StableNamespaceToken, error) {
 	if spec.Parent == nil || spec.ParentGeneration == 0 || spec.Operation == NamespaceNone || spec.NewName == "" || adapter == nil {
 		return nil, fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
@@ -1342,6 +1360,42 @@ func (token *StableNamespaceToken) validateStable() error {
 	default:
 		return ErrNamespaceUnstable
 	}
+}
+
+// cloneStable duplicates the exact retained parent handle of an already
+// stable namespace proof. It never resolves DiagnosticPath. The clone starts
+// stable because the source proof's parent/child binding and namespace sync
+// have already crossed their durability barrier; publication of a later root
+// may therefore retain that same immutable proof without performing another
+// parent-directory sync.
+func (token *StableNamespaceToken) cloneStable() (*StableNamespaceToken, error) {
+	if token == nil {
+		return nil, nil
+	}
+	if err := token.validateStable(); err != nil {
+		return nil, err
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() || token.state.Load() != namespaceStable || token.parent == nil {
+		return nil, ErrResourceOwnership
+	}
+	pinned, err := duplicateStableFile(token.parent)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate stable namespace handle: %w", err)
+	}
+	clone := &StableNamespaceToken{
+		parent: pinned, parentIdentity: token.parentIdentity,
+		linkedResourceIdentity: token.linkedResourceIdentity,
+		hasLinkedResource:      token.hasLinkedResource,
+		operation:              token.operation,
+		oldName:                token.oldName,
+		newName:                token.newName,
+		diagnosticPath:         token.diagnosticPath,
+		adapter:                token.adapter,
+	}
+	clone.state.Store(namespaceStable)
+	return clone, nil
 }
 
 func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool {

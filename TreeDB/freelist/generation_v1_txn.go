@@ -268,6 +268,21 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 		t.stats.ReuseAllocations++
 		return id, nil
 	}
+	return t.allocateAppend()
+}
+
+// AllocateAppend reserves a new page at the logical high-water mark without
+// consulting the reusable set. It preserves append-only maintenance and the
+// public PreferAppendAlloc contract while still recording exact candidate
+// ownership in the COW transaction.
+func (t *FreelistTxn) AllocateAppend() (uint64, error) {
+	if err := t.valid(); err != nil {
+		return 0, err
+	}
+	return t.allocateAppend()
+}
+
+func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	if t.highWater == math.MaxUint64 {
 		return 0, ErrNoAllocatablePage
 	}

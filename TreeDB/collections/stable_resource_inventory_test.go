@@ -1482,14 +1482,14 @@ func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 		}
 		return contentSyncs, namespaceSyncs
 	}
-	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != 0 || namespaceSyncs != 1 {
-		t.Fatalf("captured sync counts content=%d namespace=%d want 0,1", contentSyncs, namespaceSyncs)
+	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != 0 || namespaceSyncs != uint64(len(descriptors)) {
+		t.Fatalf("captured sync counts content=%d namespace=%d want 0,%d", contentSyncs, namespaceSyncs, len(descriptors))
 	}
 	if err := resources.SyncThrough(); err != nil {
 		t.Fatal(err)
 	}
-	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != uint64(len(descriptors)) || namespaceSyncs != 1 {
-		t.Fatalf("post-SyncThrough attempt counts content=%d namespace=%d want %d,1", contentSyncs, namespaceSyncs, len(descriptors))
+	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != uint64(len(descriptors)) || namespaceSyncs != uint64(len(descriptors)) {
+		t.Fatalf("post-SyncThrough attempt counts content=%d namespace=%d want %d,%d", contentSyncs, namespaceSyncs, len(descriptors), len(descriptors))
 	}
 	if physicalResourceSyncs != 0 {
 		t.Fatalf("post-SyncThrough physical content syncs=%d want 0", physicalResourceSyncs)
@@ -1659,18 +1659,17 @@ func testStableColumnAppendSessionFailureReleasesPinsAndNamespaceProof(t *testin
 	}
 }
 
-func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
+func testColumnCommandWALPublishRetainsStableAssetAuthorityInDurableSlots(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
 	registry := d.StableResourceIdentityPinRegistry()
 	baselinePins := registry.ActivePins()
 	if _, err := col.Insert([]byte("stable-publish"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("active stable asset pins after command-WAL publish=%d want baseline %d", got, baselinePins)
+	if got := registry.ActivePins(); got <= baselinePins {
+		t.Fatalf("active stable asset pins after command-WAL publish=%d want greater than baseline %d", got, baselinePins)
 	}
 	cfg := col.Meta().Options.ColumnStore
 	if cfg == nil || cfg.AssetManager == nil {
@@ -1685,6 +1684,7 @@ func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	segments := 0
+	var identities []rootpublication.StableIdentity
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), columnAssetSegmentFilePrefix) ||
 			!strings.HasSuffix(entry.Name(), columnAssetSegmentFileSuffix) {
@@ -1703,11 +1703,12 @@ func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
 		if closeErr != nil {
 			t.Fatal(closeErr)
 		}
-		if got := registry.PinCount(identity); got != 0 {
-			t.Fatalf("column segment %q pins after command-WAL publish=%d want 0", entry.Name(), got)
+		identities = append(identities, identity)
+		if got := registry.PinCount(identity); got == 0 {
+			t.Fatalf("column segment %q pins after command-WAL publish=%d want retained durable-slot authority", entry.Name(), got)
 		}
-		if got := registry.ObserverCount(identity); got != 0 {
-			t.Fatalf("column segment %q observers after command-WAL publish=%d want 0", entry.Name(), got)
+		if got := registry.ObserverCount(identity); got == 0 {
+			t.Fatalf("column segment %q observers after command-WAL publish=%d want retained durable-slot authority", entry.Name(), got)
 		}
 	}
 	if segments == 0 {
@@ -1715,6 +1716,17 @@ func testColumnCommandWALPublishReleasesStableAssetAuthority(t *testing.T) {
 	}
 	if got := registry.ActiveStableNamespaceLinks(); got == 0 {
 		t.Fatal("successful command-WAL publish retained no exact namespace sync proof")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range identities {
+		if got := registry.PinCount(identity); got != 0 {
+			t.Fatalf("column segment pins after DB close=%d want 0", got)
+		}
+		if got := registry.ObserverCount(identity); got != 0 {
+			t.Fatalf("column segment observers after DB close=%d want 0", got)
+		}
 	}
 }
 
@@ -1815,10 +1827,11 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 		return closeStats, resources, namespaceSyncs
 	}
 
+	const descriptorsPerIteration = 3 // column, typed-column, and HNSW resource kinds
 	primeStats, primeResources, primeNamespaceSyncs := appendAndClose(1)
-	if primeStats.FileSyncCount != 1 || primeNamespaceSyncs != 1 {
+	if primeStats.FileSyncCount != 1 || primeNamespaceSyncs != descriptorsPerIteration {
 		primeResources.Release()
-		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content and namespace sync", primeStats, primeNamespaceSyncs)
+		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content sync and %d descriptor views of one namespace sync", primeStats, primeNamespaceSyncs, descriptorsPerIteration)
 	}
 	primeResources.Release()
 
@@ -1856,7 +1869,6 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 	if pinHighWater != 1 {
 		b.Fatalf("pin high-water=%d want 1", pinHighWater)
 	}
-	const descriptorsPerIteration = 3 // column, typed-column, and HNSW resource kinds
 	if descriptors != uint64(b.N*descriptorsPerIteration) || logicalObligations != uint64(b.N*len(items)) {
 		b.Fatalf("descriptors=%d logical obligations=%d want %d/%d", descriptors, logicalObligations, b.N*descriptorsPerIteration, b.N*len(items))
 	}

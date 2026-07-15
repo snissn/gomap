@@ -162,7 +162,10 @@ func openReadOnly(opts Options) (*DB, error) {
 		db.cacheCommandWALRequiredFeatureStats()
 	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
+		manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
+		if err == nil && !selectedExact {
+			manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
+		}
 		if err != nil {
 			_ = db.Close()
 			return nil, err
@@ -313,7 +316,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		db.cacheCommandWALRequiredFeatureStats()
 	}
 	if opts.IndexOuterLeavesInValueLog {
-		manifest, err := loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
+		manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
+		if err == nil && !selectedExact {
+			manifest, err = loadOrCreateLeafGenerationManifestWithStore(layout.leafVLogDir, db.meta.CommitSeq, true, db.leafGenerationManifestStore)
+		}
 		if err != nil {
 			_ = db.Close()
 			return nil, err

@@ -667,13 +667,24 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	stats.LeafGenerationPlan = finalAudit.LeafGenerationPlan
 	addCompactStorageAuditStats(&stats.Audit, finalAudit.Audit)
 	stats.RemainingDebt = finalDebt
+	// A zombie is removed from the manager's current topology before its exact
+	// durable-slot/snapshot handles are released. The final filesystem audit
+	// therefore cannot rediscover that pending deletion through the live set.
+	// Preserve the applied GC result so CompactStorage never reports fully
+	// compacted while a safely retained zombie still exists.
+	if stats.ValueLogGC.SegmentsPending > stats.RemainingDebt.ValueLogGCSegments {
+		stats.RemainingDebt.ValueLogGCSegments = stats.ValueLogGC.SegmentsPending
+	}
+	if stats.ValueLogGC.BytesPending > stats.RemainingDebt.ValueLogGCBytes {
+		stats.RemainingDebt.ValueLogGCBytes = stats.ValueLogGC.BytesPending
+	}
 	if leafLogHandoff != nil {
 		if err := leafLogHandoff.cleanup(); err != nil {
 			return stats, err
 		}
 	}
 	cleanupLeafLogDone = true
-	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, finalDebt)
+	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, stats.RemainingDebt)
 	return stats, nil
 }
 

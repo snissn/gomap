@@ -252,7 +252,14 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
-	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
+	durableRequirements, err := stableColumnManifestDurableRequirements(patchedRecords, state.manifest.Generation, state.cfg.AssetManager.Namespace)
+	if err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, fmt.Errorf("collections: column asset rewrite durable requirements: %w", err)
+	}
+	durableResources := remap.stableResources
+	remap.stableResources = nil
+	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestStateWithDurableClosure(state, updatedMeta, updatedIdentity, patchedRecords, durableResources, durableRequirements)
 	if err != nil {
 		if columnAssetRewritePublishFailedBeforeApply(err) {
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -480,10 +487,11 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	}
 	// This rewrite transaction owns one newly-created physical segment. A mixed
 	// segment may require multiple kind-scoped descriptors and pins while still
-	// sharing one exact file identity and one content/namespace sync epoch.
-	if out.stableSegments != 1 || out.stableDescriptors == 0 || out.stableContentSyncs != 1 || out.stableNamespaceSyncs != 1 || out.stablePinHighWater != out.stableDescriptors {
+	// sharing one exact file identity and one content/namespace sync epoch. The
+	// stable inventory preserves one namespace-sync evidence view per descriptor.
+	if out.stableSegments != 1 || out.stableDescriptors == 0 || out.stableContentSyncs != 1 || out.stableNamespaceSyncs != uint64(out.stableDescriptors) || out.stablePinHighWater != out.stableDescriptors {
 		out.releaseStableResources()
-		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want segments/content/namespace=1 and pins=descriptors", rootpublication.ErrUnresolvedResource, out.stableSegments, out.stableDescriptors, out.stableContentSyncs, out.stableNamespaceSyncs, out.stablePinHighWater)
+		return columnAssetRewriteCopyResult{}, fmt.Errorf("%w: column asset rewrite stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want segments/content=1 and namespace/pins=descriptors", rootpublication.ErrUnresolvedResource, out.stableSegments, out.stableDescriptors, out.stableContentSyncs, out.stableNamespaceSyncs, out.stablePinHighWater)
 	}
 	assets := make([]ColumnPreparedAsset, len(out.newRefs))
 	for i, ref := range out.newRefs {
@@ -935,15 +943,22 @@ func columnAssetRewriteManifestRootStoragePolicy(state columnAssetRewriteManifes
 }
 
 func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRewriteManifestState, updatedMeta CollectionMeta, updatedIdentity ColumnManifestIdentity, records []columnManifestRecord) (uint64, []uint64, error) {
+	return c.publishColumnAssetRewriteManifestStateWithDurableClosure(state, updatedMeta, updatedIdentity, records, nil, rootpublication.StableLogicalObligationRequirements{})
+}
+
+func (c *Collection) publishColumnAssetRewriteManifestStateWithDurableClosure(state columnAssetRewriteManifestState, updatedMeta CollectionMeta, updatedIdentity ColumnManifestIdentity, records []columnManifestRecord, durableResources *rootpublication.StableResourceSet, durableRequirements rootpublication.StableLogicalObligationRequirements) (uint64, []uint64, error) {
+	defer durableResources.Release()
 	policy, err := columnAssetRewriteManifestRootStoragePolicy(state)
 	if err != nil {
 		return 0, nil, err
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(updatedIdentity)
 	ordered := []backenddb.StorageMaintenanceRootDeltaPublishInput{{
-		BaseRoot:      state.baseRoot,
-		Iter:          columnManifestRootRecordIteratorOwned(identityRecord, records),
-		StoragePolicy: policy,
+		BaseRoot:                    state.baseRoot,
+		Iter:                        columnManifestRootRecordIteratorOwned(identityRecord, records),
+		StoragePolicy:               policy,
+		DurableResources:            durableResources,
+		DurableResourceRequirements: durableRequirements,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),

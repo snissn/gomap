@@ -8,6 +8,11 @@ import (
 
 var ErrCOWCandidatePrepared = errors.New("COW freelist candidate publication pending")
 
+// TestHookRetireCOWBeforeUnlock is a test-only hook that fires after a COW
+// retirement has updated the candidate transaction and counters but before the
+// allocator lock is released. It should remain nil in production.
+var TestHookRetireCOWBeforeUnlock func()
+
 type allocatorCOWStateV1 struct {
 	generation *FreelistGenerationV1
 	txn        *FreelistTxn
@@ -89,7 +94,15 @@ func (a *Allocator) allocCOWLocked(hint uint64) (uint64, error) {
 	if a.cow == nil || a.cow.txn == nil {
 		return 0, ErrGenerationFormat
 	}
-	id, err := a.cow.txn.Allocate(hint)
+	var (
+		id  uint64
+		err error
+	)
+	if a.preferAppend {
+		id, err = a.cow.txn.AllocateAppend()
+	} else {
+		id, err = a.cow.txn.Allocate(hint)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -118,6 +131,9 @@ func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64)
 		a.cow.txn.Retire(id, lastReachableCommitSeq)
 	}
 	a.stats.FreePages += uint64(len(ids))
+	if TestHookRetireCOWBeforeUnlock != nil {
+		TestHookRetireCOWBeforeUnlock()
+	}
 	return nil
 }
 
@@ -150,6 +166,10 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 		}
 		return a.cow.prepared, nil
 	}
+	// Encode every page that the caller's sealed reuse capability permits as
+	// free in this exact durable generation. A prepared candidate is immutable;
+	// retry returns it above instead of applying a fresher capability after the
+	// caller releases its reader-admission gate.
 	a.cow.txn.PruneWithCapability(capability)
 	auxiliary, err := a.cow.txn.allocateAppendedRange(auxiliaryPageCount)
 	if err != nil {

@@ -1450,6 +1450,121 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.CopyTimeNanos = time.Since(copyStarted).Nanoseconds()
 	}
 
+	publishEvent := leafGenerationPackPublishEvent{
+		Attempt: attempt,
+		FileIDs: append([]uint32(nil), createdIDs...),
+	}
+	publishEvent.Phase = leafGenerationPackBeforePromotion
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: promotion failpoint: %w", err)
+	}
+	promotionStarted := time.Now()
+	promotedSegments, _, promoteErr := authority.promote()
+	if runStats != nil {
+		runStats.ApplyStages.PromotionTimeNanos += time.Since(promotionStarted).Nanoseconds()
+		runStats.ApplyStages.DirectorySyncTimeNanos += authority.namespaceSyncNanos
+	}
+	createdSegments = promotedSegments
+	var (
+		publishAlloc     *leafGenerationPackPublishAllocator
+		durableResources *rootpublication.StableResourceSet
+		manifestClosure  *LeafGenerationManifestStablePreparedClosure
+	)
+	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
+		if publishAlloc != nil {
+			publishAlloc.Rollback()
+		}
+		if durableResources != nil {
+			durableResources.Release()
+			durableResources = nil
+		}
+		if manifestClosure != nil {
+			if cleanupErr := manifestClosure.abandonUnpublished(); cleanupErr != nil {
+				baseErr = errors.Join(baseErr, cleanupErr)
+				db.publicationPoisoned.Store(true)
+			}
+		}
+		// Release the candidate set and capture pins before asking the manager's
+		// deletion owner to acquire an exact-identity delete lease.
+		if releaseErr := authority.release(); releaseErr != nil {
+			baseErr = errors.Join(baseErr, releaseErr)
+		}
+		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
+		if cleanupErr != nil {
+			baseErr = errors.Join(baseErr, cleanupErr)
+		}
+		if len(createdSegments) > 0 {
+			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
+			if syncErr := syncDeletionNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf); syncErr != nil {
+				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
+			}
+		}
+		return 0, 0, baseErr
+	}
+	if promoteErr != nil {
+		promoteErr = fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr)
+		if authority.retainedForRecovery {
+			promoteErr = errors.Join(promoteErr, ErrRecoveryRequired)
+			db.publicationPoisoned.Store(true)
+			return 0, 0, promoteErr
+		}
+		return cleanupCreatedSegments(promoteErr)
+	}
+	publishEvent.Phase = leafGenerationPackAfterPromotion
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: promoted leaf directory failpoint: %w", err))
+	}
+	// Exact packed promotion already synchronized both the staging and
+	// destination parents once as one namespace batch. Do not issue the former
+	// path-based destination-directory sync here.
+
+	var leafManifestRawFileIDs []uint32
+	if snap.state.LeafGenerations == nil || snap.state.LeafGenerations.sourceManifest == nil {
+		return cleanupCreatedSegments(fmt.Errorf("%w: packed publication has no source leaf-generation manifest", rootpublication.ErrUnresolvedResource))
+	}
+	leafManifest := snap.state.LeafGenerations.sourceManifest.clone()
+	rawFileIDs, changed, manifestErr := noteCreatedLeafGenerationFileIDsInManifest(leafManifest, snap.state.CommitSeq+1, createdIDs)
+	if manifestErr != nil {
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", manifestErr))
+	}
+	if !changed {
+		return cleanupCreatedSegments(fmt.Errorf("%w: packed publication did not advance the leaf-generation manifest", rootpublication.ErrResourceConflict))
+	}
+	leafManifestRawFileIDs = rawFileIDs
+	var persistedLeafManifest *leafGenerationManifest
+	manifestClosure, persistedLeafManifest, manifestErr = db.prepareLeafGenerationManifestStableCandidate(leafManifest)
+	if manifestErr != nil {
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: persist exact leaf-generation manifest: %w", manifestErr))
+	}
+	leafManifest = persistedLeafManifest
+	manifestResources, manifestErr := manifestClosure.TakeStableResources()
+	if manifestErr != nil {
+		manifestClosure.Release()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: transfer exact leaf-generation manifest: %w", manifestErr))
+	}
+	packedResources, resourceErr := authority.takeStableResources()
+	if resourceErr != nil {
+		manifestResources.Release()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: transfer exact packed resources: %w", resourceErr))
+	}
+	resourceBuilder := rootpublication.NewStableResourceSetBuilder()
+	if resourceErr = resourceBuilder.Merge(packedResources); resourceErr != nil {
+		packedResources.Release()
+		manifestResources.Release()
+		resourceBuilder.Abandon()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: merge exact packed resources: %w", resourceErr))
+	}
+	if resourceErr = resourceBuilder.Merge(manifestResources); resourceErr != nil {
+		manifestResources.Release()
+		resourceBuilder.Abandon()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: merge exact manifest resource: %w", resourceErr))
+	}
+	durableResources, resourceErr = resourceBuilder.Freeze()
+	if resourceErr != nil {
+		resourceBuilder.Abandon()
+		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: freeze packed durable resources: %w", resourceErr))
+	}
+
 	publishWaitStarted := time.Now()
 	db.writeMu.Lock()
 	publishWait := time.Since(publishWaitStarted)
@@ -1457,23 +1572,31 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		runStats.PublishWaitNanos = publishWait.Nanoseconds()
 	}
+	publishUnlocked := false
 	unlockPublish := func() {
+		if publishUnlocked {
+			return
+		}
+		publishUnlocked = true
 		if runStats != nil {
 			runStats.PublishHoldNanos = time.Since(publishStarted).Nanoseconds()
 		}
 		db.writeMu.Unlock()
 	}
-	if db.closing.Load() {
+	cleanupAndUnlock := func(baseErr error) (int, int64, error) {
+		copied, copiedBytes, cleanupErr := cleanupCreatedSegments(baseErr)
 		unlockPublish()
-		return 0, 0, ErrClosed
+		return copied, copiedBytes, cleanupErr
+	}
+	if db.closing.Load() {
+		return cleanupAndUnlock(ErrClosed)
 	}
 	if !db.leafGenerationPackCopyBasisMatches(basis) {
 		if runStats != nil {
 			runStats.PublishConflict = true
 			runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
 		}
-		unlockPublish()
-		return 0, 0, errLeafGenerationPackPublishConflict
+		return cleanupAndUnlock(errLeafGenerationPackPublishConflict)
 	}
 
 	visibilityLocked := false
@@ -1501,86 +1624,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			runStats.PublishConflict = true
 			runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
 		}
-		unlockPublish()
-		return 0, 0, errLeafGenerationPackPublishConflict
-	}
-	publishEvent := leafGenerationPackPublishEvent{
-		Attempt: attempt,
-		FileIDs: append([]uint32(nil), createdIDs...),
-	}
-	publishEvent.Phase = leafGenerationPackBeforePromotion
-	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
-		unlockPublish()
-		return 0, 0, fmt.Errorf("vlog-rewrite: promotion failpoint: %w", err)
+		return cleanupAndUnlock(errLeafGenerationPackPublishConflict)
 	}
 
 	if runStats != nil {
 		runStats.ApplyStages.RevalidateTimeNanos += time.Since(publishStarted).Nanoseconds()
-	}
-	promotionStarted := time.Now()
-	promotedSegments, _, promoteErr := authority.promote()
-	if runStats != nil {
-		runStats.ApplyStages.PromotionTimeNanos += time.Since(promotionStarted).Nanoseconds()
-		runStats.ApplyStages.DirectorySyncTimeNanos += authority.namespaceSyncNanos
-	}
-	createdSegments = promotedSegments
-	var publishAlloc *leafGenerationPackPublishAllocator
-	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
-		if publishAlloc != nil {
-			publishAlloc.Rollback()
-		}
-		// Release the candidate set and capture pins before asking the manager's
-		// deletion owner to acquire an exact-identity delete lease.
-		if releaseErr := authority.release(); releaseErr != nil {
-			baseErr = errors.Join(baseErr, releaseErr)
-		}
-		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
-		if cleanupErr != nil {
-			baseErr = errors.Join(baseErr, cleanupErr)
-		}
-		if len(createdSegments) > 0 {
-			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
-			if syncErr := syncDeletionNamespaceDirectory(leafVLogDir, durabilitycut.ResourceOuterLeaf); syncErr != nil {
-				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
-			}
-		}
-		return 0, 0, baseErr
-	}
-	cleanupAndUnlock := func(baseErr error) (int, int64, error) {
-		copied, copiedBytes, cleanupErr := cleanupCreatedSegments(baseErr)
-		unlockPublish()
-		return copied, copiedBytes, cleanupErr
-	}
-	if promoteErr != nil {
-		promoteErr = fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr)
-		if authority.retainedForRecovery {
-			promoteErr = errors.Join(promoteErr, ErrRecoveryRequired)
-			db.publicationPoisoned.Store(true)
-			unlockPublish()
-			return 0, 0, promoteErr
-		}
-		return cleanupAndUnlock(promoteErr)
-	}
-	publishEvent.Phase = leafGenerationPackAfterPromotion
-	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promoted leaf directory failpoint: %w", err))
-	}
-	// Exact packed promotion already synchronized both the staging and
-	// destination parents once as one namespace batch. Do not issue the former
-	// path-based destination-directory sync here.
-
-	var leafManifest *leafGenerationManifest
-	var leafManifestRawFileIDs []uint32
-	if db.leafGenerationManifest != nil {
-		stagedManifest := db.leafGenerationManifest.clone()
-		rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(stagedManifest, snap.state.CommitSeq+1, createdIDs)
-		if err != nil {
-			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", err))
-		}
-		if changed {
-			leafManifest = stagedManifest
-			leafManifestRawFileIDs = rawFileIDs
-		}
 	}
 
 	// Allocate committed IDs only after exact revalidation. No foreground writer
@@ -1606,16 +1654,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.ApplyStages.RelocationTimeNanos += relocateDuration.Nanoseconds()
 	}
 	publishRetired := leafGenerationPackCommittedRetired(leafCtx.retired)
-	// The target-directory and index-page durability fences are independent and
-	// can run concurrently. Both complete before registration or meta write.
-	pageSyncStarted := time.Now()
-	if err := idx.pager.SyncPages(publishAlloc.Pages()); err != nil {
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published index pages: %w", err))
-	}
-	pageSyncDuration := time.Since(pageSyncStarted)
-	if runStats != nil {
-		runStats.ApplyStages.PageSyncTimeNanos += pageSyncDuration.Nanoseconds()
-	}
+	// The durable-root candidate synchronizes its exact index identity only
+	// after root serialization is released. Syncing these pages here would put
+	// index I/O back under write/root-build locks.
+	pageSyncDuration := time.Duration(0)
 	publishEvent.Phase = leafGenerationPackAfterDirectorySync
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: directory sync failpoint: %w", err))
@@ -1668,11 +1710,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish collection descriptors: %w", err))
 		}
 		publishRetired = append(publishRetired, publishCtx.retired...)
-		if err := db.leafPageLog.Sync(); err != nil {
-			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection descriptors: %w", err))
-		}
-		if err := idx.pager.SyncPages(publishAlloc.Pages()); err != nil {
-			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection index pages: %w", err))
+		// Expose the append frontier to exact resource capture without performing
+		// physical dependency I/O while publication locks are held. The candidate
+		// resource set owns the subsequent stable-file sync.
+		if err := db.leafPageLog.Flush(); err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: flush published collection descriptors: %w", err))
 		}
 	}
 	if runStats != nil {
@@ -1685,14 +1727,34 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
-		skipPrePublishFlush: true,
-		syncMetaPageOnly:    true,
+		skipPrePublishFlush:           true,
+		syncMetaPageOnly:              true,
+		durableIndex:                  idx,
+		expectedBaseCommitSeq:         basis.commitSeq,
+		hasExpectedBaseCommitSeq:      true,
+		releaseRootSerialization:      unlockPublish,
+		durableResources:              durableResources,
+		leafManifestAlreadyPersistent: true,
 	})
+	// The finalizer consumes producer closures on every path. A prepared retry
+	// candidate, when present, now owns their exact handles independently of the
+	// construction authority below.
+	durableResources = nil
 	finalizeDuration := time.Since(finalizeStarted)
 	if runStats != nil {
 		runStats.ApplyStages.FinalizeTimeNanos += finalizeDuration.Nanoseconds()
 	}
 	if finalizeErr != nil {
+		if db.durableRoot.pending != nil {
+			// Before target-meta mutation the exact COW/resource candidate remains
+			// retryable and owns its allocator reservations. Rolling back pages or
+			// unlinking packed children here would corrupt that retained candidate.
+			if releaseErr := authority.release(); releaseErr != nil {
+				finalizeErr = errors.Join(finalizeErr, releaseErr)
+			}
+			unlockPublish()
+			return 0, 0, fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr)
+		}
 		if !finalizeCommitErrorAllowsCreatedSegmentCleanup(finalizeErr) {
 			// The alternate meta page was written and its durability outcome is
 			// ambiguous. Retain every candidate resource and fail closed until reopen.

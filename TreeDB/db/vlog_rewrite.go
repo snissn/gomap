@@ -2429,7 +2429,12 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 		return nil
 	}
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 
 	if db.readOnly {
 		return ErrReadOnly
@@ -2463,10 +2468,20 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 	}()
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, sync, metrics, touched,
+		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
 		return err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	db.clearLeafGenerationReachabilityCaches()
 	return nil
 }
@@ -2480,7 +2495,12 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	}
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 
 	if db.readOnly {
 		return ErrReadOnly
@@ -2543,10 +2563,20 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		}
 	}()
 	if newCollectionRoot == collectionRoot {
-		if err := db.finalizeCommit(userRoot, systemRoot, retired, sync, metrics, touched, rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+		post, err := db.finalizeCommitReleasingRootSerialization(
+			userRoot, systemRoot, retired, sync, metrics, touched,
+			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+			func() {
+				db.writeMu.Unlock()
+				writeLocked = false
+			},
+			nil,
+		)
+		if err != nil {
 			return err
 		}
 		vlogRefDelta = nil
+		db.finalizeCommitPostWork(post)
 		db.clearLeafGenerationReachabilityCaches()
 		return nil
 	}
@@ -2567,10 +2597,20 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	retired = append(retired, systemRetired...)
 	mergeOrderedRootPublishMetrics(&metrics, systemMetrics)
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, sync, metrics, touched, forceValueLogRefresh, vlogRefDelta, nil, nil); err != nil {
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, sync, metrics, touched,
+		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
 		return err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	target.rootID = newCollectionRoot
 	target.systemRoot = newSystemRoot
 	db.clearLeafGenerationReachabilityCaches()
@@ -2675,6 +2715,7 @@ func collectionRootDescriptorKeyMatches(got, primary []byte, aliases [][]byte) b
 
 func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {
 	db.writeMu.RLock()
+	writeReadLocked := true
 	idx := db.idx.Load()
 	if idx == nil {
 		db.writeMu.RUnlock()
@@ -2682,6 +2723,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	}
 
 	var vlogSet *valuelog.Set
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	rootID := db.meta.UserRootPageID
 	baseSeq := db.meta.CommitSeq
@@ -2691,8 +2733,13 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	}
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
 	defer idx.registry.Unregister(regID)
-	defer db.writeMu.RUnlock()
+	defer func() {
+		if writeReadLocked {
+			db.writeMu.RUnlock()
+		}
+	}()
 	if vlogSet != nil {
 		db.valueLogManager.Acquire(vlogSet)
 		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
@@ -2737,13 +2784,30 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		}
 	}()
 
+	db.writeMu.RUnlock()
+	writeReadLocked = false
+	publishPrepareGuard, err := db.prepareFinalizeCommitDurability(sync)
+	db.writeMu.RLock()
+	writeReadLocked = true
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return false, errors.Join(err, freeErr)
+		}
+		return false, err
+	}
+	defer publishPrepareGuard.Release()
+
 	db.commitMu.Lock()
+	commitLocked := true
 	db.mu.RLock()
 	currentRoot := db.meta.UserRootPageID
+	currentSeq := db.meta.CommitSeq
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
-	if currentRoot != rootID {
+	if currentRoot != rootID || currentSeq != baseSeq {
 		db.commitMu.Unlock()
+		commitLocked = false
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
 			return false, freeErr
@@ -2751,23 +2815,51 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, nil
 	}
 
-	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
-	db.commitMu.Unlock()
+	post, err := db.finalizeCommitLockedWithOptions(
+		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
+		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil,
+		finalizeCommitOptions{
+			skipPrePublishFlush:      true,
+			expectedBaseCommitSeq:    baseSeq,
+			hasExpectedBaseCommitSeq: true,
+			recordVacuumMutation: func() {
+				db.vacuum.RecordEntries(entries)
+			},
+			releaseRootSerialization: func() {
+				db.commitMu.Unlock()
+				commitLocked = false
+				db.writeMu.RUnlock()
+				writeReadLocked = false
+			},
+		},
+	)
+	if commitLocked {
+		db.commitMu.Unlock()
+	}
 	if err != nil {
+		if errors.Is(err, errDurableRootCandidateStale) {
+			freeErr := tracker.FreeAll()
+			if freeErr != nil {
+				return false, freeErr
+			}
+			return false, nil
+		}
 		return false, err
 	}
 	vlogRefDelta = nil
 	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	db.finalizeCommitPostWork(post)
-	if db.vacuum.Active() {
-		db.vacuum.RecordEntries(entries)
-	}
 	return true, nil
 }
 
 func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) error {
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 
 	idx := db.idx.Load()
 	if idx == nil {
@@ -2775,6 +2867,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	}
 
 	var vlogSet *valuelog.Set
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	rootID := db.meta.UserRootPageID
 	sysRoot := db.meta.SystemRootPageID
@@ -2785,6 +2878,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	}
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
 	defer idx.registry.Unregister(regID)
 	if vlogSet != nil {
 		db.valueLogManager.Acquire(vlogSet)
@@ -2824,14 +2918,25 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 	}()
-	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
+		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{
+			recordVacuumMutation: func() {
+				db.vacuum.RecordEntries(entries)
+			},
+		},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
 		return err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	db.clearLeafGenerationReachabilityCaches()
-	if db.vacuum.Active() {
-		db.vacuum.RecordEntries(entries)
-	}
 	return nil
 }
 
@@ -2921,6 +3026,27 @@ func noteRewriteSwapTouchedSegments(b *batch.Batch, swaps []rewriteSwap) {
 	for _, swap := range swaps {
 		b.NoteTouchedValueLogFileID(swap.newPtr.FileID)
 	}
+}
+
+func captureOfflineRewriteDurableResourcesV1(db *DB, writer *rewriteWriter) (*rootpublication.StableResourceSet, error) {
+	if db == nil || db.valueLogManager == nil || writer == nil {
+		return nil, fmt.Errorf("%w: offline rewrite resource owner unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	segments, err := writer.createdSegmentsSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	references := make(map[uint32]struct{}, len(segments))
+	for _, segment := range segments {
+		if segment.path == "" || segment.fileID == 0 {
+			return nil, fmt.Errorf("%w: offline rewrite produced an incomplete segment identity", rootpublication.ErrUnresolvedResource)
+		}
+		if err := db.valueLogManager.RegisterSegment(segment.path, segment.fileID); err != nil {
+			return nil, fmt.Errorf("register offline rewrite segment %d: %w", segment.fileID, err)
+		}
+		references[segment.fileID] = struct{}{}
+	}
+	return db.captureRegisteredDurableValueLogResourcesV1(references)
 }
 
 func rewriteSwapsKeySorted(swaps []rewriteSwap) bool {
@@ -3240,22 +3366,19 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	meta.FreelistHeadID = 0
 	meta.TotalPages = newPager.PageCount()
 
-	if err := writeMetaToPager(newPager, MetaPage0ID, meta); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
-	}
-	if err := writeMetaToPager(newPager, MetaPage1ID, meta); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
-	}
-	if err := newPager.Sync(); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
-	}
 	if err := writer.Sync(); err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return stats, err
+	}
+	durableResources, err := captureOfflineRewriteDurableResourcesV1(d, writer)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return stats, err
+	}
+	defer durableResources.Release()
+	if err := writeRebuiltDurableRootV1(newPager, meta, durableResources); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err

@@ -1,8 +1,10 @@
 package rootpublication
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -12,12 +14,22 @@ import (
 func TestDependencyManifestV1DeterministicMultiPageRoundTrip(t *testing.T) {
 	entries := make([]DependencyManifestEntryV1, 0, 48)
 	for i := 47; i >= 0; i-- {
+		logicalDigest := sha256.Sum256([]byte(fmt.Sprintf("logical-%d", i)))
 		entries = append(entries, DependencyManifestEntryV1{
 			Kind: ResourceValueLog, LogicalLane: "main", ResourceID: fmt.Sprintf("segment-%03d", i),
 			DiagnosticPath: fmt.Sprintf("value_vlog/%03d-%s.vlog", i, string(make([]byte, 96))),
 			Identity:       StableIdentity{Platform: "unix", VolumeID: 9, ObjectID: [16]byte{byte(i + 1)}, Generation: uint64(i + 1)},
-			Generation:     uint64(i + 1), Frontier: DurableFrontier{Bytes: uint64((i + 1) * 4096)},
+			Generation:     uint64(i + 1), Digest: sha256.Sum256([]byte(fmt.Sprintf("segment-%d", i))), Frontier: DurableFrontier{Bytes: uint64((i + 1) * 4096)},
 			Reachability: []ReachabilityField{ReachabilityValueLogPointer},
+			LogicalObligations: []StableLogicalObligation{{
+				Class: "fixture", Kind: "value-log-ref", Namespace: "main", Generation: uint64(i + 1),
+				FileID: uint64(i + 1), Offset: int64(i * 4096), Length: 4096, Checksum: uint32(i + 1),
+				Reachability: ReachabilityValueLogPointer, Digest: logicalDigest,
+			}},
+			Namespace: &DependencyManifestNamespaceV1{
+				ParentIdentity: StableIdentity{Platform: "unix", VolumeID: 9, ObjectID: [16]byte{99}, Generation: 7},
+				Operation:      NamespaceCreate, NewName: fmt.Sprintf("%03d.vlog", i), DiagnosticPath: "value_vlog",
+			},
 		})
 	}
 	manifest, err := NewDependencyManifestV1(entries)
@@ -36,7 +48,7 @@ func TestDependencyManifestV1DeterministicMultiPageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.Entries(), manifest.Entries(); fmt.Sprint(got) != fmt.Sprint(want) {
+	if got, want := loaded.Entries(), manifest.Entries(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("loaded manifest differs\ngot=%v\nwant=%v", got, want)
 	}
 

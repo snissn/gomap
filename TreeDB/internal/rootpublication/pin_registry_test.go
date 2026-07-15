@@ -123,6 +123,57 @@ func TestIdentityPinRegistrySerializesDeleteNamespace(t *testing.T) {
 	secondLease.Abort()
 }
 
+func TestIdentityPinRegistryRebindsOnlyExactKnownStableNamespaceLink(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	const name = "segment-000001.tca"
+	path := filepath.Join(dir, name)
+	child, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	spec := StableNamespaceSpec{
+		Parent: parent, LinkedResource: child, ParentGeneration: 1,
+		Operation: NamespaceCreate, NewName: name, DiagnosticPath: "column-assets/assets/segments",
+	}
+	registry := NewIdentityPinRegistry()
+	if _, err := registry.NewStableNamespaceTokenForKnownLink(spec); !errors.Is(err, ErrNamespaceUnstable) {
+		t.Fatalf("unremembered link error=%v want ErrNamespaceUnstable", err)
+	}
+	if err := parent.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RememberStableNamespaceLink(parent, child, name); err != nil {
+		t.Fatal(err)
+	}
+	token, err := registry.NewStableNamespaceTokenForKnownLink(spec)
+	if err != nil {
+		t.Fatalf("known exact link: %v", err)
+	}
+	if err := token.validateStable(); err != nil {
+		t.Fatalf("known exact link token is not stable: %v", err)
+	}
+	token.Release()
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.Close()
+	spec.LinkedResource = replacement
+	if _, err := registry.NewStableNamespaceTokenForKnownLink(spec); !errors.Is(err, ErrNamespaceUnstable) {
+		t.Fatalf("replacement link error=%v want ErrNamespaceUnstable", err)
+	}
+}
+
 func TestIdentityPinRegistryRejectsUnbalancedRelease(t *testing.T) {
 	registry := NewIdentityPinRegistry()
 	if err := registry.release(testStableIdentity(1)); !errors.Is(err, ErrUnbalancedResourcePin) {

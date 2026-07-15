@@ -297,6 +297,7 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 		t.Fatalf("delete k1: %v", err)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
@@ -1353,6 +1354,7 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("delete k1: %v", err)
 	}
+	advancePastRetainedDurableSlotForTest(t, db)
 	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}

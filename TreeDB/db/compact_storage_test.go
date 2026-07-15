@@ -834,7 +834,7 @@ func openCompactStorageRewritePolicyFixture(t *testing.T, liveRecords, staleReco
 	return db
 }
 
-func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
+func TestCompactStorageRetainsValueLogGCDebtWhileOlderSlotProtectsSegment(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{Dir: dir})
@@ -911,14 +911,17 @@ func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if stats.ValueLogGC.SegmentsDeleted == 0 {
-		t.Fatalf("applied ValueLogGC stats were not preserved: %+v", stats.ValueLogGC)
+	if stats.ValueLogGC.SegmentsEligible == 0 || stats.ValueLogGC.SegmentsPending == 0 {
+		t.Fatalf("older-slot ValueLogGC debt was not preserved: %+v", stats.ValueLogGC)
 	}
-	if stats.ValueLogGC.BytesDeleted == 0 {
-		t.Fatalf("applied ValueLogGC bytes deleted were not preserved: %+v", stats.ValueLogGC)
+	if stats.ValueLogGC.SegmentsDeleted != 0 || stats.ValueLogGC.BytesDeleted != 0 {
+		t.Fatalf("segment reachable from the older durable slot was deleted: %+v", stats.ValueLogGC)
 	}
-	if stats.RemainingDebt.ValueLogGCSegments != 0 || stats.RemainingDebt.ValueLogGCBytes != 0 {
-		t.Fatalf("remaining GC debt=%+v, want none", stats.RemainingDebt)
+	if stats.RemainingDebt.ValueLogGCSegments == 0 || stats.RemainingDebt.ValueLogGCBytes == 0 {
+		t.Fatalf("remaining GC debt=%+v, want retained older-slot debt", stats.RemainingDebt)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("older-slot segment was not retained: %v", err)
 	}
 }
 

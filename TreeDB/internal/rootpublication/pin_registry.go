@@ -360,6 +360,39 @@ func (registry *IdentityPinRegistry) StableNamespaceLinkKnown(parent, child *os.
 	return known, nil
 }
 
+// NewStableNamespaceTokenForKnownLink binds a publication token to an exact
+// parent/child/name link whose namespace durability was already established by
+// this registry. The registry proof is scoped to physical identities, while
+// ParentGeneration remains the caller's logical publication generation.
+//
+// The returned token starts stable and performs no additional directory sync.
+// This is only valid while the caller retains the exact child against deletion;
+// a pathname lookup is never accepted as a substitute for the open handles.
+func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLink(spec StableNamespaceSpec) (*StableNamespaceToken, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	if spec.LinkedResource == nil {
+		return nil, fmt.Errorf("%w: known stable namespace link requires exact child handle", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(spec.Parent, spec.LinkedResource, spec.NewName)
+	if err != nil {
+		return nil, err
+	}
+	registry.mu.Lock()
+	_, known := registry.stableLinks[link]
+	registry.mu.Unlock()
+	if !known {
+		return nil, fmt.Errorf("%w: exact namespace link is not known durable", ErrNamespaceUnstable)
+	}
+	token, err := newStableNamespaceToken(spec, nativeNamespaceAdapter{})
+	if err != nil {
+		return nil, err
+	}
+	token.state.Store(namespaceStable)
+	return token, nil
+}
+
 // RememberStableNamespaceLink records proof only after the exact parent handle
 // has been synced while the exact child binding was validated.
 func (registry *IdentityPinRegistry) RememberStableNamespaceLink(parent, child *os.File, name string) error {

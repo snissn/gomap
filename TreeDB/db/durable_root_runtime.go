@@ -6,6 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,11 +17,13 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
@@ -47,8 +52,9 @@ type durableRootRuntimeV1 struct {
 
 // durableRootPublishCandidateV1 owns every identity and allocator reservation
 // needed to retry one exact pre-meta publication. It is immutable after
-// preparation except for the phase markers, which only move forward while
-// durablePublishMu is held.
+// preparation except for the retry reuse capability and phase markers. The
+// capability is refreshed immediately before a retry while durablePublishMu
+// and the root-reuse admission gate are held; phase markers only move forward.
 type durableRootPublishCandidateV1 struct {
 	idx        *indexGen
 	base       durableRootRuntimeV1
@@ -107,6 +113,14 @@ func oldestRecoverableSlotCommitV1(commits [2]uint64) (uint64, error) {
 	return oldest, nil
 }
 
+func (db *DB) durableRootReuseCapabilityV1(current durableRootRuntimeV1) (freelist.ReuseCapability, error) {
+	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
+	if err != nil {
+		return freelist.ReuseCapability{}, err
+	}
+	return freelist.NewReuseCapability(oldest, db.MinPinnedSnapshotCommitSeq(), 0)
+}
+
 func durableManifestFromResourcesV1(resources *rootpublication.StableResourceSet) (*rootpublication.DependencyManifestV1, error) {
 	if resources == nil {
 		return rootpublication.NewDependencyManifestV1(nil)
@@ -117,8 +131,18 @@ func durableManifestFromResourcesV1(resources *rootpublication.StableResourceSet
 		entries[i] = rootpublication.DependencyManifestEntryV1{
 			Kind: descriptor.Kind(), LogicalLane: descriptor.LogicalLane(),
 			ResourceID: descriptor.ResourceID(), DiagnosticPath: descriptor.DiagnosticPath(),
-			Identity: descriptor.Identity(), Generation: descriptor.Generation(),
+			Identity: descriptor.Identity(), Generation: descriptor.Generation(), Digest: descriptor.Digest(),
 			Frontier: descriptor.Frontier(), Reachability: descriptor.ReachabilityFields(),
+			LogicalObligations: descriptor.LogicalObligations(),
+		}
+		if namespace, ok := descriptor.Namespace(); ok {
+			entries[i].Namespace = &rootpublication.DependencyManifestNamespaceV1{
+				ParentIdentity: namespace.ParentIdentity,
+				Operation:      namespace.Operation,
+				OldName:        namespace.OldName,
+				NewName:        namespace.NewName,
+				DiagnosticPath: namespace.DiagnosticPath,
+			}
 		}
 	}
 	return rootpublication.NewDependencyManifestV1(entries)
@@ -174,7 +198,7 @@ func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *value
 		case change < 0:
 			decrement := uint64(-change)
 			if decrement > current {
-				return fmt.Errorf("value-log dependency count underflow for file %d", fileID)
+				return fmt.Errorf("value-log dependency count underflow for file %d: have=%d decrement=%d", fileID, current, decrement)
 			}
 			if decrement == current {
 				delete(counts, fileID)
@@ -220,17 +244,16 @@ func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPag
 			idx:               idx,
 			state:             &candidateState,
 			vlogManager:       db.valueLogManager,
+			vlogPinned:        true,
 			reader:            newValueReader(set),
 			registryShardHint: snapshotShardHintUnset,
 		}
-		result, scanErr := db.maintenanceReachabilityScan(context.Background(), recoverySnapshot, maintenanceReachabilityScanOptions{
-			Collectors: maintenanceReachabilityValueLogRefCounts,
-		})
-		releaseErr := db.valueLogManager.Release(set)
-		if scanErr != nil || releaseErr != nil {
-			return nil, errors.Join(scanErr, releaseErr)
+		references, scanErr := db.scanCandidateExternalReferencesV1(recoverySnapshot)
+		closeErr := recoverySnapshot.Close()
+		if scanErr != nil || closeErr != nil {
+			return nil, errors.Join(scanErr, closeErr)
 		}
-		return result.valueLogReferencedSegments, nil
+		return references, nil
 	}
 	if snapshot.state == nil {
 		_ = snapshot.Close()
@@ -240,17 +263,149 @@ func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPag
 		_ = snapshot.Close()
 		return nil, errors.New("candidate dependency index changed")
 	}
+	// Publication registers newly produced value/outer-leaf segments before
+	// this scan, while the visible snapshot may still carry the pre-publication
+	// value-log set. Rebind this private candidate view to a fresh manager set so
+	// traversing a newly reachable outer leaf never consults the stale set.
+	freshSet := db.valueLogManager.CurrentSetNoRefresh()
+	if len(freshSet.Files) == 0 {
+		_ = db.valueLogManager.Release(freshSet)
+		freshSet = nil
+	}
+	oldSet := snapshot.state.ValueLogSet
+	oldSetPinned := snapshot.vlogPinned
 	candidateState := *snapshot.state
+	candidateState.ValueLogSet = freshSet
 	applyDurableRootCandidateStateV1(&candidateState, next)
 	snapshot.state = &candidateState
-	result, scanErr := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
-		Collectors: maintenanceReachabilityValueLogRefCounts,
-	})
+	snapshot.vlogPinned = freshSet != nil
+	snapshot.reader = newValueReader(freshSet)
+	if oldSetPinned && oldSet != nil {
+		if err := db.valueLogManager.Release(oldSet); err != nil {
+			_ = snapshot.Close()
+			return nil, fmt.Errorf("release stale candidate dependency set: %w", err)
+		}
+	}
+	references, scanErr := db.scanCandidateExternalReferencesV1(snapshot)
 	closeErr := snapshot.Close()
 	if scanErr != nil || closeErr != nil {
 		return nil, errors.Join(scanErr, closeErr)
 	}
-	return result.valueLogReferencedSegments, nil
+	return references, nil
+}
+
+// scanCandidateExternalReferencesV1 computes the exact segment closure for
+// values stored in value-log frames and for outer leaves stored as raw leaf-log
+// records. The shared maintenance scan projects values inside an outer leaf;
+// the leaf-ref walk separately records the segment that owns the outer leaf
+// itself.
+func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]struct{}, error) {
+	if db == nil || db.valueLogManager == nil || snapshot == nil || snapshot.state == nil || snapshot.idx == nil || snapshot.idx.pager == nil {
+		return nil, errors.New("scan candidate external references: missing snapshot state")
+	}
+	references := make(map[uint32]struct{})
+	registerOuterLeaves := func(rootIDs []uint64) error {
+		if err := leafrefscan.WalkRoots(context.Background(), rootIDs, snapshot.idx.pager.Get, nil, func(ptr page.LeafLogPtr) error {
+			if ptr.FileID != 0 {
+				// LeafLogPtr stores the unmarked segment ID; the manager and
+				// dependency manifest use the ValuePtr-compatible marked ID.
+				references[ptr.ValueLogFileID()] = struct{}{}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
+			return err
+		}
+		return db.rebindCandidateValueLogSetV1(snapshot)
+	}
+	registerValuePointers := func(rootIDs []uint64) error {
+		for _, rootID := range rootIDs {
+			if rootID == 0 {
+				continue
+			}
+			it := tree.New(snapshot.idx.pager, &snapshot.reader, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
+				Mode: tree.IteratorModePointerProjection,
+			})
+			for it.Valid() {
+				_, ptr, flags := it.UnsafeEntry()
+				if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+					references[ptr.FileID] = struct{}{}
+				}
+				it.Next()
+			}
+			err := errors.Join(it.Error(), it.Close())
+			if err != nil {
+				return err
+			}
+		}
+		if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
+			return err
+		}
+		return db.rebindCandidateValueLogSetV1(snapshot)
+	}
+	// Raw outer-leaf pointers can be discovered without dereferencing their
+	// segments. Register those exact canonical files first so an unreported but
+	// valid producer segment remains readable during the full closure scan.
+	primaryRootIDs := []uint64{snapshot.state.RootPageID, snapshot.state.SystemRootPageID}
+	if err := registerOuterLeaves(primaryRootIDs); err != nil {
+		return nil, err
+	}
+	// Pointer projection exposes the exact value-log IDs in the primary roots
+	// without reading their records. This must precede descriptor decoding: a
+	// collection root descriptor can itself be pointer-backed by a canonical
+	// segment that an external producer has not registered with the manager.
+	if err := registerValuePointers(primaryRootIDs); err != nil {
+		return nil, err
+	}
+	roots, _, err := maintenanceReachabilityRoots(context.Background(), snapshot, nil, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	// System descriptors may expose collection/vector roots that have their own
+	// raw outer leaves. Register that second bounded frontier before projecting
+	// value pointers inside any of those leaves.
+	rootIDs := maintenanceRootIDs(roots)
+	if err := registerOuterLeaves(rootIDs); err != nil {
+		return nil, err
+	}
+	if err := registerValuePointers(rootIDs); err != nil {
+		return nil, err
+	}
+	result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
+		Collectors: maintenanceReachabilityValueLogRefCounts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for fileID := range result.valueLogReferencedSegments {
+		references[fileID] = struct{}{}
+	}
+	return references, nil
+}
+
+// rebindCandidateValueLogSetV1 refreshes only a private candidate snapshot
+// from the manager's already-registered files. It never scans the filesystem;
+// the caller must register every newly discovered canonical segment first.
+func (db *DB) rebindCandidateValueLogSetV1(snapshot *Snapshot) error {
+	if db == nil || db.valueLogManager == nil || snapshot == nil || snapshot.state == nil {
+		return errors.New("rebind candidate value-log set: missing snapshot state")
+	}
+	fresh := db.valueLogManager.CurrentSetNoRefresh()
+	old := snapshot.state.ValueLogSet
+	oldPinned := snapshot.vlogPinned
+	state := *snapshot.state
+	state.ValueLogSet = fresh
+	snapshot.state = &state
+	snapshot.vlogPinned = true
+	snapshot.reader = newValueReader(fresh)
+	if oldPinned && old != nil {
+		if err := db.valueLogManager.Release(old); err != nil {
+			return fmt.Errorf("release stale candidate dependency set: %w", err)
+		}
+	}
+	return nil
 }
 
 func applyDurableRootCandidateStateV1(state *DBState, next page.MetaPageBody) {
@@ -324,7 +479,7 @@ func (db *DB) ensureDurableValueLogReferencesRegisteredV1(references map[uint32]
 	return nil
 }
 
-func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}) (*rootpublication.StableResourceSet, error) {
 	if db.valueLogManager == nil {
 		return nil, nil
 	}
@@ -338,13 +493,111 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 			return nil, err
 		}
 	}
+	// Packed outer-leaf files are captured by their promotion producer with a
+	// stronger immutable digest and namespace token. Do not recapture the same
+	// physical file as a generic raw outer-leaf segment: that would both weaken
+	// its semantic classification and conflict with the producer token.
+	for fileID := range exactPackedFileIDs {
+		delete(references, fileID)
+	}
 	if len(references) == 0 {
 		return nil, nil
 	}
 	if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
 		return nil, err
 	}
+	return db.captureRegisteredDurableValueLogResourcesV1(references)
+}
 
+// captureDurableRootResourcesV1 builds the candidate root's complete external
+// closure. Immutable resources already retained by the selected durable slot
+// are cloned from their exact handles; value-log and raw outer-leaf resources
+// are replaced by a fresh candidate-root reachability scan. additional is a
+// producer-owned exact closure for resources made reachable by this publish
+// and is consumed on both success and failure.
+func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements) (*rootpublication.StableResourceSet, error) {
+	if additional != nil {
+		defer additional.Release()
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	abandon := true
+	defer func() {
+		if abandon {
+			builder.Abandon()
+		}
+	}()
+	merge := func(resources *rootpublication.StableResourceSet) error {
+		if resources == nil {
+			return nil
+		}
+		if err := builder.Merge(resources); err != nil {
+			resources.Release()
+			return err
+		}
+		return nil
+	}
+
+	selected := db.durableRoot.slotResources[db.durableRoot.slot]
+	exactPackedFileIDs := make(map[uint32]struct{})
+	hasReplacementManifest := false
+	for _, resources := range []*rootpublication.StableResourceSet{selected, additional} {
+		for _, descriptor := range resources.Descriptors() {
+			switch descriptor.Kind() {
+			case rootpublication.ResourceOuterLeafPack:
+				if descriptor.Generation() <= uint64(^uint32(0)) {
+					exactPackedFileIDs[uint32(descriptor.Generation())] = struct{}{}
+				}
+			case rootpublication.ResourceOuterLeafManifest:
+				if resources == additional {
+					hasReplacementManifest = true
+				}
+			}
+		}
+	}
+	excludedInheritedKinds := []rootpublication.ResourceKind{
+		rootpublication.ResourceValueLog,
+		rootpublication.ResourceOuterLeafLog,
+	}
+	if hasReplacementManifest {
+		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafManifest)
+	}
+	inherited, err := rootpublication.CloneStableResourceSetForLogicalObligations(
+		selected,
+		requirements,
+		excludedInheritedKinds...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("clone selected durable-root resources: %w", err)
+	}
+	if err := merge(inherited); err != nil {
+		return nil, fmt.Errorf("merge selected durable-root resources: %w", err)
+	}
+	fresh, err := db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := merge(fresh); err != nil {
+		return nil, fmt.Errorf("merge candidate value-log resources: %w", err)
+	}
+	if err := merge(additional); err != nil {
+		return nil, fmt.Errorf("merge producer durable-root resources: %w", err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		return nil, err
+	}
+	if err := rootpublication.ValidateStableResourceSetLogicalObligations(resources, requirements); err != nil {
+		resources.Release()
+		return nil, err
+	}
+	abandon = false
+	return resources, nil
+}
+
+func (db *DB) captureRegisteredDurableValueLogResourcesV1(references map[uint32]struct{}) (*rootpublication.StableResourceSet, error) {
+	if db == nil || db.valueLogManager == nil || len(references) == 0 {
+		return nil, nil
+	}
 	set := db.valueLogManager.CurrentSetNoRefresh()
 	defer func() { _ = db.valueLogManager.Release(set) }()
 	fileIDs := make([]uint32, 0, len(references))
@@ -352,7 +605,23 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 		fileIDs = append(fileIDs, fileID)
 	}
 	sort.Slice(fileIDs, func(i, j int) bool { return fileIDs[i] < fileIDs[j] })
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+	required := make([]rootpublication.ReachabilityField, 0, 2)
+	var requiresValueLog, requiresOuterLeafRaw bool
+	for _, fileID := range fileIDs {
+		lane, _ := valuelog.DecodeFileID(fileID)
+		if lane == valuelog.ReservedLeafLogLaneID {
+			requiresOuterLeafRaw = true
+		} else {
+			requiresValueLog = true
+		}
+	}
+	if requiresValueLog {
+		required = append(required, rootpublication.ReachabilityValueLogPointer)
+	}
+	if requiresOuterLeafRaw {
+		required = append(required, rootpublication.ReachabilityOuterLeafRawPointer)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder(required...)
 	abandon := true
 	defer func() {
 		if abandon {
@@ -368,10 +637,19 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 		if err != nil {
 			return nil, fmt.Errorf("%w: value-log file %d: %v", rootpublication.ErrUnresolvedResource, fileID, err)
 		}
+		kind := rootpublication.ResourceValueLog
+		logicalLane := "db/value-log"
+		reachability := rootpublication.ReachabilityValueLogPointer
+		lane, _ := valuelog.DecodeFileID(fileID)
+		if lane == valuelog.ReservedLeafLogLaneID {
+			kind = rootpublication.ResourceOuterLeafLog
+			logicalLane = "db/outer-leaf-raw"
+			reachability = rootpublication.ReachabilityOuterLeafRawPointer
+		}
 		token, err := db.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
-			Kind: rootpublication.ResourceValueLog, LogicalLane: "db/value-log",
+			Kind: kind, LogicalLane: logicalLane,
 			Generation: uint64(fileID), DiagnosticPath: diagnosticPath,
-			Reachability: rootpublication.ReachabilityValueLogPointer,
+			Reachability: reachability,
 		})
 		if err != nil {
 			return nil, err
@@ -389,11 +667,91 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 	return resources, nil
 }
 
+// captureRebuiltIndexDurableResourcesV1 scans a replacement index before its
+// namespace is made live. The replacement pager supplies the exact new roots;
+// the current manager set supplies the immutable external handles those roots
+// reference. This is maintenance-only and deliberately does not publish a
+// snapshot or mutate the live DB generation.
+func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.MetaPageBody) (*rootpublication.StableResourceSet, error) {
+	if db == nil || db.valueLogManager == nil || p == nil || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 {
+		return nil, fmt.Errorf("%w: rebuilt index dependency scanner unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	state := DBState{
+		CommitSeq: meta.CommitSeq, RootPageID: meta.UserRootPageID, SystemRootPageID: meta.SystemRootPageID,
+		AppliedCommandLSN: meta.AppliedCommandLSN, MaxEntryRevision: page.EntryRevision(meta.MaxEntryRevision),
+		ValueLogSet: set, LeafGenerations: db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
+	}
+	snapshot := &Snapshot{
+		db: db, idx: &indexGen{pager: p}, state: &state,
+		vlogManager: db.valueLogManager, vlogPinned: true, reader: newValueReader(set),
+		registryShardHint: snapshotShardHintUnset,
+	}
+	references, scanErr := db.scanCandidateExternalReferencesV1(snapshot)
+	closeErr := snapshot.Close()
+	if scanErr != nil || closeErr != nil {
+		return nil, errors.Join(scanErr, closeErr)
+	}
+	selected := db.durableRoot.slotResources[db.durableRoot.slot]
+	exactPackedFileIDs := make(map[uint32]struct{})
+	for _, descriptor := range selected.Descriptors() {
+		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack && descriptor.Generation() <= uint64(^uint32(0)) {
+			exactPackedFileIDs[uint32(descriptor.Generation())] = struct{}{}
+		}
+	}
+	for fileID := range exactPackedFileIDs {
+		delete(references, fileID)
+	}
+
+	inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(
+		selected,
+		rootpublication.ResourceValueLog,
+		rootpublication.ResourceOuterLeafLog,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("clone rebuilt-index durable resources: %w", err)
+	}
+	fresh, err := db.captureRegisteredDurableValueLogResourcesV1(references)
+	if err != nil {
+		inherited.Release()
+		return nil, err
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	closures := []struct {
+		label     string
+		resources *rootpublication.StableResourceSet
+	}{
+		{label: "inherited", resources: inherited},
+		{label: "fresh", resources: fresh},
+	}
+	for _, closure := range closures {
+		resources := closure.resources
+		if resources == nil {
+			continue
+		}
+		if err := builder.Merge(resources); err != nil {
+			resources.Release()
+			return nil, fmt.Errorf("merge %s rebuilt-index durable resources: %w", closure.label, err)
+		}
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		return nil, err
+	}
+	if resources.Len() == 0 {
+		resources.Release()
+		return nil, nil
+	}
+	return resources, nil
+}
+
 // prepareDurableRootCandidateV1 validates and freezes one exact publication
 // candidate without mutating either meta slot. COW pages are encoded into the
 // allocator-owned memory store here but are not copied into the index until
 // after external dependencies cross their flush and sync frontiers.
-func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (*durableRootPublishCandidateV1, error) {
+func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, resources *rootpublication.StableResourceSet, closeTeardownPinned bool) (*durableRootPublishCandidateV1, error) {
 	current := db.durableRoot
 	if current.meta.CommitSeq == 0 || current.record.CommitSeq != current.meta.CommitSeq || next.CommitSeq != current.meta.CommitSeq+1 {
 		return nil, fmt.Errorf("%w: durable=%d candidate=%d", errDurableRootCandidateStale, current.meta.CommitSeq, next.CommitSeq)
@@ -401,17 +759,9 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if next.UserRootPageID < 2 || next.SystemRootPageID < 2 {
 		return nil, errors.New("durable-root candidate has invalid roots")
 	}
-	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
+	capability, err := db.durableRootReuseCapabilityV1(current)
 	if err != nil {
 		return nil, err
-	}
-	capability, err := freelist.NewReuseCapability(oldest, db.MinPinnedSnapshotCommitSeq(), 0)
-	if err != nil {
-		return nil, err
-	}
-	resources, err := db.captureDurableValueLogResourcesV1(idx, next, vlogRefDelta)
-	if err != nil {
-		return nil, fmt.Errorf("capture durable-root dependencies: %w", err)
 	}
 	releaseResources := true
 	defer func() {
@@ -423,6 +773,29 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
+	// Capture the exact index identity before freezing the COW allocator. This
+	// acquisition is deliberately maintenance-lock-free: online vacuum and the
+	// capture use an atomic exclusion handshake, so candidate preparation never
+	// waits for maintenance while it owns allocator reservations.
+	stableSnapshot := db.acquireDurableCandidateStableIndexSnapshotV1(idx, closeTeardownPinned)
+	if stableSnapshot == nil {
+		return nil, errors.New("capture stable index snapshot")
+	}
+	if stableSnapshot.idx != idx {
+		_ = stableSnapshot.Close()
+		return nil, errors.New("stable index generation changed during durable-root preparation")
+	}
+	token, err := stableSnapshot.CaptureStableIndexFileResource()
+	if err != nil {
+		_ = stableSnapshot.Close()
+		return nil, fmt.Errorf("capture stable index resource: %w", err)
+	}
+	releaseToken := true
+	defer func() {
+		if releaseToken {
+			token.Release()
+		}
+	}()
 	target := uint64(MetaPage0ID)
 	if current.slot == MetaPage0ID {
 		target = MetaPage1ID
@@ -481,53 +854,44 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
-	stableSnapshot := db.acquireDurableCandidateStableIndexSnapshotV1(idx)
-	if stableSnapshot == nil {
-		return nil, errors.New("capture stable index snapshot")
-	}
-	if stableSnapshot.idx != idx {
-		_ = stableSnapshot.Close()
-		return nil, errors.New("stable index generation changed during durable-root preparation")
-	}
-	token, err := stableSnapshot.CaptureStableIndexFileResource()
-	if err != nil {
-		_ = stableSnapshot.Close()
-		return nil, fmt.Errorf("capture stable index resource: %w", err)
-	}
-
 	candidate := &durableRootPublishCandidateV1{
 		idx: idx, base: current, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, capability: capability, token: token, record: record, meta: meta, target: target,
 	}
 	releaseResources = false
+	releaseToken = false
 	return candidate, nil
 }
 
-// acquireDurableCandidateStableIndexSnapshotV1 uses the normal public stable
-// snapshot once Open has installed visible state. Command-WAL replay reaches
-// durable publication earlier, while the recovered index is already the DB's
-// exclusive live generation but no public snapshot view exists yet. In that
-// recovery-only window, synthesize the same maintenance lease around the exact
-// index generation so the resource token retains it through publication.
-func (db *DB) acquireDurableCandidateStableIndexSnapshotV1(idx *indexGen) *Snapshot {
-	if snapshot := db.AcquireStableSnapshot(); snapshot != nil {
-		return snapshot
-	}
-	if db == nil || idx == nil || db.state.Load() != nil || db.closing.Load() {
+// acquireDurableCandidateStableIndexSnapshotV1 pins exactly idx without taking
+// maintenanceMu. vacuumCutoverInProgress is raised while durablePublishMu is
+// held and before vacuum observes the stable capture count. Increment-then-check
+// therefore makes either the capture or the replacement back out, with no
+// unsafe window between them. The broader vacuumInProgress flag deliberately
+// does not block durable publication while online vacuum builds its replacement.
+func (db *DB) acquireDurableCandidateStableIndexSnapshotV1(idx *indexGen, closeTeardownPinned bool) *Snapshot {
+	if db == nil || idx == nil || (db.closing.Load() && !closeTeardownPinned) {
 		return nil
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
-	if db.state.Load() != nil || db.closing.Load() || db.idx.Load() != idx {
+	// Durable publication already owns rootReuseMu exclusively while capturing
+	// this maintenance-only index lease, so it must not enter AcquireSnapshot's
+	// reader-admission path. The lease never reads a logical tree; the stable
+	// capture counter and generation identity are the required vacuum exclusion.
+	if db.idx.Load() != idx {
 		return nil
 	}
 	snapshot := db.snapPool.Get()
 	snapshot.db = db
 	snapshot.idx = idx
-	snapshot.stableIndexCapture = true
 	snapshot.closed.Store(false)
 	snapshot.readState.Store(0)
-	db.stableIndexCaptures.Add(1)
+	db.durableCandidateIndexCaptures.Add(1)
+	snapshot.stableIndexCapture = true
+	snapshot.stableIndexCaptureCounter = &db.durableCandidateIndexCaptures
+	if db.vacuumCutoverInProgress.Load() || db.idx.Load() != idx || (db.closing.Load() && !closeTeardownPinned) {
+		_ = snapshot.Close()
+		return nil
+	}
 	return snapshot
 }
 
@@ -669,6 +1033,28 @@ func sameDurableRootCandidateV1(candidate *durableRootPublishCandidateV1, idx *i
 		next.MaxEntryRevision == want.MaxEntryRevision && next.LastCommitHeight == want.LastCommitHeight
 }
 
+// prepareOrResumeDurableRootCandidateV1 runs with durablePublishMu held. A
+// pre-meta failure retains the exact candidate, so only an identical logical
+// publication may resume it; every competing root fails closed.
+func (db *DB) prepareOrResumeDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, resources *rootpublication.StableResourceSet, closeTeardownPinned bool) (*durableRootPublishCandidateV1, error) {
+	if pending := db.durableRoot.pending; pending != nil {
+		if resources != nil {
+			resources.Release()
+			return nil, errors.New("durable-root retry received replacement dependency resources")
+		}
+		if !sameDurableRootCandidateV1(pending, idx, next) {
+			return nil, freelist.ErrCOWCandidatePrepared
+		}
+		capability, err := db.durableRootReuseCapabilityV1(pending.base)
+		if err != nil {
+			return nil, err
+		}
+		pending.capability = capability
+		return pending, nil
+	}
+	return db.prepareDurableRootCandidateV1(idx, next, retired, resources, closeTeardownPinned)
+}
+
 // publishDurableRootV1 is the sole V1 meta mutator. Pre-meta failures retain
 // the exact immutable candidate for retry; post-meta failures retain it as an
 // ambiguous recovery closure and poison the writable handle.
@@ -678,13 +1064,17 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 	}
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()
-	if pending := db.durableRoot.pending; pending != nil {
-		if !sameDurableRootCandidateV1(pending, idx, next) {
-			return page.MetaPageBody{}, wrapFinalizeCommitError(freelist.ErrCOWCandidatePrepared, true)
+	var resources *rootpublication.StableResourceSet
+	var err error
+	if db.durableRoot.pending == nil {
+		resources, err = db.captureDurableRootResourcesV1(idx, next, vlogRefDelta, nil, rootpublication.StableLogicalObligationRequirements{})
+		if err != nil {
+			return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
-		return db.executeDurableRootCandidateV1(pending)
 	}
-	candidate, err := db.prepareDurableRootCandidateV1(idx, next, retired, vlogRefDelta)
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
+	candidate, err := db.prepareOrResumeDurableRootCandidateV1(idx, next, retired, resources, false)
 	if err != nil {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(err, true)
 	}
@@ -823,6 +1213,93 @@ func writeDurableMetaSlotV1(sink freelist.AppendPageSink, slot uint64, meta page
 	return sink.WritePage(slot, image)
 }
 
+// writeRebuiltDurableRootV1 installs the first durable-root generation for an
+// already materialized replacement index (offline vacuum/rewrite). The caller
+// owns resources; this function only flushes/syncs their exact frontiers before
+// the replacement index and its sole valid meta slot become durable.
+func writeRebuiltDurableRootV1(p *pager.Pager, meta page.MetaPageBody, resources *rootpublication.StableResourceSet) error {
+	if p == nil || meta.CommitSeq == 0 || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 ||
+		meta.UserRootPageID >= p.PageCount() || meta.SystemRootPageID >= p.PageCount() {
+		return errors.New("invalid rebuilt durable-root input")
+	}
+	if resources != nil {
+		if err := resources.FlushThrough(); err != nil {
+			return fmt.Errorf("flush rebuilt durable-root dependencies: %w", err)
+		}
+		if err := resources.SyncThrough(); err != nil {
+			return fmt.Errorf("sync rebuilt durable-root dependencies: %w", err)
+		}
+	}
+	manifest, err := durableManifestFromResourcesV1(resources)
+	if err != nil {
+		return err
+	}
+	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
+	if err != nil {
+		return err
+	}
+	allocator := freelist.New(p, 0)
+	ledger := freelist.NewReservationLedger()
+	if err := allocator.EnableCOWV1(base, ledger); err != nil {
+		return err
+	}
+	capability, err := freelist.NewReuseCapability(meta.CommitSeq, meta.CommitSeq, 0)
+	if err != nil {
+		return err
+	}
+	var candidateID freelist.CandidateIDV1
+	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
+	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID)
+	prepared, err := allocator.PrepareCOWCandidateV1(2, meta.CommitSeq, candidateID, capability, int(manifest.PageCount())+1, freelist.NewMemoryPageStoreV1())
+	if err != nil {
+		return err
+	}
+	generation := prepared.Candidate().Generation()
+	auxiliary := prepared.AuxiliaryPageIDs()
+	if generation == nil || len(auxiliary) != int(manifest.PageCount())+1 {
+		return errors.New("incomplete rebuilt durable-root COW generation")
+	}
+	if err := p.Truncate(generation.HighWater()); err != nil {
+		return err
+	}
+	for _, image := range prepared.Candidate().Pages() {
+		if err := p.Write(image.PageID, image.Data); err != nil {
+			return fmt.Errorf("write rebuilt COW page %d: %w", image.PageID, err)
+		}
+	}
+	sink := durablePagerSinkV1{pager: p}
+	manifestRef, err := manifest.Materialize(auxiliary[0], sink)
+	if err != nil {
+		return err
+	}
+	recordPageID := auxiliary[len(auxiliary)-1]
+	meta.TotalPages = generation.HighWater()
+	meta.FreelistHeadID = 0
+	record := rootpublication.DurableRootRecordV1{
+		CommitSeq: meta.CommitSeq, DurableSeq: meta.CommitSeq,
+		UserRootPageID: meta.UserRootPageID, SystemRootPageID: meta.SystemRootPageID,
+		TotalPages: meta.TotalPages, MaxEntryRevision: meta.MaxEntryRevision,
+		AppliedCommandLSN: meta.AppliedCommandLSN, LastCommitHeight: meta.LastCommitHeight,
+		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
+		Manifest: manifestRef, MetaProjectionDigest: page.DurableMetaProjectionDigestV1(meta.CommitSeq, meta.CommitSeq, recordPageID),
+	}
+	recordImage, recordDigest, err := record.EncodePage(recordPageID)
+	if err != nil {
+		return err
+	}
+	if err := p.Write(recordPageID, recordImage); err != nil {
+		return err
+	}
+	durableMeta, err := page.NewDurableMetaV1(meta.CommitSeq, meta.CommitSeq, recordPageID, recordDigest)
+	if err != nil {
+		return err
+	}
+	if err := writeDurableMetaSlotV1(sink, MetaPage0ID, durableMeta); err != nil {
+		return err
+	}
+	return p.Sync()
+}
+
 func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 	db.durableRoot = durableRootRuntimeV1{
 		meta: selected.Meta, record: selected.Record, manifest: selected.Manifest,
@@ -859,42 +1336,58 @@ func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.Depe
 		}
 	}()
 	for _, entry := range entries {
-		if entry.Kind != rootpublication.ResourceValueLog {
-			return nil, fmt.Errorf("%w: unsupported durable dependency kind %q", rootpublication.ErrUnresolvedResource, entry.Kind)
+		var reachability rootpublication.ReachabilityField
+		var logicalLane string
+		switch entry.Kind {
+		case rootpublication.ResourceValueLog:
+			reachability = rootpublication.ReachabilityValueLogPointer
+			logicalLane = "db/value-log"
+		case rootpublication.ResourceOuterLeafLog:
+			reachability = rootpublication.ReachabilityOuterLeafRawPointer
+			logicalLane = "db/outer-leaf-raw"
+		default:
+			if err := db.validateGenericDurableDependencyEntryV1(builder, entry); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		fileID64, err := strconv.ParseUint(entry.ResourceID, 10, 32)
-		if err != nil || fileID64 == 0 || entry.Generation != fileID64 || entry.LogicalLane != "db/value-log" {
-			return nil, fmt.Errorf("%w: invalid value-log resource identity %q/%d", rootpublication.ErrUnresolvedResource, entry.ResourceID, entry.Generation)
+		if err != nil || fileID64 == 0 || entry.Generation != fileID64 || entry.LogicalLane != logicalLane {
+			return nil, fmt.Errorf("%w: invalid %s resource identity %q/%d", rootpublication.ErrUnresolvedResource, entry.Kind, entry.ResourceID, entry.Generation)
 		}
-		if len(entry.Reachability) != 1 || entry.Reachability[0] != rootpublication.ReachabilityValueLogPointer {
-			return nil, fmt.Errorf("%w: value-log resource %q has invalid reachability", rootpublication.ErrUnresolvedResource, entry.ResourceID)
+		if len(entry.Reachability) != 1 || entry.Reachability[0] != reachability || len(entry.LogicalObligations) != 0 {
+			return nil, fmt.Errorf("%w: %s resource %q has invalid reachability or logical obligations", rootpublication.ErrUnresolvedResource, entry.Kind, entry.ResourceID)
 		}
 		fileID := uint32(fileID64)
+		lane, _ := valuelog.DecodeFileID(fileID)
+		if (entry.Kind == rootpublication.ResourceOuterLeafLog) != (lane == valuelog.ReservedLeafLogLaneID) {
+			return nil, fmt.Errorf("%w: file %d namespace does not match durable kind %q", rootpublication.ErrResourceConflict, fileID, entry.Kind)
+		}
 		file := set.Files[fileID]
 		if file == nil || file.File == nil || file.IsZombie.Load() {
-			return nil, fmt.Errorf("%w: value-log file %d is missing", rootpublication.ErrUnresolvedResource, fileID)
+			return nil, fmt.Errorf("%w: %s file %d is missing", rootpublication.ErrUnresolvedResource, entry.Kind, fileID)
 		}
 		diagnosticPath, err := durableDiagnosticPathV1(db.dir, file.Path)
 		if err != nil || diagnosticPath != entry.DiagnosticPath {
-			return nil, fmt.Errorf("%w: value-log file %d path differs from manifest", rootpublication.ErrResourceConflict, fileID)
+			return nil, fmt.Errorf("%w: %s file %d path differs from manifest", rootpublication.ErrResourceConflict, entry.Kind, fileID)
 		}
 		token, err := db.valueLogManager.StableResourceToken(fileID, valuelog.StableResourceRegistration{
-			Kind: rootpublication.ResourceValueLog, LogicalLane: entry.LogicalLane,
+			Kind: entry.Kind, LogicalLane: entry.LogicalLane,
 			Generation: entry.Generation, DiagnosticPath: entry.DiagnosticPath,
-			Reachability: rootpublication.ReachabilityValueLogPointer,
+			Reachability: reachability,
 		})
 		if err != nil {
 			return nil, err
 		}
 		identity := token.Identity()
 		frontier := token.Frontier()
-		if identity.Generation != entry.Identity.Generation || !rootpublication.SamePhysicalIdentity(identity, entry.Identity) {
+		if identity.Generation != entry.Identity.Generation || !rootpublication.SamePhysicalIdentity(identity, entry.Identity) || token.Digest() != entry.Digest {
 			token.Release()
-			return nil, fmt.Errorf("%w: value-log file %d identity differs from manifest", rootpublication.ErrResourceConflict, fileID)
+			return nil, fmt.Errorf("%w: %s file %d identity or digest differs from manifest", rootpublication.ErrResourceConflict, entry.Kind, fileID)
 		}
-		if frontier.Bytes < entry.Frontier.Bytes {
+		if frontier.Bytes < entry.Frontier.Bytes || frontier.MaxLSN < entry.Frontier.MaxLSN {
 			token.Release()
-			return nil, fmt.Errorf("%w: value-log file %d frontier %d is below required %d", rootpublication.ErrFrontierBeyondResource, fileID, frontier.Bytes, entry.Frontier.Bytes)
+			return nil, fmt.Errorf("%w: %s file %d frontier is below required manifest frontier", rootpublication.ErrFrontierBeyondResource, entry.Kind, fileID)
 		}
 		if err := builder.Add(token); err != nil {
 			token.Release()
@@ -907,6 +1400,214 @@ func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.Depe
 	}
 	abandon = false
 	return resources, nil
+}
+
+func durableDependencyPathV1(root, relative string) (string, error) {
+	if root == "" || relative == "" || filepath.IsAbs(relative) {
+		return "", rootpublication.ErrUnresolvedResource
+	}
+	clean := filepath.Clean(filepath.FromSlash(relative))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.ToSlash(clean) != relative {
+		return "", rootpublication.ErrUnresolvedResource
+	}
+	return filepath.Join(root, clean), nil
+}
+
+func durableColumnSegmentDigestV1(lane string, fileID uint32) [32]byte {
+	namespace := []byte(lane)
+	raw := make([]byte, 4+len(namespace)+4)
+	binary.LittleEndian.PutUint32(raw[:4], uint32(len(namespace)))
+	copy(raw[4:], namespace)
+	binary.LittleEndian.PutUint32(raw[4+len(namespace):], fileID)
+	return sha256.Sum256(raw)
+}
+
+func durableColumnLogicalObligationDigestV1(obligation rootpublication.StableLogicalObligation) [32]byte {
+	appendString := func(raw []byte, value string) []byte {
+		var size [4]byte
+		binary.LittleEndian.PutUint32(size[:], uint32(len(value)))
+		raw = append(raw, size[:]...)
+		return append(raw, value...)
+	}
+	appendUint64 := func(raw []byte, value uint64) []byte {
+		var encoded [8]byte
+		binary.LittleEndian.PutUint64(encoded[:], value)
+		return append(raw, encoded[:]...)
+	}
+	appendUint32 := func(raw []byte, value uint32) []byte {
+		var encoded [4]byte
+		binary.LittleEndian.PutUint32(encoded[:], value)
+		return append(raw, encoded[:]...)
+	}
+	raw := make([]byte, 0, len(obligation.Class)+len(obligation.Kind)+len(obligation.Namespace)+len(obligation.Reachability)+75)
+	raw = appendString(raw, obligation.Class)
+	raw = appendString(raw, obligation.Kind)
+	raw = appendString(raw, obligation.Namespace)
+	raw = appendUint64(raw, obligation.Generation)
+	raw = appendUint64(raw, obligation.PartID)
+	raw = appendUint32(raw, uint32(obligation.FileID))
+	raw = appendUint64(raw, uint64(obligation.Offset))
+	raw = appendUint64(raw, uint64(obligation.Length))
+	raw = appendUint32(raw, obligation.Checksum)
+	raw = appendString(raw, string(obligation.Reachability))
+	return sha256.Sum256(raw)
+}
+
+func validateDurableDependencyContentV1(file *os.File, entry rootpublication.DependencyManifestEntryV1) error {
+	if file == nil || entry.Frontier.Bytes == 0 || entry.Frontier.MaxLSN != 0 || len(entry.Frontier.RIDs()) != 0 {
+		return fmt.Errorf("%w: invalid external frontier for %q", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath)
+	}
+	if entry.Frontier.Bytes > math.MaxInt64 {
+		return fmt.Errorf("%w: external frontier exceeds readable range for %q", rootpublication.ErrFrontierBeyondResource, entry.DiagnosticPath)
+	}
+	switch entry.Kind {
+	case rootpublication.ResourceColumnAsset, rootpublication.ResourceTypedColumnAsset, rootpublication.ResourceVectorGraphPack:
+		fileID, err := strconv.ParseUint(entry.ResourceID, 10, 32)
+		if err != nil || fileID == 0 || entry.Generation != fileID || entry.Digest != durableColumnSegmentDigestV1(entry.LogicalLane, uint32(fileID)) {
+			return fmt.Errorf("%w: invalid column resource identity or digest", rootpublication.ErrResourceConflict)
+		}
+		if len(entry.LogicalObligations) == 0 {
+			return fmt.Errorf("%w: column resource has no logical obligations", rootpublication.ErrUnresolvedResource)
+		}
+		for _, obligation := range entry.LogicalObligations {
+			if obligation.Class != "column-asset-ref-v1" || obligation.Namespace != entry.LogicalLane || obligation.FileID != fileID ||
+				obligation.Offset < 0 || obligation.Length <= 0 || uint64(obligation.Offset) > entry.Frontier.Bytes ||
+				uint64(obligation.Length) > entry.Frontier.Bytes-uint64(obligation.Offset) ||
+				obligation.Digest != durableColumnLogicalObligationDigestV1(obligation) {
+				return fmt.Errorf("%w: invalid column logical obligation", rootpublication.ErrResourceConflict)
+			}
+			hash := crc32.NewIEEE()
+			if _, err := io.CopyN(hash, io.NewSectionReader(file, obligation.Offset, obligation.Length), obligation.Length); err != nil {
+				return fmt.Errorf("read column logical obligation: %w", err)
+			}
+			if hash.Sum32() != obligation.Checksum {
+				return fmt.Errorf("%w: column logical obligation checksum mismatch", rootpublication.ErrResourceConflict)
+			}
+		}
+	case rootpublication.ResourceOuterLeafPack:
+		fileID, err := strconv.ParseUint(entry.ResourceID, 10, 32)
+		if err != nil || fileID == 0 || entry.Generation != fileID {
+			return fmt.Errorf("%w: invalid packed outer-leaf identity", rootpublication.ErrResourceConflict)
+		}
+		digest, err := stablePackedSegmentDigest(file, uint32(fileID), entry.Frontier.Bytes)
+		if err != nil || digest != entry.Digest {
+			return fmt.Errorf("%w: packed outer-leaf digest mismatch", rootpublication.ErrResourceConflict)
+		}
+	case rootpublication.ResourceOuterLeafManifest:
+		data, err := io.ReadAll(io.NewSectionReader(file, 0, int64(entry.Frontier.Bytes)))
+		if err != nil {
+			return fmt.Errorf("read outer-leaf manifest: %w", err)
+		}
+		if sha256.Sum256(data) != entry.Digest {
+			return fmt.Errorf("%w: outer-leaf manifest digest mismatch", rootpublication.ErrResourceConflict)
+		}
+		manifest, err := decodeLeafGenerationManifest(data, entry.ResourceID)
+		if err != nil || manifest.ManifestRevision != entry.Generation {
+			return fmt.Errorf("%w: outer-leaf manifest revision differs from durable dependency", rootpublication.ErrResourceConflict)
+		}
+	case rootpublication.ResourceDictionary, rootpublication.ResourceTemplate:
+		// Their producer-canonical logical digests bind definitions while the
+		// exact index/value-log identities and frontiers below fence replacement.
+		// Traversing nested stores here would violate bounded root recovery.
+		if len(entry.LogicalObligations) == 0 {
+			return fmt.Errorf("%w: transitive resource has no logical obligations", rootpublication.ErrUnresolvedResource)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported durable dependency kind %q", rootpublication.ErrUnresolvedResource, entry.Kind)
+	}
+	return nil
+}
+
+func (db *DB) validateGenericDurableDependencyEntryV1(builder *rootpublication.StableResourceSetBuilder, entry rootpublication.DependencyManifestEntryV1) error {
+	if db == nil || builder == nil {
+		return fmt.Errorf("%w: durable dependency validator unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if entry.Namespace == nil {
+		return fmt.Errorf("%w: durable dependency %q has no namespace proof", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath)
+	}
+	if entry.Generation == 0 || entry.Identity.Generation != entry.Generation {
+		return fmt.Errorf("%w: durable dependency %q generation=%d identity_generation=%d", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath, entry.Generation, entry.Identity.Generation)
+	}
+	if entry.LogicalLane == "" || entry.ResourceID == "" || len(entry.Reachability) == 0 {
+		return fmt.Errorf("%w: durable dependency %q lane=%q resource_id=%q reachability=%d", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath, entry.LogicalLane, entry.ResourceID, len(entry.Reachability))
+	}
+	path, err := durableDependencyPathV1(db.dir, entry.DiagnosticPath)
+	if err != nil {
+		return fmt.Errorf("%w: invalid durable dependency path %q", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath)
+	}
+	name := filepath.Base(path)
+	if entry.Namespace.NewName != name || entry.Namespace.ParentIdentity.Generation == 0 {
+		return fmt.Errorf("%w: durable dependency namespace differs from path", rootpublication.ErrResourceConflict)
+	}
+	parent, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open durable dependency parent: %w", err)
+	}
+	defer parent.Close()
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open durable dependency child: %w", err)
+	}
+	defer file.Close()
+	identity, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil || !rootpublication.SamePhysicalIdentity(identity, entry.Identity) {
+		return fmt.Errorf("%w: durable dependency identity differs from manifest", rootpublication.ErrResourceConflict)
+	}
+	info, err := file.Stat()
+	if err != nil || info.Size() < 0 || uint64(info.Size()) < entry.Frontier.Bytes {
+		return fmt.Errorf("%w: durable dependency frontier exceeds file", rootpublication.ErrFrontierBeyondResource)
+	}
+	if err := validateDurableDependencyContentV1(file, entry); err != nil {
+		return err
+	}
+	registry := db.StableResourceIdentityPinRegistry()
+	for _, reachability := range entry.Reachability {
+		policy, ok := rootpublication.StableResourcePolicyFor(reachability)
+		if !ok || !policy.Registerable || policy.Kind != entry.Kind {
+			return fmt.Errorf("%w: invalid reachability %q for kind %q", rootpublication.ErrResourceConflict, reachability, entry.Kind)
+		}
+		obligations := make([]rootpublication.StableLogicalObligation, 0, len(entry.LogicalObligations))
+		for _, obligation := range entry.LogicalObligations {
+			if obligation.Reachability == reachability {
+				obligations = append(obligations, obligation)
+			}
+		}
+		namespace, err := rootpublication.NewRecoveredStableNamespaceToken(rootpublication.StableNamespaceSpec{
+			Parent: parent, LinkedResource: file, ParentGeneration: entry.Namespace.ParentIdentity.Generation,
+			Operation: entry.Namespace.Operation, OldName: entry.Namespace.OldName, NewName: entry.Namespace.NewName,
+			DiagnosticPath: entry.Namespace.DiagnosticPath,
+		}, entry.Namespace.ParentIdentity)
+		if err != nil {
+			return err
+		}
+		if err := registry.Observe(identity); err != nil {
+			namespace.Release()
+			return err
+		}
+		observed := true
+		token, err := rootpublication.NewStableProducerResourceToken(rootpublication.StableResourceSpec{
+			Kind: entry.Kind, LogicalLane: entry.LogicalLane, ResourceID: entry.ResourceID,
+			Generation: entry.Generation, DiagnosticPath: entry.DiagnosticPath, File: file,
+			Frontier: entry.Frontier, Digest: entry.Digest, Reachability: reachability,
+			Namespace: namespace, LogicalObligations: obligations, ContentSynced: true, PinRegistry: registry,
+			OnRelease: func() { _ = registry.Unobserve(identity) },
+		}, policy.Classification)
+		if err != nil {
+			if observed {
+				_ = registry.Unobserve(identity)
+			}
+			namespace.Release()
+			return err
+		}
+		observed = false
+		if err := builder.Add(token); err != nil {
+			token.Release()
+			namespace.Release()
+			return err
+		}
+		namespace.Release()
+	}
+	return nil
 }
 
 func (db *DB) releaseDurableRootResourcesV1() {

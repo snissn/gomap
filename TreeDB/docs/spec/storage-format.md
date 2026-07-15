@@ -355,74 +355,143 @@ Page types (`Flags` low bits):
 - `0x02`: freelist page
 - `0x03`: internal page
 - `0x04`: leaf page
+- `0x05`: COW freelist generation page
+- `0x06`: COW freelist index page
+- `0x07`: COW freelist chunk page
+- `0x08`: COW freelist reservation page
+- `0x09`: dependency-manifest page
+- `0x0a`: durable-root-record page
 
 ### 2.3 Checksum
 
 - Checksum algorithm: CRC-32/IEEE.
 - Verification may be cached unless `VerifyOnRead` forces every-read checks.
 
-## 3. Meta Page Body
+## 3. Durable Root Publication V1
 
-Meta page payload (after 16-byte header) encodes:
+TreeDB keeps exactly two fixed meta pages, at page IDs 0 and 1. A meta page is
+the single authoritative publication point for one independently recoverable
+root generation. Roots, allocator state, the command-WAL frontier, and external
+resource reachability live in immutable pages that the meta page binds by page
+identity and SHA-256 digest.
 
-```text
-u64 CommitSeq
-u64 UserRootPageID
-u64 SystemRootPageID
-u64 FreelistHeadID
-u64 TotalPages
-u32 ActiveSlabID      // legacy/reserved field name in MetaPageBody
-u64 ActiveSlabTail    // legacy/reserved field name in MetaPageBody
-u64 LastCommitHeight  // reserved
-```
+This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
+`ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
 
-Notes:
+### 3.1 Durable meta body V1
 
-- Field names intentionally match `page.MetaPageBody.ActiveSlabID` and
-  `page.MetaPageBody.ActiveSlabTail` for binary compatibility.
-- Current TreeDB value storage uses persistent value-log segments and `ValuePtr` references.
+The 104-byte body after the common page header is:
 
-## 3.1 Command WAL Meta Extension
+| Body bytes | Encoding | Meaning |
+| --- | --- | --- |
+| `0:8` | bytes | magic `TDMETV1\0` |
+| `8:10` | u16 LE | format version, `1` |
+| `10:12` | u16 LE | projection version, `1` |
+| `12:14` | u16 LE | body size, `104` |
+| `14:16` | zero | reserved |
+| `16:24` | u64 LE | `CommitSeq` |
+| `24:32` | u64 LE | `DurableSeq` |
+| `32:40` | u64 LE | `RootRecordPageID` |
+| `40:72` | bytes | SHA-256 meta-projection digest |
+| `72:104` | bytes | SHA-256 durable-root-record digest |
 
-Command-WAL V1 meta pages extend the 60-byte body above with an in-page marker
-and the applied command stream boundary:
+The projection digest hashes the magic, versions, body size, reserved bytes,
+`CommitSeq`, `DurableSeq`, and `RootRecordPageID`. It deliberately excludes the
+root-record digest: the root record stores the projection digest, its digest
+then binds the record, and the meta stores that record digest without a hash
+cycle.
 
-```text
-body offset 60 / page offset 76:
-[8]byte CommandWALV1Marker = "TMETAW1\x00"
+### 3.2 Durable-root record V1
 
-body offset 68 / page offset 84:
-u64 AppliedCommandLSN
+A durable-root record is one checksummed `0x0a` page. Bytes `16:384` are:
 
-body offset 76 / page offset 92:
-[8]byte RevisionV1Marker = "TMETAR1\x00"
+| Page bytes | Encoding | Meaning |
+| --- | --- | --- |
+| `16:24` | bytes | magic `DROOTV1\0` |
+| `24:26` | u16 LE | version, `1` |
+| `26:28` | u16 LE | header size, `384` |
+| `28:32` | zero | reserved |
+| `32:40` | u64 LE | `CommitSeq` |
+| `40:48` | u64 LE | `DurableSeq` |
+| `48:56` | u64 LE | user root page ID |
+| `56:64` | u64 LE | system root page ID |
+| `64:72` | u64 LE | durable total-page extent |
+| `72:80` | u64 LE | maximum entry revision |
+| `80:88` | u64 LE | applied command-WAL LSN |
+| `88:96` | u64 LE | last commit height |
+| `96:128` | four u64 LE | COW freelist header, generation, commit, and high-water IDs |
+| `128:160` | bytes | SHA-256 COW freelist digest |
+| `160:176` | two u64 LE | freelist free and retired counts |
+| `176:192` | two u64 LE | dependency-manifest first page and byte length |
+| `192:200` | two u32 LE | dependency-manifest entry and page counts |
+| `200:232` | bytes | SHA-256 dependency-manifest digest |
+| `232:248` | two u64 LE | parent record page ID and commit sequence, or zero |
+| `248:280` | bytes | parent record digest, or zero |
+| `280:312` | bytes | meta-projection digest |
+| `312:344` | bytes | SHA-256 durable-root-record digest |
+| `344:384` | zero | reserved |
 
-body offset 84 / page offset 100:
-u64 MaxEntryRevision
-```
+Bytes `384:4096` are zero. The record digest is SHA-256 over the complete page
+with both the common page checksum and record-digest fields cleared. The common
+page checksum is then computed normally. The optional parent tuple identifies
+the previous independently recoverable generation; it does not authorize an
+unbounded recovery walk.
 
-The `command_wal_v1` meta body size is 76 bytes. The revision-extension meta
-body size is 92 bytes. Bytes after offset 76 are reserved unless the
-`RevisionV1Marker` is present.
-`AppliedCommandLSN` is the physical on-disk field for the logical `AppliedLSN`
-command stream boundary. Alternating meta-page selection must choose roots and
-`AppliedCommandLSN`/`MaxEntryRevision` from the same meta page candidate.
+`AppliedCommandLSN` and `MaxEntryRevision` are therefore selected with the
+exact roots that contain their effects. No sidecar, format marker, or padded
+meta bytes may supply either value independently.
 
-The marker is checksummed with the selected meta page. A decoder must treat
-`AppliedCommandLSN` as zero unless the marker is present in that same page body.
-It must treat `MaxEntryRevision` as zero unless both the command-WAL marker and
-the revision-extension marker are present in that same page body; buffer length
-or full-page padding is not sufficient.
-`format.json`, manifests, stats, or any other sidecar file must not decide
-whether a meta page's `AppliedCommandLSN` bytes are authoritative.
+### 3.3 Dependency manifest V1
 
-Rules:
+The manifest is a deterministic payload split across contiguous checksummed
+`0x09` pages. Each page uses this 96-byte header:
 
-- New `command_wal_v1` directories start with `AppliedCommandLSN=0`.
-- Updating `AppliedCommandLSN` without selecting the roots that contain those
-  command effects is invalid.
-- Selecting roots that contain command effects without the matching
-  `AppliedCommandLSN` is invalid for durable root publish/checkpoint state.
+| Page bytes | Encoding | Meaning |
+| --- | --- | --- |
+| `16:24` | bytes | magic `DPMPGV1\0` |
+| `24:26` | u16 LE | version, `1` |
+| `26:28` | u16 LE | header size, `96` |
+| `28:32` | u32 LE | zero-based page index |
+| `32:36` | u32 LE | page count |
+| `36:40` | u32 LE | manifest entry count |
+| `40:48` | u64 LE | complete payload byte length |
+| `48:56` | u64 LE | next page ID, or zero |
+| `56:88` | bytes | SHA-256 complete-payload digest |
+| `88:92` | u32 LE | this page's payload length |
+| `92:96` | zero | reserved |
+| `96:4096` | bytes | payload chunk, then zero padding |
+
+The payload begins with `DPMANV1\0`, version `1`, header size `16`, and an
+entry count. Each entry is length-prefixed and canonically sorted by its encoded
+bytes. It binds the resource kind and logical lane; resource ID and diagnostic
+path; platform/volume/object/generation identity; resource generation and
+digest; durable byte/LSN/RID frontiers; root reachability fields; logical
+obligations; and, when present, the retained-parent namespace identity and
+create/rename obligation. Duplicate or conflicting entries fail closed.
+
+Manifest validation is bounded by its declared 64 MiB maximum, byte length,
+page count, contiguous page IDs, per-page checksums, complete-payload digest,
+and deterministic re-encoding. The selected manifest is the exact external
+resource closure that must remain present for that root generation.
+
+### 3.4 Publication order and ownership
+
+One synchronous publication executes in this order:
+
+1. validate the candidate and capture its exact dependency closure,
+2. flush and sync those external dependencies,
+3. materialize the COW freelist, dependency manifest, and durable-root record,
+4. sync the exact candidate index file through its retained handle,
+5. write the alternate meta slot exactly once,
+6. sync that exact meta page through the same stable index handle,
+7. install visible state and only then advance frontiers or release overwritten
+   generation ownership.
+
+Dependency, index, and meta syncs run outside DB, write, commit, and root-build
+locks. A failure before the target meta is first mutated leaves the prior meta
+authoritative and retains exact candidate ownership for retry. From the first
+target-meta mutation onward, an error is ambiguous and poisons the live handle;
+the process must reopen and run bounded selection.
 - Required feature validation must fail closed before full `command_wal_v1`
   execution is enabled if a command-WAL directory is opened by code that decodes
   only the 60-byte pre-command-WAL meta body.
@@ -1190,9 +1259,18 @@ writes and syncs one temporary file through its exact handle, renames it
 relative to the retained `leaf_vlog` directory, verifies the destination is
 the same physical object, then syncs that exact directory once. The returned
 stable resource token binds the SHA-256 digest of the exact version-2 bytes and
-uses `manifest_revision` as its immutable generation. Current root publication
-does not yet consume that token; issue #3679 owns adding the dependency without
-changing the replacement format or its physical identity.
+uses `manifest_revision` as its immutable generation. The replacement also
+persists an immutable `manifest.durable.<revision>.json` revision. Durable-root
+publication consumes that exact stable token in `DependencyManifestV1`; the
+fixed `manifest.json` path is a compatibility view, not the selected revision's
+identity.
+
+If a prepared rewrite fails before publishing its meta slot, TreeDB abandons
+only that unpublished immutable revision after releasing its durable resource
+ownership. It verifies the exact physical identity before deletion and restores
+the prior compatibility view only when the view still names the abandoned
+revision. A later view wins. Any ambiguous restore or cleanup poisons the live
+handle rather than guessing.
 
 Platforms without a retained-parent relative rename capability fail the
 strict stable operation before creating a temporary file. Ordinary pre-#3679

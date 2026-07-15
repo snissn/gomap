@@ -1671,6 +1671,9 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		return nil, errors.New("collections: stable column segment capture requires exact file and parent handles")
 	}
 	var namespaceToken *rootpublication.StableNamespaceToken
+	if a.stableNamespaceRef == nil && len(a.stableRefs) != 0 {
+		return nil, errors.New("collections: stable column segment has no namespace ref")
+	}
 	if a.stableNamespaceNeedsSync {
 		if a.stableNamespaceRef == nil {
 			return nil, errors.New("collections: created stable column segment has no appended ref")
@@ -1699,6 +1702,14 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 			return nil, err
 		}
 		a.stableNamespaceProofAdded = true
+	} else if a.stableNamespaceRef != nil {
+		var err error
+		namespaceToken, err = stableColumnAssetKnownNamespaceToken(a.stableRegistry, a.stableParent, a.file, *a.stableNamespaceRef)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if namespaceToken != nil {
 		defer namespaceToken.Release()
 	}
 	refs := append([]ColumnAssetRef(nil), a.stableRefs...)
@@ -1721,17 +1732,13 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		return false
 	})
 	builder := rootpublication.NewStableResourceSetBuilder()
-	for i, ref := range refs {
-		var tokenNamespace *rootpublication.StableNamespaceToken
-		if i == 0 {
-			tokenNamespace = namespaceToken
-		}
+	for _, ref := range refs {
 		var token *rootpublication.StableResourceToken
 		var err error
 		if a.stableVectorGraphAuthority {
-			token, err = stableVectorGraphResourceTokenWithRegistry(a.file, ref, tokenNamespace, a.stableRegistry)
+			token, err = stableVectorGraphResourceTokenWithRegistry(a.file, ref, namespaceToken, a.stableRegistry)
 		} else {
-			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, tokenNamespace, a.stableRegistry)
+			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, namespaceToken, a.stableRegistry)
 		}
 		if errors.Is(err, errColumnAssetStableTokenOmittedForTest) {
 			continue

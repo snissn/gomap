@@ -432,6 +432,18 @@ func (authority *leafGenerationPackPromotionAuthority) verifyManagerRegistration
 	return nil
 }
 
+// takeStableResources transfers the promoted packed/dictionary closure into
+// the durable-root candidate. Construction handles and deletion pins remain
+// owned by authority until publication succeeds or exact abandonment runs.
+func (authority *leafGenerationPackPromotionAuthority) takeStableResources() (*rootpublication.StableResourceSet, error) {
+	if authority == nil || authority.released || authority.resources == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	resources := authority.resources
+	authority.resources = nil
+	return resources, nil
+}
+
 func (authority *leafGenerationPackPromotionAuthority) retainForRecovery() {
 	if authority == nil || authority.released || authority.retainedForRecovery {
 		return

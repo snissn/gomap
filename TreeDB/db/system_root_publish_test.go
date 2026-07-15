@@ -36,6 +36,23 @@ func mustFrozenSystemPointerMemtable(tb testing.TB, key string, ptr page.ValuePt
 	return mt
 }
 
+// advancePastRetainedDurableSlotForTest publishes one inline-only successor
+// after a resource became unreachable. The preceding recoverable meta slot can
+// still retain that resource until this successor overwrites it. Callers must
+// only use this after the system-root contents they care about were removed,
+// because the helper intentionally publishes a replacement system root.
+func advancePastRetainedDurableSlotForTest(tb testing.TB, db *DB) {
+	tb.Helper()
+	before := db.currentCommitSeq()
+	key := fmt.Sprintf("sys/test/durable-slot-advance/%020d", before+1)
+	if _, err := db.PublishSystemRootIterator(mustFrozenSystemMemtable(tb, key, "advance").NewIterator(nil, nil)); err != nil {
+		tb.Fatalf("advance past retained durable slot: %v", err)
+	}
+	if got, want := db.currentCommitSeq(), before+1; got != want {
+		tb.Fatalf("durable-slot advance commit sequence=%d want %d", got, want)
+	}
+}
+
 func systemRangeKVs(count int, overrides map[int]string) []string {
 	kvs := make([]string, 0, count*2)
 	for i := 0; i < count; i++ {

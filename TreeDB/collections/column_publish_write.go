@@ -194,6 +194,14 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
+			_ = columnDelta.Iter.Close()
+			return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
+		}
+		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
+			_ = columnDelta.Iter.Close()
+			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
+		}
 		return []backenddb.OrderedRootDeltaPublishInput{columnDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -297,6 +305,20 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
+		if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
+			if cleanupColumnDelta != nil {
+				cleanupColumnDelta()
+				cleanupColumnDelta = nil
+			}
+			return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
+		}
+		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
+			if cleanupColumnDelta != nil {
+				cleanupColumnDelta()
+				cleanupColumnDelta = nil
+			}
+			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
+		}
 		return []backenddb.OrderedRootDeltaBatchPublishInput{columnDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {

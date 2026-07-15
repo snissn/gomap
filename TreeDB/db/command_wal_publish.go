@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -34,11 +35,41 @@ type finalizeCommitOptions struct {
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
 	durablePublishLocked        bool
+	// closeTeardownPinned proves the caller acquired teardownMu for reading
+	// before Close could revoke write admission and will retain that lease
+	// through commit post-work. It permits an already-admitted publication to
+	// finish capturing its stable index identity after Close has set closing.
+	closeTeardownPinned bool
+	// durableIndex is the exact index generation against which the caller built
+	// its roots. Root-releasing callers capture it before dropping construction
+	// serialization so an online vacuum cannot redirect publication to a
+	// replacement file with coincident page IDs.
+	durableIndex *indexGen
+	// expectedBaseCommitSeq binds a constructed root to the visible generation
+	// it was derived from. Page IDs alone are ABA-unsafe once COW reuse begins.
+	expectedBaseCommitSeq    uint64
+	hasExpectedBaseCommitSeq bool
 	// releaseRootSerialization transfers an already-prepared candidate from
 	// root construction to the synchronous durability transaction. The callback
 	// must release every DB/write/commit/root-build lock held by the caller and
 	// is invoked exactly once, immediately before external/index/meta I/O.
 	releaseRootSerialization func()
+	// recordVacuumMutation transfers a successful primary-tree mutation into the
+	// online-vacuum tail before durablePublishMu can pass to cutover. Cutover
+	// acquires that same fence before stopping and draining the recorder, so a
+	// visible old-generation commit cannot fall between publication and capture.
+	recordVacuumMutation func()
+	// durableResources transfers producer-owned exact external handles into the
+	// candidate root's dependency manifest. The finalizer consumes the set.
+	durableResources *rootpublication.StableResourceSet
+	// leafManifestAlreadyPersistent marks an exact immutable manifest revision
+	// already carried by durableResources. Post-work may build rebuildable
+	// record-length indexes, but must not create a second manifest revision after
+	// the meta has selected the producer's exact one.
+	leafManifestAlreadyPersistent bool
+	// durableResourceRequirements scopes exact logical obligations for external
+	// resources whose physical files can outlive several root generations.
+	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {

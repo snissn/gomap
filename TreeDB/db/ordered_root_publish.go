@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -207,6 +208,12 @@ type StorageMaintenanceRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
 	StoragePolicy OrderedRootStoragePolicy
+	// DurableResources transfers exact external handles made reachable by this
+	// maintenance rewrite. The publish consumes the closure on every return.
+	DurableResources *rootpublication.StableResourceSet
+	// DurableResourceRequirements is the complete logical-reference closure for
+	// every scoped reachability field in the rewritten candidate root.
+	DurableResourceRequirements rootpublication.StableLogicalObligationRequirements
 }
 
 // OrderedRootDeltaBatchPublishInput describes a sorted root-local mutation
@@ -284,7 +291,46 @@ type OrderedRootGroupSystemBuilder func(rootIDs []uint64) (iterator.UnsafeIterat
 // context-aware grouped publish APIs so command append and root publication
 // remain one fail-closed boundary.
 type CommandWALPublishContext struct {
-	AppliedCommandLSN uint64
+	AppliedCommandLSN           uint64
+	durableResources            *rootpublication.StableResourceSetBuilder
+	durableResourceRequirements *rootpublication.StableLogicalObligationRequirements
+}
+
+// RegisterDurableResources transfers a producer-owned exact resource closure
+// into this command-WAL root publication. The DB retains it through external
+// sync, durable-meta publication, fallback-slot recovery, and eventual slot
+// replacement. Builders must register resources before returning the root
+// delta that makes them reachable.
+func (ctx CommandWALPublishContext) RegisterDurableResources(resources *rootpublication.StableResourceSet) error {
+	if resources == nil {
+		return nil
+	}
+	if ctx.durableResources == nil {
+		resources.Release()
+		return rootpublication.ErrResourceOwnership
+	}
+	if err := ctx.durableResources.Merge(resources); err != nil {
+		resources.Release()
+		return err
+	}
+	return nil
+}
+
+// RegisterDurableLogicalObligationRequirements supplies the complete logical
+// reference set for selected reachability fields in the candidate root. It is
+// independent of RegisterDurableResources: retained references may be
+// satisfied by exact handles inherited from the selected fallback slot, while
+// newly produced references are supplied by the builder's resource closure.
+func (ctx CommandWALPublishContext) RegisterDurableLogicalObligationRequirements(requirements rootpublication.StableLogicalObligationRequirements) error {
+	if ctx.durableResourceRequirements == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	merged, err := rootpublication.MergeStableLogicalObligationRequirements(*ctx.durableResourceRequirements, requirements)
+	if err != nil {
+		return err
+	}
+	*ctx.durableResourceRequirements = merged
+	return nil
 }
 
 // OrderedRootGroupCommandWALSystemBuilder builds a target system-root iterator
@@ -1022,7 +1068,7 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 		err = errors.New("missing index")
 		return
 	}
-	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, &pagerAllocator{p: idx.pager}, false)
+	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, idx.allocator, false)
 }
 
 func (db *DB) orderedRootDeltaBatchApplyOptions(opts orderedRootPublishOptions) zipper.ApplyOptions {
@@ -1408,7 +1454,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		if opts.outerLeavesInValueLog {
 			leafPageLog = opts.leafPageLog
 		}
-		newRoot, err = bulk.BuildWithOptions(buildIter, &pagerAllocator{p: idx.pager}, idx.pager, bulk.BuildOptions{
+		newRoot, err = bulk.BuildWithOptions(buildIter, idx.allocator, idx.pager, bulk.BuildOptions{
 			LeafPrefixCompression: opts.leafPrefixCompression,
 			LeafColumnar:          opts.leafColumnar,
 			PackedValuePtr:        opts.packedValuePtr,
@@ -1493,7 +1539,12 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	}
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		return 0, err
 	}
@@ -1531,10 +1582,20 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		}
 	}()
 
-	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, systemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil,
+		finalizeCommitOptions{},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
 		return 0, err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	return newRoot, nil
 }
 
@@ -1577,13 +1638,22 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
+	writeLocked := true
+	var hold time.Duration
+	releaseWrite := func() {
+		if !writeLocked {
+			return
+		}
+		hold = time.Since(holdStart)
+		db.writeMu.Unlock()
+		writeLocked = false
+	}
 	finishPublish := func() {
 		if finished {
 			return
 		}
 		finished = true
-		hold := time.Since(holdStart)
-		db.writeMu.Unlock()
+		releaseWrite()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	cleanupIterators := func() {}
@@ -1705,7 +1775,11 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	phaseStart = time.Now()
-	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil)
+	var post finalizeCommitPost
+	post, err = db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil,
+		finalizeCommitOptions{}, releaseWrite, nil,
+	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -1716,6 +1790,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
 
@@ -1814,6 +1889,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // command-WAL-covered publish APIs. This path does not append or advance a
 // command-WAL frame.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	defer releaseStorageMaintenanceDurableResources(ordered)
 	if buildSystemDeltaIter == nil {
 		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
 		return 0, nil, storageMaintenancePreApplyError(ErrStorageMaintenanceSystemBuilderMissing)
@@ -1834,7 +1910,52 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBui
 		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
 		return 0, nil, storageMaintenancePreApplyError(err)
 	}
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, storageMaintenanceRootDeltaInputsToOrdered(ordered), preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance, orderedRootCommandWALPublishOptions{})
+	durableResources, durableRequirements, err := collectStorageMaintenanceDurableClosure(ordered)
+	if err != nil {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(err)
+	}
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, storageMaintenanceRootDeltaInputsToOrdered(ordered), preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance, orderedRootCommandWALPublishOptions{
+		durableResources:            durableResources,
+		durableResourceRequirements: durableRequirements,
+	})
+}
+
+func collectStorageMaintenanceDurableClosure(ordered []StorageMaintenanceRootDeltaPublishInput) (*rootpublication.StableResourceSet, rootpublication.StableLogicalObligationRequirements, error) {
+	requirements := rootpublication.StableLogicalObligationRequirements{}
+	for idx := range ordered {
+		merged, err := rootpublication.MergeStableLogicalObligationRequirements(requirements, ordered[idx].DurableResourceRequirements)
+		if err != nil {
+			return nil, rootpublication.StableLogicalObligationRequirements{}, fmt.Errorf("storage maintenance durable requirements input %d: %w", idx, err)
+		}
+		requirements = merged
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	for idx := range ordered {
+		resources := ordered[idx].DurableResources
+		if resources == nil {
+			continue
+		}
+		if err := builder.Merge(resources); err != nil {
+			return nil, rootpublication.StableLogicalObligationRequirements{}, fmt.Errorf("storage maintenance durable resources input %d: %w", idx, err)
+		}
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		return nil, rootpublication.StableLogicalObligationRequirements{}, err
+	}
+	if resources.Len() == 0 {
+		resources.Release()
+		resources = nil
+	}
+	return resources, requirements, nil
+}
+
+func releaseStorageMaintenanceDurableResources(ordered []StorageMaintenanceRootDeltaPublishInput) {
+	for idx := range ordered {
+		ordered[idx].DurableResources.Release()
+	}
 }
 
 func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput) error {
@@ -2036,13 +2157,22 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	wait := holdStart.Sub(lockStart)
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
+	writeLocked := true
+	var hold time.Duration
+	releaseWrite := func() {
+		if !writeLocked {
+			return
+		}
+		hold = time.Since(holdStart)
+		db.writeMu.Unlock()
+		writeLocked = false
+	}
 	finishPublish := func() {
 		if finished {
 			return
 		}
 		finished = true
-		hold := time.Since(holdStart)
-		db.writeMu.Unlock()
+		releaseWrite()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	rootIDs = make([]uint64, len(ordered))
@@ -2179,7 +2309,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	// tracker conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts)
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts, releaseWrite)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2217,13 +2347,22 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
+	writeLocked := true
+	var hold time.Duration
+	releaseWrite := func() {
+		if !writeLocked {
+			return
+		}
+		hold = time.Since(holdStart)
+		db.writeMu.Unlock()
+		writeLocked = false
+	}
 	finishPublish := func() {
 		if finished {
 			return
 		}
 		finished = true
-		hold := time.Since(holdStart)
-		db.writeMu.Unlock()
+		releaseWrite()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	allOrdered := ordered
@@ -2283,7 +2422,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		err = errCommandWALContextZeroLSN
 		return 0, nil, err
 	}
-	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
+	durableResourceBuilder := rootpublication.NewStableResourceSetBuilder()
+	defer durableResourceBuilder.Abandon()
+	durableResourceRequirements := rootpublication.StableLogicalObligationRequirements{}
+	ctx := CommandWALPublishContext{
+		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
+		durableResourceRequirements: &durableResourceRequirements,
+	}
 
 	if buildContextDeltas != nil {
 		contextOrdered, buildErr := buildContextDeltas(ctx)
@@ -2380,7 +2525,30 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	durableResources, err := durableResourceBuilder.Freeze()
+	if err != nil {
+		return 0, nil, err
+	}
+	if durableResources.Len() == 0 {
+		durableResources.Release()
+		durableResources = nil
+	}
+	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.durableResources = durableResources
+	finalizeOpts.durableResourceRequirements = durableResourceRequirements
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
+		true, vlogRefDelta, nil, nil, finalizeOpts,
+		func() {
+			db.commitMu.Unlock()
+			commitLocked = false
+			releaseWrite()
+		},
+		func(error) {
+			db.poisonCommandWALAfterPublicPostAppendFailure(commandWALIntent)
+			commandAppended = false
+		},
+	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2388,8 +2556,6 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	}
 	commandAppended = false
 	commandWALIntent.inner.staged = false
-	commitLocked = false
-	db.commitMu.Unlock()
 	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
@@ -2607,9 +2773,13 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}
 
 	db.writeMu.RLock()
-	if err = db.checkWriteAdmissionLocked(); err != nil {
+	if err = db.checkReadAdmissionLocked(); err != nil {
 		db.writeMu.RUnlock()
 		return 0, nil, false, err
+	}
+	if db.vacuumCutoverInProgress.Load() {
+		db.writeMu.RUnlock()
+		return 0, nil, true, nil
 	}
 	if db.readOnly {
 		db.writeMu.RUnlock()
@@ -2627,16 +2797,19 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, false, err
 	}
 
+	db.rootReuseMu.RLock()
 	db.mu.RLock()
 	baseUserRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
+	db.rootReuseMu.RUnlock()
 
+	writeReadLocked := true
 	defer func() {
 		idx.registry.Unregister(regID)
-		if err != nil || retrySerialized {
+		if writeReadLocked {
 			db.writeMu.RUnlock()
 		}
 	}()
@@ -2761,7 +2934,11 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			continue
 		}
 		phaseStart = time.Now()
+		db.writeMu.RUnlock()
+		writeReadLocked = false
 		publishPrepareGuard, prepareErr := db.prepareFinalizeCommitDurability(false)
+		db.writeMu.RLock()
+		writeReadLocked = true
 		publishPrepareNs := orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.publishPrepareNs += publishPrepareNs
 		phaseStats.publishPrepareCalls++
@@ -2772,6 +2949,11 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			db.orderedRootDeltaGroupPublishPrepareErrors.Add(1)
 			err = prepareErr
 			return 0, nil, false, err
+		}
+		if db.vacuumCutoverInProgress.Load() {
+			publishPrepareGuard.Release()
+			retrySerialized = true
+			return 0, nil, retrySerialized, nil
 		}
 		releasePublishPrepare := func() {
 			if publishPrepareGuard != nil {
@@ -2787,6 +2969,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		db.mu.RLock()
 		curUserRoot := db.meta.UserRootPageID
 		curSystemRoot := db.meta.SystemRootPageID
+		curSeq := db.meta.CommitSeq
 		db.mu.RUnlock()
 		if curSystemRoot != systemBaseRoot {
 			db.commitMu.Unlock()
@@ -2823,20 +3006,44 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
-		post, err = db.finalizeCommitLockedWithOptions(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true})
+		commitLocked := true
+		rootLocksReleased := false
+		var hold time.Duration
+		post, err = db.finalizeCommitLockedWithOptions(
+			curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments,
+			true, vlogRefDelta, nil, nil,
+			finalizeCommitOptions{
+				skipPrePublishFlush:      true,
+				expectedBaseCommitSeq:    curSeq,
+				hasExpectedBaseCommitSeq: true,
+				releaseRootSerialization: func() {
+					hold = time.Since(holdStart)
+					db.commitMu.Unlock()
+					commitLocked = false
+					db.writeMu.RUnlock()
+					writeReadLocked = false
+					rootLocksReleased = true
+				},
+			},
+		)
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
-		hold := time.Since(holdStart)
 		committedRootPages = rootTracker.Pages()
 		committedSystemPages = systemTracker.Pages()
-		db.commitMu.Unlock()
+		if commitLocked {
+			hold = time.Since(holdStart)
+			db.commitMu.Unlock()
+		}
 		releasePublishPrepare()
 		if err != nil {
 			return 0, nil, false, err
 		}
 		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 		db.finalizeCommitPostWork(post)
-		db.writeMu.RUnlock()
+		if !rootLocksReleased {
+			db.writeMu.RUnlock()
+			writeReadLocked = false
+		}
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
 		return newSystemRoot, rootIDs, false, nil
 	}
@@ -2868,13 +3075,22 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
+	writeLocked := true
+	var hold time.Duration
+	releaseWrite := func() {
+		if !writeLocked {
+			return
+		}
+		hold = time.Since(holdStart)
+		db.writeMu.Unlock()
+		writeLocked = false
+	}
 	finishPublish := func() {
 		if finished {
 			return
 		}
 		finished = true
-		hold := time.Since(holdStart)
-		db.writeMu.Unlock()
+		releaseWrite()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	defer finishPublish()
@@ -2940,7 +3156,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		defaultRoute = OrderedRootSpanNativeRouteCommandWALPublish
 		defaultContext = "command-WAL ordered-root group root apply"
 	}
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, defaultRoute, defaultContext)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, idxGen.allocator, defaultRoute, defaultContext)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -3005,7 +3221,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts)
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts, releaseWrite)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -3043,13 +3259,22 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
+	writeLocked := true
+	var hold time.Duration
+	releaseWrite := func() {
+		if !writeLocked {
+			return
+		}
+		hold = time.Since(holdStart)
+		db.writeMu.Unlock()
+		writeLocked = false
+	}
 	finishPublish := func() {
 		if finished {
 			return
 		}
 		finished = true
-		hold := time.Since(holdStart)
-		db.writeMu.Unlock()
+		releaseWrite()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	defer finishPublish()
@@ -3105,7 +3330,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		err = errCommandWALContextZeroLSN
 		return 0, nil, err
 	}
-	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
+	durableResourceBuilder := rootpublication.NewStableResourceSetBuilder()
+	defer durableResourceBuilder.Abandon()
+	durableResourceRequirements := rootpublication.StableLogicalObligationRequirements{}
+	ctx := CommandWALPublishContext{
+		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
+		durableResourceRequirements: &durableResourceRequirements,
+	}
 
 	allOrdered := ordered
 	var contextOrdered []OrderedRootDeltaBatchPublishInput
@@ -3148,7 +3379,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply")
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply")
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -3211,15 +3442,36 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	durableResources, err := durableResourceBuilder.Freeze()
+	if err != nil {
+		return 0, nil, err
+	}
+	if durableResources.Len() == 0 {
+		durableResources.Release()
+		durableResources = nil
+	}
+	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.durableResources = durableResources
+	finalizeOpts.durableResourceRequirements = durableResourceRequirements
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
+		true, vlogRefDelta, nil, nil, finalizeOpts,
+		func() {
+			db.commitMu.Unlock()
+			commitLocked = false
+			releaseWrite()
+		},
+		func(error) {
+			db.poisonCommandWALAfterPublicPostAppendFailure(commandWALIntent)
+			commandAppended = false
+		},
+	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
 		return 0, nil, err
 	}
 	commandAppended = false
-	commitLocked = false
-	db.commitMu.Unlock()
 	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
@@ -3235,16 +3487,28 @@ func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUser
 }
 
 type orderedRootCommandWALPublishOptions struct {
-	rawPublishLocked bool
+	rawPublishLocked            bool
+	durableResources            *rootpublication.StableResourceSet
+	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
 }
 
-func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent) error {
-	return db.finalizeOrderedRootPublishWithCommandWALOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, intent, orderedRootCommandWALPublishOptions{})
-}
-
-func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions) error {
+func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions, releaseRootSerialization func()) error {
+	defer opts.durableResources.Release()
 	if intent == nil {
-		return db.finalizeCommit(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
+		finalizeOpts := finalizeCommitOptions{
+			durableResources:            opts.durableResources,
+			durableResourceRequirements: opts.durableResourceRequirements,
+		}
+		post, err := db.finalizeCommitReleasingRootSerialization(
+			newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
+			forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs,
+			finalizeOpts, releaseRootSerialization, nil,
+		)
+		if err != nil {
+			return err
+		}
+		db.finalizeCommitPostWork(post)
+		return nil
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
 	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(intent) {
@@ -3259,13 +3523,30 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		db.commitMu.Unlock()
 		return err
 	}
-	post, err := db.finalizeCommitLockedWithOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, commandWALFinalizeOptionsForPublicIntent(intent))
+	commitLocked := true
+	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
+	finalizeOpts.durableResources = opts.durableResources
+	finalizeOpts.durableResourceRequirements = opts.durableResourceRequirements
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
+		forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs,
+		finalizeOpts,
+		func() {
+			db.commitMu.Unlock()
+			commitLocked = false
+			releaseRootSerialization()
+		},
+		func(error) { db.poisonCommandWALAfterPublicPostAppendFailure(intent) },
+	)
 	if err != nil {
-		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
-		db.commitMu.Unlock()
+		if commitLocked {
+			db.commitMu.Unlock()
+		}
 		return err
 	}
-	db.commitMu.Unlock()
+	if commitLocked {
+		db.commitMu.Unlock()
+	}
 	db.finalizeCommitPostWork(post)
 	return nil
 }
@@ -3282,7 +3563,12 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	}
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		return 0, nil, err
 	}
@@ -3407,10 +3693,20 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	if vlogRefDelta == nil && !forceRefTrackerRebuild {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil); err != nil {
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments,
+		true, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
 		return 0, nil, err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	if systemIter != nil {
 		db.systemRootWarmPublishAttempts.Add(systemStats.warmAttempts)
 		db.systemRootWarmNativeApplyAttempts.Add(systemStats.warmNativeApplyAttempts)

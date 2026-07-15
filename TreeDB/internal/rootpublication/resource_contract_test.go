@@ -93,6 +93,168 @@ func testStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing
 	}
 }
 
+func testCloneStableResourceSetUsesExactHandlesAndIndependentPins(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	resource := writeStableResourceFixture(t, dir, "asset.bin", "original-resource-bytes")
+	identity, err := StableIdentityFromFile(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewIdentityPinRegistry()
+	if err := registry.Observe(identity); err != nil {
+		t.Fatal(err)
+	}
+	observed := true
+	defer func() {
+		if observed {
+			_ = registry.Unobserve(identity)
+		}
+	}()
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "asset.bin", DiagnosticPath: "columns/asset.bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := namespace.Stabilize(); err != nil {
+		t.Fatal(err)
+	}
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "asset", Generation: 1,
+		DiagnosticPath: "columns/asset.bin", File: resource,
+		Frontier: DurableFrontier{Bytes: uint64(len("original-resource-bytes"))},
+		Digest:   sha256.Sum256([]byte("asset")), Reachability: ReachabilityColumnManifest,
+		Namespace: namespace, ContentSynced: true, PinRegistry: registry,
+		OnRelease: func() { _ = registry.Unobserve(identity) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed = false
+	builder := NewStableResourceSetBuilder()
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone, err := CloneStableResourceSetExcludingKinds(source)
+	if err != nil {
+		source.Release()
+		t.Fatal(err)
+	}
+	if got := clone.Descriptors(); len(got) != 1 || got[0].Identity() != source.Descriptors()[0].Identity() {
+		clone.Release()
+		source.Release()
+		t.Fatalf("clone descriptors = %+v, want exact source identity", got)
+	}
+	source.Release()
+	if got := registry.Stats().ActivePins; got != 1 {
+		clone.Release()
+		t.Fatalf("active pins after source release = %d, want 1", got)
+	}
+	path := filepath.Join(dir, "asset.bin")
+	if err := os.Rename(path, filepath.Join(dir, "old-asset.bin")); err != nil {
+		clone.Release()
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement-resource"), 0o600); err != nil {
+		clone.Release()
+		t.Fatal(err)
+	}
+	var got string
+	if err := clone.Tokens()[0].WithPinnedFile(func(file *os.File) error {
+		buf := make([]byte, len("original-resource-bytes"))
+		if _, err := file.ReadAt(buf, 0); err != nil {
+			return err
+		}
+		got = string(buf)
+		return nil
+	}); err != nil {
+		clone.Release()
+		t.Fatal(err)
+	}
+	if got != "original-resource-bytes" {
+		clone.Release()
+		t.Fatalf("cloned handle read %q, want original bytes", got)
+	}
+	clone.Release()
+	if got := registry.Stats().ActivePins; got != 0 {
+		t.Fatalf("active pins after clone release = %d, want 0", got)
+	}
+}
+
+func testCloneStableResourceSetFiltersExactLogicalObligationClosure(t *testing.T) {
+	dir := t.TempDir()
+	makeObligation := func(partID, fileID uint64) StableLogicalObligation {
+		obligation := StableLogicalObligation{
+			Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
+			Generation: 1, PartID: partID, FileID: fileID, Offset: 0, Length: 8,
+			Checksum: uint32(partID), Reachability: ReachabilityColumnManifest,
+		}
+		obligation.Digest = sha256.Sum256([]byte(fmt.Sprintf("obligation-%d", partID)))
+		return obligation
+	}
+	keep, stale := makeObligation(1, 1), makeObligation(2, 2)
+	builder := NewStableResourceSetBuilder()
+	for i, obligation := range []StableLogicalObligation{keep, stale} {
+		token := stableTokenFixture(t, dir, fmt.Sprintf("asset-%d.bin", i+1), uint64(i+1), 8, ReachabilityColumnManifest, fmt.Sprintf("asset-%d", i+1), func(spec *StableResourceSpec) {
+			spec.Kind = ResourceColumnAsset
+			spec.LogicalLane = "columns"
+			spec.ResourceID = fmt.Sprint(i + 1)
+			spec.LogicalObligations = []StableLogicalObligation{obligation}
+			spec.ContentSynced = true
+		})
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	requirements := StableLogicalObligationRequirements{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Obligations:  []StableLogicalObligation{keep},
+	}
+	clone, err := CloneStableResourceSetForLogicalObligations(source, requirements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Release()
+	if err := ValidateStableResourceSetLogicalObligations(clone, requirements); err != nil {
+		t.Fatal(err)
+	}
+	descriptors := clone.Descriptors()
+	if len(descriptors) != 1 || len(descriptors[0].LogicalObligations()) != 1 || descriptors[0].LogicalObligations()[0] != keep {
+		t.Fatalf("filtered descriptors=%+v want only retained obligation", descriptors)
+	}
+	if err := ValidateStableResourceSetLogicalObligations(clone, StableLogicalObligationRequirements{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Obligations:  []StableLogicalObligation{stale},
+	}); !errors.Is(err, ErrResourceConflict) && !errors.Is(err, ErrUnresolvedResource) {
+		t.Fatalf("mismatched exact closure err=%v", err)
+	}
+	empty, err := CloneStableResourceSetForLogicalObligations(source, StableLogicalObligationRequirements{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer empty.Release()
+	if empty.Len() != 0 {
+		t.Fatalf("empty scoped closure retained %d resources", empty.Len())
+	}
+}
+
 func testStableResourceSetRejectsDataStableNamespaceUnstable(t *testing.T) {
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
