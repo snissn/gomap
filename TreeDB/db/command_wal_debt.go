@@ -65,6 +65,28 @@ func (debt *CommandWALDependencyDebt) resourceViewThrough(lsn uint64, extra ...*
 	return rootpublication.UnionStableResourceSets(sets...)
 }
 
+// hasPhysicalDependenciesThrough reports whether closing the prefix requires
+// any external-resource or rotated-command-WAL work before the final WAL sync.
+// Empty debt entries still retain their LSN identity for retry diagnostics, but
+// do not require allocating union/sort views on an otherwise inline durable
+// append.
+func (debt *CommandWALDependencyDebt) hasPhysicalDependenciesThrough(lsn uint64) bool {
+	if debt == nil {
+		return false
+	}
+	debt.mu.Lock()
+	defer debt.mu.Unlock()
+	for _, entry := range debt.entries {
+		if entry.firstLSN > lsn {
+			break
+		}
+		if len(entry.resources) != 0 || len(entry.rotationFiles) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // rotationFileViewThrough returns a deterministic, exact-handle view of the
 // command-WAL files retained by relaxed rotations. These tokens deliberately
 // remain outside StableResourceSet until their namespace-create obligations
@@ -224,11 +246,28 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 	for cut < len(debt.entries) && debt.entries[cut].lastLSN <= lsn {
 		cut++
 	}
-	released := append([]commandWALDependencyDebtEntry(nil), debt.entries[:cut]...)
-	if cut != 0 {
-		copy(debt.entries, debt.entries[cut:])
-		debt.entries = debt.entries[:len(debt.entries)-cut]
+	if cut == 0 {
+		debt.mu.Unlock()
+		return
 	}
+	physical := false
+	for i := 0; i < cut; i++ {
+		if len(debt.entries[i].resources) != 0 || len(debt.entries[i].rotationFiles) != 0 {
+			physical = true
+			break
+		}
+	}
+	if !physical {
+		copy(debt.entries, debt.entries[cut:])
+		clear(debt.entries[len(debt.entries)-cut:])
+		debt.entries = debt.entries[:len(debt.entries)-cut]
+		debt.mu.Unlock()
+		return
+	}
+	released := append([]commandWALDependencyDebtEntry(nil), debt.entries[:cut]...)
+	copy(debt.entries, debt.entries[cut:])
+	clear(debt.entries[len(debt.entries)-cut:])
+	debt.entries = debt.entries[:len(debt.entries)-cut]
 	debt.mu.Unlock()
 	for _, entry := range released {
 		for _, resource := range entry.resources {

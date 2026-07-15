@@ -130,6 +130,7 @@ type DB struct {
 	ghostManager *indexGhostManager
 
 	dir                  string
+	commandWALDir        string
 	columnAssetRootDir   string
 	chunkSize            int64
 	preferAppendAlloc    bool
@@ -1983,6 +1984,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		flushApplySpanNative:           opts.FlushApplySpanNative,
 		flushApplyWorkerPool:           flushApplyWorkerPool,
 		dir:                            opts.Dir,
+		commandWALDir:                  layout.walDir,
 		columnAssetRootDir:             layout.columnAssetDir,
 		chunkSize:                      opts.ChunkSize,
 		preferAppendAlloc:              opts.PreferAppendAlloc,

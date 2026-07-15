@@ -1593,6 +1593,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if !sync {
 			return nil
 		}
+		if dependencies == nil && !db.commandWALDebt.hasPhysicalDependenciesThrough(^uint64(0)) {
+			return nil
+		}
 		view, err := db.commandWALDebt.resourceViewThrough(^uint64(0), dependencies)
 		if err != nil {
 			return err
@@ -1601,7 +1604,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 			db.commandWALDebt.noteRetryThrough(^uint64(0))
 			return err
 		}
-		if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, WALDirPath(db.dir), ^uint64(0)); err != nil {
+		if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, ^uint64(0)); err != nil {
 			db.commandWALDebt.noteRetryThrough(^uint64(0))
 			return err
 		}
@@ -1609,7 +1612,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 			db.commandWALDebt.noteRetryThrough(^uint64(0))
 			return err
 		}
-		if err := db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, WALDirPath(db.dir), ^uint64(0)); err != nil {
+		if err := db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, ^uint64(0)); err != nil {
 			db.commandWALDebt.noteRetryThrough(^uint64(0))
 			return err
 		}
