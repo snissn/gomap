@@ -13,6 +13,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+var stableReOpenFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReOpenFile")
+
 func stableRelativeNamespaceSupported() bool { return false }
 
 // Windows does not provide the complete create/rename/remove plus parent-sync
@@ -162,6 +164,36 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(duplicate), file.Name()+"#stable-pin"), nil
+}
+
+// duplicateStableSyncFile reopens the exact file object with GENERIC_WRITE.
+// DuplicateHandle preserves the source access mask, but FlushFileBuffers
+// requires GENERIC_WRITE and sealed value-log managers intentionally retain
+// read-only handles. ReOpenFile upgrades only the private durability pin; it
+// does not broaden the manager's ordinary read handle or re-resolve a path.
+func duplicateStableSyncFile(file *os.File) (*os.File, error) {
+	if file == nil {
+		return nil, os.ErrInvalid
+	}
+	handle, _, callErr := stableReOpenFile.Call(
+		file.Fd(),
+		uintptr(windows.GENERIC_READ|windows.GENERIC_WRITE),
+		uintptr(windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE),
+		uintptr(windows.FILE_ATTRIBUTE_NORMAL),
+	)
+	runtime.KeepAlive(file)
+	if windows.Handle(handle) == windows.InvalidHandle {
+		if callErr != nil && callErr != windows.ERROR_SUCCESS {
+			return nil, callErr
+		}
+		return nil, windows.ERROR_INVALID_HANDLE
+	}
+	pinned := os.NewFile(handle, file.Name()+"#stable-sync-pin")
+	if pinned == nil {
+		_ = windows.CloseHandle(windows.Handle(handle))
+		return nil, errors.New("invalid Windows stable sync handle")
+	}
+	return pinned, nil
 }
 
 func stableIdentityFromFile(file *os.File) (StableIdentity, error) {

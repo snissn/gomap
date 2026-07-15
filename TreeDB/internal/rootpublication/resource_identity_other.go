@@ -32,6 +32,10 @@ func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }
 
+func duplicateStableSyncFile(file *os.File) (*os.File, error) {
+	return duplicateStableFile(file)
+}
+
 func stableIdentityFromFile(*os.File) (StableIdentity, error) {
 	return StableIdentity{}, ErrStableIdentityUnsupported
 }

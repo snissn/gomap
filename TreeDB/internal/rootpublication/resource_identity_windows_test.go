@@ -3,11 +3,50 @@
 package rootpublication
 
 import (
+	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestStableResourceTokenSyncReopensReadOnlyHandleWithWriteAccessWindows(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := OpenStableParent(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	created, err := OpenStableChildFile(parent, "readonly.vlog", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.Write([]byte("durable")); err != nil {
+		_ = created.Close()
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := OpenStableChildFile(parent, "readonly.vlog", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceValueLog, LogicalLane: "main", ResourceID: "1", Generation: 1,
+		DiagnosticPath: "value_vlog/readonly.vlog", File: readOnly,
+		Frontier: DurableFrontier{Bytes: uint64(len("durable"))}, Digest: sha256.Sum256([]byte("durable")),
+		Reachability: ReachabilityValueLogPointer,
+	})
+	if err != nil {
+		t.Fatalf("NewStableResourceToken from read-only handle: %v", err)
+	}
+	defer token.Release()
+	if err := token.SyncThrough(); err != nil {
+		t.Fatalf("SyncThrough read-only source handle: %v", err)
+	}
+}
 
 func TestStableRelativeNamespaceCapabilityRemainsFailClosedWindows(t *testing.T) {
 	if StableRelativeNamespaceSupported() {

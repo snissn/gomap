@@ -468,7 +468,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	if !ok {
 		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
 	}
-	pinned, err := duplicateStableFile(spec.File)
+	pinned, err := duplicateStableSyncFile(spec.File)
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable resource handle: %w", err)
 	}
