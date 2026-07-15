@@ -481,11 +481,10 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	}
 	if err == nil {
 		// Covered dependency pins can retain handles to inactive segments. Drop
-		// the durable prefix before unlinking those segments so Windows can
-		// remove them as well as Unix-like platforms.
-		if sync {
-			db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
-		}
+		// them before unlinking those segments so Windows can remove them as
+		// well as Unix-like platforms. Pin release is independent of the
+		// optional deletion-directory fsync below.
+		db.releaseCommandWALDurablePrefixPinsThrough(state.AppliedCommandLSN)
 		decisions, err = removeCoveredCommandWALSegments(decisions)
 	}
 	removed := uint64(0)
@@ -534,7 +533,17 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 			}
 		}
 	}
+	if err == nil && sync {
+		db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
+	}
 	return err
+}
+
+func (db *DB) releaseCommandWALDurablePrefixPinsThrough(lsn uint64) {
+	if db == nil || lsn == 0 {
+		return
+	}
+	db.commandWALDebt.releaseThrough(lsn)
 }
 
 func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
