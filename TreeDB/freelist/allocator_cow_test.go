@@ -10,6 +10,21 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+func materializeAllocatorCOWCandidateForTest(t *testing.T, p *pager.Pager, prepared *PreparedCOWCandidateV1) {
+	t.Helper()
+	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
+		t.Fatal("missing prepared COW candidate")
+	}
+	if err := p.Truncate(prepared.Candidate().Generation().HighWater()); err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range prepared.Candidate().Pages() {
+		if err := p.Write(image.PageID, image.Data); err != nil {
+			t.Fatalf("write candidate page %d: %v", image.PageID, err)
+		}
+	}
+}
+
 func TestAllocatorFailedCOWCandidateWakesBlockedAllocation(t *testing.T) {
 	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
 	if err != nil {
@@ -114,6 +129,153 @@ func TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages(t *testing.T) {
 	if prepared.Candidate().Generation().HighWater() <= aux[1] {
 		t.Fatalf("high-water=%d does not cover auxiliary page %d", prepared.Candidate().Generation().HighWater(), aux[1])
 	}
+}
+
+func TestAllocatorCOWCandidateMustBeMaterializedBeforePublish(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("materialize-before-publish"), capability, 1, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.PublishCOWCandidateV1(prepared, capability); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("publish unmaterialized candidate error=%v, want ErrGenerationFormat", err)
+	}
+	materializeAllocatorCOWCandidateForTest(t, p, prepared)
+	if err := allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
+		t.Fatalf("publish materialized candidate: %v", err)
+	}
+}
+
+func TestAllocatorCOWCandidateRetirementsRollbackBeforePublish(t *testing.T) {
+	newAllocator := func(t *testing.T) (*Allocator, *pager.Pager, ReuseCapability) {
+		t.Helper()
+		p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Alloc(8); err != nil {
+			_ = p.Close()
+			t.Fatal(err)
+		}
+		allocator := New(p, 0)
+		if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 8, nil, nil), NewReservationLedger()); err != nil {
+			_ = p.Close()
+			t.Fatal(err)
+		}
+		capability, err := NewReuseCapability(1, 1, 0)
+		if err != nil {
+			_ = p.Close()
+			t.Fatal(err)
+		}
+		return allocator, p, capability
+	}
+
+	t.Run("prepare failure", func(t *testing.T) {
+		allocator, p, capability := newAllocator(t)
+		defer p.Close()
+		before := allocator.Counters()
+		if _, err := allocator.PrepareCOWCandidateRetiringV1(
+			2, 2, candidateIDFromString("failed-retirement-stage"), capability,
+			[]COWRetirementV1{{PageIDs: []uint64{4}, LastReachableCommitSeq: 1}},
+			1, failingPageSinkV1{},
+		); err == nil {
+			t.Fatal("candidate preparation unexpectedly succeeded")
+		}
+		if got := p.PageCount(); got != 8 {
+			t.Fatalf("pager pages after failed prepare=%d want 8", got)
+		}
+		if got := allocator.Counters(); got != before {
+			t.Fatalf("allocator counters after rollback=%+v want %+v", got, before)
+		}
+		prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("retry-without-retirement"), capability, 1, NewMemoryPageStoreV1())
+		if err != nil {
+			t.Fatalf("prepare after rollback: %v", err)
+		}
+		if got := prepared.Candidate().Generation().RetiredCount(); got != 0 {
+			t.Fatalf("retry inherited %d stale retirements", got)
+		}
+	})
+
+	t.Run("caller abort", func(t *testing.T) {
+		allocator, p, capability := newAllocator(t)
+		defer p.Close()
+		before := allocator.Counters()
+		prepared, err := allocator.PrepareCOWCandidateRetiringV1(
+			2, 2, candidateIDFromString("aborted-retirement-stage"), capability,
+			[]COWRetirementV1{{PageIDs: []uint64{4}, LastReachableCommitSeq: 1}},
+			1, NewMemoryPageStoreV1(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := prepared.Candidate().Generation().RetiredCount(); got != 1 {
+			t.Fatalf("prepared retired=%d want 1", got)
+		}
+		if got := p.PageCount(); got != 8 {
+			t.Fatalf("pager pages after prepare=%d want 8", got)
+		}
+		waiting := make(chan struct{})
+		var waitingOnce sync.Once
+		TestHookCOWWaitBeforeSleep = func() { waitingOnce.Do(func() { close(waiting) }) }
+		defer func() { TestHookCOWWaitBeforeSleep = nil }()
+		allocationDone := make(chan struct {
+			id  uint64
+			err error
+		}, 1)
+		go func() {
+			id, err := allocator.Alloc(0)
+			allocationDone <- struct {
+				id  uint64
+				err error
+			}{id: id, err: err}
+		}()
+		select {
+		case <-waiting:
+		case <-time.After(2 * time.Second):
+			t.Fatal("allocation did not wait behind prepared candidate")
+		}
+		if err := allocator.AbortCOWCandidateV1(prepared); err != nil {
+			t.Fatalf("abort candidate: %v", err)
+		}
+		select {
+		case result := <-allocationDone:
+			if result.err != nil {
+				t.Fatalf("allocation after abort: %v", result.err)
+			}
+			if result.id != 8 {
+				t.Fatalf("allocation after abort=%d want append page 8, not retired live page 4", result.id)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("abort did not wake blocked allocation")
+		}
+		// The one admitted allocation after abort is expected; retirement
+		// counters must still have rolled back to their prior values.
+		if got := allocator.Counters(); got.FreePages != before.FreePages {
+			t.Fatalf("allocator free counters after abort=%+v want FreePages=%d", got, before.FreePages)
+		}
+		retry, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("prepare-after-abort"), capability, 1, NewMemoryPageStoreV1())
+		if err != nil {
+			t.Fatalf("prepare after abort: %v", err)
+		}
+		if got := retry.Candidate().Generation().RetiredCount(); got != 0 {
+			t.Fatalf("post-abort candidate inherited %d stale retirements", got)
+		}
+	})
 }
 
 func TestAllocatorCOWAuxiliaryPagesStayContiguousAboveReusableHoles(t *testing.T) {
@@ -264,6 +426,7 @@ func TestAllocatorCOWDoesNotReuseUntilTwoSlotHorizonAdvances(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		materializeAllocatorCOWCandidateForTest(t, p, prepared)
 		if err := allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
 			t.Fatal(err)
 		}

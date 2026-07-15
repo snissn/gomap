@@ -530,7 +530,11 @@ type DB struct {
 	// testFailDurableRootVisibleInstall fails after the alternate meta page is
 	// durably selected but before the matching in-memory state is installed.
 	// The writable handle must poison because recovery now owns reconciliation.
-	testFailDurableRootVisibleInstall              atomic.Bool
+	testFailDurableRootVisibleInstall atomic.Bool
+	// testFailDurableRootAfterCOWPrepare fails after allocator preparation but
+	// before the DB candidate owns that prepared state. Preparation must abort
+	// atomically so a later publication cannot inherit stale retirements.
+	testFailDurableRootAfterCOWPrepare             atomic.Bool
 	testFailCommandWALFlush                        atomic.Bool
 	testAfterOptimisticBaseCaptureHook             func()
 	testAfterOptimisticApplyHook                   func()
@@ -663,6 +667,7 @@ var errTestCommandWALRecoveryDependencySyncFailpoint = errors.New("treedb: comma
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 var errTestSyncMetaFailpoint = errors.New("treedb: sync meta failpoint")
 var errTestDurableRootVisibleInstallFailpoint = errors.New("treedb: durable root visible install failpoint")
+var errTestDurableRootAfterCOWPrepareFailpoint = errors.New("treedb: durable root post-COW-prepare failpoint")
 
 const (
 	commandWALWriterBufferSize              = 16 << 20
@@ -2959,6 +2964,14 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		defer db.durablePublishMu.Unlock()
 		opts.durablePublishLocked = true
 	}
+	// A publication that owned the durable gate while this caller waited may
+	// have crossed an outcome-ambiguous cut and poisoned the open handle. The
+	// admission check above cannot authorize work after that predecessor, and
+	// dependency capture is allowed to use projections that take no snapshot.
+	// Recheck while serialized before deriving or materializing another meta.
+	if err := db.commandWALPoisonedError(); err != nil {
+		return post, err
+	}
 	if opts.hasExpectedBaseCommitSeq {
 		db.mu.RLock()
 		currentCommitSeq := db.meta.CommitSeq
@@ -3094,7 +3107,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}()
 	candidate, prepareErr := db.prepareOrResumeDurableRootCandidateV1(idx, nextMeta, retired, durableResources, opts.closeTeardownPinned)
 	if prepareErr != nil {
-		return post, wrapFinalizeCommitError(prepareErr, true)
+		return post, wrapFinalizeCommitError(prepareErr, !errors.Is(prepareErr, ErrRecoveryRequired))
 	}
 	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
 		// The immutable candidate now owns its allocator reservations and exact

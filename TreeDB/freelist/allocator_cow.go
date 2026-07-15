@@ -27,14 +27,24 @@ type allocatorCOWStateV1 struct {
 	ready      *sync.Cond
 }
 
+// COWRetirementV1 is one retirement set staged atomically with a COW
+// candidate. The live allocator transaction is unchanged if preparation fails
+// or the caller aborts before publication.
+type COWRetirementV1 struct {
+	PageIDs                []uint64
+	LastReachableCommitSeq uint64
+}
+
 // PreparedCOWCandidateV1 is the immutable allocator handoff consumed by the
 // durable-root publisher. Auxiliary page IDs are reserved as ordinary data
 // pages in the same generation so manifest and root-record pages cannot race
 // allocator metadata or later index allocation.
 type PreparedCOWCandidateV1 struct {
-	candidate   *FreelistCandidateV1
-	candidateID CandidateIDV1
-	auxiliary   []uint64
+	candidate     *FreelistCandidateV1
+	candidateID   CandidateIDV1
+	auxiliary     []uint64
+	rollbackTxn   *FreelistTxn
+	rollbackStats Stats
 }
 
 func (prepared *PreparedCOWCandidateV1) Candidate() *FreelistCandidateV1 {
@@ -209,6 +219,13 @@ func (a *Allocator) RetireCOWV1(ids []uint64, lastReachableCommitSeq uint64) err
 }
 
 func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, auxiliaryPageCount int, sink AppendPageSink) (*PreparedCOWCandidateV1, error) {
+	return a.PrepareCOWCandidateRetiringV1(generationID, commitSeq, candidateID, capability, nil, auxiliaryPageCount, sink)
+}
+
+// PrepareCOWCandidateRetiringV1 stages retirements and candidate
+// materialization as one allocator transaction. The pre-prepare transaction
+// remains available for rollback until the candidate publishes.
+func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink) (*PreparedCOWCandidateV1, error) {
 	if auxiliaryPageCount < 0 || sink == nil {
 		return nil, ErrGenerationFormat
 	}
@@ -228,6 +245,29 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 		}
 		return a.cow.prepared, nil
 	}
+	rollbackTxn := a.cow.txn
+	rollbackStats := a.stats
+	staged, err := rollbackTxn.cloneForAllocatorPrepare()
+	if err != nil {
+		return nil, err
+	}
+	a.cow.txn = staged
+	rollback := func(cause error) (*PreparedCOWCandidateV1, error) {
+		a.cow.txn = rollbackTxn
+		a.stats = rollbackStats
+		if rollbackErr := a.cow.ledger.RollbackPreVisible(candidateID); rollbackErr != nil {
+			return nil, errors.Join(cause, fmt.Errorf("rollback COW reservation: %w", rollbackErr))
+		}
+		return nil, cause
+	}
+	for _, retirement := range retirements {
+		if len(retirement.PageIDs) == 0 {
+			continue
+		}
+		if err := a.retireCOWLocked(retirement.PageIDs, retirement.LastReachableCommitSeq); err != nil {
+			return rollback(err)
+		}
+	}
 	// Encode every page that the caller's sealed reuse capability permits as
 	// free in this exact durable generation. A prepared candidate is immutable;
 	// retry returns it above instead of applying a fresher capability after the
@@ -235,22 +275,44 @@ func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candid
 	a.cow.txn.PruneWithCapability(capability)
 	auxiliary, err := a.cow.txn.allocateAppendedRange(auxiliaryPageCount)
 	if err != nil {
-		return nil, err
-	}
-	for _, id := range auxiliary {
-		if id >= a.pager.PageCount() {
-			if err := a.pager.Truncate(id + 1); err != nil {
-				return nil, err
-			}
-		}
+		return rollback(err)
 	}
 	candidate, err := a.cow.txn.MaterializeCandidate(generationID, commitSeq, candidateID, sink)
 	if err != nil {
-		return nil, err
+		return rollback(err)
 	}
-	prepared := &PreparedCOWCandidateV1{candidate: candidate, candidateID: candidateID, auxiliary: auxiliary}
+	prepared := &PreparedCOWCandidateV1{
+		candidate: candidate, candidateID: candidateID, auxiliary: auxiliary,
+		rollbackTxn: rollbackTxn, rollbackStats: rollbackStats,
+	}
 	a.cow.prepared = prepared
 	return prepared, nil
+}
+
+// AbortCOWCandidateV1 rolls back a candidate that has not crossed visibility.
+// Reservation tails accepted by an arbitrary sink remain conservatively
+// burned, while the live allocation and retirement transaction is restored.
+func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
+	if a == nil || prepared == nil || prepared.rollbackTxn == nil {
+		return ErrGenerationFormat
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow == nil || a.cow.prepared != prepared {
+		return ErrCandidateConsumed
+	}
+	if a.cow.waitErr != nil {
+		return a.cow.waitErr
+	}
+	if err := a.cow.ledger.RollbackPreVisible(prepared.candidateID); err != nil {
+		return err
+	}
+	a.cow.txn = prepared.rollbackTxn
+	a.stats = prepared.rollbackStats
+	a.cow.prepared = nil
+	prepared.rollbackTxn = nil
+	a.cow.ready.Broadcast()
+	return nil
 }
 
 // FailCOWCandidateV1 preserves the exact prepared candidate for close/reopen
@@ -285,20 +347,25 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
 	}
+	generation := prepared.candidate.Generation()
+	if pageCount := a.pager.PageCount(); pageCount != generation.HighWater() {
+		return fmt.Errorf("%w: pager pages %d do not match prepared generation high-water %d", ErrGenerationFormat, pageCount, generation.HighWater())
+	}
 	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
 		return err
 	}
 	if err := a.cow.ledger.Publish(prepared.candidateID); err != nil {
 		return err
 	}
-	next, err := BeginCandidateV1(prepared.candidate.Generation(), prepared.candidate.GenerationRef(), a.cow.ledger)
+	next, err := BeginCandidateV1(generation, prepared.candidate.GenerationRef(), a.cow.ledger)
 	if err != nil {
 		return err
 	}
 	next.PruneWithCapability(nextCapability)
-	a.cow.generation = prepared.candidate.Generation()
+	a.cow.generation = generation
 	a.cow.txn = next
 	a.cow.prepared = nil
+	prepared.rollbackTxn = nil
 	a.cow.waitErr = nil
 	a.stats.FreeIDs = a.cow.generation.FreeCount()
 	a.cow.ready.Broadcast()

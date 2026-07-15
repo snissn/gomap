@@ -730,7 +730,7 @@ func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.Me
 // candidate without mutating either meta slot. COW pages are encoded into the
 // allocator-owned memory store here but are not copied into the index until
 // after external dependencies cross their flush and sync frontiers.
-func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, resources *rootpublication.StableResourceSet, closeTeardownPinned bool) (*durableRootPublishCandidateV1, error) {
+func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, resources *rootpublication.StableResourceSet, closeTeardownPinned bool) (candidate *durableRootPublishCandidateV1, err error) {
 	current := db.durableRoot
 	if current.meta.CommitSeq == 0 || current.record.CommitSeq != current.meta.CommitSeq || next.CommitSeq != current.meta.CommitSeq+1 {
 		return nil, fmt.Errorf("%w: durable=%d candidate=%d", errDurableRootCandidateStale, current.meta.CommitSeq, next.CommitSeq)
@@ -783,23 +783,38 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
-	if err := idx.allocator.RetireCOWV1(overwrittenPages, current.slotCommit[target]); err != nil {
-		return nil, fmt.Errorf("retire overwritten durable-root slot pages: %w", err)
-	}
-	if err := idx.allocator.RetireCOWV1(retired, current.record.CommitSeq); err != nil {
-		return nil, fmt.Errorf("retire COW pages: %w", err)
-	}
 	auxiliaryCount := int(manifest.PageCount()) + 1
-	prepared, err := idx.allocator.PrepareCOWCandidateV1(
+	prepared, err := idx.allocator.PrepareCOWCandidateRetiringV1(
 		current.record.Freelist.GenerationID+1,
 		next.CommitSeq,
 		durableRootCandidateIDV1(current, next),
 		capability,
+		[]freelist.COWRetirementV1{
+			{PageIDs: overwrittenPages, LastReachableCommitSeq: current.slotCommit[target]},
+			{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq},
+		},
 		auxiliaryCount,
 		freelist.NewMemoryPageStoreV1(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("prepare COW generation: %w", err)
+	}
+	preparedOwned := true
+	defer func() {
+		if !preparedOwned {
+			return
+		}
+		if abortErr := idx.allocator.AbortCOWCandidateV1(prepared); abortErr != nil {
+			cause := errors.Join(err, fmt.Errorf("abort incomplete COW generation: %w", abortErr), ErrRecoveryRequired)
+			db.publicationPoisoned.Store(true)
+			if failErr := idx.allocator.FailCOWCandidateV1(prepared, cause); failErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("fail incomplete COW generation: %w", failErr))
+			}
+			err = cause
+		}
+	}()
+	if db.testFailDurableRootAfterCOWPrepare.Load() {
+		return nil, errTestDurableRootAfterCOWPrepareFailpoint
 	}
 	generation := prepared.Candidate().Generation()
 	auxiliary := prepared.AuxiliaryPageIDs()
@@ -833,10 +848,11 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
-	candidate := &durableRootPublishCandidateV1{
+	candidate = &durableRootPublishCandidateV1{
 		idx: idx, base: current, next: next, resources: resources, manifest: manifest,
 		prepared: prepared, capability: capability, token: token, record: record, meta: meta, target: target,
 	}
+	preparedOwned = false
 	releaseResources = false
 	releaseToken = false
 	return candidate, nil

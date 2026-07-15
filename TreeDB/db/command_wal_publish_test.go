@@ -233,6 +233,65 @@ func TestCommandWALAppliedLSNOnlyPublishRebindsRootsAfterDurableGateWait(t *test
 	}
 }
 
+func TestCommandWALAppliedLSNOnlyPublishRechecksPoisonAfterDurableGateWait(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.State()
+	if before == nil {
+		t.Fatal("missing state before publication")
+	}
+	beforeGate := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	db.testCommandWALBeforeDurablePublishLockHook = func() {
+		once.Do(func() {
+			close(beforeGate)
+			<-release
+		})
+	}
+	db.durablePublishMu.Lock()
+	gateLocked := true
+	defer func() {
+		if gateLocked {
+			db.durablePublishMu.Unlock()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.PublishCommandWALAppliedLSN(
+			before.AppliedCommandLSN+1,
+			[]CommandWALLSNRange{{First: before.AppliedCommandLSN + 1, Last: before.AppliedCommandLSN + 1}},
+			true,
+		)
+	}()
+	select {
+	case <-beforeGate:
+	case <-time.After(5 * time.Second):
+		t.Fatal("applied-LSN publication did not reach the durable publish gate")
+	}
+	db.publicationPoisoned.Store(true)
+	close(release)
+	db.durablePublishMu.Unlock()
+	gateLocked = false
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("PublishCommandWALAppliedLSN error=%v, want ErrRecoveryRequired", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("poisoned publication did not return")
+	}
+	if after := db.State(); after == nil || after.CommitSeq != before.CommitSeq || after.AppliedCommandLSN != before.AppliedCommandLSN {
+		t.Fatalf("state changed after poisoned gate wait: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestPublishCommandWALNoopPreservesValueLogRefTracker(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{

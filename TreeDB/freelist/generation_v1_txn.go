@@ -192,6 +192,28 @@ type FreelistTxn struct {
 	stats            FreelistTxnStats
 }
 
+// cloneForAllocatorPrepare creates an isolated staging transaction. Tree nodes
+// are persistent copy-on-write values, so sharing the root is safe; every
+// mutable slice and map must be copied because candidate materialization
+// consumes and annotates the staged transaction.
+func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
+	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	clone := *t
+	clone.allocated = append([]allocatedPage(nil), t.allocated...)
+	clone.abandonedAppends = append([]ReservationExtentV1(nil), t.abandonedAppends...)
+	clone.changedChunks = make(map[uint64]struct{}, len(t.changedChunks))
+	for chunk := range t.changedChunks {
+		clone.changedChunks[chunk] = struct{}{}
+	}
+	clone.replacedMetadata = make(map[uint64]struct{}, len(t.replacedMetadata))
+	for id := range t.replacedMetadata {
+		clone.replacedMetadata[id] = struct{}{}
+	}
+	return &clone, nil
+}
+
 func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger) (*FreelistTxn, error) {
 	if base == nil || base.root == nil {
 		return nil, ErrGenerationFormat
