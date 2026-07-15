@@ -468,7 +468,15 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	if !ok {
 		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
 	}
-	pinned, err := duplicateStableSyncFile(spec.File)
+	duplicate := duplicateStableFile
+	if spec.SyncThrough == nil {
+		// The default Windows durability barrier needs a private write-capable
+		// reopen even when the producer retains only a read handle. A custom
+		// sync callback owns its handle contract, so preserve the source access
+		// rights (and support non-disk handles used by custom barriers).
+		duplicate = duplicateStableSyncFile
+	}
+	pinned, err := duplicate(spec.File)
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable resource handle: %w", err)
 	}
