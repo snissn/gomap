@@ -26,7 +26,12 @@ import (
 
 var ErrVacuumInProgress = errors.New("online vacuum already in progress")
 var ErrVacuumUnsupported = errors.New("online vacuum unsupported on this platform")
+var ErrVacuumRecoverableRootSetRequired = errors.New("online vacuum requires recoverable-root-set maintenance fencing")
 var ErrVacuumConcurrentMutation = errors.New("online vacuum aborted after concurrent mutations")
+
+type legacyOnlineVacuumCapabilityV1 interface {
+	allowLegacyOnlineVacuumV1()
+}
 
 // testHookVacuumAfterBaseSnapshot coordinates writes that must be replayed by
 // online vacuum tests. It remains nil in production.
@@ -301,7 +306,21 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	return db.vacuumIndexOnline(ctx, true)
 }
 
-func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retErr error) {
+func (db *DB) vacuumIndexOnline(_ context.Context, _ bool) error {
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return err
+	}
+	return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
+}
+
+// vacuumIndexOnlineLegacyV1 retains the pre-root-publication rebuild algorithm
+// for focused regression coverage while recoverable-root-set maintenance
+// fencing is implemented. Production callers cannot authorize this path: a
+// root-publication runtime must never be rebound by this direct index/meta swap.
+func (db *DB) vacuumIndexOnlineLegacyV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1) (retErr error) {
+	if capability == nil {
+		return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

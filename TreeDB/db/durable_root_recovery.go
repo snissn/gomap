@@ -244,8 +244,8 @@ func validateDurableRootLineageV1(source freelist.PageSource, record rootpublica
 	if parent.CommitSeq != record.ParentCommitSeq {
 		return fmt.Errorf("parent commit sequence mismatch: record=%d parent=%d", record.ParentCommitSeq, parent.CommitSeq)
 	}
-	if parent.CommitSeq == ^uint64(0) || parent.CommitSeq+1 != record.CommitSeq {
-		return fmt.Errorf("non-contiguous parent commit sequence: parent=%d child=%d", parent.CommitSeq, record.CommitSeq)
+	if parent.DurableSeq == ^uint64(0) || parent.DurableSeq+1 != record.DurableSeq {
+		return fmt.Errorf("non-contiguous durable publication sequence: parent=%d child=%d", parent.DurableSeq, record.DurableSeq)
 	}
 	if record.AppliedCommandLSN < parent.AppliedCommandLSN {
 		return fmt.Errorf("applied command-WAL frontier regressed: parent=%d child=%d", parent.AppliedCommandLSN, record.AppliedCommandLSN)

@@ -596,11 +596,14 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	indexVacuumSkipped := false
+	indexVacuumSkipReason := ""
 	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
 		indexVacuumSkipped = false
+		indexVacuumSkipReason = ""
 		err := db.vacuumIndexOnline(ctx, !maintenanceLocked)
 		if errors.Is(err, ErrVacuumUnsupported) {
 			indexVacuumSkipped = true
+			indexVacuumSkipReason = err.Error()
 			return nil
 		}
 		return err
@@ -610,7 +613,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if indexVacuumSkipped {
 		if len(stats.Phases) > 0 {
 			stats.Phases[len(stats.Phases)-1].Skipped = true
-			stats.Phases[len(stats.Phases)-1].SkipReason = ErrVacuumUnsupported.Error()
+			stats.Phases[len(stats.Phases)-1].SkipReason = indexVacuumSkipReason
 		}
 	} else if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
 		return db.Checkpoint()

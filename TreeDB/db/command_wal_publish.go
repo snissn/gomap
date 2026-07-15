@@ -35,6 +35,14 @@ type finalizeCommitOptions struct {
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
 	durablePublishLocked        bool
+	// durablePublishRelease transfers a caller-owned durablePublishMu lease to
+	// the finalizer and clears the caller's ownership flag exactly once. It is
+	// required whenever durablePublishLocked is true.
+	durablePublishRelease func()
+	// rootPublicationBuilder is an admitted builder lease acquired before any
+	// caller-owned durable publication lock. The finalizer consumes its final
+	// handle atomically with the visible candidate handoff.
+	rootPublicationBuilder *rootpublication.BuilderToken
 	// closeTeardownPinned proves the caller acquired teardownMu for reading
 	// before Close could revoke write admission and will retain that lease
 	// through commit post-work. It permits an already-admitted publication to
@@ -90,12 +98,21 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 	}
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
+	builder, err := db.acquireRootPublicationBuilderV1()
+	if err != nil {
+		return err
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 	durablePublishLocked := false
-	defer func() {
+	releaseDurablePublish := func() {
 		if durablePublishLocked {
 			db.durablePublishMu.Unlock()
+			durablePublishLocked = false
 		}
-	}()
+	}
+	defer releaseDurablePublish()
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		db.writeMu.Unlock()
@@ -149,12 +166,12 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		appliedRanges:            covered,
 		skipPrePublishFlush:      true,
 		durablePublishLocked:     true,
+		durablePublishRelease:    releaseDurablePublish,
+		rootPublicationBuilder:   builder,
 		closeTeardownPinned:      true,
 		releaseRootSerialization: func() {},
-	}
-	if !currentRoots {
-		finalizeOpts.expectedBaseCommitSeq = baseSeq
-		finalizeOpts.hasExpectedBaseCommitSeq = true
+		expectedBaseCommitSeq:    baseSeq,
+		hasExpectedBaseCommitSeq: true,
 	}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
@@ -169,8 +186,6 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		nil,
 		finalizeOpts,
 	)
-	db.durablePublishMu.Unlock()
-	durablePublishLocked = false
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)

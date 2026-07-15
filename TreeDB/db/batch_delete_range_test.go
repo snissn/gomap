@@ -212,7 +212,7 @@ func TestBatchDeleteRangeValueLogPointerRefsAndGC(t *testing.T) {
 	if pinned.SegmentsPending < 2 {
 		t.Fatalf("ValueLogGC pending %d segments while older durable slot is recoverable, want at least 2: %+v", pinned.SegmentsPending, pinned)
 	}
-	if err := d.Set([]byte("slot-advance"), []byte("inline")); err != nil {
+	if err := d.SetSync([]byte("slot-advance"), []byte("inline")); err != nil {
 		t.Fatalf("advance durable slot: %v", err)
 	}
 

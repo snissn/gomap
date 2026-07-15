@@ -147,6 +147,24 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			return stats, err
 		}
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Destructive standalone GC must classify reachability against a recovery-
+	// selectable root. A newer visible root may have removed the last reference
+	// while the older durable slots still pin that segment. Advance through the
+	// captured visible frontier before taking maintenanceMu so publisher stable
+	// I/O never runs under a maintenance lock. Internal callers that already own
+	// maintenanceMu establish their boundary explicitly (CompactStorage does so
+	// with its preceding checkpoint).
+	if !opts.DryRun && lockMaintenance && db.rootPublication != nil && db.rootPublication.coordinator != nil {
+		visibleSeq := db.rootPublication.coordinator.Stats().VisibleCommitSeq
+		if visibleSeq != 0 {
+			if err := db.rootPublication.coordinator.WaitThrough(ctx, visibleSeq); err != nil {
+				return stats, fmt.Errorf("stabilize value-log GC reachability frontier %d: %w", visibleSeq, publicRootPublicationErrorV1(err))
+			}
+		}
+	}
 	if lockMaintenance {
 		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
 			hook("value-log-gc")
@@ -163,9 +181,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				return stats, err
 			}
 		}
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	vm := db.valueLogManager
 	if vm == nil {

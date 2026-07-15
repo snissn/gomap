@@ -60,7 +60,7 @@ func TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutatio
 		defer token.Release()
 		prepared, set := candidateWithEmptyResourceSet(t, 1, 1)
 		defer prepared.AbandonResources()
-		if err := coordinator.EnqueueBuilt(context.Background(), prepared, token); !errors.Is(err, ErrBuilderLease) {
+		if _, err := coordinator.EnqueueBuilt(prepared, token); !errors.Is(err, ErrBuilderLease) {
 			t.Fatalf("foreign lease enqueue=%v", err)
 		}
 		if set.Owner() != ResourceOwnerCandidate || foreign.Stats().ActiveBuilders != 1 || coordinator.Stats().VisibleCommitSeq != 0 {
@@ -77,7 +77,7 @@ func TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutatio
 		token.Release()
 		prepared, set := candidateWithEmptyResourceSet(t, 1, 1)
 		defer prepared.AbandonResources()
-		if err := coordinator.EnqueueBuilt(context.Background(), prepared, token); !errors.Is(err, ErrBuilderLease) {
+		if _, err := coordinator.EnqueueBuilt(prepared, token); !errors.Is(err, ErrBuilderLease) {
 			t.Fatalf("released lease enqueue=%v", err)
 		}
 		if set.Owner() != ResourceOwnerCandidate || coordinator.Stats().VisibleCommitSeq != 0 {
@@ -96,15 +96,19 @@ func TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutatio
 			t.Fatal(err)
 		}
 		prepared, set := candidateWithEmptyResourceSet(t, 1, 1)
-		if err := coordinator.EnqueueBuilt(context.Background(), prepared, outer); !errors.Is(err, ErrBuilderLease) {
+		if _, err := coordinator.EnqueueBuilt(prepared, outer); !errors.Is(err, ErrBuilderLease) {
 			t.Fatalf("nested lease enqueue=%v", err)
 		}
 		if set.Owner() != ResourceOwnerCandidate || coordinator.Stats().ActiveBuilders != 1 || coordinator.Stats().VisibleCommitSeq != 0 {
 			t.Fatalf("nested rejection mutated candidate/lease/coordinator: owner=%v stats=%+v", set.Owner(), coordinator.Stats())
 		}
 		nested.Release()
-		if err := coordinator.EnqueueBuilt(context.Background(), prepared, outer); err != nil {
+		receipt, err := coordinator.EnqueueBuilt(prepared, outer)
+		if err != nil {
 			t.Fatalf("final lease handoff: %v", err)
+		}
+		if err := coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
+			t.Fatalf("final lease admission: %v", err)
 		}
 		if err := coordinator.Drain(context.Background()); err != nil {
 			t.Fatal(err)
@@ -127,7 +131,7 @@ func TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.EnqueueBuilt(context.Background(), nil, token); !errors.Is(err, ErrInvalidCandidate) {
+	if _, err := coordinator.EnqueueBuilt(nil, token); !errors.Is(err, ErrInvalidCandidate) {
 		t.Fatalf("nil candidate enqueue=%v", err)
 	}
 	probe, err := token.Nested()
@@ -138,7 +142,7 @@ func TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease(t *testing
 
 	fixture := newDurableRootTransactionFixture(t, durableLineage(9), 2)
 	fixture.activateErr = errors.New("activation rejected")
-	if err := coordinator.EnqueueBuilt(context.Background(), fixture.candidate, token); !errors.Is(err, fixture.activateErr) {
+	if _, err := coordinator.EnqueueBuilt(fixture.candidate, token); !errors.Is(err, fixture.activateErr) {
 		t.Fatalf("activation failure=%v", err)
 	}
 	if fixture.tx.Owner() != ResourceOwnerCandidate || fixture.resources.Owner() != ResourceOwnerCandidate || coordinator.Stats().ActiveBuilders != 1 {
@@ -172,8 +176,12 @@ func TestEnqueueBuiltAppendsBeforeFinalLeaseReleaseAndHardAdmissionWait(t *testi
 	if err := coordinator.Enqueue(context.Background(), candidate(t, 1, SoftPendingBytes)); err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.EnqueueBuilt(context.Background(), candidate(t, 2, HardPendingBytes), token); err != nil {
+	receipt, err := coordinator.EnqueueBuilt(candidate(t, 2, HardPendingBytes), token)
+	if err != nil {
 		t.Fatalf("atomic hard-admission handoff: %v", err)
+	}
+	if err := coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
+		t.Fatalf("hard-admission wait: %v", err)
 	}
 	published := waitForCall(t, calls)
 	if published.Frontier().CommitSeq() != 2 || coordinator.Stats().LastGroupSize != 2 {
@@ -206,7 +214,11 @@ func TestEnqueueBuiltConcurrentReleaseHasNoLockInversionOrDoubleConsume(t *testi
 		done := make(chan error, 1)
 		go func() {
 			<-start
-			done <- coordinator.EnqueueBuilt(context.Background(), prepared, token)
+			receipt, err := coordinator.EnqueueBuilt(prepared, token)
+			if err == nil {
+				err = coordinator.WaitForAdmission(context.Background(), receipt)
+			}
+			done <- err
 		}()
 		close(start)
 		runtime.Gosched()

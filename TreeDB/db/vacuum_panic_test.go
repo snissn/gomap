@@ -14,6 +14,7 @@ import (
 // in progress. The vacuum recorder must capture the full batch.Entry so vacuum
 // never needs to look up the key in a potentially stale snapshot.
 func TestVacuumRaceMissingKey(t *testing.T) {
+	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
@@ -59,7 +60,7 @@ func TestVacuumRaceMissingKey(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond)
-		if err := db.VacuumIndexOnline(ctx); err != nil {
+		if err := db.vacuumIndexOnlineLegacyForTest(ctx); err != nil {
 			errCh <- fmt.Errorf("vacuum failed: %v", err)
 		}
 	}()

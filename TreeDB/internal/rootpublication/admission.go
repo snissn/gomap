@@ -12,6 +12,17 @@ import (
 // candidate ownership.
 var ErrBuilderLease = errors.New("invalid root publication builder lease")
 
+// BuilderHandoffReceipt proves that EnqueueBuilt atomically accepted one
+// candidate and consumed its final builder lease. A receipt is coordinator
+// specific and separates irreversible ownership transfer from the optional
+// post-acceptance hard-admission wait.
+type BuilderHandoffReceipt struct {
+	coordinator       *Coordinator
+	sequence          uint64
+	failureGeneration uint64
+	hard              bool
+}
+
 // BuilderToken accounts one active candidate builder. Nested returns another
 // handle to the same lease; the coordinator sees one active builder until the
 // final handle is released.
@@ -68,24 +79,25 @@ func (c *Coordinator) AcquireBuilder(ctx context.Context) (*BuilderToken, error)
 // EnqueueBuilt atomically moves a prepared candidate into pending publication
 // and consumes the final builder lease. The handle -> lease -> coordinator lock
 // order matches Nested and Release. Validation or activation failure preserves
-// both candidate ownership and the live token. Any hard-admission wait starts
-// only after every lock and the consumed lease have been released.
-func (c *Coordinator) EnqueueBuilt(ctx context.Context, candidate *PreparedRootCandidate, token *BuilderToken) error {
+// both candidate ownership and the live token. A successful return proves that
+// ownership moved even when the receipt subsequently requires an admission
+// wait.
+func (c *Coordinator) EnqueueBuilt(candidate *PreparedRootCandidate, token *BuilderToken) (*BuilderHandoffReceipt, error) {
 	if token == nil || token.handle == nil {
-		return ErrBuilderLease
+		return nil, ErrBuilderLease
 	}
 	handle := token.handle
 	handle.mu.Lock()
 	if handle.released || handle.lease == nil {
 		handle.mu.Unlock()
-		return ErrBuilderLease
+		return nil, ErrBuilderLease
 	}
 	lease := handle.lease
 	lease.mu.Lock()
 	if lease.released || lease.coordinator != c || lease.refs != 1 {
 		lease.mu.Unlock()
 		handle.mu.Unlock()
-		return ErrBuilderLease
+		return nil, ErrBuilderLease
 	}
 
 	c.mu.Lock()
@@ -93,14 +105,14 @@ func (c *Coordinator) EnqueueBuilt(ctx context.Context, candidate *PreparedRootC
 		c.mu.Unlock()
 		lease.mu.Unlock()
 		handle.mu.Unlock()
-		return fmt.Errorf("%w: coordinator has no active builder", ErrBuilderLease)
+		return nil, fmt.Errorf("%w: coordinator has no active builder", ErrBuilderLease)
 	}
 	decision, err := c.enqueueLocked(candidate, false)
 	if err != nil {
 		c.mu.Unlock()
 		lease.mu.Unlock()
 		handle.mu.Unlock()
-		return err
+		return nil, err
 	}
 
 	// enqueueLocked has crossed its final fallible step. Consume the final
@@ -116,10 +128,23 @@ func (c *Coordinator) EnqueueBuilt(ctx context.Context, candidate *PreparedRootC
 	lease.mu.Unlock()
 	handle.mu.Unlock()
 	c.signal()
-	if !decision.hard {
+	return &BuilderHandoffReceipt{
+		coordinator: c, sequence: decision.sequence,
+		failureGeneration: decision.failureGeneration, hard: decision.hard,
+	}, nil
+}
+
+// WaitForAdmission completes the optional hard-admission wait associated with
+// an accepted builder handoff. Errors from this method are always
+// post-acceptance: the coordinator already owns the candidate and its debt.
+func (c *Coordinator) WaitForAdmission(ctx context.Context, receipt *BuilderHandoffReceipt) error {
+	if receipt == nil || receipt.coordinator != c {
+		return ErrBuilderLease
+	}
+	if !receipt.hard {
 		return nil
 	}
-	return c.waitForAdmission(ctx, decision.sequence, decision.failureGeneration)
+	return c.waitForAdmission(ctx, receipt.sequence, receipt.failureGeneration)
 }
 
 func (t *BuilderToken) Nested() (*BuilderToken, error) {

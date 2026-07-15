@@ -174,6 +174,7 @@ type DB struct {
 	teardownMu       sync.RWMutex // Pins Close-sensitive resources outside writeMu.
 	commitMu         sync.Mutex
 	durablePublishMu sync.Mutex
+	rootPublication  *rootPublicationRuntimeV1
 	// rootReuseMu seals acquisition of a visible root generation while durable
 	// publication converts retired COW pages into reusable pages. Existing
 	// readers remain concurrent; only new generation captures wait for the
@@ -2294,6 +2295,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 	}
+	// Recovery, replay, the visible snapshot, reachability tracking, and any
+	// command-WAL appender must all name the same root before asynchronous root
+	// publication can admit its first builder.
+	if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,
@@ -2634,33 +2642,54 @@ func (db *DB) closeAfterHooksOnce() error {
 func (db *DB) closeAfterHooks() error {
 	var errs []error
 
-	// Lock order after user callbacks is maintenanceMu, internal teardown hooks,
-	// writeMu, teardownMu, then mu. Internal registration never waits on
-	// maintenanceMu, and callbacks run before this chain with no DB lock held.
+	// User callbacks have flushed their higher-level buffers. First pass through
+	// maintenanceMu so an already-admitted maintenance operation can finish
+	// before closing becomes visible. Release it immediately after closing the
+	// admission gate: stable root publication must never run while it is held.
 	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
 	db.closing.Store(true)
-	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
-		errs = append(errs, err)
-	}
-	// Wait for active apply attempts before closing the reusable flush/apply
-	// worker pool and tearing down index resources.
+	db.maintenanceMu.Unlock()
+	// Wait for every already-admitted writer to finish constructing and handing
+	// off its immutable root candidate.
 	db.writeMu.Lock()
-	leafPageLog := db.leafPageLog
-	leafGenerationManifestStore := db.leafGenerationManifestStore
 	if db.flushApplyWorkerPool != nil {
 		db.flushApplyWorkerPool.Close()
 		db.flushApplyWorkerPool = nil
 	}
 	db.clearFlushApplyReadOnlyPrepareBuffers()
-	// Commit post-work persists the leaf-generation manifest while its writer
-	// still holds writeMu. Keep the retained manifest handles usable until every
-	// in-flight writer has drained. Close them before releasing writeMu so a
-	// caller queued behind Close cannot enter the drain-to-teardown handoff.
+	db.writeMu.Unlock()
+
+	var (
+		rootRuntime *rootPublicationRuntimeV1
+		rootHandoff *rootpublication.RecoveryResourceHandoff
+	)
+	if rootRuntime = db.rootPublication; rootRuntime != nil && rootRuntime.coordinator != nil {
+		if err := rootRuntime.coordinator.Drain(context.Background()); err != nil {
+			errs = append(errs, fmt.Errorf("drain root publication: %w", publicRootPublicationErrorV1(err)))
+		}
+		if err := rootRuntime.coordinator.Stop(context.Background()); err != nil {
+			errs = append(errs, fmt.Errorf("stop root publication: %w", publicRootPublicationErrorV1(err)))
+		}
+		var err error
+		rootHandoff, err = rootRuntime.coordinator.TakeRecoveryHandoff()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("take root publication recovery handoff: %w", publicRootPublicationErrorV1(err)))
+		}
+		db.rootPublication = nil
+	}
+
+	// No stable root I/O can begin beyond this point. Maintenance and teardown
+	// may now close producer resources and the index without racing Publisher.
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
+		errs = append(errs, err)
+	}
+	leafPageLog := db.leafPageLog
+	leafGenerationManifestStore := db.leafGenerationManifestStore
 	if leafGenerationManifestStore != nil {
 		leafGenerationManifestStore.Close()
 	}
-	db.writeMu.Unlock()
 	// Operations using teardownMu may briefly take writeMu while preparing or
 	// revalidating work. Never wait for them while holding writeMu.
 	db.teardownMu.Lock()
@@ -2718,6 +2747,15 @@ func (db *DB) closeAfterHooks() error {
 		if err := commandJournal.Close(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	// Pending candidate handles and allocator transactions stay pinned through
+	// resource and index shutdown. Only now may the live-runtime clones and the
+	// coordinator's exact recovery handoff be released.
+	if rootRuntime != nil {
+		rootRuntime.release()
+	}
+	if rootHandoff != nil {
+		rootHandoff.Release()
 	}
 	// Namespace sync proofs are valid only for this DB lifetime. Stable
 	// publication closures retain exact handles independently and remain usable
@@ -2910,6 +2948,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 }
 
 type finalizeCommitPost struct {
+	accepted                          bool
 	oldState                          *DBState
 	metrics                           adaptive.Metrics
 	vlogRefDelta                      *valueLogRefDelta
@@ -2955,15 +2994,44 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if err := db.commandWALPoisonedError(); err != nil {
 		return post, err
 	}
+	rootRuntime := db.rootPublication
+	builder := opts.rootPublicationBuilder
+	if rootRuntime != nil && builder == nil {
+		var err error
+		builder, err = rootRuntime.coordinator.AcquireBuilder(context.Background())
+		if err != nil {
+			return post, prePublishErr(fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err)))
+		}
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 	// Serialize before reading the visible meta projection. A preceding
 	// publication may already have synced its durable meta while it is still
 	// installing the matching in-memory state; preparing nextMeta before this
 	// gate would then reuse the just-published commit sequence.
-	if !opts.durablePublishLocked {
+	durablePublishLocked := true
+	releaseDurablePublishAction := opts.durablePublishRelease
+	if opts.durablePublishLocked {
+		if releaseDurablePublishAction == nil {
+			// Preserve legacy test/caller safety while making the transferred-lock
+			// contract explicit for every production prelocked path.
+			releaseDurablePublishAction = func() { db.durablePublishMu.Unlock() }
+		}
+	} else {
 		db.durablePublishMu.Lock()
-		defer db.durablePublishMu.Unlock()
-		opts.durablePublishLocked = true
+		releaseDurablePublishAction = func() {
+			db.durablePublishMu.Unlock()
+		}
 	}
+	releaseDurablePublish := func() {
+		if !durablePublishLocked {
+			return
+		}
+		durablePublishLocked = false
+		releaseDurablePublishAction()
+	}
+	defer releaseDurablePublish()
 	// A publication that owned the durable gate while this caller waited may
 	// have crossed an outcome-ambiguous cut and poisoned the open handle. The
 	// admission check above cannot authorize work after that predecessor, and
@@ -3073,6 +3141,14 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 				}
 			}
 		}
+	}
+	if rootRuntime != nil {
+		return db.finalizeQueuedRootPublicationV1(
+			rootRuntime, builder, idx, nextMeta, oldUserRootID, newRootID,
+			retired, sync, post, vlogRefDelta, leafManifest,
+			leafManifestRawFileIDs, opts, inlinePublishPrepareGuard,
+			releaseDurablePublish,
+		)
 	}
 
 	// 3. Materialize the COW inventory, sync the exact index identity, write the
@@ -3391,8 +3467,30 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 		db.mu.RUnlock()
 		opts.hasExpectedBaseCommitSeq = true
 	}
+	rootRuntime := db.rootPublication
+	var builder *rootpublication.BuilderToken
+	if rootRuntime != nil {
+		var err error
+		builder, err = rootRuntime.coordinator.AcquireBuilder(context.Background())
+		if err != nil {
+			err = publicRootPublicationErrorV1(err)
+			if onError != nil {
+				onError(err)
+			}
+			return finalizeCommitPost{}, fmt.Errorf("acquire root-publication builder: %w", err)
+		}
+		defer builder.Release()
+	}
+	durablePublishLocked := false
+	releaseDurablePublish := func() {
+		if durablePublishLocked {
+			db.durablePublishMu.Unlock()
+			durablePublishLocked = false
+		}
+	}
 	db.durablePublishMu.Lock()
-	defer db.durablePublishMu.Unlock()
+	durablePublishLocked = true
+	defer releaseDurablePublish()
 	release()
 
 	guard, err := db.prepareFinalizeCommitDurability(sync)
@@ -3406,6 +3504,8 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 
 	opts.skipPrePublishFlush = true
 	opts.durablePublishLocked = true
+	opts.durablePublishRelease = releaseDurablePublish
+	opts.rootPublicationBuilder = builder
 	opts.releaseRootSerialization = func() {}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
@@ -3490,18 +3590,46 @@ func (db *DB) Checkpoint() error {
 	}
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {
+		db.writeMu.Unlock()
 		return errors.New("missing index")
 	}
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		db.mu.RLock()
+		visibleCommitSeq := db.meta.CommitSeq
+		db.mu.RUnlock()
+		db.writeMu.Unlock()
+		// Checkpoint is a root durability boundary in every profile. Waiting is
+		// deliberately outside write/commit/root-build locks; Publisher owns the
+		// dependency -> index -> alternate-meta ordering for this exact prefix.
+		if err := runtime.coordinator.WaitThrough(context.Background(), visibleCommitSeq); err != nil {
+			return publicRootPublicationErrorV1(err)
+		}
+		rotatedCommandWAL := false
+		if db.commandWAL && db.commandJournal != nil && db.CommandWALActiveBytes() > 0 {
+			if err := db.RotateCommandWALActiveSegment(true); err != nil {
+				return err
+			}
+			rotatedCommandWAL = true
+		}
+		if rotatedCommandWAL {
+			if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	defer db.writeMu.Unlock()
 	debugTiming := commitTimingEnabled()
 	var (
 		start      time.Time
