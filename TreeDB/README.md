@@ -317,7 +317,7 @@ done
 ## Durability & Safety Notes
 
 - Safe defaults keep WAL, fsync, and read checksums enabled; relax safety knobs via `Options.Durability` and `Options.ValueLog.ReadIntegrity`.
-- In legacy relaxed durability modes, `SetSync`/`WriteSync` are crash-consistent only (no fsync) and may not survive power loss. When the command WAL is active, explicit sync APIs instead opt up to a durable V2 prefix even if ordinary writes use `DurabilityWALOnRelaxed`.
+- Explicit sync APIs do not downgrade in canonical production profiles. Command-WAL profiles wait for a durable V2 prefix, while `ProfileFast`/`no_wal_fast` wait for a sealed root covering the call. Ordinary relaxed writes may still be lost, and legacy WAL-on compatibility without command WAL retains its relaxed sync behavior.
 - Page checksums are verified once and cached until the page is rewritten; use `VerifyOnRead` for paranoid always-verify behavior. `Options.ValueLog.ReadIntegrity = IntegritySkipChecksums` disables value-log CRC checks entirely.
 - CRC checksums detect accidental corruption, not malicious tampering; use filesystem encryption/HMAC if your threat model includes adversarial disk access.
 - `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.

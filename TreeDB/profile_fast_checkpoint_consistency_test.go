@@ -142,7 +142,7 @@ func TestProfileFast_SetSyncRemainsVisibleAndPersistsAfterCheckpoint(t *testing.
 	assertCheckpointConsistencyLiveSet(t, db, live)
 }
 
-func TestProfileFast_SetSyncDefersBackendCommitUntilCheckpoint(t *testing.T) {
+func TestProfileFast_SetSyncPublishesDurableRootBeforeReturn(t *testing.T) {
 	opts := OptionsFor(ProfileFast, t.TempDir())
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.PointerThreshold = 1
@@ -184,20 +184,15 @@ func TestProfileFast_SetSyncDefersBackendCommitUntilCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse commit_seq after sync: %v", err)
 	}
-	if commitSeqAfterSync != commitSeqBefore {
-		t.Fatalf("commit_seq after SetSync=%d want %d before checkpoint", commitSeqAfterSync, commitSeqBefore)
+	if commitSeqAfterSync <= commitSeqBefore {
+		t.Fatalf("commit_seq after SetSync=%d want > %d", commitSeqAfterSync, commitSeqBefore)
 	}
-
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-
-	commitSeqAfterCheckpoint, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	durableCommitSeqAfterSync, err := strconv.ParseUint(db.Stats()["treedb.durable_root.commit_seq"], 10, 64)
 	if err != nil {
-		t.Fatalf("parse commit_seq after checkpoint: %v", err)
+		t.Fatalf("parse durable_root.commit_seq after sync: %v", err)
 	}
-	if commitSeqAfterCheckpoint <= commitSeqAfterSync {
-		t.Fatalf("commit_seq after checkpoint=%d want > %d", commitSeqAfterCheckpoint, commitSeqAfterSync)
+	if durableCommitSeqAfterSync != commitSeqAfterSync {
+		t.Fatalf("durable_root.commit_seq after SetSync=%d want visible commit_seq %d", durableCommitSeqAfterSync, commitSeqAfterSync)
 	}
 
 	if err := db.Close(); err != nil {

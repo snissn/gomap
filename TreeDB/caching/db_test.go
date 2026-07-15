@@ -1410,7 +1410,7 @@ func TestCheckpoint_IgnoresUnsupportedSparseVacuum(t *testing.T) {
 	}
 }
 
-func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
+func TestCheckpoint_WALOffNoPendingStateSkipsRotationAndSyncsBackend(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -1461,6 +1461,7 @@ func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
 	}
 	backend.mu.RLock()
 	writeCallsBefore := backend.writeCalls
+	writeSyncsBefore := backend.writeSyncs
 	backend.mu.RUnlock()
 
 	if err := db.Checkpoint(); err != nil {
@@ -1480,9 +1481,13 @@ func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
 	}
 	backend.mu.RLock()
 	writeCallsAfter := backend.writeCalls
+	writeSyncsAfter := backend.writeSyncs
 	backend.mu.RUnlock()
-	if writeCallsAfter != writeCallsBefore {
-		t.Fatalf("backend writeCalls after checkpoint=%d want %d", writeCallsAfter, writeCallsBefore)
+	if writeCallsAfter != writeCallsBefore+1 {
+		t.Fatalf("backend writeCalls after checkpoint=%d want %d", writeCallsAfter, writeCallsBefore+1)
+	}
+	if writeSyncsAfter != writeSyncsBefore+1 {
+		t.Fatalf("backend writeSyncs after checkpoint=%d want %d", writeSyncsAfter, writeSyncsBefore+1)
 	}
 
 	got, err := db.Get(key)

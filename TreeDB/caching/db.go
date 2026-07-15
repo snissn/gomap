@@ -24105,6 +24105,12 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		releaseWriteMu()
 		endWriteCutover()
+		backendBoundaryStart := time.Now()
+		err := backendSyncBoundary(db.backend)
+		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
+		if err != nil {
+			return err
+		}
 		db.checkpointNoopSkips.Add(1)
 		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
 			return err
@@ -24134,6 +24140,12 @@ func (db *DB) Checkpoint() error {
 					return err
 				}
 				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+					return err
+				}
+				backendBoundaryStart := time.Now()
+				err = backendSyncBoundary(db.backend)
+				recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
+				if err != nil {
 					return err
 				}
 				if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
@@ -24316,10 +24328,9 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 
-	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
+	segments, _ := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
 		filtered := segments[:0]
-		nonEmptyBytes = 0
 		for _, seg := range segments {
 			if seg.valueLog != db.walUsesValueLog() {
 				continue
@@ -24328,39 +24339,24 @@ func (db *DB) Checkpoint() error {
 				continue
 			}
 			filtered = append(filtered, seg)
-			if seg.size > 0 {
-				nonEmptyBytes += seg.size
-			}
 		}
 		segments = filtered
 	}
-	// New logic: perform sync write only if not relaxedSync
 	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
-	var commitErr error
-	if nonEmptyBytes > 0 || needsCommandWALPublish {
-		backendBoundaryStart := time.Now()
-		if needsCommandWALPublish {
-			// This backend batch is also the checkpoint durability boundary for any
-			// non-command WAL segments observed above, so command-LSN publication and
-			// ordinary cached checkpoint proof are not mutually exclusive.
-			_, commitErr = db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges)
-		} else if db.relaxedSync {
-			backendBatch := db.backend.NewBatch()
-			// If relaxed sync, just write the batch without forcing sync
-			commitErr = backendBatch.Write()
-			cerr := backendBatch.Close()
-			if commitErr == nil {
-				commitErr = cerr
-			}
-		} else {
-			// Otherwise, force a backend durability boundary without publishing
-			// an artificial same-root commit.
-			commitErr = backendSyncBoundary(db.backend)
+	if needsCommandWALPublish {
+		if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+			return err
 		}
-		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
-		if commitErr != nil {
-			return commitErr
-		}
+	}
+	// Checkpoint is the root-durability boundary in every profile. Backend batch
+	// WriteSync only proves the command-WAL prefix when command WAL is enabled,
+	// and relaxed publication may only enqueue a root candidate, so explicitly
+	// wait through the backend checkpoint before trimming the command WAL.
+	backendBoundaryStart := time.Now()
+	commitErr := backendSyncBoundary(db.backend)
+	recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
+	if commitErr != nil {
+		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
 		if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
@@ -25247,21 +25243,10 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 		// - relaxed: flush-to-kernel (no fsync)
 		return nil
 	}
-	if db.relaxedSync {
-		if db.indexOuterLeavesInValueLog {
-			// ProfileFast-style workloads rely on WriteSync for immediate
-			// read-after-write visibility, not per-batch backend publication.
-			// Forcing a backend flush boundary on every sync write with WAL off and
-			// outer leaves in the value log turns live catch-up into thousands of
-			// tiny backend commits, which explodes page count and sparse internal
-			// nodes. Keep these writes visible in memory and let checkpoint/rotation
-			// establish the backend boundary.
-			return nil
-		}
-		// Journal disabled: enforce a backend flush boundary without fsync.
-		return db.flushAllMemtablesForSync(false)
-	}
-	// Journal disabled: enforce a durable backend boundary.
+	// Explicit sync always opts a WAL-off write into a recovery-selectable root,
+	// even when ordinary writes use the relaxed/no-WAL-fast profile. Visibility
+	// alone is the contract of Flush; SetSync, DeleteSync, batch WriteSync, and
+	// their collection equivalents must survive process loss.
 	return db.Checkpoint()
 }
 
