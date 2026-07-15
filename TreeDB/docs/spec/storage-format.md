@@ -434,8 +434,13 @@ A durable-root record is one checksummed `0x0a` page. Bytes `16:384` are:
 Bytes `384:4096` are zero. The record digest is SHA-256 over the complete page
 with both the common page checksum and record-digest fields cleared. The common
 page checksum is then computed normally. The optional parent tuple identifies
-the previous independently recoverable generation; it does not authorize an
-unbounded recovery walk.
+the previous independently recoverable generation. Recovery reads at most that
+one parent record, verifies its exact page/commit/digest binding and contiguous
+commit sequence, and rejects a child whose applied command-WAL LSN regresses
+below the parent's frontier. The live publisher separately proves contiguous
+command-WAL coverage before encoding the child. Recovery never follows the
+parent recursively, so this lineage check does not authorize an unbounded
+recovery walk.
 
 `AppliedCommandLSN` and `MaxEntryRevision` are therefore selected with the
 exact roots that contain their effects. No sidecar, format marker, or padded

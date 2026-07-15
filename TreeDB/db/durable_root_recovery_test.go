@@ -123,6 +123,9 @@ type durableRootFixtureV1 struct {
 	store                *freelist.MemoryPageStoreV1
 	generation           *freelist.FreelistGenerationV1
 	nextCommit           uint64
+	appliedCommandLSN    uint64
+	lastRecordPageID     uint64
+	lastRecordDigest     [32]byte
 	lastPublicationPages uint64
 }
 
@@ -193,10 +196,15 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	record := rootpublication.DurableRootRecordV1{
 		CommitSeq: commitSeq, DurableSeq: commitSeq,
 		UserRootPageID: 2, SystemRootPageID: 3,
-		TotalPages: candidate.Generation().HighWater(),
-		Freelist:   candidate.GenerationRef(), FreelistFreeCount: candidate.Generation().FreeCount(),
+		TotalPages: candidate.Generation().HighWater(), AppliedCommandLSN: fixture.appliedCommandLSN,
+		Freelist: candidate.GenerationRef(), FreelistFreeCount: candidate.Generation().FreeCount(),
 		FreelistRetiredCount: candidate.Generation().RetiredCount(), Manifest: manifestRef,
+		ParentRecordPageID: fixture.lastRecordPageID, ParentCommitSeq: commitSeq - 1,
+		ParentRecordDigest:   fixture.lastRecordDigest,
 		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(commitSeq, commitSeq, recordPageID),
+	}
+	if fixture.lastRecordPageID == 0 {
+		record.ParentCommitSeq = 0
 	}
 	recordImage, recordDigest, err := record.EncodePage(recordPageID)
 	if err != nil {
@@ -220,6 +228,8 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 		t.Fatal(err)
 	}
 	fixture.generation = candidate.Generation()
+	fixture.lastRecordPageID = recordPageID
+	fixture.lastRecordDigest = recordDigest
 	if err := ledger.MarkVisible(candidateID); err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +238,62 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	}
 	fixture.lastPublicationPages = uint64(len(fixture.store.Pages) - pagesBefore)
 	return durableRootSelectionV1{Slot: slot, Meta: meta, Record: record, Freelist: candidate.Generation(), Manifest: manifest}
+}
+
+func rewriteDurableRootFixtureRecordV1(t testing.TB, fixture *durableRootFixtureV1, selected durableRootSelectionV1, record rootpublication.DurableRootRecordV1) durableRootSelectionV1 {
+	t.Helper()
+	image, digest, err := record.EncodePage(selected.Meta.RootRecordPageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.Pages[selected.Meta.RootRecordPageID] = append([]byte(nil), image...)
+	meta, err := page.NewDurableMetaV1(record.CommitSeq, record.DurableSeq, selected.Meta.RootRecordPageID, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaImage := make([]byte, page.PageSize)
+	if err := meta.Encode(metaImage[page.PageHeaderSize:]); err != nil {
+		t.Fatal(err)
+	}
+	header := page.PageHeader{PageID: selected.Slot, Flags: uint16(page.PageTypeMeta)}
+	header.Encode(metaImage)
+	page.UpdateChecksum(metaImage)
+	fixture.store.Pages[selected.Slot] = append([]byte(nil), metaImage...)
+	selected.Meta = meta
+	selected.Record = record
+	return selected
+}
+
+func TestSelectDurableRootV1RejectsNewestBrokenParentLineageAndFallsBack(t *testing.T) {
+	fixture := newDurableRootFixtureV1(t)
+	older := fixture.addCandidate(t, MetaPage0ID)
+	newer := fixture.addCandidate(t, MetaPage1ID)
+	newer.Record.ParentRecordDigest[0] ^= 0xff
+	newer = rewriteDurableRootFixtureRecordV1(t, fixture, newer, newer.Record)
+
+	selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Slot != older.Slot || selected.Meta.CommitSeq != older.Meta.CommitSeq {
+		t.Fatalf("selected slot/commit=(%d,%d), want older (%d,%d)", selected.Slot, selected.Meta.CommitSeq, older.Slot, older.Meta.CommitSeq)
+	}
+}
+
+func TestSelectDurableRootV1RejectsNewestAppliedCommandWALRegressionAndFallsBack(t *testing.T) {
+	fixture := newDurableRootFixtureV1(t)
+	fixture.appliedCommandLSN = 7
+	older := fixture.addCandidate(t, MetaPage0ID)
+	fixture.appliedCommandLSN = 6
+	newer := fixture.addCandidate(t, MetaPage1ID)
+
+	selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Slot != older.Slot || selected.Meta.CommitSeq != older.Meta.CommitSeq {
+		t.Fatalf("selected slot/commit=(%d,%d), want older (%d,%d)", selected.Slot, selected.Meta.CommitSeq, older.Slot, older.Meta.CommitSeq)
+	}
 }
 
 func TestSelectDurableRootV1ValidatesExactExternalRangesAndFallsBack(t *testing.T) {

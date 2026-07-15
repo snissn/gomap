@@ -166,6 +166,9 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	if record.TotalPages > physicalPageCount {
 		return durableRootSelectionV1{}, fmt.Errorf("root record: total pages %d exceeds physical pages %d", record.TotalPages, physicalPageCount)
 	}
+	if err := validateDurableRootLineageV1(source, record); err != nil {
+		return durableRootSelectionV1{}, fmt.Errorf("root record lineage: %w", err)
+	}
 	generation, err := freelist.LoadGenerationV1(source, record.Freelist)
 	if err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("COW freelist: %w", err)
@@ -198,6 +201,37 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	}
 	accepted = true
 	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest, resources: resources}, nil
+}
+
+// validateDurableRootLineageV1 performs the fixed-depth lineage check promised
+// by the durable-root format. A lineage anchor has no parent. Every ordinary
+// successor binds the immediately preceding record by page, commit sequence,
+// and digest; decoding that parent also lets recovery prove that the selected
+// applied command-WAL frontier did not regress. Publication proves contiguous
+// coverage before writing the child record, while this bounded read proves the
+// persisted frontier belongs to the exact parent/child root lineage.
+func validateDurableRootLineageV1(source freelist.PageSource, record rootpublication.DurableRootRecordV1) error {
+	if record.ParentRecordPageID == 0 {
+		return nil
+	}
+	parentImage, err := source.ReadPage(record.ParentRecordPageID)
+	if err != nil {
+		return fmt.Errorf("parent record: %w", err)
+	}
+	parent, err := rootpublication.DecodeDurableRootRecordV1(parentImage, record.ParentRecordPageID, record.ParentRecordDigest)
+	if err != nil {
+		return fmt.Errorf("parent record: %w", err)
+	}
+	if parent.CommitSeq != record.ParentCommitSeq {
+		return fmt.Errorf("parent commit sequence mismatch: record=%d parent=%d", record.ParentCommitSeq, parent.CommitSeq)
+	}
+	if parent.CommitSeq == ^uint64(0) || parent.CommitSeq+1 != record.CommitSeq {
+		return fmt.Errorf("non-contiguous parent commit sequence: parent=%d child=%d", parent.CommitSeq, record.CommitSeq)
+	}
+	if record.AppliedCommandLSN < parent.AppliedCommandLSN {
+		return fmt.Errorf("applied command-WAL frontier regressed: parent=%d child=%d", parent.AppliedCommandLSN, record.AppliedCommandLSN)
+	}
+	return nil
 }
 
 func validateDurableRootPageV1(source freelist.PageSource, pageID, totalPages uint64) error {
