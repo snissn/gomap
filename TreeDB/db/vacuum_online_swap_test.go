@@ -336,6 +336,7 @@ func (l *countingLeafPageLog) Flush() error { return l.inner.Flush() }
 func (l *countingLeafPageLog) Sync() error  { return l.inner.Sync() }
 
 func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
+	skipLegacyOnlineVacuumRuntimeIntegration(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
