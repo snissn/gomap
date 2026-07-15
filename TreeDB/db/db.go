@@ -1964,12 +1964,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
-	vm, err := valuelog.NewManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
+	vm, err := valuelog.NewManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		p.Close()
 		return nil, err
 	}
-	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		p.Close()
 		return nil, err
@@ -2183,16 +2183,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 
-	// Recovery and WAL/value-log replay may touch the manager's file set. Reapply
-	// decode hooks and refresh before publishing the initial snapshot so
-	// read-write opens decode dict/template-backed values the same way as
-	// read-only opens and offline maintenance helpers.
+	// Recovery registers the exact resource paths named by each viable durable
+	// manifest, and replay producers register newly created segments directly.
+	// Reapply decode hooks without replacing that bounded inventory with a
+	// directory-wide discovery pass.
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
-	if err := vm.Refresh(); err != nil {
-		db.Close()
-		return nil, err
-	}
 	recoverySet := vm.CurrentSetNoRefresh()
 	reader := newValueReader(recoverySet)
 	releaseRecoverySet := func() error {
@@ -2203,19 +2199,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		recoverySet = nil
 		return err
 	}
-	recoveredLeafReset, err := recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq, releaseRecoverySet, vm.EvictSegment)
+	_, err = recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq, releaseRecoverySet, vm.EvictSegment)
 	if releaseErr := releaseRecoverySet(); err == nil && releaseErr != nil {
 		err = releaseErr
 	}
 	if err != nil {
 		db.Close()
 		return nil, err
-	}
-	if recoveredLeafReset {
-		if err := vm.Refresh(); err != nil {
-			db.Close()
-			return nil, err
-		}
 	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, selectedExact, err := db.loadSelectedDurableLeafGenerationManifest()
@@ -2236,7 +2226,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
-		ValueLogSet:                vm.CurrentSet(),
+		ValueLogSet:                vm.CurrentSetNoRefresh(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}

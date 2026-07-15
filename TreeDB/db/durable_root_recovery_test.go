@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"hash/crc32"
 	"os"
@@ -10,9 +11,113 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestOpenDurableRootRecoveryDoesNotScanUnrelatedValueLogSegments(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{
+		Dir:                    dir,
+		DisableBackgroundPrune: true,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	want := bytes.Repeat([]byte("bounded-recovery|"), 64)
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 1, 1, func(int) []byte { return want })[0]
+	if err := database.valueLogManager.RegisterSegment(valuelog.SegmentPath(ValueLogDirPath(dir), ptr.FileID), ptr.FileID); err != nil {
+		_ = database.Close()
+		t.Fatalf("register exact producer segment: %v", err)
+	}
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("key"), ptr); err != nil {
+		_ = batch.Close()
+		_ = database.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		_ = batch.Close()
+		_ = database.Close()
+		t.Fatalf("write sync: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		_ = database.Close()
+		t.Fatalf("close batch: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	for lane := uint32(1); lane <= 32; lane++ {
+		fileID, err := valuelog.EncodeFileID(lane, 1)
+		if err != nil {
+			t.Fatalf("encode unrelated file id: %v", err)
+		}
+		path := valuelog.SegmentPath(ValueLogDirPath(dir), fileID)
+		if err := os.WriteFile(path, []byte("not a value-log segment"), 0o600); err != nil {
+			t.Fatalf("write unrelated segment: %v", err)
+		}
+	}
+
+	reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("bounded reopen: %v", err)
+	}
+	defer reopened.Close()
+	if scans := reopened.valueLogManager.RefreshScanCount(); scans != 0 {
+		t.Fatalf("recovery performed %d value-log directory scans, want 0", scans)
+	}
+	got, err := reopened.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value differs after bounded reopen")
+	}
+}
+
+func TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer database.Close()
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 1, 1, func(int) []byte {
+		return bytes.Repeat([]byte("producer-owned|"), 32)
+	})[0]
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("key"), ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := batch.WriteSync(); !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("unregistered canonical path write error=%v want unresolved resource", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("close rejected batch: %v", err)
+	}
+
+	path := valuelog.SegmentPath(ValueLogDirPath(dir), ptr.FileID)
+	if err := database.RegisterValueLogSegment(path, ptr.FileID); err != nil {
+		t.Fatalf("register exact producer segment: %v", err)
+	}
+	batch = database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("key"), ptr); err != nil {
+		t.Fatalf("set registered pointer: %v", err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatalf("write registered pointer: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("close registered batch: %v", err)
+	}
+}
 
 type durableRootFixtureV1 struct {
 	store                *freelist.MemoryPageStoreV1

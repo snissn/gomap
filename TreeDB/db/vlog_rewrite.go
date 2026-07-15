@@ -5768,7 +5768,11 @@ func readRawRecord(r io.ReaderAt, ptr page.ValuePtr) ([]byte, error) {
 func chooseRewriteLane(segments []logSegment, reserved ...uint32) (uint32, uint32) {
 	used := make(map[uint32]struct{})
 	maxSeq := make(map[uint32]uint32)
-	reservedSet := make(map[uint32]struct{}, len(reserved))
+	reservedSet := make(map[uint32]struct{}, len(reserved)+1)
+	// The outer-leaf lane is a format-level namespace reservation even when the
+	// current DB has outer-leaf logging disabled. Reusing it for ordinary values
+	// makes a ValuePtr's physical namespace ambiguous during bounded recovery.
+	reservedSet[rewriteLeafLogLaneID] = struct{}{}
 	for _, lane := range reserved {
 		reservedSet[lane] = struct{}{}
 	}

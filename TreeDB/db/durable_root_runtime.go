@@ -315,7 +315,7 @@ func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]
 		}); err != nil {
 			return err
 		}
-		if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
+		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 			return err
 		}
 		return db.rebindCandidateValueLogSetV1(snapshot)
@@ -340,7 +340,7 @@ func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]
 				return err
 			}
 		}
-		if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
+		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 			return err
 		}
 		return db.rebindCandidateValueLogSetV1(snapshot)
@@ -428,13 +428,11 @@ func durableDiagnosticPathV1(root, path string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
-// ensureDurableValueLogReferencesRegisteredV1 resolves only the projected
-// pointer dependencies that are absent from the manager. Normal in-process
-// writers register segments at creation time; this bounded fallback covers
-// externally prepared pointer segments without turning root publication into a
-// recursive directory scan. ValuePtr does not encode the value/leaf namespace,
-// so the same file ID in both namespaces is an identity conflict.
-func (db *DB) ensureDurableValueLogReferencesRegisteredV1(references map[uint32]struct{}) error {
+// requireDurableValueLogReferencesRegisteredV1 enforces producer ownership:
+// every pointer made reachable by a candidate must already have been
+// registered from the producer's exact open handle. Publication never stats a
+// derived path to discover or authorize an otherwise unreported resource.
+func (db *DB) requireDurableValueLogReferencesRegisteredV1(references map[uint32]struct{}) error {
 	if db == nil || db.valueLogManager == nil || len(references) == 0 {
 		return nil
 	}
@@ -444,36 +442,8 @@ func (db *DB) ensureDurableValueLogReferencesRegisteredV1(references map[uint32]
 	}
 	sort.Slice(fileIDs, func(i, j int) bool { return fileIDs[i] < fileIDs[j] })
 	for _, fileID := range fileIDs {
-		if db.valueLogManager.HasSegment(fileID) {
-			continue
-		}
-		candidatePaths := []string{
-			valuelog.SegmentPath(ValueLogDirPath(db.dir), fileID),
-			valuelog.SegmentPath(LeafLogDirPath(db.dir), fileID),
-		}
-		found := make([]string, 0, len(candidatePaths))
-		for _, path := range candidatePaths {
-			info, err := os.Stat(path)
-			switch {
-			case err == nil && !info.IsDir():
-				found = append(found, path)
-			case err == nil:
-				return fmt.Errorf("%w: value-log file %d path %q is not a file", rootpublication.ErrUnresolvedResource, fileID, path)
-			case errors.Is(err, os.ErrNotExist):
-				continue
-			default:
-				return fmt.Errorf("%w: inspect value-log file %d path %q: %v", rootpublication.ErrUnresolvedResource, fileID, path, err)
-			}
-		}
-		switch len(found) {
-		case 0:
-			return fmt.Errorf("%w: value-log file %d is not registered and has no canonical segment", rootpublication.ErrUnresolvedResource, fileID)
-		case 1:
-			if err := db.valueLogManager.RegisterSegment(found[0], fileID); err != nil {
-				return fmt.Errorf("register durable value-log file %d: %w", fileID, err)
-			}
-		default:
-			return fmt.Errorf("%w: value-log file %d exists in both canonical namespaces", rootpublication.ErrResourceConflict, fileID)
+		if !db.valueLogManager.HasSegment(fileID) {
+			return fmt.Errorf("%w: value-log file %d was not registered by its producer", rootpublication.ErrUnresolvedResource, fileID)
 		}
 	}
 	return nil
@@ -503,7 +473,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 	if len(references) == 0 {
 		return nil, nil
 	}
-	if err := db.ensureDurableValueLogReferencesRegisteredV1(references); err != nil {
+	if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 		return nil, err
 	}
 	return db.captureRegisteredDurableValueLogResourcesV1(references)
@@ -1315,6 +1285,45 @@ func (db *DB) installDurableRootSelectionV1(selected durableRootSelectionV1) {
 	db.metaPageID = selected.Slot
 }
 
+// registerDurableManifestValueLogSegmentsV1 resolves only exact value-log
+// identities named by the bounded durable inventory. The physical path is
+// derived from the resource kind and encoded file ID; DiagnosticPath is checked
+// against that derivation and is never used as discovery authority.
+func (db *DB) registerDurableManifestValueLogSegmentsV1(entries []rootpublication.DependencyManifestEntryV1) error {
+	if db == nil || db.valueLogManager == nil {
+		return fmt.Errorf("%w: value-log manager unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	for _, entry := range entries {
+		var dir string
+		switch entry.Kind {
+		case rootpublication.ResourceValueLog:
+			dir = ValueLogDirPath(db.dir)
+		case rootpublication.ResourceOuterLeafLog:
+			dir = LeafLogDirPath(db.dir)
+		default:
+			continue
+		}
+		fileID64, err := strconv.ParseUint(entry.ResourceID, 10, 32)
+		if err != nil || fileID64 == 0 || entry.Generation != fileID64 {
+			return fmt.Errorf("%w: invalid %s resource identity %q/%d", rootpublication.ErrUnresolvedResource, entry.Kind, entry.ResourceID, entry.Generation)
+		}
+		fileID := uint32(fileID64)
+		lane, _ := valuelog.DecodeFileID(fileID)
+		if (entry.Kind == rootpublication.ResourceOuterLeafLog) != (lane == valuelog.ReservedLeafLogLaneID) {
+			return fmt.Errorf("%w: file %d namespace does not match durable kind %q", rootpublication.ErrResourceConflict, fileID, entry.Kind)
+		}
+		path := valuelog.SegmentPath(dir, fileID)
+		diagnosticPath, err := durableDiagnosticPathV1(db.dir, path)
+		if err != nil || diagnosticPath != entry.DiagnosticPath {
+			return fmt.Errorf("%w: %s file %d path %q differs from canonical namespace %q", rootpublication.ErrResourceConflict, entry.Kind, fileID, entry.DiagnosticPath, diagnosticPath)
+		}
+		if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
+			return fmt.Errorf("register manifest %s file %d: %w", entry.Kind, fileID, err)
+		}
+	}
+	return nil
+}
+
 func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error) {
 	if manifest == nil {
 		return nil, rootpublication.ErrDependencyManifestFormat
@@ -1325,6 +1334,9 @@ func (db *DB) validateDurableDependencyManifestV1(manifest *rootpublication.Depe
 	}
 	if db == nil || db.valueLogManager == nil {
 		return nil, fmt.Errorf("%w: value-log manager unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if err := db.registerDurableManifestValueLogSegmentsV1(entries); err != nil {
+		return nil, err
 	}
 	set := db.valueLogManager.CurrentSetNoRefresh()
 	defer func() { _ = db.valueLogManager.Release(set) }()

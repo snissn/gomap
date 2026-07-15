@@ -459,6 +459,12 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	if err := w2.Close(); err != nil {
 		t.Fatalf("close2: %v", err)
 	}
+	if err := db.RegisterValueLogSegment(path1, id1); err != nil {
+		t.Fatalf("register producer segment1: %v", err)
+	}
+	if err := db.RegisterValueLogSegmentReplacing(path2, id2, id1); err != nil {
+		t.Fatalf("register producer segment2: %v", err)
+	}
 
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {
@@ -1768,6 +1774,9 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 100_000, 4, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(i + 1)}, 512)
 	})
+	if err := db.RegisterValueLogSegment(valueLogSegmentPath(t, dir, ptrs[0].FileID), ptrs[0].FileID); err != nil {
+		t.Fatalf("register producer segment: %v", err)
+	}
 	b := db.NewBatch().(*Batch)
 	for i := range ptrs {
 		if err := b.SetPointer([]byte{byte('a' + i)}, ptrs[i]); err != nil {
@@ -2077,6 +2086,9 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 	})
 	sourceID := ptrs[0].FileID
 	sourcePath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := db.RegisterValueLogSegment(sourcePath, sourceID); err != nil {
+		t.Fatalf("register producer segment: %v", err)
+	}
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {

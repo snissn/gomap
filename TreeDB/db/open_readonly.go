@@ -60,13 +60,13 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
-	vm, err := valuelog.NewReadOnlyManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
+	vm, err := valuelog.NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
 		_ = lock.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
-	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		_ = p.Close()
 		_ = lock.Close()
@@ -179,7 +179,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
-		ValueLogSet:                vm.CurrentSet(),
+		ValueLogSet:                vm.CurrentSetNoRefresh(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
@@ -217,12 +217,12 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	layout := resolveStorageLayout(opts.Dir)
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
-	vm, err := valuelog.NewReadOnlyManagerWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
+	vm, err := valuelog.NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
 		_ = p.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
 	}
-	if err := vm.AddScanDir(layout.leafVLogDir); err != nil {
+	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
 		_ = vm.Close()
 		_ = p.Close()
 		return nil, wrapReadOnlyValueLogRecoveryError(err)
@@ -333,7 +333,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
-		ValueLogSet:                vm.CurrentSet(),
+		ValueLogSet:                vm.CurrentSetNoRefresh(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
