@@ -7,13 +7,46 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestColumnAssetRewriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
+func prepareUnprovenColumnAssetNamespaceOnWindows(t *testing.T, rootDir, namespaceName string) columnAssetManagerNamespace {
+	t.Helper()
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, namespaceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("prepare unproven column asset namespace: %v", err)
+	}
+	return namespace
+}
+
+func TestStableColumnAssetCreateRejectsFreshUnstableParentsOnWindows(t *testing.T) {
+	dir := t.TempDir()
+	cfg := stableColumnAppendTestConfig("fresh_unstable_parent")
+	_, token, err := writeColumnAssetToManagerWithStableResource(
+		dir, cfg, []byte("windows-stable-column"), ColumnAssetKindTCS1TypedColumnPart, 7, 11,
+	)
+	if token != nil {
+		token.Release()
+	}
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("stable first write error=%v want ErrNamespacePersistenceUnsupported", err)
+	}
+	namespace, namespaceErr := columnAssetManagerNamespaceForRoot(dir, cfg.AssetManager.Namespace)
+	if namespaceErr != nil {
+		t.Fatal(namespaceErr)
+	}
+	if _, statErr := os.Stat(namespace.ManagerRootDir); !os.IsNotExist(statErr) {
+		t.Fatalf("stable first write manager root stat=%v want not-exist", statErr)
+	}
+}
+
+func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -26,67 +59,57 @@ func TestColumnAssetRewriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	before := columnAssetSegmentNamesM15C(t, d, col)
-	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}})
-	if err != nil {
-		t.Fatalf("ColumnAssetRewrite: %v", err)
+	if _, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{CandidateRefs: []ColumnAssetRef{candidate}}); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("ColumnAssetRewrite error=%v want ErrNamespacePersistenceUnsupported", err)
 	}
-	if stats.SegmentsRewritten != 1 || stats.RefsRemapped == 0 || len(stats.SupersededRefs) != stats.RefsRemapped {
-		t.Fatalf("ColumnAssetRewrite stats=%+v want one rewritten segment and matched remap", stats)
+	if after := columnAssetSegmentNamesM15C(t, d, col); !slices.Equal(after, before) {
+		t.Fatalf("unsupported rewrite exposed segments after=%v before=%v", after, before)
 	}
-	after := columnAssetSegmentNamesM15C(t, d, col)
-	if len(after) != len(before)+1 {
-		t.Fatalf("create-only rewrite segments after=%v before=%v want one fresh segment", after, before)
-	}
-	if stats.RemapSegmentFileID == 0 || stats.RemapSegmentFileID == candidate.FileID {
-		t.Fatalf("create-only rewrite remap file_id=%d source=%d", stats.RemapSegmentFileID, candidate.FileID)
-	}
-	sourcePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(sourcePath); err != nil {
-		t.Fatalf("create-only rewrite removed source %q: %v", sourcePath, err)
-	}
-	if registry.ActivePins() <= baselinePins || registry.ActiveIdentities() <= baselineIdentities {
-		t.Fatalf("create-only rewrite retained pins=%d identities=%d want above baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
+	if registry.ActivePins() != baselinePins || registry.ActiveIdentities() != baselineIdentities {
+		t.Fatalf("unsupported rewrite changed registry pins=%d identities=%d want baseline pins=%d identities=%d", registry.ActivePins(), registry.ActiveIdentities(), baselinePins, baselineIdentities)
 	}
 }
 
-func TestOrdinaryColumnWriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
-	if !ordinaryColumnStableAuthorityEnabled() {
-		t.Fatal("ordinary stable column create authority unexpectedly disabled on Windows")
+func TestOrdinaryColumnWriteUsesLegacyPreActivationPathAndReopensOnWindows(t *testing.T) {
+	if ordinaryColumnStableAuthorityEnabled() {
+		t.Fatal("ordinary stable column authority unexpectedly enabled on Windows")
 	}
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	col := openColumnStoreCollectionM10B(t, d)
 	registry := d.StableResourceIdentityPinRegistry()
-	baselinePins := registry.ActivePins()
-	baselineLinks := registry.ActiveStableNamespaceLinks()
 	doc := []byte(`{"time_us":1,"kind":"like","did":"did:windows"}`)
-	if _, err := col.Insert([]byte("windows-stable"), doc); err != nil {
-		t.Fatalf("ordinary stable column Insert: %v", err)
+	if _, err := col.Insert([]byte("windows-legacy"), doc); err != nil {
+		t.Fatalf("ordinary legacy column Insert: %v", err)
 	}
-	got, err := col.Get([]byte("windows-stable"))
+	got, err := col.Get([]byte("windows-legacy"))
 	if err != nil {
-		t.Fatalf("ordinary stable column Get: %v", err)
+		t.Fatalf("ordinary legacy column Get: %v", err)
 	}
 	if !bytes.Equal(got, doc) {
-		t.Fatalf("ordinary stable column Get=%s want %s", got, doc)
-	}
-	if got := registry.ActivePins(); got <= baselinePins {
-		t.Fatalf("ordinary stable publication active pins=%d want > baseline %d while durable roots retain authority", got, baselinePins)
-	}
-	if got := registry.ActiveStableNamespaceLinks(); got <= baselineLinks {
-		t.Fatalf("ordinary stable publication namespace proofs=%d want > baseline %d", got, baselineLinks)
-	}
-	if err := d.Close(); err != nil {
-		t.Fatalf("close ordinary stable column DB: %v", err)
+		t.Fatalf("ordinary legacy column Get=%s want %s", got, doc)
 	}
 	if got := registry.ActivePins(); got != 0 {
-		t.Fatalf("ordinary stable publication active pins after close=%d want 0", got)
+		t.Fatalf("ordinary legacy publication active stable pins=%d want 0", got)
 	}
-	if got := registry.ActiveIdentities(); got != 0 {
-		t.Fatalf("ordinary stable publication active identities after close=%d want 0", got)
+	if got := registry.ActiveStableNamespaceLinks(); got != 0 {
+		t.Fatalf("ordinary legacy publication stable namespace proofs=%d want 0", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close ordinary legacy column DB: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCollection, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open ordinary legacy collection after reopen: %v", err)
+	}
+	got, err = reopenedCollection.Get([]byte("windows-legacy"))
+	if err != nil {
+		t.Fatalf("ordinary legacy column Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("ordinary legacy column Get after reopen=%s want %s", got, doc)
 	}
 }
 
@@ -122,7 +145,7 @@ func TestColumnAssetGCDestructiveFailsClosedOnWindowsBeforeUnlink(t *testing.T) 
 	}
 }
 
-func TestStableColumnAssetCaptureUsesCreateOnlyWindowsEvidence(t *testing.T) {
+func TestStableColumnAssetCaptureRejectsUnprovenExistingParentsOnWindows(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -130,119 +153,79 @@ func TestStableColumnAssetCaptureUsesCreateOnlyWindowsEvidence(t *testing.T) {
 			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_parent",
 		},
 	}
+	namespace := prepareUnprovenColumnAssetNamespaceOnWindows(t, dir, cfg.AssetManager.Namespace)
 	payload := []byte("windows-stable-column")
-	ref, token, err := writeColumnAssetToManagerWithStableResource(
+	_, token, err := writeColumnAssetToManagerWithStableResource(
 		dir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, 7, 11,
 	)
-	if err != nil {
-		t.Fatalf("stable column capture: %v", err)
+	if token != nil {
+		token.Release()
+		t.Fatal("unsupported stable column capture returned authority")
 	}
-	if token == nil {
-		t.Fatal("stable column capture returned nil authority")
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("stable column capture error=%v want ErrNamespacePersistenceUnsupported", err)
 	}
-	defer token.Release()
-	segmentPath, err := columnAssetSegmentPath(dir, ref)
-	if err != nil {
-		t.Fatal(err)
-	}
-	segment, err := os.ReadFile(segmentPath)
+	entries, err := os.ReadDir(namespace.SegmentDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	end := ref.Offset + ref.Length
-	if ref.Offset < 0 || end < ref.Offset || end > int64(len(segment)) {
-		t.Fatalf("stable column ref=%+v segment bytes=%d", ref, len(segment))
-	}
-	if got := segment[ref.Offset:end]; !bytes.Equal(got, payload) {
-		t.Fatalf("stable column bytes=%q want %q", got, payload)
+	if len(entries) != 0 {
+		t.Fatalf("unsupported stable column capture exposed entries=%v", entries)
 	}
 }
 
-func TestStableColumnAppendSessionUsesCreateOnlyWindowsEvidence(t *testing.T) {
+func TestStableColumnAppendSessionRejectsUnprovenExistingParentsOnWindows(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
 		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_session_parent",
 	}}
+	namespace := prepareUnprovenColumnAssetNamespaceOnWindows(t, dir, cfg.AssetManager.Namespace)
 	registry := rootpublication.NewIdentityPinRegistry()
 	session := newColumnPhysicalAssetAppendSessionWithStableResources(dir, cfg, registry)
-	refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
+	_, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
 		payload: []byte("windows-stable-session"), kind: ColumnAssetKindTCS1PartImage, generation: 1, partID: 1,
 	}})
-	if err != nil {
-		_ = session.abort()
-		t.Fatalf("stable session append: %v", err)
+	_ = session.abort()
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		t.Fatalf("stable session append error=%v want ErrNamespacePersistenceUnsupported", err)
 	}
-	if len(refs) != 1 {
-		_ = session.abort()
-		t.Fatalf("stable session refs=%+v want one", refs)
-	}
-	closeStats, resources, err := session.closeWithStableResources()
-	if err != nil {
-		t.Fatalf("close stable session: %v", err)
-	}
-	if resources == nil {
-		t.Fatal("stable session returned nil authority")
-	}
-	if closeStats.FileSyncCount != 1 || closeStats.SyncEpochCount != 1 {
-		resources.Release()
-		t.Fatalf("stable session close stats=%+v want one sync epoch", closeStats)
-	}
-	resources.Release()
-	segmentPath, err := columnAssetSegmentPath(dir, refs[0])
+	entries, err := os.ReadDir(namespace.SegmentDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(segmentPath); err != nil {
-		t.Fatalf("stable session segment %q: %v", segmentPath, err)
+	if len(entries) != 0 {
+		t.Fatalf("unsupported stable session exposed entries=%v", entries)
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
-		t.Fatalf("released stable session active identities=%d want 0", got)
+		t.Fatalf("unsupported stable session active identities=%d want 0", got)
 	}
 }
 
-func TestStableFreshColumnAssetSegmentUsesCreateOnlyWindowsEvidence(t *testing.T) {
+func TestStableFreshColumnAssetSegmentFailsClosedBeforeVisibilityOnWindows(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
-		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "windows_fresh_segment",
+		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_fresh_segment",
 	}}
 	registry := rootpublication.NewIdentityPinRegistry()
 	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(dir, cfg, registry)
-	if err != nil {
-		t.Fatalf("stable fresh segment: %v", err)
+	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+		if appender != nil {
+			_ = appender.abort()
+		}
+		t.Fatalf("stable fresh segment error=%v want ErrNamespacePersistenceUnsupported", err)
 	}
-	refs, err := appender.appendKinds([]columnPhysicalAssetAppendItem{{
-		payload: []byte("windows-stable-fresh"), kind: ColumnAssetKindTCS1TypedColumnPart,
-		generation: 1, partID: 1,
-	}})
-	if err != nil {
+	if appender != nil {
 		_ = appender.abort()
-		t.Fatalf("append stable fresh segment: %v", err)
+		t.Fatalf("unsupported stable fresh segment returned appender=%v", appender)
 	}
-	if err := appender.close(); err != nil {
-		t.Fatalf("close stable fresh segment: %v", err)
-	}
-	resources := appender.stableResources
-	appender.stableResources = nil
-	if resources == nil {
-		t.Fatal("stable fresh segment returned nil authority")
-	}
-	var namespaceSyncs uint64
-	for _, stats := range resources.Stats(time.Now()) {
-		namespaceSyncs += stats.NamespaceSyncs
-	}
-	if namespaceSyncs != 1 {
-		resources.Release()
-		t.Fatalf("stable fresh segment namespace syncs=%d want 1", namespaceSyncs)
-	}
-	resources.Release()
-	segmentPath, err := columnAssetSegmentPath(dir, refs[0])
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(segmentPath); err != nil {
-		t.Fatalf("stable fresh segment %q: %v", segmentPath, err)
+	if len(entries) != 0 {
+		t.Fatalf("unsupported stable fresh segment exposed entries=%v", entries)
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
-		t.Fatalf("released stable fresh segment active identities=%d want 0", got)
+		t.Fatalf("unsupported stable fresh segment active identities=%d want 0", got)
 	}
 }

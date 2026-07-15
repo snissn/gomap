@@ -117,6 +117,7 @@ type orderedRootPublishOptions struct {
 	spanNativeRoute       OrderedRootSpanNativeRoute
 	spanNativeContext     string
 	spanNativeFallback    string
+	appendOnlyAllocation  bool
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
@@ -1317,6 +1318,10 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		err = errors.New("missing backend state")
 		return
 	}
+	alloc := zipper.PageAllocator(idx.allocator)
+	if opts.appendOnlyAllocation {
+		alloc = appendOnlyPageAllocator{alloc: idx.allocator}
+	}
 
 	newRoot = baseRoot
 	var buildIter iterator.UnsafeIterator
@@ -1389,7 +1394,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			case orderedRootPublishPlanWarmNativeApply:
 				stats.warmAttempts++
 				stats.warmNativeApplyAttempts++
-				rootZipper, zipperErr := db.orderedRootZipperForOptions(idx, opts)
+				rootZipper, zipperErr := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 				if zipperErr != nil {
 					err = zipperErr
 					return
@@ -1454,7 +1459,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		if opts.outerLeavesInValueLog {
 			leafPageLog = opts.leafPageLog
 		}
-		newRoot, err = bulk.BuildWithOptions(buildIter, idx.allocator, idx.pager, bulk.BuildOptions{
+		newRoot, err = bulk.BuildWithOptions(buildIter, alloc, idx.pager, bulk.BuildOptions{
 			LeafPrefixCompression: opts.leafPrefixCompression,
 			LeafColumnar:          opts.leafColumnar,
 			PackedValuePtr:        opts.packedValuePtr,
@@ -1537,6 +1542,8 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	if iter == nil {
 		return 0, errors.New("nil ordered root iterator")
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 
 	db.writeMu.Lock()
 	writeLocked := true
@@ -1562,7 +1569,12 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
-	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db), false)
+	opts := systemRootOrderedPublishOptions(db)
+	// baseRoot is supplied by the caller and can outlive a previous root
+	// publication's write lock. Append-only allocation keeps this build from
+	// reusing any page that the caller's tree still references.
+	opts.appendOnlyAllocation = true
+	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, iter, opts, false)
 	if err != nil {
 		return 0, err
 	}
@@ -1584,7 +1596,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, systemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil,
-		finalizeCommitOptions{},
+		finalizeCommitOptions{closeTeardownPinned: true},
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -1915,6 +1927,11 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBui
 		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
 		return 0, nil, storageMaintenancePreApplyError(err)
 	}
+	// Collection transfers the producer sets into a new union. Keep that union
+	// owned here as well as in the finalizer so every preflight/root-apply early
+	// return releases its exact resource handles. Release is idempotent after a
+	// successful ownership transfer to the durable-root candidate.
+	defer durableResources.Release()
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, storageMaintenanceRootDeltaInputsToOrdered(ordered), preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance, orderedRootCommandWALPublishOptions{
 		durableResources:            durableResources,
 		durableResourceRequirements: durableRequirements,

@@ -256,6 +256,18 @@ func ensureColumnAssetManagerNamespace(namespace columnAssetManagerNamespace) er
 	return nil
 }
 
+// ensureStableColumnAssetManagerNamespace establishes every ancestor required
+// by a stable column child. A narrow create-through-child primitive cannot
+// prove that an ancestor created earlier in this process is itself durable;
+// mere pathname existence is not authority. Keep column publication disabled
+// unless the platform supports the complete retained-parent contract.
+func ensureStableColumnAssetManagerNamespace(namespace columnAssetManagerNamespace) error {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return fmt.Errorf("%w: stable column asset publication requires retained-parent namespace persistence", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	return ensureColumnAssetManagerNamespace(namespace)
+}
+
 func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]string, error) {
 	if namespace.ManagerRootDir == "" {
 		return nil, errors.New("collections: column asset manager root dir is required")
@@ -439,7 +451,12 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	if capture != nil {
+		err = ensureStableColumnAssetManagerNamespace(namespace)
+	} else {
+		err = ensureColumnAssetManagerNamespace(namespace)
+	}
+	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
 	ref := ColumnAssetRef{
@@ -648,15 +665,13 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 // newNextColumnPhysicalAssetSegmentAppenderWithStableResources allocates one
 // fresh segment with O_EXCL while binding construction and final publication
 // authority to the exact parent and child handles. Unlike the append-session
-// constructor, this helper never falls back to an existing segment. Successful
-// publication only owes child creation persistence; destructive rollback stays
-// gated separately on complete relative-namespace support.
+// constructor, this helper never falls back to an existing segment.
 func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset allocation requires identity pin registry")
 	}
-	if !rootpublication.StableNamespaceCreationSupported() {
-		return nil, fmt.Errorf("%w: stable fresh column physical asset allocation requires exact child creation authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return nil, fmt.Errorf("%w: stable fresh column physical asset allocation requires retained-parent namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset segment allocation requires asset manager")
@@ -671,7 +686,7 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	if err := ensureStableColumnAssetManagerNamespace(namespace); err != nil {
 		return nil, err
 	}
 	cleanSegmentDir := filepath.Clean(namespace.SegmentDir)
@@ -1256,7 +1271,7 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	if err := ensureStableColumnAssetManagerNamespace(namespace); err != nil {
 		return nil, err
 	}
 	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: cfg.AssetManager.Namespace, FileID: fileID, Length: 1}
@@ -1288,8 +1303,8 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset append requires identity pin registry")
 	}
-	if !rootpublication.StableNamespaceCreationSupported() {
-		return nil, fmt.Errorf("%w: stable fresh column physical asset append requires exact child creation authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		return nil, fmt.Errorf("%w: stable fresh column physical asset append requires retained-parent namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset append requires asset manager")
@@ -1307,7 +1322,7 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	if err := ensureStableColumnAssetManagerNamespace(namespace); err != nil {
 		return nil, err
 	}
 	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: cfg.AssetManager.Namespace, FileID: fileID, Length: 1}

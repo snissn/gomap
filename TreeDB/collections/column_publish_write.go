@@ -807,9 +807,8 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 					c.db.ColumnAssetRootDir(), hookInput.ColumnStore, c.db.StableResourceIdentityPinRegistry(),
 				)
 			} else {
-				// Platforms without even exact create persistence keep the legacy
-				// pre-activation path and do not claim stable authority. Broader
-				// rename/removal APIs remain independently capability-gated.
+				// Platforms without complete retained-parent persistence keep the
+				// legacy pre-activation path and do not claim stable authority.
 				session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
 			}
 			appendOpenDuration += time.Since(appendStart)
@@ -1223,7 +1222,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 }
 
 func ordinaryColumnStableAuthorityEnabled() bool {
-	return rootpublication.StableNamespaceCreationSupported()
+	return rootpublication.StableRelativeNamespaceSupported()
 }
 
 // Stable-authoritative bytes remain persistent storage even when publication

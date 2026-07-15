@@ -8,23 +8,33 @@ import (
 func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 	tests := []struct {
 		name string
-		run  func(*DB) error
+		run  func(*testing.T, *DB) error
 	}{
 		{
 			name: "Commit",
-			run: func(database *DB) error {
+			run: func(_ *testing.T, database *DB) error {
 				return database.Commit(database.State().RootPageID)
 			},
 		},
 		{
 			name: "CompactIndex",
-			run: func(database *DB) error {
+			run: func(_ *testing.T, database *DB) error {
 				return database.CompactIndex()
 			},
 		},
 		{
+			name: "PublishOrderedRootIterator",
+			run: func(t *testing.T, database *DB) error {
+				_, err := database.PublishOrderedRootIterator(
+					0,
+					mustFrozenSystemMemtable(t, "ordered/root", "value").NewIterator(nil, nil),
+				)
+				return err
+			},
+		},
+		{
 			name: "PublishCommandWALRoots",
-			run: func(database *DB) error {
+			run: func(_ *testing.T, database *DB) error {
 				state := database.State()
 				next := state.AppliedCommandLSN + 1
 				return database.publishCommandWALRoots(
@@ -61,7 +71,7 @@ func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 			})
 
 			publishDone := make(chan error, 1)
-			go func() { publishDone <- test.run(database) }()
+			go func() { publishDone <- test.run(t, database) }()
 			select {
 			case <-prepared:
 			case <-time.After(5 * time.Second):

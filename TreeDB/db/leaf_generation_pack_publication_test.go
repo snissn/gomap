@@ -237,6 +237,127 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 	}
 }
 
+func TestLeafGenerationPack_PromotionBlocksRefreshUntilRollbackCompletes(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	wantErr := errors.New("fail after packed promotion")
+	promoted := make(chan struct{})
+	releasePromotion := make(chan struct{})
+	var created []uint32
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackAfterPromotion {
+			return nil
+		}
+		created = append(created, event.FileIDs...)
+		close(promoted)
+		<-releasePromotion
+		return wantErr
+	})
+	defer unregister()
+
+	packDone := make(chan error, 1)
+	go func() {
+		_, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+			GenerationIDs: []uint64{candidate.generation.GenerationID},
+			Force:         true,
+		})
+		packDone <- err
+	}()
+	select {
+	case <-promoted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("leaf pack did not reach post-promotion hook")
+	}
+	if db.valueLogPublicationMu.TryRLock() {
+		db.valueLogPublicationMu.RUnlock()
+		t.Fatal("post-promotion hook did not hold value-log publication gate")
+	}
+
+	refreshStarted := make(chan struct{})
+	refreshDone := make(chan error, 1)
+	go func() {
+		close(refreshStarted)
+		refreshDone <- db.RefreshValueLogSet()
+	}()
+	<-refreshStarted
+	select {
+	case err := <-refreshDone:
+		t.Fatalf("RefreshValueLogSet completed before promotion rollback: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releasePromotion)
+	select {
+	case err := <-packDone:
+		if !errors.Is(err, wantErr) || errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("LeafGenerationPack error=%v want exact rollback failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("LeafGenerationPack did not finish after releasing hook")
+	}
+	select {
+	case err := <-refreshDone:
+		if err != nil {
+			t.Fatalf("RefreshValueLogSet after rollback: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RefreshValueLogSet remained blocked after rollback")
+	}
+	if db.publicationPoisoned.Load() {
+		t.Fatal("exact post-promotion rollback poisoned DB")
+	}
+	for _, id := range created {
+		if db.valueLogManager.HasSegment(id) {
+			t.Fatalf("rolled-back segment %d remained registered", id)
+		}
+	}
+}
+
+func TestLeafGenerationPack_ManifestPreparationRunsBeforePublicationLocks(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	var observed atomic.Bool
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackAfterManifestPreparation {
+			return nil
+		}
+		if !db.writeMu.TryLock() {
+			return errors.New("manifest preparation retained writeMu")
+		}
+		db.writeMu.Unlock()
+		if !db.commitMu.TryLock() {
+			return errors.New("manifest preparation retained commitMu")
+		}
+		db.commitMu.Unlock()
+		if !db.publishPrepareMu.TryLock() {
+			return errors.New("manifest preparation retained publishPrepareMu")
+		}
+		db.publishPrepareMu.Unlock()
+		if !db.valueLogPublicationMu.TryLock() {
+			return errors.New("manifest preparation retained valueLogPublicationMu")
+		}
+		db.valueLogPublicationMu.Unlock()
+		observed.Store(true)
+		return nil
+	})
+	defer unregister()
+
+	if _, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID},
+		Force:         true,
+	}); err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if !observed.Load() {
+		t.Fatal("manifest preparation hook was not observed")
+	}
+}
+
 func TestLeafGenerationPack_ClosesStagingReaderBeforePromotion(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)

@@ -25,13 +25,12 @@ func TestLeafGenerationPack_ApplyStageAccounting(t *testing.T) {
 	if copyAttributed > stats.CopyTimeNanos {
 		t.Fatalf("copy stages=%d exceed copy wall=%d: %+v", copyAttributed, stats.CopyTimeNanos, stages)
 	}
-	// Promotion and its namespace sync complete before writeMu is acquired and
-	// PublishHoldNanos starts. They must be observable, but are not additive to
-	// the exclusive publish-hold subtotal below.
+	// Promotion runs under the publication visibility gate so a concurrent
+	// Refresh cannot discover and pin an uncommitted segment.
 	if stages.PromotionTimeNanos <= 0 {
 		t.Fatalf("promotion timing was not populated: %+v", stages)
 	}
-	publishAttributed := stages.RevalidateTimeNanos + stages.RelocationTimeNanos +
+	publishAttributed := stages.RevalidateTimeNanos + stages.PromotionTimeNanos + stages.RelocationTimeNanos +
 		stages.PageSyncTimeNanos + stages.DirectorySyncWaitTimeNanos + stages.RegistrationTimeNanos +
 		stages.CollectionPublishTimeNanos
 	if publishAttributed <= 0 {

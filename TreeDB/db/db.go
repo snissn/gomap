@@ -4027,9 +4027,7 @@ func (db *DB) CompactIndex() error {
 	defer iter.Close()
 
 	// Build new tree sequentially
-	alloc := idx.allocator
-	alloc.SetPreferAppend(true)
-	defer alloc.SetPreferAppend(db.preferAppendAlloc)
+	alloc := appendOnlyPageAllocator{alloc: idx.allocator}
 	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
