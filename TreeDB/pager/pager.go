@@ -997,9 +997,6 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 // is the scoped primitive used for the durability-critical meta-page cut: it
 // never reopens the diagnostic path and it fails closed on a rebound handle.
 func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
-	if file == nil {
-		return errors.New("pager: stable index file unavailable")
-	}
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -1010,6 +1007,9 @@ func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 			}
 		}
 		return nil
+	}
+	if file == nil {
+		return errors.New("pager: stable index file unavailable")
 	}
 	if len(pageIDs) == 0 {
 		return nil

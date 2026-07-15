@@ -95,6 +95,12 @@ TreeDB `Options.Dir` is a *root* directory. `treedb.Open` manages:
   - `Dir/dictdb/index.db`: dictionary metadata (internal).
   - `Dir/dictdb/LOCK`: cross-process lock for the dictionary store.
 
+The lower-level `caching.Open(cacheDir, backend, ...)` API may use a cache
+directory that differs from a TreeDB backend's `Dir()`. In that configuration,
+only the cached command WAL lives under `cacheDir/wal/`; persistent
+`value_vlog/` and `leaf_vlog/` segments live under the backend directory so its
+durable roots remain independently reopenable.
+
 Note: value-log dictionary compression applies to value-log records and does
 not require any split-log option.
 
