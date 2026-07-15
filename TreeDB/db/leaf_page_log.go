@@ -979,6 +979,7 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	}
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	db.waitForVacuumCutoverWriteLocked()
 	if db.closing.Load() && installed != nil {
 		return
 	}

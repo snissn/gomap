@@ -6,21 +6,23 @@ import (
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestValueLogRefTrackerApplyPathAvoidsPointLookups(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = d.Close() }()
 
 	const count = 64
+	seedPtrs := appendPointersInNewSegment(t, dir, 0, 1, 1_000, count, func(i int) []byte {
+		return []byte(fmt.Sprintf("seed-value-%06d", i))
+	})
 	seed := d.NewBatch().(*Batch)
 	for i := 0; i < count; i++ {
-		ptr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: uint64(i + 1), Length: 64}
-		if err := seed.SetPointer([]byte(fmt.Sprintf("key-%06d", i)), ptr); err != nil {
+		if err := seed.SetPointer([]byte(fmt.Sprintf("key-%06d", i)), seedPtrs[i]); err != nil {
 			t.Fatalf("seed SetPointer %d: %v", i, err)
 		}
 	}
@@ -33,10 +35,12 @@ func TestValueLogRefTrackerApplyPathAvoidsPointLookups(t *testing.T) {
 	restore := registerLookupValueLogRefAtKeyHook(func() { lookups.Add(1) })
 	defer restore()
 
+	updatePtrs := appendPointersInNewSegment(t, dir, 0, 2, 2_000, count, func(i int) []byte {
+		return []byte(fmt.Sprintf("update-value-%06d", i))
+	})
 	update := d.NewBatch().(*Batch)
 	for i := 0; i < count; i++ {
-		ptr := page.ValuePtr{FileID: page.ValueLogFileID(2), Offset: uint64(i + 1000), Length: 96}
-		if err := update.SetPointer([]byte(fmt.Sprintf("key-%06d", i)), ptr); err != nil {
+		if err := update.SetPointer([]byte(fmt.Sprintf("key-%06d", i)), updatePtrs[i]); err != nil {
 			t.Fatalf("update SetPointer %d: %v", i, err)
 		}
 	}
@@ -51,16 +55,19 @@ func TestValueLogRefTrackerApplyPathAvoidsPointLookups(t *testing.T) {
 }
 
 func TestBuildValueLogRefDeltaFallsBackWhenApplyEvidenceMissing(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = d.Close() }()
 
+	seedPtrs := appendPointersInNewSegment(t, dir, 0, 31, 31_000, 4, func(i int) []byte {
+		return []byte(fmt.Sprintf("seed-value-%06d", i))
+	})
 	seed := d.NewBatch().(*Batch)
 	for i := 0; i < 4; i++ {
-		ptr := page.ValuePtr{FileID: page.ValueLogFileID(31), Offset: uint64(i + 1), Length: 64}
-		if err := seed.SetPointer([]byte(fmt.Sprintf("key-%06d", i)), ptr); err != nil {
+		if err := seed.SetPointer([]byte(fmt.Sprintf("key-%06d", i)), seedPtrs[i]); err != nil {
 			t.Fatalf("seed SetPointer: %v", err)
 		}
 	}
@@ -93,13 +100,16 @@ func TestBuildValueLogRefDeltaFallsBackWhenApplyEvidenceMissing(t *testing.T) {
 }
 
 func TestValueLogRefTrackerPreservesSharedPointerMultiplicity(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = d.Close() }()
 
-	shared := page.ValuePtr{FileID: page.ValueLogFileID(7), Offset: 100, Length: 256}
+	shared := appendPointersInNewSegment(t, dir, 0, 7, 7_000, 1, func(int) []byte {
+		return []byte("shared-value")
+	})[0]
 	seed := d.NewBatch().(*Batch)
 	for _, key := range []string{"a", "b"} {
 		if err := seed.SetPointer([]byte(key), shared); err != nil {

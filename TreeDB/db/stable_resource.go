@@ -374,6 +374,7 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		token            *rootpublication.StableResourceToken
 		leaseTransferred atomic.Bool
 	)
+	captureCounter := snapshot.stableIndexCaptureCounter
 	err = snapshot.idx.pager.WithStableResourceFile(func(file *os.File) error {
 		info, err := file.Stat()
 		if err != nil {
@@ -396,8 +397,8 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		callerRelease := spec.OnRelease
 		spec.OnRelease = func() {
 			_ = snapshot.Close()
-			if leaseTransferred.CompareAndSwap(true, false) {
-				database.stableIndexCaptures.Add(-1)
+			if leaseTransferred.CompareAndSwap(true, false) && captureCounter != nil {
+				captureCounter.Add(-1)
 			}
 			if callerRelease != nil {
 				callerRelease()

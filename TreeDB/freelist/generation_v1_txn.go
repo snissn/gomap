@@ -74,6 +74,18 @@ func (g *FreelistGenerationV1) HighWater() uint64 {
 	}
 	return g.highWater
 }
+func (g *FreelistGenerationV1) FreeCount() uint64 {
+	if g == nil || g.root == nil {
+		return 0
+	}
+	return g.root.freeCount
+}
+func (g *FreelistGenerationV1) RetiredCount() uint64 {
+	if g == nil || g.root == nil {
+		return 0
+	}
+	return g.root.retiredCount
+}
 func (g *FreelistGenerationV1) GenerationRef() GenerationRefV1 {
 	if g == nil {
 		return GenerationRefV1{}
@@ -180,6 +192,28 @@ type FreelistTxn struct {
 	stats            FreelistTxnStats
 }
 
+// cloneForAllocatorPrepare creates an isolated staging transaction. Tree nodes
+// are persistent copy-on-write values, so sharing the root is safe; every
+// mutable slice and map must be copied because candidate materialization
+// consumes and annotates the staged transaction.
+func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
+	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	clone := *t
+	clone.allocated = append([]allocatedPage(nil), t.allocated...)
+	clone.abandonedAppends = append([]ReservationExtentV1(nil), t.abandonedAppends...)
+	clone.changedChunks = make(map[uint64]struct{}, len(t.changedChunks))
+	for chunk := range t.changedChunks {
+		clone.changedChunks[chunk] = struct{}{}
+	}
+	clone.replacedMetadata = make(map[uint64]struct{}, len(t.replacedMetadata))
+	for id := range t.replacedMetadata {
+		clone.replacedMetadata[id] = struct{}{}
+	}
+	return &clone, nil
+}
+
 func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger) (*FreelistTxn, error) {
 	if base == nil || base.root == nil {
 		return nil, ErrGenerationFormat
@@ -256,6 +290,21 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 		t.stats.ReuseAllocations++
 		return id, nil
 	}
+	return t.allocateAppend()
+}
+
+// AllocateAppend reserves a new page at the logical high-water mark without
+// consulting the reusable set. It preserves append-only maintenance and the
+// public PreferAppendAlloc contract while still recording exact candidate
+// ownership in the COW transaction.
+func (t *FreelistTxn) AllocateAppend() (uint64, error) {
+	if err := t.valid(); err != nil {
+		return 0, err
+	}
+	return t.allocateAppend()
+}
+
+func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	if t.highWater == math.MaxUint64 {
 		return 0, ErrNoAllocatablePage
 	}
@@ -271,6 +320,55 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 	t.allocated = append(t.allocated, allocatedPage{id, ReservationAppendedData})
 	t.stats.AppendAllocations++
 	return id, nil
+}
+
+// allocateAppendedRange reserves one contiguous data-page extent above the
+// transaction high-water. Durable dependency manifests use this for their
+// positional page chain; ordinary allocations should continue to use
+// Allocate so reusable pages remain available to index writers.
+func (t *FreelistTxn) allocateAppendedRange(count int) ([]uint64, error) {
+	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	if count < 0 {
+		return nil, ErrGenerationFormat
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	width := uint64(count)
+	start := t.highWater
+	for {
+		candidate, ok := t.ledger.firstUnreservedAtOrAfter(start)
+		if !ok || candidate > math.MaxUint64-width {
+			return nil, ErrNoAllocatablePage
+		}
+		conflict := uint64(0)
+		for id := candidate; id < candidate+width; id++ {
+			if t.ledger.Reserved(id) {
+				conflict = id
+				break
+			}
+		}
+		if conflict != 0 {
+			if conflict == math.MaxUint64 {
+				return nil, ErrNoAllocatablePage
+			}
+			start = conflict + 1
+			continue
+		}
+		if candidate > t.highWater {
+			t.abandonedAppends = appendReservationRange(t.abandonedAppends, t.highWater, candidate-t.highWater, ReservationAbandonedAppend, 0)
+		}
+		ids := make([]uint64, count)
+		for i := range ids {
+			ids[i] = candidate + uint64(i)
+			t.allocated = append(t.allocated, allocatedPage{ids[i], ReservationAppendedData})
+		}
+		t.highWater = candidate + width
+		t.stats.AppendAllocations += width
+		return ids, nil
+	}
 }
 
 func (t *FreelistTxn) ReservePage(id uint64) error {

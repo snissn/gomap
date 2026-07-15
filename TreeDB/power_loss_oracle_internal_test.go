@@ -48,10 +48,6 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 	if err := d.backend.RotateCommandWALActiveSegment(true); err != nil {
 		t.Fatalf("rotate synced command-WAL segment: %v", err)
 	}
-	baseline := d.backend.State()
-	if baseline == nil {
-		t.Fatal("missing baseline state")
-	}
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
 		t.Fatalf("capture stable command-WAL image: %v", err)
@@ -89,6 +85,11 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 	if err := snapshot.MaterializeStable(crashDir); err != nil {
 		t.Fatalf("materialize stable-only image: %v", err)
 	}
+	releaseIdentities, err := snapshot.InstallStableIdentityOverrides(crashDir)
+	if err != nil {
+		t.Fatalf("install stable identity model: %v", err)
+	}
+	defer releaseIdentities()
 	reopenOpts := opts
 	reopenOpts.Dir = crashDir
 	reopenOpts.ReadOnly = true
@@ -111,7 +112,7 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 	if err != nil {
 		t.Fatalf("parse reopened applied LSN: %v", err)
 	}
-	generation := powerLossCompleteGeneration(baseline.CommitSeq, baseline.AppliedCommandLSN)
+	generation := powerLossCompleteGeneration(openedSequence, openedApplied)
 	for i := range generation.Resources {
 		if generation.Resources[i].Kind == powerlossoracle.ResourceCommandWAL {
 			generation.Resources[i].ID = deletionSync.Path
@@ -121,7 +122,7 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 		Name:                 "actual-source-deletion-before-stable-coverage",
 		Cut:                  powerlossoracle.AfterDeletionDirectorySync,
 		Generations:          []powerlossoracle.Generation{generation},
-		LatestSealedSequence: baseline.CommitSeq,
+		LatestSealedSequence: openedSequence,
 		SelectedSequence:     openedSequence,
 		OpenedSequence:       openedSequence,
 		OpenedAppliedLSN:     openedApplied,
@@ -132,7 +133,7 @@ func TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage(t *test
 		ReopenAttempted: true,
 	}
 	if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantEarlySourceDeletion); err != nil {
-		t.Fatalf("successful public Open did not produce early-source-deletion diagnosis: %v (value=%q get=%v)", err, got, getErr)
+		t.Fatalf("successful reopen did not diagnose the command-WAL source deleted while still required: %v (value=%q get=%v)", err, got, getErr)
 	}
 }
 

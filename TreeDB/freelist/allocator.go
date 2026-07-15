@@ -196,6 +196,9 @@ func New(p *pager.Pager, head uint64) *Allocator {
 func (a *Allocator) Head() uint64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		return a.cow.generation.GenerationRef().HeaderPageID
+	}
 	return a.head
 }
 
@@ -249,6 +252,18 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		ids := make([]uint64, 0, count)
+		for len(ids) < count {
+			id, err := a.allocCOWLocked(hint)
+			if err != nil {
+				return ids, err
+			}
+			ids = append(ids, id)
+			hint = id
+		}
+		return ids, nil
+	}
 
 	if a.regionPages > 0 && a.regionRadius > 0 {
 		return a.allocManyRegionLocked(count, hint)
@@ -777,6 +792,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		return a.allocCOWLocked(hint)
+	}
 
 	return a.allocLocked(hint)
 }
@@ -785,6 +803,9 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 func (a *Allocator) Free(id uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		return a.retireCOWLocked([]uint64{id}, a.cow.generation.CommitSeq()+1)
+	}
 
 	if id == 0 {
 		return errCannotFreePageZero
@@ -857,6 +878,9 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		return a.retireCOWLocked(ids, a.cow.generation.CommitSeq()+1)
+	}
 	processed := 0
 
 	if a.head != 0 {
@@ -972,6 +996,9 @@ func (a *Allocator) initHead(id, next uint64) error {
 func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		return Stats{Head: a.cow.generation.GenerationRef().HeaderPageID, FreeIDs: a.cow.generation.FreeCount(), AllocPages: a.stats.AllocPages, AppendAllocPages: a.stats.AppendAllocPages, ReuseAllocPages: a.stats.ReuseAllocPages, FreePages: a.stats.FreePages}, nil
+	}
 	out, err := readStatsLocked(a.pager, a.head, pageLimit)
 	if err == nil {
 		a.stats.Pages = out.Pages
@@ -989,6 +1016,9 @@ func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 func (a *Allocator) Counters() Stats {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.cow != nil {
+		return Stats{Head: a.cow.generation.GenerationRef().HeaderPageID, FreeIDs: a.cow.generation.FreeCount(), AllocPages: a.stats.AllocPages, AppendAllocPages: a.stats.AppendAllocPages, ReuseAllocPages: a.stats.ReuseAllocPages, FreePages: a.stats.FreePages}
+	}
 	return Stats{
 		Head:             a.head,
 		Pages:            a.stats.Pages,

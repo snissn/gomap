@@ -27,6 +27,20 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, emptyStats, err
 	}
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		meta, stats, err := c.createTextIndexOnce(def)
+		if !isRetriableCollectionMutationError(err) {
+			return meta, stats, err
+		}
+		lastErr = err
+		waitBeforeCollectionMutationRetry(attempt)
+	}
+	return nil, emptyStats, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) createTextIndexOnce(def TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
+	var emptyStats TextIndexBackfillStats
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
@@ -126,6 +140,19 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		meta, err := c.dropTextIndexOnce(name)
+		if !isRetriableCollectionMutationError(err) {
+			return meta, err
+		}
+		lastErr = err
+		waitBeforeCollectionMutationRetry(attempt)
+	}
+	return nil, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) dropTextIndexOnce(name string) (*CollectionMeta, error) {
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {

@@ -111,6 +111,14 @@ func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlan
 	if !rootpublication.SamePhysicalIdentity(identity, planned.childIdentity) {
 		return false, fmt.Errorf("%w: candidate rebound for file_id=%d", ErrColumnAssetGCPlanStale, fileID)
 	}
+	// Detect publications that completed after planning before consulting the
+	// pin registry. Such a publication may itself pin this identity; returning a
+	// generic retained result would hide that the destructive plan is stale.
+	if validatePlanCurrent != nil {
+		if err := validatePlanCurrent(); err != nil {
+			return false, err
+		}
+	}
 	namespace := filepath.ToSlash(filepath.Join(filepath.Clean(deleter.segmentDir), name))
 	lease, err := deleter.registry.BeginDeleteAt(identity, namespace)
 	if err != nil {

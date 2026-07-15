@@ -66,6 +66,8 @@ func TestCaptureTemplateResourcesPointerDefinitionReturnsExactTransitiveClosure(
 	if err := seedPointerTemplate(backend, templateID, definition); err != nil {
 		t.Fatalf("seed pointer template: %v", err)
 	}
+	registry := backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 	snapshot := backend.AcquireSnapshot()
 	entry, err := snapshot.GetEntryExact(templateKey(templateID))
 	if err != nil {
@@ -84,8 +86,8 @@ func TestCaptureTemplateResourcesPointerDefinitionReturnsExactTransitiveClosure(
 	if got := resources.Len(); got != 2 {
 		t.Fatalf("closure len=%d want index+value-log", got)
 	}
-	if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 2 {
-		t.Fatalf("index/value-log identity pins=%d want 2", got)
+	if got := registry.ActivePins(); got != baselinePins+2 {
+		t.Fatalf("index/value-log identity pins=%d want baseline %d + 2 capture pins", got, baselinePins)
 	}
 	paths := make(map[string]bool, 2)
 	for _, token := range resources.Tokens() {
@@ -99,8 +101,8 @@ func TestCaptureTemplateResourcesPointerDefinitionReturnsExactTransitiveClosure(
 		t.Fatalf("closure paths=%v want exact index and value-log segment", paths)
 	}
 	resources.Release()
-	if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
-		t.Fatalf("value-log identity pins after release=%d want 0", got)
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("value-log identity pins after release=%d want baseline %d", got, baselinePins)
 	}
 }
 
@@ -119,6 +121,8 @@ func TestCaptureTemplateResourcesRejectsParentEscapingDiagnosticPath(t *testing.
 	if err := seedPointerTemplate(backend, templateID, definition); err != nil {
 		t.Fatalf("seed pointer template: %v", err)
 	}
+	registry := backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 	for _, diagnosticPath := range []string{
 		filepath.Join("..", "outside.log"),
 		filepath.FromSlash("safe/../../outside.log"),
@@ -142,8 +146,8 @@ func TestCaptureTemplateResourcesRejectsParentEscapingDiagnosticPath(t *testing.
 			if valueLogTokenCalls != 0 {
 				t.Fatalf("parent-escaping path reached token construction %d times, want 0", valueLogTokenCalls)
 			}
-			if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
-				t.Fatalf("parent-escaping capture left identity pins=%d want 0", got)
+			if got := registry.ActivePins(); got != baselinePins {
+				t.Fatalf("parent-escaping capture left identity pins=%d want baseline %d", got, baselinePins)
 			}
 		})
 	}
@@ -227,6 +231,11 @@ func seedPointerTemplates(backend *backenddb.DB, seeds []pointerTemplateSeed) er
 		return err
 	}
 	defer writer.Close()
+	// This helper is the segment producer. Register its exact object before a
+	// pointer to it can enter a recovery-selectable durable root.
+	if err := backend.RegisterValueLogSegment(path, fileID); err != nil {
+		return err
+	}
 	pointers := make([]page.ValuePtr, len(seeds))
 	for i, seed := range seeds {
 		pointers[i], err = writer.Append(0, nil, seed.templateID, seed.definition)
@@ -247,7 +256,7 @@ func seedPointerTemplates(backend *backenddb.DB, seeds []pointerTemplateSeed) er
 	if err := batch.WriteSync(); err != nil {
 		return err
 	}
-	return backend.RefreshValueLogSet()
+	return nil
 }
 
 func seedGroupedPointerTemplateWithOmittedLengthHint(backend *backenddb.DB, templateID uint64, definition []byte) (uint64, error) {
@@ -265,6 +274,11 @@ func seedGroupedPointerTemplateWithOmittedLengthHint(backend *backenddb.DB, temp
 		return 0, err
 	}
 	defer writer.Close()
+	// This helper is the segment producer. Register its exact object before a
+	// pointer to it can enter a recovery-selectable durable root.
+	if err := backend.RegisterValueLogSegment(path, fileID); err != nil {
+		return 0, err
+	}
 	ptrs, err := writer.AppendFrame(0, nil, []valuelog.Record{
 		{RID: templateID, Value: definition},
 		{RID: 1, Value: []byte("grouped-sibling")},
@@ -290,9 +304,6 @@ func seedGroupedPointerTemplateWithOmittedLengthHint(backend *backenddb.DB, temp
 		return 0, err
 	}
 	if err := batch.WriteSync(); err != nil {
-		return 0, err
-	}
-	if err := backend.RefreshValueLogSet(); err != nil {
 		return 0, err
 	}
 	return ptr.Offset + uint64(recordLength), nil
@@ -363,6 +374,7 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 
 	store := New(stableTestKV{db: backend}, Config{})
 	registry := backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 	merge := func(order []int) *rootpublication.StableResourceSet {
 		t.Helper()
 		builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTemplateGeneration)
@@ -397,9 +409,9 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 			resources.Release()
 			t.Fatalf("iteration %d merged descriptors=%d want index+shared value-log", i, got)
 		}
-		if got := registry.ActivePins(); got != 2 {
+		if got := registry.ActivePins(); got != baselinePins+2 {
 			resources.Release()
-			t.Fatalf("iteration %d coalesced index/value-log identity pins=%d want 2", i, got)
+			t.Fatalf("iteration %d coalesced index/value-log identity pins=%d want baseline %d + 2 capture pins", i, got, baselinePins)
 		}
 		tokens := resources.Tokens()
 		descriptors := resources.Descriptors()
@@ -436,8 +448,8 @@ func TestCaptureTemplateResourcesMultiIDCoalescesSharedPhysicalClosureDeterminis
 			t.Fatalf("iteration %d order-dependent merged closure\n got: %#v\nwant: %#v", i, views, wantViews)
 		}
 		resources.Release()
-		if got := registry.ActivePins(); got != 0 {
-			t.Fatalf("iteration %d release left active pins=%d", i, got)
+		if got := registry.ActivePins(); got != baselinePins {
+			t.Fatalf("iteration %d release left active pins=%d want baseline %d", i, got, baselinePins)
 		}
 	}
 	if checkFDs {
@@ -518,6 +530,8 @@ func TestCaptureTemplateResourcesRejectsEachMissingPointerChild(t *testing.T) {
 			if err := seedPointerTemplate(backend, templateID, definition); err != nil {
 				t.Fatal(err)
 			}
+			registry := backend.StableResourceIdentityPinRegistry()
+			baselinePins := registry.ActivePins()
 			store := New(stableTestKV{db: backend}, Config{})
 			var withheld []*rootpublication.StableResourceToken
 			previous := addTemplateStableResourceToken
@@ -539,8 +553,8 @@ func TestCaptureTemplateResourcesRejectsEachMissingPointerChild(t *testing.T) {
 			if !errors.Is(captureErr, rootpublication.ErrUnresolvedResource) || resources != nil {
 				t.Fatalf("omitted %s resources=%v err=%v want ErrUnresolvedResource", omitted, resources, captureErr)
 			}
-			if got := backend.StableResourceIdentityPinRegistry().ActivePins(); got != 0 {
-				t.Fatalf("omitted %s active pins=%d want 0", omitted, got)
+			if got := registry.ActivePins(); got != baselinePins {
+				t.Fatalf("omitted %s active pins=%d want baseline %d", omitted, got, baselinePins)
 			}
 		})
 	}
@@ -609,6 +623,8 @@ func TestCaptureTemplateResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing.T
 	if err := seedPointerTemplate(backend, templateID, definition); err != nil {
 		t.Fatalf("seed pointer template: %v", err)
 	}
+	registry := backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 	store := New(stableTestKV{db: backend}, Config{})
 	warm, err := store.CaptureTemplateResources(context.Background(), templateID)
 	if err != nil {
@@ -619,9 +635,8 @@ func TestCaptureTemplateResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing.T
 		t.Fatalf("warm resources=%d want index+value-log closure", got)
 	}
 	warm.Release()
-	registry := backend.StableResourceIdentityPinRegistry()
-	if got := registry.ActivePins(); got != 0 {
-		t.Fatalf("warm release left active pins=%d", got)
+	if got := registry.ActivePins(); got != baselinePins {
+		t.Fatalf("warm release left active pins=%d want baseline %d", got, baselinePins)
 	}
 
 	beforeFDs, fdErr := os.ReadDir("/dev/fd")
@@ -635,13 +650,13 @@ func TestCaptureTemplateResourcesDedupeDoesNotGrowPinsOrDescriptors(t *testing.T
 			resources.Release()
 			t.Fatalf("dedupe %d resources=%d want index+value-log closure", i, got)
 		}
-		if got := registry.ActivePins(); got != 2 {
+		if got := registry.ActivePins(); got != baselinePins+2 {
 			resources.Release()
-			t.Fatalf("dedupe %d active index/value-log pins=%d want 2", i, got)
+			t.Fatalf("dedupe %d active index/value-log pins=%d want baseline %d + 2 capture pins", i, got, baselinePins)
 		}
 		resources.Release()
-		if got := registry.ActivePins(); got != 0 {
-			t.Fatalf("dedupe %d left active pins=%d", i, got)
+		if got := registry.ActivePins(); got != baselinePins {
+			t.Fatalf("dedupe %d left active pins=%d want baseline %d", i, got, baselinePins)
 		}
 	}
 	if checkFDs {
@@ -691,12 +706,14 @@ func BenchmarkCaptureTemplateResources(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			registry := backend.StableResourceIdentityPinRegistry()
+			baselinePins := registry.ActivePins()
 			warm, err := store.CaptureTemplateResources(ctx, templateID)
 			if err != nil {
 				b.Fatal(err)
 			}
 			resourcesPerOp := warm.Len()
-			identityPinHighWater := backend.StableResourceIdentityPinRegistry().ActivePins()
+			identityPinHighWater := registry.ActivePins() - baselinePins
 			pinHighWater := identityPinHighWater
 			for _, stats := range warm.Stats(time.Now()) {
 				if stats.PinHighWater > pinHighWater {
@@ -754,6 +771,7 @@ func BenchmarkCaptureTemplateResourcesMultiIDCoalesce(b *testing.B) {
 	}
 	store := New(stableTestKV{db: backend}, Config{})
 	registry := backend.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
 
 	captureMerged := func() (*rootpublication.StableResourceSet, uint64, error) {
 		builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTemplateGeneration)
@@ -764,7 +782,7 @@ func BenchmarkCaptureTemplateResourcesMultiIDCoalesce(b *testing.B) {
 			if err != nil {
 				return nil, identityPinHighWater, err
 			}
-			if pins := registry.ActivePins(); pins > identityPinHighWater {
+			if pins := registry.ActivePins() - baselinePins; pins > identityPinHighWater {
 				identityPinHighWater = pins
 			}
 			if err := builder.Merge(resources); err != nil {
@@ -791,10 +809,10 @@ func BenchmarkCaptureTemplateResourcesMultiIDCoalesce(b *testing.B) {
 			pinHighWater = stats.PinHighWater
 		}
 	}
-	identityPinsAfterCoalesce := registry.ActivePins()
+	identityPinsAfterCoalesce := registry.ActivePins() - baselinePins
 	warm.Release()
-	if resourcesPerOp != 2 || logicalObligationsPerOp != 4 || identityPinsAfterCoalesce != 1 || registry.ActivePins() != 0 {
-		b.Fatalf("warm coalesce resources=%d obligations=%d residentPins=%d releasedPins=%d", resourcesPerOp, logicalObligationsPerOp, identityPinsAfterCoalesce, registry.ActivePins())
+	if resourcesPerOp != 2 || logicalObligationsPerOp != 4 || identityPinsAfterCoalesce != 2 || registry.ActivePins() != baselinePins {
+		b.Fatalf("warm coalesce resources=%d obligations=%d residentPins=%d releasedPins=%d baselinePins=%d", resourcesPerOp, logicalObligationsPerOp, identityPinsAfterCoalesce, registry.ActivePins(), baselinePins)
 	}
 
 	b.ReportAllocs()

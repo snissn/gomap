@@ -325,17 +325,16 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
+	if !db.vacuumInProgress.CompareAndSwap(false, true) {
+		return ErrVacuumInProgress
+	}
+	defer db.vacuumInProgress.Store(false)
 	if db.stableIndexCaptures.Load() != 0 {
 		return rootpublication.ErrResourcePinned
 	}
 	if err := db.CheckStorageMaintenanceReady(); err != nil {
 		return err
 	}
-
-	if !db.vacuumInProgress.CompareAndSwap(false, true) {
-		return ErrVacuumInProgress
-	}
-	defer db.vacuumInProgress.Store(false)
 
 	if db.dir == "" {
 		return errors.New("vacuum: missing db dir")
@@ -364,6 +363,15 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		_ = newPager.Close()
 		return err
 	}
+	var replacementSelection *durableRootSelectionV1
+	defer func() {
+		if replacementSelection == nil {
+			return
+		}
+		for _, resources := range replacementSelection.SlotResources {
+			resources.Release()
+		}
+	}()
 	closeNewPager := func() {
 		_ = newPager.Close()
 	}
@@ -638,19 +646,41 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 
 		db.writeMu.Lock()
 		cutoverLocked = true
+		durablePublishLocked := false
 		holdStarted := time.Now()
-		unlockCutover := func(completed bool) {
+		var writerHold time.Duration
+		holdActive := true
+		recordWriterHold := func() {
+			if !holdActive {
+				return
+			}
 			hold := time.Since(holdStarted)
+			writerHold += hold
 			if hold > runStats.MaxWriterPause {
 				runStats.MaxWriterPause = hold
 			}
+			holdActive = false
+		}
+		unlockCutover := func(completed bool) {
+			recordWriterHold()
 			if completed {
-				runStats.CutoverDuration = hold
+				runStats.CutoverDuration = writerHold
+			}
+			if durablePublishLocked {
+				db.endVacuumCutoverGateLocked()
+				durablePublishLocked = false
+				db.durablePublishMu.Unlock()
 			}
 			cutoverLocked = false
 			db.writeMu.Unlock()
 		}
 
+		// Join durable publication before stopping the recorder. Successful
+		// old-generation writers capture their user-tree mutation while holding
+		// this fence, so every visible commit is either in the drained tail or
+		// starts after the replacement generation becomes visible.
+		db.durablePublishMu.Lock()
+		durablePublishLocked = true
 		db.vacuum.Stop()
 		finalOps, finalRanges := db.vacuum.DrainApplyPlan()
 		tailMutations := len(finalOps) + len(finalRanges)
@@ -790,13 +820,6 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		nextMeta.FreelistHeadID = newAlloc.Head()
 		nextMeta.TotalPages = newPager.PageCount()
 
-		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
-			if err := db.leafPageLog.Sync(); err != nil {
-				unlockCutover(false)
-				cleanupNewPager()
-				return err
-			}
-		}
 		leafPageLogSegmentsRegistered := true
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 			var err error
@@ -824,28 +847,65 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			}
 		}
 
-		// Write redundant Meta pages (0/1) to the new file and sync it.
-		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
+		// Seal durable-root publication while the replacement receives its sole
+		// recovery-selectable meta. A retained/ambiguous live-index candidate
+		// cannot be transferred across the namespace replacement.
+		db.beginVacuumCutoverGateLocked()
+		if db.stableIndexCaptures.Load() != 0 || db.durableCandidateIndexCaptures.Load() != 0 {
+			unlockCutover(false)
+			cleanupNewPager()
+			return rootpublication.ErrResourcePinned
+		}
+		if db.durableRoot.pending != nil || len(db.durableRoot.ambiguous) != 0 {
+			unlockCutover(false)
+			cleanupNewPager()
+			return ErrRecoveryRequired
+		}
+		durableResources, err := db.captureRebuiltIndexDurableResourcesV1(newPager, nextMeta)
+		if err != nil {
 			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
-		if err := writeMetaToPager(newPager, MetaPage1ID, nextMeta); err != nil {
-			unlockCutover(false)
-			cleanupNewPager()
-			return err
-		}
+		// The gate keeps all ordinary writers outside the old-generation
+		// mutation critical section while dependency, replacement-index, and
+		// durable-meta sync run with no DB write lock held.
+		recordWriterHold()
+		cutoverLocked = false
+		db.writeMu.Unlock()
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
 		}
 		finalSyncStarted := time.Now()
-		finalSyncErr := newPager.Sync()
+		finalSyncErr := writeRebuiltDurableRootV1(db.dir, newPath, newPager, nextMeta, durableResources)
 		runStats.FinalPagerSyncDuration += time.Since(finalSyncStarted)
+		db.writeMu.Lock()
+		cutoverLocked = true
+		holdStarted = time.Now()
+		holdActive = true
 		if finalSyncErr != nil {
+			durableResources.Release()
 			unlockCutover(false)
 			cleanupNewPager()
 			return finalSyncErr
 		}
+		selected, selectionErr := selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1)
+		durableResources.Release()
+		if selectionErr != nil {
+			unlockCutover(false)
+			cleanupNewPager()
+			return selectionErr
+		}
+		if err := newAlloc.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+			for _, resources := range selected.SlotResources {
+				resources.Release()
+			}
+			unlockCutover(false)
+			cleanupNewPager()
+			return fmt.Errorf("vacuum: enable replacement COW freelist: %w", err)
+		}
+		nextMeta.TotalPages = selected.Record.TotalPages
+		replacementSelection = &selected
 		// A fallback directory scan can fail. Complete it before renaming index.db
 		// so an error cannot leave the live generation backed by an unlinked file.
 		if !leafPageLogSegmentsRegistered {
@@ -946,11 +1006,14 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.trackIndex(newGen)
 
 		var oldState *DBState
+		previousDurableResources := append([]*rootpublication.StableResourceSet(nil), db.durableRoot.slotResources[:]...)
 		db.mu.Lock()
 		oldState = db.state.Load()
 		db.idx.Store(newGen)
+		db.installDurableRootSelectionV1(*replacementSelection)
+		replacementSelection = nil
 		db.meta = nextMeta
-		db.metaPageID = MetaPage0ID
+		db.metaPageID = db.durableRoot.slot
 		valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
 		leafGenerationView := oldState.LeafGenerations
 		if leafGenerationChanged {
@@ -977,6 +1040,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 
 		unlockCutover(true)
 		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
+		for _, resources := range previousDurableResources {
+			resources.Release()
+		}
 
 		if oldState != nil {
 			_ = db.valueLogManager.Release(oldState.ValueLogSet)

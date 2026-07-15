@@ -4,6 +4,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 )
 
 func isFastHandle(id int64) bool {
@@ -288,5 +289,48 @@ func TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing(t *tes
 	}
 	if got := reg.fastShards[shard].count.Load(); got != -1 {
 		t.Fatalf("expected count to stay initializing sentinel, got %d", got)
+	}
+}
+
+func TestReaderRegistry_EmptyShardClaimSerializesWithMinScan(t *testing.T) {
+	reg := NewReaderRegistry()
+	const (
+		shard  = 0
+		oldSeq = uint64(100)
+		newSeq = uint64(10)
+	)
+	reg.fastShards[shard].seq.Store(oldSeq)
+	reg.fastShards[shard].count.Store(0)
+	reg.nextFastShard.Store(shard)
+
+	// MinPinnedSeq owns this mutex while it pairs shard sequence and count.
+	// A first claimant must not publish a lower sequence through that scan.
+	reg.mu.Lock()
+	done := make(chan int64, 1)
+	go func() {
+		id, _ := reg.RegisterWithHint(newSeq, shard)
+		done <- id
+	}()
+
+	select {
+	case id := <-done:
+		reg.mu.Unlock()
+		reg.Unregister(id)
+		t.Fatal("empty-shard claim completed while MinPinnedSeq serialization was held")
+	case <-time.After(25 * time.Millisecond):
+	}
+	reg.mu.Unlock()
+
+	select {
+	case id := <-done:
+		defer reg.Unregister(id)
+		if !isFastHandle(id) {
+			t.Fatalf("claim returned slow handle %d", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty-shard claim did not complete after MinPinnedSeq serialization released")
+	}
+	if min := reg.MinPinnedSeq(); min != newSeq {
+		t.Fatalf("min pinned seq=%d want %d", min, newSeq)
 	}
 }

@@ -66,7 +66,13 @@ func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
 		hint &= fastReaderShardMask
 	}
 
-	if id := r.tryAcquireFast(seq, hint); id != 0 {
+	// Joining an already-published shard is safe without the registry mutex: it
+	// cannot lower the pinned sequence observed by MinPinnedSeq. Claiming an
+	// empty shard can lower that minimum, so serialize first publication with
+	// MinPinnedSeq's scan. Otherwise the scan can pair a recycled shard's old,
+	// higher seq with the claimant's new positive count and reclaim pages below
+	// an in-flight reader's actual generation.
+	if id := r.tryJoinFast(seq, hint); id != 0 {
 		return id, hint
 	}
 

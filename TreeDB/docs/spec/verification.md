@@ -22,9 +22,14 @@ Durability evidence uses exactly one of these labels:
 separate process-visible and stable bytes, inode-aware names, file-sync
 promotion, and directory-sync promotion for create/rename/unlink. `Crash`
 discards volatile state. `MaterializeStable` writes only stable bytes reachable
-through stable directory entries, and `internal/powerlossreopen.Stable` passes
-that directory to normal public read-write or read-only `treedb.Open`; it does
-not invoke recovery internals.
+through stable directory entries. Materialization necessarily creates new host
+file IDs, so the model carries the captured file and directory identities into
+that image through a scoped, test-only physical-object adapter. The adapter is
+keyed by the recreated object's native identity, not by pathname: retained
+handles and aliases follow the object, while a later path replacement does not
+inherit the old identity. `internal/powerlossreopen.Stable` installs that view,
+passes the directory to normal public read-write or read-only `treedb.Open`,
+then releases it after close; it does not invoke recovery internals.
 
 The canonical cut-point enumeration command is:
 
@@ -34,14 +39,25 @@ GOWORK=off go test ./TreeDB -run '^TestPowerLossOracleEnumerateCutPoints$' -v -c
 
 Failure output includes `seed=3674` and the stable cut-point name. The command
 enumerates cuts before/after dependency append, userspace flush, dependency
-file sync, new-file directory sync, index-data sync, the logical publication
-boundary, meta write/sync, applied-LSN advancement, WAL/asset unlink, and
-deletion directory sync. The stable identifiers
-`before-publication-seal-write` and `after-publication-seal-write` are currently
-logical placeholders around the existing publication-registration boundary;
-there is no on-disk publication seal yet. DUR-09
-[#3679](https://github.com/snissn/gomap/issues/3679) will retarget those hooks
-to the real seal write.
+file sync, new-file directory sync, index-data sync, durable-root-record write,
+meta write/sync, applied-LSN advancement, WAL/asset unlink, and deletion
+directory sync. The stable identifiers `before-publication-seal-write` and
+`after-publication-seal-write` bracket the exact `DurableRootRecordV1` page
+write. The following index sync makes that record and its COW closure stable;
+only the later alternate-meta write and sync make it recovery-selectable.
+
+`db.TestRebindDurableRootSnapshotV1PreservesBothSlotsAndExactTargetIdentity`
+proves that ordinary copied dependencies fail before explicit snapshot rebind,
+a cut immediately before the first rebound-meta write leaves the installed
+index byte-for-byte unchanged, both distinct slots recover afterward, the older
+slot remains usable when the newest meta is corrupt, and a later byte-identical
+dependency replacement is still rejected.
+`db.TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback`
+proves that a main DB resolves a transitive dictionary identity against the
+public sibling `dictdb` layout and falls back when only the newest slot's exact
+dependency identity is replaced. `raftfsm.TestRaftSnapshotV1*` exercises rebind
+through the production archive installer, including value-log pointers and side
+stores.
 
 ### 0.2 Bounded adversarial crash-image generation
 
@@ -61,11 +77,12 @@ mismatches for newly created names, complete writeback, old-live-page reuse,
 and torn format-aware ranges. The generator recognizes meta, root-record,
 freelist, and index-page labels, rejects unknown labels, duplicate selectors,
 and ranges outside actual declared changes. The current public-Open integration
-witness exercises a real changed meta checksum boundary. Root-record,
-freelist, and index-page labels have generator coverage only; they do not claim
-production crash-image coverage until a real publication cut registers the
-corresponding changed bytes. The root-record boundary becomes such a production
-boundary when DUR-09 #3679 adds the sealed root record.
+witness exercises a real changed meta checksum boundary. Freelist and
+index-page labels have generator coverage only unless a production cut
+registers their corresponding changed bytes. The #3679 publication-seal event
+now exposes the root record's exact index-file page range as such a production
+boundary. A witness must register that range in its `CutSpec` before claiming
+public-reopen coverage for a torn root-record image.
 
 Every generated image used by the integration witnesses is materialized and
 passed to normal public `Open`. A single image can be replayed without a host
@@ -100,9 +117,9 @@ and separate-durability fields negative. `TestAllKindAuthorityGeneratesStableTar
 maps the same 16 fields independently into the #3717 generator and proves the
 deterministic 19-image shape: synced baseline, target-meta-only, sixteen
 one-missing-dependency images, and full writeback. That generator test does not
-materialize or reopen those 19 images through public `Open`, does not prove a
-root candidate consumes the captured resource sets, and does not close DUR-09
-#3679.
+materialize or reopen those 19 images through public `Open` and does not by
+itself prove that a root candidate consumes the captured resource sets; the
+#3679 publication and public-open integration witnesses own that proof.
 
 ### 0.3 Counterexample-to-conformance map
 
@@ -117,8 +134,8 @@ Later children update these stable test names rather than duplicating them.
 
 | Stable scenario | Current counterexample | Positive-conformance owner |
 |---|---|---|
-| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | `db.finalizeCommitLockedWithOptions` / `db.flushFinalizeCommitDurability`: newer meta lacks stable index/value-log/outer-leaf closure | DUR-02 #3675, then sealed fallback in DUR-09 #3679 |
-| `TestPowerLossOracleCounterexampleRecoverablePageReuse` | graveyard/freelist reuse touches a page reachable from an older recoverable meta | DUR-04 #3678 and maintenance horizon DUR-08 #3681 |
+| `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: the target meta is written only after the durable-root record, manifest, index, value-log, and outer-leaf closure is stable; incomplete candidates fall back | DUR-09 #3679 |
+| `TestPowerLossOracleCounterexampleRecoverablePageReuse` | resolved for synchronous publication: the root-reuse admission fence prevents reuse from racing older-root capture, and both durable slots retain their exact COW generations | DUR-04 #3678 and DUR-09 #3679; maintenance horizon remains DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3718 |
 | `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | `caching.DB.publishCommandWALCheckpointApplied` or cleanup removes command WAL/assets before sealed coverage | DUR-07 #3682 and DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | `caching.DB.Checkpoint`, `caching.DB.flushSyncRequested`, or chunked cached flush apply exposes an incomplete intermediate root | DUR-06 #3680 |
@@ -622,6 +639,12 @@ Coverage:
   to eight samples per revision. The raw-gate timing verdict uses the median
   per-pair candidate/base relative delta; base/head timing medians remain
   reported as context.
+- The `performance-observation-only` PR label is the narrow exception for a
+  ticket whose frozen performance class explicitly replaces the raw-path
+  percentage budget with matched observational fixtures. CI still runs the
+  exact base/head gate, uploads its artifacts, and reports its measured verdict;
+  only threshold enforcement becomes non-blocking. The linked ticket and PR
+  must document the accepted performance class and replacement evidence.
   `scripts/mvcc_closeout_matrix.sh` runs the pinned CommitAt, GetAt,
   all-version, and pruning depth/durability matrix and captures CPU, peak RSS,
   normalized storage footprint, `B/op`, and `allocs/op`.

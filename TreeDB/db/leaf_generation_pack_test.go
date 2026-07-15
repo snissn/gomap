@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -33,6 +34,14 @@ func expectLeafGenerationValue(t *testing.T, db *DB, key []byte, fill byte) {
 
 func leafGenerationKey(prefix string, i int) []byte {
 	return []byte(fmt.Sprintf("%s-%04d", prefix, i))
+}
+
+func advanceLeafGenerationPackDurableRootHorizon(t *testing.T, db *DB, reason string) {
+	t.Helper()
+	state := db.State()
+	if err := db.Commit(state.RootPageID); err != nil {
+		t.Fatalf("advance recoverable-root horizon (%s): %v", reason, err)
+	}
 }
 
 func openLeafGenerationPackTestDB(t *testing.T) (*DB, *rewriteWriter, string) {
@@ -243,7 +252,7 @@ func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T)
 	}
 }
 
-func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T) {
+func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *testing.T) {
 	requireLeafGenerationPackPromotionSupport(t)
 	db, leafLog, dir := openLeafGenerationPackTestDB(t)
 
@@ -266,25 +275,41 @@ func TestLeafGenerationPack_WriteMetaFailpointCleansCreatedSegments(t *testing.T
 	db.testFailWriteMeta.Store(true)
 	_, err = db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{GenerationIDs: []uint64{gen1.GenerationID}, Force: true})
 	db.testFailWriteMeta.Store(false)
-	if !errors.Is(err, errTestWriteMetaFailpoint) {
-		t.Fatalf("LeafGenerationPack writeMeta failpoint err=%v, want %v", err, errTestWriteMetaFailpoint)
+	if !errors.Is(err, errTestWriteMetaFailpoint) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("LeafGenerationPack writeMeta failpoint err=%v, want failpoint plus recovery-required", err)
+	}
+	if !db.publicationPoisoned.Load() {
+		t.Fatal("pre-meta retry exhaustion did not fail the writable handle closed")
+	}
+	pending := db.durableRoot.pending
+	if pending == nil || pending.resources == nil || pending.token == nil || pending.prepared == nil {
+		t.Fatalf("retained candidate=%+v, want exact resources/index/COW ownership", pending)
 	}
 
 	afterFiles, err := listLeafGenerationBootstrapFiles(LeafLogDirPath(dir))
 	if err != nil {
 		t.Fatalf("listLeafGenerationBootstrapFiles(after): %v", err)
 	}
-	if len(afterFiles) != len(beforeFiles) {
-		t.Fatalf("bootstrap file count=%d, want %d", len(afterFiles), len(beforeFiles))
-	}
-	for i := range beforeFiles {
-		if afterFiles[i] != beforeFiles[i] {
-			t.Fatalf("bootstrap files[%d]=%+v, want %+v", i, afterFiles[i], beforeFiles[i])
-		}
+	if len(afterFiles) <= len(beforeFiles) {
+		t.Fatalf("bootstrap file count=%d, want retained packed candidate beyond baseline %d", len(afterFiles), len(beforeFiles))
 	}
 	manifestAfter := loadLeafGenerationManifestOrFatal(t, dir)
-	if len(manifestAfter.Generations) != len(manifestBefore.Generations) {
-		t.Fatalf("manifest generations=%d, want %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
+	if len(manifestAfter.Generations) <= len(manifestBefore.Generations) {
+		t.Fatalf("manifest generations=%d, want retained packed revision beyond baseline %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
+	}
+	var retainedManifest, retainedPack bool
+	for _, entry := range pending.manifest.Entries() {
+		for _, field := range entry.Reachability {
+			switch field {
+			case rootpublication.ReachabilityOuterLeafGeneration:
+				retainedManifest = entry.Generation == manifestAfter.ManifestRevision
+			case rootpublication.ReachabilityOuterLeafPackedPointer:
+				retainedPack = true
+			}
+		}
+	}
+	if !retainedManifest || !retainedPack {
+		t.Fatalf("retained candidate manifest revision=%d manifest=%t pack=%t entries=%+v", manifestAfter.ManifestRevision, retainedManifest, retainedPack, pending.manifest.Entries())
 	}
 }
 
@@ -502,6 +527,7 @@ func TestLeafGenerationPack_MovesSparseSealedGeneration(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		expectLeafGenerationValue(t, reopened, leafGenerationKey("z", i), 'z')
 	}
+	advanceLeafGenerationPackDurableRootHorizon(t, reopened, "moves-sparse")
 	if _, err := reopened.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC after reopen: %v", err)
 	}
@@ -722,6 +748,7 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if got := entryAfter.BytesLive; got != 0 {
 		t.Fatalf("generation %d BytesLive=%d, want 0 after collection pack", gen.GenerationID, got)
 	}
+	advanceLeafGenerationPackDurableRootHorizon(t, db, "collection-leaf-root")
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}
@@ -869,6 +896,7 @@ func TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC(t *testing.T
 		t.Fatalf("generation %d BytesLive=%d, want 0 after pack", gen.GenerationID, got)
 	}
 
+	advanceLeafGenerationPackDurableRootHorizon(t, db, "collection-internal-roots")
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}

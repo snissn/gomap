@@ -46,6 +46,7 @@ type Allocator struct {
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
 	preferAppend bool
+	cow          *allocatorCOWStateV1
 
 	instrumentation allocatorInstrumentation
 }

@@ -9911,7 +9911,18 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 }
 
 func isRetriableCollectionMutationError(err error) bool {
-	return errors.Is(err, ErrConcurrentMutation) || isRetriableCollectionCatalogReadEOF(err)
+	return errors.Is(err, ErrConcurrentMutation) ||
+		isRetriableOrderedRootPublishConflict(err) ||
+		isRetriableCollectionCatalogReadEOF(err)
+}
+
+func isRetriableOrderedRootPublishConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "concurrent modification detected during ordered root publish") ||
+		strings.Contains(err.Error(), "concurrent modification detected during ordered root group publish") ||
+		strings.Contains(err.Error(), "durable-root candidate base changed:")
 }
 
 func isRetriableCollectionCatalogReadEOF(err error) bool {
@@ -11360,7 +11371,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		deleted, err := c.deleteDocumentOnce(documentID, nil)
-		if errors.Is(err, ErrConcurrentMutation) {
+		if isRetriableCollectionMutationError(err) {
 			lastErr = err
 			if flushErr := c.flushBufferedWrites(); flushErr != nil {
 				return false, flushErr
@@ -12159,7 +12170,7 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		matched, modified, err := c.updateDocumentOnce(documentID, update)
-		if errors.Is(err, ErrConcurrentMutation) {
+		if isRetriableCollectionMutationError(err) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
@@ -12358,7 +12369,7 @@ func (c *Collection) updateBatchOwnedItemsWithCommandWALIntent(items []updateBat
 		if isBufferedRootBaseMismatch(err) {
 			return make([]UpdateBatchResult, len(items)), false, err
 		}
-		if errors.Is(err, ErrConcurrentMutation) {
+		if isRetriableCollectionMutationError(err) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue

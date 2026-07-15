@@ -66,7 +66,12 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	}
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		return 0, err
 	}
@@ -111,9 +116,19 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, touchedValueLogSegments, true, vlogRefDelta, nil, nil); err != nil {
+	post, err := db.finalizeCommitReleasingRootSerialization(
+		userRoot, newSystemRoot, retired, false, metrics, touchedValueLogSegments,
+		true, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		func() {
+			db.writeMu.Unlock()
+			writeLocked = false
+		},
+		nil,
+	)
+	if err != nil {
 		return 0, err
 	}
 	vlogRefDelta = nil
+	db.finalizeCommitPostWork(post)
 	return newSystemRoot, nil
 }

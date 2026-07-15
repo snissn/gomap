@@ -296,8 +296,11 @@ func TestHelperTreeDBCommandWALDurableUncheckpointedWriter(t *testing.T) {
 		stats["treedb.cache.command_wal.external_durability"] != "true" {
 		t.Fatalf("unexpected command-WAL cached durability stats: %#v", stats)
 	}
-	if stats["treedb.commit_seq"] != "0" {
-		t.Fatalf("commit_seq=%q, want 0 before crash without checkpoint", stats["treedb.commit_seq"])
+	// Durable-root V1 seals the fresh bootstrap as commit 1. The synced command
+	// WAL frames above must remain ahead of that unchanged checkpoint until
+	// recovery replays them.
+	if stats["treedb.commit_seq"] != "1" {
+		t.Fatalf("commit_seq=%q, want bootstrap commit 1 before crash without checkpoint", stats["treedb.commit_seq"])
 	}
 
 	// Simulate a crash by exiting without Close(), so no close-time checkpoint can
