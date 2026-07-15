@@ -6,70 +6,82 @@ import (
 	"testing"
 )
 
-func benchmarkFixture(snapshotNS, publicNS, snapshotBytes, publicBytes float64, samples int) string {
+func fixture(snapshot, public []float64) string {
 	var b strings.Builder
 	for _, keys := range []int{1024, 16384} {
-		for _, operation := range []string{"seek", "next"} {
-			for _, mode := range []string{"snapshot", "public"} {
-				ns := publicNS
-				bytesPerOp := publicBytes
-				if mode == "snapshot" {
-					ns = snapshotNS
-					bytesPerOp = snapshotBytes
+		for _, op := range []string{"seek", "next"} {
+			for i := range snapshot {
+				order := "AB"
+				modes := []string{"snapshot", "public"}
+				if i%2 == 1 {
+					order = "BA"
+					modes = []string{"public", "snapshot"}
 				}
-				rowName := mode + "_" + operation
-				if mode == "public" {
-					rowName += "_baseline"
-				}
-				for i := 0; i < samples; i++ {
-					fmt.Fprintf(&b, "BenchmarkSnapshotIteratorSeekNext/keys=%d/%s-4 1000 %.3f ns/op %.0f B/op 0 allocs/op\n",
-						keys, rowName, ns+float64(i%3), bytesPerOp)
+				for _, mode := range modes {
+					ns := public[i]
+					name := "public_" + op + "_baseline"
+					if mode == "snapshot" {
+						ns = snapshot[i]
+						name = "snapshot_" + op
+					}
+					fmt.Fprintf(&b, "# pair=%d order=%s\nBenchmarkSnapshotIteratorSeekNext/keys=%d/%s-1 1000 %.3f ns/op 0 B/op 0 allocs/op\n", i+1, order, keys, name, ns)
 				}
 			}
 		}
 	}
 	return b.String()
 }
-
-func TestEvaluatePassesSameBinaryGate(t *testing.T) {
-	rows, err := parseBenchmarkOutput(benchmarkFixture(104, 100, 0, 0, 7))
+func testMeta() metadata {
+	return metadata{Head: "deadbeef", BinarySHA256: "abc", RunnerImage: "ubuntu", CPU: "cpu", Affinity: "1", GoVersion: "go"}
+}
+func TestEvaluateObservedBimodalFalseFailureUsesAlignedPairs(t *testing.T) {
+	// The seven independently grouped hosted samples in #3788 have an over-5%
+	// median delta even though the aligned AB/BA protocol below is within budget.
+	if legacy := (median([]float64{355, 356, 357, 407, 408, 409, 410})/median([]float64{362, 363, 364, 362, 363, 364, 363}) - 1) * 100; legacy <= 5 {
+		t.Fatalf("observed independent fixture delta=%f, want >5%%", legacy)
+	}
+	rows, err := parseBenchmarkOutput(fixture([]float64{355, 356, 357, 356, 407, 408, 409, 408}, []float64{362, 363, 364, 363, 410, 411, 412, 411}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep := evaluate(rows, metadata{Head: "deadbeef"}, 7, 0.05)
-	if !rep.Passed || len(rep.Cases) != 4 || len(rep.Violations) != 0 {
-		t.Fatalf("report = %+v, want passing four-case report", rep)
+	rep := evaluate(rows, testMeta(), 8, .05)
+	if !rep.Passed {
+		t.Fatalf("paired report should pass: %+v", rep)
 	}
-	if got := markdown(rep); !strings.Contains(got, "Exact head: `deadbeef`") || !strings.Contains(got, "PASS") {
-		t.Fatalf("unexpected Markdown report:\n%s", got)
+	if rep.Cases[0].PairedMedianDeltaPercent >= 5 {
+		t.Fatalf("aligned paired evidence must stay below the 5%% budget: %+v", rep.Cases[0])
+	}
+	if !strings.Contains(markdown(rep), "paired delta") {
+		t.Fatal("report missing paired field")
 	}
 }
-
-func TestEvaluateRejectsTimingAndAllocationRegression(t *testing.T) {
-	rows, err := parseBenchmarkOutput(benchmarkFixture(106, 100, 8, 0, 7))
+func TestEvaluateRejectsGenuinePairedRegressionAndAllocation(t *testing.T) {
+	rows, err := parseBenchmarkOutput(fixture([]float64{108, 108, 108, 108, 108, 108, 108, 108}, []float64{100, 100, 100, 100, 100, 100, 100, 100}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep := evaluate(rows, metadata{}, 7, 0.05)
-	if rep.Passed || len(rep.Violations) != 8 {
-		t.Fatalf("violations = %d, passed = %v; want two violations per case", len(rep.Violations), rep.Passed)
+	rep := evaluate(rows, testMeta(), 8, .05)
+	if rep.Passed || len(rep.Violations) != 4 {
+		t.Fatalf("genuine paired regression report=%+v", rep)
 	}
 }
-
-func TestEvaluateRejectsMissingSamples(t *testing.T) {
-	rows, err := parseBenchmarkOutput(benchmarkFixture(100, 100, 0, 0, 6))
+func TestEvaluateFailsClosedOnUnbalancedPairs(t *testing.T) {
+	raw := fixture([]float64{100, 100, 100, 100, 100, 100, 100, 100}, []float64{100, 100, 100, 100, 100, 100, 100, 100})
+	raw = strings.Replace(raw, "# pair=2 order=BA", "# pair=2 order=AB", 1)
+	rows, err := parseBenchmarkOutput(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep := evaluate(rows, metadata{}, 7, 0.05)
-	if rep.Passed || len(rep.Violations) != 4 || len(rep.Cases) != 0 {
-		t.Fatalf("report = %+v, want four missing-sample violations", rep)
+	rep := evaluate(rows, testMeta(), 8, .05)
+	if rep.Passed || len(rep.Cases) != 3 {
+		t.Fatalf("unbalanced pairs report=%+v", rep)
 	}
 }
-
-func TestParseBenchmarkOutputRejectsMissingAllocationMetric(t *testing.T) {
-	_, err := parseBenchmarkOutput("BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek-4 1000 100 ns/op 0 B/op\n")
-	if err == nil || !strings.Contains(err.Error(), "malformed") {
-		t.Fatalf("error = %v, want malformed row", err)
+func TestParseRejectsMissingAnnotationAndMalformedMetrics(t *testing.T) {
+	if _, err := parseBenchmarkOutput("BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek-1 1000 1 ns/op 0 B/op 0 allocs/op\n"); err == nil {
+		t.Fatal("missing annotation passed")
+	}
+	if _, err := parseBenchmarkOutput("# pair=1 order=AB\nBenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek-1 1000 nope ns/op 0 B/op 0 allocs/op\n"); err == nil {
+		t.Fatal("malformed metric passed")
 	}
 }
