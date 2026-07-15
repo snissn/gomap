@@ -480,6 +480,12 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	if err == nil {
+		// Covered dependency pins can retain handles to inactive segments. Drop
+		// the durable prefix before unlinking those segments so Windows can
+		// remove them as well as Unix-like platforms.
+		if sync {
+			db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
+		}
 		decisions, err = removeCoveredCommandWALSegments(decisions)
 	}
 	removed := uint64(0)
@@ -527,9 +533,6 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 				return errors.Join(syncErr, ErrRecoveryRequired)
 			}
 		}
-	}
-	if err == nil && sync {
-		db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
 	}
 	return err
 }

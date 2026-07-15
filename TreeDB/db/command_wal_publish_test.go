@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -928,6 +929,109 @@ func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
 		t.Fatalf("uncovered segment stat=%v, want present", err)
+	}
+}
+
+func TestCommandWALCheckpointCleanupReleasesCoveredDebtBeforeUnlink(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	newToken := func(name string, generation uint64, released *bool) *rootpublication.StableResourceToken {
+		t.Helper()
+		file, err := os.Open(filepath.Join(WALDirPath(dir), name))
+		if err != nil {
+			t.Fatalf("open %s: %v", name, err)
+		}
+		token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+			Kind:           rootpublication.ResourceCommandWAL,
+			LogicalLane:    "0",
+			ResourceID:     name,
+			Generation:     generation,
+			DiagnosticPath: filepath.ToSlash(filepath.Join("wal", name)),
+			File:           file,
+			Frontier:       rootpublication.DurableFrontier{Bytes: 1, MaxLSN: generation},
+			Reachability:   rootpublication.ReachabilityCommandWALRotated,
+			ContentSynced:  true,
+			OnRelease: func() {
+				*released = true
+			},
+		})
+		if err != nil {
+			_ = file.Close()
+			t.Fatalf("new stable token %s: %v", name, err)
+		}
+		_ = file.Close()
+		return token
+	}
+
+	coveredReleased := false
+	coveredResourceReleased := false
+	laterReleased := false
+	covered := newToken("commit-l0-000001.log", 1, &coveredReleased)
+	coveredResource := newToken("commit-l0-000001.log", 3, &coveredResourceReleased)
+	resourceBuilder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityCommandWALRotated)
+	if err := resourceBuilder.Add(coveredResource); err != nil {
+		covered.Release()
+		coveredResource.Release()
+		later := newToken("commit-l0-000002.log", 2, &laterReleased)
+		later.Release()
+		t.Fatalf("add covered resource: %v", err)
+	}
+	coveredResources, err := resourceBuilder.Freeze()
+	if err != nil {
+		covered.Release()
+		resourceBuilder.Abandon()
+		t.Fatalf("freeze covered resource: %v", err)
+	}
+	later := newToken("commit-l0-000002.log", 2, &laterReleased)
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	db.state.Store(&DBState{AppliedCommandLSN: 1})
+	if err := db.commandWALDebt.add(1, []*rootpublication.StableResourceToken{covered}, coveredResources); err != nil {
+		covered.Release()
+		coveredResources.Release()
+		later.Release()
+		t.Fatalf("add covered debt: %v", err)
+	}
+	if err := db.commandWALDebt.add(2, []*rootpublication.StableResourceToken{later}); err != nil {
+		db.commandWALDebt.releaseAll()
+		t.Fatalf("add later debt: %v", err)
+	}
+	t.Cleanup(db.commandWALDebt.releaseAll)
+
+	restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeWALOrAssetUnlink && filepath.Base(event.Path) == "commit-l0-000001.log" {
+			if !coveredReleased {
+				t.Error("covered command-WAL rotation debt remained pinned at its segment unlink")
+			}
+			if !coveredResourceReleased {
+				t.Error("covered command-WAL resource debt remained pinned at its segment unlink")
+			}
+			if laterReleased {
+				t.Error("later command-WAL debt was released before its applied prefix")
+			}
+		}
+		return nil
+	})
+	defer restoreObserver()
+
+	if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+	}
+	if !coveredReleased {
+		t.Fatal("covered command-WAL rotation debt was not released")
+	}
+	if !coveredResourceReleased {
+		t.Fatal("covered command-WAL resource debt was not released")
+	}
+	if laterReleased {
+		t.Fatal("later command-WAL debt was released")
+	}
+	db.commandWALDebt.mu.Lock()
+	pending := len(db.commandWALDebt.entries)
+	db.commandWALDebt.mu.Unlock()
+	if pending != 1 {
+		t.Fatalf("pending debt entries=%d, want 1 for later LSN", pending)
 	}
 }
 
