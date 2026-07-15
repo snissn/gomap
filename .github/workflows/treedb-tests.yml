@@ -2,6 +2,15 @@ name: "TreeDB: vet+test"
 
 on:
   push:
+    branches:
+      - main
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: treedb-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -13,44 +22,33 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout))\.py$|\.github/workflows/treedb-tests\.yml$)'
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract)\.py$|\.github/workflows/treedb-tests\.yml$)'
     steps:
-      - name: Resolve open PR and relevant paths
+      - name: Resolve pull request and relevant paths
         id: scope
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
-          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${REPOSITORY}/commits/${HEAD_SHA}/pulls" > "$RUNNER_TEMP/pulls.json"
-          pr_row=$(jq -r --arg head "$HEAD_SHA" \
-            '.[] | select(.state == "open" and .head.sha == $head) | [.number, .base.sha, .head.sha] | @tsv' \
-            "$RUNNER_TEMP/pulls.json" | head -1)
-          if [[ -z "$pr_row" ]]; then
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No open PR has exact head ${HEAD_SHA}; skipping MVCC raw-path gate."
+            echo "Event ${EVENT_NAME} has no pull-request comparison pair; skipping MVCC raw-path gate."
             exit 0
           fi
-          IFS=$'\t' read -r pr_number base_sha head_sha <<< "$pr_row"
-          gh api --paginate \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
-            --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
-          cat "$RUNNER_TEMP/pr-files.txt"
-          if grep -Eq "$MVCC_GATE_PATH_RE" \
-            "$RUNNER_TEMP/pr-files.txt"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No MVCC/raw-gate relevant path changed; skipping."
+          if [[ -z "$PR_NUMBER" || -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "pull_request event is missing number/base/head identity" >&2
+            exit 2
           fi
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "run=true"
+            echo "pr_number=$PR_NUMBER"
+            echo "base_sha=$BASE_SHA"
+            echo "head_sha=$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact PR head
         if: steps.scope.outputs.run == 'true'
@@ -59,15 +57,38 @@ jobs:
           ref: ${{ steps.scope.outputs.head_sha }}
           fetch-depth: 0
 
-      - name: Setup Go
+      - name: Resolve relevant paths from the event pair
+        id: paths
         if: steps.scope.outputs.run == 'true'
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.scope.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]]; then
+            echo "candidate checkout does not match pull-request event head" >&2
+            exit 2
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/pr-files.txt"
+          cat "$RUNNER_TEMP/pr-files.txt"
+          if grep -Eq "$MVCC_GATE_PATH_RE" "$RUNNER_TEMP/pr-files.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No MVCC/raw-gate relevant path changed; skipping."
+          fi
+
+      - name: Setup Go
+        if: steps.paths.outputs.run == 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Gate self-checks
-        if: steps.scope.outputs.run == 'true'
+        if: steps.paths.outputs.run == 'true'
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -84,6 +105,7 @@ jobs:
           python3 .github/scripts/test_mvcc_benchmark_pairing.py
           python3 .github/scripts/test_summarize_mvcc_closeout.py
           python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
+          python3 .github/scripts/test_treedb_ci_contract.py
           for path in \
             TreeDB/snapshot_seek_iterator_bench_test.go \
             TreeDB/command_wal_public_test.go \
@@ -100,7 +122,8 @@ jobs:
             scripts/mvcc_candidate_checkout_guard.sh \
             .github/scripts/summarize_mvcc_closeout.py \
             .github/scripts/test_summarize_mvcc_closeout.py \
-            .github/scripts/test_mvcc_candidate_checkout_guard.py; do
+            .github/scripts/test_mvcc_candidate_checkout_guard.py \
+            .github/scripts/test_treedb_ci_contract.py; do
             if ! grep -Eq "$MVCC_GATE_PATH_RE" <<< "$path"; then
               echo "MVCC gate path scope unexpectedly excludes: $path" >&2
               exit 1
@@ -108,7 +131,7 @@ jobs:
           done
 
       - name: Compare exact base and head
-        if: steps.scope.outputs.run == 'true'
+        if: steps.paths.outputs.run == 'true'
         env:
           BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
           CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
@@ -130,7 +153,7 @@ jobs:
           ./scripts/mvcc_raw_path_gate.sh
 
       - name: Add benchmark summary
-        if: always() && steps.scope.outputs.run == 'true'
+        if: always() && steps.paths.outputs.run == 'true'
         run: |
           if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" ]]; then
             cat "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" >> "$GITHUB_STEP_SUMMARY"
@@ -139,7 +162,7 @@ jobs:
           fi
 
       - name: Upload benchmark evidence
-        if: always() && steps.scope.outputs.run == 'true'
+        if: always() && steps.paths.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mvcc-raw-path-gate-${{ steps.scope.outputs.head_sha }}
@@ -742,3 +765,41 @@ jobs:
           path: artifacts/snapshot_iterator_perf/
           if-no-files-found: error
           retention-days: 14
+
+  required:
+    name: TreeDB required gate
+    if: ${{ always() }}
+    needs:
+      - mvcc-raw-path-gate
+      - test
+      - race
+      - perf
+      - snapshot-iterator-perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required TreeDB jobs
+        shell: bash
+        env:
+          MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          PERF_RESULT: ${{ needs.perf.result }}
+          SNAPSHOT_ITERATOR_PERF_RESULT: ${{ needs.snapshot-iterator-perf.result }}
+        run: |
+          set -euo pipefail
+          failed=false
+          for result in \
+            "$MVCC_RESULT" \
+            "$TEST_RESULT" \
+            "$RACE_RESULT" \
+            "$PERF_RESULT" \
+            "$SNAPSHOT_ITERATOR_PERF_RESULT"; do
+            if ! [[ "$result" == "success" ]]; then
+              echo "required TreeDB job result is ${result}" >&2
+              failed=true
+            fi
+          done
+          if [[ "$failed" == "true" ]]; then
+            exit 1
+          fi
