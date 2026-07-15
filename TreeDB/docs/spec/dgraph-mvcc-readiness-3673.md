@@ -132,11 +132,11 @@ reads, batch writes, snapshot seek, iterator reuse, and durable synced writes.
 The point-read and batch-write rows use separate invocations so one row cannot
 delay the base/head pair for the other. Eight samples provide exactly four AB
 and four BA pairs; odd sample counts are rejected. The gate rejects a median
-timing regression over 5%, any allocation increase, or a material `B/op`
+paired candidate/base timing regression over 5%, any allocation increase, or a material `B/op`
 increase. A distinct `EQUIVALENT` acceptance is available only when the checker
 hashes all six actual test-binary paths and every row-producing base/head pair
 matches (`db`, `caching`, and `treedb`). `EQUIVALENT` preserves the measured
-PASS/FAIL medians and deltas but states that no observed difference can be
+PASS/FAIL base/head medians and paired timing deltas but states that no observed difference can be
 attributed to the candidate code; mixed, missing, or malformed binary evidence
 fails closed and cannot produce equivalence acceptance.
 The verdict truth table is `PASS` for a passing measurement, `EQUIVALENT` only

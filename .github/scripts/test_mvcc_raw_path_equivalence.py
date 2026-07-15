@@ -35,6 +35,81 @@ class RawPathEquivalenceTests(unittest.TestCase):
             for benchmark in CHECKER.BENCHMARKS
         ]
 
+    @staticmethod
+    def samples(timings: list[float]) -> list[CHECKER.Sample]:
+        return [CHECKER.Sample(timing, 128.0, 2.0) for timing in timings]
+
+    def benchmark_sets(
+        self, baseline_timings: list[float], candidate_timings: list[float]
+    ) -> tuple[dict[str, list[CHECKER.Sample]], dict[str, list[CHECKER.Sample]]]:
+        return (
+            {benchmark: self.samples(baseline_timings) for benchmark in CHECKER.BENCHMARKS},
+            {benchmark: self.samples(candidate_timings) for benchmark in CHECKER.BENCHMARKS},
+        )
+
+    def test_paired_timing_accepts_observed_independent_median_false_failure(self) -> None:
+        baseline, candidate = self.benchmark_sets(
+            [
+                1302945,
+                1176097,
+                1679767,
+                1962560,
+                1050465,
+                4438267,
+                1170681,
+                660182,
+            ],
+            [
+                2491471,
+                839760,
+                1502818,
+                743114,
+                1287476,
+                4460418,
+                915485,
+                1558013,
+            ],
+        )
+        passed, results = CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+        self.assertTrue(passed)
+        self.assertGreater(results[0]["ns_delta_percent"], 5.0)
+        self.assertLess(results[0]["paired_ns_delta_percent"], 0.0)
+        self.assertTrue(results[0]["timing_pass"])
+
+    def test_paired_timing_rejects_real_regression(self) -> None:
+        baseline, candidate = self.benchmark_sets(
+            [100.0] * 8,
+            [106.0] * 8,
+        )
+        passed, results = CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+        self.assertFalse(passed)
+        self.assertAlmostEqual(results[0]["paired_ns_delta_percent"], 6.0)
+        self.assertFalse(results[0]["timing_pass"])
+
+    def test_paired_timing_rejects_non_positive_baseline(self) -> None:
+        baseline, candidate = self.benchmark_sets(
+            [100.0, 100.0, 100.0, 0.0, 100.0, 100.0, 100.0, 100.0],
+            [100.0] * 8,
+        )
+        with self.assertRaisesRegex(ValueError, "baseline ns/op must be positive"):
+            CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+
+        baseline, candidate = self.benchmark_sets([0.0] * 8, [100.0] * 8)
+        with self.assertRaisesRegex(ValueError, "baseline ns/op must be positive"):
+            CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+
+    def test_paired_timing_rejects_non_positive_candidate(self) -> None:
+        baseline, candidate = self.benchmark_sets(
+            [100.0] * 8,
+            [100.0, 100.0, 100.0, 0.0, 100.0, 100.0, 100.0, 100.0],
+        )
+        with self.assertRaisesRegex(ValueError, "candidate ns/op must be positive"):
+            CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+
+        baseline, candidate = self.benchmark_sets([100.0] * 8, [0.0] * 8)
+        with self.assertRaisesRegex(ValueError, "candidate ns/op must be positive"):
+            CHECKER.evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+
     def binary_paths(
         self, equivalent_packages: set[str]
     ) -> dict[str, dict[str, Path]]:
@@ -172,10 +247,13 @@ class RawPathEquivalenceTests(unittest.TestCase):
         self.assertTrue(payload["no_attributable_regression"])
         self.assertFalse(payload["measurement_pass"])
         self.assertFalse(payload["results"][0]["measurement_pass"])
+        self.assertAlmostEqual(payload["results"][0]["paired_ns_delta_percent"], 20.0)
         self.assertNotIn("pass", payload)
         markdown = markdown_output.read_text(encoding="utf-8")
         self.assertIn("- verdict: **EQUIVALENT**", markdown)
         self.assertIn("- measured threshold observation: **FAIL**", markdown)
+        self.assertIn("timing acceptance: median paired candidate/base", markdown)
+        self.assertIn("| Median delta | Paired delta |", markdown)
 
 
 if __name__ == "__main__":
