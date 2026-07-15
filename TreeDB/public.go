@@ -1935,8 +1935,8 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 }
 
 // UpdateSync applies fn to the current value for key and writes the returned
-// mutation with a sync durability boundary. When the command WAL is enabled,
-// explicit sync operations opt up even when the configured default is relaxed.
+// mutation with a sync durability boundary. Command-WAL cached mode rejects
+// callback-based updates until they have deterministic replay support.
 //
 // Concurrent UpdateSync/Update calls for the same key on the same DB handle do
 // not lose each other's changes. Because fn may be retried, it should avoid
