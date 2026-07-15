@@ -37,31 +37,31 @@ func TestColumnAssetRewriteFailsClosedBeforeCopiedVisibilityOnWindows(t *testing
 	}
 }
 
-func TestOrdinaryColumnWriteUsesLegacyPreCutoverPathOnWindows(t *testing.T) {
-	if ordinaryColumnStableAuthorityEnabled() {
-		t.Fatal("ordinary stable column authority unexpectedly enabled on Windows")
+func TestOrdinaryColumnWriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
+	if !ordinaryColumnStableAuthorityEnabled() {
+		t.Fatal("ordinary stable column create authority unexpectedly disabled on Windows")
 	}
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
 	doc := []byte(`{"time_us":1,"kind":"like","did":"did:windows"}`)
-	if _, err := col.Insert([]byte("windows-legacy"), doc); err != nil {
-		t.Fatalf("ordinary legacy column Insert: %v", err)
+	if _, err := col.Insert([]byte("windows-stable"), doc); err != nil {
+		t.Fatalf("ordinary stable column Insert: %v", err)
 	}
-	got, err := col.Get([]byte("windows-legacy"))
+	got, err := col.Get([]byte("windows-stable"))
 	if err != nil {
-		t.Fatalf("ordinary legacy column Get: %v", err)
+		t.Fatalf("ordinary stable column Get: %v", err)
 	}
 	if !bytes.Equal(got, doc) {
-		t.Fatalf("ordinary legacy column Get=%s want %s", got, doc)
+		t.Fatalf("ordinary stable column Get=%s want %s", got, doc)
 	}
 	registry := d.StableResourceIdentityPinRegistry()
 	if got := registry.ActivePins(); got != 0 {
-		t.Fatalf("ordinary legacy publication active stable pins=%d want 0", got)
+		t.Fatalf("ordinary stable publication active pins=%d want 0", got)
 	}
-	if got := registry.ActiveStableNamespaceLinks(); got != 0 {
-		t.Fatalf("ordinary legacy publication stable namespace proofs=%d want 0", got)
+	if got := registry.ActiveStableNamespaceLinks(); got == 0 {
+		t.Fatal("ordinary stable publication recorded no exact namespace proof")
 	}
 }
 

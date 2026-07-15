@@ -367,11 +367,16 @@ func TestSelectDurableRootV1ValidatesExactExternalRangesAndFallsBack(t *testing.
 	if err := os.MkdirAll(parentPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	parent, err := rootpublication.OpenStableParent(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = parent.Close() })
 	resourcePath := filepath.Join(parentPath, resourceName)
 	oldRange := []byte("older-slot-authoritative-range")
 	newRange := []byte("newest-slot-only-range")
 	payload := append(append([]byte(nil), oldRange...), newRange...)
-	file, err := os.OpenFile(resourcePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := rootpublication.OpenStableChildFile(parent, resourceName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,23 +397,18 @@ func TestSelectDurableRootV1ValidatesExactExternalRangesAndFallsBack(t *testing.
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	parent, err := os.Open(parentPath)
-	if err != nil {
-		t.Fatal(err)
+	if rootpublication.StableRelativeNamespaceSupported() {
+		if err := parent.Sync(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := parent.Sync(); err != nil {
-		_ = parent.Close()
-		t.Fatal(err)
-	}
+	// Windows' narrower create-only contract persists namespace metadata through
+	// the exact child Sync above; full namespace platforms sync the parent.
 	parentIdentity, err := rootpublication.StableIdentityFromFile(parent)
 	if err != nil {
-		_ = parent.Close()
 		t.Fatal(err)
 	}
 	parentIdentity.Generation = 1
-	if err := parent.Close(); err != nil {
-		t.Fatal(err)
-	}
 
 	obligation := func(offset int64, raw []byte, partID uint64) rootpublication.StableLogicalObligation {
 		entry := rootpublication.StableLogicalObligation{

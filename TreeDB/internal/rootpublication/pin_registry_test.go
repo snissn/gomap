@@ -124,6 +124,9 @@ func TestIdentityPinRegistrySerializesDeleteNamespace(t *testing.T) {
 }
 
 func TestIdentityPinRegistryRebindsOnlyExactKnownStableNamespaceLink(t *testing.T) {
+	if !StableRelativeNamespaceSupported() {
+		t.Skip("known-link replacement requires durable namespace removal")
+	}
 	dir := t.TempDir()
 	parent, err := os.Open(dir)
 	if err != nil {

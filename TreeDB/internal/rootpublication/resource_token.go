@@ -1326,6 +1326,14 @@ func StableRelativeNamespaceSupported() bool {
 	return stableRelativeNamespaceSupported()
 }
 
+// StableNamespaceCreationSupported reports whether the platform can persist
+// an exact retained-parent child creation. Windows supports this narrower
+// contract by flushing the exact child even though rename, removal, and parent
+// directory sync remain unsupported.
+func StableNamespaceCreationSupported() bool {
+	return stableRelativeNamespaceSupported() || stableNamespaceCreationPersistsThroughChild()
+}
+
 func validateStableChildLink(parent, resource *os.File, name string) error {
 	resourceIdentity, err := stableIdentityFromFile(resource)
 	if err != nil {
