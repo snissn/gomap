@@ -297,3 +297,12 @@ func TestStableFreshColumnAssetSegmentUsesCreateOnlyWindowsEvidence(t *testing.T
 		t.Fatalf("released stable fresh segment active identities=%d want 0", got)
 	}
 }
+
+func TestColumnVectorGraphStableAuthorityUsesCreateOnlyWindowsEvidence(t *testing.T) {
+	registry := rootpublication.NewIdentityPinRegistry()
+	authority, err := newColumnVectorGraphStableResourceAccumulator(registry)
+	if err != nil {
+		t.Fatalf("create-only vector stable authority: %v", err)
+	}
+	authority.abandon()
+}

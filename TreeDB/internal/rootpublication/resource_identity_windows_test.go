@@ -183,10 +183,10 @@ func TestEnsureStableChildDirectoryUsesExactParentHandleWindows(t *testing.T) {
 	if got := registry.CachedStableDirectoryLinks(); got != 0 {
 		t.Fatalf("cleared stable directory cache entries=%d want 0", got)
 	}
-	if _, err := retained.parent.Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := retained.parent.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("cleared stable directory parent authority: %v", err)
 	}
-	if _, err := retained.child.Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := retained.child.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("cleared stable directory child authority: %v", err)
 	}
 }

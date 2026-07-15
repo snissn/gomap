@@ -24,8 +24,8 @@ func newColumnVectorGraphStableResourceAccumulator(registry *rootpublication.Ide
 	if registry == nil {
 		return nil, errors.New("collections: column vector rebuild stable authority requires identity pin registry")
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		return nil, fmt.Errorf("%w: column vector rebuild stable authority requires retained-parent namespace persistence", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableNamespaceCreationSupported() {
+		return nil, fmt.Errorf("%w: column vector rebuild stable authority requires exact child creation persistence", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	return &columnVectorGraphStableResourceAccumulator{
 		registry: registry,
