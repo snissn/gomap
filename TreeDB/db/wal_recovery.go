@@ -515,6 +515,14 @@ func captureCommandWALReplayRelaxedDependencies(db *DB, frames []commandWALRepla
 	segments := make([]valuelog.StableExternalRIDSegment, 0)
 	for _, entry := range entries {
 		if len(segments) == 0 || segments[len(segments)-1].FileID != entry.ptr.FileID {
+			// Durable-root recovery registers only the selected generation's
+			// manifest closure. A relaxed command-WAL suffix may legitimately
+			// reference a newer value-log child that is not reachable from that
+			// root yet, so bind the already-scanned RID pointer to its canonical
+			// manager identity before asking the producer to capture and sync it.
+			if err := db.registerReplayValueLogPointer(entry.ptr); err != nil {
+				return nil, fmt.Errorf("register command WAL replay dependency: %w", err)
+			}
 			segments = append(segments, valuelog.StableExternalRIDSegment{
 				FileID: entry.ptr.FileID,
 				Digest: stableExternalRIDSegmentDigest(entry.ptr.FileID),
@@ -786,11 +794,11 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 }
 
 // registerReplayValueLogPointer makes the exact physical segment resolved from
-// a legacy RID-bearing recovery record available to bounded durable-root
-// publication. Legacy WAL payloads carry only an RID, so recovery first proves
-// the RID-to-pointer mapping by reading the segment and then registers that
-// single canonical identity. This is not a publisher discovery fallback: no
-// candidate path is statted or scanned after the pointer becomes reachable.
+// an RID-bearing recovery record available to bounded durable-root publication.
+// Recovery first proves the RID-to-pointer mapping by reading the segment and
+// then registers that single canonical identity. This is not a publisher
+// discovery fallback: no candidate path is statted or scanned after the pointer
+// becomes reachable.
 func (db *DB) registerReplayValueLogPointer(ptr page.ValuePtr) error {
 	if db == nil || db.valueLogManager == nil || ptr.FileID == 0 {
 		return nil
