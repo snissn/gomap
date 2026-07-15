@@ -179,7 +179,7 @@ func duplicateStableSyncFile(file *os.File) (*os.File, error) {
 		file.Fd(),
 		uintptr(windows.GENERIC_READ|windows.GENERIC_WRITE),
 		uintptr(windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE),
-		uintptr(windows.FILE_ATTRIBUTE_NORMAL),
+		0,
 	)
 	runtime.KeepAlive(file)
 	if windows.Handle(handle) == windows.InvalidHandle {
