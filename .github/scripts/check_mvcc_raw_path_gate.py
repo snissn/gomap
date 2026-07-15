@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -131,6 +132,25 @@ def median_sample(samples: list[Sample]) -> Sample:
     )
 
 
+def median_paired_ns_delta_percent(
+    baseline: list[Sample], candidate: list[Sample]
+) -> float:
+    if len(baseline) != len(candidate):
+        raise ValueError("baseline and candidate timing sample counts must match")
+    deltas: list[float] = []
+    for index, (base, head) in enumerate(zip(baseline, candidate), 1):
+        if not math.isfinite(base.ns_per_op) or base.ns_per_op <= 0.0:
+            raise ValueError(
+                f"paired sample {index}: baseline ns/op must be positive, got {base.ns_per_op}"
+            )
+        if not math.isfinite(head.ns_per_op) or head.ns_per_op < 0.0:
+            raise ValueError(
+                f"paired sample {index}: candidate ns/op must be non-negative, got {head.ns_per_op}"
+            )
+        deltas.append(((head.ns_per_op / base.ns_per_op) - 1.0) * 100.0)
+    return statistics.median(deltas)
+
+
 def evaluate(
     baseline: dict[str, list[Sample]],
     candidate: dict[str, list[Sample]],
@@ -143,8 +163,11 @@ def evaluate(
     for name in BENCHMARKS:
         base = median_sample(baseline[name])
         head = median_sample(candidate[name])
+        paired_ns_delta_percent = median_paired_ns_delta_percent(
+            baseline[name], candidate[name]
+        )
         ns_delta_percent = ((head.ns_per_op / base.ns_per_op) - 1.0) * 100.0
-        timing_pass = ns_delta_percent <= max_regression_percent
+        timing_pass = paired_ns_delta_percent <= max_regression_percent
         bytes_delta = head.bytes_per_op - base.bytes_per_op
         bytes_tolerance = min(
             base.bytes_per_op * max_bytes_regression_percent / 100.0,
@@ -168,6 +191,7 @@ def evaluate(
                     "allocs_per_op": head.allocs_per_op,
                 },
                 "ns_delta_percent": ns_delta_percent,
+                "paired_ns_delta_percent": paired_ns_delta_percent,
                 "bytes_delta": bytes_delta,
                 "bytes_tolerance": bytes_tolerance,
                 "timing_pass": timing_pass,
@@ -228,7 +252,8 @@ def render_markdown(
         f"- baseline: `{baseline_sha}`",
         f"- candidate: `{candidate_sha}`",
         f"- samples: {expected_samples} per revision, benchmark-group-paired alternating AB/BA order",
-        f"- timing threshold: candidate median <= baseline median + {max_regression_percent:g}%",
+        "- timing acceptance: median paired candidate/base relative delta <= "
+        f"{max_regression_percent:g}% (base/head medians remain reported for context)",
         "- allocs/op threshold: candidate median must not increase",
         "- B/op jitter threshold: candidate median may increase by at most the smaller of "
         f"{max_bytes_regression_percent:g}% or {max_bytes_regression_absolute:g} B; "
@@ -259,8 +284,8 @@ def render_markdown(
     lines.extend(
         [
             "",
-            "| Benchmark | Binary | Base ns/op | Head ns/op | Delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Measured |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| Benchmark | Binary | Base ns/op | Head ns/op | Median delta | Paired delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Measured |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for row in results:
@@ -269,7 +294,7 @@ def render_markdown(
         assert isinstance(base, dict)
         assert isinstance(head, dict)
         lines.append(
-            "| {benchmark} | {binary} | {base_ns:.3f} | {head_ns:.3f} | {delta:+.2f}% | "
+            "| {benchmark} | {binary} | {base_ns:.3f} | {head_ns:.3f} | {delta:+.2f}% | {paired_delta:+.2f}% | "
             "{base_bytes:.3f} | {head_bytes:.3f} | {bytes_tolerance:.3f} | {base_allocs:.3f} | "
             "{head_allocs:.3f} | {status} |".format(
                 benchmark=row["benchmark"],
@@ -281,6 +306,7 @@ def render_markdown(
                 base_ns=base["ns_per_op"],
                 head_ns=head["ns_per_op"],
                 delta=row["ns_delta_percent"],
+                paired_delta=row["paired_ns_delta_percent"],
                 base_bytes=base["bytes_per_op"],
                 head_bytes=head["bytes_per_op"],
                 bytes_tolerance=row["bytes_tolerance"],
@@ -374,6 +400,24 @@ def self_test() -> None:
         passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("B/op increase above the 64 B boundary should fail")
+
+        observed_baseline = [
+            1302945, 1176097, 1679767, 1962560, 1050465, 4438267, 1170681, 660182,
+        ]
+        observed_candidate = [
+            2491471, 839760, 1502818, 743114, 1287476, 4460418, 915485, 1558013,
+        ]
+        baseline = {
+            name: [Sample(ns_per_op, 128.0, 2.0) for ns_per_op in observed_baseline]
+            for name in BENCHMARKS
+        }
+        candidate = {
+            name: [Sample(ns_per_op, 128.0, 2.0) for ns_per_op in observed_candidate]
+            for name in BENCHMARKS
+        }
+        passed, results = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+        if not passed or results[0]["paired_ns_delta_percent"] >= 0.0:
+            raise AssertionError("paired samples should accept the observed false failure")
 
         candidate_path.write_text(synthetic_log(runs=7), encoding="utf-8")
         try:
