@@ -711,7 +711,7 @@ jobs:
             go.sum
 
       - name: Test snapshot iterator benchmark parser
-        run: go test ./.github/scripts/snapshot_iterator_bench
+        run: GOWORK=off go test ./.github/scripts/snapshot_iterator_bench
 
       - name: Capture exact-head runner metadata
         run: |
@@ -725,24 +725,33 @@ jobs:
             echo "kernel=$(uname -a)"
           } | tee artifacts/snapshot_iterator_perf/environment.txt
 
-      - name: Run same-binary snapshot iterator benchmark
+      - name: Build one exact-head snapshot iterator benchmark binary
         run: |
-          GOMAXPROCS=1 go test ./TreeDB -run '^$' \
-            -bench '^BenchmarkSnapshotIteratorSeekNext/keys=(1024|16384)/(snapshot_(seek|next)|public_(seek|next)_baseline)$' \
-            -benchmem -benchtime=500ms -count=7 \
-            | tee artifacts/snapshot_iterator_perf/raw.txt
+          GOWORK=off go test -c -o artifacts/snapshot_iterator_perf/snapshot_iterator.test ./TreeDB
+          sha256sum artifacts/snapshot_iterator_perf/snapshot_iterator.test | tee artifacts/snapshot_iterator_perf/binary.sha256
+
+      - name: Collect CPU-pinned balanced same-binary snapshot iterator pairs
+        run: |
+          SNAPSHOT_ITERATOR_PAIRS=8 \
+            .github/scripts/collect_snapshot_iterator_pairs.sh \
+              artifacts/snapshot_iterator_perf/snapshot_iterator.test \
+              artifacts/snapshot_iterator_perf/raw.txt
+          affinity=$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)
+          echo "affinity=${affinity}" | tee -a artifacts/snapshot_iterator_perf/environment.txt
 
       - name: Check snapshot iterator performance gate
         run: |
-          go run ./.github/scripts/snapshot_iterator_bench \
+          GOWORK=off go run ./.github/scripts/snapshot_iterator_bench \
             -bench-output artifacts/snapshot_iterator_perf/raw.txt \
             -json-output artifacts/snapshot_iterator_perf/report.json \
             -markdown-output artifacts/snapshot_iterator_perf/report.md \
             -head "$(git rev-parse HEAD)" \
+            -binary-sha256 "$(cut -d' ' -f1 artifacts/snapshot_iterator_perf/binary.sha256)" \
             -runner-image "${ImageOS:-unknown}-${ImageVersion:-unknown}" \
             -cpu "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)" \
+            -affinity "$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)" \
             -go-version "$(go version)" \
-            -samples 7 \
+            -samples 8 \
             -max-regression 0.05
 
       - name: Publish snapshot iterator summary
