@@ -1130,7 +1130,7 @@ func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTe
 	var previous leaderReadinessObservation
 	var lastErr error
 	for readinessCtx.Err() == nil {
-		leader := c.waitForSingleLeader()
+		leader := c.waitForSingleLeader(tb)
 		if leader == nil {
 			previous = leaderReadinessObservation{}
 			waitForLeaderReadinessPoll(readinessCtx)
@@ -1171,18 +1171,22 @@ func sameStableLeaderTerm(previous, current leaderReadinessObservation) bool {
 	return previous.valid && current.valid && previous.nodeID == current.nodeID && previous.nodeID != "" && previous.term == current.term && current.term != 0
 }
 
-func (c *hashicorpRaftTestCluster) waitForSingleLeader() *hashicorpRaftTestNode {
+func (c *hashicorpRaftTestCluster) waitForSingleLeader(tb testing.TB) *hashicorpRaftTestNode {
+	tb.Helper()
 	var leader *hashicorpRaftTestNode
 	for _, node := range c.nodes {
 		if node.provider == nil {
 			continue
 		}
 		status, err := node.provider.ClusterAdmissionStatus(context.Background())
-		if err != nil || !status.Leader {
+		if err != nil {
+			tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+		}
+		if !status.Leader {
 			continue
 		}
 		if leader != nil {
-			return nil
+			tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
 		}
 		leader = node
 	}
