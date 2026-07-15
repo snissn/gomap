@@ -2,8 +2,15 @@ package rootpublication
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 )
+
+// ErrBuilderLease rejects atomic handoff with a foreign, released, or
+// non-final nested builder lease. Rejection never consumes the lease or moves
+// candidate ownership.
+var ErrBuilderLease = errors.New("invalid root publication builder lease")
 
 // BuilderToken accounts one active candidate builder. Nested returns another
 // handle to the same lease; the coordinator sees one active builder until the
@@ -29,17 +36,90 @@ type builderLease struct {
 }
 
 func (c *Coordinator) AcquireBuilder(ctx context.Context) (*BuilderToken, error) {
+	for {
+		c.mu.Lock()
+		if err := c.terminalErrorLocked(); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
+		if !c.preparing {
+			c.activeBuilders++
+			lease := &builderLease{coordinator: c, refs: 1}
+			c.mu.Unlock()
+			return &BuilderToken{handle: &builderHandle{lease: lease}}, nil
+		}
+		changed := c.changed
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.ctx.Done():
+			// Recheck terminal state so Stop consistently reports ErrClosed and
+			// poison retains its recovery error.
+		case <-changed:
+		}
+	}
+}
+
+// EnqueueBuilt atomically moves a prepared candidate into pending publication
+// and consumes the final builder lease. The handle -> lease -> coordinator lock
+// order matches Nested and Release. Validation or activation failure preserves
+// both candidate ownership and the live token. Any hard-admission wait starts
+// only after every lock and the consumed lease have been released.
+func (c *Coordinator) EnqueueBuilt(ctx context.Context, candidate *PreparedRootCandidate, token *BuilderToken) error {
+	if token == nil || token.handle == nil {
+		return ErrBuilderLease
+	}
+	handle := token.handle
+	handle.mu.Lock()
+	if handle.released || handle.lease == nil {
+		handle.mu.Unlock()
+		return ErrBuilderLease
+	}
+	lease := handle.lease
+	lease.mu.Lock()
+	if lease.released || lease.coordinator != c || lease.refs != 1 {
+		lease.mu.Unlock()
+		handle.mu.Unlock()
+		return ErrBuilderLease
+	}
+
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err := c.terminalErrorLocked(); err != nil {
-		return nil, err
+	if c.activeBuilders == 0 {
+		c.mu.Unlock()
+		lease.mu.Unlock()
+		handle.mu.Unlock()
+		return fmt.Errorf("%w: coordinator has no active builder", ErrBuilderLease)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	decision, err := c.enqueueLocked(candidate, false)
+	if err != nil {
+		c.mu.Unlock()
+		lease.mu.Unlock()
+		handle.mu.Unlock()
+		return err
 	}
-	c.activeBuilders++
-	lease := &builderLease{coordinator: c, refs: 1}
-	return &BuilderToken{handle: &builderHandle{lease: lease}}, nil
+
+	// enqueueLocked has crossed its final fallible step. Consume the final
+	// handle and lease before making activeBuilders zero under the same c.mu
+	// transition that appended the candidate.
+	handle.released = true
+	handle.lease = nil
+	lease.refs = 0
+	lease.released = true
+	c.activeBuilders--
+	c.notifyLocked()
+	c.mu.Unlock()
+	lease.mu.Unlock()
+	handle.mu.Unlock()
+	c.signal()
+	if !decision.hard {
+		return nil
+	}
+	return c.waitForAdmission(ctx, decision.sequence, decision.failureGeneration)
 }
 
 func (t *BuilderToken) Nested() (*BuilderToken, error) {

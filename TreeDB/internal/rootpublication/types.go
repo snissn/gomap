@@ -367,6 +367,15 @@ type Publisher interface {
 	Publish(ctx context.Context, candidate *PreparedRootCandidate) PublishResult
 }
 
+// PublisherPreparer is an optional preparation-only builder gate implemented
+// by a Publisher. The coordinator calls Prepare for the exact captured and
+// coalesced attempt after active builders drain, while preventing new builder
+// acquisition. The gate opens before stable Publish, and every retry prepares
+// again. Prepare must observe ctx and must not acquire a builder itself.
+type PublisherPreparer interface {
+	Prepare(ctx context.Context, candidate *PreparedRootCandidate) error
+}
+
 type PublisherFunc func(context.Context, *PreparedRootCandidate) PublishResult
 
 func (f PublisherFunc) Publish(ctx context.Context, c *PreparedRootCandidate) PublishResult {
