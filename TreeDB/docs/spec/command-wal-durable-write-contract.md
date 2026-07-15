@@ -125,11 +125,14 @@ the next dirty batch use an empty `WriteSync`.
 
 ### Empty `WriteSync` after unsynced writes
 
-An empty public `Batch.WriteSync` appends no frame. It takes the command publish
-barrier, syncs every pending dirty value-log lane, and then performs one
-command-WAL barrier sync. It therefore establishes the durable boundary for
-preceding flushed writes without manufacturing an LSN or publishing a backend
-root.
+An empty public `Batch.WriteSync` takes the command publish barrier. When a
+relaxed command prefix is waiting to be promoted, it syncs the exact pending
+dependencies, appends and syncs one durable-prefix barrier, and leaves that
+barrier covered by the same pending public checkpoint range as the preceding
+mutations. When the current command prefix is already durable (including a
+fresh database), it performs the physical sync without manufacturing another
+LSN. It therefore cannot leave an unapplied no-op LSN between consecutive
+public checkpoint ranges.
 
 ## Logical observations versus physical calls
 

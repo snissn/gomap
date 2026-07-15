@@ -244,8 +244,18 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 	}
 	defer unlock()
 	if sync && db != nil && db.commandWAL {
-		_, err := db.appendCommandWALDurablePrefixBarrier()
-		return err
+		// A barrier is a logical frame only when it promotes an undurable
+		// command prefix. Appending one when the current prefix is already
+		// durable leaves an unapplied no-op LSN between public checkpoint
+		// ranges. The next dirty checkpoint would then reject that artificial
+		// gap. Keep an empty sync at the existing frontier as a physical sync
+		// below, without manufacturing a new command identity.
+		nextLSN := db.CommandWALNextLSN()
+		if nextLSN > 1 && db.commandWALDurableLSN.Load() < nextLSN-1 {
+			_, err := db.appendCommandWALDurablePrefixBarrier()
+			return err
+		}
+		return db.FlushCommandWAL(true)
 	}
 
 	if appender := db.currentValueLogAppender(); appender != nil {

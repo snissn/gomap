@@ -79,8 +79,12 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 	beforeStats := d.Stats()
 	before := commandWALTestStatUint64(t, beforeStats, "treedb.command_wal.sync.count_total")
 	beforeFileSyncs := commandWALTestStatUint64(t, beforeStats, "treedb.command_wal.file_sync.calls_total")
+	beforeNextLSN := d.CommandWALNextLSN()
 	if err := d.FlushCommandWALBarrier(true); err != nil {
 		t.Fatalf("FlushCommandWALBarrier: %v", err)
+	}
+	if got := d.CommandWALNextLSN(); got != beforeNextLSN {
+		t.Fatalf("next LSN after empty durable-prefix sync=%d, want unchanged %d", got, beforeNextLSN)
 	}
 	if appender.externalFlushes != 0 {
 		t.Fatalf("external barrier calls=%d, want exact debt resources only", appender.externalFlushes)
@@ -94,6 +98,9 @@ func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) 
 
 	if err := d.FlushCommandWALBarrier(true); err != nil {
 		t.Fatalf("FlushCommandWALBarrier retry: %v", err)
+	}
+	if got := d.CommandWALNextLSN(); got != beforeNextLSN {
+		t.Fatalf("next LSN after repeated empty durable-prefix sync=%d, want unchanged %d", got, beforeNextLSN)
 	}
 	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before+2 {
 		t.Fatalf("command WAL sync count=%d, want %d", got, before+2)

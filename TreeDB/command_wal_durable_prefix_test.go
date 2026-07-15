@@ -116,6 +116,66 @@ func TestPublicCommandWALRelaxedEmptyWriteSyncPersistsDurablePrefixBarrier(t *te
 	}
 }
 
+func TestPublicCommandWALRelaxedEmptyWriteSyncDoesNotCreateAppliedLSNGap(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *DB)
+	}{
+		{name: "fresh prefix"},
+		{
+			name: "already durable applied prefix",
+			setup: func(t *testing.T, db *DB) {
+				t.Helper()
+				if err := db.Set([]byte("already-applied"), []byte("value")); err != nil {
+					t.Fatalf("Set setup value: %v", err)
+				}
+				if err := db.Checkpoint(); err != nil {
+					t.Fatalf("Checkpoint setup value: %v", err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
+			if err != nil {
+				t.Fatalf("Open relaxed command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			if tc.setup != nil {
+				tc.setup(t, db)
+			}
+
+			before := db.Stats()
+			beforeNextLSN := statMapUint64(t, before, "treedb.command_wal.next_lsn")
+			beforeDurableLSN := statMapUint64(t, before, "treedb.command_wal.durable_wal_lsn")
+			b := db.NewBatch()
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				t.Fatalf("empty WriteSync: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("empty batch Close: %v", err)
+			}
+			after := db.Stats()
+			if got := statMapUint64(t, after, "treedb.command_wal.next_lsn"); got != beforeNextLSN {
+				t.Fatalf("next LSN after empty sync=%d, want unchanged %d", got, beforeNextLSN)
+			}
+			if got := statMapUint64(t, after, "treedb.command_wal.durable_wal_lsn"); got != beforeDurableLSN {
+				t.Fatalf("durable LSN after empty sync=%d, want unchanged %d", got, beforeDurableLSN)
+			}
+
+			if err := db.Set([]byte("after-empty-sync"), []byte("value")); err != nil {
+				t.Fatalf("Set after empty sync: %v", err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint after empty sync: %v", err)
+			}
+		})
+	}
+}
+
 func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 	dir := t.TempDir()
 	opts := relaxedCommandWALDurablePrefixOptions(dir)

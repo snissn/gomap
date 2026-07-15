@@ -1596,7 +1596,7 @@ func TestPublicCommandWALDurableBatchWriteSyncDoesNotCheckpoint(t *testing.T) {
 	requireRawKVValue(t, reopen, key, want)
 }
 
-func TestPublicCommandWALDurableEmptyBatchWriteSyncOnlySyncsCommandWAL(t *testing.T) {
+func TestPublicCommandWALDurableEmptyBatchWriteSyncDoesNotManufactureBarrier(t *testing.T) {
 	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open command WAL durable: %v", err)
@@ -1616,9 +1616,9 @@ func TestPublicCommandWALDurableEmptyBatchWriteSyncOnlySyncsCommandWAL(t *testin
 	after := db.Stats()
 	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.write.syscalls_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.write.syscalls_total", 0)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 }
 
