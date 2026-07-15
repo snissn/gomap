@@ -506,19 +506,20 @@ type DB struct {
 	testFailWriteMeta atomic.Bool
 	// testFailSyncMeta fails after the alternate meta page has been written but
 	// before its durability outcome is known.
-	testFailSyncMeta                            atomic.Bool
-	testFailCommandWALFlush                     atomic.Bool
-	testAfterOptimisticApplyHook                func()
-	testAfterOptimisticPublishPrepareHook       func()
-	testCheckpointAfterPoisonPreflightHook      func()
-	testConditionalReadOnlyAfterClosePreflight  func()
-	testOrderedRootBatchAfterClosePreflightHook func()
-	testStorageMaintenanceBeforeLockHook        func(string)
-	testStorageMaintenanceAfterLockHook         func(string) error
-	testCommandWALRecoveryFailAfterLSN          atomic.Uint64
-	commandWALReplayLSN                         atomic.Uint64
-	commandWALReplayToken                       atomic.Uint64
-	commandWALReplayTokenSeq                    atomic.Uint64
+	testFailSyncMeta                               atomic.Bool
+	testFailCommandWALFlush                        atomic.Bool
+	testAfterOptimisticApplyHook                   func()
+	testAfterOptimisticPublishPrepareHook          func()
+	testCheckpointAfterPoisonPreflightHook         func()
+	testConditionalReadOnlyAfterClosePreflight     func()
+	testOrderedRootBatchAfterClosePreflightHook    func()
+	testStorageMaintenanceBeforeLockHook           func(string)
+	testStorageMaintenanceAfterLockHook            func(string) error
+	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
+	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
+	commandWALReplayLSN                            atomic.Uint64
+	commandWALReplayToken                          atomic.Uint64
+	commandWALReplayTokenSeq                       atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
@@ -623,6 +624,7 @@ const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
+var errTestCommandWALRecoveryDependencySyncFailpoint = errors.New("treedb: command wal recovery dependency sync failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 var errTestSyncMetaFailpoint = errors.New("treedb: sync meta failpoint")
 
@@ -1309,6 +1311,10 @@ type Options struct {
 	// after the given LSN is published. It is package-private test plumbing so
 	// crash-recovery tests can avoid process-global failpoints.
 	testCommandWALRecoveryFailAfterLSN uint64
+	// testCommandWALRecoveryFailBeforeDependencySync injects a one-shot
+	// recovery failure after exact relaxed-tail dependencies are captured but
+	// before they are synced or any replayed root can be published.
+	testCommandWALRecoveryFailBeforeDependencySync bool
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -2012,6 +2018,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	db.idx.Store(gen)
 	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
 		db.testCommandWALRecoveryFailAfterLSN.Store(opts.testCommandWALRecoveryFailAfterLSN)
+	}
+	if opts.testCommandWALRecoveryFailBeforeDependencySync {
+		db.testCommandWALRecoveryFailBeforeDependencySync.Store(true)
 	}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)

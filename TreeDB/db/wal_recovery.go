@@ -14,6 +14,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -302,7 +303,8 @@ func requireNoLegacyCachedRedoJournalReplay(dir string, db *DB, maxSegmentBytes 
 }
 
 type commandWALReplayFrame struct {
-	env commitlog.CommandEnvelope
+	env          commitlog.CommandEnvelope
+	requiredRIDs []uint64
 }
 
 type commandWALReplayRIDMapFunc func() (map[uint64]page.ValuePtr, error)
@@ -346,11 +348,30 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	db.commandWALDurableLSN.Store(classification.DurableFrontier)
 	frames := make([]commandWALReplayFrame, 0, len(classification.CompletePrefix))
 	for i := range classification.CompletePrefix {
-		frames = append(frames, commandWALReplayFrame{env: classification.CompletePrefix[i].Envelope})
+		frames = append(frames, commandWALReplayFrame{
+			env:          classification.CompletePrefix[i].Envelope,
+			requiredRIDs: classification.CompletePrefix[i].RequiredRIDs,
+		})
 	}
 	if len(frames) == 0 {
 		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 		return err
+	}
+	replayDependencies, err := captureCommandWALReplayRelaxedDependencies(db, frames, classification.DurableFrontier, ridMap)
+	if err != nil {
+		return err
+	}
+	if replayDependencies != nil {
+		defer replayDependencies.Release()
+		if db.testCommandWALRecoveryFailBeforeDependencySync.Swap(false) {
+			return errTestCommandWALRecoveryDependencySyncFailpoint
+		}
+		if err := replayDependencies.SyncThrough(); err != nil {
+			return err
+		}
+		if err := stabilizeCommandWALResourceNamespaces(replayDependencies); err != nil {
+			return err
+		}
 	}
 	var inlineAppender *replayInlineAppender
 	previousLeafPageLog := db.leafPageLog
@@ -444,6 +465,70 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 	return err
+}
+
+// captureCommandWALReplayRelaxedDependencies reconstructs the exact physical
+// value-log closure for the complete relaxed suffix that lies above the last
+// durable command-WAL frontier. Recovery publishes replayed roots durably, so
+// these transitive dependencies must cross their file barrier first; retaining
+// the returned set also prevents deletion until replay has finished.
+func captureCommandWALReplayRelaxedDependencies(db *DB, frames []commandWALReplayFrame, durableFrontier uint64, ridMap map[uint64]page.ValuePtr) (*rootpublication.StableResourceSet, error) {
+	uniqueRIDs := make(map[uint64]struct{})
+	for i := range frames {
+		if frames[i].env.LSN <= durableFrontier {
+			continue
+		}
+		for _, rid := range frames[i].requiredRIDs {
+			uniqueRIDs[rid] = struct{}{}
+		}
+	}
+	if len(uniqueRIDs) == 0 {
+		return nil, nil
+	}
+	if db == nil || db.valueLogManager == nil {
+		return nil, fmt.Errorf("%w: command WAL relaxed replay has no exact value-log producer closure", rootpublication.ErrUnresolvedResource)
+	}
+
+	entries := make([]rawKVCommandWALRIDCacheEntry, 0, len(uniqueRIDs))
+	rids := make([]uint64, 0, len(uniqueRIDs))
+	for rid := range uniqueRIDs {
+		ptr, ok := ridMap[rid]
+		if !ok {
+			return nil, fmt.Errorf("%w: command WAL relaxed replay missing RID %d", ErrCommandWALMissingValueLogRID, rid)
+		}
+		entries = append(entries, rawKVCommandWALRIDCacheEntry{ptr: ptr, rid: rid})
+		rids = append(rids, rid)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ptr.FileID != entries[j].ptr.FileID {
+			return entries[i].ptr.FileID < entries[j].ptr.FileID
+		}
+		if entries[i].ptr.Offset != entries[j].ptr.Offset {
+			return entries[i].ptr.Offset < entries[j].ptr.Offset
+		}
+		if entries[i].ptr.Length != entries[j].ptr.Length {
+			return entries[i].ptr.Length < entries[j].ptr.Length
+		}
+		return entries[i].rid < entries[j].rid
+	})
+
+	segments := make([]valuelog.StableExternalRIDSegment, 0)
+	for _, entry := range entries {
+		if len(segments) == 0 || segments[len(segments)-1].FileID != entry.ptr.FileID {
+			segments = append(segments, valuelog.StableExternalRIDSegment{
+				FileID: entry.ptr.FileID,
+				Digest: stableExternalRIDSegmentDigest(entry.ptr.FileID),
+			})
+		}
+		segment := &segments[len(segments)-1]
+		segment.RIDs = append(segment.RIDs, entry.rid)
+		segment.Pointers = append(segment.Pointers, entry.ptr)
+	}
+	fence, err := valuelog.NewStableExternalRIDFence(rids)
+	if err != nil {
+		return nil, err
+	}
+	return db.valueLogManager.CaptureStableExternalRIDFence(fence, segments)
 }
 
 func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALReplayFrame, error) {

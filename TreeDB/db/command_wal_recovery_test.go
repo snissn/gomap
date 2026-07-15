@@ -1501,6 +1501,38 @@ func TestCommandWALRIDFencePreservedForRawKVBatch(t *testing.T) {
 	}
 }
 
+func TestCommandWALRelaxedRIDReplaySyncsDependenciesBeforeRootPublication(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 7, []byte("large-value"))
+	writeCommandWALRawKVFrameWithDurability(t, dir, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetRID, Key: []byte("k"), RID: 7,
+	}})
+
+	_, err := Open(Options{Dir: dir, testCommandWALRecoveryFailBeforeDependencySync: true})
+	if !errors.Is(err, errTestCommandWALRecoveryDependencySyncFailpoint) {
+		t.Fatalf("Open before dependency sync error=%v, want failpoint", err)
+	}
+
+	// If the dependency failure published the replayed root, this second open
+	// would have no unapplied LSN at which to trigger the post-publication cut.
+	_, err = Open(Options{Dir: dir, testCommandWALRecoveryFailAfterLSN: 1})
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Open after dependency-sync retry error=%v, want post-publication failpoint", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "large-value")
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCommandWALPointerBatchReplaysThroughRIDFence(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -1882,10 +1914,20 @@ func commandWALSegmentNamesForTest(t *testing.T, dir string) []string {
 
 func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
 	t.Helper()
-	writeCommandWALRawKVFrameForLane(t, dir, 0, segmentSeq, lsn, ops)
+	writeCommandWALRawKVFrameWithDurability(t, dir, segmentSeq, lsn, commitlog.CommandDurabilityDurable, ops)
+}
+
+func writeCommandWALRawKVFrameWithDurability(t testing.TB, dir string, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
+	t.Helper()
+	writeCommandWALRawKVFrameForLaneWithDurability(t, dir, 0, segmentSeq, lsn, durability, ops)
 }
 
 func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
+	t.Helper()
+	writeCommandWALRawKVFrameForLaneWithDurability(t, dir, lane, segmentSeq, lsn, commitlog.CommandDurabilityDurable, ops)
+}
+
+func writeCommandWALRawKVFrameForLaneWithDurability(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, durability commitlog.CommandDurabilityClass, ops []commitlog.RawKVOperation) {
 	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -1902,7 +1944,7 @@ func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmen
 	}
 	if err := w.AppendCommand(commitlog.CommandEnvelope{
 		Version:         commitlog.CommandFrameVersionV2,
-		DurabilityClass: commitlog.CommandDurabilityDurable,
+		DurabilityClass: durability,
 		LSN:             lsn,
 		Kind:            commitlog.CommandKindRawKVBatch,
 		Scope:           commitlog.CommandScopeRawKV,
