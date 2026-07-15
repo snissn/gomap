@@ -208,6 +208,9 @@ func TestColumnVectorGraphRebuildStableAuthorityMatchesEveryPublishedAsset(t *te
 	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
 	defer func() { _ = d.Close() }()
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	hookCalls := 0
@@ -318,6 +321,9 @@ func TestColumnVectorGraphRebuildStableAuthorityIncludesCalibratedScalarU8Alpha(
 	_, d, col, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{q})
 	defer func() { _ = d.Close() }()
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	const wantSegments = 7
@@ -412,6 +418,9 @@ func TestColumnVectorGraphRebuildStableAuthorityHookFailureReleasesPins(t *testi
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
 	defer func() { _ = d.Close() }()
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	injected := errors.New("injected vector stable authority failure")

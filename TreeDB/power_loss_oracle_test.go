@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1051,7 +1052,13 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	cutErr := errors.New("power-loss-oracle: stop after intermediate chunk meta")
 	var snapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
+	var observeMu sync.Mutex
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		if snapshot != nil {
+			return cutErr
+		}
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
@@ -1063,6 +1070,10 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	})
 	err = db.Checkpoint()
 	restore()
+	observeMu.Lock()
+	capturedSnapshot, capturedMeta := snapshot, meta
+	observeMu.Unlock()
+	snapshot, meta = capturedSnapshot, capturedMeta
 	if !errors.Is(err, cutErr) || snapshot == nil {
 		t.Fatalf("actual chunk checkpoint cut err=%v", err)
 	}
