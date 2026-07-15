@@ -75,6 +75,9 @@ type CandidateSpec struct {
 	IndexBytes      uint64
 	Obligations     []ObligationID
 	ResourceSet     *StableResourceSet
+	// DurableRoot is the exact allocator/root transaction for this visible
+	// candidate. Construction moves it from Builder to Candidate ownership.
+	DurableRoot *DurableRootTransaction
 }
 
 // ObligationID is an opaque, path-free identity for dependency ownership. Its
@@ -116,6 +119,14 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 	if spec.Frontier.commitSeq == 0 {
 		return nil, fmt.Errorf("%w: commit sequence is zero", ErrInvalidCandidate)
 	}
+	if spec.DurableRoot != nil {
+		if extensions.durableRootRecord != nil {
+			return nil, fmt.Errorf("%w: duplicate durable-root extension", ErrInvalidCandidate)
+		}
+		if err := validateCandidateDurableRoot(spec, spec.DurableRoot); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCandidate, err)
+		}
+	}
 	if spec.ResourceSet != nil {
 		if extensions.resourceSet != nil {
 			return nil, fmt.Errorf("%w: duplicate resource-set extension", ErrInvalidCandidate)
@@ -128,11 +139,44 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 		}
 		extensions.resourceSet = spec.ResourceSet
 	}
+	if spec.DurableRoot != nil {
+		if err := spec.DurableRoot.transfer(ResourceOwnerBuilder, ResourceOwnerCandidate); err != nil {
+			if spec.ResourceSet != nil {
+				_ = spec.ResourceSet.transfer(ResourceOwnerCandidate, ResourceOwnerBuilder)
+			}
+			return nil, fmt.Errorf("%w: transfer durable-root transaction: %w", ErrInvalidCandidate, err)
+		}
+		extensions.durableRootRecord = newDurableRootGroupExtension(spec.DurableRoot)
+	}
 	return &PreparedRootCandidate{
 		frontier: spec.Frontier, freelistHeadID: spec.FreelistHeadID,
 		totalPages: spec.TotalPages, dependencyBytes: spec.DependencyBytes,
 		indexBytes: spec.IndexBytes, obligations: normalizeObligations(spec.Obligations), extensions: extensions,
 	}, nil
+}
+
+func validateCandidateDurableRoot(spec CandidateSpec, transaction *DurableRootTransaction) error {
+	if transaction.Owner() != ResourceOwnerBuilder || transaction.Sequence() != spec.Frontier.commitSeq {
+		return ErrDurableRootOwnership
+	}
+	prepared := transaction.PreparedCOW()
+	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
+		return errors.New("candidate has no exact COW generation")
+	}
+	generation := prepared.Candidate().Generation()
+	if generation.CommitSeq() != spec.Frontier.commitSeq || spec.FreelistHeadID != 0 || spec.TotalPages != generation.HighWater() {
+		return errors.New("candidate frontier does not match exact COW generation")
+	}
+	payload := transaction.Payload()
+	if durableRootPayloadIsZero(payload) {
+		return nil
+	}
+	record := payload.Record
+	if spec.Frontier.userRootPageID != record.UserRootPageID || spec.Frontier.systemRootPageID != record.SystemRootPageID ||
+		spec.Frontier.appliedCommandLSN != record.AppliedCommandLSN || spec.Frontier.maxEntryRevision != record.MaxEntryRevision {
+		return errors.New("candidate frontier does not match durable-root payload")
+	}
+	return nil
 }
 
 func (c *PreparedRootCandidate) Frontier() Frontier      { return c.frontier }
@@ -155,16 +199,51 @@ func (c *PreparedRootCandidate) resourceSet() *StableResourceSet {
 	return set
 }
 
+func (c *PreparedRootCandidate) durableRootGroup() durableRootGroupExtension {
+	if c == nil || c.extensions.durableRootRecord == nil {
+		return durableRootGroupExtension{}
+	}
+	group, _ := c.extensions.durableRootRecord.(durableRootGroupExtension)
+	return group
+}
+
+// DurableRootGroup exposes the exact ordered allocator lineage owned by this
+// candidate. A coalesced publication includes every member and Latest names
+// the one root that Publisher may make recovery-selectable.
+func (c *PreparedRootCandidate) DurableRootGroup() DurableRootGroup {
+	group := c.durableRootGroup()
+	return DurableRootGroup{members: append([]*DurableRootTransaction(nil), group.members...)}
+}
+
+// DurableRoot returns the latest exact transaction, or nil for a legacy
+// candidate without an activated durable-root payload.
+func (c *PreparedRootCandidate) DurableRoot() *DurableRootTransaction {
+	return c.DurableRootGroup().Latest()
+}
+
 // Resources exposes the immutable candidate-scoped token union to the
 // publisher. The returned set does not permit mutation or ownership transfer.
 func (c *PreparedRootCandidate) Resources() *StableResourceSet { return c.resourceSet() }
 
-// AbandonResources releases a prepared candidate that failed before Enqueue.
-// It is idempotent and cannot release coordinator-owned resources.
-func (c *PreparedRootCandidate) AbandonResources() {
+// Abandon releases a prepared candidate that failed before Enqueue. The exact
+// COW transaction is aborted before resource pins are released. It is
+// idempotent and cannot release coordinator-owned ownership.
+func (c *PreparedRootCandidate) Abandon() error {
+	for _, transaction := range c.durableRootGroup().members {
+		if err := transaction.abortFrom(ResourceOwnerCandidate); err != nil {
+			return err
+		}
+	}
 	if set := c.resourceSet(); set != nil {
 		set.releaseFrom(ResourceOwnerCandidate)
 	}
+	return nil
+}
+
+// AbandonResources is retained for resource-only callers. New activation code
+// should use Abandon so allocator-abort errors are observable.
+func (c *PreparedRootCandidate) AbandonResources() {
+	_ = c.Abandon()
 }
 
 func coalesceCandidates(candidates []*PreparedRootCandidate) (*PreparedRootCandidate, error) {
