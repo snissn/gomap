@@ -32,7 +32,7 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 		t.Fatal(err)
 	}
 	commandPath, _ := commandJournal.ActiveSegmentSnapshot()
-	commandSuccessor := filepath.Join(filepath.Dir(commandPath), commitlog.CommandSegmentName(5, 2))
+	commandPaths := []string{commandPath}
 	commandEnvelope := commitlog.CommandEnvelope{
 		Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV, PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
 	}
@@ -67,21 +67,18 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 				t.Fatal(err)
 			}
 			rotation, err := commandJournal.RotateActiveSegmentWithStableResources(false)
-			if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || rotation != nil {
-				if rotation != nil {
-					rotation.Release()
-				}
-				t.Fatalf("command-WAL rotation %d resources=%v error=%v", seq, rotation, err)
+			if err != nil {
+				t.Fatalf("command-WAL create-only rotation %d: %v", seq, err)
 			}
+			rotation.Release()
 			activePath, _ := commandJournal.ActiveSegmentSnapshot()
-			if activePath != commandPath {
-				t.Fatalf("command-WAL rotation %d changed active path=%q", seq, activePath)
+			if activePath == commandPaths[len(commandPaths)-1] {
+				t.Fatalf("command-WAL rotation %d did not advance active path=%q", seq, activePath)
 			}
+			commandPaths = append(commandPaths, activePath)
 		}
-		for _, successor := range []string{valueSuccessor, commandSuccessor} {
-			if _, err := os.Stat(successor); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("unsupported rotation %d exposed successor %q: %v", seq, successor, err)
-			}
+		if _, err := os.Stat(valueSuccessor); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unsupported value-log rotation %d exposed successor %q: %v", seq, valueSuccessor, err)
 		}
 	}
 
@@ -91,7 +88,7 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 	if err := commandJournal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{valuePath, commandPath} {
+	for _, path := range append([]string{valuePath}, commandPaths...) {
 		if err := os.Rename(path, path+".released"); err != nil {
 			t.Fatalf("stable rotation retries leaked a pin for %q: %v", path, err)
 		}

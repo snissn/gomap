@@ -46,12 +46,12 @@ func openLogFile(path string, flags int) (*os.File, error) {
 	return os.OpenFile(path, flags|os.O_CREATE, 0o600)
 }
 
-func syncNewLogFileDirectory(w *Writer, path string) error {
+func syncNewLogFileDirectory(w *Writer, file *os.File, path string) error {
 	dir := filepath.Dir(path)
 	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceCommandWAL, "", dir); err != nil {
 		return err
 	}
-	if err := w.syncDirectory(path); err != nil {
+	if err := w.syncCreatedFileNamespace(file, path); err != nil {
 		return err
 	}
 	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, "", dir)
@@ -226,7 +226,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		syncFn: func(file *os.File) error { return file.Sync() },
 	}
 	w.fileSink = writerFileSink{owner: w, file: f}
-	if err := syncNewLogFileDirectory(w, path); err != nil {
+	if err := syncNewLogFileDirectory(w, f, path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -333,6 +333,37 @@ func (w *Writer) syncDirectory(path string) error {
 	}
 	if err != nil {
 		w.directorySyncErrors.Add(1)
+	}
+	return err
+}
+
+// syncCreatedFileNamespace persists a just-created log name. Unix-like
+// systems do that through the parent directory. Windows has no equivalent
+// retained-directory flush contract, but FlushFileBuffers on the exact child
+// persists file metadata; os.File.Sync maps to that primitive. Count both as
+// namespace syncs because that is the durability obligation being discharged.
+func (w *Writer) syncCreatedFileNamespace(file *os.File, path string) error {
+	if runtime.GOOS != "windows" {
+		return w.syncDirectory(path)
+	}
+	if file == nil {
+		return os.ErrInvalid
+	}
+	start := time.Now()
+	var err error
+	if w != nil && w.syncFn != nil {
+		err = w.syncFn(file)
+	} else {
+		err = file.Sync()
+	}
+	if w != nil {
+		w.directorySyncCalls.Add(1)
+		if ns := time.Since(start).Nanoseconds(); ns > 0 {
+			w.directorySyncNs.Add(uint64(ns))
+		}
+		if err != nil {
+			w.directorySyncErrors.Add(1)
+		}
 	}
 	return err
 }
@@ -544,7 +575,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 			return writerRotationOutcome{}, err
 		}
 		if syncCurrent {
-			if err := syncNewLogFileDirectory(w, path); err != nil {
+			if err := syncNewLogFileDirectory(w, f, path); err != nil {
 				_ = f.Close()
 				return writerRotationOutcome{}, err
 			}
@@ -603,7 +634,7 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 		return writerRotationOutcome{}, err
 	}
 	if syncCurrent {
-		if err := syncNewLogFileDirectory(w, path); err != nil {
+		if err := syncNewLogFileDirectory(w, f, path); err != nil {
 			_ = f.Close()
 			return writerRotationOutcome{}, err
 		}

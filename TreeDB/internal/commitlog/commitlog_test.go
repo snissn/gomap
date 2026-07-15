@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -727,11 +728,18 @@ func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
 	if err := writer.RotateToWithSync(path2, true); err != nil {
 		t.Fatalf("strict RotateToWithSync: %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("strict RotateToWithSync syncDir calls=%d, want 1", calls)
+	wantDirCalls, wantFileSyncs := 1, 1
+	if runtime.GOOS == "windows" {
+		// Windows persists the successor's creation metadata through that exact
+		// child handle, so the injected file-sync seam observes both the old
+		// segment content sync and the successor namespace proof.
+		wantDirCalls, wantFileSyncs = 0, 2
 	}
-	if fileSyncs != 1 {
-		t.Fatalf("strict RotateToWithSync file sync calls=%d, want 1", fileSyncs)
+	if calls != wantDirCalls {
+		t.Fatalf("strict RotateToWithSync syncDir calls=%d, want %d", calls, wantDirCalls)
+	}
+	if fileSyncs != wantFileSyncs {
+		t.Fatalf("strict RotateToWithSync file sync calls=%d, want %d", fileSyncs, wantFileSyncs)
 	}
 	if got := writer.DurabilityStats(); got.FileSyncCalls != 1 || got.DirectorySyncCalls != 2 || got.FileSyncErrors != 0 || got.DirectorySyncErrors != 0 {
 		t.Fatalf("durability stats after strict rotate=%+v, want file=1 directory=2 and no errors", got)

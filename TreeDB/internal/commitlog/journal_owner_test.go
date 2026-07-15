@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"testing"
@@ -428,8 +429,12 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("k2"), []byte("v2"), true); err != nil {
 		t.Fatalf("AppendRawKVPointCommandTrustedAndFlush second: %v", err)
 	}
-	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
-		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
+	wantSyncedSegments := []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2)}
+	if runtime.GOOS == "windows" {
+		wantSyncedSegments = []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2), CommandSegmentName(0, 2)}
+	}
+	if !slices.Equal(syncedSegments, wantSyncedSegments) {
+		t.Fatalf("synced segments=%v, want %v", syncedSegments, wantSyncedSegments)
 	}
 }
 
@@ -691,8 +696,12 @@ func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	if _, err := j.AppendRawKVSingleCommandAndFlush(0, RawKVOperation{Op: RawKVOpSet, Key: []byte("k2"), Value: []byte("v2")}, true); err != nil {
 		t.Fatalf("AppendRawKVSingleCommandAndFlush second: %v", err)
 	}
-	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
-		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
+	wantSyncedSegments := []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2)}
+	if runtime.GOOS == "windows" {
+		wantSyncedSegments = []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2), CommandSegmentName(0, 2)}
+	}
+	if !slices.Equal(syncedSegments, wantSyncedSegments) {
+		t.Fatalf("synced segments=%v, want %v", syncedSegments, wantSyncedSegments)
 	}
 }
 

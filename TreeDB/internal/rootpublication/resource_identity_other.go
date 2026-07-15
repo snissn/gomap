@@ -6,6 +6,8 @@ import "os"
 
 func stableRelativeNamespaceSupported() bool { return false }
 
+func stableNamespaceCreationPersistsThroughChild() bool { return false }
+
 func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }

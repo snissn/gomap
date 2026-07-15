@@ -4,8 +4,10 @@ package rootpublication
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -13,8 +15,94 @@ import (
 
 func stableRelativeNamespaceSupported() bool { return false }
 
-func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
-	return nil, fmt.Errorf("%w: relative directory-handle open is unavailable", ErrNamespacePersistenceUnsupported)
+// Windows does not provide the complete create/rename/remove plus parent-sync
+// contract advertised by StableRelativeNamespaceSupported. It does provide a
+// narrower create-only contract for append-only files: open the child relative
+// to the retained parent and flush that exact child. Microsoft documents a file
+// flush as persisting file metadata, which is sufficient for a creation debt
+// without claiming rename or removal support.
+func stableNamespaceCreationPersistsThroughChild() bool { return true }
+
+func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
+	if parent == nil {
+		return nil, os.ErrInvalid
+	}
+	_ = perm // Windows applies ACLs inherited from the exact parent namespace.
+
+	objectName, err := windows.NewNTUnicodeString(name)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: err}
+	}
+	attributes := windows.OBJECT_ATTRIBUTES{
+		RootDirectory: windows.Handle(parent.Fd()),
+		ObjectName:    objectName,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE,
+	}
+	attributes.Length = uint32(unsafe.Sizeof(attributes))
+
+	access := uint32(windows.FILE_GENERIC_READ | windows.SYNCHRONIZE)
+	switch flags & (os.O_WRONLY | os.O_RDWR) {
+	case os.O_WRONLY:
+		access = windows.FILE_GENERIC_WRITE | windows.SYNCHRONIZE
+	case os.O_RDWR:
+		access = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.SYNCHRONIZE
+	}
+	if flags&os.O_CREATE != 0 {
+		access |= windows.FILE_GENERIC_WRITE
+	}
+	if flags&os.O_APPEND != 0 && flags&os.O_TRUNC == 0 {
+		access &^= windows.FILE_WRITE_DATA
+		access |= windows.FILE_APPEND_DATA
+	}
+	disposition := uint32(windows.FILE_OPEN)
+	switch {
+	case flags&(os.O_CREATE|os.O_EXCL) == os.O_CREATE|os.O_EXCL:
+		disposition = windows.FILE_CREATE
+	case flags&os.O_TRUNC != 0 && flags&os.O_CREATE != 0:
+		disposition = windows.FILE_OVERWRITE_IF
+	case flags&os.O_TRUNC != 0:
+		disposition = windows.FILE_OVERWRITE
+	case flags&os.O_CREATE != 0:
+		disposition = windows.FILE_OPEN_IF
+	}
+	options := uint32(windows.FILE_NON_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT | windows.FILE_OPEN_REPARSE_POINT)
+	if flags&os.O_SYNC != 0 {
+		options |= windows.FILE_WRITE_THROUGH
+	}
+	var (
+		handle windows.Handle
+		status windows.IO_STATUS_BLOCK
+	)
+	err = windows.NtCreateFile(
+		&handle,
+		access,
+		&attributes,
+		&status,
+		nil,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		disposition,
+		options,
+		0,
+		0,
+	)
+	runtime.KeepAlive(parent)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: stableWindowsNTError(err)}
+	}
+	file := os.NewFile(uintptr(handle), parent.Name()+string(os.PathSeparator)+name)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, &os.PathError{Op: "openat", Path: name, Err: errors.New("invalid Windows file handle")}
+	}
+	return file, nil
+}
+
+func stableWindowsNTError(err error) error {
+	if status, ok := err.(windows.NTStatus); ok {
+		return status.Errno()
+	}
+	return err
 }
 
 func removeStableChildFile(*os.File, string) error {
@@ -76,16 +164,16 @@ func errorsJoinStableWindows(primary, fallback error) error {
 	return fmt.Errorf("stable file identity unavailable: FILE_ID_INFO=%v BY_HANDLE_FILE_INFORMATION=%w", primary, fallback)
 }
 
-func syncStableNamespace(parent *os.File) error {
-	if parent == nil {
+func syncStableNamespace(handle *os.File) error {
+	if handle == nil {
 		return os.ErrInvalid
 	}
-	err := windows.FlushFileBuffers(windows.Handle(parent.Fd()))
+	err := windows.FlushFileBuffers(windows.Handle(handle.Fd()))
 	if err == nil {
 		return nil
 	}
 	if err == windows.ERROR_INVALID_HANDLE || err == windows.ERROR_ACCESS_DENIED || err == windows.ERROR_NOT_SUPPORTED {
-		return fmt.Errorf("%w: FlushFileBuffers(directory): %v", ErrNamespacePersistenceUnsupported, err)
+		return fmt.Errorf("%w: FlushFileBuffers(namespace persistence handle): %v", ErrNamespacePersistenceUnsupported, err)
 	}
 	return err
 }

@@ -745,7 +745,11 @@ func (j *CommandJournal) recordAppendedLSNLocked(lsn uint64) {
 }
 
 func openStableCommandWALFile(parent *os.File, path string) (*os.File, error) {
-	return rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
+	// The journal owner serializes writes and installs only a fresh empty
+	// successor, so an append-only access mask is unnecessary here. Retain full
+	// write access because Windows FlushFileBuffers requires it when the same
+	// exact handle later proves content and creation-metadata durability.
+	return rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 }
 
 func pendingCommandWALFailure(parent, file *os.File, path string, err error) error {
