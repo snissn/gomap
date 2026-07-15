@@ -22,28 +22,47 @@ func TestValidateFragmentationReport_EndToEnd(t *testing.T) {
 
 	// Create enough churn to produce internal pages and a non-trivial freelist.
 	//
-	// Use non-sync operations: this test is validating internal accounting and
-	// invariants (FragmentationReport + ValidateFragmentationReport), not
-	// durability. Forcing an fsync per operation (SetSync/DeleteSync) is
-	// unnecessarily slow on some environments and can cause unit test timeouts.
+	// Group each churn phase into one root publication: this test validates
+	// internal accounting and invariants, not per-key publication behavior. The
+	// durable-root format intentionally uses a synchronous data-before-meta
+	// transaction for every published root, including Write, so publishing each
+	// key separately would turn this accounting fixture into tens of thousands
+	// of filesystem barriers.
 	const n = 20000
+	insertBatch := d.NewBatch()
+	defer insertBatch.Close()
 	for i := 0; i < n; i++ {
 		k := []byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)}
-		if err := d.Set(k, valA); err != nil {
+		if err := insertBatch.Set(k, valA); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 	}
+	if err := insertBatch.Write(); err != nil {
+		t.Fatalf("write insert batch: %v", err)
+	}
+
+	deleteBatch := d.NewBatch()
+	defer deleteBatch.Close()
 	for i := 0; i < n; i += 2 {
 		k := []byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)}
-		if err := d.Delete(k); err != nil {
+		if err := deleteBatch.Delete(k); err != nil {
 			t.Fatalf("del: %v", err)
 		}
 	}
+	if err := deleteBatch.Write(); err != nil {
+		t.Fatalf("write delete batch: %v", err)
+	}
+
+	rewriteBatch := d.NewBatch()
+	defer rewriteBatch.Close()
 	for i := 1; i < n; i += 2 {
 		k := []byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)}
-		if err := d.Set(k, valB); err != nil {
+		if err := rewriteBatch.Set(k, valB); err != nil {
 			t.Fatalf("set2: %v", err)
 		}
+	}
+	if err := rewriteBatch.Write(); err != nil {
+		t.Fatalf("write rewrite batch: %v", err)
 	}
 
 	// Advance commit seq enough for KeepRecent=1 pruning to take effect.
@@ -93,14 +112,14 @@ func TestFragmentationReportWaitsForFreelistUpdate(t *testing.T) {
 
 	reached := make(chan struct{}, 1)
 	release := make(chan struct{})
-	freelist.TestHookFreeBeforeChecksum = func() {
+	freelist.TestHookRetireCOWBeforeUnlock = func() {
 		select {
 		case reached <- struct{}{}:
 		default:
 		}
 		<-release
 	}
-	defer func() { freelist.TestHookFreeBeforeChecksum = nil }()
+	defer func() { freelist.TestHookRetireCOWBeforeUnlock = nil }()
 
 	freeDone := make(chan error, 1)
 	go func() {

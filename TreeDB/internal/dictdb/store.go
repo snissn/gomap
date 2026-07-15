@@ -434,6 +434,12 @@ func (s *Store) ensureValueLogWriterLocked() (*valuelog.Writer, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Register the producer's newly-created segment before any pointer to it can
+	// enter a durable root. Durable publication deliberately refuses to discover
+	// unreported dependencies by scanning or statting a derived path.
+	if err := s.backend.RegisterValueLogSegment(path, fileID); err != nil {
+		return nil, errors.Join(err, writer.Close())
+	}
 	s.vlog = writer
 	s.vlogSeq = seq
 	return writer, nil

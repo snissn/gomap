@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"io"
 	"math/rand"
 	"os"
 	"reflect"
@@ -1687,7 +1686,7 @@ func TestColumnStoreReplayReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 }
 
-func TestColumnStoreQueryAndReconstructionFailClosedMissingAssetM13C(t *testing.T) {
+func TestColumnStoreQueryAndReconstructionUseSelectedClosureWhenOtherAssetMissingM13C(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
 	if err != nil {
@@ -1700,15 +1699,18 @@ func TestColumnStoreQueryAndReconstructionFailClosedMissingAssetM13C(t *testing.
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("RunColumnPhysicalQuery missing asset err=%v want os.ErrNotExist", err)
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil || len(result.Groups) != 1 || result.Groups[0].Key != "like" || result.Groups[0].Count != 1 {
+		t.Fatalf("RunColumnPhysicalQuery after missing non-selected asset result=%+v err=%v want selected valid closure", result, err)
 	}
-	if got, err := reopened.Get([]byte("e1")); !errors.Is(err, os.ErrNotExist) || got != nil {
-		t.Fatalf("Get missing asset got=%s err=%v want fail-closed os.ErrNotExist", got, err)
+	if got, err := reopened.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get after missing non-selected asset: %v", err)
+	} else {
+		assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","did":"d1"}`))
 	}
 }
 
-func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.T) {
+func TestColumnStoreQueryAndReconstructionUseSelectedClosureWhenOtherAssetCorruptM13C(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
 	sidecarRef := columnPhysicalQueryInt64SidecarRefForCorruption(t, dir)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
@@ -1745,15 +1747,18 @@ func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}); err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("RunColumnPhysicalQuery corrupt asset err=%v want checksum failure", err)
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"})
+	if err != nil || len(result.Groups) != 1 || result.Groups[0].Key != "d1" || result.Groups[0].Int64 != 1 {
+		t.Fatalf("RunColumnPhysicalQuery after corrupt non-selected asset result=%+v err=%v want selected valid closure", result, err)
 	}
-	if got, err := reopened.Get([]byte("e1")); err == nil || !strings.Contains(err.Error(), "checksum") || got != nil {
-		t.Fatalf("Get corrupt asset got=%s err=%v want fail-closed checksum failure", got, err)
+	if got, err := reopened.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get after corrupt non-selected asset: %v", err)
+	} else {
+		assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","did":"d1"}`))
 	}
 }
 
-func TestColumnStoreQueryAndReconstructionFailClosedTruncatedAssetM13C(t *testing.T) {
+func TestColumnStoreQueryAndReconstructionUseSelectedClosureWhenOtherAssetTruncatedM13C(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
 	sidecarRef := columnPhysicalQueryInt64SidecarRefForCorruption(t, dir)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
@@ -1774,11 +1779,14 @@ func TestColumnStoreQueryAndReconstructionFailClosedTruncatedAssetM13C(t *testin
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}); err == nil || (!errors.Is(err, io.ErrUnexpectedEOF) && !strings.Contains(err.Error(), "checksum")) {
-		t.Fatalf("RunColumnPhysicalQuery truncated asset err=%v want fail-closed checksum/EOF failure", err)
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"})
+	if err != nil || len(result.Groups) != 1 || result.Groups[0].Key != "d1" || result.Groups[0].Int64 != 1 {
+		t.Fatalf("RunColumnPhysicalQuery after truncated non-selected asset result=%+v err=%v want selected valid closure", result, err)
 	}
-	if got, err := reopened.Get([]byte("e1")); got != nil || err == nil || (!errors.Is(err, io.ErrUnexpectedEOF) && !strings.Contains(err.Error(), "checksum")) {
-		t.Fatalf("Get truncated asset got=%s err=%v want fail-closed checksum/EOF failure", got, err)
+	if got, err := reopened.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get after truncated non-selected asset: %v", err)
+	} else {
+		assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","did":"d1"}`))
 	}
 }
 

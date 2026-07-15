@@ -52,6 +52,8 @@ const (
 	PageTypeFreelistIndex       PageType = 0x06
 	PageTypeFreelistChunk       PageType = 0x07
 	PageTypeFreelistReservation PageType = 0x08
+	PageTypeDependencyManifest  PageType = 0x09
+	PageTypeDurableRootRecord   PageType = 0x0a
 )
 
 // PageHeader represents the 16-byte header of a page.

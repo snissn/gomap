@@ -13,10 +13,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// TestPowerLossOracleCounterexampleRecoverablePageReuse is the stable witness
-// for graveyard/freelist reuse before the older recoverable root is displaced.
-// It uses package-local access only to identify actual live and reused page IDs;
-// every mutation and the crash-image reopen use exported production methods.
+// TestPowerLossOracleCounterexampleRecoverablePageReuse retains the historical
+// old-page-reuse witness after the two-slot horizon fix. It proves that pages
+// from generation A are not reused while A remains selectable, then advances
+// both durable slots and proves that reusing an A page cannot affect the newer
+// stable generation C. Package-local access identifies actual live and reused
+// page IDs; every database mutation and crash-image reopen uses exported
+// production methods.
 func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
@@ -58,31 +61,38 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	if err := writeGeneration('a', true); err != nil {
 		t.Fatalf("write stable generation: %v", err)
 	}
-	oldState := d.State()
-	if oldState == nil || oldState.RootPageID == 0 {
-		t.Fatalf("missing stable root: %+v", oldState)
+	retiredState := d.State()
+	if retiredState == nil || retiredState.RootPageID == 0 {
+		t.Fatalf("missing first durable root: %+v", retiredState)
 	}
-	oldPages := collectRootPageIDs(t, d, oldState.RootPageID)
+	oldPages := collectRootPageIDs(t, d, retiredState.RootPageID)
 	oldLive := make(map[uint64]struct{}, len(oldPages))
 	for _, id := range oldPages {
 		oldLive[id] = struct{}{}
 	}
 	if len(oldLive) < 2 {
-		t.Fatalf("stable generation has too few live pages: root=%d pages=%v", oldState.RootPageID, oldPages)
+		t.Fatalf("first durable generation has too few live pages: root=%d pages=%v", retiredState.RootPageID, oldPages)
+	}
+
+	// B retires A but leaves A in the alternate slot. C displaces A and D
+	// transfers its now-horizon-safe pages into the sealed freelist generation
+	// that E may consume.
+	if err := writeGeneration('b', true); err != nil {
+		t.Fatalf("write retirement generation: %v", err)
+	}
+	if err := writeGeneration('c', true); err != nil {
+		t.Fatalf("write horizon-advance generation: %v", err)
+	}
+	if err := writeGeneration('d', true); err != nil {
+		t.Fatalf("write retired-page-transfer generation: %v", err)
+	}
+	stableState := d.State()
+	if stableState == nil || stableState.CommitSeq <= retiredState.CommitSeq || stableState.RootPageID == retiredState.RootPageID {
+		t.Fatalf("durable horizon did not advance: retired=%+v stable=%+v", retiredState, stableState)
 	}
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
-		t.Fatalf("capture stable generation: %v", err)
-	}
-
-	// Generation 2 retires generation 1. Generation 3 advances KeepRecent=1
-	// far enough for synchronous pruning to put those actual page IDs on the
-	// freelist. Neither relaxed commit changes the model's stable image.
-	if err := writeGeneration('b', false); err != nil {
-		t.Fatalf("write retirement generation: %v", err)
-	}
-	if err := writeGeneration('c', false); err != nil {
-		t.Fatalf("write prune generation: %v", err)
+		t.Fatalf("capture post-horizon stable generation: %v", err)
 	}
 	idx := d.idx.Load()
 	if idx == nil {
@@ -90,34 +100,34 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	}
 	beforeReuse := idx.allocator.Counters()
 	if beforeReuse.FreeIDs == 0 {
-		t.Fatalf("actual prune exposed no reusable pages: counters=%+v", beforeReuse)
+		t.Fatalf("advanced horizon exposed no reusable pages: counters=%+v", beforeReuse)
 	}
 
-	cutErr := errors.New("power-loss-oracle: stop after actual reuse meta write")
+	cutErr := errors.New("power-loss-oracle: stop before actual reuse index sync")
 	var snapshot *powerlossoracle.Model
-	var meta durabilitycut.Event
+	var indexSync durabilitycut.Event
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
-		if event.Point == durabilitycut.AfterMetaWrite {
-			meta = event
+		if event.Point == durabilitycut.BeforeIndexDataSync {
+			indexSync = event
 			snapshot = model.Clone()
 			return cutErr
 		}
 		return nil
 	})
-	err = writeGeneration('d', false)
+	err = writeGeneration('e', false)
 	restore()
 	if !errors.Is(err, cutErr) || snapshot == nil {
-		t.Fatalf("actual reuse generation did not stop at AfterMetaWrite: err=%v", err)
+		t.Fatalf("post-horizon reuse generation did not stop at BeforeIndexDataSync: err=%v", err)
 	}
 	afterReuse := idx.allocator.Counters()
 	if afterReuse.ReuseAllocPages <= beforeReuse.ReuseAllocPages {
-		t.Fatalf("actual generation reused no freelist pages: before=%+v after=%+v", beforeReuse, afterReuse)
+		t.Fatalf("post-horizon generation reused no freelist pages: before=%+v after=%+v", beforeReuse, afterReuse)
 	}
 
-	indexPath, err := filepath.Rel(dir, meta.Path)
+	indexPath, err := filepath.Rel(dir, indexSync.Path)
 	if err != nil {
 		t.Fatalf("relative index path: %v", err)
 	}
@@ -143,16 +153,17 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 		}
 	}
 	if reusedPage == 0 {
-		t.Fatalf("freelist reuse did not overwrite an old-live page: root=%d old_pages=%d changed_ranges=%d before=%+v after=%+v", oldState.RootPageID, len(oldPages), len(changed), beforeReuse, afterReuse)
+		t.Fatalf("safe freelist reuse did not overwrite a displaced-generation page: root=%d old_pages=%v changed=%v index=%q before=%+v after=%+v", retiredState.RootPageID, oldPages, changed, indexPath, beforeReuse, afterReuse)
 	}
 
-	// Model the physically permitted writeback of the actual reused page while
-	// keeping the older synced meta page. The resulting image must never read as
-	// the complete older generation.
+	// Model the physically permitted writeback of the actual reused A page while
+	// keeping stable generation C and both of its metas. Because A was displaced
+	// before reuse, neither the synced-only image nor this partial writeback may
+	// change the selected durable root.
 	pageOffset := int64(reusedPage) * int64(page.PageSize)
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:         "older-meta-live-page-reuse",
-		Point:      powerlossoracle.AfterMetaWrite,
+		Point:      powerlossoracle.BeforeIndexDataSync,
 		Occurrence: 1,
 		Model:      snapshot,
 		OldPageWrites: []powerlossoracle.DirtyResource{{
@@ -164,7 +175,7 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantOldPageReuse},
 		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 			powerlossoracle.VariantSyncedOnly:   powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedCorruption,
+			powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedOldRoot,
 		},
 	})
 	if err != nil {
@@ -197,6 +208,11 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 			if err := variant.Model.MaterializeStable(crashDir); err != nil {
 				t.Fatalf("materialize stable-only image: %v", err)
 			}
+			releaseIdentities, err := variant.Model.InstallStableIdentityOverrides(crashDir)
+			if err != nil {
+				t.Fatalf("install stable identity model: %v", err)
+			}
+			defer releaseIdentities()
 			reopenOpts := opts
 			reopenOpts.Dir = crashDir
 			reopenOpts.ReadOnly = true
@@ -221,57 +237,15 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if variant.Family == powerlossoracle.VariantSyncedOnly {
-				opened := reopened.State()
-				if opened == nil || opened.CommitSeq != oldState.CommitSeq || opened.AppliedCommandLSN != oldState.AppliedCommandLSN || opened.RootPageID != oldState.RootPageID {
-					t.Fatalf("synced old root state=%+v want commit=%d applied=%d root=%d", opened, oldState.CommitSeq, oldState.AppliedCommandLSN, oldState.RootPageID)
-				}
-				validate(powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot})
-				return
-			}
-			if variant.Family != powerlossoracle.VariantOldPageReuse {
+			if variant.Family != powerlossoracle.VariantSyncedOnly && variant.Family != powerlossoracle.VariantOldPageReuse {
 				t.Fatalf("unclassified generated family %s", variant.Family)
 			}
 			opened := reopened.State()
-			if opened == nil {
-				t.Fatal("public db.Open returned no state")
+			if opened == nil || opened.CommitSeq != stableState.CommitSeq || opened.AppliedCommandLSN != stableState.AppliedCommandLSN || opened.RootPageID != stableState.RootPageID {
+				t.Fatalf("stable root changed after %s image: state=%+v want commit=%d applied=%d root=%d", variant.Family, opened, stableState.CommitSeq, stableState.AppliedCommandLSN, stableState.RootPageID)
 			}
-			generation := powerLossDBCompleteGeneration(oldState.CommitSeq, oldState.AppliedCommandLSN)
-			generation.LivePages = append([]uint64(nil), oldPages...)
-			scenario := powerlossoracle.Scenario{
-				Name:                 "actual-recoverable-page-reuse",
-				Cut:                  powerlossoracle.AfterMetaWrite,
-				Generations:          []powerlossoracle.Generation{generation},
-				LatestSealedSequence: oldState.CommitSeq,
-				SelectedSequence:     opened.CommitSeq,
-				OpenedSequence:       opened.CommitSeq,
-				OpenedAppliedLSN:     opened.AppliedCommandLSN,
-				ReusedPages:          []uint64{reusedPage},
-				ReopenAttempted:      true,
-			}
-			if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantRecoverablePageReused); err != nil {
-				t.Fatalf("successful public Open did not produce recoverable-page-reused diagnosis: %v", err)
-			}
-			validate(powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantRecoverablePageReused})
+			validate(powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot})
 		})
 	}
 	t.Logf("adversarial crash images: cut=%s count=%d family_coverage=%v", coverage.CutID, len(variants), coverage.ByFamily)
-}
-
-func powerLossDBCompleteGeneration(sequence, applied uint64) powerlossoracle.Generation {
-	kinds := []powerlossoracle.ResourceKind{
-		powerlossoracle.ResourceIndex,
-		powerlossoracle.ResourceFreelist,
-		powerlossoracle.ResourceValueLog,
-		powerlossoracle.ResourceOuterLeaf,
-		powerlossoracle.ResourceAuxiliary,
-		powerlossoracle.ResourceDirectory,
-		powerlossoracle.ResourceSeal,
-		powerlossoracle.ResourceCommandWAL,
-	}
-	resources := make([]powerlossoracle.Resource, 0, len(kinds))
-	for _, kind := range kinds {
-		resources = append(resources, powerlossoracle.Resource{Kind: kind, ID: string(kind), Stable: true, Live: true})
-	}
-	return powerlossoracle.Generation{Sequence: sequence, Recoverable: true, Resources: resources, AppliedLSN: applied}
 }

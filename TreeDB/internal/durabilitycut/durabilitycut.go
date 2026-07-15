@@ -21,8 +21,9 @@ const (
 	AfterNewFileDirectorySync  Point = "after-new-file-directory-sync"
 	BeforeIndexDataSync        Point = "before-index-data-sync"
 	AfterIndexDataSync         Point = "after-index-data-sync"
-	// PublicationSealWrite is a logical publication-boundary placeholder. Issue
-	// #3679 will retarget it to the future on-disk publication seal.
+	// PublicationSealWrite brackets the exact durable-root-record page write.
+	// The subsequent index sync makes that record and its COW closure stable;
+	// the alternate meta write then makes the record recovery-selectable.
 	BeforePublicationSealWrite  Point = "before-publication-seal-write"
 	AfterPublicationSealWrite   Point = "after-publication-seal-write"
 	BeforeMetaWrite             Point = "before-meta-write"

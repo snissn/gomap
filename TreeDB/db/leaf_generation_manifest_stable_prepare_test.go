@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,55 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
+
+func TestLeafGenerationManifestStablePreparedClosureAbandonUnpublishedRestoresView(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable manifest replacement requires exact relative namespace support")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	beforeView, err := os.ReadFile(leafGenerationManifestPath(resolveStorageLayout(database.dir).leafVLogDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.mu.RLock()
+	candidate := database.leafGenerationManifest.clone()
+	database.mu.RUnlock()
+
+	closure, _, err := database.prepareLeafGenerationManifestStableCandidate(candidate)
+	if err != nil {
+		t.Fatalf("prepareLeafGenerationManifestStableCandidate: %v", err)
+	}
+	resources, err := closure.TakeStableResources()
+	if err != nil {
+		closure.Release()
+		t.Fatal(err)
+	}
+	resources.Release()
+	if err := closure.abandonUnpublished(); err != nil {
+		t.Fatalf("abandonUnpublished: %v", err)
+	}
+	if err := closure.abandonUnpublished(); err != nil {
+		t.Fatalf("second abandonUnpublished: %v", err)
+	}
+	afterView, err := os.ReadFile(leafGenerationManifestPath(resolveStorageLayout(database.dir).leafVLogDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterView, beforeView) {
+		t.Fatalf("compatibility manifest changed after abandonment\nbefore=%s\nafter=%s", beforeView, afterView)
+	}
+	exactPath := filepath.Join(resolveStorageLayout(database.dir).leafVLogDir, leafGenerationDurableManifestFileName(closure.Revision()))
+	if _, err := os.Stat(exactPath); !os.IsNotExist(err) {
+		t.Fatalf("unpublished exact manifest remains at %q: %v", exactPath, err)
+	}
+	if database.publicationPoisoned.Load() {
+		t.Fatal("exact unpublished manifest abandonment poisoned DB")
+	}
+}
 
 func TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {

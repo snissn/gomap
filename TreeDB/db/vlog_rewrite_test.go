@@ -459,6 +459,12 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	if err := w2.Close(); err != nil {
 		t.Fatalf("close2: %v", err)
 	}
+	if err := db.RegisterValueLogSegment(path1, id1); err != nil {
+		t.Fatalf("register producer segment1: %v", err)
+	}
+	if err := db.RegisterValueLogSegmentReplacing(path2, id2, id1); err != nil {
+		t.Fatalf("register producer segment2: %v", err)
+	}
 
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {
@@ -1388,6 +1394,7 @@ func TestValueLogRewriteOffline_RejectsPendingCommitLog(t *testing.T) {
 	if err := w1.Close(); err != nil {
 		t.Fatalf("close1: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path1, id1)
 
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {
@@ -1768,6 +1775,9 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 100_000, 4, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(i + 1)}, 512)
 	})
+	if err := db.RegisterValueLogSegment(valueLogSegmentPath(t, dir, ptrs[0].FileID), ptrs[0].FileID); err != nil {
+		t.Fatalf("register producer segment: %v", err)
+	}
 	b := db.NewBatch().(*Batch)
 	for i := range ptrs {
 		if err := b.SetPointer([]byte{byte('a' + i)}, ptrs[i]); err != nil {
@@ -2077,6 +2087,9 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 	})
 	sourceID := ptrs[0].FileID
 	sourcePath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if err := db.RegisterValueLogSegment(sourcePath, sourceID); err != nil {
+		t.Fatalf("register producer segment: %v", err)
+	}
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("k"), ptrs[0]); err != nil {
@@ -2116,6 +2129,7 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 		t.Fatalf("active source should remain without reclaim option, stat=%v", err)
 	}
 
+	advancePastRetainedDurableSlotForTest(t, db)
 	reclaimStats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
 		ObservedSourceFileIDs:            rewriteStats.SourceFileIDsUnreferenced,
 		ObservedSourceAssumeUnreferenced: true,
@@ -2892,6 +2906,7 @@ func TestValueLogRewriteOffline_ReencodesLargeBlockFramesWithObservedDict(t *tes
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path, fileID)
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("k1"), ptrDict); err != nil {
@@ -3078,6 +3093,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path, fileID)
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("z1"), ptrDict); err != nil {
@@ -3489,6 +3505,7 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockOuterLeafPagesWithObservedD
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path, fileID)
 
 	b := db.NewBatch().(*Batch)
 	if err := b.SetPointer([]byte("k1"), ptrDict); err != nil {
@@ -3706,6 +3723,7 @@ func appendBlockCompressedPointersInNewSegment(t *testing.T, dir string, lane, s
 	if err := w.Close(); err != nil {
 		t.Fatalf("close writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path, fileID)
 	return ptrs
 }
 
@@ -5125,7 +5143,7 @@ func TestValueLogRewriteOnline_WithoutReserveRIDs_FastPathStillScansRIDStart(t *
 	}
 }
 
-func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing.T) {
+func TestValueLogRewriteOnline_ManagerHintAvoidsReservedLaneAndSkipsFallbackScan(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
@@ -5155,8 +5173,8 @@ func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing
 	if !ok {
 		t.Fatalf("RewriteLaneHint: ok=false")
 	}
-	if lane != rewriteLeafLogLaneID {
-		t.Fatalf("RewriteLaneHint lane=%d want reserved leaf lane %d", lane, rewriteLeafLogLaneID)
+	if lane == rewriteLeafLogLaneID {
+		t.Fatalf("RewriteLaneHint selected reserved leaf lane %d", lane)
 	}
 
 	sentinel := errors.New("rid-start scan invoked")
@@ -5185,8 +5203,8 @@ func TestValueLogRewriteOnline_LeafLogReservedLaneHintFallsBackToScan(t *testing
 	if ridStartScanCalls != 1 {
 		t.Fatalf("expected one rid-start scan call, got %d", ridStartScanCalls)
 	}
-	if walScanCalls != 1 {
-		t.Fatalf("expected one wal segment scan call, got %d", walScanCalls)
+	if walScanCalls != 0 {
+		t.Fatalf("manager hint unexpectedly used fallback wal segment scan: calls=%d", walScanCalls)
 	}
 }
 

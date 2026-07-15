@@ -448,7 +448,10 @@ func (db *DB) installCommandWALValueLogAppender() error {
 	}
 	db.SetValueLogAppender(appender)
 	db.SetLeafPageLog(replayInlineLeafPageLog{appender: appender})
-	db.registerInternalTeardownHook(func() error {
+	// Ordered-root finalization deliberately releases writeMu before its durable
+	// candidate and post-work complete. Defer appender teardown until Close owns
+	// teardownMu exclusively so those publications cannot race leaf-log removal.
+	db.registerCaptureTeardownHook(func() error {
 		db.SetLeafPageLog(nil)
 		db.SetValueLogAppender(nil)
 		return appender.close()

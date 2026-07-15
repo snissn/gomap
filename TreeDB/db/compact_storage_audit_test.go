@@ -110,6 +110,9 @@ func TestCompactStorageAudit_PublishesLegitimatelyEmptyRefreshedTopology(t *test
 		t.Fatalf("Open: %v", err)
 	}
 	defer closeNoErr(t, db)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 
 	fileID, ok := compactStorageValueLogFileID(filepath.Base(path))
 	if !ok {

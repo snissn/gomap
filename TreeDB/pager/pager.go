@@ -895,7 +895,7 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 	if syncErr == nil && syncFile {
 		if syncTarget == nil {
 			syncErr = errors.New("pager: sync file unavailable")
-		} else if err := syncTarget.Sync(); err != nil {
+		} else if err := syncPageFile(syncTarget); err != nil {
 			syncErr = err
 		} else {
 			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
@@ -983,11 +983,22 @@ func planSyncPageRanges(pageIDs []uint64, pageIDBase, pageCount uint64, chunkSiz
 // SyncPages durably synchronizes the named pages. Platforms that require an
 // explicit mapped-view flush receive granularity-aligned ranges before the
 // final file data-sync boundary. Linux fdatasync includes file-size metadata
-// needed to retrieve appended pages; other platforms retain os.File.Sync.
+// needed to retrieve appended pages; Darwin uses F_FULLFSYNC and Windows uses
+// FlushFileBuffers after its mapped-view flush. Unsupported adapters fail
+// closed.
 // This method never promises that only the named bytes reach stable storage
 // and deliberately leaves dirtyChunks unchanged so ordinary commit bookkeeping
 // remains exact.
 func (p *Pager) SyncPages(pageIDs []uint64) error {
+	return p.SyncPagesWithStableFile(p.file, pageIDs)
+}
+
+// SyncPagesWithStableFile durably synchronizes the named mapped pages through
+// an exact retained handle for this pager's file. The handle is validated
+// against the live pager identity before any mapped-view or file barrier. This
+// is the scoped primitive used for the durability-critical meta-page cut: it
+// never reopens the diagnostic path and it fails closed on a rebound handle.
+func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -999,11 +1010,32 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 		}
 		return nil
 	}
+	if file == nil {
+		return errors.New("pager: stable index file unavailable")
+	}
 	if len(pageIDs) == 0 {
 		return nil
 	}
 
 	p.mu.RLock()
+	if p.file == nil {
+		p.mu.RUnlock()
+		return errors.New("pager: stable index file unavailable")
+	}
+	ownedInfo, err := p.file.Stat()
+	if err != nil {
+		p.mu.RUnlock()
+		return err
+	}
+	stableInfo, err := file.Stat()
+	if err != nil {
+		p.mu.RUnlock()
+		return err
+	}
+	if !os.SameFile(ownedInfo, stableInfo) {
+		p.mu.RUnlock()
+		return errors.New("pager: stable index file identity mismatch")
+	}
 	chunkLengths := make([]int, len(p.chunks))
 	for i := range p.chunks {
 		chunkLengths[i] = len(p.chunks[i])
@@ -1015,7 +1047,7 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 	}
 	handled := false
 	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
-		handled, err = syncPageRangesFn(p.file, p.chunks, ranges, p.chunkSize)
+		handled, err = syncPageRangesFn(file, p.chunks, ranges, p.chunkSize)
 		if err != nil {
 			p.mu.RUnlock()
 			return err
@@ -1031,7 +1063,7 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 		}
 	}
 	if !handled {
-		err = syncPageFile(p.file)
+		err = syncPageFile(file)
 		if err == nil {
 			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
 		}

@@ -212,11 +212,21 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	// Commit-sequence equality fences published roots, not prepared output. The
 	// current/recent and pending-append keep sets below are therefore computed
 	// from the value-log topology while publish preparation remains excluded.
-	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
-	// path. Fall back to a refresh if the manager has not yet discovered any
-	// segments (or if another process created segments on disk).
-	set := vm.CurrentSetNoRefresh()
-	if set == nil || len(set.Files) == 0 {
+	// A full GC pass is already a directory-wide maintenance operation, so it
+	// must refresh even when publication registered a non-empty reachable
+	// subset: externally created unreferenced siblings are precisely what GC is
+	// expected to discover. Observed-source reclamation remains bounded to the
+	// caller's already-registered identities and avoids that scan.
+	var set *valuelog.Set
+	if observedOnly {
+		set = vm.CurrentSetNoRefresh()
+	} else {
+		if err := vm.Refresh(); err != nil {
+			return stats, err
+		}
+		set = valueLogGCPostRefreshCurrentSetNoRefresh(vm)
+	}
+	if observedOnly && (set == nil || len(set.Files) == 0) {
 		if set != nil {
 			_ = vm.Release(set)
 		}

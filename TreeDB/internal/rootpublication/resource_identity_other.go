@@ -14,6 +14,10 @@ func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }
 
+func openOrCreateStableChildDirectory(*os.File, string, os.FileMode) (*os.File, error) {
+	return nil, ErrNamespacePersistenceUnsupported
+}
+
 func removeStableChildFile(*os.File, string) error {
 	return ErrNamespacePersistenceUnsupported
 }
@@ -36,17 +40,10 @@ func duplicateStableSyncFile(file *os.File) (*os.File, error) {
 	return duplicateStableFile(file)
 }
 
-func stableIdentityFromFile(*os.File) (StableIdentity, error) {
+func platformStableIdentityFromFile(*os.File) (StableIdentity, error) {
 	return StableIdentity{}, ErrStableIdentityUnsupported
 }
 
 func syncStableNamespace(*os.File) error {
 	return ErrNamespacePersistenceUnsupported
-}
-
-func syncStableFile(file *os.File) error {
-	if file == nil {
-		return os.ErrInvalid
-	}
-	return file.Sync()
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/template"
 )
@@ -155,6 +156,7 @@ func TestRaftSnapshotV1CopyFileContentDoesNotOverrunHeaderSize(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
@@ -318,6 +320,7 @@ func TestRaftSnapshotV1OpenClassifiesStagedCleanupFailure(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
@@ -354,6 +357,7 @@ func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
@@ -401,6 +405,7 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
@@ -437,6 +442,7 @@ func TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState(t *t
 }
 
 func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
@@ -483,6 +489,7 @@ func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
 	sourceDir := filepath.Join(sourceRoot, "maindb")
@@ -530,6 +537,7 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
 	sourceDir := filepath.Join(sourceRoot, "maindb")
@@ -565,6 +573,7 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
@@ -606,6 +615,7 @@ func TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata(t *testing.T) {
 }
 
 func TestRaftSnapshotV1InstallDisabledSideStoresDoesNotTouchParentSideStores(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source", "maindb")
 	sourceDB := openRaftSnapshotFSMTestDBWithOptions(t, sourceDir, false, true)
@@ -814,6 +824,7 @@ func TestRaftSnapshotV1ExportRejectsDirectoryRootSymlink(t *testing.T) {
 }
 
 func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
+	requireRaftSnapshotInstallSupportedV1(b)
 	root := b.TempDir()
 	sourceDir := filepath.Join(root, "source")
 	sourceDB := openRaftSnapshotFSMTestDB(b, sourceDir, true)
@@ -938,6 +949,13 @@ func installRaftSnapshotForTest(tb testing.TB, fsm *FSM, snapshot raftcluster.Ra
 	defer func() { _ = reader.Close() }()
 	if err := fsm.InstallRaftSnapshotV1(reader); err != nil {
 		tb.Fatalf("InstallRaftSnapshotV1: %v", err)
+	}
+}
+
+func requireRaftSnapshotInstallSupportedV1(tb testing.TB) {
+	tb.Helper()
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		tb.Skip("Raft snapshot install requires durable rename and removal namespaces")
 	}
 }
 

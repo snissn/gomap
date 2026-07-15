@@ -66,7 +66,18 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ steps.scope.outputs.head_sha }}", mvcc)
         self.assertIn('if [[ "$EVENT_NAME" != "pull_request" ]]', mvcc)
         self.assertIn('git diff --name-only "$BASE_SHA...$HEAD_SHA"', mvcc)
-        self.assertNotRegex(mvcc, r"/pulls/\$\{(?:PR_NUMBER|pr_number)\}")
+        self.assertNotIn('/commits/${HEAD_SHA}/pulls', mvcc)
+        self.assertNotIn('/pulls/${PR_NUMBER}/files', mvcc)
+
+    def test_mvcc_observation_only_label_does_not_change_attribution(self) -> None:
+        mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")
+        self.assertIn('/pulls/${PR_NUMBER}', mvcc)
+        self.assertIn('performance-observation-only', mvcc)
+        self.assertIn(
+            "continue-on-error: ${{ steps.scope.outputs.enforce != 'true' }}",
+            mvcc,
+        )
+        self.assertIn("if: steps.paths.outputs.run == 'true'", mvcc)
 
     def test_required_gate_aggregates_every_tree_job(self) -> None:
         required = block(self.source, "  required:\n")

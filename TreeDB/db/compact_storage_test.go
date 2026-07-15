@@ -160,6 +160,9 @@ func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
 	if err := liveWriter.Close(); err != nil {
 		t.Fatalf("close live writer: %v", err)
 	}
+	if err := d.RegisterValueLogSegment(livePath, liveID); err != nil {
+		t.Fatalf("register live value-log producer: %v", err)
+	}
 	batch := d.NewBatch()
 	ptrBatch, ok := batch.(interface {
 		SetPointer(key []byte, ptr page.ValuePtr) error
@@ -195,6 +198,9 @@ func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
 		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
 	}
@@ -248,6 +254,9 @@ func TestCompactStorageManagerSegmentPostUnlinkCutRequiresRecovery(t *testing.T)
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
 		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
 	}
@@ -302,6 +311,9 @@ func TestCompactStorageKeepsPinnedZombieZeroByteValueLogFiles(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
 		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
 	}
@@ -371,6 +383,7 @@ func TestCompactStoragePlanMatchesAppliedRewriteScopeForLiveOnlySegments(t *test
 	if err := liveWriter.Close(); err != nil {
 		t.Fatalf("close live writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, livePath, liveID)
 
 	batch := d.NewBatch()
 	ptrBatch, ok := batch.(interface {
@@ -834,7 +847,7 @@ func openCompactStorageRewritePolicyFixture(t *testing.T, liveRecords, staleReco
 	return db
 }
 
-func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
+func TestCompactStorageRetainsValueLogGCDebtWhileOlderSlotProtectsSegment(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{Dir: dir})
@@ -865,6 +878,7 @@ func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
 	if err := w1.Close(); err != nil {
 		t.Fatalf("close writer 1: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path1, id1)
 
 	path2 := filepath.Join(valueLogDir, "value-l0-000002.log")
 	id2, err := valuelog.EncodeFileID(0, 2)
@@ -883,6 +897,7 @@ func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
 	if err := w2.Close(); err != nil {
 		t.Fatalf("close writer 2: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path2, id2)
 
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {
@@ -911,14 +926,17 @@ func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if stats.ValueLogGC.SegmentsDeleted == 0 {
-		t.Fatalf("applied ValueLogGC stats were not preserved: %+v", stats.ValueLogGC)
+	if stats.ValueLogGC.SegmentsEligible == 0 || stats.ValueLogGC.SegmentsPending == 0 {
+		t.Fatalf("older-slot ValueLogGC debt was not preserved: %+v", stats.ValueLogGC)
 	}
-	if stats.ValueLogGC.BytesDeleted == 0 {
-		t.Fatalf("applied ValueLogGC bytes deleted were not preserved: %+v", stats.ValueLogGC)
+	if stats.ValueLogGC.SegmentsDeleted != 0 || stats.ValueLogGC.BytesDeleted != 0 {
+		t.Fatalf("segment reachable from the older durable slot was deleted: %+v", stats.ValueLogGC)
 	}
-	if stats.RemainingDebt.ValueLogGCSegments != 0 || stats.RemainingDebt.ValueLogGCBytes != 0 {
-		t.Fatalf("remaining GC debt=%+v, want none", stats.RemainingDebt)
+	if stats.RemainingDebt.ValueLogGCSegments == 0 || stats.RemainingDebt.ValueLogGCBytes == 0 {
+		t.Fatalf("remaining GC debt=%+v, want retained older-slot debt", stats.RemainingDebt)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("older-slot segment was not retained: %v", err)
 	}
 }
 

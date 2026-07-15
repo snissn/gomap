@@ -256,6 +256,51 @@ func ensureColumnAssetManagerNamespace(namespace columnAssetManagerNamespace) er
 	return nil
 }
 
+// ensureStableColumnAssetManagerNamespace establishes every ancestor required
+// by a stable column child through a chain of exact retained-parent handles.
+// This lets Windows use its narrower create-through-child persistence contract
+// without treating prior os.Stat success as durability authority.
+func ensureStableColumnAssetManagerNamespace(namespace columnAssetManagerNamespace, registry *rootpublication.IdentityPinRegistry) (*os.File, error) {
+	if !rootpublication.StableNamespaceCreationSupported() {
+		return nil, fmt.Errorf("%w: stable column asset publication requires exact child creation persistence", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	dirs, err := columnAssetManagerNamespaceDirs(namespace)
+	if err != nil {
+		return nil, err
+	}
+	anchorPath := filepath.Clean(filepath.Dir(namespace.ManagerRootDir))
+	anchor, err := openStableColumnAssetParent(anchorPath)
+	if err != nil {
+		return nil, err
+	}
+	handles := map[string]*os.File{anchorPath: anchor}
+	defer func() {
+		for _, handle := range handles {
+			_ = handle.Close()
+		}
+	}()
+	for _, dir := range dirs {
+		cleanDir := filepath.Clean(dir)
+		parentPath := filepath.Clean(filepath.Dir(cleanDir))
+		parent := handles[parentPath]
+		if parent == nil {
+			return nil, fmt.Errorf("%w: stable column namespace parent %q has no retained authority", rootpublication.ErrUnresolvedResource, parentPath)
+		}
+		child, err := rootpublication.EnsureStableChildDirectory(parent, filepath.Base(cleanDir), 0o700, registry)
+		if err != nil {
+			return nil, err
+		}
+		handles[cleanDir] = child
+	}
+	segmentDir := filepath.Clean(namespace.SegmentDir)
+	segmentParent := handles[segmentDir]
+	if segmentParent == nil {
+		return nil, fmt.Errorf("%w: stable column segment directory %q has no retained authority", rootpublication.ErrUnresolvedResource, segmentDir)
+	}
+	delete(handles, segmentDir)
+	return segmentParent, nil
+}
+
 func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]string, error) {
 	if namespace.ManagerRootDir == "" {
 		return nil, errors.New("collections: column asset manager root dir is required")
@@ -439,8 +484,17 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	var stableParent *os.File
+	if capture != nil {
+		stableParent, err = ensureStableColumnAssetManagerNamespace(namespace, nil)
+	} else {
+		err = ensureColumnAssetManagerNamespace(namespace)
+	}
+	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
+	}
+	if stableParent != nil {
+		defer stableParent.Close()
 	}
 	ref := ColumnAssetRef{
 		Kind:       kind,
@@ -458,14 +512,8 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	var stableParent *os.File
 	if capture != nil {
-		stableParent, err = openStableColumnAssetParent(namespace.SegmentDir)
-		if err != nil {
-			return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
-		}
 		clearColumnAssetSegmentDirSyncKnown(assetPath)
-		defer stableParent.Close()
 	}
 	var file *os.File
 	var needsDirSync, created bool
@@ -653,8 +701,8 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset allocation requires identity pin registry")
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		return nil, fmt.Errorf("%w: stable fresh column physical asset allocation requires exact relative namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableNamespaceCreationSupported() {
+		return nil, fmt.Errorf("%w: stable fresh column physical asset allocation requires exact child creation authority", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset segment allocation requires asset manager")
@@ -669,9 +717,11 @@ func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	stableParent, err := ensureStableColumnAssetManagerNamespace(namespace, registry)
+	if err != nil {
 		return nil, err
 	}
+	_ = stableParent.Close()
 	cleanSegmentDir := filepath.Clean(namespace.SegmentDir)
 	allocatorIndex := columnAssetSegmentAllocationLockIndex(cleanSegmentDir)
 	allocatorLock := &columnAssetSegmentAllocationLocks[allocatorIndex]
@@ -1254,12 +1304,14 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	parent, err := ensureStableColumnAssetManagerNamespace(namespace, registry)
+	if err != nil {
 		return nil, err
 	}
 	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: cfg.AssetManager.Namespace, FileID: fileID, Length: 1}
 	assetPath, err := columnAssetSegmentPath(rootDir, ref)
 	if err != nil {
+		_ = parent.Close()
 		return nil, err
 	}
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
@@ -1267,11 +1319,6 @@ func newColumnPhysicalAssetSegmentAppendWriterWithStableResources(rootDir string
 	appender := &columnPhysicalAssetSegmentAppender{
 		cfg: cfg, namespace: namespace, fileID: fileID, assetPath: assetPath,
 		lock: segmentLock, unlockLock: true, stableRegistry: registry,
-	}
-	parent, err := openStableColumnAssetParent(namespace.SegmentDir)
-	if err != nil {
-		appender.releaseLock()
-		return nil, err
 	}
 	file, namespaceNeedsSync, created, err := openColumnAssetSegmentAppendFileAt(parent, assetPath)
 	if err != nil {
@@ -1286,8 +1333,8 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset append requires identity pin registry")
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		return nil, fmt.Errorf("%w: stable fresh column physical asset append requires exact relative namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableNamespaceCreationSupported() {
+		return nil, fmt.Errorf("%w: stable fresh column physical asset append requires exact child creation authority", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset append requires asset manager")
@@ -1305,12 +1352,14 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+	parent, err := ensureStableColumnAssetManagerNamespace(namespace, registry)
+	if err != nil {
 		return nil, err
 	}
 	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: cfg.AssetManager.Namespace, FileID: fileID, Length: 1}
 	assetPath, err := columnAssetSegmentPath(rootDir, ref)
 	if err != nil {
+		_ = parent.Close()
 		return nil, err
 	}
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
@@ -1318,11 +1367,6 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 	appender := &columnPhysicalAssetSegmentAppender{
 		cfg: cfg, namespace: namespace, fileID: fileID, assetPath: assetPath,
 		lock: segmentLock, unlockLock: true, stableRegistry: registry,
-	}
-	parent, err := openStableColumnAssetParent(namespace.SegmentDir)
-	if err != nil {
-		appender.releaseLock()
-		return nil, err
 	}
 	name := filepath.Base(assetPath)
 	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
@@ -1671,6 +1715,9 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		return nil, errors.New("collections: stable column segment capture requires exact file and parent handles")
 	}
 	var namespaceToken *rootpublication.StableNamespaceToken
+	if a.stableNamespaceRef == nil && len(a.stableRefs) != 0 {
+		return nil, errors.New("collections: stable column segment has no namespace ref")
+	}
 	if a.stableNamespaceNeedsSync {
 		if a.stableNamespaceRef == nil {
 			return nil, errors.New("collections: created stable column segment has no appended ref")
@@ -1699,6 +1746,14 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 			return nil, err
 		}
 		a.stableNamespaceProofAdded = true
+	} else if a.stableNamespaceRef != nil {
+		var err error
+		namespaceToken, err = stableColumnAssetKnownNamespaceToken(a.stableRegistry, a.stableParent, a.file, *a.stableNamespaceRef)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if namespaceToken != nil {
 		defer namespaceToken.Release()
 	}
 	refs := append([]ColumnAssetRef(nil), a.stableRefs...)
@@ -1721,17 +1776,13 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		return false
 	})
 	builder := rootpublication.NewStableResourceSetBuilder()
-	for i, ref := range refs {
-		var tokenNamespace *rootpublication.StableNamespaceToken
-		if i == 0 {
-			tokenNamespace = namespaceToken
-		}
+	for _, ref := range refs {
 		var token *rootpublication.StableResourceToken
 		var err error
 		if a.stableVectorGraphAuthority {
-			token, err = stableVectorGraphResourceTokenWithRegistry(a.file, ref, tokenNamespace, a.stableRegistry)
+			token, err = stableVectorGraphResourceTokenWithRegistry(a.file, ref, namespaceToken, a.stableRegistry)
 		} else {
-			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, tokenNamespace, a.stableRegistry)
+			token, err = stableColumnAssetResourceTokenWithRegistryForPublish(a.file, ref, namespaceToken, a.stableRegistry)
 		}
 		if errors.Is(err, errColumnAssetStableTokenOmittedForTest) {
 			continue

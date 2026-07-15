@@ -16,11 +16,12 @@ var (
 // deleter that can reach the same physical files. Logical generations are not
 // part of this key: deleting an inode must be blocked by every alias of it.
 type IdentityPinRegistry struct {
-	mu          sync.Mutex
-	states      map[StableIdentity]*identityPinState
-	namespaces  map[string]bool
-	stableLinks map[stableNamespaceLink]struct{}
-	activePins  uint64
+	mu                   sync.Mutex
+	states               map[StableIdentity]*identityPinState
+	namespaces           map[string]bool
+	stableLinks          map[stableNamespaceLink]struct{}
+	stableDirectoryLinks map[stableNamespaceLink]stableDirectoryLinkAuthority
+	activePins           uint64
 }
 
 // IdentityPinRegistryStats is an atomic snapshot of the live physical-identity
@@ -38,6 +39,24 @@ type stableNamespaceLink struct {
 	parent StableIdentity
 	child  StableIdentity
 	name   string
+}
+
+// stableDirectoryLinkAuthority keeps both physical identities alive for as
+// long as a directory-ancestry sync proof may be reused. Numeric file
+// identities alone are insufficient because the filesystem may recycle them
+// after deletion.
+type stableDirectoryLinkAuthority struct {
+	parent *os.File
+	child  *os.File
+}
+
+func (authority stableDirectoryLinkAuthority) close() {
+	if authority.child != nil {
+		_ = authority.child.Close()
+	}
+	if authority.parent != nil {
+		_ = authority.parent.Close()
+	}
 }
 
 type identityPinState struct {
@@ -65,9 +84,10 @@ type IdentityPin struct {
 
 func NewIdentityPinRegistry() *IdentityPinRegistry {
 	return &IdentityPinRegistry{
-		states:      make(map[StableIdentity]*identityPinState),
-		namespaces:  make(map[string]bool),
-		stableLinks: make(map[stableNamespaceLink]struct{}),
+		states:               make(map[StableIdentity]*identityPinState),
+		namespaces:           make(map[string]bool),
+		stableLinks:          make(map[stableNamespaceLink]struct{}),
+		stableDirectoryLinks: make(map[stableNamespaceLink]stableDirectoryLinkAuthority),
 	}
 }
 
@@ -360,6 +380,105 @@ func (registry *IdentityPinRegistry) StableNamespaceLinkKnown(parent, child *os.
 	return known, nil
 }
 
+// StableDirectoryLinkKnown reports whether this exact physical
+// parent/child/name directory binding has already survived the platform's
+// create-persistence operation. Each proof retains duplicate handles so its
+// physical identities cannot be deleted and reused while sync elision remains
+// possible. Directory-ancestry proofs are deliberately separate from
+// stableLinks: they are a namespace-setup cache, not live publication resources
+// owned by rollback and retirement.
+func (registry *IdentityPinRegistry) StableDirectoryLinkKnown(parent, child *os.File, name string) (bool, error) {
+	if registry == nil {
+		return false, fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(parent, child, name)
+	if err != nil {
+		return false, err
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	_, known := registry.stableDirectoryLinks[link]
+	return known, nil
+}
+
+// RememberStableDirectoryLink records a directory-ancestry proof only after
+// the exact platform persistence handle has been synchronized. Rebinding a
+// name to another child invalidates the previous proof for that parent/name.
+func (registry *IdentityPinRegistry) RememberStableDirectoryLink(parent, child *os.File, name string) error {
+	if registry == nil {
+		return fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(parent, child, name)
+	if err != nil {
+		return err
+	}
+	retainedParent, err := duplicateStableFile(parent)
+	if err != nil {
+		return fmt.Errorf("retain stable directory parent: %w", err)
+	}
+	retainedChild, err := duplicateStableFile(child)
+	if err != nil {
+		_ = retainedParent.Close()
+		return fmt.Errorf("retain stable directory child: %w", err)
+	}
+	retained := stableDirectoryLinkAuthority{parent: retainedParent, child: retainedChild}
+	var retired []stableDirectoryLinkAuthority
+	registry.mu.Lock()
+	if registry.stableDirectoryLinks == nil {
+		registry.stableDirectoryLinks = make(map[stableNamespaceLink]stableDirectoryLinkAuthority)
+	}
+	if _, known := registry.stableDirectoryLinks[link]; known {
+		registry.mu.Unlock()
+		retained.close()
+		return nil
+	}
+	for prior, authority := range registry.stableDirectoryLinks {
+		if prior.parent == link.parent && prior.name == link.name && prior.child != link.child {
+			delete(registry.stableDirectoryLinks, prior)
+			retired = append(retired, authority)
+		}
+	}
+	registry.stableDirectoryLinks[link] = retained
+	registry.mu.Unlock()
+	for _, authority := range retired {
+		authority.close()
+	}
+	return nil
+}
+
+// NewStableNamespaceTokenForKnownLink binds a publication token to an exact
+// parent/child/name link whose namespace durability was already established by
+// this registry. The registry proof is scoped to physical identities, while
+// ParentGeneration remains the caller's logical publication generation.
+//
+// The returned token starts stable and performs no additional directory sync.
+// This is only valid while the caller retains the exact child against deletion;
+// a pathname lookup is never accepted as a substitute for the open handles.
+func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLink(spec StableNamespaceSpec) (*StableNamespaceToken, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
+	}
+	if spec.LinkedResource == nil {
+		return nil, fmt.Errorf("%w: known stable namespace link requires exact child handle", ErrUnresolvedResource)
+	}
+	link, err := stableNamespaceLinkFromFiles(spec.Parent, spec.LinkedResource, spec.NewName)
+	if err != nil {
+		return nil, err
+	}
+	registry.mu.Lock()
+	_, known := registry.stableLinks[link]
+	registry.mu.Unlock()
+	if !known {
+		return nil, fmt.Errorf("%w: exact namespace link is not known durable", ErrNamespaceUnstable)
+	}
+	token, err := newStableNamespaceToken(spec, nativeNamespaceAdapter{})
+	if err != nil {
+		return nil, err
+	}
+	token.state.Store(namespaceStable)
+	return token, nil
+}
+
 // RememberStableNamespaceLink records proof only after the exact parent handle
 // has been synced while the exact child binding was validated.
 func (registry *IdentityPinRegistry) RememberStableNamespaceLink(parent, child *os.File, name string) error {
@@ -435,16 +554,37 @@ func (registry *IdentityPinRegistry) ActiveStableNamespaceLinks() int {
 	return len(registry.stableLinks)
 }
 
-// ClearStableNamespaceLinks retires DB-lifetime namespace-sync proofs during
-// producer shutdown. Exact resource tokens retain their own parent handles and
-// remain usable; a later DB instance must establish fresh namespace evidence.
+// CachedStableDirectoryLinks reports the DB-lifetime ancestry proofs retained
+// as a sync-elision cache. These entries are not live resource ownership and
+// are intentionally excluded from Stats and ActiveStableNamespaceLinks.
+func (registry *IdentityPinRegistry) CachedStableDirectoryLinks() int {
+	if registry == nil {
+		return 0
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return len(registry.stableDirectoryLinks)
+}
+
+// ClearStableNamespaceLinks retires DB-lifetime namespace-sync proofs and
+// directory-ancestry setup proofs during producer shutdown. Exact resource
+// tokens retain their own parent handles and remain usable; a later DB instance
+// must establish fresh namespace evidence.
 func (registry *IdentityPinRegistry) ClearStableNamespaceLinks() {
 	if registry == nil {
 		return
 	}
 	registry.mu.Lock()
 	clear(registry.stableLinks)
+	authorities := make([]stableDirectoryLinkAuthority, 0, len(registry.stableDirectoryLinks))
+	for link, authority := range registry.stableDirectoryLinks {
+		authorities = append(authorities, authority)
+		delete(registry.stableDirectoryLinks, link)
+	}
 	registry.mu.Unlock()
+	for _, authority := range authorities {
+		authority.close()
+	}
 }
 
 func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) *identityPinState {
