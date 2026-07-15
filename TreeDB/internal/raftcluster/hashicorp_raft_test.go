@@ -1112,33 +1112,104 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	return conf
 }
 
+// waitForLeader requires two leader observations in the same live term.
+// A single Leader admission observation is not sufficient: on slow hosts it
+// can be sampled while the election/current-term no-op is still settling,
+// allowing the next submit or read assertion to race leadership loss. This is
+// a test-harness barrier only; it deliberately does not retry the operation
+// under test.
 func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
 	tb.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		var leader *hashicorpRaftTestNode
-		for _, node := range c.nodes {
-			if node.provider == nil {
-				continue
-			}
-			status, err := node.provider.ClusterAdmissionStatus(context.Background())
-			if err != nil {
-				tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
-			}
-			if status.Leader {
-				if leader != nil {
-					tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
-				}
-				leader = node
-			}
+	// Opening three durable test nodes can consume most of the old 15-second
+	// budget on a contended Windows runner. Keep failure bounded, but leave
+	// enough time for an election before requiring the state-based quorum/term
+	// barrier below.
+	deadline := time.Now().Add(30 * time.Second)
+	readinessCtx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	var previous leaderReadinessObservation
+	var lastErr error
+	for readinessCtx.Err() == nil {
+		leader := c.waitForSingleLeader(tb)
+		if leader == nil {
+			previous = leaderReadinessObservation{}
+			waitForLeaderReadinessPoll(readinessCtx)
+			continue
 		}
-		if leader != nil {
+		term, err := HashicorpRaftTestLeaderReady(readinessCtx, leader.provider)
+		if err != nil {
+			lastErr = err
+			previous = leaderReadinessObservation{}
+			waitForLeaderReadinessPoll(readinessCtx)
+			continue
+		}
+		current := leaderReadinessObservation{nodeID: leader.id, term: term, valid: true}
+		if sameStableLeaderTerm(previous, current) {
 			return leader
 		}
-		time.Sleep(20 * time.Millisecond)
+		previous = current
+		waitForLeaderReadinessPoll(readinessCtx)
 	}
-	tb.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
+	tb.Fatalf("timed out waiting for leader-ready stable term; last_readiness_err=%v states=%s", lastErr, c.admissionSummary())
 	return nil
+}
+
+func waitForLeaderReadinessPoll(ctx context.Context) {
+	select {
+	case <-time.After(20 * time.Millisecond):
+	case <-ctx.Done():
+	}
+}
+
+type leaderReadinessObservation struct {
+	nodeID NodeID
+	term   uint64
+	valid  bool
+}
+
+func sameStableLeaderTerm(previous, current leaderReadinessObservation) bool {
+	return previous.valid && current.valid && previous.nodeID == current.nodeID && previous.nodeID != "" && previous.term == current.term && current.term != 0
+}
+
+func (c *hashicorpRaftTestCluster) waitForSingleLeader(tb testing.TB) *hashicorpRaftTestNode {
+	tb.Helper()
+	var leader *hashicorpRaftTestNode
+	for _, node := range c.nodes {
+		if node.provider == nil {
+			continue
+		}
+		status, err := node.provider.ClusterAdmissionStatus(context.Background())
+		if err != nil {
+			tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+		}
+		if !status.Leader {
+			continue
+		}
+		if leader != nil {
+			tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
+		}
+		leader = node
+	}
+	return leader
+}
+
+func TestHashicorpRaftLeaderReadinessRequiresConsecutiveObservationsInOneTerm(t *testing.T) {
+	ready := leaderReadinessObservation{nodeID: "node-a", term: 4, valid: true}
+	if sameStableLeaderTerm(leaderReadinessObservation{}, ready) {
+		t.Fatal("a single leader/proof observation must not satisfy the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-a", term: 5, valid: true}) {
+		t.Fatal("a term transition must reset the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-b", term: 4, valid: true}) {
+		t.Fatal("a leader transition must reset the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-a", term: 4}) {
+		t.Fatal("an invalid observation must not satisfy the readiness barrier")
+	}
+	if !sameStableLeaderTerm(ready, ready) {
+		t.Fatal("two valid observations for the same leader term must satisfy the readiness barrier")
+	}
 }
 
 func (c *hashicorpRaftTestCluster) firstFollower(tb testing.TB, leaderID NodeID) *hashicorpRaftTestNode {
