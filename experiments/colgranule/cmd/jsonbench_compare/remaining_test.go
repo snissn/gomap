@@ -309,16 +309,34 @@ func TestRemainingRewriteEvidenceAllowsDurableRootDeferredReclaim(t *testing.T) 
 	}
 }
 
-func TestRemainingRewriteEvidenceRejectsInconsistentReclaimCounters(t *testing.T) {
-	result := remainingTreeDBResult{
+func TestRemainingRewriteEvidenceRejectsInvalidCounters(t *testing.T) {
+	valid := remainingTreeDBResult{
 		RewriteRecordsCopied: 1,
 		RewriteValueBytes:    128,
 		RewriteSourceBytes:   256,
-		RewriteReclaimFiles:  1,
-		RewriteReclaimBytes:  0,
 	}
-	if err := validateRemainingRewriteEvidence(result); err == nil {
-		t.Fatal("inconsistent rewrite reclaim counters accepted")
+	for _, tc := range []struct {
+		name   string
+		mutate func(*remainingTreeDBResult)
+	}{
+		{name: "no records copied", mutate: func(r *remainingTreeDBResult) { r.RewriteRecordsCopied = 0 }},
+		{name: "no value bytes copied", mutate: func(r *remainingTreeDBResult) { r.RewriteValueBytes = 0 }},
+		{name: "no source bytes selected", mutate: func(r *remainingTreeDBResult) { r.RewriteSourceBytes = 0 }},
+		{name: "negative reclaim files", mutate: func(r *remainingTreeDBResult) { r.RewriteReclaimFiles = -1 }},
+		{name: "negative reclaim bytes", mutate: func(r *remainingTreeDBResult) { r.RewriteReclaimBytes = -1 }},
+		{name: "inconsistent reclaim", mutate: func(r *remainingTreeDBResult) { r.RewriteReclaimFiles = 1 }},
+		{name: "over reclaim", mutate: func(r *remainingTreeDBResult) {
+			r.RewriteReclaimFiles = 1
+			r.RewriteReclaimBytes = 257
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := valid
+			tc.mutate(&result)
+			if err := validateRemainingRewriteEvidence(result); err == nil {
+				t.Fatalf("invalid rewrite counters accepted: %+v", result)
+			}
+		})
 	}
 }
 
@@ -480,6 +498,9 @@ func validateRemainingRewriteEvidence(result remainingTreeDBResult) error {
 	}
 	if result.RewriteSourceBytes <= 0 {
 		return fmt.Errorf("selected no value-log source bytes")
+	}
+	if result.RewriteReclaimFiles < 0 || result.RewriteReclaimBytes < 0 {
+		return fmt.Errorf("reported negative reclaim counters: files=%d bytes=%d", result.RewriteReclaimFiles, result.RewriteReclaimBytes)
 	}
 	if (result.RewriteReclaimFiles == 0) != (result.RewriteReclaimBytes == 0) {
 		return fmt.Errorf("reported inconsistent reclaim counters: files=%d bytes=%d", result.RewriteReclaimFiles, result.RewriteReclaimBytes)
