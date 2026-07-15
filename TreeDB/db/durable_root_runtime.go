@@ -1193,12 +1193,19 @@ func (db *DB) prepareOrResumeDurableRootCandidateV1(idx *indexGen, next page.Met
 	return db.prepareDurableRootCandidateV1(idx, next, retired, resources, closeTeardownPinned)
 }
 
-// publishDurableRootV1 is the sole V1 meta mutator. Pre-meta failures retain
-// the exact immutable candidate for retry; post-meta failures retain it as an
-// ambiguous recovery closure and poison the writable handle.
+var errDirectDurableRootPublisherDisabledV1 = errors.New("direct durable-root publisher disabled after coordinator activation")
+
+// publishDurableRootV1 is retained only as a tripwire for stale internal call
+// sites. Once the root-publication coordinator is active, every root must pass
+// through its accepted-candidate handoff and stable publisher.
 func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retired []uint64, vlogRefDelta *valueLogRefDelta) (page.MetaPageBody, error) {
 	if db == nil || idx == nil || idx.pager == nil || idx.allocator == nil {
 		return page.MetaPageBody{}, wrapFinalizeCommitError(errors.New("missing durable-root index"), true)
+	}
+	if db.rootPublication != nil {
+		return page.MetaPageBody{}, wrapFinalizeCommitError(
+			errors.Join(ErrRecoveryRequired, errDirectDurableRootPublisherDisabledV1), true,
+		)
 	}
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()

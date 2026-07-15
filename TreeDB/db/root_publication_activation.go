@@ -200,6 +200,7 @@ func (db *DB) initializeRootPublicationRuntimeV1(idx *indexGen) error {
 	}
 	coordinator, err := rootpublication.New(rootpublication.Options{
 		Publisher:                  runtime,
+		FixedPublishDelay:          db.rootPublicationFixedDelay,
 		InitialDurableFrontier:     rootPublicationFrontierV1(db.meta),
 		OldestRecoverableCommitSeq: oldest,
 		DurableRootLineage:         runtime.lineage,
