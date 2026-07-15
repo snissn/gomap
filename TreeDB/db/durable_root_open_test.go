@@ -53,6 +53,38 @@ func TestOpenFreshUsesOneDurableRootSlotAndReopens(t *testing.T) {
 	}
 }
 
+func TestScanCandidateValueLogReferencesUsesCallerPublicationLease(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	idx := database.idx.Load()
+	if idx == nil {
+		t.Fatal("missing index generation")
+	}
+	database.valueLogPublicationMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, scanErr := database.scanCandidateValueLogReferencesV1(idx, database.meta, true)
+		done <- scanErr
+	}()
+	select {
+	case scanErr := <-done:
+		database.valueLogPublicationMu.Unlock()
+		if scanErr != nil {
+			t.Fatalf("scan candidate references: %v", scanErr)
+		}
+	case <-time.After(2 * time.Second):
+		// Release the gate so the pre-fix implementation can unwind instead of
+		// leaking a permanently blocked goroutine into the remainder of the suite.
+		database.valueLogPublicationMu.Unlock()
+		<-done
+		t.Fatal("candidate dependency scan recursively acquired valueLogPublicationMu")
+	}
+}
+
 func TestStatsRenderSelectedDurableRootV1(t *testing.T) {
 	database, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

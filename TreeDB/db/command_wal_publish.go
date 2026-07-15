@@ -70,6 +70,10 @@ type finalizeCommitOptions struct {
 	// durableResourceRequirements scopes exact logical obligations for external
 	// resources whose physical files can outlive several root generations.
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
+	// valueLogPublicationLocked proves the caller already owns the exclusive
+	// valueLogPublicationMu lease. Candidate dependency capture must reuse that
+	// lease instead of recursively acquiring its read side.
+	valueLogPublicationLocked bool
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {

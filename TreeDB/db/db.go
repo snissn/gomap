@@ -1481,6 +1481,19 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	db.valueLogPublicationMu.RLock()
 	defer db.valueLogPublicationMu.RUnlock()
+	return db.acquireSnapshotWithValueLogPublicationLockHeld()
+}
+
+// acquireSnapshotWithValueLogPublicationLockHeld captures a normal snapshot
+// when the caller already owns either side of valueLogPublicationMu. It exists
+// for publication paths that hold the exclusive side while sealing a candidate;
+// recursively taking RLock on sync.RWMutex would deadlock. All other snapshot
+// lifetime, root-reuse, value-log, and generation pins remain identical to
+// AcquireSnapshot.
+func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
+	if db == nil {
+		return nil
+	}
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
@@ -3043,7 +3056,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
 	if db.durableRoot.pending == nil {
-		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements)
+		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.valueLogPublicationLocked)
 		if err != nil {
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}

@@ -1735,6 +1735,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		releaseRootSerialization:      unlockPublish,
 		durableResources:              durableResources,
 		leafManifestAlreadyPersistent: true,
+		valueLogPublicationLocked:     true,
 	})
 	// The finalizer consumes producer closures on every path. A prepared retry
 	// candidate, when present, now owns their exact handles independently of the

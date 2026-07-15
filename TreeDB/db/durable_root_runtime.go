@@ -224,8 +224,13 @@ func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *value
 	return references, true, nil
 }
 
-func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPageBody) (map[uint32]struct{}, error) {
-	snapshot := db.AcquireSnapshot()
+func (db *DB) scanCandidateValueLogReferencesV1(idx *indexGen, next page.MetaPageBody, valueLogPublicationLocked bool) (map[uint32]struct{}, error) {
+	var snapshot *Snapshot
+	if valueLogPublicationLocked {
+		snapshot = db.acquireSnapshotWithValueLogPublicationLockHeld()
+	} else {
+		snapshot = db.AcquireSnapshot()
+	}
 	if snapshot == nil {
 		// Command-WAL recovery publishes roots before Open installs the first
 		// public snapshot view. Build the same bounded candidate projection from
@@ -453,7 +458,7 @@ func (db *DB) requireDurableValueLogReferencesRegisteredV1(references map[uint32
 	return nil
 }
 
-func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool) (*rootpublication.StableResourceSet, error) {
 	if db.valueLogManager == nil {
 		return nil, nil
 	}
@@ -462,7 +467,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 		return nil, err
 	}
 	if !projected {
-		references, err = db.scanCandidateValueLogReferencesV1(idx, next)
+		references, err = db.scanCandidateValueLogReferencesV1(idx, next, valueLogPublicationLocked)
 		if err != nil {
 			return nil, err
 		}
@@ -489,7 +494,7 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // are replaced by a fresh candidate-root reachability scan. additional is a
 // producer-owned exact closure for resources made reachable by this publish
 // and is consumed on both success and failure.
-func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, valueLogPublicationLocked bool) (*rootpublication.StableResourceSet, error) {
 	if additional != nil {
 		defer additional.Release()
 	}
@@ -546,7 +551,7 @@ func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBod
 	if err := merge(inherited); err != nil {
 		return nil, fmt.Errorf("merge selected durable-root resources: %w", err)
 	}
-	fresh, err := db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs)
+	fresh, err := db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked)
 	if err != nil {
 		return nil, err
 	}
@@ -1144,7 +1149,7 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 	var resources *rootpublication.StableResourceSet
 	var err error
 	if db.durableRoot.pending == nil {
-		resources, err = db.captureDurableRootResourcesV1(idx, next, vlogRefDelta, nil, rootpublication.StableLogicalObligationRequirements{})
+		resources, err = db.captureDurableRootResourcesV1(idx, next, vlogRefDelta, nil, rootpublication.StableLogicalObligationRequirements{}, false)
 		if err != nil {
 			return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
