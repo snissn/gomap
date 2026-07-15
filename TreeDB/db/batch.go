@@ -295,6 +295,7 @@ func (b *Batch) write(sync bool) error {
 		if err != nil {
 			return err
 		}
+		defer releaseUnassignedCommandWALIntent(intent)
 	}
 	return b.writeWithCommandWALIntent(sync, intent, maxEntryRevision)
 }
@@ -806,6 +807,7 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 		if err != nil {
 			return err
 		}
+		defer releaseUnassignedCommandWALIntent(intent)
 	}
 	err = b.writeWithCommandWALIntentPreflight(sync, intent, maxEntryRevision, conditional)
 	if err == nil && intent != nil && intent.lsn != 0 {

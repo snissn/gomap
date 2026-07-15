@@ -243,7 +243,7 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	dbClosed = true
 }
 
-func TestCommandWALStatsExposeDeferredCommandBufferTrim(t *testing.T) {
+func TestCommandWALStatsBoundV2ScratchAfterLargeFrame(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
@@ -261,26 +261,168 @@ func TestCommandWALStatsExposeDeferredCommandBufferTrim(t *testing.T) {
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.command_wal.writer.command_buffer.length_bytes"]; got != "0" {
-		t.Fatalf("command buffer len=%q, want 0 after append flush (stats=%#v)", got, stats)
-	}
-	if got, want := stats["treedb.command_wal.writer.command_buffer.capacity_bytes"], strconv.Itoa(commandWALDeferredPointBufferRetainSize); got != want {
-		t.Fatalf("command buffer cap=%q, want retain cap %s (stats=%#v)", got, want, stats)
-	}
-	if got := stats["treedb.command_wal.writer.command_buffer.trim_count"]; got != "1" {
-		t.Fatalf("command buffer trim count=%q, want 1 (stats=%#v)", got, stats)
-	}
-	dropped, err := strconv.ParseUint(stats["treedb.command_wal.writer.command_buffer.dropped_bytes_total"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse dropped bytes: %v (stats=%#v)", err, stats)
-	}
-	if dropped == 0 {
-		t.Fatalf("command buffer dropped bytes=0, want retained capacity drop accounted (stats=%#v)", stats)
+	if got, want := stats["treedb.command_wal.writer.scratch_capacity_bytes"], strconv.Itoa(commandWALDeferredPointBufferRetainSize); got != want {
+		t.Fatalf("V2 scratch cap=%q, want retain cap %s after oversized append (stats=%#v)", got, want, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	dbClosed = true
+}
+
+func TestCommandWALStatsExposeDurablePrefixAndPendingDebt(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("relaxed"), []byte("value"), false); err != nil {
+		t.Fatalf("append relaxed command: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+		t.Fatalf("durable_wal_lsn=%q, want 0 before barrier", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want 1", got)
+	}
+	if _, ok := stats["treedb.command_wal.dependency_debt.max_age_ns"]; !ok {
+		t.Fatal("pending debt age stat missing")
+	}
+
+	if err := db.FlushCommandWALBarrier(true); err != nil {
+		t.Fatalf("durable prefix barrier: %v", err)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want 2 after barrier", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after barrier", got)
+	}
+}
+
+func TestPublishStagedCommandWALNoopSyncClosesExistingFrameDurablePrefix(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	lsn, err := db.AppendStagedCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent relaxed: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("staged intent lsn=%d, want 1", lsn)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+		t.Fatalf("durable_wal_lsn=%q, want 0 before sync publish", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+		t.Fatalf("pending debt entries=%q, want 1 before sync publish", got)
+	}
+
+	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop sync: %v", err)
+	}
+	const barrierLSN = uint64(2)
+	if got := db.State().AppliedCommandLSN; got != barrierLSN {
+		t.Fatalf("AppliedCommandLSN=%d, want durable barrier lsn %d", got, barrierLSN)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want durable barrier lsn 2", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0 after sync publish", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.count_total"); got != 2 {
+		t.Fatalf("append count=%d, want relaxed frame plus durable barrier", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.barrier.count_total"); got != 1 {
+		t.Fatalf("barrier sync count=%d, want 1", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.frames"); got != 2 {
+		t.Fatalf("command WAL frames=%d, want relaxed frame plus durable barrier", got)
+	}
+
+	next := mustRawKVCommandWALIntent(t, db, "after/staged-sync", "value")
+	if err := db.PublishCommandWALNoop(next, false); err != nil {
+		t.Fatalf("PublishCommandWALNoop after staged sync barrier: %v", err)
+	}
+	if got := next.AssignedLSN(); got != barrierLSN+1 {
+		t.Fatalf("next command lsn=%d, want %d", got, barrierLSN+1)
+	}
+	if got := db.State().AppliedCommandLSN; got != barrierLSN+1 {
+		t.Fatalf("AppliedCommandLSN after next command=%d, want %d", got, barrierLSN+1)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close after sync publish: %v", err)
+	}
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("reopen after sync publish: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != barrierLSN+1 {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want next command lsn %d", got, barrierLSN+1)
+	}
+	if got := reopen.Stats()["treedb.command_wal.durable_wal_lsn"]; got != "3" {
+		t.Fatalf("reopened durable_wal_lsn=%q, want graceful close through next command lsn 3", got)
+	}
+}
+
+func TestPublishStagedCommandWALNoopSyncDoesNotAppendBarrierForDurableFrame(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	lsn, err := db.AppendStagedCommandWALIntent(intent, true)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent durable: %v", err)
+	}
+	if err := db.PublishStagedCommandWALNoop(intent, true); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop durable: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "1" {
+		t.Fatalf("durable_wal_lsn=%q, want original durable frame lsn 1", got)
+	}
+	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+		t.Fatalf("pending debt entries=%q, want 0", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.count_total"); got != 1 {
+		t.Fatalf("append count=%d, want only original durable frame", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.barrier.count_total"); got != 0 {
+		t.Fatalf("barrier sync count=%d, want 0", got)
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("AppliedCommandLSN=%d, want durable frame lsn %d", got, lsn)
+	}
 }
 
 func TestCommandWALStatsReadOnlyReportsPersistedMode(t *testing.T) {

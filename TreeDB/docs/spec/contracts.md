@@ -367,8 +367,9 @@ Durability mode controls guarantees for sync calls:
   - `*Sync` methods use fsync durability boundaries.
 - `DurabilityWALOnRelaxed`:
   - In legacy/raw compatibility mode, WAL remains on, but `*Sync` is relaxed
-    (no fsync boundary). In the current command-WAL relaxed profile, command
-    frames remain the recovery source while sync is relaxed.
+    (no fsync boundary). In the current command-WAL relaxed profile, ordinary
+    command frames remain relaxed while explicit sync APIs opt up to a durable
+    V2 prefix.
 - `DurabilityWALOffRelaxed`:
   - In benchmark/compatibility mode, WAL off means relaxed sync; the durability
     boundary is typically checkpoint-based.

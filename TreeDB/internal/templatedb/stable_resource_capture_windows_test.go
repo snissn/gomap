@@ -4,14 +4,12 @@ package templatedb
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestCaptureTemplateResourcesFailsClosedWithoutDurableNamespacePrimitive(t *testing.T) {
+func TestCaptureTemplateResourcesUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -23,11 +21,14 @@ func TestCaptureTemplateResourcesFailsClosedWithoutDurableNamespacePrimitive(t *
 		t.Fatalf("put template: %v", err)
 	}
 	resources, err := store.CaptureTemplateResources(context.Background(), templateID)
-	if resources != nil {
-		resources.Release()
-		t.Fatal("unsupported Windows namespace capture returned resources")
+	if err != nil {
+		t.Fatalf("capture template resources: %v", err)
 	}
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		t.Fatalf("capture error=%v want namespace persistence unsupported", err)
+	if resources == nil {
+		t.Fatal("capture template resources returned nil authority")
+	}
+	defer resources.Release()
+	if err := resources.SyncThrough(); err != nil {
+		t.Fatalf("sync template authority: %v", err)
 	}
 }

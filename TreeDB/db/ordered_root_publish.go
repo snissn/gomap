@@ -2142,7 +2142,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		return 0, nil, preApplyErr(ErrClosed)
 	}
 
-	rawPublishLocked := commandWALIntent != nil && !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent)
+	rawPublishLocked := !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false)
 	if rawPublishLocked {
 		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
 		if lockErr != nil {
@@ -2332,7 +2332,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, ErrClosed
 	}
 
-	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent) && !commandWALIntent.staged() {
+	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
+	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
 		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
 		if lockErr != nil {
 			return 0, nil, lockErr
@@ -2401,7 +2402,6 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
-	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -3060,7 +3060,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, ErrClosed
 	}
 
-	if commandWALIntent != nil && !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent) {
+	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false) {
 		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
 		if lockErr != nil {
 			return 0, nil, lockErr
@@ -3244,7 +3244,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, ErrClosed
 	}
 
-	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent) {
+	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
+	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
 		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
 		if lockErr != nil {
 			return 0, nil, lockErr
@@ -3309,7 +3310,6 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
-	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -3511,7 +3511,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		return nil
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
-	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(intent) {
+	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
 		unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
 		if err != nil {
 			return err

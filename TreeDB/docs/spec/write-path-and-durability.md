@@ -107,12 +107,13 @@ request and no public fast-close/abort alias in this contract.
 
 ### 1.2 `DurabilityWALOnRelaxed` command-WAL relaxed / legacy compatibility
 
-- With `CommandWAL=true`, command-WAL frames remain the recovery source, but
-  sync operations are relaxed and do not establish an fsync boundary.
+- With `CommandWAL=true`, ordinary command-WAL frames use relaxed
+  acknowledgement, while explicit sync operations close and persist a durable
+  V2 prefix before acknowledgement.
 - Without command WAL, this is the legacy compatibility cached redo-journal
   mode with relaxed sync operations.
-- Crash-consistent for process failure patterns, but not guaranteed durable
-  across power loss.
+- Ordinary writes remain crash-consistent for process failure patterns and may
+  be lost across power loss; a successful command-WAL explicit sync is durable.
 
 ### 1.3 Legacy compatibility `DurabilityWALOffRelaxed`
 
@@ -223,7 +224,7 @@ This skip behavior is specific to the existing pre-command-WAL cached key/value
 commit log and its RID fence. The target user-command WAL replaces raw
 `commitlog.Record` batches with `RawKVBatch` command frames, uses command LSN
 ordering and applied-LSN checkpointing, and does not require compatibility
-replay for old raw record batches after `command_wal_v1` activation. Complete
+replay for old raw record batches after `command_wal_v2` activation. Complete
 command frames whose dependencies or external refs are missing fail recovery
 closed unless the command kind defines a formal idempotent skip rule.
 
@@ -288,7 +289,9 @@ must remain outside that final serialized boundary.
 
 ### 5.2 Sync APIs
 
-- `SetSync`, `DeleteSync`, `Batch.WriteSync`: in durable mode, fsync durability boundary; in relaxed modes, relaxed boundary only.
+- `SetSync`, `DeleteSync`, `Batch.WriteSync`: in durable mode, an fsync
+  durability boundary; in command-WAL relaxed mode, a durable V2 prefix; in
+  legacy relaxed modes without command WAL, a relaxed boundary only.
 
 ### 5.3 External-version MVCC commits
 

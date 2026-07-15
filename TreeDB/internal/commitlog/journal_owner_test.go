@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"testing"
@@ -131,6 +132,74 @@ func TestCommandJournalObservedBoundariesHoldJournalLock(t *testing.T) {
 		if want != durabilitycut.BeforeDependencyAppend && events[i].Path != activePath {
 			t.Fatalf("event[%d].Path=%q, want active path %q", i, events[i].Path, activePath)
 		}
+	}
+}
+
+func TestCommandJournalAppendHooksHoldLockAndTransferCurrentRotation(t *testing.T) {
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{
+		SegmentTargetBytes:     1,
+		CaptureStableResources: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
+	envelope := CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityRelaxed,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	}
+	assertLocked := func(stage string) {
+		t.Helper()
+		if j.mu.TryLock() {
+			j.mu.Unlock()
+			t.Fatalf("journal mutex was not held during %s hook", stage)
+		}
+	}
+	appendWithHooks := func(wantLSN uint64, wantRotations int) {
+		t.Helper()
+		lsn, err := j.AppendCommandObservedWithHooks(envelope,
+			func() error {
+				assertLocked("before-append")
+				return nil
+			},
+			func(gotLSN uint64, rotations []*CommandJournalStableRotation) error {
+				assertLocked("after-append")
+				if gotLSN != wantLSN {
+					t.Fatalf("post-hook LSN=%d, want %d", gotLSN, wantLSN)
+				}
+				if len(rotations) != wantRotations {
+					t.Fatalf("post-hook rotations=%d, want %d", len(rotations), wantRotations)
+				}
+				for _, rotation := range rotations {
+					if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
+						t.Fatalf("post-hook rotation=%+v, want exact closed and active tokens", rotation)
+					}
+					rotation.Release()
+				}
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("AppendCommandObservedWithHooks: %v", err)
+		}
+		if lsn != wantLSN {
+			t.Fatalf("append LSN=%d, want %d", lsn, wantLSN)
+		}
+	}
+
+	appendWithHooks(1, 0)
+	appendWithHooks(2, 1)
+	if rotations, err := j.TakePendingStableRotations(); err != nil {
+		t.Fatalf("TakePendingStableRotations: %v", err)
+	} else if len(rotations) != 0 {
+		for _, rotation := range rotations {
+			rotation.Release()
+		}
+		t.Fatalf("post hook left %d rotations for a later append to steal", len(rotations))
 	}
 }
 
@@ -360,8 +429,12 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("k2"), []byte("v2"), true); err != nil {
 		t.Fatalf("AppendRawKVPointCommandTrustedAndFlush second: %v", err)
 	}
-	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
-		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
+	wantSyncedSegments := []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2)}
+	if runtime.GOOS == "windows" {
+		wantSyncedSegments = []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2), CommandSegmentName(0, 2)}
+	}
+	if !slices.Equal(syncedSegments, wantSyncedSegments) {
+		t.Fatalf("synced segments=%v, want %v", syncedSegments, wantSyncedSegments)
 	}
 }
 
@@ -623,8 +696,12 @@ func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	if _, err := j.AppendRawKVSingleCommandAndFlush(0, RawKVOperation{Op: RawKVOpSet, Key: []byte("k2"), Value: []byte("v2")}, true); err != nil {
 		t.Fatalf("AppendRawKVSingleCommandAndFlush second: %v", err)
 	}
-	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
-		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
+	wantSyncedSegments := []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2)}
+	if runtime.GOOS == "windows" {
+		wantSyncedSegments = []string{CommandSegmentName(0, 1), CommandSegmentName(0, 2), CommandSegmentName(0, 2)}
+	}
+	if !slices.Equal(syncedSegments, wantSyncedSegments) {
+		t.Fatalf("synced segments=%v, want %v", syncedSegments, wantSyncedSegments)
 	}
 }
 
@@ -1186,7 +1263,7 @@ func TestCommandJournalUnsupportedVersionDoesNotConsumeLSN(t *testing.T) {
 	defer j.Close()
 
 	_, err = j.AppendCommand(CommandEnvelope{
-		Version:       CommandFrameVersion + 1,
+		Version:       CommandFrameVersionV2 + 1,
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
 		PayloadFormat: PayloadFormatRawKVBatchV1,
@@ -1285,6 +1362,57 @@ func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("LSN after oversized frame=%d, want 1", got)
+	}
+}
+
+func TestCommandJournalV2OversizedFrameDoesNotConsumeLSN(t *testing.T) {
+	emptyFrameSize, err := commandFrameV2EncodedSize(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("commandFrameV2EncodedSize empty: %v", err)
+	}
+	oversizedPayload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("k"), Value: bytes.Repeat([]byte("v"), 32)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload oversized: %v", err)
+	}
+
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{MaxSegmentSize: int64(emptyFrameSize)})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	_, err = j.AppendCommand(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         oversizedPayload,
+	})
+	if !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("oversized AppendCommand V2 error=%v, want ErrRecordTooLarge", err)
+	}
+	got, err := j.AppendCommand(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("valid AppendCommand V2 after oversized frame: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("V2 LSN after oversized frame=%d, want 1", got)
 	}
 }
 

@@ -22,11 +22,31 @@ type failingStableNamespaceBatchAdapter struct {
 	err error
 }
 
+type failOnceStableNamespaceBatchAdapter struct {
+	countingStableNamespaceBatchAdapter
+	failureMu sync.Mutex
+	failures  int
+	err       error
+}
+
 func (adapter *failingStableNamespaceBatchAdapter) Sync(parent *os.File) error {
 	if err := adapter.countingStableNamespaceBatchAdapter.Sync(parent); err != nil {
 		return err
 	}
 	return adapter.err
+}
+
+func (adapter *failOnceStableNamespaceBatchAdapter) Sync(parent *os.File) error {
+	if err := adapter.countingStableNamespaceBatchAdapter.Sync(parent); err != nil {
+		return err
+	}
+	adapter.failureMu.Lock()
+	defer adapter.failureMu.Unlock()
+	if adapter.failures > 0 {
+		adapter.failures--
+		return adapter.err
+	}
+	return nil
 }
 
 func (adapter *countingStableNamespaceBatchAdapter) Identity(file *os.File) (StableIdentity, error) {
@@ -156,6 +176,98 @@ func TestStableNamespaceBatchSyncsEachDistinctParentOnce(t *testing.T) {
 	}
 	if stats[0].NamespaceSyncDuration != wantDuration {
 		t.Fatalf("namespace sync duration=%s want exact token evidence %s", stats[0].NamespaceSyncDuration, wantDuration)
+	}
+}
+
+func TestStabilizeStableNamespaceTokensSyncsParentGenerationOnce(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	parentGeneration, err := StableNamespaceParentGeneration(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &countingStableNamespaceBatchAdapter{}
+	var tokens []*StableNamespaceToken
+	for _, name := range []string{"000001.wal", "000002.wal", "000003.wal"} {
+		child, err := OpenStableChildFile(parent, name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer child.Close()
+		token, err := newStableNamespaceToken(StableNamespaceSpec{
+			Parent: parent, LinkedResource: child, ParentGeneration: parentGeneration,
+			Operation: NamespaceCreate, NewName: name, DiagnosticPath: filepath.Join("wal", name),
+		}, adapter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens = append(tokens, token)
+		defer token.Release()
+	}
+	if err := StabilizeStableNamespaceTokens(tokens...); err != nil {
+		t.Fatalf("StabilizeStableNamespaceTokens: %v", err)
+	}
+	identity, err := StableIdentityFromFile(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.Generation = 0
+	if got := adapter.syncs[identity]; got != 1 {
+		t.Fatalf("parent syncs=%d want 1", got)
+	}
+	for _, token := range tokens {
+		if err := token.validateStable(); err != nil {
+			t.Fatalf("token not stable: %v", err)
+		}
+	}
+}
+
+func TestStabilizeStableNamespaceTokensRetriesParentSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := OpenStableChildFile(parent, "000001.wal", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+	parentGeneration, err := StableNamespaceParentGeneration(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("transient namespace sync failure")
+	adapter := &failOnceStableNamespaceBatchAdapter{failures: 1, err: wantErr}
+	token, err := newStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: child, ParentGeneration: parentGeneration,
+		Operation: NamespaceCreate, NewName: "000001.wal", DiagnosticPath: "wal/000001.wal",
+	}, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Release()
+	if err := StabilizeStableNamespaceTokens(token); !errors.Is(err, wantErr) {
+		t.Fatalf("first stabilization error=%v want %v", err, wantErr)
+	}
+	if err := StabilizeStableNamespaceTokens(token); err != nil {
+		t.Fatalf("retry stabilization: %v", err)
+	}
+	if err := token.validateStable(); err != nil {
+		t.Fatalf("token not stable after retry: %v", err)
+	}
+	identity, err := StableIdentityFromFile(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.Generation = 0
+	if got := adapter.syncs[identity]; got != 2 {
+		t.Fatalf("parent sync attempts=%d want 2", got)
 	}
 }
 

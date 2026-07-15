@@ -16,27 +16,23 @@ Current high-level order for non-collection cached WAL:
 6. expose recovered backend roots and memtables,
 7. clean obsolete commit-log segments only after replay permits it.
 
-Target user-command WAL extension:
-
-User-command WAL replay is target behavior owned by `user-command-wal.md` until
-the implementation gate lands. In that target, recovery discovers command WAL
-segments, loads the checkpointed `AppliedLSN`, validates frames and required
-external refs, replays complete commands with `LSN > AppliedLSN` through the
-deterministic command executor, then checkpoints the recovered `AppliedLSN`
-before cleaning replayed WAL.
+User-command WAL recovery discovers command WAL segments, loads the
+checkpointed `AppliedLSN`, validates V2 frames and required external refs,
+repairs only the discardable suffix above the durable frontier, replays complete
+commands with `LSN > AppliedLSN` through the deterministic command executor,
+then checkpoints the recovered `AppliedLSN` before cleaning covered WAL.
 
 The command-frame V2 scanner, durable-frontier classifier, and physical suffix
-repair are currently explicit inert entry points. Production `Open`, public
-append, and reopen remain V1 until #3718 activates the complete dependency and
-publication protocol. This boundary prevents a binary from partially enabling
-V2 recovery while still appending V1 frames.
+repair are the production `command_wal_v2` open path. Production append and
+reopen therefore use the same strict V2 format; V1 directories require a
+pre-alpha rebuild instead of entering a mixed-version mode.
 
 V2 command segments are currently required to be uncompressed at the outer
 commit-log segment layer. A terminal compressed record cannot expose a trusted
 LSN/class prefix, so both complete and torn compressed V2 records fail closed
-with `ErrCommandWALV2CompressedRecordUnsupported`. #3718 must keep segment
-compression disabled when it activates V2 unless a later format change makes
-that identity prefix independently readable and authenticated.
+with `ErrCommandWALV2CompressedRecordUnsupported`. Production V2 command WAL
+therefore keeps outer segment compression disabled unless a later format change
+makes that identity prefix independently readable and authenticated.
 
 For V2 recovery, scan every unapplied physical frame across all lanes and retain
 its lane, segment sequence, byte start/end offsets, and source path. After
@@ -47,20 +43,22 @@ validation, the highest complete durable command or
 - LSNs through `H` must be unique and contiguous from `AppliedLSN + 1`, and all
   referenced RIDs must exist. Any gap, duplicate, incomplete frame, corrupt
   fence, or missing dependency at or below `H` is corruption before mutation.
-- Above `H`, only a complete, dependency-closed, contiguous relaxed prefix may
-  be applied. The first incomplete, non-contiguous, duplicate, or
-  dependency-incomplete relaxed frame starts one discarded physical suffix.
+- Above `H`, no relaxed frame is replayed. A complete, contiguous relaxed tail
+  and an allowed incomplete terminal relaxed frame form one discarded physical
+  suffix. A gap, duplicate, non-terminal short read, or dependency defect that
+  cannot be proven wholly above `H` fails closed.
 - A later complete durable command or barrier raises `H`; therefore an earlier
   defect that otherwise looked discardable becomes corruption.
 
-After the complete prefix is durably published, physical repair processes the
-discarded frames in reverse global-LSN order. It truncates and syncs later
-segments, removes now-empty suffix segments, syncs the WAL directory, and
-truncates and syncs the anchor segment last. Each stage is retryable. Read-only
-recovery performs no mutation and returns structured `ErrRecoveryRequired`
-diagnostics containing the durable frontier, first discarded LSN, discarded
-frame/byte counts, missing-RID count, source segment, repair stages, completed
-stage count, and directory-sync completion.
+Before replay mutates backend state, physical repair processes the discarded
+frames in reverse global-LSN order. It truncates and syncs later segments,
+removes now-empty suffix segments, syncs the WAL directory, and truncates and
+syncs the anchor segment last. Each stage is retryable. Recovery then replays
+the validated complete prefix through `H` and publishes its `AppliedLSN` with
+the resulting roots. Read-only recovery performs no mutation and returns
+structured `ErrRecoveryRequired` diagnostics containing the durable frontier,
+first discarded LSN, discarded frame/byte counts, missing-RID count, source
+segment, repair stages, completed stage count, and directory-sync completion.
 
 Target entry revisions are part of the same recovered command effect as the raw
 KV value or tombstone. Recovery must not reconstruct revisions from a
@@ -166,7 +164,7 @@ empty, truncated, malformed, zero-revision, or unsupported-version document.
 Ambiguous cleanup is handle-owned until close; recovery does not guess a
 temporary pathname to unlink.
 
-Before `command_wal_v1`, accepted patterns include:
+Before `command_wal_v2`, accepted patterns include:
 
 - canonical commit log: `commit-l<lane>-<seq>.log`
 - legacy accepted commit-log aliases: `commit-<seq>.log`, `wal-<seq>.log`
@@ -174,7 +172,7 @@ Before `command_wal_v1`, accepted patterns include:
   `value-<seq>.log`, `vlog-<seq>.log`, and legacy mixed `wal/value-l*.log`
   names
 
-After `command_wal_v1` activation, command WAL segments use only the shared
+After `command_wal_v2` activation, command WAL segments use only the shared
 `commit-l<lane>-<seq>.log` family for required command replay. Old raw batch
 payloads are unsupported in command WAL directories; activation must start from
 a clean WAL state or an explicit rebuild.
@@ -205,8 +203,8 @@ Otherwise:
 
 ### 4.2 Read commit-log segments
 
-- Before `command_wal_v1`, read raw batches from commit-log segments.
-- After `command_wal_v1`, read typed command frames from commit-log segments.
+- Before `command_wal_v2`, read raw batches from commit-log segments.
+- After `command_wal_v2`, read typed V2 command frames from commit-log segments.
 - Command frame ordering uses `LSN`; duplicate LSN is corruption.
 - Old raw `commitlog.Record` batches in a command WAL directory fail closed.
 - Truncated tail in commit log stops replay at partial tail safely.
@@ -218,7 +216,7 @@ closed.
 
 ### 4.3 Apply batches or command frames to backend
 
-Before `command_wal_v1`, each commit record maps to backend batch op:
+Before `command_wal_v2`, each commit record maps to backend batch op:
 
 - `OpDelete` -> `Delete(key)`
 - `OpSetInline` -> `Set(key, value)`
@@ -233,7 +231,7 @@ WAL fence mode implications:
 
 Each replayed batch is committed with `WriteSync`.
 
-After `command_wal_v1`, raw writes replay as `RawKVBatch` command frames through
+After `command_wal_v2`, raw writes replay as `RawKVBatch` command frames through
 the deterministic command executor. Recovery must publish command effects and
 advance `AppliedLSN` in the same backend durability boundary. A restart during
 replay must observe either the old root plus old `AppliedLSN`, or the new root

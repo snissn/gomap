@@ -106,7 +106,7 @@ If `DisableSideStores=true`, the main DB is opened directly at `<root>`.
 Durability mode controls WAL/journal behavior, not whether value log exists.
 
 - `DurabilityDurable`: WAL on, sync on sync APIs.
-- `DurabilityWALOnRelaxed`: WAL on, sync APIs are relaxed (no fsync boundary).
+- `DurabilityWALOnRelaxed`: WAL on; legacy sync APIs are relaxed, while command-WAL explicit sync APIs opt up to a durable V2 prefix.
 - `DurabilityWALOffRelaxed`: WAL off, value log still used for pointers.
 
 See `TreeDB/docs/spec/write-path-and-durability.md`.

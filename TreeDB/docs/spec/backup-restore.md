@@ -19,7 +19,7 @@ A complete restorable root-layout backup includes:
 - `maindb/leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
   manifests/indexes when outer leaves are enabled;
 - future typed external-ref payload files referenced by non-cleaned command WAL
-  frames, once #3718 activates their authority contract, plus future column
+  frames, once a separate authority contract activates them, plus future column
   files referenced by roots;
 - `dictdb/**` and `templatedb/**`, including each side store's `index.db`,
   `format.json`, `wal/`, `value_vlog/`, `leaf_vlog/`, and cleanup metadata,
@@ -39,10 +39,10 @@ complete root-layout backup when `dictdb`, `templatedb`, command-WAL external
 refs, or future column external-ref files are enabled.
 
 The typed `CommandEnvelope.ExternalRefs` section is currently dormant: V1 and
-V2 reject every non-empty section before journal mutation. The external-ref
-prepare, protection, restore, and quarantine steps below define the contract
-for the future #3718 activation; they do not describe authority accepted by the
-current codecs.
+V2 reject every non-empty section before journal mutation. RawKV `SetRID`
+commands instead use the active V2 `ExternalRefFenceV1` dependency closure.
+The typed external-ref prepare, protection, restore, and quarantine steps below
+describe a separate future activation, not authority accepted by current codecs.
 
 ## 2. Live Backup Support
 
@@ -131,10 +131,11 @@ Restore/open validation before serving reads:
 10. quarantine, but do not immediately purge, files proven orphaned.
 
 Backup/restore validation currently fails closed on every non-empty typed
-command-WAL external-ref section. After #3718 activation it also fails closed
-on any missing required ref. A restore may accept a missing commit-log segment
-only when durable cleanup metadata or the backup manifest proves the exact
-segment/range was safely cleaned.
+command-WAL external-ref section. Active V2 recovery also fails closed on a
+missing RawKV RID at or below the durable horizon; a missing RID strictly above
+that horizon makes the relaxed suffix discardable. A restore may accept a
+missing commit-log segment only when durable cleanup metadata or the backup
+manifest proves the exact segment/range was safely cleaned.
 
 ## 4. Quarantine and Purge
 

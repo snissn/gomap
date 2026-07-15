@@ -98,10 +98,9 @@
       "seed": 18057848185145254985,
       "variant_families": ["full-writeback"],
       "expected_result": "suffix-discard",
-      "observed_result": "typed-error",
+      "observed_result": "suffix-discard",
       "owner": "#3718",
-      "disposition": "known-counterexample",
-      "known_violation": {"kind": "typed-sentinel", "sentinel": "db.ErrCommandWALMissingValueLogRID"},
+      "disposition": "resolved",
       "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID", "cut_id": "cut/relaxed-command-frame-external-rid/after-userspace-flush/001", "variant_id": "cut/relaxed-command-frame-external-rid/after-userspace-flush/001/variant/full-writeback", "seed": 18057848185145254985}
     },
     {

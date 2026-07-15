@@ -374,11 +374,13 @@ func writeColumnStoreCommandWALReplayFramesM10C(path string, baseAppliedLSN uint
 			return 0, 0, fmt.Errorf("encode collection insert batch by ID payload: %w", err)
 		}
 		if err := w.AppendCommand(commitlog.CommandEnvelope{
-			LSN:           baseAppliedLSN + uint64(i) + 1,
-			Kind:          commitlog.CommandKindCollectionInsertBatchByID,
-			Scope:         commitlog.CommandScopeCollection,
-			PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
-			Payload:       payload,
+			Version:         commitlog.CommandFrameVersionV2,
+			LSN:             baseAppliedLSN + uint64(i) + 1,
+			DurabilityClass: commitlog.CommandDurabilityDurable,
+			Kind:            commitlog.CommandKindCollectionInsertBatchByID,
+			Scope:           commitlog.CommandScopeCollection,
+			PayloadFormat:   commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+			Payload:         payload,
 		}); err != nil {
 			return 0, 0, fmt.Errorf("append command: %w", err)
 		}

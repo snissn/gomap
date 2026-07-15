@@ -7,7 +7,7 @@ The native client/server wire protocol is owned by
 TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
 That disclaimer does not permit fail-open handling of acknowledged durable
 writes. Once a directory advertises a required storage feature such as
-`command_wal_v1`, unsupported binaries must fail closed instead of serving,
+`command_wal_v2`, unsupported binaries must fail closed instead of serving,
 cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
@@ -530,21 +530,27 @@ The active stable-I/O adapters are explicit and fail closed:
 | Linux | `fdatasync` for pager index publication; `fsync` for general stable files | `fsync` on the retained directory handle | supported when the syscalls succeed |
 | FreeBSD, NetBSD, OpenBSD | aligned `msync(MS_SYNC)`, then `fsync` on the retained file | `fsync` on the retained directory handle | supported when the syscalls succeed |
 | Darwin | aligned `msync(MS_SYNC)`, then `F_FULLFSYNC` on the retained file | `fsync` on the retained directory handle | unsupported errors are typed and fail before activation |
-| Windows | `FlushViewOfFile`, then `FlushFileBuffers` on the retained file | `FlushFileBuffers` on the retained directory handle | unsupported directory or relative-parent semantics fail closed |
+| Windows | `FlushViewOfFile`, then `FlushFileBuffers` on the retained file | append-only create/open uses `NtCreateFile` relative to a delete-sharing retained parent and `FlushFileBuffers` on the exact child; rename, remove, and generic parent-directory sync are unsupported | create-only obligations are supported; broader namespace mutation returns a typed unsupported result |
 | Other targets | no asserted stable-file primitive | no asserted stable-namespace primitive | typed unsupported result; durable-root activation is rejected |
 
 These are ordering primitives, not evidence that a particular device honored
 volatile-cache persistence. Deterministic oracle events describe the requested
 barriers and the resulting modeled stable image.
-- Required feature validation must fail closed before full `command_wal_v1`
+
+- New `command_wal_v2` directories start with `AppliedCommandLSN=0`.
+- Updating `AppliedCommandLSN` without selecting the roots that contain those
+  command effects is invalid.
+- Selecting roots that contain command effects without the matching
+  `AppliedCommandLSN` is invalid for durable root publish/checkpoint state.
+- Required feature validation must fail closed before full `command_wal_v2`
   execution is enabled if a command-WAL directory is opened by code that decodes
   only the 60-byte pre-command-WAL meta body.
 - `format.json` must use version 3 or newer when `required_features` contains
-  `command_wal_v1`; putting required features in version 2 is invalid because
+  `command_wal_v2`; putting required features in version 2 is invalid because
   older binaries would ignore unknown JSON fields and fail open.
-- PR2 must add meta-page tests covering `AppliedCommandLSN` encode/decode,
-  in-page marker gating for legacy/reserved bytes, alternating meta pages,
-  old/new tuple selection, and checksum validation over the extended body.
+- Meta-page tests cover `AppliedCommandLSN` encode/decode, durable-meta
+  magic/version/body gating, alternating meta pages, paired root/frontier
+  selection, and checksum validation over the complete durable body.
 
 ## 3.1.1 R3a Apply Metadata Logs
 
@@ -1885,8 +1891,8 @@ Compression is only kept when it is a strict size win.
 
 ### 8.1 Legacy Pre-Command-WAL Raw Commit Batch Payload Format
 
-This is the current pre-command-WAL raw payload format. It is not a compatibility
-target for `command_wal_v1`. When command WAL lands, raw key/value writes are
+This is the legacy pre-command-WAL raw payload format. It is not a compatibility
+target for `command_wal_v2`. Command-WAL raw key/value writes are
 encoded as `RawKVBatch` command frames and this payload may be removed from
 normal open/recovery code.
 
@@ -1914,13 +1920,13 @@ Validation rules:
 - `OpSetInline`: `RID == 0`.
 - `OpDelete`: `RID == 0`, `ValueLen == 0`.
 
-## 9. Command WAL Typed Frame Target
+## 9. Command WAL Typed Frame Format
 
-The active target for collection and catalog durability is the user-command WAL
+The active format for collection and catalog durability is the user-command WAL
 defined in `user-command-wal.md`. It extends the existing commit-log segment
 family instead of defining a new collection WAL file class. Typed command WAL
 frames must live in `wal/commit-l<lane>-<seq>.log` as the only WAL payload
-format once `command_wal_v1` is enabled.
+format once `command_wal_v2` is enabled.
 
 The current raw commit-log record schema is superseded, not retained as a
 compatibility payload. Raw KV writes become `RawKVBatch` command frames. New
@@ -1950,7 +1956,7 @@ u64      CatalogEpoch
 u64      SchemaEpoch
 u64      BaseAppliedLSN
 u16      PayloadFormat
-u16      ReservedZero
+u16      DurabilityClass   // 1=durable, 2=relaxed
 u32      PayloadLen
 u32      ExternalRefsLen
 u32      PreconditionsLen
@@ -1961,21 +1967,21 @@ bytes Preconditions[PreconditionsLen]
 bytes ResultAssertions[ResultAssertionsLen]
 ```
 
-Production append and reopen continue to use frame version 1. The version-2
-candidate is implemented as an explicit, inert codec and recovery boundary;
-activation is owned by #3718 and must switch append, scan, and open atomically.
-There is no mixed V1/V2 append mode. A strict V2 reader that encounters V1
-returns a pre-alpha rebuild-required error, and an unsupported version fails
-closed.
+Production append, scan, and reopen use frame version 2 when the
+`command_wal_v2` required feature is active. There is no mixed V1/V2 append
+mode. A strict V2 reader that encounters V1 returns a pre-alpha
+rebuild-required error, and an unsupported version fails closed. The old
+`command_wal_v1` required-feature spelling is rejected with the same rebuild
+requirement rather than opening a directory under partially upgraded rules.
 
-The inert V2 boundary forbids the commit-log segment-level compressed flag.
+The active V2 boundary forbids the commit-log segment-level compressed flag.
 A torn compressed segment exposes only compressed bytes after `RawLen`, so its
 LSN and durability class cannot be authenticated before deciding whether it is
 above the durable frontier. Strict V2 readers therefore return
 `ErrCommandWALV2CompressedRecordUnsupported` for both complete and terminal
-compressed records. #3718 must activate V2 with segment compression disabled,
-or first introduce and verify a new framing that keeps the required terminal
-identity prefix uncompressed. It may not silently inherit `Options.Compress`.
+compressed records. Production V2 journals disable outer segment compression;
+a later format may enable it only after introducing and verifying framing that
+keeps the required terminal identity prefix uncompressed.
 
 V2 keeps the 72-byte envelope above and assigns the former reserved header
 field at bytes `[54,56)` to a little-endian durability class:
@@ -1991,6 +1997,27 @@ An uncompressed active terminal tail is classifiable only when frame bytes
 `[0,56)` persist the complete V2 identity, LSN, and durability class. A shorter
 tail fails closed with `ErrCommandWALV2TailIdentityUnavailable` joined with
 `ErrCorrupt`; recovery must not infer a missing class or LSN from write intent.
+
+The journal assigns each LSN and retains its dependency debt under the same
+serialization boundary. A relaxed append flushes dependency bytes to visibility
+but does not issue stable file or namespace syncs. Its ordered debt entry pins
+the exact dependency handles, required byte/RID frontiers, and any rotated
+command-WAL file and successor-name obligations. A later durable command or
+barrier deterministically coalesces debt through its assigned prefix, syncs the
+exact files, stabilizes the retained namespaces, appends the durable V2 frame,
+and then syncs the command WAL. That successful final WAL sync advances the
+in-memory durable WAL LSN and releases covered debt. A successful synced
+publication of an already-appended relaxed staged command publishes one
+contiguous applied range through the new durable barrier LSN; it must not leave
+the barrier below the durable frontier but above `AppliedCommandLSN`. A
+successful synced checkpoint cleanup may also advance and release through the
+already-durable `AppliedCommandLSN`: durable root coverage has superseded those
+command frames,
+and cleanup may already have deleted their segments. Cleanup or directory-sync
+failure retains the debt; a later barrier must never reopen a deleted segment
+through an obsolete rotation token. A failure before a durable frame append
+retains the debt for retry; a failure after append or during the final WAL sync
+is commit-ambiguous and poisons the open handle with `ErrRecoveryRequired`.
 
 Every V2 `RawKVBatch` frame containing at least one `SetRID` operation has
 exactly one `ExternalRefFenceV1` precondition. Frames without `SetRID` have no
@@ -2021,7 +2048,7 @@ Current command kinds:
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
-| 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | V2 empty durable-frontier record; inert until #3718 |
+| 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | active V2 empty durable-frontier record used by explicit sync with no user mutation |
 
 Current payload format IDs:
 
@@ -2303,12 +2330,13 @@ bytes[32] Digest
 bytes Path[PathLen]
 ```
 
-The typed `ExternalRefs` layout is reserved but inert: current V1 and V2
+The typed `ExternalRefs` layout remains reserved and inert: current V1 and V2
 encoders and decoders reject every non-empty section with
-`ErrCommandWALUnsupportedExternalRef`. #3718 owns atomic activation after the
-typed resource producers, exact-handle pins, sync order, recovery resolvers,
-and deletion owners exist. RawKV `SetRID` uses the separate V2
-`ExternalRefFenceV1` precondition and is not disabled by this quarantine.
+`ErrCommandWALUnsupportedExternalRef`. RawKV `SetRID` instead uses the active V2
+`ExternalRefFenceV1` precondition plus exact-handle dependency debt and is not
+disabled by this quarantine. Activating the general typed section still
+requires its resource producers, sync/recovery ownership, and deletion policy
+to land atomically.
 
 Precondition and result-assertion sections each start with `u32 Count`; every
 entry is:
@@ -2367,7 +2395,7 @@ Current canonical names:
 - split leaf log: `leaf_vlog/value-l<lane>-<seq>.log`
 
 Recovery parser may accept historical value-log and commit-log file names before
-`command_wal_v1` activation. Once command WAL is enabled, command frames use the
+`command_wal_v2` activation. Once command WAL is enabled, command frames use the
 shared `commit-l<lane>-<seq>.log` segment family and old raw batch payloads are
 unsupported.
 
