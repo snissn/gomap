@@ -31,7 +31,7 @@ var bindValueLogStableNamespaceCreationProof = func(proof *rootpublication.Stabl
 var bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublication.StableNamespaceCreationProof, parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
 	return proof.Bind(parent, parentGeneration, name, diagnosticPath)
 }
-var openStableValueLogParent = os.Open
+var openStableValueLogParent = rootpublication.OpenStableParent
 
 type pendingValueLogSuccessor struct {
 	parent          *os.File

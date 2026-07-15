@@ -8,6 +8,8 @@ func stableRelativeNamespaceSupported() bool { return false }
 
 func stableNamespaceCreationPersistsThroughChild() bool { return false }
 
+func openStableParent(path string) (*os.File, error) { return os.Open(path) }
+
 func openStableChildFile(*os.File, string, int, os.FileMode) (*os.File, error) {
 	return nil, ErrNamespacePersistenceUnsupported
 }

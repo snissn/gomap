@@ -23,6 +23,31 @@ func stableRelativeNamespaceSupported() bool { return false }
 // without claiming rename or removal support.
 func stableNamespaceCreationPersistsThroughChild() bool { return true }
 
+func openStableParent(path string) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	handle, err := windows.CreateFile(
+		name,
+		windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, &os.PathError{Op: "open", Path: path, Err: errors.New("invalid Windows directory handle")}
+	}
+	return file, nil
+}
+
 func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {
 	if parent == nil {
 		return nil, os.ErrInvalid

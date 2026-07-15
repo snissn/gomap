@@ -73,5 +73,23 @@ func TestCommandJournalStableRotationUsesCreateOnlyWindowsEvidence(t *testing.T)
 }
 
 func TestCommandJournalStableRotationCreatesThroughCapturedParentWindows(t *testing.T) {
-	testCommandJournalStableRotationCreatesThroughCapturedParent(t)
+	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	parentIdentity, err := rootpublication.StableIdentityFromFile(journal.stableParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotation, err := journal.RotateActiveSegmentWithStableResources(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	got := rotation.Active.Namespace().ParentIdentity()
+	got.Generation = 0
+	if got != parentIdentity {
+		t.Fatalf("active namespace parent identity=%+v want captured parent %+v", got, parentIdentity)
+	}
 }

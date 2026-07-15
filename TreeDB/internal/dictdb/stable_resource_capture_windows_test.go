@@ -4,14 +4,12 @@ package dictdb
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func TestCaptureDictionaryResourcesFailsClosedWithoutDurableNamespacePrimitive(t *testing.T) {
+func TestCaptureDictionaryResourcesUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	store, err := Open(t.TempDir(), backenddb.Options{ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open dictionary store: %v", err)
@@ -22,11 +20,14 @@ func TestCaptureDictionaryResourcesFailsClosedWithoutDurableNamespacePrimitive(t
 		t.Fatalf("put dictionary: %v", err)
 	}
 	resources, err := store.CaptureDictionaryResources(context.Background(), dictID)
-	if resources != nil {
-		resources.Release()
-		t.Fatal("unsupported Windows namespace capture returned resources")
+	if err != nil {
+		t.Fatalf("capture dictionary resources: %v", err)
 	}
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		t.Fatalf("capture error=%v want namespace persistence unsupported", err)
+	if resources == nil {
+		t.Fatal("capture dictionary resources returned nil authority")
+	}
+	defer resources.Release()
+	if err := resources.SyncThrough(); err != nil {
+		t.Fatalf("sync dictionary authority: %v", err)
 	}
 }

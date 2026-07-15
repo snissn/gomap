@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -98,7 +97,7 @@ func TestColumnAssetGCDestructiveFailsClosedOnWindowsBeforeUnlink(t *testing.T) 
 	}
 }
 
-func TestStableColumnAssetCaptureFailsClosedWithoutRelativeParentOpen(t *testing.T) {
+func TestStableColumnAssetCaptureUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -106,32 +105,35 @@ func TestStableColumnAssetCaptureFailsClosedWithoutRelativeParentOpen(t *testing
 			Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_parent",
 		},
 	}
+	payload := []byte("windows-stable-column")
 	ref, token, err := writeColumnAssetToManagerWithStableResource(
-		dir, cfg, []byte("must-not-become-visible"), ColumnAssetKindQueryReadyBase, 7, 11,
+		dir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, 7, 11,
 	)
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		if token != nil {
-			token.Release()
-		}
-		t.Fatalf("stable column capture error=%v want ErrNamespacePersistenceUnsupported", err)
+	if err != nil {
+		t.Fatalf("stable column capture: %v", err)
 	}
-	if token != nil || ref != (ColumnAssetRef{}) {
-		if token != nil {
-			token.Release()
-		}
-		t.Fatalf("unsupported capture returned ref=%+v token=%v", ref, token)
+	if token == nil {
+		t.Fatal("stable column capture returned nil authority")
 	}
-	namespace, err := columnAssetManagerNamespaceForRoot(dir, cfg.AssetManager.Namespace)
+	defer token.Release()
+	segmentPath, err := columnAssetSegmentPath(dir, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(columnAssetM12ASegmentFileID))
-	if _, err := os.Stat(segmentPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unsupported capture exposed segment %q: %v", segmentPath, err)
+	segment, err := os.ReadFile(segmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := ref.Offset + ref.Length
+	if ref.Offset < 0 || end < ref.Offset || end > int64(len(segment)) {
+		t.Fatalf("stable column ref=%+v segment bytes=%d", ref, len(segment))
+	}
+	if got := segment[ref.Offset:end]; !bytes.Equal(got, payload) {
+		t.Fatalf("stable column bytes=%q want %q", got, payload)
 	}
 }
 
-func TestStableColumnAppendSessionFailsClosedBeforeSegmentVisibility(t *testing.T) {
+func TestStableColumnAppendSessionUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
 		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_session_parent",
@@ -139,28 +141,37 @@ func TestStableColumnAppendSessionFailsClosedBeforeSegmentVisibility(t *testing.
 	registry := rootpublication.NewIdentityPinRegistry()
 	session := newColumnPhysicalAssetAppendSessionWithStableResources(dir, cfg, registry)
 	refs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{{
-		payload: []byte("must-not-become-visible"), kind: ColumnAssetKindTCS1PartImage, generation: 1, partID: 1,
+		payload: []byte("windows-stable-session"), kind: ColumnAssetKindTCS1PartImage, generation: 1, partID: 1,
 	}})
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+	if err != nil {
 		_ = session.abort()
-		t.Fatalf("stable session append error=%v want ErrNamespacePersistenceUnsupported", err)
+		t.Fatalf("stable session append: %v", err)
 	}
-	if len(refs) != 0 {
-		t.Fatalf("unsupported stable session returned refs=%+v", refs)
+	if len(refs) != 1 {
+		_ = session.abort()
+		t.Fatalf("stable session refs=%+v want one", refs)
 	}
-	if err := session.abort(); err != nil {
-		t.Fatal(err)
+	closeStats, resources, err := session.closeWithStableResources()
+	if err != nil {
+		t.Fatalf("close stable session: %v", err)
 	}
-	namespace, err := columnAssetManagerNamespaceForRoot(dir, cfg.AssetManager.Namespace)
+	if resources == nil {
+		t.Fatal("stable session returned nil authority")
+	}
+	if closeStats.FileSyncCount != 1 || closeStats.SyncEpochCount != 1 {
+		resources.Release()
+		t.Fatalf("stable session close stats=%+v want one sync epoch", closeStats)
+	}
+	resources.Release()
+	segmentPath, err := columnAssetSegmentPath(dir, refs[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(columnAssetM12ASegmentFileID))
-	if _, err := os.Stat(segmentPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unsupported stable session exposed segment %q: %v", segmentPath, err)
+	if _, err := os.Stat(segmentPath); err != nil {
+		t.Fatalf("stable session segment %q: %v", segmentPath, err)
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
-		t.Fatalf("unsupported stable session active identities=%d want 0", got)
+		t.Fatalf("released stable session active identities=%d want 0", got)
 	}
 }
 

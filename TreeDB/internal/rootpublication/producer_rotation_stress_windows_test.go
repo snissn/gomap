@@ -3,7 +3,7 @@
 package rootpublication_test
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +21,7 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 		t.Fatal(err)
 	}
 	valuePath := filepath.Join(valueDir, "000001.vlog")
-	valueSuccessor := filepath.Join(valueDir, "000002.vlog")
+	valuePaths := []string{valuePath}
 	valueWriter, err := valuelog.NewWriter(valuePath, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -40,28 +40,36 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 	for i := 0; i < iterations; i++ {
 		seq := uint64(i + 1)
 		if i%2 == 0 {
-			if _, err := valueWriter.Append(0, nil, seq, []byte("unsupported-rotation-stress")); err != nil {
+			if _, err := valueWriter.Append(0, nil, seq, []byte("windows-rotation-stress")); err != nil {
 				t.Fatal(err)
 			}
-			rotation, err := valueWriter.RotateToWithStableResources(valueSuccessor, 2, false,
+			closedID := valueWriter.FileID()
+			activeID := closedID + 1
+			valueSuccessor := filepath.Join(valueDir, fmt.Sprintf("%06d.vlog", activeID))
+			rotation, err := valueWriter.RotateToWithStableResources(valueSuccessor, activeID, false,
 				valuelog.StableResourceRegistration{
-					LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/000001.vlog",
+					LogicalLane: "main", Generation: uint64(closedID), DiagnosticPath: "maindb/value_vlog/" + filepath.Base(valuePaths[len(valuePaths)-1]),
 					Reachability: rootpublication.ReachabilityValueLogPointer,
 				},
 				valuelog.StableResourceRegistration{
-					LogicalLane: "main", Generation: 2, DiagnosticPath: "maindb/value_vlog/000002.vlog",
-					Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: 2,
+					LogicalLane: "main", Generation: uint64(activeID), DiagnosticPath: "maindb/value_vlog/" + filepath.Base(valueSuccessor),
+					Reachability: rootpublication.ReachabilityValueLogPointer, ParentGeneration: uint64(activeID),
 					NamespaceOperation: rootpublication.NamespaceCreate,
 				})
-			if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || rotation != nil {
+			if err != nil {
+				t.Fatalf("value-log rotation %d resources=%v error=%v", seq, rotation, err)
+			}
+			if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
 				if rotation != nil {
 					rotation.Release()
 				}
-				t.Fatalf("value-log rotation %d resources=%v error=%v", seq, rotation, err)
+				t.Fatalf("value-log rotation %d resources=%v want exact closed and active authority", seq, rotation)
 			}
-			if valueWriter.FileID() != 1 {
+			rotation.Release()
+			if valueWriter.FileID() != activeID {
 				t.Fatalf("value-log rotation %d changed active file id=%d", seq, valueWriter.FileID())
 			}
+			valuePaths = append(valuePaths, valueSuccessor)
 		} else {
 			if _, err := commandJournal.AppendCommand(commandEnvelope); err != nil {
 				t.Fatal(err)
@@ -70,15 +78,18 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 			if err != nil {
 				t.Fatalf("command-WAL create-only rotation %d: %v", seq, err)
 			}
+			if rotation == nil || rotation.Closed == nil || rotation.Active == nil {
+				if rotation != nil {
+					rotation.Release()
+				}
+				t.Fatalf("command-WAL rotation %d resources=%v want exact closed and active authority", seq, rotation)
+			}
 			rotation.Release()
 			activePath, _ := commandJournal.ActiveSegmentSnapshot()
 			if activePath == commandPaths[len(commandPaths)-1] {
 				t.Fatalf("command-WAL rotation %d did not advance active path=%q", seq, activePath)
 			}
 			commandPaths = append(commandPaths, activePath)
-		}
-		if _, err := os.Stat(valueSuccessor); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("unsupported value-log rotation %d exposed successor %q: %v", seq, valueSuccessor, err)
 		}
 	}
 
@@ -88,7 +99,7 @@ func TestStableProducerRotationRetryResourcePlateau(t *testing.T) {
 	if err := commandJournal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range append([]string{valuePath}, commandPaths...) {
+	for _, path := range append(valuePaths, commandPaths...) {
 		if err := os.Rename(path, path+".released"); err != nil {
 			t.Fatalf("stable rotation retries leaked a pin for %q: %v", path, err)
 		}

@@ -1215,6 +1215,17 @@ func OpenStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return openStableChildFile(parent, name, flags, perm)
 }
 
+// OpenStableParent captures a directory for later exact-handle child
+// operations. On Windows the handle explicitly shares delete access so a
+// rename/recreate adversary cannot force later child creation through the
+// rebound diagnostic path.
+func OpenStableParent(path string) (*os.File, error) {
+	if path == "" {
+		return nil, fmt.Errorf("%w: stable parent path is empty", ErrUnresolvedResource)
+	}
+	return openStableParent(path)
+}
+
 // RemoveStableChildFile unlinks name relative to the exact already-open parent
 // directory. Callers remain responsible for syncing parent after the unlink.
 func RemoveStableChildFile(parent *os.File, name string) error {

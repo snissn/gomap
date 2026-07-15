@@ -648,7 +648,7 @@ type CommandJournalStableRotation struct {
 }
 
 var newCommandWALStableNamespaceToken = rootpublication.NewStableNamespaceToken
-var openStableCommandWALParent = os.Open
+var openStableCommandWALParent = rootpublication.OpenStableParent
 
 func captureStableCommandWALParent(walDir string, resource *os.File) (*os.File, error) {
 	parent, err := openStableCommandWALParent(walDir)

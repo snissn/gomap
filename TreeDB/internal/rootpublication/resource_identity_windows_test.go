@@ -17,7 +17,7 @@ func TestStableRelativeNamespaceCapabilityRemainsFailClosedWindows(t *testing.T)
 
 func TestOpenStableChildFileUsesExactParentHandleWindows(t *testing.T) {
 	dir := t.TempDir()
-	parent, err := os.Open(dir)
+	parent, err := OpenStableParent(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,26 @@ func TestOpenStableChildFileUsesExactParentHandleWindows(t *testing.T) {
 			_ = missing.Close()
 		}
 		t.Fatalf("missing OpenStableChildFile error=%v want os.ErrNotExist", err)
+	}
+	moved := dir + "-moved"
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatalf("rename exact parent: %v", err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reboundChild, err := OpenStableChildFile(parent, "after-rebind", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("OpenStableChildFile after parent rebind: %v", err)
+	}
+	if err := reboundChild.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "after-rebind")); err != nil {
+		t.Fatalf("exact parent did not receive rebound child: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "after-rebind")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement diagnostic path received child: %v", err)
 	}
 }
 
