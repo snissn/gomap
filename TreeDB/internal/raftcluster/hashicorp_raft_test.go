@@ -27,7 +27,7 @@ import (
 
 func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
-	leader := cluster.waitForLeaderReady(t)
+	leader := cluster.waitForLeader(t)
 
 	entry := testClusterCreateCollectionEntry(t, 7)
 	leaderCtx, leaderCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -80,7 +80,7 @@ func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T
 
 func TestHashicorpRaftProviderReadIndexReturnsProductionProofForLeader(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
-	leader := cluster.waitForLeaderReady(t)
+	leader := cluster.waitForLeader(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -490,7 +490,7 @@ func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *t
 		t.Skip("Raft snapshot rejoin requires durable rename and removal namespaces")
 	}
 	cluster := newHashicorpRaftDBCluster(t)
-	leader := cluster.waitForLeaderReady(t)
+	leader := cluster.waitForLeader(t)
 	lagging := cluster.firstFollower(t, leader.id)
 	healthy := cluster.firstFollowerExcept(t, leader.id, lagging.id)
 	cluster.disconnectNode(t, lagging.id)
@@ -1112,42 +1112,13 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	return conf
 }
 
-func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
-	tb.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		var leader *hashicorpRaftTestNode
-		for _, node := range c.nodes {
-			if node.provider == nil {
-				continue
-			}
-			status, err := node.provider.ClusterAdmissionStatus(context.Background())
-			if err != nil {
-				tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
-			}
-			if status.Leader {
-				if leader != nil {
-					tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
-				}
-				leader = node
-			}
-		}
-		if leader != nil {
-			return leader
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	tb.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
-	return nil
-}
-
-// waitForLeaderReady requires two leader observations in the same live term.
+// waitForLeader requires two leader observations in the same live term.
 // A single Leader admission observation is not sufficient: on slow hosts it
 // can be sampled while the election/current-term no-op is still settling,
 // allowing the next submit or read assertion to race leadership loss. This is
 // a test-harness barrier only; it deliberately does not retry the operation
 // under test.
-func (c *hashicorpRaftTestCluster) waitForLeaderReady(tb testing.TB) *hashicorpRaftTestNode {
+func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
 	tb.Helper()
 	// Opening three durable test nodes can consume most of the old 15-second
 	// budget on a contended Windows runner. Keep failure bounded, but leave
