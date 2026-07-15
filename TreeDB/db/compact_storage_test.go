@@ -160,6 +160,9 @@ func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
 	if err := liveWriter.Close(); err != nil {
 		t.Fatalf("close live writer: %v", err)
 	}
+	if err := d.RegisterValueLogSegment(livePath, liveID); err != nil {
+		t.Fatalf("register live value-log producer: %v", err)
+	}
 	batch := d.NewBatch()
 	ptrBatch, ok := batch.(interface {
 		SetPointer(key []byte, ptr page.ValuePtr) error
@@ -195,6 +198,9 @@ func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
 		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
 	}
@@ -248,6 +254,9 @@ func TestCompactStorageManagerSegmentPostUnlinkCutRequiresRecovery(t *testing.T)
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
 		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
 	}
@@ -302,6 +311,9 @@ func TestCompactStorageKeepsPinnedZombieZeroByteValueLogFiles(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
 	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
 		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
 	}
@@ -371,6 +383,7 @@ func TestCompactStoragePlanMatchesAppliedRewriteScopeForLiveOnlySegments(t *test
 	if err := liveWriter.Close(); err != nil {
 		t.Fatalf("close live writer: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, livePath, liveID)
 
 	batch := d.NewBatch()
 	ptrBatch, ok := batch.(interface {
@@ -865,6 +878,7 @@ func TestCompactStorageRetainsValueLogGCDebtWhileOlderSlotProtectsSegment(t *tes
 	if err := w1.Close(); err != nil {
 		t.Fatalf("close writer 1: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path1, id1)
 
 	path2 := filepath.Join(valueLogDir, "value-l0-000002.log")
 	id2, err := valuelog.EncodeFileID(0, 2)
@@ -883,6 +897,7 @@ func TestCompactStorageRetainsValueLogGCDebtWhileOlderSlotProtectsSegment(t *tes
 	if err := w2.Close(); err != nil {
 		t.Fatalf("close writer 2: %v", err)
 	}
+	registerTestValueLogProducer(t, dir, path2, id2)
 
 	b := db.NewBatch()
 	ptrBatch, ok := b.(interface {

@@ -1482,14 +1482,14 @@ func testStableColumnAppendSessionReturnsCoalescedPinnedAuthority(t *testing.T) 
 		}
 		return contentSyncs, namespaceSyncs
 	}
-	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != 0 || namespaceSyncs != uint64(len(descriptors)) {
-		t.Fatalf("captured sync counts content=%d namespace=%d want 0,%d", contentSyncs, namespaceSyncs, len(descriptors))
+	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != 0 || namespaceSyncs != 1 {
+		t.Fatalf("captured sync counts content=%d namespace=%d want 0,1", contentSyncs, namespaceSyncs)
 	}
 	if err := resources.SyncThrough(); err != nil {
 		t.Fatal(err)
 	}
-	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != uint64(len(descriptors)) || namespaceSyncs != uint64(len(descriptors)) {
-		t.Fatalf("post-SyncThrough attempt counts content=%d namespace=%d want %d,%d", contentSyncs, namespaceSyncs, len(descriptors), len(descriptors))
+	if contentSyncs, namespaceSyncs := resourceSyncCounts(); contentSyncs != uint64(len(descriptors)) || namespaceSyncs != 1 {
+		t.Fatalf("post-SyncThrough attempt counts content=%d namespace=%d want %d,1", contentSyncs, namespaceSyncs, len(descriptors))
 	}
 	if physicalResourceSyncs != 0 {
 		t.Fatalf("post-SyncThrough physical content syncs=%d want 0", physicalResourceSyncs)
@@ -1829,9 +1829,9 @@ func benchmarkStableCentralColumnAppendSessionAuthority(b *testing.B) {
 
 	const descriptorsPerIteration = 3 // column, typed-column, and HNSW resource kinds
 	primeStats, primeResources, primeNamespaceSyncs := appendAndClose(1)
-	if primeStats.FileSyncCount != 1 || primeNamespaceSyncs != descriptorsPerIteration {
+	if primeStats.FileSyncCount != 1 || primeNamespaceSyncs != 1 {
 		primeResources.Release()
-		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content sync and %d descriptor views of one namespace sync", primeStats, primeNamespaceSyncs, descriptorsPerIteration)
+		b.Fatalf("prime close stats=%+v namespace syncs=%d want one content sync and one shared namespace sync", primeStats, primeNamespaceSyncs)
 	}
 	primeResources.Release()
 

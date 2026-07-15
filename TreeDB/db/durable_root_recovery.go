@@ -83,13 +83,32 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		}
 		return candidates[i].slot < candidates[j].slot
 	})
+	conflictingGenerations := make(map[uint64]bool, len(candidates))
+	for i := range candidates {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[i].meta.CommitSeq == candidates[j].meta.CommitSeq && candidates[i].meta != candidates[j].meta {
+				conflictingGenerations[candidates[i].meta.CommitSeq] = true
+			}
+		}
+	}
 	var chosen *durableRootSelectionV1
 	var slotResources [2]*rootpublication.StableResourceSet
 	var slotMetas [2]page.DurableMetaV1
 	var slotRecords [2]rootpublication.DurableRootRecordV1
+	seenGenerations := make(map[uint64]uint64, len(candidates))
 	for _, candidate := range candidates {
+		if conflictingGenerations[candidate.meta.CommitSeq] {
+			reasons[candidate.slot] = fmt.Errorf("conflicting recovery generation: commit %d appears with different roots", candidate.meta.CommitSeq)
+			continue
+		}
 		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest)
 		if err == nil {
+			if priorSlot, duplicate := seenGenerations[selected.Meta.CommitSeq]; duplicate {
+				selected.resources.Release()
+				reasons[candidate.slot] = fmt.Errorf("duplicate recovery generation: commit %d already selected from slot %d", selected.Meta.CommitSeq, priorSlot)
+				continue
+			}
+			seenGenerations[selected.Meta.CommitSeq] = candidate.slot
 			slotResources[candidate.slot] = selected.resources
 			slotMetas[candidate.slot] = selected.Meta
 			slotRecords[candidate.slot] = selected.Record

@@ -548,7 +548,8 @@ type DB struct {
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
 	commandWALFlushPoisoned atomic.Bool
-	// publicationPoisoned is set after an outcome-ambiguous root/meta publish.
+	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
+	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
 	publicationPoisoned              atomic.Bool
 	commandWALStatsMu                sync.Mutex
@@ -607,6 +608,13 @@ type DB struct {
 	commandWALRawBarriers            []*commandWALRawBarrier
 	closing                          atomic.Bool
 }
+
+// These hooks let package tests attach producer-side fixtures to the exact DB
+// handle that owns their value-log manager. Production leaves them nil.
+var (
+	testDBOpenHook  func(*DB) error
+	testDBCloseHook func(*DB)
+)
 
 type valueLogRewriteLiveBytesKey struct {
 	commitSeq  uint64
@@ -1806,6 +1814,12 @@ func Open(opts Options) (*DB, error) {
 		_ = lock.Close()
 		return nil, err
 	}
+	if testDBOpenHook != nil {
+		if err := testDBOpenHook(db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	return db, nil
 }
 
@@ -2574,6 +2588,9 @@ func (db *DB) Close() error {
 
 func (db *DB) closeAfterHooksOnce() error {
 	db.closeTeardownOnce.Do(func() {
+		if testDBCloseHook != nil {
+			testDBCloseHook(db)
+		}
 		db.closeTeardownErr = db.closeAfterHooks()
 	})
 	return db.closeTeardownErr
@@ -2998,12 +3015,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
 	// Every newly reachable external segment must be registered before the
-	// immutable manifest captures its exact identity. This is independent of
-	// whether visible-state installation later needs a manager refresh.
+	// immutable manifest captures its exact identity. Visible-state installation
+	// consumes that bounded registered inventory without a directory scan.
 	if db.valueLogManager != nil {
-		if err := durabilitycut.EmitBasic(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
-			return post, prePublishErr(err)
-		}
 		if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
 			return post, prePublishErr(err)
 		}
@@ -3014,9 +3028,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 					return post, prePublishErr(err)
 				}
 			}
-		}
-		if err := durabilitycut.EmitBasic(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, db.dir); err != nil {
-			return post, prePublishErr(err)
 		}
 	}
 
@@ -3063,7 +3074,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
 	}
-	nextMeta, err = db.executeDurableRootCandidateV1(candidate)
+	nextMeta, err = db.executeDurableRootCandidateWithRetryV1(candidate)
 	if err != nil {
 		return post, err
 	}
@@ -3090,28 +3101,11 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		needRefresh := false
-		if len(touchedValueLogSegments) > 0 {
-			for _, id := range touchedValueLogSegments {
-				if !db.valueLogManager.HasSegment(id) {
-					needRefresh = true
-					break
-				}
-			}
-		}
 		// The exact durable-root closure has already resolved and retained every
-		// reachable external segment. CurrentSetNoRefresh therefore contains the
-		// complete visible set even when a producer omitted its registration
-		// callback; a broad directory scan here would add no safety.
-		if needRefresh {
-			if err := db.valueLogManager.Refresh(); err != nil {
-				db.mu.Unlock()
-				return poisonVisibleInstall(err)
-			}
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		} else {
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		}
+		// reachable external segment, and unresolved producer registrations fail
+		// before the alternate meta is mutated. A broad directory scan here would
+		// add unrelated files rather than strengthen the candidate closure.
+		valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	var leafGenerationView *leafGenerationView
 	if leafManifest != nil {

@@ -303,6 +303,14 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 			if err := db.valueLogManager.MarkZombie(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
 				return stats, err
 			}
+			// A maintenance refresh can discover a previously deleted segment
+			// that was never part of a published ValueLogSet. Such a file has no
+			// Set release to trigger zombie deletion, so attempt the unpinned
+			// removal directly. Snapshot- or identity-pinned files remain marked
+			// zombie and are retried by the manager when their final pin releases.
+			if _, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
+				return stats, err
+			}
 		}
 	}
 

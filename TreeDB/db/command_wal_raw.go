@@ -280,7 +280,7 @@ func (db *DB) finishCommandWALAppendFlush(path commandWALAppendStatsPath, actual
 
 func (db *DB) publicationPoisonedError() error {
 	if db != nil && db.publicationPoisoned.Load() {
-		return fmt.Errorf("%w: root publication outcome is ambiguous; reopen required", ErrRecoveryRequired)
+		return fmt.Errorf("%w: root publication cannot safely progress; reopen required", ErrRecoveryRequired)
 	}
 	return nil
 }
@@ -1739,6 +1739,9 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			ptr, ok := ridMap[entry.RID]
 			if !ok {
 				return fmt.Errorf("%w: %d", ErrCommandWALMissingValueLogRID, entry.RID)
+			}
+			if err := db.registerReplayValueLogPointer(ptr); err != nil {
+				return err
 			}
 			if err := b.SetPointerWithRevision(entry.Key, ptr, revision); err != nil {
 				return err

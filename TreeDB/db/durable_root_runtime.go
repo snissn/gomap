@@ -11,9 +11,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -29,6 +31,8 @@ import (
 type durablePagerSinkV1 struct{ pager *pager.Pager }
 
 var errDurableRootCandidateStale = errors.New("durable-root candidate base changed")
+
+const maxDurableRootPreMetaRetriesV1 = 64
 
 func (sink durablePagerSinkV1) WritePage(pageID uint64, image []byte) error {
 	if sink.pager == nil {
@@ -896,8 +900,16 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 	if recordDigest != candidate.meta.RootRecordDigest {
 		return errors.New("durable-root record digest changed after preparation")
 	}
+	recordOffset := int64(recordPageID) * int64(page.PageSize)
+	indexPath := filepath.Join(db.dir, indexFileName)
+	if err := durabilitycut.EmitRange(durabilitycut.BeforePublicationSealWrite, durabilitycut.ResourceSeal, db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
+		return err
+	}
 	if err := candidate.idx.pager.Write(recordPageID, recordImage); err != nil {
 		return fmt.Errorf("write durable root record: %w", err)
+	}
+	if err := durabilitycut.EmitRange(durabilitycut.AfterPublicationSealWrite, durabilitycut.ResourceSeal, db.dir, indexPath, recordOffset, int64(page.PageSize)); err != nil {
+		return err
 	}
 	candidate.materialized = true
 	return nil
@@ -1058,6 +1070,34 @@ func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandida
 	candidate.release()
 	previousResources.Release()
 	return candidate.next, nil
+}
+
+func (db *DB) executeDurableRootCandidateWithRetryV1(candidate *durableRootPublishCandidateV1) (page.MetaPageBody, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxDurableRootPreMetaRetriesV1; attempt++ {
+		next, err := db.executeDurableRootCandidateV1(candidate)
+		if err == nil || candidate == nil || candidate.metaMutated || db.publicationPoisoned.Load() {
+			return next, err
+		}
+		lastErr = err
+		if attempt+1 < maxDurableRootPreMetaRetriesV1 {
+			if attempt < 4 {
+				runtime.Gosched()
+			} else {
+				shift := attempt - 4
+				if shift > 6 {
+					shift = 6
+				}
+				time.Sleep(time.Duration(1<<shift) * time.Microsecond)
+			}
+		}
+	}
+	// The prior durable slot remains authoritative, but this live allocator has
+	// an immutable COW candidate prepared and cannot safely build another root.
+	// Retain its exact ownership until Close and fail the handle closed instead
+	// of allowing a later allocation to wait forever.
+	db.publicationPoisoned.Store(true)
+	return page.MetaPageBody{}, wrapFinalizeCommitError(errors.Join(lastErr, ErrRecoveryRequired), true)
 }
 
 func sameDurableRootCandidateV1(candidate *durableRootPublishCandidateV1, idx *indexGen, next page.MetaPageBody) bool {
@@ -1500,6 +1540,31 @@ func durableDependencyPathV1(root, relative string) (string, error) {
 	return filepath.Join(root, clean), nil
 }
 
+// durableDependencyPathForKindV1 resolves transitive dictionary/template
+// dependencies against their sibling side-store roots in the public
+// <root>/{maindb,dictdb,templatedb} layout. Other dependencies remain relative
+// to the publishing backend directory. A non-empty sideRoot is used by
+// snapshot restore while its extracted trees still have staging names.
+func durableDependencyPathForKindV1(mainDir, sideRoot string, kind rootpublication.ResourceKind, relative string) (string, error) {
+	root := mainDir
+	sideName := ""
+	switch kind {
+	case rootpublication.ResourceDictionary:
+		sideName = "dictdb"
+	case rootpublication.ResourceTemplate:
+		sideName = "templatedb"
+	}
+	if sideName != "" {
+		if sideRoot == "" && filepath.Base(filepath.Clean(mainDir)) == "maindb" {
+			sideRoot = filepath.Dir(filepath.Clean(mainDir))
+		}
+		if sideRoot != "" {
+			root = filepath.Join(sideRoot, sideName)
+		}
+	}
+	return durableDependencyPathV1(root, relative)
+}
+
 func durableColumnSegmentDigestV1(lane string, fileID uint32) [32]byte {
 	namespace := []byte(lane)
 	raw := make([]byte, 4+len(namespace)+4)
@@ -1618,7 +1683,7 @@ func (db *DB) validateGenericDurableDependencyEntryV1(builder *rootpublication.S
 	if entry.LogicalLane == "" || entry.ResourceID == "" || len(entry.Reachability) == 0 {
 		return fmt.Errorf("%w: durable dependency %q lane=%q resource_id=%q reachability=%d", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath, entry.LogicalLane, entry.ResourceID, len(entry.Reachability))
 	}
-	path, err := durableDependencyPathV1(db.dir, entry.DiagnosticPath)
+	path, err := durableDependencyPathForKindV1(db.dir, "", entry.Kind, entry.DiagnosticPath)
 	if err != nil {
 		return fmt.Errorf("%w: invalid durable dependency path %q", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath)
 	}

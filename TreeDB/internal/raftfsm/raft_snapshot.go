@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -239,6 +240,9 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if header.Manifest.GroupID != f.cluster.GroupID {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot archive group %q does not match FSM group %q", header.Manifest.GroupID, f.cluster.GroupID)
 	}
+	if err := rebindExtractedRaftSnapshotDurableRootsV1(tmpMain, tmpSide, f.cluster.DisableSideStores); err != nil {
+		return codedError(raftentry.ErrorRejectedConflictV1, "rebind extracted snapshot durable roots: %v", err)
+	}
 	if err := f.verifyExtractedRaftSnapshotV1(header.Manifest, tmpMain, tmpSide, tmpApply); err != nil {
 		return err
 	}
@@ -253,7 +257,12 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
 			return err
 		}
-		cleanupSide = false
+	}
+	// Entry-wise installs can change parent directory identities even though
+	// the dependency files themselves retain their handles across rename. Rebind
+	// once more in the final layout before any restored meta is reopened.
+	if err := rebindExtractedRaftSnapshotDurableRootsV1(mainDir, snapshotSideStoreRootV1(mainDir), f.cluster.DisableSideStores); err != nil {
+		return codedError(raftentry.ErrorRejectedConflictV1, "rebind installed snapshot durable roots: %v", err)
 	}
 	if err := replaceSnapshotDirV1(applyDir, tmpApply); err != nil {
 		return err
@@ -263,6 +272,26 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		return err
 	}
 	return f.verifyInstalledSnapshotManifestV1Locked(header.Manifest)
+}
+
+func rebindExtractedRaftSnapshotDurableRootsV1(mainDir, sideDir string, disableSideStores bool) error {
+	if !disableSideStores {
+		// Rebinding a side store atomically replaces its index file. Do that
+		// first so the main manifest captures the side store's final identity.
+		for _, name := range raftSnapshotSideStoreEntriesV1 {
+			dir := filepath.Join(sideDir, name)
+			if _, err := os.Stat(filepath.Join(dir, "index.db")); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return err
+			}
+			if err := backenddb.RebindDurableRootSnapshotV1(dir); err != nil {
+				return fmt.Errorf("side store %s: %w", name, err)
+			}
+		}
+	}
+	return backenddb.RebindDurableRootSnapshotLayoutV1(mainDir, sideDir)
 }
 
 func (f *FSM) requireRaftSnapshotOpenV1() error {
@@ -634,6 +663,9 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 	if !sawApplyFile {
 		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot archive has no Raft apply metadata files")
 	}
+	if err := syncExtractedRaftSnapshotRootsV1(mainDir, sideDir, applyDir); err != nil {
+		return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
+	}
 	return header, nil
 }
 
@@ -695,11 +727,49 @@ func extractRaftSnapshotEntryV1(tr *tar.Reader, header *tar.Header, root, rel st
 			return false, err
 		}
 		_, copyErr := io.Copy(file, tr)
+		syncErr := error(nil)
+		if copyErr == nil {
+			syncErr = rootpublication.SyncStableFile(file)
+		}
 		closeErr := file.Close()
-		return true, errors.Join(copyErr, closeErr)
+		return true, errors.Join(copyErr, syncErr, closeErr)
 	default:
 		return false, fmt.Errorf("raftfsm: unsupported snapshot archive entry type %d for %q", header.Typeflag, header.Name)
 	}
+}
+
+func syncExtractedRaftSnapshotRootsV1(roots ...string) error {
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		directories := make([]string, 0, 16)
+		if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				directories = append(directories, path)
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("raftfsm: inventory extracted snapshot namespaces: %w", err)
+		}
+		// Children must become durable before the name that links them from their
+		// parent. WalkDir is parent-first, so synchronize in reverse order.
+		for index := len(directories) - 1; index >= 0; index-- {
+			dir, err := os.Open(directories[index])
+			if err != nil {
+				return fmt.Errorf("raftfsm: open extracted snapshot namespace %q: %w", directories[index], err)
+			}
+			syncErr := rootpublication.SyncStableNamespace(dir)
+			closeErr := dir.Close()
+			if syncErr != nil || closeErr != nil {
+				return fmt.Errorf("raftfsm: sync extracted snapshot namespace %q: %w", directories[index], errors.Join(syncErr, closeErr))
+			}
+		}
+	}
+	return nil
 }
 
 func sameOrUnderSnapshotDirV1(parent, child string) bool {
@@ -765,7 +835,10 @@ func replaceSnapshotDirV1(dest, src string) error {
 	if err := os.RemoveAll(dest); err != nil {
 		return err
 	}
-	return os.Rename(src, dest)
+	if err := os.Rename(src, dest); err != nil {
+		return err
+	}
+	return syncRaftSnapshotRenameParentsV1(src, dest)
 }
 
 func replaceSnapshotMainDBV1(destMain, srcMain, preserveRoot string) error {
@@ -781,7 +854,10 @@ func replaceSnapshotMainDBV1(destMain, srcMain, preserveRoot string) error {
 	if err := os.RemoveAll(destMain); err != nil {
 		return err
 	}
-	return os.Rename(srcMain, destMain)
+	if err := os.Rename(srcMain, destMain); err != nil {
+		return err
+	}
+	return syncRaftSnapshotRenameParentsV1(srcMain, destMain)
 }
 
 func replaceSnapshotMainDBEntriesV1(destMain, srcMain, preserveRoot string) error {
@@ -818,6 +894,9 @@ func replaceSnapshotMainDBEntriesV1(destMain, srcMain, preserveRoot string) erro
 			return err
 		}
 		if err := os.Rename(src, dest); err != nil {
+			return err
+		}
+		if err := syncRaftSnapshotRenameParentsV1(src, dest); err != nil {
 			return err
 		}
 	}
@@ -860,6 +939,28 @@ func replaceSnapshotSideStoresV1(mainDir, srcSide string) error {
 		}
 		if err := os.Rename(src, dest); err != nil {
 			return err
+		}
+		if err := syncRaftSnapshotRenameParentsV1(src, dest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func syncRaftSnapshotRenameParentsV1(src, dest string) error {
+	parents := []string{filepath.Dir(src)}
+	if destParent := filepath.Dir(dest); filepath.Clean(destParent) != filepath.Clean(parents[0]) {
+		parents = append(parents, destParent)
+	}
+	for _, parent := range parents {
+		dir, err := os.Open(parent)
+		if err != nil {
+			return fmt.Errorf("raftfsm: open snapshot rename parent %q: %w", parent, err)
+		}
+		syncErr := rootpublication.SyncStableNamespace(dir)
+		closeErr := dir.Close()
+		if syncErr != nil || closeErr != nil {
+			return fmt.Errorf("raftfsm: sync snapshot rename parent %q: %w", parent, errors.Join(syncErr, closeErr))
 		}
 	}
 	return nil

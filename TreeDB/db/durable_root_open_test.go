@@ -395,21 +395,13 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 	}
 }
 
-func TestDurableRootPublicationRetainsAndRetriesExactPreMetaCandidate(t *testing.T) {
+func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(t *testing.T) {
 	dir := t.TempDir()
 	database, err := Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	registry := database.valueLogIdentityPins
-	defer func() {
-		if err := database.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if got := registry.ActivePins(); got != 0 {
-			t.Fatalf("identity pins after close=%d, want 0", got)
-		}
-	}()
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 30_000, 1, func(int) []byte {
 		return []byte("retry-owned durable value")
@@ -427,11 +419,11 @@ func TestDurableRootPublicationRetainsAndRetriesExactPreMetaCandidate(t *testing
 	if closeErr := batch.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if !errors.Is(err, errTestWriteMetaFailpoint) || errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("pre-meta publish error=%v, want failpoint without recovery poison", err)
+	if !errors.Is(err, errTestWriteMetaFailpoint) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("pre-meta publish error=%v, want failpoint plus recovery-required after bounded retries", err)
 	}
-	if database.publicationPoisoned.Load() {
-		t.Fatal("pre-meta publication failure poisoned writable handle")
+	if !database.publicationPoisoned.Load() {
+		t.Fatal("pre-meta retry exhaustion did not fail the writable handle closed")
 	}
 	if database.metaPageID != MetaPage0ID || database.currentCommitSeq() != 1 {
 		t.Fatalf("authoritative slot/commit after failure=(%d,%d), want (0,1)", database.metaPageID, database.currentCommitSeq())
@@ -447,25 +439,38 @@ func TestDurableRootPublicationRetainsAndRetriesExactPreMetaCandidate(t *testing
 		t.Fatalf("identity pins while retry pending=%d, want value-log plus index", got)
 	}
 
-	next, err := database.retryPendingDurableRootV1()
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- database.SetSync([]byte("after-retry-exhaustion"), []byte("blocked"))
+	}()
+	select {
+	case retryErr := <-writeDone:
+		if !errors.Is(retryErr, ErrRecoveryRequired) {
+			t.Fatalf("subsequent SetSync error=%v, want ErrRecoveryRequired", retryErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subsequent SetSync blocked behind the retained COW candidate")
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("identity pins after close=%d, want 0", got)
+	}
+
+	reopened, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.CommitSeq != 2 || database.durableRoot.pending != nil || database.durableRoot.slot != MetaPage1ID {
-		t.Fatalf("retried commit/pending/slot=(%d,%v,%d), want (2,nil,1)", next.CommitSeq, database.durableRoot.pending, database.durableRoot.slot)
+	defer reopened.Close()
+	if got, err := reopened.Get([]byte("retry")); err != nil || got != nil {
+		t.Fatalf("failed pre-meta value after reopen=(%q,%v), want absent", got, err)
 	}
-	if got := database.durableCandidateIndexCaptures.Load(); got != 0 {
-		t.Fatalf("durable candidate index captures after retry=%d, want 0", got)
+	if err := reopened.SetSync([]byte("after-reopen"), []byte("progress")); err != nil {
+		t.Fatalf("SetSync after reopen: %v", err)
 	}
-	if got := registry.ActivePins(); got != 1 {
-		t.Fatalf("identity pins after retry=%d, want retained slot value-log pin", got)
-	}
-	meta, err := readDurableMetaSlotV1(database.idx.Load().pager, MetaPage1ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.CommitSeq != 2 {
-		t.Fatalf("retried durable meta commit=%d, want 2", meta.CommitSeq)
+	if got, err := reopened.Get([]byte("after-reopen")); err != nil || string(got) != "progress" {
+		t.Fatalf("value after reopened progress=(%q,%v), want progress", got, err)
 	}
 }
 
@@ -608,6 +613,14 @@ func TestDurableRootPublicationIOReleasesRootSerializationLocks(t *testing.T) {
 				if !tryExclusive(database.commitMu.TryLock, database.commitMu.Unlock) {
 					return fmt.Errorf("commitMu held during %s", stage)
 				}
+				// rootReuseMu is not root-construction serialization. It is the
+				// narrow admission fence that prevents a new reader from capturing
+				// the old visible generation after page reuse has been sampled. It
+				// must remain exclusively held through the matching visible install.
+				if database.rootReuseMu.TryRLock() {
+					database.rootReuseMu.RUnlock()
+					return fmt.Errorf("rootReuseMu admission fence open during %s", stage)
+				}
 				return nil
 			}
 
@@ -617,13 +630,25 @@ func TestDurableRootPublicationIOReleasesRootSerializationLocks(t *testing.T) {
 			var lockErrors []error
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 				switch event.Point {
-				case durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync,
+				case durabilitycut.BeforePublicationSealWrite, durabilitycut.AfterPublicationSealWrite,
+					durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync,
 					durabilitycut.BeforeMetaWrite, durabilitycut.AfterMetaWrite,
 					durabilitycut.BeforeMetaSync, durabilitycut.AfterMetaSync:
 					observedMu.Lock()
 					observed[event.Point]++
 					publicationOrder = append(publicationOrder, event.Point)
-					if event.Point == durabilitycut.BeforeIndexDataSync || event.Point == durabilitycut.BeforeMetaWrite || event.Point == durabilitycut.BeforeMetaSync {
+					if event.Point == durabilitycut.BeforePublicationSealWrite || event.Point == durabilitycut.AfterPublicationSealWrite {
+						if event.Resource != durabilitycut.ResourceSeal {
+							lockErrors = append(lockErrors, fmt.Errorf("publication seal resource=%q, want %q", event.Resource, durabilitycut.ResourceSeal))
+						}
+						if event.Path != filepath.Join(database.dir, indexFileName) {
+							lockErrors = append(lockErrors, fmt.Errorf("publication seal path=%q, want index path", event.Path))
+						}
+						if event.Offset < int64(2*page.PageSize) || event.Offset%int64(page.PageSize) != 0 || event.Length != int64(page.PageSize) {
+							lockErrors = append(lockErrors, fmt.Errorf("publication seal range=(%d,%d), want one aligned non-meta page", event.Offset, event.Length))
+						}
+					}
+					if event.Point == durabilitycut.BeforePublicationSealWrite || event.Point == durabilitycut.BeforeIndexDataSync || event.Point == durabilitycut.BeforeMetaWrite || event.Point == durabilitycut.BeforeMetaSync {
 						if lockErr := checkLocks(string(event.Point)); lockErr != nil {
 							lockErrors = append(lockErrors, lockErr)
 						}
@@ -641,6 +666,7 @@ func TestDurableRootPublicationIOReleasesRootSerializationLocks(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantOrder := []durabilitycut.Point{
+				durabilitycut.BeforePublicationSealWrite, durabilitycut.AfterPublicationSealWrite,
 				durabilitycut.BeforeIndexDataSync, durabilitycut.AfterIndexDataSync,
 				durabilitycut.BeforeMetaWrite, durabilitycut.AfterMetaWrite,
 				durabilitycut.BeforeMetaSync, durabilitycut.AfterMetaSync,

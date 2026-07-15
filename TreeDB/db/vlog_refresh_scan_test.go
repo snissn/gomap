@@ -36,7 +36,7 @@ func writeValueLogSegment(t *testing.T, dir string, lane, seq uint32) (path stri
 	return path, fileID
 }
 
-func TestValueLogGC_RefreshesFullInventoryWhenSetAlreadyPopulated(t *testing.T) {
+func TestValueLogGC_RefreshesFullInventoryAfterBoundedOpen(t *testing.T) {
 	dir := t.TempDir()
 	path1, id1 := writeValueLogSegment(t, dir, 7, 1)
 
@@ -49,8 +49,8 @@ func TestValueLogGC_RefreshesFullInventoryWhenSetAlreadyPopulated(t *testing.T) 
 	if d.valueLogManager == nil {
 		t.Fatalf("missing value log manager")
 	}
-	if !d.valueLogManager.HasSegment(id1) {
-		t.Fatalf("expected segment %d to be registered at open", id1)
+	if d.valueLogManager.HasSegment(id1) {
+		t.Fatalf("bounded open unexpectedly discovered unreferenced segment %d", id1)
 	}
 	// Simulate siblings created outside the open handle after its manager set was
 	// populated. Full GC must discover them; otherwise the older unreferenced
@@ -84,7 +84,7 @@ func TestValueLogGC_RefreshesFullInventoryWhenSetAlreadyPopulated(t *testing.T) 
 	}
 }
 
-func TestValueLogRewritePlan_DoesNotRescanWhenSetAlreadyPopulated(t *testing.T) {
+func TestValueLogRewritePlan_RefreshesEmptyInventoryAfterBoundedOpen(t *testing.T) {
 	dir := t.TempDir()
 	_, _ = writeValueLogSegment(t, dir, 0, 1)
 
@@ -104,7 +104,7 @@ func TestValueLogRewritePlan_DoesNotRescanWhenSetAlreadyPopulated(t *testing.T) 
 		t.Fatalf("ValueLogRewritePlan: %v", err)
 	}
 	after := d.valueLogManager.RefreshScanCount()
-	if after != before {
-		t.Fatalf("ValueLogRewritePlan triggered value-log refresh scan: before=%d after=%d", before, after)
+	if after != before+1 {
+		t.Fatalf("ValueLogRewritePlan refresh scans=%d want exactly one: before=%d after=%d", after-before, before, after)
 	}
 }

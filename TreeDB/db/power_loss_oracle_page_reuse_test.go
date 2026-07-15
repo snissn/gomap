@@ -208,6 +208,11 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 			if err := variant.Model.MaterializeStable(crashDir); err != nil {
 				t.Fatalf("materialize stable-only image: %v", err)
 			}
+			releaseIdentities, err := variant.Model.InstallStableIdentityOverrides(crashDir)
+			if err != nil {
+				t.Fatalf("install stable identity model: %v", err)
+			}
+			defer releaseIdentities()
 			reopenOpts := opts
 			reopenOpts.Dir = crashDir
 			reopenOpts.ReadOnly = true

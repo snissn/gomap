@@ -28,7 +28,7 @@ func duplicateStableFile(*os.File) (*os.File, error) {
 	return nil, ErrStableIdentityUnsupported
 }
 
-func stableIdentityFromFile(*os.File) (StableIdentity, error) {
+func platformStableIdentityFromFile(*os.File) (StableIdentity, error) {
 	return StableIdentity{}, ErrStableIdentityUnsupported
 }
 

@@ -21,11 +21,10 @@
       "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/target-meta-only/index%2Ftarget-meta-generation-2",
       "seed": 13074376135532583911,
       "variant_families": ["synced-only", "target-meta-only", "full-writeback"],
-      "expected_result": "corruption",
-      "observed_result": "corruption",
+      "expected_result": "old-root",
+      "observed_result": "old-root",
       "owner": "#3679",
-      "disposition": "known-counterexample",
-      "known_violation": {"kind": "named-invariant", "invariant": "incomplete-recoverable-root"},
+      "disposition": "resolved",
       "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/target-meta-only/index%2Ftarget-meta-generation-2", "seed": 13074376135532583911}
     },
     {
@@ -37,11 +36,10 @@
       "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001",
       "seed": 18061462608882800384,
       "variant_families": ["one-missing-dependency"],
-      "expected_result": "corruption",
-      "observed_result": "corruption",
+      "expected_result": "old-root",
+      "observed_result": "old-root",
       "owner": "#3679",
-      "disposition": "known-counterexample",
-      "known_violation": {"kind": "named-invariant", "invariant": "incomplete-recoverable-root"},
+      "disposition": "resolved",
       "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/value-log%2Fvalue-log-generation-2-001", "seed": 18061462608882800384}
     },
     {
@@ -53,11 +51,10 @@
       "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001",
       "seed": 15963091334896744730,
       "variant_families": ["one-missing-dependency"],
-      "expected_result": "corruption",
-      "observed_result": "corruption",
+      "expected_result": "old-root",
+      "observed_result": "old-root",
       "owner": "#3679",
-      "disposition": "known-counterexample",
-      "known_violation": {"kind": "named-invariant", "invariant": "incomplete-recoverable-root"},
+      "disposition": "resolved",
       "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleNewMetaMissingClosure", "cut_id": "cut/checkpoint-generation-2/after-meta-write/001", "variant_id": "cut/checkpoint-generation-2/after-meta-write/001/variant/one-missing-dependency/outer-leaf%2Fouter-leaf-generation-2-001", "seed": 15963091334896744730}
     },
     {

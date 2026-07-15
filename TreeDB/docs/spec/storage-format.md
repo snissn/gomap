@@ -479,6 +479,27 @@ page count, contiguous page IDs, per-page checksums, complete-payload digest,
 and deterministic re-encoding. The selected manifest is the exact external
 resource closure that must remain present for that root generation.
 
+Recovery decodes the two physical meta slots independently and attempts
+checksum-valid candidates in descending commit order. Two byte-identical metas
+for the same commit count as one recoverable generation, not two; the second is
+rejected as a mirror so the next normal alternate-slot publication restores a
+distinct fallback. Two different roots claiming the same commit sequence are a
+split-brain format error and both are rejected. Recovery does not rewrite or
+repair either slot while opening.
+
+Raft snapshot installation is the explicit relocation exception. Archive
+extraction recreates external files with target-replica identities, so the
+installer rebinds each side-store index first, then re-encodes the main slots'
+manifests with those final side-store identities. Rebind mutates a synced
+sibling copy of each index and installs it with an atomic rename plus exact
+parent-directory sync only after both rebound metas are stable; a failure
+before that install leaves the original index unchanged. Root-record lineage
+and meta digests are updated, but both distinct generations are preserved. The
+scratch copy is then opened through normal bounded recovery, and any later file
+replacement still fails exact identity validation. An ordinary filesystem copy
+does not perform this rebind and remains unrecoverable when a selected manifest
+binds copied external dependencies.
+
 ### 3.4 Publication order and ownership
 
 One synchronous publication executes in this order:
@@ -493,10 +514,28 @@ One synchronous publication executes in this order:
    generation ownership.
 
 Dependency, index, and meta syncs run outside DB, write, commit, and root-build
-locks. A failure before the target meta is first mutated leaves the prior meta
+locks. The narrow root-reuse admission fence remains exclusively held: it is
+not a root-construction lock, and it prevents a new reader from capturing the
+old visible generation after reuse eligibility has been sampled. The fence is
+released only after the durable root, allocator generation, and visible root
+agree. A failure before the target meta is first mutated leaves the prior meta
 authoritative and retains exact candidate ownership for retry. From the first
 target-meta mutation onward, an error is ambiguous and poisons the live handle;
 the process must reopen and run bounded selection.
+
+The active stable-I/O adapters are explicit and fail closed:
+
+| Platform | Mapped/index file barrier | Namespace barrier | Contract result |
+| --- | --- | --- | --- |
+| Linux | `fdatasync` for pager index publication; `fsync` for general stable files | `fsync` on the retained directory handle | supported when the syscalls succeed |
+| FreeBSD, NetBSD, OpenBSD | aligned `msync(MS_SYNC)`, then `fsync` on the retained file | `fsync` on the retained directory handle | supported when the syscalls succeed |
+| Darwin | aligned `msync(MS_SYNC)`, then `F_FULLFSYNC` on the retained file | `fsync` on the retained directory handle | unsupported errors are typed and fail before activation |
+| Windows | `FlushViewOfFile`, then `FlushFileBuffers` on the retained file | `FlushFileBuffers` on the retained directory handle | unsupported directory or relative-parent semantics fail closed |
+| Other targets | no asserted stable-file primitive | no asserted stable-namespace primitive | typed unsupported result; durable-root activation is rejected |
+
+These are ordering primitives, not evidence that a particular device honored
+volatile-cache persistence. Deterministic oracle events describe the requested
+barriers and the resulting modeled stable image.
 - Required feature validation must fail closed before full `command_wal_v1`
   execution is enabled if a command-WAL directory is opened by code that decodes
   only the 60-byte pre-command-WAL meta body.
@@ -1278,10 +1317,10 @@ revision. A later view wins. Any ambiguous restore or cleanup poisons the live
 handle rather than guessing.
 
 Platforms without a retained-parent relative rename capability fail the
-strict stable operation before creating a temporary file. Ordinary pre-#3679
-TreeDB operation remains on an explicit compatibility replacement path there;
-that path returns no stable token and must not be interpreted as certifying the
-strict namespace durability contract.
+strict stable operation before creating a temporary file. The compatibility
+replacement path returns no stable token; durable-root publication must not
+accept it as certifying the strict namespace durability contract and fails
+closed when that namespace obligation is required.
 
 ### 7.3 Typed Asset Manager, TCPA Typed-Row Assets, and Typed-Column Parts
 
@@ -2358,14 +2397,14 @@ reconcile cached split value-log writers after backend maintenance so later
 writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
 reusing segment file names.
 
-# Freelist Generation V1 (standalone, not yet an active DB meta format)
+# Freelist Generation V1 (active durable-root allocator format)
 
-`TreeDB/freelist.FreelistGenerationV1` is the standalone immutable allocator
-view for the upcoming two-meta recovery path. It is encoded as 4096-byte pager
+`TreeDB/freelist.FreelistGenerationV1` is the immutable allocator view bound by
+the active two-meta durable-root recovery path. It is encoded as 4096-byte pager
 pages using the normal page header and CRC32 convention. Page types `0x05`
 through `0x08` are reserved for the generation header, radix index, state
-chunk, and candidate reservation record. They are not referenced by production
-metas until the atomic activation owned by #3679.
+chunk, and candidate reservation record. `DurableRootRecordV1` binds the exact
+generation header identity, counts, high-water boundary, and digest.
 
 The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
 index page contains up to 16 ordered child summaries: page identity, child CRC,

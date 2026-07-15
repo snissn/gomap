@@ -50,7 +50,7 @@ func powerLossOptions(dir string) treedb.Options {
 	}
 }
 
-func seedPowerLossImage(t *testing.T) (*powerlossoracle.Model, treedb.Options) {
+func seedPowerLossImage(t *testing.T) (*powerlossoracle.Model, treedb.Options, uint64) {
 	t.Helper()
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
@@ -66,6 +66,7 @@ func seedPowerLossImage(t *testing.T) (*powerlossoracle.Model, treedb.Options) {
 		_ = db.Close()
 		t.Fatalf("Checkpoint seed: %v", err)
 	}
+	baseSequence := publicCommitSequence(t, db)
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close seed: %v", err)
 	}
@@ -73,7 +74,7 @@ func seedPowerLossImage(t *testing.T) (*powerlossoracle.Model, treedb.Options) {
 	if err != nil {
 		t.Fatalf("Capture seed: %v", err)
 	}
-	return model, opts
+	return model, opts, baseSequence
 }
 
 func requirePublicReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, readOnly bool) powerlossreopen.Result {
@@ -382,20 +383,31 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		t.Fatalf("seed Checkpoint: %v", err)
 	}
 	baseSequence := publicCommitSequence(t, db)
-	base, err := powerlossoracle.Capture(dir)
+	baseline, err := powerlossoracle.Capture(dir)
 	if err != nil {
 		t.Fatalf("capture stable baseline: %v", err)
 	}
+	observed := baseline.Clone()
 	cutErr := errors.New("power-loss-oracle: stop after actual meta write")
 	var snapshot *powerlossoracle.Model
+	var actualSnapshot *powerlossoracle.Model
 	var meta durabilitycut.Event
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if err := base.Observe(dir, event); err != nil {
+		if err := observed.Observe(dir, event); err != nil {
 			return err
 		}
 		if event.Point == durabilitycut.AfterMetaWrite {
 			meta = event
-			snapshot = base.Clone()
+			actualSnapshot = observed.Clone()
+			// Retain a regression image with the new process-visible generation
+			// overlaid on the old stable baseline. Production has already synced
+			// dependencies and index pages at this point; this independent model
+			// keeps the historical selective-writeback variants replayable so the
+			// recovery selector must continue falling back safely.
+			snapshot = baseline.Clone()
+			if err := snapshot.Overlay(dir); err != nil {
+				return err
+			}
 			return cutErr
 		}
 		return nil
@@ -409,7 +421,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	}
 	err = db.Checkpoint()
 	restore()
-	if !errors.Is(err, cutErr) || snapshot == nil {
+	if !errors.Is(err, cutErr) || snapshot == nil || actualSnapshot == nil {
 		t.Fatalf("actual relaxed finalize did not stop at AfterMetaWrite: err=%v", err)
 	}
 	_ = db.Close()
@@ -417,37 +429,47 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	actualChanged, err := actualSnapshot.ChangedRanges(relIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actualChanged) == 0 {
+		t.Fatal("actual relaxed finalize changed no index bytes")
+	}
+	metaEnd := meta.Offset + meta.Length
+	splitMetaRanges := func(changed []powerlossoracle.ByteRange) (metaChanged, indexChanged []powerlossoracle.ByteRange) {
+		for _, r := range changed {
+			start, end := r.Offset, r.Offset+r.Length
+			if start < meta.Offset {
+				beforeEnd := min(end, meta.Offset)
+				if beforeEnd > start {
+					indexChanged = append(indexChanged, powerlossoracle.ByteRange{Offset: start, Length: beforeEnd - start})
+				}
+			}
+			insideStart, insideEnd := max(start, meta.Offset), min(end, metaEnd)
+			if insideEnd > insideStart {
+				metaChanged = append(metaChanged, powerlossoracle.ByteRange{Offset: insideStart, Length: insideEnd - insideStart})
+			}
+			if end > metaEnd {
+				afterStart := max(start, metaEnd)
+				if end > afterStart {
+					indexChanged = append(indexChanged, powerlossoracle.ByteRange{Offset: afterStart, Length: end - afterStart})
+				}
+			}
+		}
+		return metaChanged, indexChanged
+	}
+	actualMetaChanged, actualIndexChanged := splitMetaRanges(actualChanged)
+	if len(actualMetaChanged) == 0 || len(actualIndexChanged) != 0 {
+		t.Fatalf("actual ordered cut must leave only target-meta bytes dirty: meta=%v index=%v", actualMetaChanged, actualIndexChanged)
+	}
 	changed, err := snapshot.ChangedRanges(relIndex)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changed) == 0 {
-		t.Fatal("actual relaxed finalize changed no index bytes")
-	}
-	metaEnd := meta.Offset + meta.Length
-	metaChanged := make([]powerlossoracle.ByteRange, 0)
-	indexChanged := make([]powerlossoracle.ByteRange, 0, len(changed))
-	for _, r := range changed {
-		start, end := r.Offset, r.Offset+r.Length
-		if start < meta.Offset {
-			beforeEnd := min(end, meta.Offset)
-			if beforeEnd > start {
-				indexChanged = append(indexChanged, powerlossoracle.ByteRange{Offset: start, Length: beforeEnd - start})
-			}
-		}
-		insideStart, insideEnd := max(start, meta.Offset), min(end, metaEnd)
-		if insideEnd > insideStart {
-			metaChanged = append(metaChanged, powerlossoracle.ByteRange{Offset: insideStart, Length: insideEnd - insideStart})
-		}
-		if end > metaEnd {
-			afterStart := max(start, metaEnd)
-			if end > afterStart {
-				indexChanged = append(indexChanged, powerlossoracle.ByteRange{Offset: afterStart, Length: end - afterStart})
-			}
-		}
-	}
+	metaChanged, indexChanged := splitMetaRanges(changed)
 	if len(metaChanged) == 0 || len(indexChanged) == 0 {
-		t.Fatalf("actual cut did not separate meta and index changes: meta=%v index=%v", metaChanged, indexChanged)
+		t.Fatalf("adversarial replay model did not separate meta and index changes: meta=%v index=%v", metaChanged, indexChanged)
 	}
 
 	stablePaths := make(map[string]bool)
@@ -519,8 +541,8 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantOneMissingDependency, powerlossoracle.VariantFullWriteback, powerlossoracle.VariantTornFormat},
 		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 			powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
-			powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedCorruption,
-			powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedCorruption,
+			powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedOldRoot,
 			powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
 			powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
 			powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
@@ -569,22 +591,11 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 			}
 			if missing != "" {
 				validated[missing] = true
-				dependencyPaths := make([]string, 0)
-				for _, path := range variant.Model.VolatilePaths() {
-					slashed := filepath.ToSlash(path)
-					if strings.Contains(slashed, "value_vlog/") || strings.Contains(slashed, "leaf_vlog/") {
-						dependencyPaths = append(dependencyPaths, filepath.Join(dir, filepath.FromSlash(path)))
-					}
+				if result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
+					t.Fatalf("%s-incomplete image selected state=(commit=%d applied=%d) want old=(%d,0)", missing, result.CommitSeq, result.AppliedLSN, baseSequence)
 				}
-				newResources, err := observedPowerLossClosure(variant.Model, dir, meta.Path, dependencyPaths, true, 0, false)
-				if err != nil {
-					t.Fatalf("derive actual %s closure: %v", missing, err)
-				}
-				scenario := powerlossoracle.Scenario{Name: "actual-new-meta-missing-" + string(missing), Cut: powerlossoracle.AfterMetaWrite, LatestSealedSequence: baseSequence + 1, SelectedSequence: result.CommitSeq, OpenedSequence: result.CommitSeq, OpenedAppliedLSN: result.AppliedLSN, ReopenAttempted: true, Generations: []powerlossoracle.Generation{{Sequence: baseSequence, Recoverable: true, Resources: completePowerLossClosure("old")}, {Sequence: baseSequence + 1, Recoverable: true, Resources: newResources}}}
-				if err := powerlossoracle.RequireViolation(scenario.Validate(), powerlossoracle.InvariantIncompleteRecoverableRoot); err != nil {
-					t.Fatalf("actual %s image %s seed=%d did not produce named diagnosis: %v", missing, variant.ID, variant.Seed, err)
-				}
-				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedCorruption, NamedInvariant: powerlossoracle.InvariantIncompleteRecoverableRoot}, bound)
+				requirePowerLossPointerFixtureState(t, reopened, false)
+				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 				return
 			}
 			stable, getErr := reopened.Get([]byte("stable/old"))
@@ -617,7 +628,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 }
 
 func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
-	model, opts := seedPowerLossImage(t)
+	model, opts, baseSequence := seedPowerLossImage(t)
 	const path = "adversarial-namespace/new-dependency.bin"
 	if err := model.Create(path, []byte("new dependency bytes")); err != nil {
 		t.Fatal(err)
@@ -661,8 +672,8 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 			if result.Rejected {
 				t.Fatalf("public Open rejected old-root namespace image: %v", result.Err)
 			}
-			if result.CommitSeq != 1 || result.AppliedLSN != 0 {
-				t.Fatalf("namespace old-root state=(commit=%d applied=%d) want=(1,0)", result.CommitSeq, result.AppliedLSN)
+			if result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
+				t.Fatalf("namespace old-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence)
 			}
 			stablePaths := variant.Model.StablePaths()
 			position := sort.SearchStrings(stablePaths, path)
@@ -764,8 +775,8 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantOneMissingDependency, powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData, powerlossoracle.VariantFullWriteback, powerlossoracle.VariantTornFormat},
 			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 				powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
-				powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedCorruption,
-				powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedCorruption,
+				powerlossoracle.VariantTargetMetaOnly:       powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantOneMissingDependency: powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantDataWithoutNamespace: powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantNamespaceWithoutData: powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
@@ -813,14 +824,14 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		},
 		{
 			ID:               "older-meta-live-page-reuse",
-			Point:            powerlossoracle.AfterMetaWrite,
+			Point:            powerlossoracle.BeforeIndexDataSync,
 			Occurrence:       1,
 			Model:            model,
 			OldPageWrites:    []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "first-reused-old-live-page", Path: "maindb/reuse.db"}},
 			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantOldPageReuse},
 			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 				powerlossoracle.VariantSyncedOnly:   powerlossoracle.ExpectedOldRoot,
-				powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedCorruption,
+				powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedOldRoot,
 			},
 		},
 	}
@@ -848,6 +859,7 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseSequence := publicCommitSequence(t, db)
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -942,8 +954,8 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 				if got, getErr := reopened.Get([]byte("rid/missing")); getErr != nil || len(got) != 0 {
 					t.Fatalf("synced old root exposed missing-RID write: value=%q err=%v", got, getErr)
 				}
-				if result.CommitSeq != 0 || result.AppliedLSN != 0 {
-					t.Fatalf("synced old-root state=(commit=%d applied=%d) want=(0,0)", result.CommitSeq, result.AppliedLSN)
+				if result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
+					t.Fatalf("synced old-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence)
 				}
 				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 				return
@@ -962,7 +974,7 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 				t.Fatal("successful public Open returned no DB")
 			}
 			got, getErr := reopened.Get([]byte("rid/missing"))
-			if getErr == nil && len(got) == 0 && result.CommitSeq == 0 && result.AppliedLSN < appendedLSN {
+			if getErr == nil && len(got) == 0 && result.CommitSeq == baseSequence && result.AppliedLSN < appendedLSN {
 				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedSuffixDiscard}, bound)
 				return
 			}
@@ -1012,6 +1024,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	baseSequence := publicCommitSequence(t, db)
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -1093,8 +1106,8 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 				if got, getErr := reopened.Get([]byte("chunk/000")); getErr != nil || len(got) != 0 {
 					t.Fatalf("synced old root exposed chunk key: value=%q err=%v", got, getErr)
 				}
-				if result.CommitSeq != 1 || result.AppliedLSN != 0 {
-					t.Fatalf("synced old-root state=(commit=%d applied=%d) want=(1,0)", result.CommitSeq, result.AppliedLSN)
+				if result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
+					t.Fatalf("synced old-root state=(commit=%d applied=%d) want=(%d,0)", result.CommitSeq, result.AppliedLSN, baseSequence)
 				}
 				requirePowerLossObservation(t, variant, powerlossoracle.VariantObservation{Opened: true, Result: powerlossoracle.ExpectedOldRoot}, bound)
 				return

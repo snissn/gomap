@@ -895,7 +895,7 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 	if syncErr == nil && syncFile {
 		if syncTarget == nil {
 			syncErr = errors.New("pager: sync file unavailable")
-		} else if err := syncTarget.Sync(); err != nil {
+		} else if err := syncPageFile(syncTarget); err != nil {
 			syncErr = err
 		} else {
 			p.durableFileSize.Store(int64(len(p.chunks)) * p.chunkSize)
@@ -983,7 +983,9 @@ func planSyncPageRanges(pageIDs []uint64, pageIDBase, pageCount uint64, chunkSiz
 // SyncPages durably synchronizes the named pages. Platforms that require an
 // explicit mapped-view flush receive granularity-aligned ranges before the
 // final file data-sync boundary. Linux fdatasync includes file-size metadata
-// needed to retrieve appended pages; other platforms retain os.File.Sync.
+// needed to retrieve appended pages; Darwin uses F_FULLFSYNC and Windows uses
+// FlushFileBuffers after its mapped-view flush. Unsupported adapters fail
+// closed.
 // This method never promises that only the named bytes reach stable storage
 // and deliberately leaves dirtyChunks unchanged so ordinary commit bookkeeping
 // remains exact.

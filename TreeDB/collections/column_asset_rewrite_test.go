@@ -502,8 +502,8 @@ func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
 				t.Fatalf("copy cycle %d: %v", cycle, err)
 			}
 			defer remap.releaseStableResources()
-			if remap.stableSegments != 1 || remap.stableDescriptors != 2 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != uint64(remap.stableDescriptors) || remap.stablePinHighWater != remap.stableDescriptors {
-				t.Fatalf("copy cycle %d stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want 1,2,1,2,2", cycle, remap.stableSegments, remap.stableDescriptors, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
+			if remap.stableSegments != 1 || remap.stableDescriptors != 2 || remap.stableContentSyncs != 1 || remap.stableNamespaceSyncs != 1 || remap.stablePinHighWater != remap.stableDescriptors {
+				t.Fatalf("copy cycle %d stable counters segments=%d descriptors=%d content_syncs=%d namespace_syncs=%d pin_high_water=%d want 1,2,1,1,2", cycle, remap.stableSegments, remap.stableDescriptors, remap.stableContentSyncs, remap.stableNamespaceSyncs, remap.stablePinHighWater)
 			}
 			if got := len(remap.stableResources.Descriptors()); got != 2 {
 				t.Fatalf("copy cycle %d descriptors=%d want 2", cycle, got)

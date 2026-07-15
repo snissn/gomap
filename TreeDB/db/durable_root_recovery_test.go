@@ -89,9 +89,10 @@ func TestDurableRootPublicationRejectsUnregisteredCanonicalValueLogPath(t *testi
 	}
 	defer database.Close()
 
-	ptr := appendPointersInNewSegment(t, dir, 0, 1, 1, 1, func(int) []byte {
+	ptrs, _, _ := appendPointersInUnregisteredNewSegment(t, dir, 0, 1, 1, 1, func(int) []byte {
 		return bytes.Repeat([]byte("producer-owned|"), 32)
-	})[0]
+	})
+	ptr := ptrs[0]
 	batch := database.NewBatch().(*Batch)
 	if err := batch.SetPointer([]byte("key"), ptr); err != nil {
 		t.Fatalf("set pointer: %v", err)
@@ -167,6 +168,13 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	if err != nil {
 		t.Fatal(err)
 	}
+	rootIDs := make([]uint64, 2)
+	for i := range rootIDs {
+		rootIDs[i], err = txn.Allocate(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	var manifestPageID uint64
 	for pageIndex := uint32(0); pageIndex < manifest.PageCount(); pageIndex++ {
 		pageID, err := txn.Allocate(0)
@@ -189,13 +197,22 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, rootID := range rootIDs {
+		image := make([]byte, page.PageSize)
+		builder := node.NewBuilder(image, page.PageTypeLeaf)
+		builder.SetPageID(rootID)
+		builder.Finish()
+		if err := fixture.store.WritePage(rootID, image); err != nil {
+			t.Fatal(err)
+		}
+	}
 	manifestRef, err := manifest.Materialize(manifestPageID, fixture.store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	record := rootpublication.DurableRootRecordV1{
 		CommitSeq: commitSeq, DurableSeq: commitSeq,
-		UserRootPageID: 2, SystemRootPageID: 3,
+		UserRootPageID: rootIDs[0], SystemRootPageID: rootIDs[1],
 		TotalPages: candidate.Generation().HighWater(), AppliedCommandLSN: fixture.appliedCommandLSN,
 		Freelist: candidate.GenerationRef(), FreelistFreeCount: candidate.Generation().FreeCount(),
 		FreelistRetiredCount: candidate.Generation().RetiredCount(), Manifest: manifestRef,
@@ -251,17 +268,22 @@ func rewriteDurableRootFixtureRecordV1(t testing.TB, fixture *durableRootFixture
 	if err != nil {
 		t.Fatal(err)
 	}
+	writeDurableRootFixtureMetaV1(t, fixture, selected.Slot, meta)
+	selected.Meta = meta
+	selected.Record = record
+	return selected
+}
+
+func writeDurableRootFixtureMetaV1(t testing.TB, fixture *durableRootFixtureV1, slot uint64, meta page.DurableMetaV1) {
+	t.Helper()
 	metaImage := make([]byte, page.PageSize)
 	if err := meta.Encode(metaImage[page.PageHeaderSize:]); err != nil {
 		t.Fatal(err)
 	}
-	header := page.PageHeader{PageID: selected.Slot, Flags: uint16(page.PageTypeMeta)}
+	header := page.PageHeader{PageID: slot, Flags: uint16(page.PageTypeMeta)}
 	header.Encode(metaImage)
 	page.UpdateChecksum(metaImage)
-	fixture.store.Pages[selected.Slot] = append([]byte(nil), metaImage...)
-	selected.Meta = meta
-	selected.Record = record
-	return selected
+	fixture.store.Pages[slot] = append([]byte(nil), metaImage...)
 }
 
 func TestSelectDurableRootV1RejectsNewestBrokenParentLineageAndFallsBack(t *testing.T) {
@@ -293,6 +315,37 @@ func TestSelectDurableRootV1RejectsNewestAppliedCommandWALRegressionAndFallsBack
 	}
 	if selected.Slot != older.Slot || selected.Meta.CommitSeq != older.Meta.CommitSeq {
 		t.Fatalf("selected slot/commit=(%d,%d), want older (%d,%d)", selected.Slot, selected.Meta.CommitSeq, older.Slot, older.Meta.CommitSeq)
+	}
+}
+
+func TestSelectDurableRootV1TreatsMirroredMetasAsOneRecoveryGeneration(t *testing.T) {
+	fixture := newDurableRootFixtureV1(t)
+	_ = fixture.addCandidate(t, MetaPage0ID)
+	newer := fixture.addCandidate(t, MetaPage1ID)
+	writeDurableRootFixtureMetaV1(t, fixture, MetaPage0ID, newer.Meta)
+
+	selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Slot != MetaPage0ID || selected.SlotCommits != [2]uint64{newer.Meta.CommitSeq, 0} {
+		t.Fatalf("mirrored selection slot/commits=(%d,%v), want (0,[%d 0])", selected.Slot, selected.SlotCommits, newer.Meta.CommitSeq)
+	}
+}
+
+func TestSelectDurableRootV1RejectsConflictingRootsAtSameCommit(t *testing.T) {
+	fixture := newDurableRootFixtureV1(t)
+	older := fixture.addCandidate(t, MetaPage0ID)
+	newer := fixture.addCandidate(t, MetaPage1ID)
+	conflict, err := page.NewDurableMetaV1(older.Meta.CommitSeq, older.Meta.DurableSeq, newer.Meta.RootRecordPageID, newer.Meta.RootRecordDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDurableRootFixtureMetaV1(t, fixture, MetaPage1ID, conflict)
+
+	_, err = selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+	if !errors.Is(err, ErrNoRecoverableMeta) || !strings.Contains(err.Error(), "conflicting recovery generation") {
+		t.Fatalf("conflicting same-commit roots error=%v, want stable no-recoverable conflict", err)
 	}
 }
 
@@ -436,18 +489,51 @@ func TestSelectDurableRootV1ValidatesExactExternalRangesAndFallsBack(t *testing.
 	}
 }
 
-func TestSelectDurableRootV1FallsBackWhenNewestManifestIsMissing(t *testing.T) {
-	fixture := newDurableRootFixtureV1(t)
-	older := fixture.addCandidate(t, MetaPage0ID)
-	newer := fixture.addCandidate(t, MetaPage1ID)
-	delete(fixture.store.Pages, newer.Record.Manifest.FirstPageID)
-
-	selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
-	if err != nil {
-		t.Fatal(err)
+func TestSelectDurableRootV1FallsBackForEveryNewestBoundedComponentFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*durableRootFixtureV1, durableRootSelectionV1)
+	}{
+		{name: "root-record-missing", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			delete(f.store.Pages, newest.Meta.RootRecordPageID)
+		}},
+		{name: "root-record-truncated", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			f.store.Pages[newest.Meta.RootRecordPageID] = append([]byte(nil), f.store.Pages[newest.Meta.RootRecordPageID][:page.PageSize/2]...)
+		}},
+		{name: "manifest-missing", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			delete(f.store.Pages, newest.Record.Manifest.FirstPageID)
+		}},
+		{name: "manifest-truncated", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			f.store.Pages[newest.Record.Manifest.FirstPageID] = append([]byte(nil), f.store.Pages[newest.Record.Manifest.FirstPageID][:page.PageSize/2]...)
+		}},
+		{name: "root-page-missing", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			delete(f.store.Pages, newest.Record.UserRootPageID)
+		}},
+		{name: "root-page-truncated", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			f.store.Pages[newest.Record.UserRootPageID] = append([]byte(nil), f.store.Pages[newest.Record.UserRootPageID][:page.PageSize/2]...)
+		}},
+		{name: "freelist-generation-missing", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			delete(f.store.Pages, newest.Record.Freelist.HeaderPageID)
+		}},
+		{name: "freelist-generation-truncated", mutate: func(f *durableRootFixtureV1, newest durableRootSelectionV1) {
+			f.store.Pages[newest.Record.Freelist.HeaderPageID] = append([]byte(nil), f.store.Pages[newest.Record.Freelist.HeaderPageID][:page.PageSize/2]...)
+		}},
 	}
-	if selected.Slot != older.Slot || selected.Meta.CommitSeq != older.Meta.CommitSeq {
-		t.Fatalf("selected slot/commit=(%d,%d), want (%d,%d)", selected.Slot, selected.Meta.CommitSeq, older.Slot, older.Meta.CommitSeq)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDurableRootFixtureV1(t)
+			older := fixture.addCandidate(t, MetaPage0ID)
+			newer := fixture.addCandidate(t, MetaPage1ID)
+			test.mutate(fixture, newer)
+
+			selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selected.Slot != older.Slot || selected.Meta.CommitSeq != older.Meta.CommitSeq {
+				t.Fatalf("selected slot/commit=(%d,%d), want (%d,%d)", selected.Slot, selected.Meta.CommitSeq, older.Slot, older.Meta.CommitSeq)
+			}
+		})
 	}
 }
 

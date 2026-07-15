@@ -66,7 +66,7 @@ func duplicateStableFile(file *os.File) (*os.File, error) {
 	return os.NewFile(uintptr(fd), file.Name()+"#stable-pin"), nil
 }
 
-func stableIdentityFromFile(file *os.File) (StableIdentity, error) {
+func platformStableIdentityFromFile(file *os.File) (StableIdentity, error) {
 	if file == nil {
 		return StableIdentity{}, os.ErrInvalid
 	}

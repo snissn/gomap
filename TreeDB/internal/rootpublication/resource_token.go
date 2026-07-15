@@ -13,10 +13,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 var (
 	ErrStableIdentityUnsupported       = errors.New("stable resource identity unsupported")
+	ErrFilePersistenceUnsupported      = stableio.ErrFilePersistenceUnsupported
 	ErrNamespacePersistenceUnsupported = errors.New("namespace persistence unsupported")
 	ErrNamespaceUnstable               = errors.New("stable resource namespace unresolved")
 	ErrFrontierBeyondResource          = errors.New("stable resource frontier beyond file length")
@@ -520,7 +523,7 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 	}
 	syncThrough := spec.SyncThrough
 	if syncThrough == nil {
-		syncThrough = func(file *os.File, _ DurableFrontier) error { return file.Sync() }
+		syncThrough = func(file *os.File, _ DurableFrontier) error { return stableio.SyncFile(file) }
 	}
 	token := &StableResourceToken{
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
@@ -807,6 +810,15 @@ func (nativeNamespaceAdapter) ValidateIdentity(parent *os.File, identity StableI
 func (nativeNamespaceAdapter) Sync(file *os.File) error {
 	return syncStableNamespace(file)
 }
+
+// SyncStableFile executes the platform's physical file durability barrier.
+// Unsupported or weaker-only platforms fail closed with
+// ErrFilePersistenceUnsupported.
+func SyncStableFile(file *os.File) error { return stableio.SyncFile(file) }
+
+// SyncStableNamespace executes the platform's exact directory/namespace
+// durability barrier. Unsupported platforms fail closed.
+func SyncStableNamespace(parent *os.File) error { return syncStableNamespace(parent) }
 
 type StableNamespaceSpec struct {
 	Parent           *os.File

@@ -1114,6 +1114,7 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 	set.mu.Lock()
 	defer set.mu.Unlock()
 	byKind := make(map[ResourceKind]*ResourceKindStats)
+	seenNamespaces := make(map[*StableNamespaceToken]struct{})
 	for _, entry := range set.entries {
 		token := activeEntryToken(entry)
 		if token == nil {
@@ -1139,9 +1140,12 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 		stats.PhysicalFileSyncs += token.metrics.physicalFileSyncs.Load()
 		stats.PhysicalFileSyncDuration += time.Duration(token.metrics.physicalFileSyncNanos.Load())
 		if token.namespace != nil {
-			syncs, duration := token.namespace.physicalSyncStats()
-			stats.NamespaceSyncs += syncs
-			stats.NamespaceSyncDuration += duration
+			if _, seen := seenNamespaces[token.namespace]; !seen {
+				seenNamespaces[token.namespace] = struct{}{}
+				syncs, duration := token.namespace.physicalSyncStats()
+				stats.NamespaceSyncs += syncs
+				stats.NamespaceSyncDuration += duration
+			}
 		}
 		active := false
 		if len(entry.pins) == 0 {
