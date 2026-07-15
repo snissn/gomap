@@ -279,6 +279,34 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 	}
 }
 
+// releasePhysicalThrough releases physical resources that have already crossed
+// the unlink preparation durability barrier, while retaining their logical LSN
+// debt entries until the corresponding segment unlink completes.
+func (debt *CommandWALDependencyDebt) releasePhysicalThrough(lsn uint64) {
+	if debt == nil || lsn == 0 {
+		return
+	}
+	debt.mu.Lock()
+	var resources []*rootpublication.StableResourceSet
+	var rotationFiles []*rootpublication.StableResourceToken
+	for i := range debt.entries {
+		if debt.entries[i].firstLSN > lsn {
+			break
+		}
+		resources = append(resources, debt.entries[i].resources...)
+		rotationFiles = append(rotationFiles, debt.entries[i].rotationFiles...)
+		debt.entries[i].resources = nil
+		debt.entries[i].rotationFiles = nil
+	}
+	debt.mu.Unlock()
+	for _, resource := range resources {
+		resource.Release()
+	}
+	for _, token := range rotationFiles {
+		token.Release()
+	}
+}
+
 func (debt *CommandWALDependencyDebt) releaseAll() {
 	if debt == nil {
 		return

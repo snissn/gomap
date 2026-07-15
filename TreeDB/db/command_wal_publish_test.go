@@ -1001,14 +1001,60 @@ func TestCommandWALCheckpointCleanupReleasesCoveredDebtBeforeUnlink(t *testing.T
 			}
 			t.Cleanup(db.commandWALDebt.releaseAll)
 
+			wantErr := errors.New("injected pre-unlink cut")
+			restoreFailure := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == durabilitycut.BeforeWALOrAssetUnlink && filepath.Base(event.Path) == "commit-l0-000001.log" {
+					return wantErr
+				}
+				return nil
+			})
+			err = db.CleanupCommandWALCoveredSegments(sync)
+			restoreFailure()
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("CleanupCommandWALCoveredSegments pre-unlink error=%v, want %v", err, wantErr)
+			}
+			if coveredReleased || coveredResourceReleased || laterReleased {
+				t.Fatalf("pre-unlink failure released debt: rotation=%t resource=%t later=%t", coveredReleased, coveredResourceReleased, laterReleased)
+			}
+			db.commandWALDebt.mu.Lock()
+			pendingAfterFailure := len(db.commandWALDebt.entries)
+			db.commandWALDebt.mu.Unlock()
+			if pendingAfterFailure != 2 {
+				t.Fatalf("pending debt entries after pre-unlink failure=%d, want 2", pendingAfterFailure)
+			}
+
+			wantRemoveErr := errors.New("injected segment remove failure")
+			originalRemove := removeCommandWALSegmentFn
+			removeCommandWALSegmentFn = func(path string) error {
+				if filepath.Base(path) == "commit-l0-000001.log" {
+					if !coveredReleased || !coveredResourceReleased {
+						t.Errorf("remove failure saw covered pins rotation=%t resource=%t, want released", coveredReleased, coveredResourceReleased)
+					}
+					if laterReleased {
+						t.Error("remove failure released later command-WAL debt")
+					}
+					return wantRemoveErr
+				}
+				return originalRemove(path)
+			}
+			err = db.CleanupCommandWALCoveredSegments(sync)
+			removeCommandWALSegmentFn = originalRemove
+			if !errors.Is(err, wantRemoveErr) {
+				t.Fatalf("CleanupCommandWALCoveredSegments remove error=%v, want %v", err, wantRemoveErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); statErr != nil {
+				t.Fatalf("covered segment stat after injected remove failure=%v, want present", statErr)
+			}
+			db.commandWALDebt.mu.Lock()
+			pendingAfterRemoveFailure := len(db.commandWALDebt.entries)
+			coveredPhysicalReleased := len(db.commandWALDebt.entries[0].resources) == 0 && len(db.commandWALDebt.entries[0].rotationFiles) == 0
+			db.commandWALDebt.mu.Unlock()
+			if pendingAfterRemoveFailure != 2 || !coveredPhysicalReleased {
+				t.Fatalf("remove failure debt entries=%d coveredPhysicalReleased=%t, want 2 and true", pendingAfterRemoveFailure, coveredPhysicalReleased)
+			}
+
 			restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
 				if event.Point == durabilitycut.BeforeWALOrAssetUnlink && filepath.Base(event.Path) == "commit-l0-000001.log" {
-					if !coveredReleased {
-						t.Error("covered command-WAL rotation debt remained pinned at its segment unlink")
-					}
-					if !coveredResourceReleased {
-						t.Error("covered command-WAL resource debt remained pinned at its segment unlink")
-					}
 					if laterReleased {
 						t.Error("later command-WAL debt was released before its applied prefix")
 					}
@@ -1016,6 +1062,19 @@ func TestCommandWALCheckpointCleanupReleasesCoveredDebtBeforeUnlink(t *testing.T
 				return nil
 			})
 			defer restoreObserver()
+			originalRemove = removeCommandWALSegmentFn
+			removeCommandWALSegmentFn = func(path string) error {
+				if filepath.Base(path) == "commit-l0-000001.log" {
+					if !coveredReleased {
+						t.Error("covered command-WAL rotation debt remained pinned at its segment unlink")
+					}
+					if !coveredResourceReleased {
+						t.Error("covered command-WAL resource debt remained pinned at its segment unlink")
+					}
+				}
+				return originalRemove(path)
+			}
+			defer func() { removeCommandWALSegmentFn = originalRemove }()
 
 			if err := db.CleanupCommandWALCoveredSegments(sync); err != nil {
 				t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)

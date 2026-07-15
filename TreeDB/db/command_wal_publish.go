@@ -439,14 +439,29 @@ func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, ma
 	return decisions, nil
 }
 
+var removeCommandWALSegmentFn = os.Remove
+
 func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision) ([]commandWALSegmentCleanupDecision, error) {
+	return removeCoveredCommandWALSegmentsWithHooks(decisions, nil, nil)
+}
+
+func removeCoveredCommandWALSegmentsWithHooks(
+	decisions []commandWALSegmentCleanupDecision,
+	beforeUnlink func(commandWALSegmentCleanupDecision) error,
+	afterUnlink func(commandWALSegmentCleanupDecision),
+) ([]commandWALSegmentCleanupDecision, error) {
 	for i := range decisions {
 		decision := &decisions[i]
 		if decision.Covered && !decision.Active {
 			if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
 				return decisions, err
 			}
-			removeErr := os.Remove(decision.Path)
+			if beforeUnlink != nil {
+				if err := beforeUnlink(*decision); err != nil {
+					return decisions, err
+				}
+			}
+			removeErr := removeCommandWALSegmentFn(decision.Path)
 			if removeErr != nil && !os.IsNotExist(removeErr) {
 				return decisions, removeErr
 			}
@@ -462,6 +477,9 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 			// Preserve the completed namespace mutation in the returned decisions
 			// even when the post-unlink observer reports a simulated crash cut.
 			decision.Removed = true
+			if afterUnlink != nil {
+				afterUnlink(*decision)
+			}
 			if err := durabilitycut.Emit(after); err != nil {
 				if removeErr == nil {
 					return decisions, errors.Join(err, ErrRecoveryRequired)

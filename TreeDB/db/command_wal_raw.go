@@ -480,12 +480,18 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	if err == nil {
-		// Covered dependency pins can retain handles to inactive segments. Drop
-		// them before unlinking those segments so Windows can remove them as
-		// well as Unix-like platforms. Pin release is independent of the
-		// optional deletion-directory fsync below.
-		db.releaseCommandWALDurablePrefixPinsThrough(state.AppliedCommandLSN)
-		decisions, err = removeCoveredCommandWALSegments(decisions)
+		// After the pre-unlink cut succeeds, make the physical dependencies
+		// durable before releasing their pins for Windows unlink. Logical debt
+		// remains until the unlink completes, so a failed cleanup cannot weaken
+		// a later explicit durability barrier.
+		decisions, err = removeCoveredCommandWALSegmentsWithHooks(decisions,
+			func(decision commandWALSegmentCleanupDecision) error {
+				return db.prepareCommandWALDependencyDebtForUnlink(decision.MaxLSN)
+			},
+			func(decision commandWALSegmentCleanupDecision) {
+				db.commandWALDebt.releaseThrough(decision.MaxLSN)
+			},
+		)
 	}
 	removed := uint64(0)
 	removedBytes := uint64(0)
@@ -539,11 +545,29 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	return err
 }
 
-func (db *DB) releaseCommandWALDurablePrefixPinsThrough(lsn uint64) {
-	if db == nil || lsn == 0 {
-		return
+func (db *DB) prepareCommandWALDependencyDebtForUnlink(lsn uint64) error {
+	if db == nil || lsn == 0 || !db.commandWALDebt.hasPhysicalDependenciesThrough(lsn) {
+		return nil
 	}
-	db.commandWALDebt.releaseThrough(lsn)
+	view, err := db.commandWALDebt.resourceViewThrough(lsn)
+	if err == nil {
+		err = view.SyncThrough()
+	}
+	if err == nil {
+		err = db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn)
+	}
+	if err == nil {
+		err = stabilizeCommandWALResourceNamespaces(view)
+	}
+	if err == nil {
+		err = db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, lsn)
+	}
+	if err != nil {
+		db.commandWALDebt.noteRetryThrough(lsn)
+		return err
+	}
+	db.commandWALDebt.releasePhysicalThrough(lsn)
+	return nil
 }
 
 func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
