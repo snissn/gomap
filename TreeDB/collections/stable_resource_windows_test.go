@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -43,8 +44,10 @@ func TestOrdinaryColumnWriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
 	}
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
+	registry := d.StableResourceIdentityPinRegistry()
+	baselinePins := registry.ActivePins()
+	baselineLinks := registry.ActiveStableNamespaceLinks()
 	doc := []byte(`{"time_us":1,"kind":"like","did":"did:windows"}`)
 	if _, err := col.Insert([]byte("windows-stable"), doc); err != nil {
 		t.Fatalf("ordinary stable column Insert: %v", err)
@@ -56,12 +59,20 @@ func TestOrdinaryColumnWriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
 	if !bytes.Equal(got, doc) {
 		t.Fatalf("ordinary stable column Get=%s want %s", got, doc)
 	}
-	registry := d.StableResourceIdentityPinRegistry()
-	if got := registry.ActivePins(); got != 0 {
-		t.Fatalf("ordinary stable publication active pins=%d want 0", got)
+	if got := registry.ActivePins(); got <= baselinePins {
+		t.Fatalf("ordinary stable publication active pins=%d want > baseline %d while durable roots retain authority", got, baselinePins)
 	}
-	if got := registry.ActiveStableNamespaceLinks(); got == 0 {
-		t.Fatal("ordinary stable publication recorded no exact namespace proof")
+	if got := registry.ActiveStableNamespaceLinks(); got <= baselineLinks {
+		t.Fatalf("ordinary stable publication namespace proofs=%d want > baseline %d", got, baselineLinks)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close ordinary stable column DB: %v", err)
+	}
+	if got := registry.ActivePins(); got != 0 {
+		t.Fatalf("ordinary stable publication active pins after close=%d want 0", got)
+	}
+	if got := registry.ActiveIdentities(); got != 0 {
+		t.Fatalf("ordinary stable publication active identities after close=%d want 0", got)
 	}
 }
 
@@ -175,31 +186,49 @@ func TestStableColumnAppendSessionUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	}
 }
 
-func TestStableFreshColumnAssetSegmentFailsClosedBeforeVisibility(t *testing.T) {
+func TestStableFreshColumnAssetSegmentUsesCreateOnlyWindowsEvidence(t *testing.T) {
 	dir := t.TempDir()
 	cfg := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{
-		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "unsupported_fresh_segment",
+		Kind: ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "windows_fresh_segment",
 	}}
 	registry := rootpublication.NewIdentityPinRegistry()
 	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(dir, cfg, registry)
-	if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
-		if appender != nil {
-			_ = appender.abort()
-		}
-		t.Fatalf("stable fresh segment error=%v want ErrNamespacePersistenceUnsupported", err)
+	if err != nil {
+		t.Fatalf("stable fresh segment: %v", err)
 	}
-	if appender != nil {
+	refs, err := appender.appendKinds([]columnPhysicalAssetAppendItem{{
+		payload: []byte("windows-stable-fresh"), kind: ColumnAssetKindTCS1TypedColumnPart,
+		generation: 1, partID: 1,
+	}})
+	if err != nil {
 		_ = appender.abort()
-		t.Fatalf("unsupported stable fresh segment returned appender=%v", appender)
+		t.Fatalf("append stable fresh segment: %v", err)
 	}
-	entries, err := os.ReadDir(dir)
+	if err := appender.close(); err != nil {
+		t.Fatalf("close stable fresh segment: %v", err)
+	}
+	resources := appender.stableResources
+	appender.stableResources = nil
+	if resources == nil {
+		t.Fatal("stable fresh segment returned nil authority")
+	}
+	var namespaceSyncs uint64
+	for _, stats := range resources.Stats(time.Now()) {
+		namespaceSyncs += stats.NamespaceSyncs
+	}
+	if namespaceSyncs != 1 {
+		resources.Release()
+		t.Fatalf("stable fresh segment namespace syncs=%d want 1", namespaceSyncs)
+	}
+	resources.Release()
+	segmentPath, err := columnAssetSegmentPath(dir, refs[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("unsupported stable fresh segment exposed entries=%v", entries)
+	if _, err := os.Stat(segmentPath); err != nil {
+		t.Fatalf("stable fresh segment %q: %v", segmentPath, err)
 	}
 	if got := registry.ActiveIdentities(); got != 0 {
-		t.Fatalf("unsupported stable fresh segment active identities=%d want 0", got)
+		t.Fatalf("released stable fresh segment active identities=%d want 0", got)
 	}
 }

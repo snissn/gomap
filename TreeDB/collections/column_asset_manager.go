@@ -648,13 +648,15 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 // newNextColumnPhysicalAssetSegmentAppenderWithStableResources allocates one
 // fresh segment with O_EXCL while binding construction and final publication
 // authority to the exact parent and child handles. Unlike the append-session
-// constructor, this helper never falls back to an existing segment.
+// constructor, this helper never falls back to an existing segment. Successful
+// publication only owes child creation persistence; destructive rollback stays
+// gated separately on complete relative-namespace support.
 func newNextColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cfg ColumnStoreConfig, registry *rootpublication.IdentityPinRegistry) (*columnPhysicalAssetSegmentAppender, error) {
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset allocation requires identity pin registry")
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		return nil, fmt.Errorf("%w: stable fresh column physical asset allocation requires exact relative namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableNamespaceCreationSupported() {
+		return nil, fmt.Errorf("%w: stable fresh column physical asset allocation requires exact child creation authority", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset segment allocation requires asset manager")
@@ -1286,8 +1288,8 @@ func newColumnPhysicalAssetSegmentAppenderWithStableResources(rootDir string, cf
 	if registry == nil {
 		return nil, errors.New("collections: stable fresh column physical asset append requires identity pin registry")
 	}
-	if !rootpublication.StableRelativeNamespaceSupported() {
-		return nil, fmt.Errorf("%w: stable fresh column physical asset append requires exact relative namespace authority", rootpublication.ErrNamespacePersistenceUnsupported)
+	if !rootpublication.StableNamespaceCreationSupported() {
+		return nil, fmt.Errorf("%w: stable fresh column physical asset append requires exact child creation authority", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset append requires asset manager")
