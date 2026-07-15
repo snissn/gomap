@@ -1258,6 +1258,135 @@ func TestCommandWALCheckpointCleanupReleasesCoveredDebtBeforeUnlink(t *testing.T
 	}
 }
 
+func TestCommandWALCheckpointCleanupReleasesPredecessorTokenOwnedBySuccessorLSN(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 10)
+	writeCommandWALFrame(t, dir, 2, 11)
+
+	newToken := func(name string, generation, maxLSN uint64, released *bool) *rootpublication.StableResourceToken {
+		t.Helper()
+		file, err := os.Open(filepath.Join(WALDirPath(dir), name))
+		if err != nil {
+			t.Fatalf("open %s: %v", name, err)
+		}
+		token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+			Kind:           rootpublication.ResourceCommandWAL,
+			LogicalLane:    "0",
+			ResourceID:     name,
+			Generation:     generation,
+			DiagnosticPath: filepath.Join("maindb", "wal", name),
+			File:           file,
+			Frontier:       rootpublication.DurableFrontier{Bytes: 1, MaxLSN: maxLSN},
+			Reachability:   rootpublication.ReachabilityCommandWALRotated,
+			ContentSynced:  true,
+			OnRelease: func() {
+				*released = true
+			},
+		})
+		if err != nil {
+			_ = file.Close()
+			t.Fatalf("new stable token %s: %v", name, err)
+		}
+		_ = file.Close()
+		return token
+	}
+
+	closedReleased := false
+	activeReleased := false
+	closed := newToken("commit-l0-000001.log", 1, 10, &closedReleased)
+	active := newToken("commit-l0-000002.log", 2, 11, &activeReleased)
+	if !commandWALRotationTokenMatchesPath(closed, WALDirPath(dir), filepath.Join(WALDirPath(dir), "commit-l0-000001.log")) {
+		closed.Release()
+		active.Release()
+		t.Fatal("predecessor token did not match its exact command-WAL path")
+	}
+	if commandWALRotationTokenMatchesPath(closed, WALDirPath(dir), filepath.Join(dir, "other-wal", "commit-l0-000001.log")) {
+		closed.Release()
+		active.Release()
+		t.Fatal("predecessor token matched the same basename outside its command-WAL directory")
+	}
+	pathOnlyReleased := false
+	pathOnly := newToken("commit-l0-000002.log", 3, 11, &pathOnlyReleased)
+	var pathOnlyDebt CommandWALDependencyDebt
+	if err := pathOnlyDebt.add(12, []*rootpublication.StableResourceToken{pathOnly}); err != nil {
+		closed.Release()
+		active.Release()
+		pathOnly.Release()
+		t.Fatalf("add path-only debt: %v", err)
+	}
+	pathOnlyDebt.releasePhysicalForUnlink(0, WALDirPath(dir), filepath.Join(WALDirPath(dir), "commit-l0-000002.log"))
+	if !pathOnlyReleased || len(pathOnlyDebt.entries) != 1 || len(pathOnlyDebt.entries[0].rotationFiles) != 0 {
+		closed.Release()
+		active.Release()
+		pathOnlyDebt.releaseAll()
+		t.Fatalf("path-only release=(released=%t entries=%+v), want released physical token with logical entry retained", pathOnlyReleased, pathOnlyDebt.entries)
+	}
+	pathOnlyDebt.releaseAll()
+	db := &DB{dir: dir, commandWALDir: WALDirPath(dir), commandWAL: true, durability: DurabilityDurable}
+	db.state.Store(&DBState{AppliedCommandLSN: 10})
+	// Automatic rotation ownership is transferred after the successor frame is
+	// appended, so both tokens belong to LSN 11 even though the predecessor's
+	// final frame is LSN 10.
+	if err := db.commandWALDebt.add(11, []*rootpublication.StableResourceToken{closed, active}); err != nil {
+		closed.Release()
+		active.Release()
+		t.Fatalf("add successor-owned rotation debt: %v", err)
+	}
+	t.Cleanup(db.commandWALDebt.releaseAll)
+
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, 10, 0)
+	if err != nil {
+		t.Fatalf("scan covered command WAL segments: %v", err)
+	}
+	var predecessor commandWALSegmentCleanupDecision
+	for _, decision := range decisions {
+		if filepath.Base(decision.Path) == "commit-l0-000001.log" {
+			predecessor = decision
+			break
+		}
+	}
+	if !predecessor.Covered || predecessor.Active || predecessor.MaxLSN != 10 {
+		t.Fatalf("predecessor decision=%+v, want covered non-active max LSN 10", predecessor)
+	}
+
+	originalRemove := removeCommandWALSegmentFn
+	removeCommandWALSegmentFn = func(path string) error {
+		if filepath.Base(path) == "commit-l0-000001.log" {
+			if !closedReleased {
+				t.Error("predecessor token from successor LSN remained pinned at unlink")
+			}
+			if activeReleased {
+				t.Error("successor token was released while its LSN remained unapplied")
+			}
+		}
+		return originalRemove(path)
+	}
+	defer func() { removeCommandWALSegmentFn = originalRemove }()
+
+	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+	}
+	if !closedReleased {
+		t.Fatal("predecessor token owned by successor LSN was not released")
+	}
+	if activeReleased {
+		t.Fatal("successor token was released before LSN 11 became applied")
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("predecessor segment stat=%v, want removed", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
+		t.Fatalf("successor segment stat=%v, want retained", err)
+	}
+	db.commandWALDebt.mu.Lock()
+	defer db.commandWALDebt.mu.Unlock()
+	if len(db.commandWALDebt.entries) != 1 || db.commandWALDebt.entries[0].firstLSN != 11 ||
+		len(db.commandWALDebt.entries[0].rotationFiles) != 1 ||
+		!commandWALRotationTokenMatchesPath(db.commandWALDebt.entries[0].rotationFiles[0], WALDirPath(dir), filepath.Join(WALDirPath(dir), "commit-l0-000002.log")) {
+		t.Fatalf("successor logical debt after predecessor unlink=%+v, want LSN 11 with only successor token", db.commandWALDebt.entries)
+	}
+}
+
 func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)

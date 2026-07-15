@@ -87,22 +87,70 @@ func (debt *CommandWALDependencyDebt) hasPhysicalDependenciesThrough(lsn uint64)
 	return false
 }
 
+func commandWALRotationTokenMatchesPath(token *rootpublication.StableResourceToken, walDir, path string) bool {
+	if token == nil || walDir == "" || path == "" {
+		return false
+	}
+	tokenName := filepath.Base(filepath.Clean(token.DiagnosticPath()))
+	if tokenName == "." || tokenName == string(filepath.Separator) {
+		return false
+	}
+	// Stable command-WAL diagnostics are rooted at the logical "maindb/wal"
+	// label, while walDir is the exact physical directory for this DB. Resolve
+	// the registered segment name under that directory before comparing; a
+	// basename match outside walDir must not release this ledger's token.
+	tokenPath, err := filepath.Abs(filepath.Join(walDir, tokenName))
+	if err != nil {
+		return false
+	}
+	unlinkPath, err := filepath.Abs(path)
+	return err == nil && filepath.Clean(tokenPath) == filepath.Clean(unlinkPath)
+}
+
+// hasPhysicalDependenciesForUnlink extends the covered LSN prefix with the
+// exact closed-segment token selected for unlink. An automatic rotation is
+// recorded on the successor frame's LSN, so the predecessor token may live
+// beyond the predecessor segment's own max LSN.
+func (debt *CommandWALDependencyDebt) hasPhysicalDependenciesForUnlink(lsn uint64, walDir, path string) bool {
+	if debt == nil {
+		return false
+	}
+	debt.mu.Lock()
+	defer debt.mu.Unlock()
+	for _, entry := range debt.entries {
+		if entry.firstLSN <= lsn && (len(entry.resources) != 0 || len(entry.rotationFiles) != 0) {
+			return true
+		}
+		for _, token := range entry.rotationFiles {
+			if commandWALRotationTokenMatchesPath(token, walDir, path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // rotationFileViewThrough returns a deterministic, exact-handle view of the
 // command-WAL files retained by relaxed rotations. These tokens deliberately
 // remain outside StableResourceSet until their namespace-create obligations
 // have crossed a directory barrier: normal root-publication resource sets are
 // only valid after namespaces are stable.
 func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*rootpublication.StableResourceToken, error) {
+	return debt.rotationFileViewForUnlink(lsn, "", "")
+}
+
+func (debt *CommandWALDependencyDebt) rotationFileViewForUnlink(lsn uint64, walDir, path string) ([]*rootpublication.StableResourceToken, error) {
 	if debt == nil {
 		return nil, nil
 	}
 	debt.mu.Lock()
 	var tokens []*rootpublication.StableResourceToken
 	for _, entry := range debt.entries {
-		if entry.firstLSN > lsn {
-			break
+		for _, token := range entry.rotationFiles {
+			if entry.firstLSN <= lsn || commandWALRotationTokenMatchesPath(token, walDir, path) {
+				tokens = append(tokens, token)
+			}
 		}
-		tokens = append(tokens, entry.rotationFiles...)
 	}
 	debt.mu.Unlock()
 
@@ -146,7 +194,11 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 }
 
 func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir string, lsn uint64) error {
-	tokens, err := debt.rotationFileViewThrough(lsn)
+	return debt.syncRotationFilesForUnlink(root, walDir, lsn, "")
+}
+
+func (debt *CommandWALDependencyDebt) syncRotationFilesForUnlink(root, walDir string, lsn uint64, unlinkPath string) error {
+	tokens, err := debt.rotationFileViewForUnlink(lsn, walDir, unlinkPath)
 	if err != nil {
 		return err
 	}
@@ -166,16 +218,21 @@ func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir stri
 }
 
 func (debt *CommandWALDependencyDebt) stabilizeRotationNamespacesThrough(root, walDir string, lsn uint64) error {
+	return debt.stabilizeRotationNamespacesForUnlink(root, walDir, lsn, "")
+}
+
+func (debt *CommandWALDependencyDebt) stabilizeRotationNamespacesForUnlink(root, walDir string, lsn uint64, unlinkPath string) error {
 	if debt == nil {
 		return nil
 	}
 	debt.mu.Lock()
 	var tokens []*rootpublication.StableResourceToken
 	for _, entry := range debt.entries {
-		if entry.firstLSN > lsn {
-			break
+		for _, token := range entry.rotationFiles {
+			if entry.firstLSN <= lsn || commandWALRotationTokenMatchesPath(token, walDir, unlinkPath) {
+				tokens = append(tokens, token)
+			}
 		}
-		tokens = append(tokens, entry.rotationFiles...)
 	}
 	debt.mu.Unlock()
 	compact := tokens[:0]
@@ -237,6 +294,29 @@ func (debt *CommandWALDependencyDebt) noteRetryThrough(lsn uint64) {
 	}
 }
 
+func (debt *CommandWALDependencyDebt) noteRetryForUnlink(lsn uint64, walDir, path string) {
+	if debt == nil {
+		return
+	}
+	debt.mu.Lock()
+	defer debt.mu.Unlock()
+	for i := range debt.entries {
+		entry := &debt.entries[i]
+		matches := entry.firstLSN <= lsn
+		if !matches {
+			for _, token := range entry.rotationFiles {
+				if commandWALRotationTokenMatchesPath(token, walDir, path) {
+					matches = true
+					break
+				}
+			}
+		}
+		if matches {
+			entry.retries++
+		}
+	}
+}
+
 func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 	if debt == nil || lsn == 0 {
 		return
@@ -283,20 +363,35 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 // the unlink preparation durability barrier, while retaining their logical LSN
 // debt entries until the corresponding segment unlink completes.
 func (debt *CommandWALDependencyDebt) releasePhysicalThrough(lsn uint64) {
-	if debt == nil || lsn == 0 {
+	debt.releasePhysicalForUnlink(lsn, "", "")
+}
+
+func (debt *CommandWALDependencyDebt) releasePhysicalForUnlink(lsn uint64, walDir, path string) {
+	if debt == nil || (lsn == 0 && path == "") {
 		return
 	}
 	debt.mu.Lock()
 	var resources []*rootpublication.StableResourceSet
 	var rotationFiles []*rootpublication.StableResourceToken
 	for i := range debt.entries {
-		if debt.entries[i].firstLSN > lsn {
-			break
+		entry := &debt.entries[i]
+		if entry.firstLSN <= lsn {
+			resources = append(resources, entry.resources...)
+			rotationFiles = append(rotationFiles, entry.rotationFiles...)
+			entry.resources = nil
+			entry.rotationFiles = nil
+			continue
 		}
-		resources = append(resources, debt.entries[i].resources...)
-		rotationFiles = append(rotationFiles, debt.entries[i].rotationFiles...)
-		debt.entries[i].resources = nil
-		debt.entries[i].rotationFiles = nil
+		kept := entry.rotationFiles[:0]
+		for _, token := range entry.rotationFiles {
+			if commandWALRotationTokenMatchesPath(token, walDir, path) {
+				rotationFiles = append(rotationFiles, token)
+				continue
+			}
+			kept = append(kept, token)
+		}
+		clear(entry.rotationFiles[len(kept):])
+		entry.rotationFiles = kept
 	}
 	debt.mu.Unlock()
 	for _, resource := range resources {

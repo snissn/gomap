@@ -486,7 +486,7 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		// a later explicit durability barrier.
 		decisions, err = removeCoveredCommandWALSegmentsWithHooks(decisions,
 			func(decision commandWALSegmentCleanupDecision) error {
-				return db.prepareCommandWALDependencyDebtForUnlink(decision.MaxLSN)
+				return db.prepareCommandWALDependencyDebtForUnlink(decision.MaxLSN, decision.Path)
 			},
 			func(decision commandWALSegmentCleanupDecision) {
 				db.commandWALDebt.releaseThrough(decision.MaxLSN)
@@ -545,8 +545,8 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	return err
 }
 
-func (db *DB) prepareCommandWALDependencyDebtForUnlink(lsn uint64) error {
-	if db == nil || lsn == 0 || !db.commandWALDebt.hasPhysicalDependenciesThrough(lsn) {
+func (db *DB) prepareCommandWALDependencyDebtForUnlink(lsn uint64, path string) error {
+	if db == nil || (lsn == 0 && path == "") || !db.commandWALDebt.hasPhysicalDependenciesForUnlink(lsn, db.commandWALDir, path) {
 		return nil
 	}
 	view, err := db.commandWALDebt.resourceViewThrough(lsn)
@@ -554,19 +554,19 @@ func (db *DB) prepareCommandWALDependencyDebtForUnlink(lsn uint64) error {
 		err = view.SyncThrough()
 	}
 	if err == nil {
-		err = db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn)
+		err = db.commandWALDebt.syncRotationFilesForUnlink(db.dir, db.commandWALDir, lsn, path)
 	}
 	if err == nil {
 		err = stabilizeCommandWALResourceNamespaces(view)
 	}
 	if err == nil {
-		err = db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, lsn)
+		err = db.commandWALDebt.stabilizeRotationNamespacesForUnlink(db.dir, db.commandWALDir, lsn, path)
 	}
 	if err != nil {
-		db.commandWALDebt.noteRetryThrough(lsn)
+		db.commandWALDebt.noteRetryForUnlink(lsn, db.commandWALDir, path)
 		return err
 	}
-	db.commandWALDebt.releasePhysicalThrough(lsn)
+	db.commandWALDebt.releasePhysicalForUnlink(lsn, db.commandWALDir, path)
 	return nil
 }
 
