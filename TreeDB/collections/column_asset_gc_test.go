@@ -511,6 +511,10 @@ func TestColumnAssetGCRetainsStablePublicationPinThenDeletesM15B(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		_ = file.Close()
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	token, err := stableColumnAssetResourceTokenWithRegistry(file, candidate, nil, registry)
