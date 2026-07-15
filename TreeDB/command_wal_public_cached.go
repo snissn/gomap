@@ -312,7 +312,11 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	return tdb.backend.FlushCommandWALBarrier(true)
+	lsn, err := tdb.backend.FlushCommandWALBarrierWithLSN(true)
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	return err
 }
 
 type commandWALPublicBatch struct {

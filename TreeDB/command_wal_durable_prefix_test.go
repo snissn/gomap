@@ -116,6 +116,65 @@ func TestPublicCommandWALRelaxedEmptyWriteSyncPersistsDurablePrefixBarrier(t *te
 	}
 }
 
+func TestPublicCommandWALRelaxedEmptyWriteSyncPromotedBarrierRemainsContiguous(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+
+	if err := db.Set([]byte("before"), []byte("value-before")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set before: %v", err)
+	}
+	if err := writeEmptyPublicCommandWALSync(db); err != nil {
+		_ = db.Close()
+		t.Fatalf("empty WriteSync: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint promoted prefix: %v", err)
+	}
+	if got := db.Stats()["treedb.applied_command_lsn"]; got != "2" {
+		_ = db.Close()
+		t.Fatalf("applied_command_lsn after promoted-prefix checkpoint=%q, want 2", got)
+	}
+
+	if err := db.Set([]byte("after"), []byte("value-after")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set after: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint after promoted prefix: %v", err)
+	}
+	if got := db.Stats()["treedb.applied_command_lsn"]; got != "3" {
+		_ = db.Close()
+		t.Fatalf("applied_command_lsn after contiguous checkpoint=%q, want 3", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	for key, want := range map[string]string{
+		"before": "value-before",
+		"after":  "value-after",
+	} {
+		got, err := reopen.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("reopen Get(%q): %v", key, err)
+		}
+		if string(got) != want {
+			t.Fatalf("reopen Get(%q)=%q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestPublicCommandWALRelaxedEmptyWriteSyncDoesNotCreateAppliedLSNGap(t *testing.T) {
 	tests := []struct {
 		name  string

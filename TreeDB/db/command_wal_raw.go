@@ -238,9 +238,20 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 // frames durable before flushing the command WAL itself. It serializes with
 // command-WAL publishers so the two durability boundaries cannot be reordered.
 func (db *DB) FlushCommandWALBarrier(sync bool) error {
+	_, err := db.FlushCommandWALBarrierWithLSN(sync)
+	return err
+}
+
+// FlushCommandWALBarrierWithLSN has the same durability semantics as
+// FlushCommandWALBarrier and also reports the LSN of a durable-prefix barrier
+// appended by this call. It returns zero when only a physical flush is needed.
+// Callers that publish command-WAL applied ranges must retain a non-zero LSN
+// even when the append is followed by an error because recovery may observe the
+// assigned command identity.
+func (db *DB) FlushCommandWALBarrierWithLSN(sync bool) (uint64, error) {
 	unlock, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer unlock()
 	if sync && db != nil && db.commandWAL {
@@ -252,26 +263,25 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 		// below, without manufacturing a new command identity.
 		nextLSN := db.CommandWALNextLSN()
 		if nextLSN > 1 && db.commandWALDurableLSN.Load() < nextLSN-1 {
-			_, err := db.appendCommandWALDurablePrefixBarrier()
-			return err
+			return db.appendCommandWALDurablePrefixBarrier()
 		}
-		return db.FlushCommandWAL(true)
+		return 0, db.FlushCommandWAL(true)
 	}
 
 	if appender := db.currentValueLogAppender(); appender != nil {
 		if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
 			if err := flusher.FlushValueLogExternalRefs(nil, sync); err != nil {
-				return err
+				return 0, err
 			}
 		} else if sync {
 			if err := appender.Sync(); err != nil {
-				return err
+				return 0, err
 			}
 		} else if err := appender.Flush(); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return db.FlushCommandWAL(sync)
+	return 0, db.FlushCommandWAL(sync)
 }
 
 func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
