@@ -67,6 +67,7 @@ type Coordinator struct {
 	oldestRecoverable uint64
 	waiters           []*durabilityWaiter
 	activeBuilders    uint64
+	preparing         bool
 
 	ewmaService        time.Duration
 	lastService        time.Duration
@@ -149,29 +150,46 @@ func (c *Coordinator) Supersede(ctx context.Context, candidate *PreparedRootCand
 	return c.enqueue(ctx, candidate, true)
 }
 
+type enqueueDecision struct {
+	sequence          uint64
+	failureGeneration uint64
+	hard              bool
+}
+
 func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandidate, supersede bool) error {
 	c.mu.Lock()
-	if err := c.terminalErrorLocked(); err != nil {
-		c.mu.Unlock()
+	decision, err := c.enqueueLocked(candidate, supersede)
+	c.mu.Unlock()
+	if err != nil {
 		return err
 	}
+	c.signal()
+	if !decision.hard {
+		return nil
+	}
+	return c.waitForAdmission(ctx, decision.sequence, decision.failureGeneration)
+}
+
+// enqueueLocked validates, activates, and appends one candidate while c.mu is
+// held. Its successful return contains everything needed for an admission wait
+// after the caller has released any builder lease and all locks.
+func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede bool) (enqueueDecision, error) {
+	if err := c.terminalErrorLocked(); err != nil {
+		return enqueueDecision{}, err
+	}
 	if candidate == nil {
-		c.mu.Unlock()
-		return fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
+		return enqueueDecision{}, fmt.Errorf("%w: nil candidate", ErrInvalidCandidate)
 	}
 	if candidate.frontier.commitSeq <= c.visible.commitSeq ||
 		(c.visible.commitSeq != 0 && !candidate.frontier.Dominates(c.visible)) {
-		c.mu.Unlock()
-		return fmt.Errorf("%w: frontier %d does not dominate visible %d", ErrInvalidCandidate, candidate.frontier.commitSeq, c.visible.commitSeq)
+		return enqueueDecision{}, fmt.Errorf("%w: frontier %d does not dominate visible %d", ErrInvalidCandidate, candidate.frontier.commitSeq, c.visible.commitSeq)
 	}
 	if supersede && len(c.pending) == 0 {
-		c.mu.Unlock()
-		return fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
+		return enqueueDecision{}, fmt.Errorf("%w: no pending candidate to supersede", ErrInvalidCandidate)
 	}
 	if err := c.preflightDurableRootLocked(candidate); err != nil {
 		c.rejectedCandidates++
-		c.mu.Unlock()
-		return err
+		return enqueueDecision{}, err
 	}
 	if candidateSet := candidate.resourceSet(); candidateSet != nil {
 		sets := make([]*StableResourceSet, 0, len(c.pending)+1)
@@ -187,16 +205,14 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 			if resourceSetConflict(err) {
 				c.resourceConflicts++
 			}
-			c.mu.Unlock()
-			return err
+			return enqueueDecision{}, err
 		}
 		if physical := stableSetPhysicalCount(sets); physical > union.Len() {
 			c.resourceCoalesces = saturatingAdd(c.resourceCoalesces, uint64(physical-union.Len()))
 		}
 		if err := candidateSet.transfer(ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
 			c.rejectedCandidates++
-			c.mu.Unlock()
-			return fmt.Errorf("%w: enqueue resource transfer: %w", ErrInvalidCandidate, err)
+			return enqueueDecision{}, fmt.Errorf("%w: enqueue resource transfer: %w", ErrInvalidCandidate, err)
 		}
 	}
 	if err := transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCandidate, ResourceOwnerCoordinator); err != nil {
@@ -204,8 +220,7 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 			_ = candidateSet.transfer(ResourceOwnerCoordinator, ResourceOwnerCandidate)
 		}
 		c.rejectedCandidates++
-		c.mu.Unlock()
-		return fmt.Errorf("%w: enqueue durable-root transfer: %w", ErrInvalidCandidate, err)
+		return enqueueDecision{}, fmt.Errorf("%w: enqueue durable-root transfer: %w", ErrInvalidCandidate, err)
 	}
 	if err := activateDurableRootGroup(candidate.durableRootGroup()); err != nil {
 		_ = transferDurableRootGroup(candidate.durableRootGroup(), ResourceOwnerCoordinator, ResourceOwnerCandidate)
@@ -213,8 +228,7 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 			_ = candidateSet.transfer(ResourceOwnerCoordinator, ResourceOwnerCandidate)
 		}
 		c.rejectedCandidates++
-		c.mu.Unlock()
-		return fmt.Errorf("%w: activate durable-root transaction: %w", ErrInvalidCandidate, err)
+		return enqueueDecision{}, fmt.Errorf("%w: activate durable-root transaction: %w", ErrInvalidCandidate, err)
 	}
 	// Activation is the final fallible enqueue step. From here through pending
 	// append and visible-frontier advance the coordinator only mutates owned
@@ -237,14 +251,7 @@ func (c *Coordinator) enqueue(ctx context.Context, candidate *PreparedRootCandid
 		c.admissionWaits++
 		c.requestPublishLocked(WakeHardAdmission)
 	}
-	failureGeneration := c.failureGeneration
-	seq := candidate.frontier.commitSeq
-	c.mu.Unlock()
-	c.signal()
-	if !hard {
-		return nil
-	}
-	return c.waitForAdmission(ctx, seq, failureGeneration)
+	return enqueueDecision{sequence: candidate.frontier.commitSeq, failureGeneration: c.failureGeneration, hard: hard}, nil
 }
 
 func (c *Coordinator) preflightDurableRootLocked(candidate *PreparedRootCandidate) error {
@@ -601,7 +608,23 @@ func (c *Coordinator) run() {
 				waiters: append([]*durabilityWaiter(nil), c.waiters...),
 			}
 			c.activeAttempt = attempt
+			preparer, prepares := c.publisher.(PublisherPreparer)
+			if prepares {
+				c.preparing = true
+			}
 			c.mu.Unlock()
+			if prepares {
+				prepareErr := preparer.Prepare(c.ctx, candidate)
+				c.mu.Lock()
+				c.preparing = false
+				c.notifyLocked()
+				c.reportingAttempt = prepareErr != nil
+				c.mu.Unlock()
+				if prepareErr != nil {
+					_ = c.ReportPublishResult(attempt, PublishResult{Outcome: PublishRetryableFailure, Err: prepareErr})
+					continue
+				}
+			}
 			result := c.publisher.Publish(c.ctx, candidate)
 			c.mu.Lock()
 			c.reportingAttempt = true
