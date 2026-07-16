@@ -221,6 +221,12 @@ func BenchmarkCommandWALReadReplayFrames(b *testing.B) {
 }
 
 func BenchmarkCommandWALCoveredSegmentCleanupProof(b *testing.B) {
+	var proofNs uint64
+	var scannedBytes uint64
+	var removedSegments uint64
+	var removedBytes uint64
+	var retainedSegments uint64
+	var namespaceSyncs uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -236,35 +242,37 @@ func BenchmarkCommandWALCoveredSegmentCleanupProof(b *testing.B) {
 				Value: []byte("bench-value"),
 			}})
 		}
+		db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+		installCommandWALCleanupRootForTest(b, db, 1, 2)
 		b.StartTimer()
-		decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
+		err = db.CleanupCommandWALCoveredSegments(true)
 		b.StopTimer()
 		if err != nil {
 			_ = os.RemoveAll(dir)
-			b.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+			b.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
 		}
-		if len(decisions) != 2 {
+		if removed := db.commandWALCleanupRemoved.Load(); removed != 2 {
 			_ = os.RemoveAll(dir)
-			b.Fatalf("len(decisions)=%d, want 2", len(decisions))
+			b.Fatalf("removed=%d, want 2 with journal-owned active successor retained", removed)
 		}
-		covered, removed := 0, 0
-		for _, decision := range decisions {
-			if decision.Covered {
-				covered++
-			}
-			if decision.Removed {
-				removed++
-			}
-		}
-		if covered != 2 || removed != 1 {
-			_ = os.RemoveAll(dir)
-			b.Fatalf("covered=%d removed=%d, want covered=2 removed=1 active segment retained", covered, removed)
-		}
+		proofNs += db.commandWALCleanupProofNs.Load()
+		scannedBytes += db.commandWALCleanupScanBytes.Load()
+		removedSegments += db.commandWALCleanupRemoved.Load()
+		removedBytes += db.commandWALCleanupBytes.Load()
+		retainedSegments += db.commandWALCleanupRetained.Load()
+		namespaceSyncs += db.commandWALCleanupNamespaceSyncs.Load()
 		if err := os.RemoveAll(dir); err != nil {
 			b.Fatalf("RemoveAll: %v", err)
 		}
 		b.StartTimer()
 	}
+	b.StopTimer()
+	b.ReportMetric(float64(proofNs)/float64(b.N), "proof-ns/op")
+	b.ReportMetric(float64(scannedBytes)/float64(b.N), "scan-B/op")
+	b.ReportMetric(float64(removedSegments)/float64(b.N), "removed-segments/op")
+	b.ReportMetric(float64(removedBytes)/float64(b.N), "removed-B/op")
+	b.ReportMetric(float64(retainedSegments)/float64(b.N), "retained-segments/op")
+	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace-syncs/op")
 }
 
 func commandWALBenchRawKVPayload(b testing.TB, ops int, valueSize int) []byte {

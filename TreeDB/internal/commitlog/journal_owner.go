@@ -216,6 +216,8 @@ type CommandJournal struct {
 	lane                   int
 	segmentSeq             uint64
 	activeSegmentMaxLSN    uint64
+	cleanupEpoch           uint64
+	namespaceGeneration    uint64
 	segmentTargetBytes     int64
 	onSegmentRotated       func(closedBytes int64)
 	stableParent           *os.File
@@ -225,6 +227,23 @@ type CommandJournal struct {
 	pendingStableSuccessor *pendingCommandWALSuccessor
 	stableResourcePins     *rootpublication.IdentityPinRegistry
 }
+
+// CommandJournalCleanupSnapshot freezes the append/rotation namespace state
+// that ordinary WAL cleanup must revalidate immediately before deletion.
+// StableIdentity is captured from the exact active writer handle.
+type CommandJournalCleanupSnapshot struct {
+	CleanupEpoch          uint64
+	NamespaceGeneration   uint64
+	SegmentSeq            uint64
+	ActiveSegmentMaxLSN   uint64
+	ActiveBytes           int64
+	ActivePath            string
+	ActiveIdentity        rootpublication.StableIdentity
+	PendingStableRotation int
+	PendingSuccessor      bool
+}
+
+var ErrCommandWALCleanupSnapshotStale = errors.New("commitlog: command WAL cleanup snapshot stale")
 
 type pendingCommandWALSuccessor struct {
 	parent          *os.File
@@ -322,6 +341,8 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		lane:                   opts.Lane,
 		segmentSeq:             opts.SegmentSeq,
 		activeSegmentMaxLSN:    activeSegmentMaxLSN,
+		cleanupEpoch:           1,
+		namespaceGeneration:    opts.SegmentSeq,
 		segmentTargetBytes:     opts.SegmentTargetBytes,
 		onSegmentRotated:       opts.OnSegmentRotated,
 		stableParent:           stableParent,
@@ -619,6 +640,8 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	j.segmentSeq = nextSeq
 	j.path = nextPath
 	j.activeSegmentMaxLSN = 0
+	j.namespaceGeneration++
+	j.cleanupEpoch++
 	var closeParentErr error
 	if oldStableParent != nil {
 		closeParentErr = oldStableParent.Close()
@@ -742,6 +765,7 @@ func (j *CommandJournal) recordAppendedLSNLocked(lsn uint64) {
 	if lsn > j.activeSegmentMaxLSN {
 		j.activeSegmentMaxLSN = lsn
 	}
+	j.cleanupEpoch++
 }
 
 func openStableCommandWALFile(parent *os.File, path string) (*os.File, error) {
@@ -911,6 +935,8 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	j.segmentSeq = nextSeq
 	j.path = nextPath
 	j.activeSegmentMaxLSN = 0
+	j.namespaceGeneration++
+	j.cleanupEpoch++
 	if closedBytes > 0 && j.onSegmentRotated != nil {
 		j.onSegmentRotated(closedBytes)
 	}
@@ -1005,6 +1031,69 @@ func (j *CommandJournal) ActiveSegmentSnapshot() (path string, bytes int64) {
 		return j.path, 0
 	}
 	return j.path, j.writer.ActiveBytes()
+}
+
+func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot, error) {
+	if j == nil || j.writer == nil || j.writer.f == nil {
+		return CommandJournalCleanupSnapshot{}, errors.New("commitlog: command journal is closed")
+	}
+	identity, err := rootpublication.StableIdentityFromFile(j.writer.f)
+	if err != nil {
+		return CommandJournalCleanupSnapshot{}, err
+	}
+	return CommandJournalCleanupSnapshot{
+		CleanupEpoch:          j.cleanupEpoch,
+		NamespaceGeneration:   j.namespaceGeneration,
+		SegmentSeq:            j.segmentSeq,
+		ActiveSegmentMaxLSN:   j.activeSegmentMaxLSN,
+		ActiveBytes:           j.writer.ActiveBytes(),
+		ActivePath:            j.path,
+		ActiveIdentity:        identity,
+		PendingStableRotation: len(j.pendingStableRotations),
+		PendingSuccessor:      j.pendingStableSuccessor != nil,
+	}, nil
+}
+
+// CaptureCleanupSnapshot captures the journal namespace and append epoch under
+// the journal owner lock. The snapshot contains no deletion authority by
+// itself; callers must consume it with WithCleanupSnapshot.
+func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot, error) {
+	if j == nil {
+		return CommandJournalCleanupSnapshot{}, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.cleanupSnapshotLocked()
+}
+
+// WithCleanupSnapshot revalidates snapshot and retains the journal owner lock
+// while fn acquires exact identity deletion leases and unlinks covered closed
+// segments. Appends and rotations therefore cannot enter between the final
+// epoch check and namespace mutation. The callback reports whether it changed
+// the namespace, including a partial batch that also returned an error, so the
+// next cleanup proof cannot reuse the pre-unlink generation.
+func (j *CommandJournal) WithCleanupSnapshot(snapshot CommandJournalCleanupSnapshot, fn func(*rootpublication.IdentityPinRegistry) (bool, error)) error {
+	if j == nil {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command journal is closed"))
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	current, err := j.cleanupSnapshotLocked()
+	if err != nil {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, err)
+	}
+	if current != snapshot {
+		return ErrCommandWALCleanupSnapshotStale
+	}
+	if fn == nil {
+		return nil
+	}
+	mutated, err := fn(j.stableResourcePins)
+	if mutated {
+		j.namespaceGeneration++
+		j.cleanupEpoch++
+	}
+	return err
 }
 
 func (j *CommandJournal) NextLSN() uint64 {
