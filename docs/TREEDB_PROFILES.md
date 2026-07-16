@@ -1,38 +1,37 @@
-# TreeDB Profiles
+# TreeDB Durability Profiles
 
-TreeDB exposes many low-level tuning knobs because real workloads care about
-different trade-offs:
+TreeDB exposes four canonical profile strings. Three are production contracts;
+the fourth is an explicitly unsafe benchmark/test ceiling.
 
-- WAL path: command WAL, or explicit benchmark-only no WAL
-- ACK guarantee: fsynced, flushed/appended but relaxed, or checkpoint/close only
-- layout policy: conservative/default, production-fast, or benchmark-only
-- predictable latency vs background maintenance
-- steady-state performance vs benchmark determinism
+| Profile | Ordinary acknowledgement | Explicit `*Sync` | `Checkpoint` / clean `Close` | Integrity | Production |
+| --- | --- | --- | --- | --- | --- |
+| `command_wal_durable` | durable dependency-closed command-WAL prefix | durable dependency-closed command-WAL prefix | sealed durable root | verify | yes, default |
+| `command_wal_relaxed` | relaxed | durable dependency-closed command-WAL prefix | sealed durable root | verify | yes |
+| `no_wal_fast` | relaxed | sealed durable root covering the call | sealed durable root | verify | yes |
+| `bench_unsafe` | no promise | no promise | no production promise | benchmark-selected | no |
 
-Most callers, however, want a small number of *intention-level* configurations.
-TreeDB profiles provide those as a convenience API. For cached-mode write-path
-semantics, including command-WAL, checkpoint-only benchmark, and legacy cached
-redo-journal compatibility terminology, see `docs/TREEDB_WRITE_PATHS.md`.
+`Flush` and `FlushAll` are visibility/drain operations in every profile. They
+do not promise file sync, directory sync, command-WAL durability, or sealed-root
+publication.
 
-The public profile surface is:
+The default for an otherwise valid zero-value `Options` contract is
+`command_wal_durable`.
 
-- `command_wal_durable`
-- `command_wal_relaxed`
-- `bench` as an explicit no-WAL benchmark ceiling
+## Canonical names and parser boundaries
 
-Older pre-command-WAL aliases are compatibility-only. Do not use them for new
-server, collection, Mongo gateway, or benchmark guidance.
+Configuration strings use exact underscore spellings. Hyphenated variants,
+case variants, abbreviations, and legacy aliases are rejected.
 
-## Reachability Policy
+| API | Accepted strings |
+| --- | --- |
+| `ParsePublicProfile` | `command_wal_durable`, `command_wal_relaxed`, `no_wal_fast` |
+| `ParseBenchmarkProfile` | the three production names plus `bench_unsafe` |
+| `ParseProfile` | the same four canonical names; callers must still use the correct constructor boundary |
 
-| Surface | Accepted profile names | Legacy-name behavior |
-| --- | --- | --- |
-| Public CLI/env parsers using `ParsePublicProfile` | `command_wal_durable`, `command_wal_relaxed`, `bench` | Reject with an error that names the allowed public profiles. |
-| Programmatic `OptionsFor` / `ApplyProfile` | Public profiles plus deprecated internal compatibility constants used by low-level tests and forensic reproduction | Unknown profile tokens panic instead of silently selecting bare default options; compatibility aliases are not public CLI/env names. |
-| Unified-bench `-profile` | Cross-DB benchmark-runner presets | These are benchmark-runner presets, not TreeDB server profile names. TreeDB-specific command-WAL coverage uses explicit TreeDB DB variants and knobs. |
-| Historical docs and benchmark reports | Recorded historical labels | Allowed only as historical evidence, not current setup guidance. |
+`ProfileFlagHelp` contains the production vocabulary.
+`BenchmarkProfileFlagHelp` also includes `bench_unsafe`.
 
-## Quick Start
+## Production quick start
 
 ```go
 package main
@@ -40,9 +39,8 @@ package main
 import treedb "github.com/snissn/gomap/TreeDB"
 
 func main() {
-	// Recommended: start from a profile and then override a few knobs.
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./db")
-	opts.FlushThreshold = 128 << 20 // optional workload-specific tuning
+	opts.FlushThreshold = 128 << 20 // workload tuning remains caller-owned
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -52,216 +50,139 @@ func main() {
 }
 ```
 
-If you already have an `Options` struct, you can apply a profile and then
-override specific fields:
+Existing option values can use `ApplyProfile`:
 
 ```go
 opts := treedb.Options{Dir: "./db"}
-treedb.ApplyProfile(&opts, treedb.ProfileBench)
+treedb.ApplyProfile(&opts, treedb.ProfileCommandWALRelaxed)
 opts.FlushThreshold = 64 << 20
 ```
 
-## What is a Profile?
+## Explicit benchmark/test boundary
 
-A `Profile` is a named preset for a small set of **policy** knobs:
+`bench_unsafe` is intentionally unavailable through `OptionsFor`,
+`ApplyProfile`, and `ParsePublicProfile`. Use the benchmark-specific API:
 
-- Durability / integrity checks (journal, sync policy, read checksums)
-- WAL path. Public profiles use command WAL, except `bench`, which is the
-  explicit no-WAL benchmark ceiling.
-- Background work (checkpoint / pruning) that can affect latency and
-  benchmark stability
-- For fast-layout profiles, the common value-log compression policy used by
-  current `run_celestia` deployments:
-  - `ValueLog.Compression = auto`
-  - `ValueLog.BlockCodec = snappy`
-  - `ValueLog.AutoPolicy = balanced`
-  - `ValueLog.CompressionAutotune = medium`
-  - dict incompressible hold / probe defaults tuned for long-running ingest
-    (`64MiB` / `32MiB`)
+```go
+opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, "./bench-db")
+// Equivalent for an existing Options value:
+// treedb.ApplyBenchmarkProfile(&opts, treedb.ProfileBenchUnsafe)
+```
 
-Profiles intentionally avoid setting most throughput/capacity knobs (like
-`FlushThreshold`) because those are highly workload dependent.
+Opening `bench_unsafe` without this explicit boundary fails closed. Do not use
+it for servers, adapters, production comparisons, or durability evidence.
 
-## Public Profiles
+## Contract details
 
-### `ProfileCommandWALDurable`
+### `command_wal_durable`
 
-String name: `command_wal_durable`
+This is the recommended production default.
 
-Goal: explicit command-WAL durability entry point.
+- Ordinary raw and supported collection/catalog acknowledgements wait until the
+  typed command and every required external dependency are a stable complete
+  command-WAL prefix.
+- Explicit `*Sync` operations provide the same durable prefix guarantee. They
+  do not require a backend-root checkpoint per call.
+- `Checkpoint` and clean `Close` publish a sealed complete root covering the
+  captured frontier.
+- Value-log checksum verification is enabled.
 
-Behavior:
+### `command_wal_relaxed`
 
-- Enables command WAL:
-  - `CommandWAL = true`
-- Keeps durable sync/integrity features enabled:
-  - `Durability = DurabilityDurable`
-  - `ValueLog.ReadIntegrity = IntegrityVerify`
-- Uses the production-fast collection/index layout bundle:
-  - `IndexOuterLeavesInValueLog = true`
-  - `LeafPrefixCompression = true`
-  - `IndexColumnarLeaves = true`
-  - `IndexPackedValuePtr = true`
-- Pins the current Celestia-style value-log compression defaults.
-- Leaves background workers at their default settings.
+This production profile keeps the command-WAL recovery path while allowing
+ordinary acknowledgements to lead its stable frontier.
 
-Use when you want:
+- Ordinary acknowledgements may lose a complete recent suffix after power loss.
+- Every explicit `*Sync` closes and persists a dependency-complete command-WAL
+  prefix, including the empty-sync barrier case.
+- `Checkpoint` and clean `Close` publish a sealed complete root.
+- Value-log checksum verification remains enabled; relaxed acknowledgement does
+  not imply relaxed read integrity.
 
-- command-WAL recovery aligned with TreeDB’s intended collection/Mongo
-  durability direction
-- durable fsync boundaries
-- corruption detection on reads
+### `no_wal_fast`
 
-Note: command-WAL collection support is still gated by the command support matrix
-and performance gates. Do not treat this name alone as broad/default collection
-cutover proof.
+This is a production no-WAL profile, not an alias for `bench_unsafe`.
 
-### `ProfileCommandWALRelaxed`
+- Ordinary acknowledgements may lead sealed-root publication and can lose a
+  complete recent suffix after power loss.
+- Every explicit `*Sync` waits for a sealed complete root covering the call.
+- `Checkpoint` and clean `Close` also publish a sealed complete root.
+- The persistent value log remains enabled for large values and outer leaves.
+- Value-log checksum verification remains enabled.
 
-String name: `command_wal_relaxed`
+### `bench_unsafe`
 
-Goal: command WAL with relaxed sync/read-integrity knobs for write-heavy
-benchmarks and ingest experiments.
+This profile disables command WAL, may skip value-log checksum verification,
+uses benchmark-oriented writable mappings, and disables background work that
+would add measurement noise. It carries no durability guarantee, including for
+ordinary writes, explicit `*Sync`, checkpoint, or close.
 
-Behavior:
+## Immutable resolved contract
 
-- Enables command WAL:
-  - `CommandWAL = true`
-- Keeps command frames recoverable from the local command-WAL path while relaxing
-  sync/checksum policy through `DurabilityWALOnRelaxed`:
-  - `Durability = DurabilityWALOnRelaxed` (current command-WAL relaxed durability mode)
-  - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
-- Uses the same production-fast collection/index layout and compression defaults
-  as `ProfileCommandWALDurable`.
+Profiles own the fields that define acknowledgement, durability, and integrity:
+command-WAL selection, durability mode, value-log read integrity, and unsafe
+benchmark admission. `Open` resolves one canonical profile and reapplies those
+owned fields. Mutating them after `OptionsFor` cannot silently create a hybrid
+contract.
 
-Use when you want:
+Caller-owned tuning and layout fields remain configurable after profile
+selection, including flush thresholds, caches, memory limits, and explicit
+compression/layout tuning. A production or benchmark main DB persists the exact
+canonical profile in `maindb/format.json` (format version 4). Reopen, native
+backend open, offline vacuum, and offline value-log rewrite must select that
+same profile. A missing, unknown, or mismatched persisted profile fails with the
+pre-alpha rebuild-required error, even when `IgnoreFormatConfig` is set. This
+prevents an old no-WAL or `bench_unsafe` directory from silently becoming the
+default durable production contract.
 
-- command-WAL path coverage without per-boundary fsync cost
-- benchmark evidence for the future command-WAL default path
+The resolved contract is observable through:
 
-### `ProfileBench`
+- `DB.ResolvedProfile()`
+- `treedb.profile.resolved`
+- `treedb.profile.ordinary_ack_class`
+- `treedb.profile.production`
+- `treedb.profile.bench_unsafe`
+- `treedb.profile.deprecated_alias`
 
-String name: `bench`
+## Deprecated Go aliases
 
-Goal: no-WAL benchmark-friendly determinism.
+The following source-level aliases remain temporarily available for compatibility
+and forensic reproduction. They are not parser tokens:
 
-Behavior:
+| Deprecated alias | Canonical mapping |
+| --- | --- |
+| `ProfileDurable`, `ProfileLegacyWALDurable` | `command_wal_durable` |
+| `ProfileWALOnFast`, `ProfileLegacyWALRelaxedFast` | `command_wal_relaxed` |
+| `ProfileFast` | `no_wal_fast` |
+| `ProfileBench` | `bench_unsafe` |
 
-- Uses the fast collection/index layout bundle.
-- Disables WAL through the benchmark-only no-WAL cached compatibility path.
-- Disables background workers that can inject large work mid-run:
-  - cached-mode auto-checkpoint triggers disabled
-    (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,
-    `MaxWALBytes < 0`)
-  - disables background pruning (`DisableBackgroundPrune=true`)
+Selecting a legacy alias records `treedb.profile.deprecated_alias`. The
+`ProfileBench` alias still requires `OptionsForBenchmark` or
+`ApplyBenchmarkProfile`; compatibility does not bypass unsafe admission.
 
-Use when you want:
-
-- an explicit no-WAL throughput ceiling for benchmark comparison
-- apples-to-apples comparisons across engine variants where background work
-  would otherwise add noise
-
-Do not use `bench` as a production/server durability profile.
-
-## Transitional/Internal Compatibility
-
-Some deprecated constants and aliases still exist in code so low-level tests and
-forensic benchmark reproduction can open old raw/cached write-path bundles. They
-are intentionally absent from `ProfileFlagHelp`, rejected by
-`ParsePublicProfile`, and should not appear in new server, collection, Mongo
-gateway, or benchmark instructions. New benchmark ceilings should use `bench`;
-new durable or relaxed write-path coverage should use the command-WAL profiles.
-
-## Measuring Final Storage
+## Final storage measurement
 
 Profiles choose write-path and maintenance policy; they do not by themselves
-produce a fully compacted on-disk footprint. If you are reporting final disk
-usage for a benchmark or handoff, run the high-level storage compaction path
-after loading and before measuring:
+produce a fully compacted footprint. Before reporting settled storage size:
 
 ```sh
 treemap compact <db-dir> -rw
 treemap compact-plan <db-dir>
 ```
 
-or in Go:
+or use `DB.CompactStorage` with `CompactStorageFull`. This coordinates value-log
+rewrite/GC, outer-leaf generation packing/GC, index vacuum, and empty-segment
+cleanup.
 
-```go
-stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
-	Mode: treedb.CompactStorageFull,
-})
-```
+## Downstream validation
 
-This is the recommended path for current fast-layout profiles such as
-`ProfileCommandWALDurable`, `ProfileCommandWALRelaxed`, and benchmark-only
-`ProfileBench`. It coordinates `value_vlog` rewrite/GC, `leaf_vlog` generation
-pack/GC, index vacuum, and zero-byte value-log cleanup. Do not manually chain
-`vlog-gc`, `vlog-rewrite`, `leafgen-pack`, `leafgen-gc`, and index vacuum unless
-you are debugging TreeDB internals.
+Downstream adapters must pin the gomap commit, state the exact canonical profile,
+record any caller-owned overrides, and preserve command-WAL/root-publication
+counters. Follow `docs/TREEDB_DOWNSTREAM_VALIDATION.md` before publishing
+performance or durability claims.
 
-## Downstream Validation
+See also:
 
-Downstream adapters should not claim TreeDB-vs-LevelDB evidence from a partial
-profile switch alone. Before publishing adapter benchmark evidence, follow the
-checklist in `docs/TREEDB_DOWNSTREAM_VALIDATION.md`: pin the gomap commit/tag,
-state the selected public profile, preserve command-WAL and checkpoint counters,
-and include enough load-window rows to separate command-WAL sync cost from
-checkpoint/close cost.
-
-## Important Notes
-
-### Profiles do not prevent overrides
-
-Profiles are just helpers. You can always override any option after applying a
-profile.
-
-### Downstream wrappers should start from profiles
-
-If you are wrapping TreeDB in another project (for example a cosmos-db or
-cometbft-db adapter), start from `OptionsFor(...)` / `ApplyProfile(...)` or the
-standard downstream helper in `TreeDB/integration/kvstoreadapter`. That keeps
-the high-level intent aligned as TreeDB evolves and avoids copying profile/env
-parsing glue into each downstream wrapper.
-
-Recommended surface area for most wrappers:
-
-- Pick a profile first: `command_wal_durable`, `command_wal_relaxed`, or
-  benchmark-only `bench`
-- Expose a small set of main knobs:
-  - durability/profile
-  - value-log pointer threshold
-  - value-log compression mode / auto policy
-  - maintenance mode / background rewrite policy
-  - index optimization bundle / outer leaves in vlog
-- Keep advanced compression training/autotune/dict knobs as explicit escape
-  hatches, not primary tuning inputs
-
-Minimal helper usage:
-
-```go
-import (
-	treedb "github.com/snissn/gomap/TreeDB"
-	treedbkv "github.com/snissn/gomap/TreeDB/integration/kvstoreadapter"
-)
-
-opened, err := treedbkv.Open(treedbkv.OpenConfig{
-	ParentDir:                   dir,
-	Name:                        "application",
-	AdapterName:                 "TreeDB",
-	DefaultProfile:              treedb.ProfileCommandWALRelaxed,
-	DefaultKeepRecent:           1,
-	DefaultAdaptiveMemtableBase: "hash_sorted",
-})
-if err != nil {
-	return err
-}
-defer opened.DB.Close()
-```
-
-### Booleans are not tri-state
-
-In Go, boolean fields cannot distinguish “unset” from “explicit false”.
-Profiles set boolean policy knobs to match the profile.
-
-If you want the opposite behavior, apply the profile and then set the boolean
-explicitly.
+- `docs/TREEDB_WRITE_PATHS.md`
+- `docs/contracts/DURABILITY.md`
+- `TreeDB/docs/spec/write-path-and-durability.md`

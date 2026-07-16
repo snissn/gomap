@@ -42,13 +42,12 @@ type observedPowerLossCommandFrame struct {
 }
 
 func powerLossOptions(dir string) treedb.Options {
-	return treedb.Options{
-		Dir:                          dir,
-		ChunkSize:                    64 * 1024,
-		DisableSideStores:            true,
-		DisableBackgroundPrune:       true,
-		BackgroundCheckpointInterval: -1,
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.ChunkSize = 64 * 1024
+	opts.DisableSideStores = true
+	opts.DisableBackgroundPrune = true
+	opts.BackgroundCheckpointInterval = -1
+	return opts
 }
 
 func seedPowerLossImage(t *testing.T) (*powerlossoracle.Model, treedb.Options, uint64) {
@@ -175,7 +174,7 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	}
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	opts.CommandWAL = true
+	treedb.ApplyProfile(&opts, treedb.ProfileCommandWALRelaxed)
 	opts.CommandWALSegmentTargetBytes = 4096
 	opts.WALMaxSegmentBytes = 64 * 1024
 	opts.ValueLog.PointerThreshold = 1
@@ -369,7 +368,6 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	opts.Durability = treedb.DurabilityWALOffRelaxed
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	opts.IndexOuterLeavesInValueLog = true
@@ -865,8 +863,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	opts.CommandWAL = true
-	opts.Durability = treedb.DurabilityWALOnRelaxed
+	treedb.ApplyProfile(&opts, treedb.ProfileCommandWALRelaxed)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	db, err := treedb.Open(opts)
@@ -1027,7 +1024,6 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) {
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	opts.Durability = treedb.DurabilityWALOffRelaxed
 	opts.FlushBackendMaxEntries = 4
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -1178,11 +1174,12 @@ func TestPowerLossOracleFixtureInventoryReopensStableOnly(t *testing.T) {
 		{name: "multi-lane-value-log", entries: 320, valueSize: 1024, valueLanes: 4, configure: func(opts *treedb.Options) {
 			opts.JournalLanes = 4
 			opts.MemtableShards = 16
+			opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
 			opts.ValueLog.PointerThreshold = 1
 			opts.ValueLog.ForcePointers = true
 		}},
 		{name: "segment-rotation", entries: 80, valueSize: 1024, rotatedWAL: true, configure: func(opts *treedb.Options) {
-			opts.CommandWAL = true
+			treedb.ApplyProfile(opts, treedb.ProfileCommandWALRelaxed)
 			opts.WALMaxSegmentBytes = 4096
 			opts.ValueLog.PointerThreshold = 1
 			opts.ValueLog.ForcePointers = true

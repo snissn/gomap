@@ -189,7 +189,7 @@ func computeFlushAdmissionDecisionForHardware(opts *Options, gomax, physicalCore
 		if candidateConcurrency < defaultFlushAdmissionAutoMinConcurrency {
 			reasons = append(reasons, FlushAdmissionReasonLowConcurrency)
 		}
-		if opts.Durability == DurabilityWALOffRelaxed {
+		if opts.Durability == DurabilityWALOffRelaxed && opts.ResolvedProfile != ProfileNoWALFast {
 			reasons = append(reasons, FlushAdmissionReasonUnsafeDurability)
 		}
 		if !flushAdmissionCheckpointDebtAccepted {

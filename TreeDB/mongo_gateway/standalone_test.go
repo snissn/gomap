@@ -42,7 +42,7 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 
 	normalized, err := NormalizeStandaloneOptions(StandaloneOptions{
 		Dir:     t.TempDir(),
-		Profile: treedb.Profile("command-wal-relaxed"),
+		Profile: treedb.ProfileCommandWALRelaxed,
 		DefaultCollectionOptions: collections.CollectionOptions{
 			DocumentFormat: collections.DocumentFormat(" BSON "),
 		},
@@ -55,7 +55,7 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	}
 	commandWAL, err := NormalizeStandaloneOptions(StandaloneOptions{
 		Dir:     t.TempDir(),
-		Profile: treedb.Profile("command-wal-durable"),
+		Profile: treedb.ProfileCommandWALDurable,
 	})
 	if err != nil {
 		t.Fatalf("NormalizeStandaloneOptions command WAL profile: %v", err)
@@ -661,7 +661,11 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 				t.Fatalf("mongo connect: %v", err)
 			}
 
-			opCtx, opCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			opTimeout := 15 * time.Second
+			if profile == treedb.ProfileCommandWALDurable {
+				opTimeout = 60 * time.Second
+			}
+			opCtx, opCancel := context.WithTimeout(context.Background(), opTimeout)
 			defer opCancel()
 			if err := client.Ping(opCtx, nil); err != nil {
 				_ = client.Disconnect(context.Background())

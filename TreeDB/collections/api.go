@@ -4044,9 +4044,10 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	return ids[0], nil
 }
 
-// Flush publishes buffered collection-local writes to the backend roots. Single
-// no-index inserts use this boundary to match TreeDB's cached write path while
-// still giving callers an explicit durability/visibility point.
+// Flush publishes buffered collection-local writes for visibility and drains
+// collection-local work. It does not promise a durable WAL or root boundary;
+// callers that need durability must use the selected profile's explicit sync,
+// Checkpoint, or clean Close contract.
 func (c *Collection) Flush() error {
 	if c == nil {
 		return errCollectionNil

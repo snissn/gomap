@@ -88,6 +88,8 @@ func openReadOnly(opts Options) (*DB, error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
 		readOnly:                       true,
+		resolvedProfile:                opts.ResolvedProfile,
+		deprecatedProfileAlias:         opts.DeprecatedProfileAlias,
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,
@@ -243,6 +245,8 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
 		readOnly:                       true,
+		resolvedProfile:                opts.ResolvedProfile,
+		deprecatedProfileAlias:         opts.DeprecatedProfileAlias,
 		durability:                     opts.Durability,
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,

@@ -82,7 +82,7 @@ func requireRawKVValue(t *testing.T, db *DB, key []byte, want []byte) {
 }
 
 func TestRawKVParityEmptyPointKeyNilValueCached(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestRawKVParityEmptyPointKeyNilValueCached(t *testing.T) {
 }
 
 func TestRawKVParityUpdateEmptyKeyNilValueCached(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

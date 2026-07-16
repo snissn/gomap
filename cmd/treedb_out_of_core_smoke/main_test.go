@@ -32,16 +32,16 @@ func TestValidateSmokeRunRequiresShapeLabel(t *testing.T) {
 }
 
 func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
-	if got, err := parseProfile("bench"); err != nil || got != treedb.ProfileBench {
-		t.Fatalf("parseProfile bench = %q err=%v", got, err)
+	if got, err := parseProfile("bench_unsafe"); err != nil || got != treedb.ProfileBenchUnsafe {
+		t.Fatalf("parseProfile bench_unsafe = %q err=%v", got, err)
 	}
-	for _, raw := range []string{"fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast", "production_fast", "production_wal_on_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "production_fast", "production_wal_on_fast"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := parseProfile(raw)
 			if err == nil {
 				t.Fatal("parseProfile succeeded, want error")
 			}
-			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+			if !strings.Contains(err.Error(), treedb.BenchmarkProfileFlagHelp) {
 				t.Fatalf("error=%v, want profile help", err)
 			}
 		})

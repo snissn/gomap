@@ -290,14 +290,21 @@ func main() {
 
 The current public TreeDB profile surface is intentionally small:
 
-- `command_wal_durable`: recommended server default; command WAL enabled with
-  durable sync/checksum settings.
-- `command_wal_relaxed`: command WAL enabled with relaxed sync/read-integrity
-  settings for high-throughput ingest and comparative benchmarks.
-- `bench`: explicit no-WAL benchmark-only ceiling.
+- `command_wal_durable`: recommended server default; ordinary acknowledgements
+  wait for a durable dependency-closed command-WAL prefix.
+- `command_wal_relaxed`: ordinary acknowledgements are relaxed, while every
+  explicit `*Sync` waits for a durable dependency-closed command-WAL prefix.
+- `no_wal_fast`: production no-WAL profile; ordinary acknowledgements are
+  relaxed and every explicit `*Sync` waits for a sealed durable root.
+- `bench_unsafe`: benchmark/test-only ceiling with no durability promise. It is
+  available only through the explicit benchmark constructor/parser boundary.
 
-Legacy/raw profile names are retained only for compatibility and focused
-low-level tests. They should not be used as public server defaults.
+All three production profiles verify value-log integrity. `Flush` is a
+visibility/drain operation, not a durability boundary. `Checkpoint` and clean
+`Close` wait for a sealed durable root.
+
+Legacy Go aliases are retained only for compatibility and focused low-level
+tests. CLI and environment parsers accept only canonical underscore names.
 
 More detail: `docs/TREEDB_PROFILES.md` and `docs/TREEDB_WRITE_PATHS.md`.
 

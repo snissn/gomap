@@ -24137,7 +24137,7 @@ func (db *DB) Checkpoint() error {
 				hook()
 			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
-				commandWALAppliedLSN, commandWALRanges, err := publishHook(!db.relaxedSync)
+				commandWALAppliedLSN, commandWALRanges, err := publishHook(true)
 				if err != nil {
 					return err
 				}
@@ -24150,7 +24150,7 @@ func (db *DB) Checkpoint() error {
 				if err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+				if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 					return err
 				}
 			}
@@ -24234,7 +24234,7 @@ func (db *DB) Checkpoint() error {
 	if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
 		commandWALPublishStart := time.Now()
-		commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+		commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
@@ -24322,7 +24322,7 @@ func (db *DB) Checkpoint() error {
 		if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 			var err error
 			commandWALPublishStart := time.Now()
-			commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+			commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 			recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 			if err != nil {
 				return err
@@ -24361,7 +24361,7 @@ func (db *DB) Checkpoint() error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 			return err
 		}
 	}
@@ -24410,7 +24410,7 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
 	}
-	if removed && !db.relaxedSync {
+	if removed {
 		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	db.observeCheckpointWALCleanupCoverage(cleanupConsidered, cleanupRemoved, cleanupSkippedCurrent, cleanupSkippedPreRotate, cleanupSkippedRetained)
@@ -24444,12 +24444,7 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 		_ = backendBatch.Close()
 		return false, err
 	}
-	var err error
-	if db.relaxedSync {
-		err = backendBatch.Write()
-	} else {
-		err = backendBatch.WriteSync()
-	}
+	err := backendBatch.WriteSync()
 	cerr := backendBatch.Close()
 	if err == nil {
 		err = cerr

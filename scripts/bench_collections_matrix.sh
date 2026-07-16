@@ -59,8 +59,8 @@ case "$MATRIX" in
     MATRIX_ROWS=(
       "command_wal_relaxed_data_vlog_index_leaf command_wal_relaxed true false"
       "command_wal_relaxed_data_vlog_index_vlog command_wal_relaxed true true"
-      "bench_data_vlog_index_leaf bench true false"
-      "bench_data_vlog_index_vlog bench true true"
+      "bench_unsafe_data_vlog_index_leaf bench_unsafe true false"
+      "bench_unsafe_data_vlog_index_vlog bench_unsafe true true"
     )
     ;;
   full)
@@ -69,10 +69,10 @@ case "$MATRIX" in
       "command_wal_relaxed_data_leaf_index_vlog command_wal_relaxed false true"
       "command_wal_relaxed_data_vlog_index_leaf command_wal_relaxed true false"
       "command_wal_relaxed_data_vlog_index_vlog command_wal_relaxed true true"
-      "bench_data_leaf_index_leaf bench false false"
-      "bench_data_leaf_index_vlog bench false true"
-      "bench_data_vlog_index_leaf bench true false"
-      "bench_data_vlog_index_vlog bench true true"
+      "bench_unsafe_data_leaf_index_leaf bench_unsafe false false"
+      "bench_unsafe_data_leaf_index_vlog bench_unsafe false true"
+      "bench_unsafe_data_vlog_index_leaf bench_unsafe true false"
+      "bench_unsafe_data_vlog_index_vlog bench_unsafe true true"
     )
     ;;
   quick)
@@ -405,7 +405,7 @@ cat >>"$SUMMARY_MD" <<'EOF'
 
 ## Intended 768 Use
 
-The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `command_wal_relaxed` cells exercise the current command-WAL collection profile, while `bench` cells provide the explicit benchmark-only no-WAL ceiling without changing the collection storage policy.
+The production matrix keeps collection data roots in value-log outer-leaf mode and varies index roots between inline outer leaves and value-log outer leaves. The `command_wal_relaxed` cells exercise the current command-WAL collection profile, while `bench_unsafe` cells provide the explicit benchmark-only no-WAL ceiling without changing the collection storage policy.
 
 The focused default benchmark set keeps JSON extraction overhead, non-JSON indexed planning overhead, indexed batch apply, and indexed checkpoint apply in the same artifact so regressions can be separated into JSON cost, planner cost, root publish cost, and durability-boundary cost. Checkpointed rows report `insert_ns/doc` and `sync_ns/doc`, and the user-story TSV renders those as insert/sync milliseconds per batch.
 

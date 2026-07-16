@@ -18,25 +18,19 @@ import (
 func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	dir := t.TempDir()
 	bgErrCh := make(chan error, 16)
-	opts := treedb.Options{
-		Dir:            dir,
-		FlushThreshold: 1 << 20,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-			Compression:      treedb.ValueLogCompressionAuto,
-			AutoPolicy:       treedb.ValueLogAutoSize,
-			CompressionAutotune: treedb.AutotuneOptions{
-				Mode: treedb.AutotuneOff,
-			},
-			// Keep dict training/publish deterministic across hosts.
-			DictAdaptiveRatio: -1,
-		},
-		NotifyError: func(err error) {
-			select {
-			case bgErrCh <- err:
-			default:
-			}
-		},
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.FlushThreshold = 1 << 20
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.Compression = treedb.ValueLogCompressionAuto
+	opts.ValueLog.AutoPolicy = treedb.ValueLogAutoSize
+	opts.ValueLog.CompressionAutotune = treedb.AutotuneOptions{Mode: treedb.AutotuneOff}
+	// Keep dict training/publish deterministic across hosts.
+	opts.ValueLog.DictAdaptiveRatio = -1
+	opts.NotifyError = func(err error) {
+		select {
+		case bgErrCh <- err:
+		default:
+		}
 	}
 	treedb.EnableValueLogDictCompression(&opts)
 
@@ -159,7 +153,8 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveTreemapMainDir: %v", err)
 	}
-	backendOpts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
+	backendOpts := treedb.OptionsFor(treedb.ProfileNoWALFast, backendDir)
+	backendOpts.ReadOnly = false
 	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
 	if err != nil {
 		t.Fatalf("LoadFormatConfig: %v", err)
@@ -173,7 +168,9 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		t.Fatalf("backend Close: %v", err)
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
+	openBackendOpts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	openBackendOpts.ReadOnly = false
+	backend, cleanup, err := treedb.OpenBackend(openBackendOpts)
 	if err != nil {
 		t.Fatalf("OpenBackend: %v", err)
 	}

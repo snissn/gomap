@@ -10,6 +10,8 @@ import (
 )
 
 func TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail(t *testing.T) {
+	withTreeDBFastReadRequireHitFlags(t)
+
 	prevMemtableMode := *treedbMemtableMode
 	prevForcePointers := *treedbForceValuePointers
 	prevValueLogThreshold := *treedbValueLogThreshold
@@ -149,7 +151,7 @@ func withTreeDBFastReadRequireHitFlags(t *testing.T) {
 		*treedbValueLogThreshold = prevValueLogThreshold
 	})
 
-	applyTreeDBProfileIfUnset(treedb.ProfileFast, map[string]bool{})
+	applyTreeDBProfileIfUnset(treedb.ProfileBenchUnsafe, map[string]bool{})
 
 	*readWorkers = 8
 	*treedbAllowUnsafe = true

@@ -36,7 +36,7 @@ fi
 } >"$out/metadata.env"
 
 fixed_cmd=(go test ./benchmarks/dgraph_durability -run '^$' -bench '^BenchmarkDgraphShapedMixedFixed' -benchmem -benchtime=1x -count="$repeats")
-concurrent_cmd=(go test ./benchmarks/dgraph_durability -run '^$' -bench '^BenchmarkDgraphShapedConcurrentDurable' -benchmem -benchtime="${concurrent_commits}x" -count="$repeats")
+concurrent_cmd=(go test ./benchmarks/dgraph_durability -run '^$' -bench '^BenchmarkDgraphShapedConcurrentAcknowledgement' -benchmem -benchtime="${concurrent_commits}x" -count="$repeats")
 mvcc_cmd=(go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkCommitAtGetAtInterleaved$' -benchmem -count="$repeats")
 
 {
@@ -50,5 +50,5 @@ mvcc_cmd=(go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkCommitAtGetAtInterle
 } >"$out/commands.txt"
 
 GOWORK=off "${fixed_cmd[@]}" | tee "$out/fixed_mixed.txt"
-GOWORK=off "${concurrent_cmd[@]}" | tee "$out/concurrent_durable.txt"
+GOWORK=off "${concurrent_cmd[@]}" | tee "$out/concurrent_acknowledgement.txt"
 GOWORK=off "${mvcc_cmd[@]}" | tee "$out/mvcc_interleaved.txt"
