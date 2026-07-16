@@ -188,6 +188,24 @@ func (r *vacuumRecorder) Stop() {
 	r.active.Store(false)
 }
 
+// startVacuumRecorderWithBaseSnapshot establishes one mutation-recording cut:
+// every root publication that began before the recorder is active is fully
+// visible in the returned snapshot, while every later publication observes an
+// active recorder. durablePublishMu closes the gap after a publisher releases
+// writeMu but before its prepared root becomes visible.
+func (db *DB) startVacuumRecorderWithBaseSnapshot() *Snapshot {
+	if hook := db.vacuumBeforeRecorderFenceHook; hook != nil {
+		hook()
+	}
+	db.writeMu.Lock()
+	db.durablePublishMu.Lock()
+	db.vacuum.Start()
+	baseSnap := db.AcquireSnapshot()
+	db.durablePublishMu.Unlock()
+	db.writeMu.Unlock()
+	return baseSnap
+}
+
 func vacuumRecordCopyEntry(entry batch.Entry) batch.Entry {
 	out := entry
 	out.Key = append([]byte(nil), entry.Key...)
@@ -446,11 +464,12 @@ func (db *DB) vacuumIndexOnlineLegacyV1(ctx context.Context, lockMaintenance boo
 	db.idxMu.Unlock()
 	newZ.SetParallelMergePressureSource(parallelMergePressureSource)
 
-	db.vacuum.Start()
+	// Fence the initial recorder start against writers and in-flight prepared
+	// roots so a private multi-chunk build cannot straddle the base snapshot.
+	baseSnap := db.startVacuumRecorderWithBaseSnapshot()
 	defer db.vacuum.Stop()
 
 	// Build a fresh user tree from a stable snapshot.
-	baseSnap := db.AcquireSnapshot()
 	if baseSnap == nil {
 		cleanupNewPager()
 		if db.closing.Load() {

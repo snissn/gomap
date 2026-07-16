@@ -193,6 +193,90 @@ func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
 	}
 }
 
+func TestVacuumBaseSnapshotWaitsForPrivateRootPublicationBuildGroup(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                    t.TempDir(),
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	group, err := database.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+	}
+	defer group.Close()
+
+	intermediateKey := []byte("vacuum-fence-intermediate")
+	intermediate := database.NewPhysicalBatch().(*Batch)
+	if err := intermediate.Set(intermediateKey, []byte("private-before-vacuum")); err != nil {
+		t.Fatalf("intermediate Set: %v", err)
+	}
+	if err := intermediate.SetRootPublicationBuildGroup(group, false); err != nil {
+		t.Fatalf("intermediate SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := intermediate.Write(); err != nil {
+		t.Fatalf("intermediate Write: %v", err)
+	}
+	if err := intermediate.Close(); err != nil {
+		t.Fatalf("intermediate Close: %v", err)
+	}
+
+	fenceAttempted := make(chan struct{})
+	database.vacuumBeforeRecorderFenceHook = func() { close(fenceAttempted) }
+	defer func() { database.vacuumBeforeRecorderFenceHook = nil }()
+	baseSnapshot := make(chan *Snapshot, 1)
+	go func() { baseSnapshot <- database.startVacuumRecorderWithBaseSnapshot() }()
+	defer database.vacuum.Stop()
+	<-fenceAttempted
+	select {
+	case snap := <-baseSnapshot:
+		if snap != nil {
+			_ = snap.Close()
+		}
+		t.Fatal("vacuum captured its base snapshot while a private root build was active")
+	default:
+	}
+
+	finalKey := []byte("vacuum-fence-final")
+	final := database.NewPhysicalBatch().(*Batch)
+	if err := final.Set(finalKey, []byte("published-before-vacuum-base")); err != nil {
+		t.Fatalf("final Set: %v", err)
+	}
+	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
+		t.Fatalf("final SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := final.WriteSync(); err != nil {
+		t.Fatalf("final WriteSync: %v", err)
+	}
+	if err := final.Close(); err != nil {
+		t.Fatalf("final Close: %v", err)
+	}
+
+	var snap *Snapshot
+	select {
+	case snap = <-baseSnapshot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("vacuum base snapshot remained blocked after the root build published")
+	}
+	if snap == nil {
+		t.Fatal("vacuum base snapshot is nil")
+	}
+	defer snap.Close()
+	for _, key := range [][]byte{intermediateKey, finalKey} {
+		got, err := snap.Get(key)
+		if err != nil {
+			t.Fatalf("snapshot Get(%q): %v", key, err)
+		}
+		if got == nil {
+			t.Fatalf("vacuum base snapshot omitted published build-group key %q", key)
+		}
+	}
+}
+
 func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
