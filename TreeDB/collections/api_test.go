@@ -967,8 +967,8 @@ func TestCollectionFastJSONMaintenanceVacuumUsesValueLogLeaves(t *testing.T) {
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint after value-log GC: %v", err)
 	}
-	if err := d.VacuumIndexOnline(ctx); err != nil {
-		t.Fatalf("vacuum index online: %v", err)
+	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) {
+		t.Fatalf("vacuum index online err=%v want recoverable-root-set fence", err)
 	}
 
 	got, err := col.Get([]byte("did:example:019999"))

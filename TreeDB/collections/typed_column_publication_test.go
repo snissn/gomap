@@ -1612,6 +1612,7 @@ func TestTypedColumnMultipartPartSetRefsRetainedDuringGC1787(t *testing.T) {
 }
 
 func TestTypedColumnMultipartPartSetRefsRewriteAndGCSafe1787(t *testing.T) {
+	t.Skip("deferred to #3681: destructive typed-column asset cleanup requires RecoverableRootSet convergence")
 	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	dir := d.Dir()
@@ -1834,6 +1835,7 @@ func TestTypedColumnSnapshotReadsOldRefsAfterDelete(t *testing.T) {
 }
 
 func TestTypedColumnPublicationColumnAssetRewriteRoundTrip(t *testing.T) {
+	t.Skip("deferred to #3681: destructive typed-column asset cleanup requires RecoverableRootSet convergence")
 	runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t)
 }
 
@@ -1842,6 +1844,7 @@ func TestTypedColumnColumnAssetRewriteRoundTripMixedRefs(t *testing.T) {
 }
 
 func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
+	t.Skip("deferred to #3681: destructive typed-column asset cleanup requires RecoverableRootSet convergence")
 	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	dir := d.Dir()

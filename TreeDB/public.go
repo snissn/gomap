@@ -1088,24 +1088,10 @@ func Open(opts Options) (*DB, error) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
-	vacuumInterval := opts.BackgroundIndexVacuumInterval
-	if vacuumInterval == 0 {
-		vacuumInterval = 30 * time.Second
-	}
-	if vacuumInterval < 0 {
-		vacuumInterval = 0
-	}
-	if vacuumInterval > 0 {
-		out.bgVac.Start(out, bgIndexVacuumConfig{
-			Interval:                    vacuumInterval,
-			SpanRatioPPM:                opts.BackgroundIndexVacuumSpanRatioPPM,
-			MaxBacklogSkips:             opts.BackgroundIndexVacuumMaxBacklogSkips,
-			FreelistReclaimableRatioPPM: opts.BackgroundIndexVacuumFreelistReclaimableRatioPPM,
-			FreelistReclaimablePages:    opts.BackgroundIndexVacuumFreelistReclaimablePages,
-			CollectionRootSpanRatioPPM:  opts.BackgroundIndexVacuumCollectionRootSpanRatioPPM,
-			CollectionRootPages:         opts.BackgroundIndexVacuumCollectionRootPages,
-		})
-	}
+	// #3681 owns RecoverableRootSet convergence for destructive maintenance.
+	// Until that fence is available, do not launch a worker whose only online
+	// operation is deliberately unsupported. Explicit VacuumIndexOnline calls
+	// still fail closed with ErrVacuumRecoverableRootSetRequired.
 	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 
 	return out, nil

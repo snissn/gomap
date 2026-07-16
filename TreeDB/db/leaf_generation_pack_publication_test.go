@@ -102,6 +102,16 @@ func closeLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rew
 	}
 }
 
+func closePoisonedLeafGenerationPackPublicationTestDB(t *testing.T, db *DB, leafLog *rewriteWriter) {
+	t.Helper()
+	if err := db.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Close poisoned DB error=%v want ErrRecoveryRequired", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("Close leaf log: %v", err)
+	}
+}
+
 func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
@@ -134,15 +144,14 @@ func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.
 		t.Fatalf("retry stats=%+v hook attempts=%d", stats, attempts.Load())
 	}
 	idx := db.idx.Load()
-	if got, want := idx.pager.PageCount(), db.meta.TotalPages; got != want {
-		t.Fatalf("live PageCount=%d durable TotalPages=%d", got, want)
+	if got, want := idx.pager.PageCount(), db.durableRoot.record.TotalPages; got != want {
+		t.Fatalf("live PageCount=%d durable record TotalPages=%d", got, want)
 	}
-	durableAllocator := freelist.New(idx.pager, db.meta.FreelistHeadID)
-	beforeStats, err := durableAllocator.Stats(db.meta.TotalPages)
+	beforeStats, err := idx.allocator.Stats(db.durableRoot.record.TotalPages)
 	if err != nil {
 		t.Fatalf("allocator Stats before close: %v", err)
 	}
-	wantPages := db.meta.TotalPages
+	wantPages := db.durableRoot.record.TotalPages
 	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
 
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
@@ -157,8 +166,11 @@ func TestLeafGenerationPack_RetryExhaustionDoesNotLeakCommittedPages(t *testing.
 	if err != nil {
 		t.Fatalf("allocator Stats after reopen: %v", err)
 	}
-	if afterStats.ReclaimablePages() <= beforeStats.ReclaimablePages() {
-		t.Fatalf("retired unpublished pages were not recoverable after reopen: before=%+v after=%+v", beforeStats, afterStats)
+	// Generation-COW tracks the rollback pages in the live generation before
+	// close, so reopening may preserve (rather than strictly increase) the
+	// reclaimable count. It must never lose those already-accounted pages.
+	if afterStats.ReclaimablePages() < beforeStats.ReclaimablePages() {
+		t.Fatalf("retired unpublished pages were lost across reopen: before=%+v after=%+v", beforeStats, afterStats)
 	}
 	for i := 1; i <= 2; i++ {
 		got, err := reopened.Get([]byte(fmt.Sprintf("retry-conflict-%d", i)))
@@ -230,8 +242,8 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 			if err := db.SetSync([]byte("after-failure"), []byte("ok")); err != nil {
 				t.Fatalf("SetSync after pre-meta failure: %v", err)
 			}
-			if got, want := db.idx.Load().pager.PageCount(), db.meta.TotalPages; got != want {
-				t.Fatalf("post-failure publish pages=%d durable total=%d", got, want)
+			if got, want := db.idx.Load().pager.PageCount(), db.durableRoot.record.TotalPages; got != want {
+				t.Fatalf("post-failure publish pages=%d durable record total=%d", got, want)
 			}
 		})
 	}
@@ -739,7 +751,7 @@ func TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates(t *testin
 	if err := db.idx.Load().pager.Sync(); err != nil {
 		t.Fatalf("later raw pager sync: %v", err)
 	}
-	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	closePoisonedLeafGenerationPackPublicationTestDB(t, db, leafLog)
 	if got := registry.ActivePins(); got != 0 {
 		t.Fatalf("packed authority pins after close=%d want 0", got)
 	}
@@ -807,7 +819,7 @@ func TestLeafGenerationPack_MetaSyncFailureCanReopenOldMeta(t *testing.T) {
 	if err := db.idx.Load().pager.SyncPages([]uint64{targetMetaPageID}); err != nil {
 		t.Fatalf("sync restored alternate meta: %v", err)
 	}
-	closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	closePoisonedLeafGenerationPackPublicationTestDB(t, db, leafLog)
 
 	reopened, err := Open(leafGenerationPackPublicationTestOptions(dir))
 	if err != nil {
@@ -911,7 +923,7 @@ func TestLeafGenerationPack_RefreshAndSnapshotCannotObserveFailedRegistration(t 
 func TestLeafGenerationPack_MetaSyncFailureRejectsQueuedLeafGC(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
-	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	defer closePoisonedLeafGenerationPackPublicationTestDB(t, db, leafLog)
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 
 	registered := make(chan struct{})

@@ -458,7 +458,7 @@ func TestFlushCollectionModeCheckpointCommandWALPublishKeepsSpanNativeEligible(t
 	}
 }
 
-func TestFlushCollectionModeCheckpointCommandWALPublishDoesNotFencePublishChunk(t *testing.T) {
+func TestFlushCollectionModeCheckpointCommandWALPublishStagesOneFinalPublication(t *testing.T) {
 	db, backend := newCoalescingTestDB(t, Options{
 		FlushApplySpanNative:       true,
 		FlushApplyConcurrency:      4,
@@ -482,12 +482,18 @@ func TestFlushCollectionModeCheckpointCommandWALPublishDoesNotFencePublishChunk(
 	backend.mu.RLock()
 	writeCalls := backend.writeCalls
 	reasons := append([]backenddb.FlushSpanRunFallbackReason(nil), backend.spanNativeFallbackReasons...)
+	groups := backend.rootPublicationBuildGroups
+	groupBatches := backend.rootPublicationGroupBatches
+	groupFinals := backend.rootPublicationGroupFinals
 	backend.mu.RUnlock()
 	if writeCalls < 2 {
 		t.Fatalf("backend write calls=%d want multi-chunk flush", writeCalls)
 	}
 	if len(reasons) != 0 {
 		t.Fatalf("explicit fallback reasons=%v want none for command WAL publish chunk", reasons)
+	}
+	if groups != 1 || groupBatches != writeCalls || groupFinals != 1 {
+		t.Fatalf("root publication grouping groups=%d batches=%d finals=%d writeCalls=%d, want one group covering every chunk with one final", groups, groupBatches, groupFinals, writeCalls)
 	}
 }
 

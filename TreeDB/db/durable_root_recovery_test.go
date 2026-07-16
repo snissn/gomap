@@ -127,6 +127,8 @@ type durableRootFixtureV1 struct {
 	appliedCommandLSN    uint64
 	lastRecordPageID     uint64
 	lastRecordDigest     [32]byte
+	lastRecordCommitSeq  uint64
+	nextDurableSeq       uint64
 	lastPublicationPages uint64
 }
 
@@ -143,9 +145,10 @@ func newDurableRootFixtureV1(t testing.TB) *durableRootFixtureV1 {
 		}
 	}
 	return &durableRootFixtureV1{
-		store:      store,
-		generation: freelist.MustNewFreelistGenerationV1(1, 4, nil, nil),
-		nextCommit: 1,
+		store:          store,
+		generation:     freelist.MustNewFreelistGenerationV1(1, 4, nil, nil),
+		nextCommit:     1,
+		nextDurableSeq: 1,
 	}
 }
 
@@ -163,6 +166,8 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	pagesBefore := len(fixture.store.Pages)
 	commitSeq := fixture.nextCommit
 	fixture.nextCommit++
+	durableSeq := fixture.nextDurableSeq
+	fixture.nextDurableSeq++
 	ledger := freelist.NewReservationLedger()
 	txn, err := freelist.BeginCandidateV1(fixture.generation, fixture.generation.GenerationRef(), ledger)
 	if err != nil {
@@ -211,14 +216,14 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 		t.Fatal(err)
 	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: commitSeq, DurableSeq: commitSeq,
+		CommitSeq: commitSeq, DurableSeq: durableSeq,
 		UserRootPageID: rootIDs[0], SystemRootPageID: rootIDs[1],
 		TotalPages: candidate.Generation().HighWater(), AppliedCommandLSN: fixture.appliedCommandLSN,
 		Freelist: candidate.GenerationRef(), FreelistFreeCount: candidate.Generation().FreeCount(),
 		FreelistRetiredCount: candidate.Generation().RetiredCount(), Manifest: manifestRef,
-		ParentRecordPageID: fixture.lastRecordPageID, ParentCommitSeq: commitSeq - 1,
+		ParentRecordPageID: fixture.lastRecordPageID, ParentCommitSeq: fixture.lastRecordCommitSeq,
 		ParentRecordDigest:   fixture.lastRecordDigest,
-		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(commitSeq, commitSeq, recordPageID),
+		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(commitSeq, durableSeq, recordPageID),
 	}
 	if fixture.lastRecordPageID == 0 {
 		record.ParentCommitSeq = 0
@@ -230,7 +235,7 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	if err := fixture.store.WritePage(recordPageID, recordImage); err != nil {
 		t.Fatal(err)
 	}
-	meta, err := page.NewDurableMetaV1(commitSeq, commitSeq, recordPageID, recordDigest)
+	meta, err := page.NewDurableMetaV1(commitSeq, durableSeq, recordPageID, recordDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +252,7 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	fixture.generation = candidate.Generation()
 	fixture.lastRecordPageID = recordPageID
 	fixture.lastRecordDigest = recordDigest
+	fixture.lastRecordCommitSeq = commitSeq
 	if err := ledger.MarkVisible(candidateID); err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +261,39 @@ func (fixture *durableRootFixtureV1) addCandidateWithManifest(t testing.TB, slot
 	}
 	fixture.lastPublicationPages = uint64(len(fixture.store.Pages) - pagesBefore)
 	return durableRootSelectionV1{Slot: slot, Meta: meta, Record: record, Freelist: candidate.Generation(), Manifest: manifest}
+}
+
+func TestSelectDurableRootV1AcceptsGroupedCommitFrontierWithContiguousDurableLineage(t *testing.T) {
+	fixture := newDurableRootFixtureV1(t)
+	older := fixture.addCandidate(t, MetaPage0ID)
+	fixture.nextCommit = 5
+	newer := fixture.addCandidate(t, MetaPage1ID)
+
+	selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Slot != newer.Slot || selected.Meta.CommitSeq != 5 || selected.Meta.DurableSeq != older.Meta.DurableSeq+1 {
+		t.Fatalf("selected slot/commit/durable=(%d,%d,%d), want (%d,5,%d)", selected.Slot, selected.Meta.CommitSeq, selected.Meta.DurableSeq, newer.Slot, older.Meta.DurableSeq+1)
+	}
+}
+
+func TestSelectDurableRootV1RejectsDurableLineageGapAndFallsBack(t *testing.T) {
+	fixture := newDurableRootFixtureV1(t)
+	older := fixture.addCandidate(t, MetaPage0ID)
+	fixture.nextCommit = 5
+	newer := fixture.addCandidate(t, MetaPage1ID)
+	newer.Record.DurableSeq++
+	newer.Record.MetaProjectionDigest = page.DurableMetaProjectionDigestV1(newer.Record.CommitSeq, newer.Record.DurableSeq, newer.Meta.RootRecordPageID)
+	newer = rewriteDurableRootFixtureRecordV1(t, fixture, newer, newer.Record)
+
+	selected, err := selectDurableRootV1(fixture.store, newer.Record.TotalPages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Slot != older.Slot || selected.Meta.CommitSeq != older.Meta.CommitSeq {
+		t.Fatalf("selected slot/commit=(%d,%d), want older (%d,%d)", selected.Slot, selected.Meta.CommitSeq, older.Slot, older.Meta.CommitSeq)
+	}
 }
 
 func rewriteDurableRootFixtureRecordV1(t testing.TB, fixture *durableRootFixtureV1, selected durableRootSelectionV1, record rootpublication.DurableRootRecordV1) durableRootSelectionV1 {

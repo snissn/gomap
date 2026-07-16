@@ -1722,6 +1722,7 @@ type applyRunConfig struct {
 	workerPool         *ApplyWorkerPool
 	leafPagePersister  leafPagePersistSink
 	oldPointerRefs     *PointerRefCounts
+	oldEntriesRemoved  *uint64
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -2550,7 +2551,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		return nodeRef, nil
 	}
 
-	recordDeadPointer := func(flags byte, ptr page.ValuePtr) {
+	recordRemovedEntry := func(flags byte, ptr page.ValuePtr) {
+		if cfg.oldEntriesRemoved != nil {
+			(*cfg.oldEntriesRemoved)++
+		}
 		if flags&node.FlagPointer == 0 {
 			return
 		}
@@ -2612,7 +2616,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			} else {
 				// Equal: Update (Batch wins). The old entry is being overwritten
 				// or deleted; if it was a pointer, track it as dead bytes.
-				recordDeadPointer(f, ptr)
+				recordRemovedEntry(f, ptr)
 
 				useBatch = true
 				oldIdx++ // Skip old
@@ -2673,7 +2677,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				continue // Skip tombstones
 			}
 			if batch.DeleteRangesContainKey(ranges, key) {
-				recordDeadPointer(flags, valPtr)
+				recordRemovedEntry(flags, valPtr)
 				continue
 			}
 		}
@@ -3138,8 +3142,12 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 		var childScratches []*mergeScratch
 		var childOldPointerRefs []PointerRefCounts
+		var childOldEntriesRemoved []uint64
 		if cfg.oldPointerRefs != nil {
 			childOldPointerRefs = make([]PointerRefCounts, len(children))
+		}
+		if cfg.oldEntriesRemoved != nil {
+			childOldEntriesRemoved = make([]uint64, len(children))
 		}
 		if scratch != nil {
 			childScratches = scratch.acquireSpanWorkerScratchSlots(len(children))
@@ -3165,6 +3173,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			localCfg := childCfg
 			if childOldPointerRefs != nil {
 				localCfg.oldPointerRefs = &childOldPointerRefs[i]
+			}
+			if childOldEntriesRemoved != nil {
+				localCfg.oldEntriesRemoved = &childOldEntriesRemoved[i]
 			}
 			ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, childScratch, false, localCfg)
 			if err != nil {
@@ -3212,6 +3223,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			}
 			if childOldPointerRefs != nil {
 				cfg.oldPointerRefs.merge(&childOldPointerRefs[i])
+			}
+			if childOldEntriesRemoved != nil {
+				*cfg.oldEntriesRemoved += childOldEntriesRemoved[i]
 			}
 		}
 	} else {

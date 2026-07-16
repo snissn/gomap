@@ -12,7 +12,9 @@ import (
 )
 
 func backgroundIndexVacuumShouldReport(err error) bool {
-	return err != nil && !errors.Is(err, backenddb.ErrVacuumConcurrentMutation)
+	return err != nil &&
+		!errors.Is(err, backenddb.ErrVacuumConcurrentMutation) &&
+		!errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired)
 }
 
 const (

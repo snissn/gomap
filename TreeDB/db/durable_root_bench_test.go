@@ -202,18 +202,32 @@ func (totals durableRootResourceCallTotals) report(b *testing.B, operations floa
 }
 
 type durableRootStableCallAccumulator struct {
-	mu         sync.Mutex
-	started    map[string]time.Time
-	calls      map[string]uint64
-	durations  map[string]time.Duration
-	metaWrites uint64
-	metaBytes  uint64
+	mu                        sync.Mutex
+	started                   map[string]time.Time
+	calls                     map[string]uint64
+	durations                 map[string]time.Duration
+	metaWrites                uint64
+	metaBytes                 uint64
+	observedCallerGoroutine   uint64
+	observedCallerStableCalls uint64
 }
 
 func newDurableRootStableCallAccumulator() *durableRootStableCallAccumulator {
 	return &durableRootStableCallAccumulator{
 		started: make(map[string]time.Time), calls: make(map[string]uint64), durations: make(map[string]time.Duration),
 	}
+}
+
+func (accumulator *durableRootStableCallAccumulator) observeCaller(goroutineID uint64) {
+	accumulator.mu.Lock()
+	accumulator.observedCallerGoroutine = goroutineID
+	accumulator.mu.Unlock()
+}
+
+func (accumulator *durableRootStableCallAccumulator) callerStableCalls() uint64 {
+	accumulator.mu.Lock()
+	defer accumulator.mu.Unlock()
+	return accumulator.observedCallerStableCalls
 }
 
 func (accumulator *durableRootStableCallAccumulator) observe(event durabilitycut.Event) error {
@@ -232,9 +246,16 @@ func (accumulator *durableRootStableCallAccumulator) observe(event durabilitycut
 	}
 	key := phase + "|" + string(event.Resource) + "|" + event.Path + "|" + strings.Join(event.Paths, "\x00")
 	now := time.Now()
+	caller := uint64(0)
+	if before && phase != "userspace-flush" {
+		caller = currentGoroutineID()
+	}
 	accumulator.mu.Lock()
 	defer accumulator.mu.Unlock()
 	if before {
+		if caller != 0 && caller == accumulator.observedCallerGoroutine {
+			accumulator.observedCallerStableCalls++
+		}
 		accumulator.started[key] = now
 		return nil
 	}

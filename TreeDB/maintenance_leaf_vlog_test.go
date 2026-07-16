@@ -3,6 +3,7 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -147,12 +148,12 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := db.VacuumIndexOnline(ctx); err != nil {
-		t.Fatalf("vacuum: %v", err)
+	if err := db.VacuumIndexOnline(ctx); !errors.Is(err, treedbdb.ErrVacuumRecoverableRootSetRequired) {
+		t.Fatalf("vacuum err=%v want recoverable-root-set fence", err)
 	}
 
-	// Force a backend commit after vacuum so the post-vacuum zipper wiring is
-	// exercised on a fresh write.
+	// The rejected maintenance attempt must leave the live leaf-log root fully
+	// writable and checkpointable.
 	if err := db.Set([]byte("k010"), []byte("updated")); err != nil {
 		t.Fatalf("set updated: %v", err)
 	}

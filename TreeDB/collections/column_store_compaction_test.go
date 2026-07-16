@@ -137,8 +137,10 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if got := col.Meta().Options.ColumnStore.PhysicalMutationParts; got != 0 {
 		t.Fatalf("PhysicalMutationParts=%d want reset after compaction", got)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("stable asset pins after compaction publish=%d want baseline %d", got, baselinePins)
+	// The activated visible closure and the independently recoverable durable
+	// closure each pin the newly published physical assets.
+	if got, want := registry.ActivePins(), baselinePins+2*uint64(stats.AssetsPublished); got != want {
+		t.Fatalf("stable asset pins after compaction publish=%d want baseline+visible+durable published %d", got, want)
 	}
 	if got := registry.ActiveIdentities(); got != baselineIdentities {
 		t.Fatalf("stable asset identities after compaction publish=%d want baseline %d", got, baselineIdentities)

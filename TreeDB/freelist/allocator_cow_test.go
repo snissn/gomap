@@ -15,8 +15,10 @@ func materializeAllocatorCOWCandidateForTest(t *testing.T, p *pager.Pager, prepa
 	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
 		t.Fatal("missing prepared COW candidate")
 	}
-	if err := p.Truncate(prepared.Candidate().Generation().HighWater()); err != nil {
-		t.Fatal(err)
+	if target := prepared.Candidate().Generation().HighWater(); p.PageCount() < target {
+		if err := p.Truncate(target); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, image := range prepared.Candidate().Pages() {
 		if err := p.Write(image.PageID, image.Data); err != nil {
@@ -158,6 +160,189 @@ func TestAllocatorCOWCandidateMustBeMaterializedBeforePublish(t *testing.T) {
 	materializeAllocatorCOWCandidateForTest(t, p, prepared)
 	if err := allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
 		t.Fatalf("publish materialized candidate: %v", err)
+	}
+}
+
+func TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	ledger := NewReservationLedger()
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), ledger); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstData, err := allocator.Alloc(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("visible-first"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(first); err != nil {
+		t.Fatalf("activate first: %v", err)
+	}
+
+	secondData, err := allocator.Alloc(0)
+	if err != nil {
+		t.Fatalf("allocation behind visible undurable generation: %v", err)
+	}
+	if secondData <= firstData {
+		t.Fatalf("second data page=%d want above first=%d", secondData, firstData)
+	}
+	second, err := allocator.PrepareCOWCandidateV1(3, 3, candidateIDFromString("visible-second"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(second); err != nil {
+		t.Fatalf("activate second: %v", err)
+	}
+
+	materializeAllocatorCOWCandidateForTest(t, p, first)
+	materializeAllocatorCOWCandidateForTest(t, p, second)
+	for name, prefix := range map[string][]*PreparedCOWCandidateV1{
+		"missing first": {second},
+		"reordered":     {second, first},
+		"extra":         {first, second, &PreparedCOWCandidateV1{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := allocator.PublishActivatedCOWPrefixV1(prefix, capability); err == nil {
+				t.Fatal("malformed activated prefix unexpectedly published")
+			}
+			if first.published || second.published || len(allocator.cow.activated) != 2 {
+				t.Fatalf("malformed prefix mutated allocator: first=%v second=%v debt=%d", first.published, second.published, len(allocator.cow.activated))
+			}
+		})
+	}
+	// The second materialized generation is a legitimate physical tail beyond
+	// the first prefix because the live transaction owns its higher high-water.
+	firstHighWater := first.Candidate().Generation().HighWater()
+	physicalPages := p.PageCount()
+	liveHighWater := allocator.cow.txn.highWater
+	if !(firstHighWater < physicalPages && physicalPages <= liveHighWater) {
+		t.Fatalf("build-ahead tail invariant: first high-water=%d physical pages=%d live high-water=%d", firstHighWater, physicalPages, liveHighWater)
+	}
+	if err := allocator.PublishActivatedCOWPrefixV1([]*PreparedCOWCandidateV1{first}, capability); err != nil {
+		t.Fatalf("publish first activated prefix with tracked newer tail: %v", err)
+	}
+	if !first.published || second.published || len(allocator.cow.activated) != 1 {
+		t.Fatalf("first prefix publication state: first=%v second=%v debt=%d", first.published, second.published, len(allocator.cow.activated))
+	}
+	if err := allocator.PublishActivatedCOWPrefixV1([]*PreparedCOWCandidateV1{second}, capability); err != nil {
+		t.Fatalf("publish second activated prefix: %v", err)
+	}
+	if !first.published || !second.published {
+		t.Fatalf("published flags first=%v second=%v", first.published, second.published)
+	}
+	if got := len(allocator.cow.activated); got != 0 {
+		t.Fatalf("activated debt=%d want 0", got)
+	}
+}
+
+func TestAllocatorActivatedCOWPrefixRejectsUntrackedPhysicalTail(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := allocator.PrepareCOWCandidateV1(
+		2, 2, candidateIDFromString("untracked-physical-tail"), capability, 1, NewMemoryPageStoreV1(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(prepared); err != nil {
+		t.Fatal(err)
+	}
+	materializeAllocatorCOWCandidateForTest(t, p, prepared)
+	if err := p.Truncate(p.PageCount() + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.PublishActivatedCOWPrefixV1([]*PreparedCOWCandidateV1{prepared}, capability); !errors.Is(err, ErrGenerationFormat) {
+		t.Fatalf("publish with untracked physical tail error=%v, want ErrGenerationFormat", err)
+	}
+	if prepared.published || len(allocator.cow.activated) != 1 {
+		t.Fatalf("untracked-tail rejection mutated allocator: published=%v debt=%d", prepared.published, len(allocator.cow.activated))
+	}
+}
+
+func TestAllocatorActivatedCOWFailurePoisonsAndWakesAllocation(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := allocator.PrepareCOWCandidateV1(2, 2, candidateIDFromString("visible-failure"), capability, 0, NewMemoryPageStoreV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := allocator.ActivateCOWCandidateV1(prepared); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("visible durable-root publication failed")
+	if err := allocator.FailCOWCandidateV1(prepared, want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allocator.Alloc(0); !errors.Is(err, want) {
+		t.Fatalf("allocation error=%v want %v", err, want)
+	}
+}
+
+func TestReservationLedgerPublishBatchValidatesBeforeMutation(t *testing.T) {
+	ledger := NewReservationLedger()
+	first := candidateIDFromString("batch-first")
+	second := candidateIDFromString("batch-second")
+	missing := candidateIDFromString("batch-missing")
+	if err := ledger.reserve(first, []uint64{10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.reserve(second, []uint64{11}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.PublishBatch([]CandidateIDV1{first, missing, second}); err == nil {
+		t.Fatal("PublishBatch unexpectedly accepted an unknown middle candidate")
+	}
+	if !ledger.Reserved(10) || !ledger.Reserved(11) {
+		t.Fatal("failed batch validation partially released reservations")
+	}
+	if err := ledger.PublishBatch([]CandidateIDV1{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Reserved(10) || ledger.Reserved(11) {
+		t.Fatal("successful batch publication retained reservations")
 	}
 }
 
@@ -390,6 +575,46 @@ func TestAllocatorCOWAllocAppendIsScopedAndAdvancesCandidateHighWater(t *testing
 	}
 	if got := prepared.AuxiliaryPageIDs(); len(got) != 1 || got[0] <= appended {
 		t.Fatalf("auxiliary pages=%v overlap appended page %d", got, appended)
+	}
+}
+
+func TestAllocatorCOWAllocAppendSkipsActivatedVirtualTail(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	allocator := New(p, 0)
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 4, nil, nil), NewReservationLedger()); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := NewReuseCapability(1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := allocator.PrepareCOWCandidateV1(
+		2, 2, candidateIDFromString("activated-virtual-tail"), capability, 2, NewMemoryPageStoreV1(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	virtualHighWater := prepared.Candidate().Generation().HighWater()
+	if virtualHighWater <= p.PageCount() {
+		t.Fatalf("candidate high-water=%d want above pager pages=%d", virtualHighWater, p.PageCount())
+	}
+	if err := allocator.ActivateCOWCandidateV1(prepared); err != nil {
+		t.Fatal(err)
+	}
+
+	pageID, err := allocator.AllocAppend()
+	if err != nil {
+		t.Fatalf("AllocAppend behind activated virtual tail: %v", err)
+	}
+	if pageID != virtualHighWater || p.PageCount() != virtualHighWater+1 {
+		t.Fatalf("append/page-count=(%d,%d), want (%d,%d)", pageID, p.PageCount(), virtualHighWater, virtualHighWater+1)
 	}
 }
 
