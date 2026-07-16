@@ -109,6 +109,8 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"sub-parity results such as `0.80x`",
 		"every command-WAL acceptance artifact",
 		"incompressible value-log auto/off lanes",
+		"geometric mean of every fixed, order-balanced auto/off pair",
+		"one favorable sample cannot override a mostly failing sample set",
 	)
 	userCommandWAL := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/user-command-wal.md"))
 	assertContainsAll(t, userCommandWAL, "PR9 user command WAL acceptance",
@@ -116,24 +118,29 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"incompressible value-log auto/off throughput gates",
 		"strictly greater than `1.01x`",
 		"sub-parity evidence such as `0.80x`",
+		"geometric mean of every fixed, order-balanced auto/off pair",
+		"one favorable sample cannot override a mostly failing sample set",
 	)
 	checker := readRepoText(t, ".github/scripts/check_vlog_auto_incompressible.go")
 	assertContainsAll(t, checker, "PR9 incompressible checker",
 		`flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01`,
-		"throughputFrac <= minThroughputFrac",
+		"aggregateThroughputFrac <= minThroughputFrac",
 	)
 	workflow := collapseWhitespace(readRepoText(t, ".github/workflows/treedb-tests.yml"))
 	assertContainsAll(t, workflow, "PR9 perf smoke workflow",
+		"sample_count=6",
+		"run_vlog_row treedb_vlog_off",
+		"run_vlog_row treedb_vlog_auto",
 		"-min-throughput-frac 1.01",
-		"result at or below 1.01x is failing evidence",
+		"geometric mean of every balanced pair must exceed 1.01x",
 	)
 	gateStart := strings.Index(workflow, "name: Incompressible auto-vs-off gate")
 	gateEnd := strings.Index(workflow, "snapshot-iterator-perf:")
 	if gateStart < 0 || gateEnd <= gateStart {
 		t.Fatal("PR9 incompressible workflow gate boundaries not found")
 	}
-	if got := strings.Count(workflow[gateStart:gateEnd], "-profile fast"); got != 2 {
-		t.Fatalf("PR9 incompressible workflow explicit bench_unsafe selections=%d, want 2", got)
+	if got := strings.Count(workflow[gateStart:gateEnd], "-profile fast"); got != 1 {
+		t.Fatalf("PR9 incompressible workflow shared bench_unsafe selection count=%d, want 1", got)
 	}
 }
 
