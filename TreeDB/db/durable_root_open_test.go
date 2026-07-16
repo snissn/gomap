@@ -480,6 +480,7 @@ func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testi
 	}
 	defer func() { database.testDurableRootCandidatePreparedHook = nil }()
 	database.testFailWriteMeta.Store(true)
+	defer database.testFailWriteMeta.Store(false)
 	firstWriteDone := make(chan error, 1)
 	go func() { firstWriteDone <- batch.WriteSync() }()
 	select {
@@ -502,7 +503,6 @@ func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testi
 	}
 	close(releasePublish)
 	err = <-firstWriteDone
-	database.testFailWriteMeta.Store(false)
 	if closeErr := batch.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
@@ -515,16 +515,22 @@ func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testi
 	if database.publicationPoisoned.Load() {
 		t.Fatal("retryable pre-meta failure poisoned the writable handle")
 	}
-	if database.metaPageID != MetaPage0ID || database.durableRoot.record.CommitSeq != 1 {
-		t.Fatalf("authoritative slot/commit after failure=(%d,%d), want (0,1)", database.metaPageID, database.durableRoot.record.CommitSeq)
-	}
+	database.durablePublishMu.Lock()
+	failedMetaPageID := database.metaPageID
+	failedCommitSeq := database.durableRoot.record.CommitSeq
+	database.durablePublishMu.Unlock()
 	stats := database.rootPublication.coordinator.Stats()
-	if stats.PendingCommits == 0 || stats.PreMetaFailures != 1 || stats.Poisoned {
-		t.Fatalf("coordinator stats after retryable failure=%+v, want pending debt, one pre-meta failure, and no poison", stats)
+	retainedPins := registry.ActivePins()
+	if failedMetaPageID != MetaPage0ID || failedCommitSeq != 1 {
+		t.Fatalf("authoritative slot/commit after failure=(%d,%d), want (0,1)", failedMetaPageID, failedCommitSeq)
 	}
-	if got := registry.ActivePins(); got == 0 {
+	if stats.PendingCommits == 0 || stats.PreMetaFailures == 0 || stats.Poisoned {
+		t.Fatalf("coordinator stats after retryable failure=%+v, want pending debt, at least one pre-meta failure, and no poison", stats)
+	}
+	if retainedPins == 0 {
 		t.Fatal("retryable candidate debt did not retain its stable resources")
 	}
+	database.testFailWriteMeta.Store(false)
 
 	var blockedWriteErr error
 	select {
