@@ -538,7 +538,8 @@ Coverage:
 
 The raw regression gate uses unchanged existing point/batch benchmarks from the
 same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,
-any repeatable raw-path regression or allocation increase blocks closeout.
+any repeatable raw-path regression or allocation increase attributable to a
+changed row-owning binary blocks closeout.
 
 ## 10.4 Retained-Version Iteration and Safe Pruning
 
@@ -631,10 +632,15 @@ Coverage:
 - Existing MVCC tests retain direct fault-injection and abrupt-child-exit
   coverage that a generic in-process adapter factory cannot express.
 - `scripts/mvcc_raw_path_gate.sh` is the <=5% raw-path base/head gate. Its
-  machine-readable verdict distinguishes measured `PASS`/`FAIL` from overall
-  `EQUIVALENT` acceptance. Equivalence requires checker-computed matching
-  SHA-256 digests from all six actual row-producing benchmark binaries; mixed,
-  missing, or malformed binary evidence cannot override a failed measurement.
+  machine-readable report distinguishes raw measured `PASS`/`FAIL` from
+  per-row attribution and aggregate acceptance. The checker attributes every
+  row to the SHA-256 relation of its owning `db`, `caching`, or `treedb`
+  benchmark binary. A failed row with byte-identical base/head owner remains
+  reported but is non-attributable; a failed changed-owner row remains
+  threshold-enforced. Mixed evidence can receive aggregate `EQUIVALENT` only
+  if every changed-owner row passes. Missing, malformed, duplicated, or
+  mismatched binary evidence fails closed and cannot override a failed
+  measurement.
   Raw and adapter gates require balanced even AB/BA sample counts and default
   to eight samples per revision. The raw-gate timing verdict uses the median
   per-pair candidate/base relative delta; base/head timing medians remain
