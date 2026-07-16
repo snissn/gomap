@@ -15,6 +15,17 @@ var (
 	reValueLog   = regexp.MustCompile(`maindb/(?:value_vlog|wal):[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)`)
 )
 
+type repeatedStringFlag []string
+
+func (f *repeatedStringFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *repeatedStringFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
 type runMetrics struct {
 	OpsPerSec float64
 	WALValue  float64
@@ -22,60 +33,88 @@ type runMetrics struct {
 
 func main() {
 	var (
-		offLogPath        string
-		autoLogPath       string
+		offLogPaths       repeatedStringFlag
+		autoLogPaths      repeatedStringFlag
 		minThroughputFrac float64
 		maxSizeFrac       float64
+		minSamples        int
 	)
-	flag.StringVar(&offLogPath, "off-log", "", "path to unified_bench output for treedb_vlog_off")
-	flag.StringVar(&autoLogPath, "auto-log", "", "path to unified_bench output for treedb_vlog_auto")
+	flag.Var(&offLogPaths, "off-log", "path to unified_bench output for treedb_vlog_off; repeat once per paired sample")
+	flag.Var(&autoLogPaths, "auto-log", "path to unified_bench output for treedb_vlog_auto; repeat once per paired sample")
 	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01, "strict #1529 parity-plus auto/off batch-write throughput fraction; values at or below this fail")
 	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off value-log bytes fraction")
+	flag.IntVar(&minSamples, "min-samples", 2, "minimum number of complete paired samples required")
 	flag.Parse()
 
-	if offLogPath == "" || autoLogPath == "" {
-		fmt.Fprintln(os.Stderr, "missing -off-log or -auto-log")
+	if len(offLogPaths) != len(autoLogPaths) {
+		fmt.Fprintf(os.Stderr, "paired sample count mismatch: off=%d auto=%d\n", len(offLogPaths), len(autoLogPaths))
 		os.Exit(2)
 	}
-
-	off, err := parseMetrics(offLogPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse off log: %v\n", err)
+	if minSamples < 2 {
+		fmt.Fprintf(os.Stderr, "invalid -min-samples %d: must be at least 2\n", minSamples)
 		os.Exit(2)
 	}
-	auto, err := parseMetrics(autoLogPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parse auto log: %v\n", err)
+	if minThroughputFrac <= 0 || math.IsNaN(minThroughputFrac) || math.IsInf(minThroughputFrac, 0) {
+		fmt.Fprintf(os.Stderr, "invalid -min-throughput-frac %.4f: must be finite and positive\n", minThroughputFrac)
 		os.Exit(2)
 	}
-	if off.OpsPerSec <= 0 || off.WALValue <= 0 {
-		fmt.Fprintf(os.Stderr, "invalid off metrics: ops=%.3f wal_value=%.0f\n", off.OpsPerSec, off.WALValue)
+	if maxSizeFrac <= 0 || math.IsNaN(maxSizeFrac) || math.IsInf(maxSizeFrac, 0) {
+		fmt.Fprintf(os.Stderr, "invalid -max-size-frac %.4f: must be finite and positive\n", maxSizeFrac)
 		os.Exit(2)
 	}
-	if auto.OpsPerSec <= 0 || auto.WALValue <= 0 {
-		fmt.Fprintf(os.Stderr, "invalid auto metrics: ops=%.3f wal_value=%.0f\n", auto.OpsPerSec, auto.WALValue)
+	if len(offLogPaths) < minSamples {
+		fmt.Fprintf(os.Stderr, "insufficient paired samples: got=%d want>=%d\n", len(offLogPaths), minSamples)
 		os.Exit(2)
 	}
-
-	throughputFrac := auto.OpsPerSec / off.OpsPerSec
-	sizeFrac := auto.WALValue / off.WALValue
-
-	fmt.Printf("incompressible gate: off_ops=%.0f auto_ops=%.0f throughput_frac=%.4f (min=%.4f)\n", off.OpsPerSec, auto.OpsPerSec, throughputFrac, minThroughputFrac)
-	fmt.Printf("incompressible gate: off_value_log=%.0f auto_value_log=%.0f size_frac=%.4f (max=%.4f)\n", off.WALValue, auto.WALValue, sizeFrac, maxSizeFrac)
 
 	fail := false
-	if throughputFrac <= minThroughputFrac {
-		fmt.Fprintf(os.Stderr, "FAIL throughput gate: auto/off=%.4f <= %.4f\n", throughputFrac, minThroughputFrac)
-		fail = true
+	throughputLogSum := 0.0
+	maxObservedSizeFrac := 0.0
+	for idx := range offLogPaths {
+		off, err := parseMetrics(offLogPaths[idx])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "parse off log sample %d: %v\n", idx+1, err)
+			os.Exit(2)
+		}
+		auto, err := parseMetrics(autoLogPaths[idx])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "parse auto log sample %d: %v\n", idx+1, err)
+			os.Exit(2)
+		}
+		if off.OpsPerSec <= 0 || off.WALValue <= 0 {
+			fmt.Fprintf(os.Stderr, "invalid off metrics sample %d: ops=%.3f wal_value=%.0f\n", idx+1, off.OpsPerSec, off.WALValue)
+			os.Exit(2)
+		}
+		if auto.OpsPerSec <= 0 || auto.WALValue <= 0 {
+			fmt.Fprintf(os.Stderr, "invalid auto metrics sample %d: ops=%.3f wal_value=%.0f\n", idx+1, auto.OpsPerSec, auto.WALValue)
+			os.Exit(2)
+		}
+
+		throughputFrac := auto.OpsPerSec / off.OpsPerSec
+		sizeFrac := auto.WALValue / off.WALValue
+		throughputLogSum += math.Log(throughputFrac)
+		if sizeFrac > maxObservedSizeFrac {
+			maxObservedSizeFrac = sizeFrac
+		}
+
+		fmt.Printf("incompressible gate sample %d: off_ops=%.0f auto_ops=%.0f throughput_frac=%.4f\n", idx+1, off.OpsPerSec, auto.OpsPerSec, throughputFrac)
+		fmt.Printf("incompressible gate sample %d: off_value_log=%.0f auto_value_log=%.0f size_frac=%.4f\n", idx+1, off.WALValue, auto.WALValue, sizeFrac)
+		if sizeFrac > maxSizeFrac {
+			fmt.Fprintf(os.Stderr, "FAIL size gate sample %d: auto/off=%.4f > %.4f\n", idx+1, sizeFrac, maxSizeFrac)
+			fail = true
+		}
 	}
-	if sizeFrac > maxSizeFrac {
-		fmt.Fprintf(os.Stderr, "FAIL size gate: auto/off=%.4f > %.4f\n", sizeFrac, maxSizeFrac)
+
+	aggregateThroughputFrac := math.Exp(throughputLogSum / float64(len(offLogPaths)))
+	fmt.Printf("incompressible gate aggregate: samples=%d throughput_geomean=%.4f (min=%.4f) max_size_frac=%.4f (max=%.4f)\n", len(offLogPaths), aggregateThroughputFrac, minThroughputFrac, maxObservedSizeFrac, maxSizeFrac)
+	if aggregateThroughputFrac <= minThroughputFrac {
+		fmt.Fprintf(os.Stderr, "FAIL aggregate throughput gate: auto/off geomean=%.4f <= %.4f\n", aggregateThroughputFrac, minThroughputFrac)
 		fail = true
 	}
 	if fail {
 		os.Exit(1)
 	}
-	fmt.Println("PASS incompressible auto-vs-off gate")
+	fmt.Println("PASS incompressible auto-vs-off aggregate gate")
 }
 
 func parseMetrics(path string) (runMetrics, error) {
