@@ -33,7 +33,7 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		return Result{}, nil, nil, err
 	}
 	if evidence != nil {
-		result, db, closeFn, err := openAt(evidence.StableImageDir(), model, opts, readOnly, false)
+		result, db, closeFn, err := openAt(evidence.RecoveryInputDir(), model, opts, readOnly, false)
 		if err != nil {
 			return Result{}, nil, nil, err
 		}
@@ -50,7 +50,7 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		}{
 			SchemaVersion: "treedb-power-loss-recovery-trace/v1",
 			PublicAPI:     "treedb.Open",
-			Dir:           result.Dir,
+			Dir:           "recovery-input",
 			ReadOnly:      result.ReadOnly,
 			Rejected:      result.Rejected,
 			CommitSeq:     result.CommitSeq,

@@ -21,6 +21,9 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	if err := model.Write("index.db", []byte("new")); err != nil {
 		t.Fatal(err)
 	}
+	if err := model.Overlay(source); err != nil {
+		t.Fatal(err)
+	}
 	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +49,13 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(evidenceDir, filepath.FromSlash(path))); err != nil {
 			t.Fatalf("missing evidence %s: %v", path, err)
 		}
+	}
+	traceData, err := os.ReadFile(filepath.Join(evidenceDir, "operation_trace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(traceData), source) {
+		t.Fatalf("operation trace leaked host-specific source path: %s", traceData)
 	}
 	if err := session.RecordRecovery(map[string]any{"opened": true}); err != nil {
 		t.Fatal(err)

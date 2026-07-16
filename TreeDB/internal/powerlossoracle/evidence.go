@@ -68,7 +68,7 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	if err := requireEmptyEvidenceRoot(root); err != nil {
 		return nil, err
 	}
-	trace := model.Trace()
+	trace := portableEvidenceTrace(model.Trace())
 	cutPrefix := "cut:" + cutPoint + ":"
 	observed := 0
 	for _, event := range trace {
@@ -84,11 +84,15 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	}
 	stableDir := filepath.Join(root, "stable-image")
 	dirtyDir := filepath.Join(root, "dirty-image")
+	recoveryDir := filepath.Join(root, "recovery-input")
 	if err := model.MaterializeStable(stableDir); err != nil {
 		return nil, fmt.Errorf("powerlossoracle: materialize stable evidence: %w", err)
 	}
 	if err := model.MaterializeVolatile(dirtyDir); err != nil {
 		return nil, fmt.Errorf("powerlossoracle: materialize dirty evidence: %w", err)
+	}
+	if err := model.MaterializeStable(recoveryDir); err != nil {
+		return nil, fmt.Errorf("powerlossoracle: materialize recovery input: %w", err)
 	}
 	stableTree, err := buildEvidenceTree(stableDir, "stable-image")
 	if err != nil {
@@ -129,11 +133,28 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	return &EvidenceSession{Root: root, CutPoint: cutPoint, ObservedEventCount: observed}, nil
 }
 
+func portableEvidenceTrace(trace []string) []string {
+	out := append([]string(nil), trace...)
+	for index, event := range out {
+		if strings.HasPrefix(event, "overlay:") {
+			out[index] = "overlay:<source-root>"
+		}
+	}
+	return out
+}
+
 func (session *EvidenceSession) StableImageDir() string {
 	if session == nil {
 		return ""
 	}
 	return filepath.Join(session.Root, "stable-image")
+}
+
+func (session *EvidenceSession) RecoveryInputDir() string {
+	if session == nil {
+		return ""
+	}
+	return filepath.Join(session.Root, "recovery-input")
 }
 
 func (session *EvidenceSession) RecordRecovery(value any) error {
