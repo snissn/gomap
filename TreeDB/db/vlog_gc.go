@@ -340,7 +340,13 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 			f, ok := files[id]
 			if !ok {
-				continue
+				// MarkValueLogZombie historically delegated directly to the
+				// manager, whose missing-ID result is part of the caching backend
+				// contract: callers use ErrFileNotFound to remove an orphaned
+				// retained path that the manager no longer tracks. Observed-only
+				// GC must preserve that signal rather than reporting a successful
+				// no-op and letting the orphan escape lifecycle ownership.
+				return stats, fmt.Errorf("%w: file_id=%d", valuelog.ErrFileNotFound, id)
 			}
 			size := fileSize(f)
 			stats.ObservedSourceSegments++
