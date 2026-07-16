@@ -270,11 +270,7 @@ func runCheckpointBench(dir string, args []string) {
 	if *flushThreshold > 0 {
 		opts.FlushThreshold = *flushThreshold
 	}
-	if *fast {
-		treedb.ApplyBenchmarkProfile(&opts, treedb.ProfileBenchUnsafe)
-	} else {
-		treedb.ApplyProfile(&opts, treedb.ProfileCommandWALDurable)
-	}
+	applyCheckpointBenchProfile(&opts, *fast, *leafPrefixCompression)
 
 	if *leafPrefixCompression {
 		fmt.Fprintln(os.Stderr, "opts.leaf_prefix_compression=on")
@@ -407,6 +403,17 @@ func runCheckpointBench(dir string, args []string) {
 	if st, err := os.Stat(mainIndex); err == nil {
 		fmt.Fprintf(os.Stderr, "disk index.db bytes=%d mib=%.1f\n", st.Size(), float64(st.Size())/(1024*1024))
 	}
+}
+
+func applyCheckpointBenchProfile(opts *treedb.Options, fast, leafPrefixCompression bool) {
+	if fast {
+		treedb.ApplyBenchmarkProfile(opts, treedb.ProfileBenchUnsafe)
+	} else {
+		treedb.ApplyProfile(opts, treedb.ProfileCommandWALDurable)
+	}
+	// The profile supplies benchmark defaults, while this command's explicit
+	// on/off flag remains authoritative for the leaf-compression comparison.
+	opts.LeafPrefixCompression = leafPrefixCompression
 }
 
 func runStats(dir string, args []string) {

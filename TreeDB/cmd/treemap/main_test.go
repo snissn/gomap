@@ -18,6 +18,27 @@ type kv struct {
 	val []byte
 }
 
+func TestApplyCheckpointBenchProfilePreservesLeafPrefixCompressionOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		fast                  bool
+		leafPrefixCompression bool
+	}{
+		{name: "durable_off", fast: false, leafPrefixCompression: false},
+		{name: "durable_on", fast: false, leafPrefixCompression: true},
+		{name: "fast_off", fast: true, leafPrefixCompression: false},
+		{name: "fast_on", fast: true, leafPrefixCompression: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var opts treedb.Options
+			applyCheckpointBenchProfile(&opts, tc.fast, tc.leafPrefixCompression)
+			if got := opts.LeafPrefixCompression; got != tc.leafPrefixCompression {
+				t.Fatalf("LeafPrefixCompression=%t, want CLI override %t", got, tc.leafPrefixCompression)
+			}
+		})
+	}
+}
+
 func TestJSONLRoundTripEncodings(t *testing.T) {
 	asciiEntries := []kv{
 		{key: []byte("alpha"), val: []byte("one")},
