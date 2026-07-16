@@ -142,6 +142,12 @@ remains threshold-enforced. Mixed binary evidence may produce aggregate
 `EQUIVALENT` only when every changed-owning-binary row passes. Missing,
 malformed, duplicated, or mismatched binary evidence fails closed and cannot
 produce equivalence acceptance.
+The batch-write row uses a fixed 1,000-iteration shape. Each measured group
+contains eight ordinary writes under the production coordinator's fixed 100 ms
+timer; it fails if the asynchronous publisher runs during the group, then
+checkpoints with timing and allocation accounting stopped. This isolates the
+foreground candidate-build/enqueue path from process-wide publisher allocation
+accounting while keeping the base/head foreground iteration count identical.
 The aggregate verdict is `PASS` when all measurements pass, `EQUIVALENT` when
 only equivalent-owning-binary rows fail, and `FAIL` when any changed-owning
 binary row fails. Machine-readable `no_attributable_regression` is true exactly
