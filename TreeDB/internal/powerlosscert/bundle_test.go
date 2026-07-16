@@ -125,6 +125,23 @@ func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.
 	}
 }
 
+func TestVerifyArtifactsRejectsModeledEvidenceReuseAcrossWitnesses(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	reused := manifest.Witnesses[0]
+	reused.ID = "witness-b"
+	manifest.Witnesses = append(manifest.Witnesses, reused)
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "reuses modeled evidence directory") {
+		t.Fatalf("VerifyArtifacts modeled evidence reuse error=%v", err)
+	}
+}
+
 func TestVerifyArtifactsRejectsMalformedOrUnboundModeledArtifacts(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -214,6 +231,25 @@ func TestVerifyArtifactsRejectsAcceptedOutcomeForRejectedOpen(t *testing.T) {
 	err := VerifyArtifacts(root, []ChildManifest{manifest})
 	if err == nil || !strings.Contains(err.Error(), "outcome") {
 		t.Fatalf("VerifyArtifacts rejected-open outcome error=%v", err)
+	}
+}
+
+func TestVerifyArtifactsRejectsTamperedWritableRecoveryPreOpenSnapshot(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	rewriteArtifactJSONField(t, root, &manifest.Witnesses[0], ArtifactKindRecoveryTrace, "read_only", false)
+	snapshot := filepath.Join(root, "artifacts", "witness-a", "recovery-preopen", "index.db")
+	if err := os.WriteFile(snapshot, []byte("not the modeled input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "recovery-preopen") {
+		t.Fatalf("VerifyArtifacts writable recovery pre-open binding error=%v", err)
 	}
 }
 
@@ -314,6 +350,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	}{
 		{dir: "stable-image", contents: stableContents},
 		{dir: "dirty-image", contents: dirtyContents},
+		{dir: "recovery-preopen", contents: stableContents},
 		{dir: "recovery-input", contents: stableContents},
 	} {
 		if err := os.MkdirAll(filepath.Join(evidenceDir, image.dir), 0o700); err != nil {
@@ -360,12 +397,13 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	}
 	stableArtifact := artifactByKind(t, *witness, ArtifactKindStableImageTree)
 	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recoveryTraceArtifact{
-		SchemaVersion:     recoveryTraceSchemaVersion,
-		PublicAPI:         "treedb.Open",
-		Dir:               "recovery-input",
-		InputTreeSHA256:   stableArtifact.SHA256,
-		StableFingerprint: stableFingerprint,
-		ReadOnly:          true,
+		SchemaVersion:      recoveryTraceSchemaVersion,
+		PublicAPI:          "treedb.Open",
+		Dir:                "recovery-input",
+		PreOpenSnapshotDir: "recovery-preopen",
+		InputTreeSHA256:    stableArtifact.SHA256,
+		StableFingerprint:  stableFingerprint,
+		ReadOnly:           true,
 	})
 	contents[ArtifactKindLog] = mustJSON(t, commandLogArtifact{
 		SchemaVersion: commandLogSchemaVersion,

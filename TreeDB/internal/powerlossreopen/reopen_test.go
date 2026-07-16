@@ -99,17 +99,21 @@ func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 		t.Fatal(err)
 	}
 	var recovery struct {
-		InputTreeSHA256   string `json:"input_image_tree_sha256"`
-		StableFingerprint string `json:"stable_fingerprint"`
+		PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
+		InputTreeSHA256    string `json:"input_image_tree_sha256"`
+		StableFingerprint  string `json:"stable_fingerprint"`
 	}
 	if err := json.Unmarshal(recoveryData, &recovery); err != nil {
 		t.Fatal(err)
 	}
 	stableTreeDigest := sha256.Sum256(stableTreeData)
-	if recovery.InputTreeSHA256 != fmt.Sprintf("%x", stableTreeDigest) || len(recovery.StableFingerprint) != 64 {
+	if recovery.PreOpenSnapshotDir != "recovery-preopen" || recovery.InputTreeSHA256 != fmt.Sprintf("%x", stableTreeDigest) || len(recovery.StableFingerprint) != 64 {
 		t.Fatalf("recovery evidence binding=%+v", recovery)
 	}
 	if _, err := os.Stat(filepath.Join(evidenceDir, "stable-image")); err != nil {
 		t.Fatalf("missing immutable stable image: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(evidenceDir, "recovery-preopen", "recovery", "mutation")); !os.IsNotExist(err) {
+		t.Fatalf("pre-open recovery snapshot was mutated: %v", err)
 	}
 }

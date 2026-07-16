@@ -38,27 +38,29 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 			return Result{}, nil, nil, err
 		}
 		recovery := struct {
-			SchemaVersion     string `json:"schema_version"`
-			PublicAPI         string `json:"public_api"`
-			Dir               string `json:"dir"`
-			InputTreeSHA256   string `json:"input_image_tree_sha256"`
-			StableFingerprint string `json:"stable_fingerprint"`
-			ReadOnly          bool   `json:"read_only"`
-			Rejected          bool   `json:"rejected"`
-			ErrorType         string `json:"error_type"`
-			Error             string `json:"error"`
-			CommitSeq         uint64 `json:"commit_seq"`
-			AppliedLSN        uint64 `json:"applied_lsn"`
+			SchemaVersion      string `json:"schema_version"`
+			PublicAPI          string `json:"public_api"`
+			Dir                string `json:"dir"`
+			PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
+			InputTreeSHA256    string `json:"input_image_tree_sha256"`
+			StableFingerprint  string `json:"stable_fingerprint"`
+			ReadOnly           bool   `json:"read_only"`
+			Rejected           bool   `json:"rejected"`
+			ErrorType          string `json:"error_type"`
+			Error              string `json:"error"`
+			CommitSeq          uint64 `json:"commit_seq"`
+			AppliedLSN         uint64 `json:"applied_lsn"`
 		}{
-			SchemaVersion:     "treedb-power-loss-recovery-trace/v1",
-			PublicAPI:         "treedb.Open",
-			Dir:               "recovery-input",
-			InputTreeSHA256:   evidence.StableImageTreeSHA256(),
-			StableFingerprint: evidence.StableFingerprint(),
-			ReadOnly:          result.ReadOnly,
-			Rejected:          result.Rejected,
-			CommitSeq:         result.CommitSeq,
-			AppliedLSN:        result.AppliedLSN,
+			SchemaVersion:      "treedb-power-loss-recovery-trace/v1",
+			PublicAPI:          "treedb.Open",
+			Dir:                "recovery-input",
+			PreOpenSnapshotDir: "recovery-preopen",
+			InputTreeSHA256:    evidence.StableImageTreeSHA256(),
+			StableFingerprint:  evidence.StableFingerprint(),
+			ReadOnly:           result.ReadOnly,
+			Rejected:           result.Rejected,
+			CommitSeq:          result.CommitSeq,
+			AppliedLSN:         result.AppliedLSN,
 		}
 		if result.Err != nil {
 			recovery.ErrorType = fmt.Sprintf("%T", result.Err)

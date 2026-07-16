@@ -87,12 +87,16 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	}
 	stableDir := filepath.Join(root, "stable-image")
 	dirtyDir := filepath.Join(root, "dirty-image")
+	preOpenDir := filepath.Join(root, "recovery-preopen")
 	recoveryDir := filepath.Join(root, "recovery-input")
 	if err := model.MaterializeStable(stableDir); err != nil {
 		return nil, fmt.Errorf("powerlossoracle: materialize stable evidence: %w", err)
 	}
 	if err := model.MaterializeVolatile(dirtyDir); err != nil {
 		return nil, fmt.Errorf("powerlossoracle: materialize dirty evidence: %w", err)
+	}
+	if err := model.MaterializeStable(preOpenDir); err != nil {
+		return nil, fmt.Errorf("powerlossoracle: materialize pre-open recovery evidence: %w", err)
 	}
 	if err := model.MaterializeStable(recoveryDir); err != nil {
 		return nil, fmt.Errorf("powerlossoracle: materialize recovery input: %w", err)

@@ -213,6 +213,7 @@ func ValidateBundle(expectedSHA string, inventory RiskInventory, manifests []Chi
 	}
 	manifestIDs := make(map[string]bool, len(manifests))
 	witnessIDs := make(map[string]string)
+	modeledEvidenceDirs := make(map[string]string)
 	for i := range manifests {
 		manifest := &manifests[i]
 		if manifest.RepositorySHA != expectedSHA {
@@ -233,6 +234,9 @@ func ValidateBundle(expectedSHA string, inventory RiskInventory, manifests []Chi
 				return fmt.Errorf("powerlosscert: duplicate witness id %q in manifests %q and %q", witness.ID, owner, manifest.ManifestID)
 			}
 			witnessIDs[witness.ID] = manifest.ManifestID
+			if err := registerModeledEvidenceDir(manifest.ManifestID, witness, modeledEvidenceDirs); err != nil {
+				return err
+			}
 		}
 	}
 	report, err := BuildCoverageReport(inventory, manifests)
@@ -242,6 +246,22 @@ func ValidateBundle(expectedSHA string, inventory RiskInventory, manifests []Chi
 	if !report.Complete {
 		return fmt.Errorf("powerlosscert: incomplete frozen risk coverage: %s", strings.Join(report.Gaps, ", "))
 	}
+	return nil
+}
+
+func registerModeledEvidenceDir(manifestID string, witness Witness, seen map[string]string) error {
+	if witness.EvidenceTier != EvidenceTierModeledCrash {
+		return nil
+	}
+	rawDir := witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"]
+	dir := normalizedArtifactPath(rawDir)
+	if rawDir == "" || filepath.IsAbs(rawDir) || dir == "." || strings.HasPrefix(dir, "../") || dir != rawDir {
+		return fmt.Errorf("powerlosscert: manifest %q witness %q has unsafe or non-canonical modeled evidence directory %q", manifestID, witness.ID, rawDir)
+	}
+	if owner, reused := seen[dir]; reused {
+		return fmt.Errorf("powerlosscert: witness %q reuses modeled evidence directory %q owned by witness %q", witness.ID, dir, owner)
+	}
+	seen[dir] = witness.ID
 	return nil
 }
 

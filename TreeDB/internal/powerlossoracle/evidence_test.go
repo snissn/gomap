@@ -75,7 +75,7 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	if len(stableTree.Directories) != 1 || stableTree.Directories[0] != "empty-wal" {
 		t.Fatalf("stable image directories=%v want [empty-wal]", stableTree.Directories)
 	}
-	for _, image := range []string{"stable-image", "dirty-image", "recovery-input"} {
+	for _, image := range []string{"stable-image", "dirty-image", "recovery-preopen", "recovery-input"} {
 		info, err := os.Stat(filepath.Join(evidenceDir, image, "empty-wal"))
 		if err != nil || !info.IsDir() {
 			t.Fatalf("%s empty directory info=%v error=%v", image, info, err)

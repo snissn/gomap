@@ -65,6 +65,9 @@ The evidence directory must be empty. Capture writes:
   directories) and every regular file;
 - a separate `recovery-input/` copy so read-write recovery cannot mutate the
   crash-image evidence;
+- an immutable `recovery-preopen/` snapshot of the exact stable tree supplied
+  to public open, so writable recovery remains verifiable after it mutates
+  `recovery-input/`;
 - `recovery_trace.json` from the normal public open path, bound to the SHA-256
   of `stable_image_tree.json` and the model's stable fingerprint; and
 - `metrics.json` with image sizes, file counts, trace count, and stable-image
@@ -72,12 +75,16 @@ The evidence directory must be empty. Capture writes:
 
 Every modeled witness registers those five JSON files and
 `command_log.json` at their canonical names directly below its declared
-`TREEDB_POWERLOSS_EVIDENCE_DIR`. The verifier strictly parses every schema,
+`TREEDB_POWERLOSS_EVIDENCE_DIR`; modeled witnesses may not reuse that directory
+or its evidence as independent coverage. The verifier strictly parses every
+schema,
 rehashes every file named by both image-tree manifests, compares their exact
 directory sets, rejects extra image paths and symlinks, cross-checks metrics
 against the trace and image trees, and binds the recovery trace to the immutable
-stable image. For read-only recovery, the preserved `recovery-input/` namespace
-and bytes must still match the stable tree exactly.
+stable image. The preserved `recovery-preopen/` namespace and bytes must always
+match the stable tree exactly. For read-only recovery, the unchanged
+`recovery-input/` must match it too; writable recovery may mutate only that
+working copy after public open begins.
 
 The command runner owns `command_log.json`. Its versioned JSON envelope records
 the exact repository SHA, test-binary path and SHA-256, package, test name,

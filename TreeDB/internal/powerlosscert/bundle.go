@@ -47,17 +47,18 @@ type imageTreeFileArtifact struct {
 }
 
 type recoveryTraceArtifact struct {
-	SchemaVersion     string `json:"schema_version"`
-	PublicAPI         string `json:"public_api"`
-	Dir               string `json:"dir"`
-	InputTreeSHA256   string `json:"input_image_tree_sha256"`
-	StableFingerprint string `json:"stable_fingerprint"`
-	ReadOnly          bool   `json:"read_only"`
-	Rejected          bool   `json:"rejected"`
-	ErrorType         string `json:"error_type"`
-	Error             string `json:"error"`
-	CommitSeq         uint64 `json:"commit_seq"`
-	AppliedLSN        uint64 `json:"applied_lsn"`
+	SchemaVersion      string `json:"schema_version"`
+	PublicAPI          string `json:"public_api"`
+	Dir                string `json:"dir"`
+	PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
+	InputTreeSHA256    string `json:"input_image_tree_sha256"`
+	StableFingerprint  string `json:"stable_fingerprint"`
+	ReadOnly           bool   `json:"read_only"`
+	Rejected           bool   `json:"rejected"`
+	ErrorType          string `json:"error_type"`
+	Error              string `json:"error"`
+	CommitSeq          uint64 `json:"commit_seq"`
+	AppliedLSN         uint64 `json:"applied_lsn"`
 }
 
 type metricsArtifact struct {
@@ -184,7 +185,13 @@ func VerifyArtifacts(root string, manifests []ChildManifest) error {
 		return fmt.Errorf("powerlosscert: resolve artifact root symlinks: %w", err)
 	}
 	seen := make(map[string]string)
+	modeledEvidenceDirs := make(map[string]string)
 	for _, manifest := range manifests {
+		for _, witness := range manifest.Witnesses {
+			if err := registerModeledEvidenceDir(manifest.ManifestID, witness, modeledEvidenceDirs); err != nil {
+				return err
+			}
+		}
 		artifacts := append([]Artifact(nil), manifest.TestBinaries...)
 		for _, witness := range manifest.Witnesses {
 			artifacts = append(artifacts, witness.Artifacts...)
@@ -278,6 +285,9 @@ func verifyModeledEvidence(root string, manifest ChildManifest, witness Witness)
 	}
 	recovery, err := verifyRecoveryTrace(root, evidenceDir, manifest.ManifestID, witness, artifacts[ArtifactKindRecoveryTrace], artifacts[ArtifactKindStableImageTree], metrics)
 	if err != nil {
+		return err
+	}
+	if _, err := verifyImageDirectory(root, evidenceDir, manifest.ManifestID, witness.ID, recovery.PreOpenSnapshotDir, stableTree); err != nil {
 		return err
 	}
 	if recovery.ReadOnly {
@@ -503,8 +513,8 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 	if err := decodeStrict(data, &recovery); err != nil {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s decode: %w", prefix, err)
 	}
-	if recovery.SchemaVersion != recoveryTraceSchemaVersion || recovery.PublicAPI != "treedb.Open" || recovery.Dir != "recovery-input" {
-		return recoveryTraceArtifact{}, fmt.Errorf("%s has invalid schema, public_api, or dir", prefix)
+	if recovery.SchemaVersion != recoveryTraceSchemaVersion || recovery.PublicAPI != "treedb.Open" || recovery.Dir != "recovery-input" || recovery.PreOpenSnapshotDir != "recovery-preopen" {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s has invalid schema, public_api, dir, or pre_open_snapshot_dir", prefix)
 	}
 	if recovery.InputTreeSHA256 != stableArtifact.SHA256 || recovery.StableFingerprint != metrics.StableFingerprint {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s does not identify the captured stable image", prefix)

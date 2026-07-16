@@ -32,6 +32,18 @@ func TestValidateBundleRejectsStaleSHAAndDuplicateWitnessIDs(t *testing.T) {
 	}
 }
 
+func TestValidateBundleRejectsModeledEvidenceReuseAcrossWitnesses(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	reused := manifest.Witnesses[0]
+	reused.ID = "witness-b"
+	manifest.Witnesses = append(manifest.Witnesses, reused)
+
+	err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "reuses modeled evidence directory") {
+		t.Fatalf("ValidateBundle modeled evidence reuse error=%v", err)
+	}
+}
+
 func TestValidateBundleRejectsPassingWitnessWithoutDeclaredCutOrArtifacts(t *testing.T) {
 	inventory := testRiskInventory()
 	manifest := testChildManifest("witness-a")
