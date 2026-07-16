@@ -713,14 +713,22 @@ func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
 	db.commandWALDebt.releaseThrough(lsn)
 }
 
-func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra ...*rootpublication.StableResourceSet) error {
+func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet) error {
 	if db == nil || lsn == 0 {
 		return nil
 	}
-	if len(extra) == 0 && !db.commandWALDebt.hasPhysicalDependenciesThrough(lsn) {
+	if extra == nil && !db.commandWALDebt.hasPhysicalDependenciesThrough(lsn) {
 		return nil
 	}
-	view, err := db.commandWALDebt.resourceViewThrough(lsn, extra...)
+	var (
+		view *rootpublication.StableResourceSet
+		err  error
+	)
+	if extra == nil {
+		view, err = db.commandWALDebt.resourceViewThrough(lsn)
+	} else {
+		view, err = db.commandWALDebt.resourceViewThrough(lsn, extra)
+	}
 	if err != nil {
 		return err
 	}

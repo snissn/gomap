@@ -13,6 +13,17 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
+	db := &DB{}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if err := db.syncCommandWALDependenciesThrough(1, nil); err != nil {
+			t.Fatalf("syncCommandWALDependenciesThrough: %v", err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("syncCommandWALDependenciesThrough allocations=%v, want 0", allocs)
+	}
+}
+
 type commandWALCountingValueLogAppender struct {
 	inner   ValueLogAppender
 	flushes int

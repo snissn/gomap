@@ -3834,7 +3834,7 @@ func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err err
 	// independently advance commandWALDurableLSN through its own contract.
 	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
 	if advanced {
-		if err := db.syncCommandWALDependenciesThrough(frontier); err != nil {
+		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
 			return false, false, err
 		}
 	}
