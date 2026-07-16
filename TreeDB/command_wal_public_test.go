@@ -1946,6 +1946,15 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	// The checkpointed root is durable, but the other recovery-selectable slot
+	// can still require the covered command. Publish one durable successor so
+	// cleanup can reclaim the original segment from the exact two-slot minimum.
+	if err := db.Set([]byte("fallback-advance"), []byte("value")); err != nil {
+		t.Fatalf("Set fallback-advance: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint fallback-advance: %v", err)
+	}
 	after := publicCommandWALSegmentNames(t, dir)
 	beforeSet := make(map[string]struct{}, len(before))
 	for _, name := range before {
@@ -1960,8 +1969,8 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 		t.Fatalf("checkpoint removed all command WAL segments; before=%v after=%v", before, after)
 	}
 	stats := db.Stats()
-	if got := stats["treedb.command_wal.cleanup.removed_segments"]; got != "1" {
-		t.Fatalf("cleanup.removed_segments=%q, want 1 (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, "treedb.command_wal.cleanup.removed_segments"); got == 0 {
+		t.Fatalf("cleanup.removed_segments=0, want >0 (stats=%#v)", stats)
 	}
 	if got := statMapUint64(t, stats, "treedb.command_wal.cleanup.scan.count_total"); got == 0 {
 		t.Fatalf("cleanup.scan.count_total=0, want >0")
@@ -2020,9 +2029,18 @@ func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
 			applied = db.backend.State().AppliedCommandLSN
 		}
 		if count > 0 && stats["treedb.cache.auto_checkpoint.last_reason"] == "size" && applied >= 1 {
+			// One auto-checkpoint establishes the applied frontier, while the older
+			// durable slot can still require LSN 1. Advance the fallback slot before
+			// requiring physical cleanup convergence.
+			if err := db.Set([]byte("auto-checkpoint/fallback-advance"), []byte("value")); err != nil {
+				t.Fatalf("Set fallback advance after size auto-checkpoint: %v", err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint fallback advance after size auto-checkpoint: %v", err)
+			}
 			commandStats := db.Stats()
-			if got := commandStats["treedb.command_wal.cleanup.removed_segments"]; got != "1" {
-				t.Fatalf("cleanup.removed_segments=%q, want 1 after size auto-checkpoint (stats=%#v)", got, commandStats)
+			if got := statMapUint64(t, commandStats, "treedb.command_wal.cleanup.removed_segments"); got == 0 {
+				t.Fatalf("cleanup.removed_segments=0, want >0 after fallback advance (stats=%#v)", commandStats)
 			}
 			return
 		}
@@ -4377,15 +4395,9 @@ func TestHelperPublicCommandWALCheckpointPostFrontierCrashWriter(t *testing.T) {
 	if len(segmentsAfter) == 0 {
 		t.Fatalf("checkpoint cleanup removed the post-cut command-WAL generation; before=%v", segmentsBefore)
 	}
-	beforeSet := make(map[string]struct{}, len(segmentsBefore))
-	for _, name := range segmentsBefore {
-		beforeSet[name] = struct{}{}
-	}
-	for _, name := range segmentsAfter {
-		if _, covered := beforeSet[name]; covered {
-			t.Fatalf("checkpoint cleanup retained covered segment %s; before=%v after=%v", name, segmentsBefore, segmentsAfter)
-		}
-	}
+	// The older durable slot may still need the pre-cut command generation.
+	// Retaining covered segments here is therefore valid; reopen must tolerate
+	// the duplicate covered prefix and replay the post-cut generation.
 
 	// Simulate a process crash after cleanup without the close-time checkpoint.
 	// The only durable owner of the post-cut generation is its fresh command-WAL

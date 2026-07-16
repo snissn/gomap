@@ -283,18 +283,43 @@ func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t 
 	}
 
 	reopen := openCommandWALDB(t, dir)
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("covered segment stat after one-root coverage=%v, want retained", err)
+	}
+	// Publish the same frontier into the other independently recoverable slot.
+	// Only then does ordinary cleanup have two-root deletion authority.
+	state = reopen.State()
+	if err := reopen.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, nil, true); err != nil {
+		t.Fatalf("publishCommandWALRoots second slot: %v", err)
+	}
 	if err := reopen.Close(); err != nil {
 		t.Fatalf("Close reopen: %v", err)
+	}
+	cleanupReopen := openCommandWALDB(t, dir)
+	stats := make(map[string]string)
+	writeCommandWALStats(stats, cleanupReopen)
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.proof.capture_epoch"); got == 0 {
+		t.Fatalf("cleanup proof capture epoch=%d, want journal-owned recovery cleanup (stats=%#v)", got, stats)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.proof.namespace_generation"); got == 0 {
+		t.Fatalf("cleanup proof namespace generation=%d, want journal-owned recovery cleanup (stats=%#v)", got, stats)
+	}
+	if err := cleanupReopen.Close(); err != nil {
+		t.Fatalf("Close cleanup reopen: %v", err)
 	}
 	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
 		t.Fatalf("covered segment stat error=%v, want removed on clean reopen", err)
 	}
-	// The active covered segment (seq=2, highest seq among covered segments)
-	// must be retained so that the next open can compute commandSegmentSeq
-	// correctly and does not collide with a surviving segment.
-	activeCoveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))
-	if _, err := os.Stat(activeCoveredPath); err != nil {
-		t.Fatalf("active covered segment stat error=%v, want retained on clean reopen", err)
+	// A later journal lifecycle may advance the active anchor beyond seq=2, but
+	// cleanup must always leave an exact active successor in the namespace.
+	var commandSegments int
+	for _, name := range commandWALSegmentNamesForTest(t, dir) {
+		if commitlog.IsCommandSegmentName(name) {
+			commandSegments++
+		}
+	}
+	if commandSegments == 0 {
+		t.Fatal("cleanup removed every command-WAL segment, want active successor retained")
 	}
 }
 
@@ -1645,6 +1670,85 @@ func TestCommandWALRelaxedRIDReplaySyncsDependenciesBeforeRootPublication(t *tes
 	assertDBValue(t, reopen, "k", "large-value")
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCommandWALRelaxedReplayRetainsCleanupUntilLaterRecoveryBaseline(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameWithDurability(t, dir, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSet, Key: []byte("relaxed"), Value: []byte("value"),
+	}})
+	coveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+
+	replayOpen := openCommandWALDB(t, dir)
+	assertDBValue(t, replayOpen, "relaxed", "value")
+	if got := replayOpen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if got := replayOpen.commandWALDurableLSN.Load(); got != 0 {
+		t.Fatalf("durable WAL LSN=%d after relaxed replay, want classified frontier 0", got)
+	}
+	if _, err := replayOpen.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		t.Fatalf("cleanup proof after relaxed replay error=%v, want conservative unavailable authority", err)
+	}
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("relaxed replay cleanup removed WAL before authority existed: %v", err)
+	}
+	batch := replayOpen.NewBatch()
+	if err := batch.Set([]byte("same-session"), []byte("value-2")); err != nil {
+		_ = batch.Close()
+		t.Fatalf("Set same-session value: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		_ = batch.Close()
+		t.Fatalf("Write same-session relaxed frame: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("Close same-session batch: %v", err)
+	}
+	if got := replayOpen.CommandWALActiveBytes(); got == 0 {
+		t.Fatal("same-session relaxed write left no active WAL bytes, want checkpoint rotation coverage")
+	}
+	if err := replayOpen.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint relaxed replay handle: %v", err)
+	}
+	assertDBValue(t, replayOpen, "same-session", "value-2")
+	if got := replayOpen.commandWALDurableLSN.Load(); got != 0 {
+		t.Fatalf("durable WAL LSN after same-session checkpoint=%d, want classified frontier 0", got)
+	}
+	if _, err := replayOpen.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		t.Fatalf("cleanup proof after same-session checkpoint error=%v, want conservative unavailable authority", err)
+	}
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("same-session checkpoint removed recovered WAL without physical frontier authority: %v", err)
+	}
+	if err := replayOpen.Close(); err != nil {
+		t.Fatalf("Close relaxed replay handle: %v", err)
+	}
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("Close removed WAL while cleanup authority remained unavailable: %v", err)
+	}
+
+	converged := openCommandWALDB(t, dir)
+	assertDBValue(t, converged, "relaxed", "value")
+	assertDBValue(t, converged, "same-session", "value-2")
+	if got := converged.commandWALDurableLSN.Load(); got != 2 {
+		t.Fatalf("durable WAL LSN on later recovery baseline=%d, want 2", got)
+	}
+	state := converged.State()
+	if err := converged.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, nil, true); err != nil {
+		t.Fatalf("publish replay frontier into older recoverable slot: %v", err)
+	}
+	if err := converged.Close(); err != nil {
+		t.Fatalf("Close converged reopen: %v", err)
+	}
+	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
+		t.Fatalf("covered WAL stat after later recovery baseline=%v, want eventual cleanup", err)
 	}
 }
 

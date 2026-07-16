@@ -460,43 +460,179 @@ func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
 	return db.commandJournal.RotateActiveSegment(sync)
 }
 
-// CleanupCommandWALCoveredSegments removes command-WAL segments whose max LSN is
-// covered by the current durable AppliedCommandLSN and that are not active.
-func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
+// CleanupCommandWALCoveredSegments removes complete command-WAL segments covered
+// by the exact validated durable-root proof and outside every journal/pin
+// protection. Any successful unlink is followed by a WAL-directory sync before
+// success is reported. The legacy sync argument is retained for callers, but
+// cleanup never mints or advances a durable WAL frontier.
+func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 	if db == nil || !db.commandWAL {
 		return nil
 	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	return db.cleanupCommandWALCoveredSegmentsV1()
+}
+
+// CleanupCommandWALCoveredSegmentsAtCheckpoint performs opportunistic cleanup
+// after a checkpoint durability boundary. A checkpoint can be fully successful
+// while cleanup authority is intentionally unavailable, for example when this
+// journal session recovered a relaxed frame above the physically classified WAL
+// frontier. Retain the WAL and report checkpoint success in that case. Every
+// stale-proof, unlink, namespace-sync, poison, and admission failure still
+// propagates; explicit cleanup callers continue to receive the unavailable
+// authority error from CleanupCommandWALCoveredSegments.
+func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
+	return db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(false)
+}
+
+// cleanupCommandWALCoveredSegmentsAtCheckpointV1 accepts maintenanceAlreadyHeld
+// only from an enclosing backend maintenance operation. Ordinary checkpoint
+// callers still enter through the public maintenance admission gate.
+func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld bool) error {
+	var err error
+	if maintenanceAlreadyHeld {
+		err = db.cleanupCommandWALCoveredSegmentsV1()
+	} else {
+		err = db.CleanupCommandWALCoveredSegments(false)
+	}
+	if errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		return nil
+	}
+	return err
+}
+
+// cleanupCommandWALCoveredSegmentsV1 is the allow-closing cleanup path used by
+// DB.Close after writers and root publication have drained but before the
+// journal owner is detached. External callers must use the admission-checked
+// CleanupCommandWALCoveredSegments method above.
+func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
+	db.commandWALCleanupMu.Lock()
+	defer db.commandWALCleanupMu.Unlock()
+	cleanupStart := time.Now()
+	defer func() {
+		if elapsed := commandWALDurationNs(time.Since(cleanupStart)); elapsed > 0 {
+			db.commandWALCleanupNs.Add(elapsed)
+		}
+		if retErr != nil {
+			db.commandWALCleanupRetries.Add(1)
+		}
+	}()
 	if db.readOnly {
 		return ErrReadOnly
 	}
-	// Cleanup authority is the recovery-selectable root, never the newer
-	// visible frontier that may still be queued behind asynchronous root
-	// publication.
-	db.durablePublishMu.Lock()
-	durableAppliedLSN := db.durableRoot.record.AppliedCommandLSN
-	db.durablePublishMu.Unlock()
-	if durableAppliedLSN == 0 {
-		return nil
+	if db.commandJournal == nil {
+		return fmt.Errorf("%w: command journal owner is not live", errDurableWALCleanupProofUnavailable)
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	proofStart := time.Now()
+	proof, err := db.captureDurableWALCleanupProofV1()
+	db.commandWALCleanupProofs.Add(1)
+	if proofNs := commandWALDurationNs(time.Since(proofStart)); proofNs > 0 {
+		db.commandWALCleanupProofNs.Add(proofNs)
+	}
+	if err != nil {
+		return err
+	}
+	db.commandWALCleanupProofFrontier.Store(proof.cleanupThrough)
+	db.commandWALCleanupProofDurableLSN.Store(proof.durableWALLSN)
+	db.commandWALCleanupSelectedRoot.Store(proof.selectedCommitSeq())
+	db.commandWALCleanupOlderRoot.Store(proof.olderCommitSeq())
+	db.commandWALCleanupCaptureEpoch.Store(proof.journal.CleanupEpoch)
+	db.commandWALCleanupNamespaceGen.Store(proof.journal.NamespaceGeneration)
+	if proof.cleanupThrough == 0 {
+		return db.syncCommandWALCleanupNamespaceIfDirty()
 	}
 	scanStart := time.Now()
-	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, durableAppliedLSN, db.walMaxSegmentBytes)
+	decisions, err := scanCommandWALSegmentsForCleanupProof(db.dir, proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes)
+	proof.segments = decisions
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
-	if err == nil {
-		decisions, err = removeCoveredCommandWALSegments(decisions)
+	defer closeCommandWALCleanupDecisions(decisions)
+	if errors.Is(err, ErrCommandWALAppliedLSNNonContig) || errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		// A missing or duplicate frame in the retained replay interval means the
+		// captured roots/WAL lineage cannot authorize deletion. Nothing has been
+		// unlinked yet, so classify this as unavailable proof: explicit cleanup
+		// still receives the exact lineage error, while checkpoint/close retain
+		// the namespace and allow a later recovery baseline to converge.
+		err = errors.Join(errDurableWALCleanupProofUnavailable, err)
 	}
+	if err == nil && db.testCommandWALCleanupAfterScanHook != nil {
+		db.testCommandWALCleanupAfterScanHook()
+	}
+	if err == nil {
+		db.durablePublishMu.Lock()
+		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
+			for i := range proof.segments {
+				if rootpublication.SamePhysicalIdentity(proof.segments[i].identity, proof.journal.ActiveIdentity) {
+					proof.segments[i].Active = true
+				}
+			}
+			err = proof.journalOwner.WithCleanupSnapshot(proof.journal, func(registry *rootpublication.IdentityPinRegistry) (bool, error) {
+				var removeErr error
+				proof.segments, removeErr = removeCoveredCommandWALSegmentsWithRegistry(proof.segments, registry)
+				for i := range proof.segments {
+					if proof.segments[i].Removed {
+						return true, removeErr
+					}
+				}
+				return false, removeErr
+			})
+		}
+		db.durablePublishMu.Unlock()
+	}
+	decisions = proof.segments
 	removed := uint64(0)
 	removedBytes := uint64(0)
 	scannedBytes := uint64(0)
 	scannedFrames := uint64(0)
+	covered := uint64(0)
+	coveredBytes := uint64(0)
+	retained := uint64(0)
+	retainedBytes := uint64(0)
+	retainedActive := uint64(0)
+	retainedUncovered := uint64(0)
+	retainedPinned := uint64(0)
+	retainedError := uint64(0)
+	oldestPinnedLSN := uint64(0)
 	for _, decision := range decisions {
 		if decision.ScannedBytes > 0 {
 			scannedBytes += uint64(decision.ScannedBytes)
 		}
 		scannedFrames += decision.Frames
+		if decision.Covered {
+			covered++
+			if decision.Size > 0 {
+				coveredBytes += uint64(decision.Size)
+			}
+		}
 		if !decision.Removed {
+			retained++
+			if decision.Size > 0 {
+				retainedBytes += uint64(decision.Size)
+			}
+			if decision.Active {
+				retainedActive++
+			}
+			if !decision.Covered {
+				retainedUncovered++
+			}
+			if decision.Pinned {
+				retainedPinned++
+			}
+			if decision.Error != "" || (err != nil && decision.Covered && !decision.Active && !decision.Pinned) {
+				retainedError++
+			}
+			if (decision.Active || decision.Pinned) && decision.MinLSN != 0 && (oldestPinnedLSN == 0 || decision.MinLSN < oldestPinnedLSN) {
+				oldestPinnedLSN = decision.MinLSN
+			}
 			continue
 		}
 		removed++
@@ -510,9 +646,23 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if scannedFrames > 0 {
 		db.commandWALCleanupScanFrames.Add(scannedFrames)
 	}
+	if covered > 0 {
+		db.commandWALCleanupCovered.Add(covered)
+		db.commandWALCleanupCoveredBytes.Add(coveredBytes)
+	}
+	if retained > 0 {
+		db.commandWALCleanupRetained.Add(retained)
+		db.commandWALCleanupRetainedBytes.Add(retainedBytes)
+		db.commandWALCleanupRetainedActive.Add(retainedActive)
+		db.commandWALCleanupRetainedUncover.Add(retainedUncovered)
+		db.commandWALCleanupRetainedPinned.Add(retainedPinned)
+		db.commandWALCleanupRetainedError.Add(retainedError)
+	}
+	db.commandWALCleanupOldestPinnedLSN.Store(oldestPinnedLSN)
 	if removed > 0 {
-		db.commandWALCleanupRemoved.Add(removed)
-		db.commandWALCleanupBytes.Add(removedBytes)
+		db.commandWALCleanupUnlinkedPending.Add(removed)
+		db.commandWALCleanupBytesPending.Add(removedBytes)
+		db.commandWALCleanupNamespaceDirty.Store(true)
 		if removedBytes > 0 {
 			db.commandWALClosedBytes.Add(-int64(removedBytes))
 		}
@@ -521,22 +671,38 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 			// deletion directory could be proven durable.
 			return errors.Join(err, ErrRecoveryRequired)
 		}
-		if sync {
-			if syncErr := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil {
-				return errors.Join(syncErr, ErrRecoveryRequired)
-			}
-			if syncErr := syncDirFn(WALDirPath(db.dir)); syncErr != nil {
-				return errors.Join(syncErr, ErrRecoveryRequired)
-			}
-			if syncErr := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); syncErr != nil {
-				return errors.Join(syncErr, ErrRecoveryRequired)
-			}
-		}
 	}
-	if err == nil && sync {
-		db.closeCommandWALDurablePrefixThrough(durableAppliedLSN)
+	if syncErr := db.syncCommandWALCleanupNamespaceIfDirty(); syncErr != nil {
+		return syncErr
 	}
 	return err
+}
+
+func (db *DB) syncCommandWALCleanupNamespaceIfDirty() error {
+	if db == nil || !db.commandWALCleanupNamespaceDirty.Load() {
+		return nil
+	}
+	db.commandWALCleanupNamespaceSyncs.Add(1)
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); err != nil {
+		db.commandWALCleanupNamespaceErrors.Add(1)
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if err := syncDirFn(WALDirPath(db.dir)); err != nil {
+		db.commandWALCleanupNamespaceErrors.Add(1)
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceCommandWAL, db.dir, WALDirPath(db.dir)); err != nil {
+		db.commandWALCleanupNamespaceErrors.Add(1)
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	db.commandWALCleanupNamespaceDirty.Store(false)
+	if removed := db.commandWALCleanupUnlinkedPending.Swap(0); removed > 0 {
+		db.commandWALCleanupRemoved.Add(removed)
+	}
+	if removedBytes := db.commandWALCleanupBytesPending.Swap(0); removedBytes > 0 {
+		db.commandWALCleanupBytes.Add(removedBytes)
+	}
+	return nil
 }
 
 func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
@@ -545,6 +711,44 @@ func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
 	}
 	commandWALStoreMax(&db.commandWALDurableLSN, lsn)
 	db.commandWALDebt.releaseThrough(lsn)
+}
+
+func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet) error {
+	if db == nil || lsn == 0 {
+		return nil
+	}
+	if extra == nil && !db.commandWALDebt.hasPhysicalDependenciesThrough(lsn) {
+		return nil
+	}
+	var (
+		view *rootpublication.StableResourceSet
+		err  error
+	)
+	if extra == nil {
+		view, err = db.commandWALDebt.resourceViewThrough(lsn)
+	} else {
+		view, err = db.commandWALDebt.resourceViewThrough(lsn, extra)
+	}
+	if err != nil {
+		return err
+	}
+	if err := view.SyncThrough(); err != nil {
+		db.commandWALDebt.noteRetryThrough(lsn)
+		return err
+	}
+	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn); err != nil {
+		db.commandWALDebt.noteRetryThrough(lsn)
+		return err
+	}
+	if err := stabilizeCommandWALResourceNamespaces(view); err != nil {
+		db.commandWALDebt.noteRetryThrough(lsn)
+		return err
+	}
+	if err := db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, lsn); err != nil {
+		db.commandWALDebt.noteRetryThrough(lsn)
+		return err
+	}
+	return nil
 }
 
 func (db *DB) rejectUnloggedCommandWALRootPublish() error {
@@ -1680,30 +1884,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if !sync {
 			return nil
 		}
-		if dependencies == nil && !db.commandWALDebt.hasPhysicalDependenciesThrough(^uint64(0)) {
-			return nil
-		}
-		view, err := db.commandWALDebt.resourceViewThrough(^uint64(0), dependencies)
-		if err != nil {
-			return err
-		}
-		if err := view.SyncThrough(); err != nil {
-			db.commandWALDebt.noteRetryThrough(^uint64(0))
-			return err
-		}
-		if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, ^uint64(0)); err != nil {
-			db.commandWALDebt.noteRetryThrough(^uint64(0))
-			return err
-		}
-		if err := stabilizeCommandWALResourceNamespaces(view); err != nil {
-			db.commandWALDebt.noteRetryThrough(^uint64(0))
-			return err
-		}
-		if err := db.commandWALDebt.stabilizeRotationNamespacesThrough(db.dir, db.commandWALDir, ^uint64(0)); err != nil {
-			db.commandWALDebt.noteRetryThrough(^uint64(0))
-			return err
-		}
-		return nil
+		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
 	}
 	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
 		rotationFiles := commandWALStableRotationTokens(rotations)

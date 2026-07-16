@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -17,9 +19,26 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+// cleanupCommandWALSegmentsCoveredByAppliedLSN is intentionally test-only.
+// Production destructive cleanup must enter through
+// DB.CleanupCommandWALCoveredSegments so raw visible coverage cannot become
+// deletion authority without a validated durable cleanup proof.
+func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	return cleanupCommandWALSegmentsWithProof(dir, appliedLSN, appliedLSN, maxSegmentBytes)
+}
+
+func cleanupCommandWALSegmentsWithProof(dir string, cleanupThrough uint64, durableWALLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	decisions, err := scanCommandWALSegmentsForCleanupProof(dir, cleanupThrough, durableWALLSN, maxSegmentBytes)
+	if err != nil {
+		return decisions, err
+	}
+	return removeCoveredCommandWALSegments(decisions)
+}
 
 func TestCommandWALAppliedCommandLSNMetaFieldRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -761,7 +780,7 @@ func TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T)
 	}
 }
 
-func TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges(t *testing.T) {
+func TestCommandWALOpenAllowsCoveredDuplicateLSNAndCleanupConverges(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -791,8 +810,9 @@ func TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges(t *testin
 	if err := rw.Close(); err != nil {
 		t.Fatalf("Close read-write: %v", err)
 	}
-	// Verify that cleanupCommandWALSegmentsCoveredByAppliedLSN converges: the
-	// non-active covered segment (seq=1) must be removed, leaving only seq=2.
+	// Both physical copies are already covered by every recoverable root. The
+	// exact-identity cleanup may remove the inactive copy while retaining the
+	// active append target.
 	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
 	if err != nil {
 		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
@@ -804,7 +824,7 @@ func TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges(t *testin
 		}
 	}
 	if removed != 1 {
-		t.Fatalf("cleanup removed=%d segments, want 1 (non-active covered segment)", removed)
+		t.Fatalf("cleanup removed=%d segments, want inactive duplicate only", removed)
 	}
 }
 
@@ -1055,6 +1075,635 @@ func TestCommandWALCleanupCoveredSegmentsRejectsReadOnlyHandle(t *testing.T) {
 	}
 }
 
+func TestCommandWALCleanupRequiresLiveJournalOwner(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("close-cleanup-1"), Value: []byte("value")}})
+	writeCommandWALRawKVFrame(t, dir, 2, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("close-cleanup-2"), Value: []byte("value")}})
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	installCommandWALCleanupRootRuntimeForTest(db, 1, 1)
+
+	if _, err := db.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		t.Fatalf("captureDurableWALCleanupProofV1 error=%v, want unavailable without live owner", err)
+	}
+	if err := db.CleanupCommandWALCoveredSegments(false); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want unavailable without live owner", err)
+	}
+	if err := db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegmentsAtCheckpoint error=%v, want conservative retention", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); err != nil {
+		t.Fatalf("ownerless cleanup removed covered segment: %v", err)
+	}
+}
+
+func TestCommandWALCleanupRejectsClosedHandleWhileNewOwnerIsLive(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open first owner: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close first owner: %v", err)
+	}
+	reopen, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open second owner: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	before := commandWALSegmentNamesForTest(t, dir)
+	if err := db.CleanupCommandWALCoveredSegments(false); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed-handle cleanup error=%v, want ErrClosed", err)
+	}
+	if after := commandWALSegmentNamesForTest(t, dir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("closed-handle cleanup changed new owner's namespace: before=%v after=%v", before, after)
+	}
+}
+
+func TestCommandWALCloseRetainsUnavailableCleanupProof(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	batch := db.NewBatch()
+	if err := batch.Set([]byte("relaxed-close"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if runtime := db.rootPublication; runtime == nil || runtime.coordinator == nil {
+		t.Fatal("missing root publication runtime")
+	} else if err := runtime.coordinator.WaitThrough(context.Background(), db.State().CommitSeq); err != nil {
+		t.Fatalf("wait first durable root: %v", err)
+	}
+	if db.commandWALDurableLSN.Load() >= db.State().AppliedCommandLSN {
+		t.Fatalf("test did not create unavailable cleanup authority: durable=%d applied=%d", db.commandWALDurableLSN.Load(), db.State().AppliedCommandLSN)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close with conservative cleanup retention: %v", err)
+	}
+}
+
+func TestCommandWALClosePropagatesCleanupFailure(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	state := bootstrap.State()
+	if err := bootstrap.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 1, Last: 2}}, true); err != nil {
+		t.Fatalf("publish bootstrap command roots: %v", err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("close-cleanup-1"), Value: []byte("value")}})
+	writeCommandWALRawKVFrame(t, dir, 2, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("close-cleanup-2"), Value: []byte("value")}})
+
+	db := openCommandWALDB(t, dir)
+	installCommandWALCleanupTwoRootRuntimeForTest(db, 1, 2)
+	proof, err := db.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatalf("capture close cleanup proof: %v", err)
+	}
+	if proof.cleanupThrough == 0 {
+		t.Fatal("close cleanup proof has zero frontier")
+	}
+	wantErr := errors.New("injected close cleanup directory sync failure")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeDeletionDirectorySync && event.Resource == durabilitycut.ResourceCommandWAL {
+			return wantErr
+		}
+		return nil
+	})
+	err = db.Close()
+	restore()
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) || !strings.Contains(err.Error(), "cleanup command WAL during close") {
+		t.Fatalf("Close error=%v, want propagated cleanup sync failure", err)
+	}
+	if err := db.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("second Close error=%v, want retained teardown error", err)
+	}
+}
+
+func installCommandWALCleanupRootForTest(tb testing.TB, db *DB, commitSeq, appliedLSN uint64) {
+	tb.Helper()
+	installCommandWALCleanupRootRuntimeForTest(db, commitSeq, appliedLSN)
+	installCommandWALCleanupJournalOwnerForTest(tb, db, appliedLSN)
+}
+
+func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedLSN uint64) {
+	tb.Helper()
+	if db.commandJournal != nil {
+		return
+	}
+	segments, err := listRecoverySegments(db.dir)
+	if err != nil {
+		tb.Fatalf("list cleanup journal segments: %v", err)
+	}
+	segmentSeq := commandWALActiveSeqByLane(segments)[0]
+	if segmentSeq == ^uint64(0) {
+		tb.Fatalf("cleanup journal segment sequence exhausted")
+	}
+	hasTerminalTail, err := commandWALLaneActiveHasTerminalTail(segments, 0, db.walMaxSegmentBytes)
+	if err != nil {
+		tb.Fatalf("inspect cleanup journal active tail: %v", err)
+	}
+	if segmentSeq != 0 && !hasTerminalTail {
+		segmentSeq++
+	}
+	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), commitlog.CommandJournalOptions{
+		MaxSegmentSize:         db.walMaxSegmentBytes,
+		InitialLSN:             appliedLSN,
+		SegmentSeq:             segmentSeq,
+		CaptureStableResources: true,
+	})
+	if err != nil {
+		tb.Fatalf("OpenCommandJournal cleanup owner: %v", err)
+	}
+	db.commandJournal = journal
+	tb.Cleanup(func() {
+		if db.commandJournal == journal {
+			db.commandJournal = nil
+		}
+		_ = journal.Close()
+	})
+}
+
+func installCommandWALCleanupRootRuntimeForTest(db *DB, commitSeq, appliedLSN uint64) {
+	meta := page.DurableMetaV1{CommitSeq: commitSeq}
+	record := rootpublication.DurableRootRecordV1{CommitSeq: commitSeq, AppliedCommandLSN: appliedLSN}
+	db.durableRoot.slot = 0
+	db.durableRoot.meta = meta
+	db.durableRoot.record = record
+	db.durableRoot.slotCommit = [2]uint64{commitSeq, 0}
+	db.durableRoot.slotMeta = [2]page.DurableMetaV1{meta, {}}
+	db.durableRoot.slotRecord = [2]rootpublication.DurableRootRecordV1{record, {}}
+	db.commandWALDurableLSN.Store(appliedLSN)
+}
+
+func installCommandWALCleanupTwoRootRuntimeForTest(db *DB, commitSeq, appliedLSN uint64) {
+	meta0 := page.DurableMetaV1{CommitSeq: commitSeq}
+	meta1 := page.DurableMetaV1{CommitSeq: commitSeq + 1}
+	record0 := rootpublication.DurableRootRecordV1{CommitSeq: commitSeq, AppliedCommandLSN: appliedLSN}
+	record1 := rootpublication.DurableRootRecordV1{CommitSeq: commitSeq + 1, AppliedCommandLSN: appliedLSN}
+	db.durableRoot.slot = 1
+	db.durableRoot.meta = meta1
+	db.durableRoot.record = record1
+	db.durableRoot.slotCommit = [2]uint64{commitSeq, commitSeq + 1}
+	db.durableRoot.slotMeta = [2]page.DurableMetaV1{meta0, meta1}
+	db.durableRoot.slotRecord = [2]rootpublication.DurableRootRecordV1{record0, record1}
+	db.commandWALDurableLSN.Store(appliedLSN)
+}
+
+func TestCommandWALCheckpointEstablishesDurableCleanupProof(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	batch := db.NewBatch()
+	if err := batch.Set([]byte("checkpoint-proof"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	applied := db.State().AppliedCommandLSN
+	if applied == 0 {
+		t.Fatal("relaxed write did not advance AppliedCommandLSN")
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if durable := db.commandWALDurableLSN.Load(); durable < applied {
+		t.Fatalf("durable WAL LSN=%d, want at least applied LSN %d", durable, applied)
+	}
+	proof, err := db.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatalf("captureDurableWALCleanupProofV1 after checkpoint: %v", err)
+	}
+	if proof.durableWALLSN < applied {
+		t.Fatalf("proof durable WAL LSN=%d, want at least applied LSN %d", proof.durableWALLSN, applied)
+	}
+	selectedApplied := uint64(0)
+	for i := 0; i < proof.rootCount; i++ {
+		if proof.roots[i].slot == proof.selectedSlot {
+			selectedApplied = proof.roots[i].record.AppliedCommandLSN
+			break
+		}
+	}
+	if selectedApplied != applied {
+		t.Fatalf("selected-root applied LSN=%d, want %d", selectedApplied, applied)
+	}
+	if proof.cleanupThrough > applied {
+		t.Fatalf("cleanup frontier=%d, want at most applied LSN %d", proof.cleanupThrough, applied)
+	}
+}
+
+func TestCommandWALCleanupProofRejectsPendingJournalOwnership(t *testing.T) {
+	t.Run("stable-rotation", func(t *testing.T) {
+		dir := t.TempDir()
+		journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
+			Lane:                   0,
+			SegmentTargetBytes:     1,
+			CaptureStableResources: true,
+		})
+		if err != nil {
+			t.Fatalf("OpenCommandJournal: %v", err)
+		}
+		defer func() { _ = journal.Close() }()
+		for i := 0; i < 2; i++ {
+			if _, err := journal.AppendCommand(commitlog.CommandEnvelope{
+				Kind:          commitlog.CommandKindRawKVBatch,
+				Scope:         commitlog.CommandScopeRawKV,
+				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+			}); err != nil {
+				t.Fatalf("AppendCommand %d: %v", i, err)
+			}
+		}
+		snapshot, err := journal.CaptureCleanupSnapshot()
+		if err != nil {
+			t.Fatalf("CaptureCleanupSnapshot: %v", err)
+		}
+		if snapshot.PendingStableRotation == 0 {
+			t.Fatalf("PendingStableRotation=%d, want pending ownership", snapshot.PendingStableRotation)
+		}
+
+		db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
+		installCommandWALCleanupRootForTest(t, db, 1, 1)
+		if _, err := db.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+			t.Fatalf("captureDurableWALCleanupProofV1 error=%v, want unavailable proof", err)
+		}
+
+		rotations, err := journal.TakePendingStableRotations()
+		if err != nil {
+			t.Fatalf("TakePendingStableRotations: %v", err)
+		}
+		for _, rotation := range rotations {
+			rotation.Release()
+		}
+	})
+
+	t.Run("successor-retry", func(t *testing.T) {
+		err := validateCommandJournalCleanupSnapshotV1(commitlog.CommandJournalCleanupSnapshot{PendingSuccessor: true})
+		if !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+			t.Fatalf("validateCommandJournalCleanupSnapshotV1 error=%v, want unavailable proof", err)
+		}
+	})
+}
+
+func TestCommandWALCleanupProofRejectsDurableRootPublicationDebt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*DB)
+	}{
+		{
+			name: "pending-retry",
+			setup: func(db *DB) {
+				db.durableRoot.pending = &durableRootPublishCandidateV1{}
+			},
+		},
+		{
+			name: "ambiguous-outcome",
+			setup: func(db *DB) {
+				db.durableRoot.ambiguous = []*durableRootPublishCandidateV1{{}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCommandWALFrame(t, dir, 1, 1)
+			if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-l0-000002.log"), nil, 0o600); err != nil {
+				t.Fatalf("write active empty segment: %v", err)
+			}
+
+			db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+			installCommandWALCleanupRootForTest(t, db, 1, 1)
+			tc.setup(db)
+
+			if _, err := db.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				t.Fatalf("captureDurableWALCleanupProofV1 error=%v, want unavailable proof", err)
+			}
+			if err := db.CleanupCommandWALCoveredSegments(false); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want unavailable proof", err)
+			}
+			if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
+				t.Fatalf("covered segment removed while durable-root publication debt exists: %v", err)
+			}
+		})
+	}
+}
+
+func TestCommandWALCleanupFrontierIgnoresNonRootProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*DB)
+	}{
+		{
+			name: "visible-applied-lsn-ahead",
+			setup: func(db *DB) {
+				db.state.Store(&DBState{AppliedCommandLSN: 2})
+			},
+		},
+		{
+			name: "durable-wal-prefix-ahead",
+			setup: func(db *DB) {
+				db.commandWALDurableLSN.Store(2)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCommandWALFrame(t, dir, 1, 1)
+			writeCommandWALFrame(t, dir, 2, 2)
+			if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-l0-000003.log"), nil, 0o600); err != nil {
+				t.Fatalf("write active empty segment: %v", err)
+			}
+
+			db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+			installCommandWALCleanupRootForTest(t, db, 1, 1)
+			tc.setup(db)
+			proof, err := db.captureDurableWALCleanupProofV1()
+			if err != nil {
+				t.Fatalf("captureDurableWALCleanupProofV1: %v", err)
+			}
+			if proof.cleanupThrough != 1 {
+				t.Fatalf("cleanupThrough=%d, want durable-root frontier 1", proof.cleanupThrough)
+			}
+			if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+				t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+				t.Fatalf("root-covered segment stat=%v, want removed", err)
+			}
+			if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
+				t.Fatalf("segment beyond durable-root frontier stat=%v, want retained", err)
+			}
+		})
+	}
+}
+
+func TestCommandWALCleanupPinnedRetryRescansAndConverges(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("scanCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	var coveredIdentity rootpublication.StableIdentity
+	for _, decision := range decisions {
+		if decision.Covered && !decision.Active {
+			coveredIdentity = decision.identity
+			break
+		}
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	if err := registry.Observe(coveredIdentity); err != nil {
+		closeCommandWALCleanupDecisions(decisions)
+		t.Fatalf("Observe covered identity: %v", err)
+	}
+	pin, err := registry.Pin(coveredIdentity)
+	if err != nil {
+		closeCommandWALCleanupDecisions(decisions)
+		t.Fatalf("Pin covered identity: %v", err)
+	}
+
+	decisions, err = removeCoveredCommandWALSegmentsWithRegistry(decisions, registry)
+	if !errors.Is(err, rootpublication.ErrResourcePinned) {
+		pin.Release()
+		t.Fatalf("removeCoveredCommandWALSegmentsWithRegistry error=%v, want ErrResourcePinned", err)
+	}
+	pinned := false
+	for _, decision := range decisions {
+		if decision.Covered && !decision.Active {
+			pinned = decision.Pinned
+		}
+	}
+	if !pinned {
+		pin.Release()
+		t.Fatalf("cleanup decisions=%+v, want pinned retention", decisions)
+	}
+	coveredPath := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
+	if _, err := os.Stat(coveredPath); err != nil {
+		pin.Release()
+		t.Fatalf("pinned covered segment was removed: %v", err)
+	}
+
+	pin.Release()
+	decisions, err = scanCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("rescan after pin release: %v", err)
+	}
+	decisions, err = removeCoveredCommandWALSegmentsWithRegistry(decisions, registry)
+	if err != nil {
+		t.Fatalf("retry cleanup after pin release: %v", err)
+	}
+	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat after retry=%v, want removed", err)
+	}
+	if err := registry.Unobserve(coveredIdentity); err != nil {
+		t.Fatalf("Unobserve deleted covered identity: %v", err)
+	}
+	if stats := registry.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+		t.Fatalf("pin registry leaked after converged retry: %+v", stats)
+	}
+}
+
+func TestCommandWALCleanupRetainsReplayForOlderRecoverableRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+	if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-l0-000003.log"), nil, 0o600); err != nil {
+		t.Fatalf("write active empty segment: %v", err)
+	}
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	db.durableRoot.slot = 1
+	db.durableRoot.meta = page.DurableMetaV1{CommitSeq: 2}
+	db.durableRoot.record = rootpublication.DurableRootRecordV1{CommitSeq: 2, AppliedCommandLSN: 2}
+	db.durableRoot.slotCommit = [2]uint64{1, 2}
+	db.durableRoot.slotMeta = [2]page.DurableMetaV1{{CommitSeq: 1}, {CommitSeq: 2}}
+	db.durableRoot.slotRecord = [2]rootpublication.DurableRootRecordV1{
+		{CommitSeq: 1, AppliedCommandLSN: 1},
+		{CommitSeq: 2, AppliedCommandLSN: 2},
+	}
+	db.commandWALDurableLSN.Store(2)
+	installCommandWALCleanupJournalOwnerForTest(t, db, 2)
+
+	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("segment covered by both roots stat=%v, want removed", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
+		t.Fatalf("segment needed by older recoverable root stat=%v, want retained", err)
+	}
+}
+
+func TestCommandWALCleanupTreatsMissingRetainedReplayLineageAsUnavailableProof(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	db.durableRoot.slot = 1
+	db.durableRoot.meta = page.DurableMetaV1{CommitSeq: 2}
+	db.durableRoot.record = rootpublication.DurableRootRecordV1{CommitSeq: 2, AppliedCommandLSN: 2}
+	db.durableRoot.slotCommit = [2]uint64{1, 2}
+	db.durableRoot.slotMeta = [2]page.DurableMetaV1{{CommitSeq: 1}, {CommitSeq: 2}}
+	db.durableRoot.slotRecord = [2]rootpublication.DurableRootRecordV1{
+		{CommitSeq: 1, AppliedCommandLSN: 1},
+		{CommitSeq: 2, AppliedCommandLSN: 2},
+	}
+	db.commandWALDurableLSN.Store(2)
+	installCommandWALCleanupJournalOwnerForTest(t, db, 2)
+
+	err := db.CleanupCommandWALCoveredSegments(false)
+	if !errors.Is(err, errDurableWALCleanupProofUnavailable) || !errors.Is(err, ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want unavailable retained-lineage proof", err)
+	}
+	if err := db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false); err != nil {
+		t.Fatalf("checkpoint cleanup with unavailable retained lineage: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); err != nil {
+		t.Fatalf("unavailable proof removed covered segment: %v", err)
+	}
+}
+
+func TestCommandWALCleanupRejectsSnapshotAfterAppend(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
+		Lane:       0,
+		SegmentSeq: 2,
+		InitialLSN: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = journal.Close() }()
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	var appendErr error
+	db.testCommandWALCleanupAfterScanHook = func() {
+		_, appendErr = journal.AppendCommand(commitlog.CommandEnvelope{
+			Kind:          commitlog.CommandKindRawKVBatch,
+			Scope:         commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+		})
+	}
+
+	err = db.CleanupCommandWALCoveredSegments(false)
+	if appendErr != nil {
+		t.Fatalf("append after cleanup scan: %v", appendErr)
+	}
+	if !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want cleanup snapshot stale", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); statErr != nil {
+		t.Fatalf("covered segment removed under stale append snapshot: %v", statErr)
+	}
+}
+
+func TestCommandWALCleanupAdvancesJournalNamespaceGeneration(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
+		Lane:       0,
+		SegmentSeq: 2,
+		InitialLSN: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = journal.Close() }()
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	before, err := journal.CaptureCleanupSnapshot()
+	if err != nil {
+		t.Fatalf("CaptureCleanupSnapshot before cleanup: %v", err)
+	}
+	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+	}
+	after, err := journal.CaptureCleanupSnapshot()
+	if err != nil {
+		t.Fatalf("CaptureCleanupSnapshot after cleanup: %v", err)
+	}
+	if after.NamespaceGeneration != before.NamespaceGeneration+1 {
+		t.Fatalf("namespace generation after cleanup=%d, want %d", after.NamespaceGeneration, before.NamespaceGeneration+1)
+	}
+	if after.CleanupEpoch != before.CleanupEpoch+1 {
+		t.Fatalf("cleanup epoch after cleanup=%d, want %d", after.CleanupEpoch, before.CleanupEpoch+1)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat=%v, want removed", err)
+	}
+}
+
+func TestCommandWALCleanupRejectsSnapshotAfterDurableRootAdvance(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-l0-000002.log"), nil, 0o600); err != nil {
+		t.Fatalf("write active empty segment: %v", err)
+	}
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	db.testCommandWALCleanupAfterScanHook = func() {
+		meta := page.DurableMetaV1{CommitSeq: 2}
+		record := rootpublication.DurableRootRecordV1{CommitSeq: 2, AppliedCommandLSN: 1}
+		db.durableRoot.slot = 1
+		db.durableRoot.meta = meta
+		db.durableRoot.record = record
+		db.durableRoot.slotCommit[1] = 2
+		db.durableRoot.slotMeta[1] = meta
+		db.durableRoot.slotRecord[1] = record
+	}
+
+	err := db.CleanupCommandWALCoveredSegments(false)
+	if !errors.Is(err, errDurableWALCleanupProofStale) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want stale durable-root proof", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); statErr != nil {
+		t.Fatalf("covered segment removed under stale durable-root proof: %v", statErr)
+	}
+}
+
+func TestCommandWALCleanupRejectsPostAppendPoison(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-l0-000002.log"), nil, 0o600); err != nil {
+		t.Fatalf("write active empty segment: %v", err)
+	}
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	db.commandWALFlushPoisoned.Store(true)
+
+	err := db.CleanupCommandWALCoveredSegments(false)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want recovery required", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); statErr != nil {
+		t.Fatalf("covered segment removed from poisoned handle: %v", statErr)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
@@ -1098,7 +1747,7 @@ func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T
 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
 	db.state.Store(&DBState{AppliedCommandLSN: 1})
-	db.durableRoot.record.AppliedCommandLSN = 1
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
 
 	originalSyncDir := syncDirFn
 	defer func() { syncDirFn = originalSyncDir }()
@@ -1123,6 +1772,119 @@ func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T
 	if !reflect.DeepEqual(points, wantPoints) {
 		t.Fatalf("cut points=%v, want %v", points, wantPoints)
 	}
+	if !db.commandWALCleanupNamespaceDirty.Load() {
+		t.Fatal("directory-sync failure lost pending command-WAL namespace debt")
+	}
+	if got := db.commandWALCleanupRemoved.Load(); got != 0 {
+		t.Fatalf("removed metric=%d before durable directory sync, want 0", got)
+	}
+	if got := db.commandWALCleanupUnlinkedPending.Load(); got != 1 {
+		t.Fatalf("unlinked pending metric=%d, want 1", got)
+	}
+	syncDirFn = originalSyncDir
+	if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+		t.Fatalf("cleanup retry: %v", err)
+	}
+	if got := db.commandWALCleanupRemoved.Load(); got != 1 {
+		t.Fatalf("removed metric after durable directory sync=%d, want 1", got)
+	}
+	if got := db.commandWALCleanupUnlinkedPending.Load(); got != 0 {
+		t.Fatalf("unlinked pending metric after retry=%d, want 0", got)
+	}
+}
+
+func TestCommandWALCleanupAfterUnlinkFailureRetainsNamespaceSyncDebt(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	wantErr := errors.New("injected after-unlink cut")
+	fired := false
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if !fired && event.Point == durabilitycut.AfterWALOrAssetUnlink && event.Resource == durabilitycut.ResourceCommandWAL {
+			fired = true
+			return wantErr
+		}
+		return nil
+	})
+	err := db.CleanupCommandWALCoveredSegments(true)
+	restore()
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want injected cut and ErrRecoveryRequired", err)
+	}
+	if !fired || !db.commandWALCleanupNamespaceDirty.Load() {
+		t.Fatalf("after-unlink fired=%t namespaceDirty=%t, want retained sync debt", fired, db.commandWALCleanupNamespaceDirty.Load())
+	}
+	if got := db.commandWALCleanupRemoved.Load(); got != 0 {
+		t.Fatalf("removed metric=%d before durable directory sync, want 0", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(statErr) {
+		t.Fatalf("covered segment stat after after-unlink cut=%v, want absent", statErr)
+	}
+
+	var retryPoints []durabilitycut.Point
+	restore = durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL {
+			retryPoints = append(retryPoints, event.Point)
+		}
+		return nil
+	})
+	err = db.CleanupCommandWALCoveredSegments(true)
+	restore()
+	if err != nil {
+		t.Fatalf("cleanup retry: %v", err)
+	}
+	if db.commandWALCleanupNamespaceDirty.Load() {
+		t.Fatal("cleanup retry left command-WAL namespace sync debt pending")
+	}
+	if got := db.commandWALCleanupRemoved.Load(); got != 1 {
+		t.Fatalf("removed metric after retry=%d, want 1", got)
+	}
+	wantRetryPoints := []durabilitycut.Point{
+		durabilitycut.BeforeDeletionDirectorySync,
+		durabilitycut.AfterDeletionDirectorySync,
+	}
+	if !reflect.DeepEqual(retryPoints, wantRetryPoints) {
+		t.Fatalf("retry cut points=%v, want pending namespace sync only %v", retryPoints, wantRetryPoints)
+	}
+}
+
+func TestCommandWALCleanupAfterDirectorySyncFailureRetriesConservatively(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	wantErr := errors.New("injected after-directory-sync cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.AfterDeletionDirectorySync && event.Resource == durabilitycut.ResourceCommandWAL {
+			return wantErr
+		}
+		return nil
+	})
+	err := db.CleanupCommandWALCoveredSegments(true)
+	restore()
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want injected cut and ErrRecoveryRequired", err)
+	}
+	if !db.commandWALCleanupNamespaceDirty.Load() {
+		t.Fatal("after-directory-sync reporting failure lost conservative retry debt")
+	}
+	if got := db.commandWALCleanupRemoved.Load(); got != 0 {
+		t.Fatalf("removed metric=%d before successful deletion reporting, want 0", got)
+	}
+	if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+		t.Fatalf("cleanup retry: %v", err)
+	}
+	if db.commandWALCleanupNamespaceDirty.Load() {
+		t.Fatal("cleanup retry left namespace sync debt pending")
+	}
+	if got := db.commandWALCleanupRemoved.Load(); got != 1 {
+		t.Fatalf("removed metric after successful deletion reporting=%d, want 1", got)
+	}
 }
 
 func TestCommandWALCleanupPartialUnlinkFailureRequiresRecoveryWithoutSync(t *testing.T) {
@@ -1133,7 +1895,7 @@ func TestCommandWALCleanupPartialUnlinkFailureRequiresRecoveryWithoutSync(t *tes
 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
 	db.state.Store(&DBState{AppliedCommandLSN: 2})
-	db.durableRoot.record.AppliedCommandLSN = 2
+	installCommandWALCleanupRootForTest(t, db, 1, 2)
 
 	wantErr := errors.New("injected second-unlink cut")
 	var unlinkAttempts int
@@ -1208,6 +1970,169 @@ func TestCommandWALCheckpointScanDoesNotRemoveCoveredSegment(t *testing.T) {
 	}
 }
 
+func TestCommandWALCleanupClosesScanHandleBeforeUnlink(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("scanCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	defer closeCommandWALCleanupDecisions(decisions)
+	target := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
+	foundOpenScanHandle := false
+	for i := range decisions {
+		if filepath.Clean(decisions[i].Path) == filepath.Clean(target) {
+			foundOpenScanHandle = decisions[i].file != nil
+		}
+	}
+	if !foundOpenScanHandle {
+		t.Fatal("covered segment scan did not retain its discovery handle")
+	}
+
+	sawBeforeUnlink := false
+	restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.BeforeWALOrAssetUnlink || filepath.Clean(event.Path) != filepath.Clean(target) {
+			return nil
+		}
+		sawBeforeUnlink = true
+		for i := range decisions {
+			if filepath.Clean(decisions[i].Path) == filepath.Clean(target) && decisions[i].file != nil {
+				return errors.New("command WAL scan handle remained open before unlink")
+			}
+		}
+		return nil
+	})
+	defer restoreObserver()
+
+	decisions, err = removeCoveredCommandWALSegments(decisions)
+	if err != nil {
+		t.Fatalf("removeCoveredCommandWALSegments: %v", err)
+	}
+	if !sawBeforeUnlink {
+		t.Fatal("cleanup did not reach the pre-unlink boundary")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat after removal=%v, want removed", err)
+	}
+}
+
+func TestCommandWALCleanupRetainedLineageDoesNotHoldScanHandles(t *testing.T) {
+	dir := t.TempDir()
+	const segmentCount = 96
+	for lsn := uint64(1); lsn <= segmentCount; lsn++ {
+		writeCommandWALFrame(t, dir, lsn, lsn)
+	}
+
+	decisions, err := scanCommandWALSegmentsForCleanupProof(dir, 1, segmentCount, 0)
+	if err != nil {
+		t.Fatalf("scanCommandWALSegmentsForCleanupProof: %v", err)
+	}
+	defer closeCommandWALCleanupDecisions(decisions)
+
+	openHandles := 0
+	deletionCandidates := 0
+	for _, decision := range decisions {
+		if decision.file != nil {
+			openHandles++
+		}
+		if decision.Covered && !decision.Active {
+			deletionCandidates++
+			if decision.file == nil {
+				t.Fatalf("deletion candidate %s lost discovery handle", filepath.Base(decision.Path))
+			}
+			continue
+		}
+		if decision.file != nil {
+			t.Fatalf("retained segment %s kept a scan handle", filepath.Base(decision.Path))
+		}
+	}
+	if deletionCandidates != 1 {
+		t.Fatalf("deletion candidates=%d, want 1", deletionCandidates)
+	}
+	if openHandles != deletionCandidates {
+		t.Fatalf("open scan handles=%d, want deletion candidates=%d", openHandles, deletionCandidates)
+	}
+}
+
+func TestCommandWALCheckpointCleanupRejectsFilenameReuse(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	path := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
+	oldPath := path + ".old"
+	rebound := false
+	restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.BeforeWALOrAssetUnlink || rebound {
+			return nil
+		}
+		rebound = true
+		if err := os.Rename(path, oldPath); err != nil {
+			return err
+		}
+		writeCommandWALFrame(t, dir, 1, 1)
+		return nil
+	})
+	defer restoreObserver()
+
+	_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("cleanup error=%v, want ErrRecoveryRequired for rebound filename", err)
+	}
+	if !rebound {
+		t.Fatal("cleanup did not reach filename reuse hook")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("replacement command WAL segment was removed: %v", err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("original retained segment missing after rebind: %v", err)
+	}
+}
+
+func TestCommandWALCleanupRetainsExactActiveIdentityAfterFilenameRebind(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not permit rebinding an open command-WAL segment")
+	}
+	dir := t.TempDir()
+	journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
+		Lane:       0,
+		SegmentSeq: 2,
+		InitialLSN: 0,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = journal.Close() }()
+	if _, err := journal.AppendCommand(commitlog.CommandEnvelope{
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand: %v", err)
+	}
+
+	activePath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))
+	reboundPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 0))
+	if err := os.Rename(activePath, reboundPath); err != nil {
+		t.Fatalf("rename active segment: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1)), nil, 0o600); err != nil {
+		t.Fatalf("write misleading higher-sequence segment: %v", err)
+	}
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
+	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+	}
+	if _, err := os.Stat(reboundPath); err != nil {
+		t.Fatalf("exact active command-WAL identity was removed: %v", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
@@ -1255,10 +2180,10 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredTypedSegment(t *testing.
 	}
 }
 
-func TestCommandWALCheckpointCleanupShortCircuitsFullyUnappliedSegment(t *testing.T) {
+func TestCommandWALCheckpointCleanupValidatesFullyUnappliedSegmentLineage(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
-	writeCommandWALSegmentFrames(t, dir, 2, 3, 2)
+	writeCommandWALSegmentFrames(t, dir, 2, 2, 3, 4)
 
 	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
 	if err != nil {
@@ -1271,15 +2196,15 @@ func TestCommandWALCheckpointCleanupShortCircuitsFullyUnappliedSegment(t *testin
 	if got := decisionByName["commit-l0-000001.log"]; !got.Covered || got.Active || !got.Removed {
 		t.Fatalf("covered segment decision=%+v, want removed", got)
 	}
-	if got := decisionByName["commit-l0-000002.log"]; got.Covered || !got.Active || got.Removed || got.MaxLSN != 3 {
-		t.Fatalf("unapplied segment decision=%+v, want active uncovered retained after first-frame scan", got)
+	if got := decisionByName["commit-l0-000002.log"]; got.Covered || !got.Active || got.Removed || got.MinLSN != 2 || got.MaxLSN != 4 {
+		t.Fatalf("unapplied segment decision=%+v, want fully validated active range [2,4]", got)
 	}
 	got := decisionByName["commit-l0-000002.log"]
-	if got.Frames != 1 {
-		t.Fatalf("unapplied segment scanned frames=%d, want first frame only", got.Frames)
+	if got.Frames != 3 {
+		t.Fatalf("unapplied segment scanned frames=%d, want all 3 frames", got.Frames)
 	}
-	if got.ScannedBytes <= 0 || got.ScannedBytes >= got.Size {
-		t.Fatalf("unapplied segment scanned bytes=%d size=%d, want partial scan", got.ScannedBytes, got.Size)
+	if got.ScannedBytes != got.Size {
+		t.Fatalf("unapplied segment scanned bytes=%d size=%d, want full segment validation", got.ScannedBytes, got.Size)
 	}
 }
 
@@ -1296,39 +2221,114 @@ func TestCommandWALCheckpointCleanupReturnsScanErrors(t *testing.T) {
 	}
 }
 
-func TestCommandWALCheckpointCleanupToleratesCoveredDuplicateLSNAcrossSegments(t *testing.T) {
-	// Covered duplicate LSNs across segments are tolerated during cleanup.
-	// The non-active covered segment (lower seq) is removed; the active covered
-	// segment (higher seq) is retained.
+func TestCommandWALCheckpointCleanupAllowsCoveredDuplicateLSNAcrossSegments(t *testing.T) {
+	// Covered duplicates are no longer replay inputs. Exact-identity cleanup
+	// may remove the inactive copy while preserving the active append target.
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
 	writeCommandWALFrame(t, dir, 2, 1)
 
 	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
 	if err != nil {
-		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN error=%v, want nil (covered duplicate tolerated)", err)
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
 	}
-	var removed, retained int
+	var removed int
 	for _, d := range decisions {
 		if d.Removed {
 			removed++
-		} else {
-			retained++
 		}
 	}
 	if removed != 1 {
-		t.Fatalf("cleanup removed=%d segments, want 1 (non-active covered)", removed)
+		t.Fatalf("cleanup removed=%d segments, want inactive duplicate only", removed)
 	}
-	if retained != 1 {
-		t.Fatalf("cleanup retained=%d segments, want 1 (active covered)", retained)
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); !os.IsNotExist(err) {
+		t.Fatalf("inactive duplicate stat=%v, want removed", err)
 	}
-	// Active covered segment (seq=2) must survive.
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))); err != nil {
+		t.Fatalf("active duplicate stat=%v, want retained", err)
+	}
+}
+
+func TestCommandWALCheckpointCleanupAllowsCoveredLineageGap(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 3)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 3, 0)
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	removed := 0
+	for _, decision := range decisions {
+		if decision.Removed {
+			removed++
+		}
+	}
+	if removed != 1 {
+		t.Fatalf("cleanup removed=%d segments, want inactive covered prefix", removed)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); !os.IsNotExist(err) {
+		t.Fatalf("covered prefix stat=%v, want removed", err)
+	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))); err != nil {
 		t.Fatalf("active covered segment stat=%v, want retained", err)
 	}
-	// Non-active covered segment (seq=1) must be removed.
-	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
-		t.Fatalf("non-active covered segment stat=%v, want removed", err)
+}
+
+func TestCommandWALCheckpointCleanupRejectsRetainedReplayDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+	writeCommandWALSegmentFramesForLane(t, dir, 1, 1, 2)
+
+	decisions, err := scanCommandWALSegmentsForCleanupProof(dir, 1, 2, 0)
+	defer closeCommandWALCleanupDecisions(decisions)
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("cleanup proof scan error=%v, want duplicate retained replay LSN", err)
+	}
+	for _, decision := range decisions {
+		if decision.Removed {
+			t.Fatalf("decision=%+v, want no removal before exact replay proof", decision)
+		}
+	}
+}
+
+func TestCommandWALCheckpointCleanupRejectsRetainedReplayGap(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 3)
+
+	decisions, err := scanCommandWALSegmentsForCleanupProof(dir, 1, 3, 0)
+	defer closeCommandWALCleanupDecisions(decisions)
+	if !errors.Is(err, ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("cleanup proof scan error=%v, want retained replay gap", err)
+	}
+	for _, decision := range decisions {
+		if decision.Removed {
+			t.Fatalf("decision=%+v, want no removal before exact replay proof", decision)
+		}
+	}
+}
+
+func TestCommandWALCheckpointCleanupConvergesAcrossInterleavedLanePrefixes(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALSegmentFramesForLane(t, dir, 0, 1, 1, 3, 5)
+	writeCommandWALSegmentFramesForLane(t, dir, 0, 2, 7)
+	writeCommandWALSegmentFramesForLane(t, dir, 1, 1, 2, 4, 6)
+	writeCommandWALSegmentFramesForLane(t, dir, 1, 2, 8)
+
+	if _, err := cleanupCommandWALSegmentsWithProof(dir, 5, 8, 0); err != nil {
+		t.Fatalf("first cleanup through LSN 5: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); !os.IsNotExist(err) {
+		t.Fatalf("lane 0 covered prefix stat=%v, want removed", err)
+	}
+
+	if _, err := cleanupCommandWALSegmentsWithProof(dir, 6, 8, 0); err != nil {
+		t.Fatalf("second cleanup through LSN 6: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(1, 1))); !os.IsNotExist(err) {
+		t.Fatalf("lane 1 covered prefix stat=%v, want removed", err)
 	}
 }
 
@@ -1432,11 +2432,16 @@ func writeCommandWALFrame(t *testing.T, dir string, segmentSeq uint64, lsn uint6
 
 func writeCommandWALSegmentFrames(t *testing.T, dir string, segmentSeq uint64, lsns ...uint64) {
 	t.Helper()
+	writeCommandWALSegmentFramesForLane(t, dir, 0, segmentSeq, lsns...)
+}
+
+func writeCommandWALSegmentFramesForLane(t *testing.T, dir string, lane int, segmentSeq uint64, lsns ...uint64) {
+	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll wal: %v", err)
 	}
-	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, segmentSeq))
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(lane, segmentSeq))
 	w, err := commitlog.NewWriter(path)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
