@@ -128,6 +128,7 @@ jobs:
           CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
           RUNS: "8"
           BENCHTIME: 2s
+          BATCH_WRITE_BENCHTIME: 1000x
           CPUSET: "0"
           MAX_REGRESSION_PERCENT: "5"
           MAX_BYTES_REGRESSION_PERCENT: "1"
