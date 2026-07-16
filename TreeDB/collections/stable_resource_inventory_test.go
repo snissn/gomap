@@ -37,6 +37,9 @@ func testStableColumnConstructionPinBlocksCrossManagerGC(t *testing.T) {
 	}
 	cfg := *otherCol.Meta().Options.ColumnStore
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	opened := make(chan struct{})
 	resume := make(chan struct{})
