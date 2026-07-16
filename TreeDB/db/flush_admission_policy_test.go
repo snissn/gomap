@@ -296,6 +296,21 @@ func TestNormalizeFlushAdmission_AutoDeclinesWALOffUnsafeDurability(t *testing.T
 	}
 }
 
+func TestNormalizeFlushAdmission_AutoAdmitsResolvedNoWALFastProfile(t *testing.T) {
+	opts := Options{
+		Durability:      DurabilityWALOffRelaxed,
+		ResolvedProfile: ProfileNoWALFast,
+	}
+	decision := computeFlushAdmissionDecisionForHardware(&opts, 4, 4)
+
+	if !decision.Admitted || decision.Reason != FlushAdmissionReasonAutoAdmittedHardwareAware {
+		t.Fatalf("admitted/reason=%t/%q want true/%q", decision.Admitted, decision.Reason, FlushAdmissionReasonAutoAdmittedHardwareAware)
+	}
+	if !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("resolved no_wal_fast did not enable span/backlog: span=%t backlog=%t", opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+}
+
 func TestFlushAdmissionStatsExposePolicyReasonHardwareAndCandidate(t *testing.T) {
 	opts := Options{}
 	decision := computeFlushAdmissionDecisionForHardware(&opts, 16, 6)

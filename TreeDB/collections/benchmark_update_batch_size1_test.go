@@ -245,7 +245,7 @@ func BenchmarkCollectionUpdateBSONSetYCSB_NoIndex_Size1(b *testing.B) {
 		name    string
 		profile treedb.Profile
 	}{
-		{name: "bench_no_wal", profile: treedb.ProfileBench},
+		{name: "bench_no_wal", profile: treedb.ProfileBenchUnsafe},
 		{name: "command_wal_relaxed", profile: treedb.ProfileCommandWALRelaxed},
 	}
 	for _, profile := range profiles {
@@ -265,7 +265,7 @@ func benchmarkCollectionUpdateBSONSetYCSBNoIndexSize1(b *testing.B, profile tree
 	)
 	openCollection := func() (*collections.Collection, [][]byte, func()) {
 		dbDir := b.TempDir()
-		opts := treedb.OptionsFor(profile, dbDir)
+		opts := treedb.OptionsForBenchmark(profile, dbDir)
 		opts.IndexOuterLeavesInValueLog = true
 		backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 		if err != nil {

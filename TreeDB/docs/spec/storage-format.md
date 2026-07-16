@@ -12,6 +12,18 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+The canonical production profiles are `command_wal_durable`,
+`command_wal_relaxed`, and `no_wal_fast`; `bench_unsafe` is benchmark/test only.
+The resolved profile is immutable at open. Main DB `format.json` version 4
+persists exactly one canonical `durability_profile`. Public reopen, native
+backend open, and offline maintenance must select the same profile. Version 4
+without a profile, an unknown profile, an older unbound main-DB manifest, or a
+selected/persisted mismatch returns the pre-alpha rebuild-required error rather
+than attempting a mixed-profile or mixed-version mode. The gate is not disabled
+by `IgnoreFormatConfig`. Internal side-store and low-level test manifests may
+remain unbound version 2/3 files; they cannot open a version-4 main DB without an
+explicit matching profile.
+
 ## 1. Top-Level Storage Objects
 
 A TreeDB deployment uses:

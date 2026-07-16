@@ -72,7 +72,7 @@ func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrap
 func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	requireLeafGenerationPackPromotionSupport(t)
 	dir := t.TempDir()
-	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
@@ -94,7 +94,7 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, DisableSideStores: true})
+	backend, cleanup, err := treedb.OpenBackend(opts)
 	if err != nil {
 		t.Fatalf("OpenBackend: %v", err)
 	}

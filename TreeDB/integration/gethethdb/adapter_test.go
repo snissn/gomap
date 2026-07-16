@@ -194,7 +194,7 @@ func TestOpenWithOptionsAppliesGethSizedWALSegmentsBeforeReadOnlyFormatActivatio
 }
 
 func TestOpenRejectsWritableNonCommandWALOptions(t *testing.T) {
-	opts := treedb.OptionsFor(treedb.ProfileBench, filepath.Join(t.TempDir(), "treedb"))
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, filepath.Join(t.TempDir(), "treedb"))
 	if _, err := OpenWithOptions(opts); err == nil {
 		t.Fatal("OpenWithOptions accepted writable non-command-WAL options")
 	}

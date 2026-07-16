@@ -631,12 +631,15 @@ jobs:
             auto_log="vlog_auto_incompressible_auto_attempt${attempt}.txt"
             echo "incompressible gate attempt ${attempt}/${max_attempts}"
 
-            # Keep this value-log compression gate independent of the
-            # unconfigured flush-admission default under test in #2788. Force
-            # admission off for both rows so the strict auto/off comparison stays
-            # on the old serial/default-off flush boundary and measures value-log
-            # auto behavior rather than span-native admission changes.
+            # This gate measures the explicit bench_unsafe compression ceiling,
+            # not the command_wal_durable default used by production callers.
+            # Keep it independent of the unconfigured flush-admission default
+            # under test in #2788. Force admission off for both rows so the
+            # strict auto/off comparison stays on the old serial/default-off
+            # flush boundary and measures value-log auto behavior rather than
+            # span-native admission changes.
             if ! go run ./cmd/unified_bench \
+              -profile fast \
               -keys 1000000 \
               -valsize 512 \
               -batchsize 1024 \
@@ -658,6 +661,7 @@ jobs:
             fi
 
             if ! go run ./cmd/unified_bench \
+              -profile fast \
               -keys 1000000 \
               -valsize 512 \
               -batchsize 1024 \

@@ -1,122 +1,128 @@
-# TreeDB Write Paths (Command-WAL and Legacy Compatibility)
+# TreeDB Write Paths
 
-This is a supporting write-path explainer.
+This is a supporting explainer. The normative contract is
+`TreeDB/docs/spec/write-path-and-durability.md`.
 
-For the canonical TreeDB spec, see:
-- `TreeDB/docs/spec/README.md`
-- `TreeDB/docs/spec/write-path-and-durability.md`
+## Storage roles
 
-## Terminology (canonical)
+- **Command WAL:** redo/recovery log for typed public commands. It is enabled by
+  the two `command_wal_*` production profiles.
+- **Persistent value log:** append-only storage for large values. It remains
+  persistent storage in every profile, including production no-WAL
+  `no_wal_fast`; pointers stored in the index remain valid across reopen.
+- **Index:** B-tree roots contain inline values or durable value-log pointers.
+- **legacy cached redo-journal:** historical compatibility terminology and
+  replay path. It is not the current public durability surface.
 
-- **Value log (vlog)**: append-only log for large values used by cached mode.
-- **Command WAL**: current durable write log for public TreeDB write handles.
-- **Legacy cached redo journal**: old cached-mode redo/commit log terminology.
-  Current public docs should avoid generic WAL on/off guidance except when
-  explicitly discussing legacy compatibility or benchmark-only unsafe modes.
+## Canonical profile matrix
 
-## Write-path modes (cached mode)
+| Profile | Ordinary ACK | Explicit `*Sync` | `Flush` / `FlushAll` | `Checkpoint` / clean `Close` |
+| --- | --- | --- | --- | --- |
+| `command_wal_durable` | durable dependency-closed command-WAL prefix | same durable prefix | visibility/drain only | sealed durable root |
+| `command_wal_relaxed` | relaxed | durable dependency-closed command-WAL prefix | visibility/drain only | sealed durable root |
+| `no_wal_fast` | relaxed | sealed durable root covering the call | visibility/drain only | sealed durable root |
+| `bench_unsafe` | no promise | no promise | no promise | no production promise |
 
-This supporting document does not own the durability matrix. Use
-`TreeDB/docs/spec/write-path-and-durability.md` for the canonical three-mode
-matrix and `TreeDB/docs/spec/collections-write-domain.md` for current
-collection flush-boundary behavior. The target collection/Mongo durability path
-is the user-command WAL in `TreeDB/docs/spec/user-command-wal.md`.
+All production profiles verify value-log integrity. A successful `Flush` only
+drains buffered visibility work; it is never evidence of file sync, directory
+sync, command-WAL durability, or sealed-root publication.
 
-Legacy modes (value-log off / backend-only) have been removed.
-
-## Practical knobs (public API)
-
-Use profiles rather than raw flags when possible:
+## Public API setup
 
 ```go
-opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./db") // command WAL + durable sync
-opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, "./db") // command WAL + relaxed sync
-opts := treedb.OptionsFor(treedb.ProfileBench, "./db") // no WAL; benchmark-only unsafe ceiling
+durable := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./durable")
+relaxed := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, "./relaxed")
+noWAL := treedb.OptionsFor(treedb.ProfileNoWALFast, "./no-wal")
+unsafe := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, "./bench")
 ```
 
-Equivalent option-level knobs:
+Use `ParsePublicProfile` for production CLI/environment values and
+`ParseBenchmarkProfile` only at an explicit benchmark/test boundary. Exact
+canonical underscore strings are required.
 
-- **Command WAL + durable sync**: `CommandWAL = true`, `Durability = DurabilityDurable`.
-- **Command WAL + relaxed sync**: `CommandWAL = true`, `Durability = DurabilityWALOnRelaxed`.
-- **No WAL benchmark ceiling**: `Durability = DurabilityWALOffRelaxed`
-  (benchmark-only unsafe compatibility path).
+The low-level `CommandWAL`, `Durability`, and `ValueLog.ReadIntegrity` fields
+are implementation details of the resolved contract. `Open` reapplies those
+profile-owned fields, so modifying them after `OptionsFor` cannot create a
+silent hybrid. Workload tuning fields such as flush threshold and cache size
+remain caller-owned.
 
-Deprecated raw cached-journal option bundles still exist for compatibility and
-low-level tests, but current server, collection, Mongo gateway, and YCSB
-guidance should use `command_wal_durable`, `command_wal_relaxed`, or
-benchmark-only `bench`.
+## Raw key/value routing
 
-Raw TreeDB command-WAL support currently covers point, batch, and range
-key/value writes: `Set`, `SetSync`, `Delete`, `DeleteSync`, `DeleteRange`,
-`Batch.Write`, and `Batch.WriteSync` are represented as typed `RawKVBatch`
-command frames. Raw public operations that cannot be replayed as typed commands
-yet fail closed under command WAL; today that includes callback-based `Update`
+Command-WAL raw support covers point, batch, and range operations. The current
+typed `RawKVBatch` route includes `Set`, `SetSync`, `Delete`, `DeleteSync`, `DeleteRange`,
+`Batch.Write`, and `Batch.WriteSync`.
+
+Ordinary raw methods use the selected profile's ordinary acknowledgement class.
+Every explicit sync method uses the selected production sync frontier. An empty
+`Batch.WriteSync` is still a boundary: it persists the prior command-WAL prefix
+or publishes the prior no-WAL root as applicable.
+
+Public raw operations that cannot yet be represented as deterministic typed
+commands fail closed under command WAL; today that includes callback-based `Update`
 and `UpdateSync`.
 
-## Legacy Compatibility Migration (old -> new)
+## Collection and catalog routing
 
-TreeDB’s public `Options` API was simplified to make “intent” explicit:
-durability/integrity are selected via `Options.Durability` and
-`Options.ValueLog.*` rather than a loose set of booleans.
+Supported collection, catalog, dictionary/template, typed-column, vector, and
+text publication paths build backend command intents. The resolved profile is
+carried through that intent:
 
-Common legacy compatibility mappings:
+- `command_wal_durable` syncs the staged command intent before publishing the
+  ordinary acknowledgement;
+- `command_wal_relaxed` may publish an ordinary relaxed intent, while explicit
+  sync/barrier paths persist the dependency-complete prefix;
+- `no_wal_fast` reaches durability only through a sealed-root sync boundary.
 
-- `Options.DisableWAL=true` -> `Options.Durability = DurabilityWALOffRelaxed`
-  (legacy compatibility / benchmark-only unsafe)
-- `Options.RelaxedSync=true` (with legacy WAL on) ->
-  `Options.Durability = DurabilityWALOnRelaxed` (legacy compatibility)
-- `Options.DisableReadChecksum=true` → `Options.ValueLog.ReadIntegrity = IntegritySkipChecksums`
-- `Options.AllowUnsafe=true` → removed from public API (unsafe modes are now explicit via the fields above)
+Unsupported command kinds or unresolved external dependency closure fail
+closed instead of falling back to a weaker acknowledgement.
 
-Value-log configuration moved under `Options.ValueLog`:
+## Recovery
 
-- `Options.ValueLogPointerThreshold` → `Options.ValueLog.PointerThreshold`
-- `Options.MaxValueLogRetainedBytes` → `Options.ValueLog.MaxRetainedBytes`
-- `Options.MaxValueLogRetainedBytesHard` → `Options.ValueLog.MaxRetainedBytesHard`
-- `Options.ValueLogCompressionAutotune` → `Options.ValueLog.CompressionAutotune`
+Command-WAL recovery validates a contiguous dependency-complete durable prefix,
+discards only an allowed complete relaxed suffix, replays commands above the
+checkpointed `AppliedLSN`, and cleans segments only after a sealed backend root
+proves coverage. Read-only open never performs mutating recovery.
 
-Note: internal tools (like `cmd/unified_bench`) may still require an explicit
-`-treedb-allow-unsafe` flag to reduce accidental use of relaxed durability
-settings.
+Current command-WAL directories fail closed on replayable legacy cached redo-journal by
+default. Forensic compatibility flows must opt in explicitly with
+`AllowLegacyCachedRedoJournalReplay`.
 
-## File layout (cached mode)
+For `no_wal_fast`, recovery selects a complete sealed root. Recent ordinary
+acknowledgements beyond that root may be absent, but the selected root and every
+referenced value-log, outer-leaf, and auxiliary asset closure must be complete.
 
-TreeDB `Options.Dir` is a *root* directory. `treedb.Open` manages:
+## File layout
 
-- `Dir/maindb/`: main DB (index + journal + value log)
-  - `Dir/maindb/index.db`: B+Tree pages + metadata.
-  - `Dir/maindb/wal/`: current command-WAL segments; legacy cached redo-journal
-    segments may exist only in compatibility/recovery fixtures and fail closed
-    by default unless explicitly opted in.
-  - `Dir/maindb/value_vlog/`: value-log segments for large values.
-  - `Dir/maindb/leaf_vlog/`: optional split leaf-log segments.
-  - `Dir/maindb/LOCK`: cross-process exclusive-open lock.
-- `Dir/dictdb/`: dictionary store (for value-log compression)
-  - `Dir/dictdb/index.db`: dictionary metadata (internal).
-  - `Dir/dictdb/LOCK`: cross-process lock for the dictionary store.
+`Options.Dir` is the TreeDB root. Normal cached public opens manage:
 
-The lower-level `caching.Open(cacheDir, backend, ...)` API may use a cache
-directory that differs from a TreeDB backend's `Dir()`. In that configuration,
-only the cached command WAL lives under `cacheDir/wal/`; persistent
-`value_vlog/` and `leaf_vlog/` segments live under the backend directory so its
-durable roots remain independently reopenable.
+- `Dir/maindb/index.db`
+- `Dir/maindb/wal/` for command-WAL segments when enabled
+- `Dir/maindb/value_vlog/` for persistent large-value records
+- `Dir/maindb/leaf_vlog/` for split outer-leaf records when enabled
+- auxiliary asset and side-store directories required by published roots
 
-Note: value-log dictionary compression applies to value-log records and does
-not require any split-log option.
+The value log is not an ephemeral WAL and old segments are not truncated by
+age. Reachability-based GC and rewrite/compaction reclaim only unreachable
+records.
 
-## Debug logging
+## Pre-alpha format policy
 
-`treedb.Open` is bench-friendly by default. To emit write-path diagnostics on
-open, set:
+TreeDB is pre-alpha. Public APIs and on-disk formats may change without backward
+compatibility. If the selected profile conflicts with persisted required
+features, open fails closed and the operator should rebuild the DB directory.
 
-```
-TREEDB_WRITE_PATH_LOG=1
-```
+## Diagnostics
+
+`DB.Stats()` reports the resolved profile, ordinary acknowledgement class,
+durable command-WAL frontier and dependency debt, sync/flush counts, sealed-root
+publication state, admission/coalescing decisions, and explicit fallback/error
+reasons. Set `TREEDB_WRITE_PATH_LOG=1` for best-effort open-path diagnostics.
 
 ## Related docs
 
 - `docs/TREEDB_PROFILES.md`
 - `docs/TREEDB_DOWNSTREAM_VALIDATION.md`
-- `docs/TREEDB_VALUELOG_AUTOTUNE.md`
 - `docs/TREEDB_RECOVERY.md`
 - `docs/contracts/DURABILITY.md`
+- `TreeDB/docs/spec/storage-format.md`
+- `TreeDB/docs/spec/recovery.md`

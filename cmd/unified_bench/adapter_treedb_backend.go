@@ -44,6 +44,14 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 	if err != nil {
 		return nil, err
 	}
+	if !commandWAL {
+		// This hidden adapter intentionally opens the low-level legacy/raw
+		// backend rather than a public cached durability profile. Do not stamp a
+		// command-WAL profile onto that internal benchmark path.
+		opts.ResolvedProfile = ""
+		opts.DeprecatedProfileAlias = ""
+		opts.UnsafeBenchmarkProfile = false
+	}
 	opts.CommandWAL = commandWAL
 	opts.CommandWALStatsScan = commandWAL && *treedbCommandWALStatsScan
 	if opts.ValueLog.PointerThreshold <= 0 {

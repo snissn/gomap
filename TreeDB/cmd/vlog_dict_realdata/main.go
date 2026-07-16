@@ -1270,7 +1270,6 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	cfg.BlockCodec = blockCodecName
 
 	opts := treedb.Options{
-		Durability: treedb.DurabilityDurable,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:     cfg.PointerThreshold,
 			MaxRetainedBytesHard: 0,
@@ -1288,10 +1287,10 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	var expect benchWritePath
 	switch cfg.Mode {
 	case "wal_on":
-		opts.Durability = treedb.DurabilityDurable
-		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "on"}
+		treedb.ApplyProfile(&opts, treedb.ProfileCommandWALRelaxed)
+		expect = benchWritePath{mode: "command_wal_cached", valueStore: "value_log", redoLog: "command_wal"}
 	case "wal_off":
-		opts.Durability = treedb.DurabilityWALOffRelaxed
+		treedb.ApplyProfile(&opts, treedb.ProfileNoWALFast)
 		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "off"}
 	default:
 		return treedb.Options{}, benchWritePath{}, fmt.Errorf("unsupported -bench-mode=%q (expected wal_on|wal_off)", cfg.Mode)

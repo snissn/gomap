@@ -175,6 +175,7 @@ func runCheckpoint(dir string, args []string) {
 	if *chunkSize > 0 {
 		opts.ChunkSize = *chunkSize
 	}
+	applyPersistedFormatConfig(dir, &opts)
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -269,9 +270,7 @@ func runCheckpointBench(dir string, args []string) {
 	if *flushThreshold > 0 {
 		opts.FlushThreshold = *flushThreshold
 	}
-	if *fast {
-		opts.Durability = treedb.DurabilityWALOffRelaxed
-	}
+	applyCheckpointBenchProfile(&opts, *fast, *leafPrefixCompression)
 
 	if *leafPrefixCompression {
 		fmt.Fprintln(os.Stderr, "opts.leaf_prefix_compression=on")
@@ -406,6 +405,17 @@ func runCheckpointBench(dir string, args []string) {
 	}
 }
 
+func applyCheckpointBenchProfile(opts *treedb.Options, fast, leafPrefixCompression bool) {
+	if fast {
+		treedb.ApplyBenchmarkProfile(opts, treedb.ProfileBenchUnsafe)
+	} else {
+		treedb.ApplyProfile(opts, treedb.ProfileCommandWALDurable)
+	}
+	// The profile supplies benchmark defaults, while this command's explicit
+	// on/off flag remains authoritative for the leaf-compression comparison.
+	opts.LeafPrefixCompression = leafPrefixCompression
+}
+
 func runStats(dir string, args []string) {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
@@ -421,7 +431,9 @@ func runBackendStats(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open backend read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: !*rw})
+	opts := treedb.Options{Dir: dir, ReadOnly: !*rw}
+	applyPersistedFormatConfig(dir, &opts)
+	backend, cleanup, err := treedb.OpenBackend(opts)
 	if err != nil {
 		fatalf("Failed to open backend DB: %v", err)
 	}
@@ -516,7 +528,9 @@ func runCompact(dir string, args []string) {
 	}
 
 	rootDir := resolveTreeDBRootDir(dir)
-	backend, cleanupBackend, err := treedb.OpenBackend(treedb.Options{Dir: rootDir})
+	opts := treedb.Options{Dir: rootDir}
+	applyPersistedFormatConfig(rootDir, &opts)
+	backend, cleanupBackend, err := treedb.OpenBackend(opts)
 	if err != nil {
 		fatalf("Failed to open DB backend: %v", err)
 	}
@@ -665,6 +679,7 @@ func runVacuum(dir string, args []string) {
 	}
 
 	opts := treedb.Options{Dir: dir}
+	applyPersistedFormatConfig(dir, &opts)
 	if err := treedb.VacuumIndexOffline(opts); err != nil {
 		fatalf("VacuumIndexOffline error: %v", err)
 	}
@@ -684,7 +699,7 @@ func runVlogGC(dir string, args []string) {
 
 	// Use backend DB directly for GC to avoid cached-layer lane initialization,
 	// which can pre-create empty value-log segments and pollute GC stats.
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
+	backend, cleanup, err := openBackendForVlogGC(dir)
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
@@ -1418,6 +1433,11 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 		return
 	}
 	if ok {
+		if cfg.DurabilityProfile == treedb.ProfileBenchUnsafe {
+			treedb.ApplyBenchmarkProfile(opts, cfg.DurabilityProfile)
+		} else if cfg.DurabilityProfile != "" {
+			treedb.ApplyProfile(opts, cfg.DurabilityProfile)
+		}
 		cfg.ApplyToOptions(opts)
 	}
 }

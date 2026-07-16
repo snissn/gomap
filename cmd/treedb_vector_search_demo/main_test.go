@@ -62,8 +62,8 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].Concurrency != 1 || res.SearchBenchmarks[1].Concurrency != 2 {
 		t.Fatalf("unexpected search benchmarks: %+v", res.SearchBenchmarks)
 	}
-	if res.Profile != "bench" {
-		t.Fatalf("profile=%q want bench", res.Profile)
+	if res.Profile != "bench_unsafe" {
+		t.Fatalf("profile=%q want bench_unsafe", res.Profile)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -216,7 +216,11 @@ func TestExecuteMatrixSearchProfileDirUsesCaseSubdirectories(t *testing.T) {
 }
 
 func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
-	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
+	opts := demoBackendOptions(config{}, t.TempDir())
+	cfg := demoCommandWALFormatConfig(opts)
+	if cfg.DurabilityProfile != opts.ResolvedProfile {
+		t.Fatalf("durability profile=%q want %q", cfg.DurabilityProfile, opts.ResolvedProfile)
+	}
 	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v2" {
 		t.Fatalf("required features=%v, want command_wal_v2", cfg.RequiredFeatures)
 	}
@@ -660,7 +664,7 @@ func TestRunJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
 		t.Fatalf("decode JSON output: %v\n%s", err, stdout.String())
 	}
-	if res.Profile != "bench" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
+	if res.Profile != "bench_unsafe" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
 	}
 	if res.VectorIndexSearchPath != nativeRuntimeSnapshotPath {
@@ -705,8 +709,8 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if res.Profile != "bench" {
-		t.Fatalf("profile=%q want bench", res.Profile)
+	if res.Profile != "bench_unsafe" {
+		t.Fatalf("profile=%q want bench_unsafe", res.Profile)
 	}
 	if res.StorageExpectation.LeafVLogBytes <= 0 {
 		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)
@@ -765,16 +769,16 @@ func TestParseProfileRejectsUnsupportedProfile(t *testing.T) {
 }
 
 func TestParseProfileRejectsDeprecatedProfiles(t *testing.T) {
-	if got, err := parseProfile("command-wal-durable"); err != nil || got != treedb.ProfileCommandWALDurable {
+	if got, err := parseProfile("command_wal_durable"); err != nil || got != treedb.ProfileCommandWALDurable {
 		t.Fatalf("parseProfile command WAL durable = %q err=%v", got, err)
 	}
-	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "command-wal-durable"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := parseProfile(raw)
 			if err == nil {
 				t.Fatal("parseProfile succeeded, want error")
 			}
-			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+			if !strings.Contains(err.Error(), treedb.BenchmarkProfileFlagHelp) {
 				t.Fatalf("error=%v, want profile help", err)
 			}
 		})
@@ -1337,7 +1341,7 @@ func TestRunTextOutput(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"TreeDB vector search demo",
-		"profile=bench",
+		"profile=bench_unsafe",
 		"backend=treedb",
 		"vector_index_strategy=native_runtime",
 		"vector_index_search_path=native_runtime_snapshot",

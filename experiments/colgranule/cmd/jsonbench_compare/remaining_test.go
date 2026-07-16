@@ -475,7 +475,7 @@ func buildJSONBenchImagePartForReconstructionTest(t *testing.T, source string, l
 
 func validateStoredRemainingCollectionReconstructsJSONBenchRows(t *testing.T, source string, ds *colgranule.JSONBenchDataset, imagePart *colgranule.ColumnPart, dbDir string, format collections.DocumentFormat) {
 	t.Helper()
-	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dbDir)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)

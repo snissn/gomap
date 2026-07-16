@@ -171,7 +171,7 @@ func parseConfig(args []string) (config, error) {
 		Updates:               defaultUpdates,
 		Deletes:               defaultDeletes,
 		OutputFormat:          "text",
-		TreeDBProfile:         treedb.ProfileBench,
+		TreeDBProfile:         treedb.ProfileBenchUnsafe,
 		Formats:               []collections.DocumentFormat{collections.DocumentFormatJSON, collections.DocumentFormatTemplateV1, collections.DocumentFormatBSON},
 		IndexCounts:           []int{0, 1, 2},
 		ReadStates:            []readState{readStateBuffered, readStateFlushed, readStateCheckpointed},
@@ -195,7 +195,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.Deletes, "deletes", cfg.Deletes, "native delete operations")
 	fs.StringVar(&readerSweep, "reader-sweep", "1,2,4,8,16,32", "comma-separated reader/writer fanout values")
 	profile := string(cfg.TreeDBProfile)
-	fs.StringVar(&profile, "treedb-profile", profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
+	fs.StringVar(&profile, "treedb-profile", profile, "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
 	dataRootStorage := string(cfg.DataRootStorage)
 	indexStateRootStorage := string(cfg.IndexStateRootStorage)
 	indexRootStorage := string(cfg.IndexRootStorage)
@@ -370,9 +370,9 @@ func parsePositiveOrZeroInts(raw, label string) ([]int, error) {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
+	profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileBenchUnsafe)
 	if !ok {
-		return "", fmt.Errorf("unsupported -treedb-profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+		return "", fmt.Errorf("unsupported -treedb-profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 	}
 	return profile, nil
 }
@@ -634,7 +634,7 @@ func openTarget(cfg config, format collections.DocumentFormat, indexes int) (*be
 	} else if err := resetTreeDBDir(dir); err != nil {
 		return nil, err
 	}
-	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts := treedb.OptionsForBenchmark(cfg.TreeDBProfile, dir)
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	open := treedb.OpenBackend

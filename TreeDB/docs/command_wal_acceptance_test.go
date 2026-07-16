@@ -127,6 +127,14 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"-min-throughput-frac 1.01",
 		"result at or below 1.01x is failing evidence",
 	)
+	gateStart := strings.Index(workflow, "name: Incompressible auto-vs-off gate")
+	gateEnd := strings.Index(workflow, "snapshot-iterator-perf:")
+	if gateStart < 0 || gateEnd <= gateStart {
+		t.Fatal("PR9 incompressible workflow gate boundaries not found")
+	}
+	if got := strings.Count(workflow[gateStart:gateEnd], "-profile fast"); got != 2 {
+		t.Fatalf("PR9 incompressible workflow explicit bench_unsafe selections=%d, want 2", got)
+	}
 }
 
 func TestCommandWALAcceptancePerformanceGatesAreStrictParityPlus(t *testing.T) {

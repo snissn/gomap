@@ -59,16 +59,16 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 }
 
 func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
-	if got, err := parseProfile("command-wal-relaxed"); err != nil || got != treedb.ProfileCommandWALRelaxed {
+	if got, err := parseProfile("command_wal_relaxed"); err != nil || got != treedb.ProfileCommandWALRelaxed {
 		t.Fatalf("parseProfile command WAL relaxed = %q err=%v", got, err)
 	}
-	for _, raw := range []string{"fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast", "production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "backend_direct", "cached"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "command-wal-relaxed", "production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "backend_direct", "cached"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := parseProfile(raw)
 			if err == nil {
 				t.Fatal("parseProfile succeeded, want error")
 			}
-			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+			if !strings.Contains(err.Error(), treedb.BenchmarkProfileFlagHelp) {
 				t.Fatalf("error=%v, want profile help", err)
 			}
 		})
@@ -78,7 +78,7 @@ func TestParseProfileRejectsDeprecatedProfileNames(t *testing.T) {
 func TestBackendOptionsLeafSegmentTargetRestoresGenerationPolicy(t *testing.T) {
 	cfg := config{
 		Dir:                    t.TempDir(),
-		Profile:                treedb.ProfileBench,
+		Profile:                treedb.ProfileBenchUnsafe,
 		LeafSegmentTargetBytes: 32 << 10,
 	}
 	opts := backendOptions(cfg, false)
@@ -481,7 +481,7 @@ func TestVacuumIndexOfflinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
 		t.Fatal("expected pre-vacuum smoke verification samples")
 	}
 
-	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+	if err := treedb.VacuumIndexOffline(backendOptions(cfg, false)); err != nil {
 		t.Fatalf("vacuum index offline: %v", err)
 	}
 

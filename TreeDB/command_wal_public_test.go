@@ -23,16 +23,13 @@ import (
 
 func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(Options{
-		Dir:                              dir,
-		Durability:                       DurabilityDurable,
-		CommandWAL:                       true,
-		DisableSideStores:                true,
-		BackgroundCheckpointInterval:     -1,
-		BackgroundCheckpointIdleDuration: -1,
-		BackgroundIndexVacuumInterval:    -1,
-		DisableBackgroundPrune:           true,
-	})
+	opts := OptionsFor(ProfileCommandWALDurable, dir)
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -81,13 +78,13 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 		}
 	}
 
-	assertCuts("Set", false, func() error {
+	assertCuts("Set", true, func() error {
 		return db.Set([]byte("point"), []byte("value"))
 	})
 	assertCuts("SetSync", true, func() error {
 		return db.SetSync([]byte("point-sync"), []byte("value"))
 	})
-	assertCuts("batch Write", false, func() error {
+	assertCuts("batch Write", true, func() error {
 		b := db.NewBatch()
 		defer b.Close()
 		if err := b.Set([]byte("batch"), []byte("value")); err != nil {
@@ -588,12 +585,9 @@ func commandWALDurabilityProofOptions(dir string) Options {
 }
 
 func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
-	db, err := Open(Options{
-		Dir:                 t.TempDir(),
-		Durability:          DurabilityDurable,
-		CommandWAL:          true,
-		CommandWALStatsScan: true,
-	})
+	opts := OptionsFor(ProfileCommandWALRelaxed, t.TempDir())
+	opts.CommandWALStatsScan = true
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -825,7 +819,7 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsEnvironmentOverride(t *testing.
 
 func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelsRelaxedExplicitSync(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
-	opts.Durability = DurabilityWALOnRelaxed
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
 	opts.PublicBatchWriteSyncPhaseStats = true
 	db, err := Open(opts)
 	if err != nil {
@@ -898,7 +892,9 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 }
 
 func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
-	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -960,6 +956,7 @@ func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
 func TestPublicCommandWALPointerEmptyWriteSyncSweepsPriorUnsyncedWrite(t *testing.T) {
 	dir := t.TempDir()
 	opts := commandWALDurabilityProofOptions(dir)
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	db, err := Open(opts)
@@ -1039,6 +1036,7 @@ func TestPublicCommandWALWriteThenDirtyWriteSyncDurabilityLedger(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			opts := commandWALDurabilityProofOptions(dir)
+			ApplyProfile(&opts, ProfileCommandWALRelaxed)
 			value := []byte("inline-value")
 			if tc.forcedPointers {
 				opts.ValueLog.PointerThreshold = 1
@@ -1102,7 +1100,7 @@ func TestPublicCommandWALWriteThenDirtyWriteSyncDurabilityLedger(t *testing.T) {
 	}
 }
 
-func TestPublicCommandWALDurableSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T) {
+func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T) {
 	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open command WAL durable: %v", err)
@@ -1168,8 +1166,8 @@ func TestPublicCommandWALDurableSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T
 	afterBatchWrite := db.Stats()
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.payload.count_total", 1)
-	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 1)
-	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.sync.count_total", 2)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.sync.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.public.batch.write.calls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 
@@ -1188,8 +1186,8 @@ func TestPublicCommandWALDurableSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T
 	afterBatchWriteSync := db.Stats()
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.payload.count_total", 2)
-	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 1)
-	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.sync.count_total", 3)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.sync.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.public.batch.write_sync.calls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 
@@ -1199,8 +1197,8 @@ func TestPublicCommandWALDurableSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T
 	afterRangeDelete := db.Stats()
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.count_total", 5)
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.entry_scan.count_total", 1)
-	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 2)
-	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.sync.count_total", 3)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.sync.count_total", 5)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 
 	for _, key := range []string{"point-sync", "batch-write", "batch-sync"} {
@@ -2162,21 +2160,18 @@ func publicCommandWALSegmentNames(t *testing.T, dir string) []string {
 
 func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {
 	tests := []struct {
-		name       string
-		durability DurabilityMode
-		wantSync   bool
+		name     string
+		profile  Profile
+		wantSync bool
 	}{
-		{name: "durable", durability: DurabilityDurable, wantSync: true},
-		{name: "relaxed", durability: DurabilityWALOnRelaxed, wantSync: false},
+		{name: "durable", profile: ProfileCommandWALDurable, wantSync: true},
+		{name: "relaxed", profile: ProfileCommandWALRelaxed, wantSync: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, err := Open(Options{
-				Dir:               t.TempDir(),
-				Durability:        tt.durability,
-				CommandWAL:        true,
-				DisableSideStores: true,
-			})
+			opts := OptionsFor(tt.profile, t.TempDir())
+			opts.DisableSideStores = true
+			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("Open command WAL: %v", err)
 			}
@@ -3742,9 +3737,9 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 	case "write_then_dirty_write_sync":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls = 1, 1
-		if forcedPointers {
-			valueLogMaterializationSyncs = 1
-		}
+		// The relaxed prefix remains replay-self-contained in the command WAL;
+		// the following explicit sync closes that prefix without forcing the
+		// cache's deferred value-log materialization path.
 	case "empty_write_sync_after_write":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
@@ -3972,6 +3967,7 @@ func TestPublicCommandWALDurableTinyBatchWriteSyncShapes(t *testing.T) {
 
 func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
 	opts.BackgroundCheckpointInterval = time.Hour // Starts the existing loop; the test triggers its pass explicitly.
 	opts.FlushThreshold = 64 << 10
 	db, err := Open(opts)
@@ -4671,14 +4667,11 @@ func TestPublicCommandWALDeleteRangeCachedReopen(t *testing.T) {
 
 func TestPublicCommandWALDeleteRangeReplaysUnappliedFrame(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(Options{
-		Dir:                          dir,
-		Durability:                   DurabilityWALOnRelaxed,
-		CommandWAL:                   true,
-		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
-		BackgroundCheckpointInterval: -1,
-	})
+	opts := OptionsFor(ProfileCommandWALDurable, dir)
+	opts.CommandWALStatsScan = true
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -4697,7 +4690,16 @@ func TestPublicCommandWALDeleteRangeReplaysUnappliedFrame(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	backend, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityDurable,
+		ResolvedProfile:        backenddb.ProfileCommandWALDurable,
+		DisableBackgroundPrune: true,
+		ValueLog: backenddb.ValueLogOptions{
+			ReadIntegrity: backenddb.IntegrityVerify,
+		},
+	})
 	if err != nil {
 		t.Fatalf("backend Open for manual command append: %v", err)
 	}
@@ -5017,18 +5019,14 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 
 func TestPublicCommandWALBatchValueLogPointersFlushMultiLaneRefs(t *testing.T) {
 	dir := t.TempDir()
-	opts := Options{
-		Dir:                          dir,
-		Durability:                   DurabilityWALOnRelaxed,
-		CommandWAL:                   true,
-		CommandWALStatsScan:          true,
-		DisableSideStores:            true,
-		BackgroundCheckpointInterval: -1,
-		FlushThreshold:               1 << 30,
-		WALMaxSegmentBytes:           1 << 20,
-		JournalLanes:                 4,
-		MemtableShards:               16,
-	}
+	opts := OptionsFor(ProfileCommandWALRelaxed, dir)
+	opts.CommandWALStatsScan = true
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.FlushThreshold = 1 << 30
+	opts.WALMaxSegmentBytes = 1 << 20
+	opts.JournalLanes = 4
+	opts.MemtableShards = 16
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	opts.ValueLog.Generational.Policy = ValueLogGenerationOff

@@ -800,15 +800,11 @@ func textV2MaintenanceBenchmarkDocs2732(fallback int) int {
 
 func openTextV2MaintenanceCompressedDB2732(t testing.TB, dir string) (*backenddb.DB, func() error) {
 	t.Helper()
-	opts := treedb.Options{
-		Dir:                        dir,
-		DisableBackgroundPrune:     true,
-		IndexOuterLeavesInValueLog: true,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-			ForcePointers:    true,
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.DisableBackgroundPrune = true
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("open compressed db: %v", err)
