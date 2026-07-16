@@ -1656,6 +1656,9 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(layout.valueVLogDir, path, err) {
+				continue
+			}
 			return deleted, err
 		}
 		if info.Size() != 0 {
@@ -1764,6 +1767,9 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protected
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(dir, path, err) {
+				continue
+			}
 			return 0, err
 		}
 		if info.Size() == 0 {
