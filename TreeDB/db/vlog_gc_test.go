@@ -526,6 +526,103 @@ func TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment(t *testing.
 	}
 }
 
+func TestValueLogGC_ObservedSourceCannotZombieOlderRecoverableRootSegment(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{
+		Dir:                       dir,
+		Durability:                DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:    true,
+		rootPublicationFixedDelay: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	oldValue := bytes.Repeat([]byte("observed-older-root-value|"), 32)
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 410_000, 1, func(int) []byte {
+		return oldValue
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 2, 420_000, 1, func(int) []byte {
+		return []byte("active-segment")
+	})
+	if err := database.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("durable"), oldPtr); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	durableBefore := database.durableRoot.record.CommitSeq
+
+	releasePublisher := make(chan struct{})
+	releasedPublisher := false
+	release := func() {
+		if !releasedPublisher {
+			close(releasePublisher)
+			releasedPublisher = true
+		}
+	}
+	restoreCuts := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Root == dir && event.Point == durabilitycut.BeforePublicationSealWrite {
+			<-releasePublisher
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		release()
+		restoreCuts()
+	})
+
+	if err := database.Delete([]byte("durable")); err != nil {
+		t.Fatal(err)
+	}
+	publication := database.rootPublication.coordinator.Stats()
+	if publication.VisibleCommitSeq <= durableBefore || publication.DurableCommitSeq != durableBefore {
+		t.Fatalf("post-delete visible/durable frontier=(%d,%d), want visible > durable=%d", publication.VisibleCommitSeq, publication.DurableCommitSeq, durableBefore)
+	}
+
+	stats, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{oldPtr.FileID},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ObservedSourceSegmentsReferenced != 1 || stats.ObservedSourceSegmentsEligible != 0 || stats.ObservedSourceSegmentsDeleted != 0 {
+		t.Fatalf("observed-only GC did not retain older-root reference: %+v", stats)
+	}
+	oldPath := valueLogSegmentPath(t, dir, oldPtr.FileID)
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("observed-only GC removed older-root segment: %v", err)
+	}
+
+	recovered, err := openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("open older recoverable root: %v", err)
+	}
+	got, err := recovered.Get([]byte("durable"))
+	if err != nil {
+		_ = recovered.Close()
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, oldValue) {
+		_ = recovered.Close()
+		t.Fatalf("older recoverable value mismatch: got %d bytes want %d", len(got), len(oldValue))
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	dir := t.TempDir()
 

@@ -633,8 +633,16 @@ func TestCompactStorageFullRewriteRewritesHighStaleValueLogSegment(t *testing.T)
 	if stats.RemainingDebt.ValueLogRewriteSegments != 0 || stats.RemainingDebt.ValueLogRewriteBytes != 0 {
 		t.Fatalf("remaining policy rewrite debt=%+v want none", stats.RemainingDebt)
 	}
-	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
-		t.Fatalf("stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	if stats.RemainingDebt.ValueLogGCSegments == 0 || stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("rewrite must retain older-root GC debt: flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	}
+	advancePastRetainedDurableSlotForTest(t, db)
+	converged, err := db.CompactStorage(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStorage after durable horizon advance: %v", err)
+	}
+	if !converged.FullyCompacted || !converged.PolicyFullyCompacted || converged.ByteMinimized {
+		t.Fatalf("converged flags fully=%t policy=%t byte=%t debt=%+v", converged.FullyCompacted, converged.PolicyFullyCompacted, converged.ByteMinimized, converged.RemainingDebt)
 	}
 }
 
@@ -667,8 +675,16 @@ func TestCompactStorageFullRewriteDoesNotExemptSmallHighStaleValueLogSegment(t *
 	if got := stats.ValueLogRewrite.ValueBytesCopied; got <= 0 {
 		t.Fatalf("applied rewrite copied bytes=%d want >0, stats=%+v", got, stats.ValueLogRewrite)
 	}
-	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
-		t.Fatalf("stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	if stats.RemainingDebt.ValueLogGCSegments == 0 || stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("rewrite must retain older-root GC debt: flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	}
+	advancePastRetainedDurableSlotForTest(t, db)
+	converged, err := db.CompactStorage(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStorage after durable horizon advance: %v", err)
+	}
+	if !converged.FullyCompacted || !converged.PolicyFullyCompacted || converged.ByteMinimized {
+		t.Fatalf("converged flags fully=%t policy=%t byte=%t debt=%+v", converged.FullyCompacted, converged.PolicyFullyCompacted, converged.ByteMinimized, converged.RemainingDebt)
 	}
 }
 
@@ -709,8 +725,16 @@ func TestCompactStorageExhaustiveRewriteSelectsAnyStaleValueLogSegment(t *testin
 	if got := stats.ValueLogRewrite.ValueRecordsCopied; got != 9 {
 		t.Fatalf("exhaustive rewrite copied records=%d want 9, stats=%+v", got, stats.ValueLogRewrite)
 	}
-	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || !stats.ByteMinimized {
-		t.Fatalf("exhaustive stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	if stats.RemainingDebt.ValueLogGCSegments == 0 || stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("exhaustive rewrite must retain older-root GC debt: flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	}
+	advancePastRetainedDurableSlotForTest(t, db)
+	converged, err := db.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if err != nil {
+		t.Fatalf("CompactStorage exhaustive after durable horizon advance: %v", err)
+	}
+	if !converged.FullyCompacted || !converged.PolicyFullyCompacted || !converged.ByteMinimized {
+		t.Fatalf("exhaustive converged flags fully=%t policy=%t byte=%t debt=%+v", converged.FullyCompacted, converged.PolicyFullyCompacted, converged.ByteMinimized, converged.RemainingDebt)
 	}
 }
 

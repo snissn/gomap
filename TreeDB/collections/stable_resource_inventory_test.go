@@ -27,6 +27,12 @@ func testStableColumnConstructionPinBlocksCrossManagerGC(t *testing.T) {
 	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatal(err)
 	}
+	// Stabilize the seed publication before taking the registry baseline. The
+	// construction-pin assertion is about the candidate append below, not pins
+	// transferred asynchronously while the seed root becomes durable.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	candidatePayload := []byte("construction-authority-candidate")
 	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 117, candidatePayload)
 

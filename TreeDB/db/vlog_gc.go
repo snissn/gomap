@@ -73,6 +73,10 @@ type ValueLogGCOptions struct {
 	// otherwise-active segment. Callers must first prove the source is
 	// unreferenced and fence cached writers past the source.
 	ObservedSourceReclaimActive bool
+	// observedSourceMissingIsError preserves MarkValueLogZombie's historical
+	// missing-manager signal without changing rewrite cleanup's documented
+	// best-effort treatment of already-retired observed IDs.
+	observedSourceMissingIsError bool
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -216,13 +220,11 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if err != nil {
 			return stats, err
 		}
-		if !observedOnly {
-			if referenced == nil {
-				referenced = make(map[uint32]struct{}, len(recoverableReferenced))
-			}
-			for fileID := range recoverableReferenced {
-				referenced[fileID] = struct{}{}
-			}
+		if referenced == nil {
+			referenced = make(map[uint32]struct{}, len(recoverableReferenced))
+		}
+		for fileID := range recoverableReferenced {
+			referenced[fileID] = struct{}{}
 		}
 
 		db.publishPrepareMu.Lock()
@@ -340,13 +342,14 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 			f, ok := files[id]
 			if !ok {
-				// MarkValueLogZombie historically delegated directly to the
-				// manager, whose missing-ID result is part of the caching backend
-				// contract: callers use ErrFileNotFound to remove an orphaned
-				// retained path that the manager no longer tracks. Observed-only
-				// GC must preserve that signal rather than reporting a successful
-				// no-op and letting the orphan escape lifecycle ownership.
-				return stats, fmt.Errorf("%w: file_id=%d", valuelog.ErrFileNotFound, id)
+				if opts.observedSourceMissingIsError {
+					// MarkValueLogZombie historically delegated directly to the
+					// manager, whose missing-ID result is part of the caching backend
+					// contract: callers use ErrFileNotFound to remove an orphaned
+					// retained path that the manager no longer tracks.
+					return stats, fmt.Errorf("%w: file_id=%d", valuelog.ErrFileNotFound, id)
+				}
+				continue
 			}
 			size := fileSize(f)
 			stats.ObservedSourceSegments++
@@ -543,10 +546,10 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		// Consume the exact recovery authority only after classification is
 		// complete. publishPrepareMu remains held, so no new visible root can make
 		// one of these segments reachable between the final validation and zombie
-		// mutation. Keep the capability pinned through manager-topology publication:
-		// rewritten sources referenced only by an older recoverable root leave the
-		// current ValueLogSet immediately, while their exact physical identities
-		// remain unlink-protected until that recovery authority is retired.
+		// mutation. Segments selected by an older recoverable root were excluded
+		// during classification; eligible rewritten sources leave the current
+		// ValueLogSet here, while snapshot/resource pins retain their exact physical
+		// identities until every remaining reader releases them.
 		if err := recoverableRoots.Revalidate(); err != nil {
 			return stats, err
 		}

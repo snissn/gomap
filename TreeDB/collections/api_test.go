@@ -661,6 +661,16 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("SourceBytesLive=%d, want real collection live bytes copied (stats=%+v)", got, packStats)
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
+	// The pre-pack durable slot remains independently recovery-selectable until
+	// one later checkpoint overwrites it. Publish an inline successor so the
+	// packed source generation is no longer reachable from either durable slot
+	// before asserting physical reclamation.
+	if err := d.Set([]byte("raw/leaf-pack-gc-slot-advance"), []byte("advance")); err != nil {
+		t.Fatalf("publish durable-slot successor: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint durable-slot successor: %v", err)
+	}
 
 	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
 	gcStats, err := d.LeafGenerationGC(gcCtx, backenddb.LeafGenerationGCOptions{})

@@ -4160,6 +4160,7 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 		ObservedSourceFileIDs:            []uint32{id},
 		ObservedSourceAssumeUnreferenced: true,
 		ObservedSourceReclaimActive:      true,
+		observedSourceMissingIsError:     true,
 	}, true)
 	return err
 }

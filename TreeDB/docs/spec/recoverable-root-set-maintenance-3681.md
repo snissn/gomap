@@ -23,7 +23,7 @@ resource-specific reachability projection.
 | Storage class | Destructive owner | Capability integration | Status |
 |---|---|---|---|
 | Persistent value-log segments | `TreeDB/db/vlog_gc.go` | scans value pointers from every captured root, unions exact referenced segment IDs, then revalidates under `publishPrepareMu` before `MarkZombie`; full GC only retires segments absent from the whole union | active |
-| Value-log rewrite sources | `TreeDB/db/vlog_rewrite.go` | publishes rewritten pointers first; source retirement delegates to capability-backed value-log GC. A current-unreferenced source may leave the current manager topology while an older root's exact resource pin defers physical unlink; a stale cleanup capability records retained debt rather than failing the committed rewrite | active |
+| Value-log rewrite sources | `TreeDB/db/vlog_rewrite.go` | publishes rewritten pointers first; source retirement delegates to capability-backed value-log GC. A source remains in the current manager topology while any recoverable root still references it. Once absent from every recoverable root, zombie publication removes it from the current topology while snapshot/resource pins defer physical unlink; a stale cleanup capability records retained debt rather than failing the committed rewrite | active |
 | Exported/cached value-log zombie requests | `TreeDB/db/db.go` (`MarkValueLogZombie`) and cached retention callers | delegates to capability-backed observed-source GC instead of directly marking a manager file zombie | active |
 | Zero-byte value-log cleanup | `TreeDB/db/compact_storage.go` (`pruneZeroByteValueLogFiles`) | captures and revalidates under the publication fence, then keeps that fence through stable deletion and directory durability | active |
 | Raw and packed outer-leaf generations | `TreeDB/db/leaf_generation_gc.go` | scans raw leaf FileIDs from every captured root, resolves them through every retained leaf-generation manifest, preserves FileID reuse/ABA generations, and revalidates before zombie publication | active |
@@ -70,8 +70,8 @@ recovery state and therefore do not consume the capability:
 
 - `TreeDB/db/recoverable_root_set_test.go`: both durable slots, stale candidate
   enqueue, stale durable advance, root-bound snapshots, and exact identity pins.
-- `TreeDB/db/vlog_gc_test.go`: an older durable root remains readable after a
-  newer visible root drops its value-log pointer.
+- `TreeDB/db/vlog_gc_test.go`: full and observed-source GC both retain an older
+  durable root's value-log pointer after a newer visible root drops it.
 - `TreeDB/db/leaf_generation_gc_test.go`: stale scans delete nothing, durable
   fallback generations remain live, FileID reuse is conservative, and debt
   converges after fallback/snapshot advance.
