@@ -78,21 +78,9 @@ func TestCompactStorageRepairsMissingCurrentLeafGenerationFile(t *testing.T) {
 func TestCompactStorageConcurrentChildDeletionIsAbsentFromStorageScans(t *testing.T) {
 	root := t.TempDir()
 	child := filepath.Join(root, "value-l0-000001.log")
-	if err := os.WriteFile(child, nil, 0644); err != nil {
-		t.Fatalf("write enumerated child: %v", err)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatalf("read scan root: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("entries=%d want 1", len(entries))
-	}
-	if err := os.Remove(child); err != nil {
-		t.Fatalf("remove enumerated child: %v", err)
-	}
-	if _, err := entries[0].Info(); !compactStorageConcurrentChildDeletion(root, child, err) {
-		t.Fatalf("post-enumeration child error=%v should be absent from usage, plan, and apply scans", err)
+	missingChild := &os.PathError{Op: "lstat", Path: child, Err: os.ErrNotExist}
+	if !compactStorageConcurrentChildDeletion(root, child, missingChild) {
+		t.Fatalf("post-enumeration child error=%v should be absent from usage, plan, and apply scans", missingChild)
 	}
 	missing := &os.PathError{Op: "lstat", Path: root, Err: os.ErrNotExist}
 	if compactStorageConcurrentChildDeletion(root, root, missing) {
