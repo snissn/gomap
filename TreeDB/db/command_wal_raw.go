@@ -1588,7 +1588,11 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
-		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		if !post.accepted {
+			db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		} else {
+			intent.inner.staged = false
+		}
 		return err
 	}
 	db.finalizeCommitPostWork(post)

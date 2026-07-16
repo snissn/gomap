@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 func TestActivatedRootPublicationTripsFormerDirectPublisher(t *testing.T) {
@@ -188,6 +190,58 @@ func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("reopened Get(%q)=%q want %q", key, got, want)
 		}
+	}
+}
+
+func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	database := openCommandWALDB(t, dir)
+	defer database.Close()
+
+	intent := mustRawKVCommandWALIntent(t, database, "group-accepted", "visible-before-durable")
+	lsn, err := database.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	group, err := database.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+	}
+	defer group.Close()
+
+	final := database.NewPhysicalBatch().(*Batch)
+	defer final.Close()
+	if err := final.Set([]byte("group-accepted"), []byte("visible-before-durable")); err != nil {
+		t.Fatalf("final Set: %v", err)
+	}
+	if err := final.SetCommandWALPublish(lsn, []CommandWALLSNRange{{First: lsn, Last: lsn}}); err != nil {
+		t.Fatalf("SetCommandWALPublish: %v", err)
+	}
+	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
+		t.Fatalf("SetRootPublicationBuildGroup: %v", err)
+	}
+	database.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	database.testFailWriteMeta.Store(true)
+	err = final.WriteSync()
+	database.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted build-group wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted build-group wait error=%v unexpectedly requires recovery", err)
+	}
+	if got := database.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("visible AppliedCommandLSN after accepted build-group error=%d, want %d", got, lsn)
+	}
+	if got, getErr := database.Get([]byte("group-accepted")); getErr != nil || string(got) != "visible-before-durable" {
+		t.Fatalf("accepted build-group value=(%q,%v), want visible value", got, getErr)
+	}
+	if err := database.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after accepted build-group error: %v", err)
+	}
+	if err := database.SetSync([]byte("after-group"), []byte("same-handle-progress")); err != nil {
+		t.Fatalf("SetSync after accepted build-group error: %v", err)
 	}
 }
 

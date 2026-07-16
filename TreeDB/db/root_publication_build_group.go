@@ -356,7 +356,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	// handle. Keep cleanup from treating the same token as live ownership.
 	group.builder = nil
 	if err != nil {
-		if commandAppended {
+		if commandAppended && !post.accepted {
 			db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		if post.accepted {

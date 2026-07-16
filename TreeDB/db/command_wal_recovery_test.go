@@ -1510,6 +1510,70 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	}
 }
 
+func TestCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+
+	baseAppliedLSN := db.State().AppliedCommandLSN
+	db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	db.testFailWriteMeta.Store(true)
+	err := db.SetSync([]byte("accepted"), []byte("visible-before-durable"))
+	db.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted wait error=%v unexpectedly requires recovery", err)
+	}
+	if got := db.State().AppliedCommandLSN; got <= baseAppliedLSN {
+		t.Fatalf("visible AppliedCommandLSN after accepted wait error=%d, want greater than %d", got, baseAppliedLSN)
+	}
+	assertDBValue(t, db, "accepted", "visible-before-durable")
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after accepted wait error: %v", err)
+	}
+	if err := db.SetSync([]byte("later"), []byte("same-handle-progress")); err != nil {
+		t.Fatalf("SetSync after accepted wait error: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close after accepted wait retry: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "accepted", "visible-before-durable")
+	assertDBValue(t, reopen, "later", "same-handle-progress")
+}
+
+func TestCommandWALNoopAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "noop-covered", "external-apply")
+	db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	db.testFailWriteMeta.Store(true)
+	err := db.PublishCommandWALNoop(intent, true)
+	db.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted no-op wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted no-op wait error=%v unexpectedly requires recovery", err)
+	}
+	if got, want := db.State().AppliedCommandLSN, intent.AssignedLSN(); got == 0 || got != want {
+		t.Fatalf("visible AppliedCommandLSN after accepted no-op error=%d, want assigned %d", got, want)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after accepted no-op error: %v", err)
+	}
+	if err := db.SetSync([]byte("after-noop"), []byte("same-handle-progress")); err != nil {
+		t.Fatalf("SetSync after accepted no-op error: %v", err)
+	}
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

@@ -593,10 +593,10 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.recordVacuumMutation = recordVacuumMutation
 		opts.conditionalMutation = conditionalMutation
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
-		// Poison while still holding commitMu so that no concurrent writer can
-		// slip past the poison check in appendRawKVCommandWALIntent and publish a
-		// root that covers the unapplied frame's LSN.
-		if err != nil {
+		// Poison while still holding commitMu only when the frame remains
+		// unapplied. An accepted candidate already made the LSN visible even when
+		// its admission wait reports a retryable publisher failure.
+		if err != nil && !post.accepted {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 	}
@@ -811,7 +811,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-		if intent != nil {
+		if intent != nil && !post.accepted {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		return err

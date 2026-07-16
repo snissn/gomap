@@ -649,9 +649,13 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}()
 
+	dependencyBytes := rootPublicationDependencyBytesV1(resources)
+	if forced := db.testRootPublicationDependencyBytes.Load(); forced != 0 {
+		dependencyBytes = forced
+	}
 	candidate, err := runtime.prepareVisibleCandidate(
 		next, retired, resources, install,
-		rootPublicationDependencyBytesV1(resources), 0,
+		dependencyBytes, 0,
 	)
 	if err != nil {
 		return post, prePublishErr(err)

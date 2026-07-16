@@ -543,6 +543,7 @@ type DB struct {
 	testAfterOptimisticPublishPrepareHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
 	testDurableRootCandidatePreparedHook           func()
+	testRootPublicationDependencyBytes             atomic.Uint64
 	testScanCandidateExternalReferencesHook        func()
 	testCheckpointAfterPoisonPreflightHook         func()
 	testConditionalReadOnlyAfterClosePreflight     func()
@@ -3546,7 +3547,7 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
 		forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, opts,
 	)
-	if err != nil && onError != nil {
+	if err != nil && !post.accepted && onError != nil {
 		onError(err)
 	}
 	return post, err

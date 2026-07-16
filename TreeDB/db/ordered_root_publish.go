@@ -2587,11 +2587,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
+	if post.accepted {
+		commandAppended = false
+		commandWALIntent.inner.staged = false
+	}
 	if err != nil {
 		return 0, nil, err
 	}
-	commandAppended = false
-	commandWALIntent.inner.staged = false
 	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
@@ -3516,10 +3518,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
+	if post.accepted {
+		commandAppended = false
+		commandWALIntent.inner.staged = false
+	}
 	if err != nil {
 		return 0, nil, err
 	}
-	commandAppended = false
 	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
@@ -3591,6 +3596,9 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		},
 		func(error) { db.poisonCommandWALAfterPublicPostAppendFailure(intent) },
 	)
+	if post.accepted {
+		intent.inner.staged = false
+	}
 	if err != nil {
 		if commitLocked {
 			db.commitMu.Unlock()
