@@ -1011,6 +1011,9 @@ func TestColumnVectorGraphNativeSearchContinuesAcrossDisconnectedComponentsV3(t 
 }
 
 func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
 	const (
 		rows = 32
 		dims = 16
