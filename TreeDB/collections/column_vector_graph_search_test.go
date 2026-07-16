@@ -1034,6 +1034,9 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 16}, &scratch); err != nil {
 		t.Fatalf("warm SearchCosine: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
 	var hotErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		if hotErr != nil {
