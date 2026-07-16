@@ -1011,9 +1011,6 @@ func TestColumnVectorGraphNativeSearchContinuesAcrossDisconnectedComponentsV3(t 
 }
 
 func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
-	if collectionsRaceEnabled {
-		t.Skip("AllocsPerRun is not stable under -race")
-	}
 	const (
 		rows = 32
 		dims = 16
@@ -1036,6 +1033,9 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	var scratch columnVectorGraphNativeSearchScratch
 	if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 16}, &scratch); err != nil {
 		t.Fatalf("warm SearchCosine: %v", err)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
 	}
 	var hotErr error
 	allocs := testing.AllocsPerRun(1000, func() {
