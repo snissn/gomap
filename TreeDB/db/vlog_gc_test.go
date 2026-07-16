@@ -924,6 +924,31 @@ func TestValueLogGC_ObservedSourceReclaimActiveRequiresExplicitOption(t *testing
 	}
 }
 
+func TestMarkValueLogZombie_PreservesMissingSegmentSignal(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, dir, 0, 1, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("tracked|"), 32)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	missingID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("missing fileid: %v", err)
+	}
+	if err := db.MarkValueLogZombie(missingID); !errors.Is(err, valuelog.ErrFileNotFound) {
+		t.Fatalf("MarkValueLogZombie missing error=%v, want ErrFileNotFound", err)
+	}
+}
+
 func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 	dir := t.TempDir()
 
