@@ -559,9 +559,11 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 			t.Fatalf("%s=%d, want %d (stats=%#v)", key, got, want, stats)
 		}
 	}
+	// The proof count is the observed-work signal. On platforms with coarse
+	// monotonic clock resolution, this short phase can legitimately measure 0ns.
+	_ = commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.proof.ns_total")
 	for _, key := range []string{
 		"treedb.command_wal.cleanup.ns_total",
-		"treedb.command_wal.cleanup.proof.ns_total",
 		"treedb.command_wal.cleanup.covered_bytes_total",
 		"treedb.command_wal.cleanup.retained_bytes_total",
 		"treedb.command_wal.cleanup.removed_bytes_total",
