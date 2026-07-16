@@ -1104,10 +1104,7 @@ func durableRootDependencyObservationPathsV1(resources *rootpublication.StableRe
 		}
 		var path string
 		if err := token.WithPinnedFile(func(file *os.File) error {
-			path = file.Name()
-			for strings.HasSuffix(path, "#stable-pin") {
-				path = strings.TrimSuffix(path, "#stable-pin")
-			}
+			path = durableRootDependencyObservationPathV1(file.Name())
 			if path == "" {
 				return errors.New("stable resource handle has no observation name")
 			}
@@ -1128,6 +1125,23 @@ func durableRootDependencyObservationPathsV1(resources *rootpublication.StableRe
 		}
 	}
 	return unique, nil
+}
+
+// durableRootDependencyObservationPathV1 strips the private handle suffixes
+// used by stable-resource pins. A resource may be cloned through several
+// candidate closures, so normalize every trailing layer before exposing the
+// underlying path to the deterministic power-loss observer.
+func durableRootDependencyObservationPathV1(path string) string {
+	for {
+		switch {
+		case strings.HasSuffix(path, "#stable-sync-pin"):
+			path = strings.TrimSuffix(path, "#stable-sync-pin")
+		case strings.HasSuffix(path, "#stable-pin"):
+			path = strings.TrimSuffix(path, "#stable-pin")
+		default:
+			return path
+		}
+	}
 }
 
 func (db *DB) executeDurableRootCandidateV1(candidate *durableRootPublishCandidateV1) (page.MetaPageBody, error) {

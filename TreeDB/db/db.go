@@ -1263,18 +1263,18 @@ type Options struct {
 	// Unsupported runs fall back to recursive apply.
 	FlushApplySpanNative bool
 
-	// FlushBackendMaxEntries caps how many operations are buffered into a single
-	// backend batch before committing it and continuing with a fresh batch.
+	// FlushBackendMaxEntries caps how many operations are buffered into one
+	// backend apply chunk before continuing with a fresh batch.
 	//
-	// This increases backend commit cadence during very large flushes, which can
-	// reduce index.db high-watermark growth under small KeepRecent windows by
-	// making retired pages eligible for reuse sooner.
+	// TreeDB stages all chunks from one logical flush in a private root-build
+	// transaction. Only the final complete root is publication-eligible; no
+	// intermediate chunk is independently visible or recoverable.
 	//
 	// 0 uses the internal default. Negative disables chunking (single backend
-	// commit per flush).
+	// apply per flush).
 	FlushBackendMaxEntries int
-	// FlushBackendMaxBatches caps how many intermediate backend commits a single
-	// flush may emit (0=default, <0=disable cap).
+	// FlushBackendMaxBatches caps how many backend apply chunks a single flush may
+	// emit (0=default, <0=disable cap).
 	FlushBackendMaxBatches int
 
 	// FlushSpanRunTargetPlanning enables diagnostic read-only target-leaf planning

@@ -19,6 +19,8 @@ type Batch struct {
 	commandWALPublishIntent            *commandWALBatchIntent
 	conditionalTxnID                   uint64
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
+	rootPublicationBuildGroup          *RootPublicationBuildGroup
+	rootPublicationBuildGroupFinal     bool
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -80,6 +82,28 @@ func (b *Batch) SetFlushApplySpanNativeFallback(reason FlushSpanRunFallbackReaso
 		return
 	}
 	b.flushApplySpanNativeFallbackReason = reason
+}
+
+// SetRootPublicationBuildGroup attaches one batch of a logical chunked cached
+// apply. Exactly one attached batch must be marked final. Intermediate batches
+// build private roots; only the final batch creates a publication candidate.
+func (b *Batch) SetRootPublicationBuildGroup(group *RootPublicationBuildGroup, final bool) error {
+	if b == nil || b.db == nil || group == nil {
+		return errors.New("missing root publication build group")
+	}
+	if !b.physicalOnly {
+		return errors.New("root publication build group requires a physical batch")
+	}
+	if b.rootPublicationBuildGroup != nil {
+		return errors.New("root publication build group already attached")
+	}
+	runtime := b.db.rootPublication
+	if runtime == nil || runtime.coordinator == nil || group.coordinator != runtime.coordinator {
+		return errors.New("root publication build group belongs to another database")
+	}
+	b.rootPublicationBuildGroup = group
+	b.rootPublicationBuildGroupFinal = final
+	return nil
 }
 
 func (b *Batch) flushApplyOptions() zipper.ApplyOptions {
@@ -269,6 +293,13 @@ func (b *Batch) write(sync bool) error {
 	}
 	if b.db.readOnly {
 		return ErrReadOnly
+	}
+	if group := b.rootPublicationBuildGroup; group != nil {
+		if !b.physicalOnly {
+			return errors.New("root publication build group requires a physical batch")
+		}
+		maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
+		return group.writeBatch(b, sync, maxEntryRevision)
 	}
 	b.db.teardownMu.RLock()
 	defer b.db.teardownMu.RUnlock()
@@ -834,12 +865,16 @@ func (b *Batch) Close() error {
 		b.commandWALPublishIntent = nil
 		b.conditionalTxnID = 0
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
+		b.rootPublicationBuildGroup = nil
+		b.rootPublicationBuildGroupFinal = false
 		return err
 	}
 	b.batch = nil
 	b.commandWALPublishIntent = nil
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
+	b.rootPublicationBuildGroup = nil
+	b.rootPublicationBuildGroupFinal = false
 	return nil
 }
 
@@ -852,6 +887,8 @@ func (b *Batch) Reset() {
 	b.commandWALPublishIntent = nil
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
+	b.rootPublicationBuildGroup = nil
+	b.rootPublicationBuildGroupFinal = false
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

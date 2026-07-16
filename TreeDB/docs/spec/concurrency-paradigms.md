@@ -381,8 +381,8 @@ Note:
 | `Options.FlushApplyMinEntries` | Planned span-op gate before enabling opt-in parallel apply. |
 | `Options.FlushApplyMinSpans` | Planned leaf-span gate before enabling opt-in parallel apply. |
 | `Options.FlushApplyMinBytes` | Planned span-byte gate before enabling opt-in parallel apply. |
-| `Options.FlushBackendMaxEntries` | Backend commit chunk size during flush. |
-| `Options.FlushBackendMaxBatches` | Max intermediate backend commits per flush. |
+| `Options.FlushBackendMaxEntries` | Backend apply chunk size during flush; TreeDB stages chunks in one private root build. |
+| `Options.FlushBackendMaxBatches` | Max backend apply chunks per flush; only the final complete root is publication-eligible. |
 
 Notes:
 - `FlushBuildConcurrency <= 0` defaults to `GOMAXPROCS`.

@@ -169,6 +169,16 @@ func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 	if delta > 0 {
 		d.addPositive(fileID, delta)
 	}
+	d.addChange(fileID, delta)
+}
+
+// addChange merges only the net reference-count change. Callers that combine
+// already-accounted deltas use it together with addPositive so transient
+// positive references retain their exact pending-append release accounting.
+func (d *valueLogRefDelta) addChange(fileID uint32, delta int64) {
+	if d == nil || delta == 0 {
+		return
+	}
 	if d.changes == nil {
 		for i := 0; i < d.inlineN; i++ {
 			if d.inline[i].fileID != fileID {

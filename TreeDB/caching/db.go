@@ -8256,18 +8256,18 @@ type Options struct {
 	// symmetry and keeps the path default-off.
 	FlushApplySpanNative bool
 
-	// FlushBackendMaxEntries caps how many operations are buffered into a single
-	// backend batch before committing it and continuing with a fresh batch.
+	// FlushBackendMaxEntries caps how many operations are buffered into one
+	// backend apply chunk before continuing with a fresh batch.
 	//
-	// This increases backend commit cadence during very large flushes, which can
-	// reduce index.db high-watermark growth under small KeepRecent windows by
-	// making retired pages eligible for reuse sooner.
+	// TreeDB stages all chunks from one logical flush in a private root-build
+	// transaction. Only the final complete root is publication-eligible; no
+	// intermediate chunk is independently visible or recoverable.
 	//
 	// 0 uses the internal default. Negative disables chunking (single backend
-	// commit per flush).
+	// apply per flush).
 	FlushBackendMaxEntries int
-	// FlushBackendMaxBatches caps how many intermediate backend commits a single
-	// flush may emit. This bounds zipper/apply overhead when FlushBackendMaxEntries
+	// FlushBackendMaxBatches caps how many backend apply chunks a single flush may
+	// emit. This bounds zipper/apply overhead when FlushBackendMaxEntries
 	// is very small relative to the flush size.
 	//
 	// 0 uses the internal default. Negative disables the cap.
@@ -9825,7 +9825,7 @@ func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 		maxBatches = 16
 	}
 	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
-	// of intermediate commits in that path even if the steady-state micro-batch
+	// of intermediate apply chunks in that path even if the steady-state micro-batch
 	// policy is aggressive.
 	if sync && maxBatches > 8 {
 		maxBatches = 8
@@ -9835,8 +9835,7 @@ func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 		maxInt := int(^uint(0) >> 1)
 		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
 			// Increase the chunk size so we emit at most maxBatches intermediate
-			// commits. This preserves the high-watermark benefits of micro-batching
-			// while bounding zipper/apply overhead.
+			// applies while bounding zipper/apply overhead.
 			capEntries = (totalOps + maxBatches - 1) / maxBatches
 			if capEntries < 1 {
 				capEntries = 1
@@ -9856,15 +9855,15 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 		maxBatches = 16
 	}
 	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
-	// of intermediate commits in that path even if the steady-state micro-batch
+	// of intermediate apply chunks in that path even if the steady-state micro-batch
 	// policy is aggressive.
 	if sync && maxBatches > 8 {
 		maxBatches = 8
 	}
-	// Delete-heavy flushes are expensive to apply in many intermediate commits.
-	// Each commit re-writes leaf pages (copying surviving values), so repeated
-	// commits amplify work dramatically when deletes touch a large fraction of the
-	// keyspace. Favor fewer commits in that case.
+	// Delete-heavy flushes are expensive to apply in many intermediate chunks.
+	// Each apply re-writes leaf pages (copying surviving values), so repeated
+	// applies amplify work dramatically when deletes touch a large fraction of the
+	// keyspace. Favor fewer chunks in that case.
 	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
 		// Deterministic "delete-heavy" trigger: deletes are at least 25% of ops.
 		if deleteOps*4 >= totalOps && maxBatches > 4 {
@@ -9876,8 +9875,7 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 		maxInt := int(^uint(0) >> 1)
 		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
 			// Increase the chunk size so we emit at most maxBatches intermediate
-			// commits. This preserves the high-watermark benefits of micro-batching
-			// while bounding zipper/apply overhead.
+			// applies while bounding zipper/apply overhead.
 			capEntries = (totalOps + maxBatches - 1) / maxBatches
 			if capEntries < 1 {
 				capEntries = 1
@@ -12080,10 +12078,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
 	}
 	if opts.FlushBackendMaxEntries == 0 {
-		// In relaxed durability modes, additional commit boundaries are cheap and
-		// can reduce index.db high-watermark growth under small KeepRecent windows
-		// by making retired pages eligible for reuse sooner. Default to a smaller
-		// chunk size in that case.
+		// Retain the smaller per-apply chunk used by relaxed profiles to bound
+		// one-shot apply work. TreeDB still publishes the complete logical flush as
+		// one root regardless of this physical chunk size.
 		if opts.DisableWAL || opts.ExternalCommandWAL || opts.RelaxedSync {
 			opts.FlushBackendMaxEntries = 2 * flushBackendBatchInitEntries
 		} else {
@@ -12091,7 +12088,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	} else if opts.FlushBackendMaxEntries < 0 {
 		// Negative disables chunking; use a very large cap so the hot path
-		// never triggers intermediate commits.
+		// never triggers intermediate applies.
 		opts.FlushBackendMaxEntries = int(^uint(0) >> 1)
 		// Disable the max-batch cap when chunking is explicitly disabled.
 		// This preserves the documented "<0 disables chunking" behavior without
@@ -12101,10 +12098,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	if opts.FlushBackendMaxBatches == 0 {
-		// In relaxed durability modes, additional commit boundaries are much
-		// cheaper and can substantially reduce index.db high-watermark growth
-		// under small KeepRecent windows by making retired pages eligible for
-		// reuse sooner. Use a slightly higher default budget in that case.
+		// Retain the larger physical chunk-count budget used by relaxed profiles.
+		// These chunks stage under one private build and do not create additional
+		// visible or recoverable commit boundaries.
 		if opts.DisableWAL || opts.ExternalCommandWAL || opts.RelaxedSync {
 			opts.FlushBackendMaxBatches = 32
 		} else {
@@ -24571,10 +24567,9 @@ func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
 	if len(units) != queueLen || totalLen <= 0 {
 		return false
 	}
-	// Chunked checkpoint flushes attach command-LSN publication to the final
-	// backend batch. Intermediate chunks publish roots without advancing
-	// AppliedCommandLSN, so crash recovery either replays the command frames or
-	// observes the final root/applied-LSN tuple together.
+	// Chunked checkpoint flushes stage every backend batch in one root-build
+	// transaction and attach command-LSN publication to the final batch. Only
+	// that complete root/applied-LSN tuple can become visible or recoverable.
 	return true
 }
 
@@ -27843,7 +27838,7 @@ const (
 	// ranges.
 	flushRangeSpanCombineMaxUnits = 1024
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
-	// backend batch before committing it and continuing with a fresh batch.
+	// backend apply chunk before continuing with a fresh batch.
 	//
 	// This avoids large one-shot allocations (and their GC / page-fault overhead)
 	// when flushing very large immutable memtables (e.g. when value-log pointers
