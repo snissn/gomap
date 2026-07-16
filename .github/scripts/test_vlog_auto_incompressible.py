@@ -55,6 +55,8 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         size_ratios: list[float] | None = None,
         *,
         omit_last_auto: bool = False,
+        off_ops_per_sec: float = 1_000_000,
+        corrupt_last_auto: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         if size_ratios is None:
             size_ratios = [0.996] * len(throughput_ratios)
@@ -68,15 +70,18 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                 off_log = Path(temp_dir) / f"off-{index}.txt"
                 auto_log = Path(temp_dir) / f"auto-{index}.txt"
                 off_log.write_text(
-                    "Batch Write / fixture = 1,000,000\n"
+                    f"Batch Write / fixture = {off_ops_per_sec:.3f}\n"
                     "maindb/value_vlog: fixture value=100 MB\n",
                     encoding="utf-8",
                 )
-                auto_log.write_text(
-                    f"Batch Write / fixture = {throughput_ratio * 1_000_000:.3f}\n"
-                    f"maindb/value_vlog: fixture value={size_ratio * 100:.3f} MB\n",
-                    encoding="utf-8",
-                )
+                if corrupt_last_auto and index == len(throughput_ratios):
+                    auto_log.write_text("missing benchmark rows\n", encoding="utf-8")
+                else:
+                    auto_log.write_text(
+                        f"Batch Write / fixture = {throughput_ratio * off_ops_per_sec:.3f}\n"
+                        f"maindb/value_vlog: fixture value={size_ratio * 100:.3f} MB\n",
+                        encoding="utf-8",
+                    )
                 args.extend(["-off-log", str(off_log)])
                 if not (omit_last_auto and index == len(throughput_ratios)):
                     args.extend(["-auto-log", str(auto_log)])
@@ -125,6 +130,18 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("paired sample count mismatch", result.stderr)
 
+    def test_non_positive_metrics_fail_closed(self) -> None:
+        result = self.run_checker([1.02, 1.03], off_ops_per_sec=0)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("invalid off metrics sample 1", result.stderr)
+
+    def test_missing_benchmark_rows_fail_closed(self) -> None:
+        result = self.run_checker([1.02, 1.03], corrupt_last_auto=True)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("parse auto log sample 2", result.stderr)
+
 
 class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
     def test_workflow_uses_full_balanced_sample_set_without_early_success(self) -> None:
@@ -153,6 +170,10 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertIn("geometric mean of every balanced pair must exceed 1.01x", script)
         self.assertIn("Upload value-log performance evidence", script)
         self.assertIn("if: always()", script)
+        self.assertIn('2>&1 | tee "${summary_log}"', script)
+        self.assertIn('checker_status=${PIPESTATUS[0]}', script)
+        self.assertIn('>> "${GITHUB_STEP_SUMMARY}"', script)
+        self.assertIn("vlog_auto_incompressible_summary.txt", script)
         self.assertIn("vlog_auto_incompressible_off_sample*.txt", script)
         self.assertIn("vlog_auto_incompressible_auto_sample*.txt", script)
 
