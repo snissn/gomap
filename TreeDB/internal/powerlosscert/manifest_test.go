@@ -45,6 +45,18 @@ func TestValidateBundleRejectsPassingWitnessWithoutDeclaredCutOrArtifacts(t *tes
 	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "no hashed artifacts") {
 		t.Fatalf("ValidateBundle artifact error=%v", err)
 	}
+
+	manifest = testChildManifest("witness-a")
+	manifest.Witnesses[0].ObservedEventCount = 0
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "observed event count") {
+		t.Fatalf("ValidateBundle observed-cut error=%v", err)
+	}
+
+	manifest = testChildManifest("witness-a")
+	manifest.Witnesses[0].Artifacts = manifest.Witnesses[0].Artifacts[:1]
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "missing required artifact kind") {
+		t.Fatalf("ValidateBundle artifact-kind error=%v", err)
+	}
 }
 
 func TestBuildCoverageReportRequiresModeledCrashOwnership(t *testing.T) {
@@ -103,6 +115,22 @@ func TestSelectRepresentativeCasesIsDeterministicAndKeepsMandatoryRows(t *testin
 	}
 }
 
+func TestValidateBundleRejectsUndeclaredRiskValuesAndUnownedInteractions(t *testing.T) {
+	inventory := testRiskInventory()
+	manifest := testChildManifest("witness-a")
+	manifest.Witnesses[0].ResourceShapes = append(manifest.Witnesses[0].ResourceShapes, "undeclared-shape")
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "undeclared resource_shape") {
+		t.Fatalf("ValidateBundle undeclared value error=%v", err)
+	}
+
+	manifest = testChildManifest("witness-a")
+	inventory.RequiredInteractions[0].Members[1].Value = "unowned-boundary"
+	inventory.Dimensions[DimensionStorageBoundary] = append(inventory.Dimensions[DimensionStorageBoundary], "unowned-boundary")
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "interaction:") {
+		t.Fatalf("ValidateBundle interaction gap error=%v", err)
+	}
+}
+
 func testRiskInventory() RiskInventory {
 	return RiskInventory{
 		SchemaVersion: RiskInventorySchemaVersion,
@@ -116,6 +144,13 @@ func testRiskInventory() RiskInventory {
 		},
 		RetainedCounterexamples:  []string{"counterexample-a"},
 		RequiredNegativeControls: []string{"negative-a"},
+		RequiredInteractions: []RequiredInteraction{{
+			ID: "checkpoint-target-meta",
+			Members: []CoverageRequirement{
+				{Dimension: DimensionAcknowledgement, Value: "checkpoint"},
+				{Dimension: DimensionStorageBoundary, Value: "target-meta-write-sync"},
+			},
+		}},
 	}
 }
 
@@ -137,7 +172,7 @@ func testChildManifest(witnessID string) ChildManifest {
 			Architecture:    "arm64",
 			FilesystemModel: "stable-dirty-v1",
 		},
-		TestBinaries:  []Artifact{{Path: "bin/TreeDB.test", SHA256: strings.Repeat("d", 64)}},
+		TestBinaries:  []Artifact{{Kind: ArtifactKindTestBinary, Path: "bin/TreeDB.test", SHA256: strings.Repeat("d", 64)}},
 		ClaimBoundary: "modeled stable-byte crash images only; no block-device claim",
 		Witnesses: []Witness{{
 			ID:                     witnessID,
@@ -162,17 +197,34 @@ func testChildManifest(witnessID string) ChildManifest {
 				DurableLSN:          "not-applicable",
 				CleanupPins:         "older-root-pin",
 			},
-			CounterexampleID:  "counterexample-a",
-			NegativeControlID: "negative-a",
-			Seed:              1,
+			CounterexampleID:   "counterexample-a",
+			NegativeControlID:  "negative-a",
+			Seed:               1,
+			CutID:              "cut/checkpoint-generation-2/after-meta-write/001",
+			CutPoint:           "after-meta-write",
+			CutOccurrence:      1,
+			ObservedEventCount: 1,
 			Command: TestCommand{
 				BinaryPath: "bin/TreeDB.test",
 				Package:    "./TreeDB",
 				TestName:   "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+				Args:       []string{"-test.run", "^TestPowerLossOracleCounterexampleNewMetaMissingClosure$", "-test.v"},
+				Env: map[string]string{
+					"TREEDB_POWERLOSS_CUT_ID":     "cut/checkpoint-generation-2/after-meta-write/001",
+					"TREEDB_POWERLOSS_VARIANT_ID": "variant-a",
+					"TREEDB_POWERLOSS_SEED":       "1",
+				},
 			},
 			CutExercised:  true,
 			ClaimBoundary: "normal public reopen from modeled stable bytes",
-			Artifacts:     []Artifact{{Path: "artifacts/witness-a.log", SHA256: strings.Repeat("e", 64)}},
+			Artifacts: []Artifact{
+				{Kind: ArtifactKindOperationTrace, Path: "artifacts/witness-a-operation.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindStableImageTree, Path: "artifacts/witness-a-stable.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindDirtyImageTree, Path: "artifacts/witness-a-dirty.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindRecoveryTrace, Path: "artifacts/witness-a-recovery.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindMetrics, Path: "artifacts/witness-a-metrics.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindLog, Path: "artifacts/witness-a.log", SHA256: strings.Repeat("e", 64)},
+			},
 		}},
 	}
 }
