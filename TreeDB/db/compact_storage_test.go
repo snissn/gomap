@@ -75,19 +75,46 @@ func TestCompactStorageRepairsMissingCurrentLeafGenerationFile(t *testing.T) {
 	}
 }
 
-func TestCompactStorageConcurrentChildDeletionIsAbsentFromUsageSnapshot(t *testing.T) {
+func TestCompactStorageConcurrentChildDeletionIsAbsentFromStorageScans(t *testing.T) {
 	root := t.TempDir()
-	child := filepath.Join(root, ".value-l0-000001.log.delete-test")
-	err := &os.PathError{Op: "readdirent", Path: child, Err: os.ErrNotExist}
-
-	if !compactStorageConcurrentChildDeletion(root, child, err) {
-		t.Fatal("concurrently deleted child should be absent from usage snapshot")
+	child := filepath.Join(root, "value-l0-000001.log")
+	missingChild := &os.PathError{Op: "lstat", Path: child, Err: os.ErrNotExist}
+	if !compactStorageConcurrentChildDeletion(root, child, missingChild) {
+		t.Fatalf("post-enumeration child error=%v should be absent from usage, plan, and apply scans", missingChild)
 	}
-	if compactStorageConcurrentChildDeletion(root, root, err) {
-		t.Fatal("missing usage root should remain an error")
+	missing := &os.PathError{Op: "lstat", Path: root, Err: os.ErrNotExist}
+	if compactStorageConcurrentChildDeletion(root, root, missing) {
+		t.Fatal("missing scan root should remain an error")
 	}
 	if compactStorageConcurrentChildDeletion(root, child, os.ErrPermission) {
 		t.Fatal("non-ENOENT child error should remain an error")
+	}
+}
+
+func TestZeroByteValueLogScansTreatAbsentDomainAsEmpty(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	if count, err := zeroByteValueLogSegmentFiles(missing, nil, nil); err != nil || count != 0 {
+		t.Fatalf("zero-byte plan absent domain: count=%d err=%v", count, err)
+	}
+	dbDir := filepath.Join(root, "db")
+	db, err := Open(Options{Dir: dbDir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	valueLogDir := ValueLogDirPath(dbDir)
+	if err := os.Remove(valueLogDir); err != nil {
+		t.Fatalf("remove empty value-log domain: %v", err)
+	}
+	db.maintenanceMu.Lock()
+	deleted, pruneErr := db.pruneZeroByteValueLogFiles(nil)
+	db.maintenanceMu.Unlock()
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("restore value-log domain: %v", err)
+	}
+	if pruneErr != nil || deleted != 0 {
+		t.Fatalf("zero-byte apply absent domain: deleted=%d err=%v", deleted, pruneErr)
 	}
 }
 
