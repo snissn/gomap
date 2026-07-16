@@ -57,6 +57,14 @@ func TestValidateBundleRejectsPassingWitnessWithoutDeclaredCutOrArtifacts(t *tes
 	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "missing required artifact kind") {
 		t.Fatalf("ValidateBundle artifact-kind error=%v", err)
 	}
+
+	manifest = testChildManifest("witness-a")
+	for index := range manifest.Witnesses[0].Artifacts {
+		manifest.Witnesses[0].Artifacts[index].Path = "artifacts/one-file-for-every-kind.json"
+	}
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "reuses artifact path") {
+		t.Fatalf("ValidateBundle artifact-path reuse error=%v", err)
+	}
 }
 
 func TestValidateBundleAcceptsZeroBasedFirstCutOccurrence(t *testing.T) {
