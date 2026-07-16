@@ -1,3 +1,4 @@
-# Pinned to shard 0 because this TreeDB/db test dominated the previous
-# line-count shard on Windows and race runs.
+# Pinned to shard 0 because these TreeDB/db tests dominated prior
+# line-count shards on Windows or race runs.
 TestValidateFragmentationReport_EndToEnd
+TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs
