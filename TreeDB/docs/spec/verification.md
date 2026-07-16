@@ -1335,6 +1335,9 @@ value-log auto/off lanes must each report candidate throughput strictly greater
 than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
 a failing gate, including sub-parity results such as `0.80x`; those results may
 be recorded only as failing evidence, not accepted evidence.
+The incompressible value-log lane applies that threshold to the geometric mean
+of every fixed, order-balanced auto/off pair; one favorable sample cannot
+override a mostly failing sample set.
 
 The same strict parity-plus rule applies to every command-WAL acceptance artifact
 with a required performance gate: a passing status must have `>` throughput-gate

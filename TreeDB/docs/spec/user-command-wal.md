@@ -1197,6 +1197,9 @@ Acceptance:
   throughput strictly greater than `1.01x` of the relevant baseline. Any
   required lane at or below `1.01x`, including sub-parity evidence such as
   `0.80x`, is a failing gate rather than accepted evidence.
+- the incompressible value-log lane applies that threshold to the geometric
+  mean of every fixed, order-balanced auto/off pair, so one favorable sample
+  cannot override a mostly failing sample set;
 - all required command-WAL acceptance performance gates use the same strict
   parity-plus policy: passing evidence must include `>` semantics, explicit
   `1.01x` minimum ratio thresholds, and comparative throughput ratios above the
