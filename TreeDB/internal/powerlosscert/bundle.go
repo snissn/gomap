@@ -35,6 +35,7 @@ type operationTraceArtifact struct {
 type imageTreeArtifact struct {
 	SchemaVersion string                  `json:"schema_version"`
 	Kind          string                  `json:"kind"`
+	Directories   []string                `json:"directories"`
 	Files         []imageTreeFileArtifact `json:"files"`
 	TotalBytes    int64                   `json:"total_bytes"`
 }
@@ -376,6 +377,17 @@ func verifyImageTree(root, evidenceDir, manifestID, witnessID string, artifact A
 }
 
 func validateDeclaredImageTree(prefix string, tree imageTreeArtifact) error {
+	priorDirectory := ""
+	for index, directory := range tree.Directories {
+		pathKey := normalizedArtifactPath(directory)
+		if directory == "" || filepath.IsAbs(directory) || pathKey == "." || strings.HasPrefix(pathKey, "../") || pathKey != directory {
+			return fmt.Errorf("%s directory %d has unsafe or non-canonical path %q", prefix, index, directory)
+		}
+		if priorDirectory != "" && directory <= priorDirectory {
+			return fmt.Errorf("%s directories are not strictly sorted at %q", prefix, directory)
+		}
+		priorDirectory = directory
+	}
 	var total int64
 	prior := ""
 	for index, file := range tree.Files {
@@ -420,6 +432,13 @@ func verifyImageDirectory(root, evidenceDir, manifestID, witnessID, kind string,
 			return walkErr
 		}
 		if entry.IsDir() {
+			if path != dir {
+				rel, err := filepath.Rel(dir, path)
+				if err != nil {
+					return err
+				}
+				actual.Directories = append(actual.Directories, filepath.ToSlash(rel))
+			}
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
@@ -444,8 +463,9 @@ func verifyImageDirectory(root, evidenceDir, manifestID, witnessID, kind string,
 	if err != nil {
 		return imageTreeArtifact{}, err
 	}
+	sort.Strings(actual.Directories)
 	sort.Slice(actual.Files, func(i, j int) bool { return actual.Files[i].Path < actual.Files[j].Path })
-	if !reflect.DeepEqual(actual.Files, declared.Files) || actual.TotalBytes != declared.TotalBytes {
+	if !reflect.DeepEqual(actual.Directories, declared.Directories) || !reflect.DeepEqual(actual.Files, declared.Files) || actual.TotalBytes != declared.TotalBytes {
 		return imageTreeArtifact{}, fmt.Errorf("%s contents do not match hashed tree manifest", prefix)
 	}
 	return actual, nil

@@ -38,6 +38,7 @@ type evidenceTrace struct {
 type evidenceTree struct {
 	SchemaVersion string             `json:"schema_version"`
 	Kind          string             `json:"kind"`
+	Directories   []string           `json:"directories"`
 	Files         []evidenceTreeFile `json:"files"`
 	TotalBytes    int64              `json:"total_bytes"`
 }
@@ -216,6 +217,13 @@ func buildEvidenceTree(root, kind string) (evidenceTree, error) {
 			return err
 		}
 		if entry.IsDir() {
+			if path != root {
+				rel, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				tree.Directories = append(tree.Directories, filepath.ToSlash(rel))
+			}
 			return nil
 		}
 		if !entry.Type().IsRegular() {
@@ -240,6 +248,7 @@ func buildEvidenceTree(root, kind string) (evidenceTree, error) {
 	if err != nil {
 		return evidenceTree{}, err
 	}
+	sort.Strings(tree.Directories)
 	sort.Slice(tree.Files, func(i, j int) bool { return tree.Files[i].Path < tree.Files[j].Path })
 	return tree, nil
 }

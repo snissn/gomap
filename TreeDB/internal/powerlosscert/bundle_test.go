@@ -134,6 +134,7 @@ func TestVerifyArtifactsRejectsMalformedOrUnboundModeledArtifacts(t *testing.T) 
 		want  string
 	}{
 		{name: "stable tree schema", kind: ArtifactKindStableImageTree, field: "schema_version", value: "wrong/v1", want: "stable image tree"},
+		{name: "stable tree directory escape", kind: ArtifactKindStableImageTree, field: "directories", value: []string{"../escape"}, want: "unsafe or non-canonical"},
 		{name: "dirty tree totals", kind: ArtifactKindDirtyImageTree, field: "total_bytes", value: 999, want: "dirty image tree"},
 		{name: "metrics cross reference", kind: ArtifactKindMetrics, field: "trace_events", value: 999, want: "does not match"},
 		{name: "recovery input binding", kind: ArtifactKindRecoveryTrace, field: "input_image_tree_sha256", value: strings.Repeat("0", 64), want: "does not identify"},
@@ -171,6 +172,28 @@ func TestVerifyArtifactsRejectsImageBytesThatDoNotMatchTree(t *testing.T) {
 	err := VerifyArtifacts(root, []ChildManifest{manifest})
 	if err == nil || !strings.Contains(err.Error(), "contents do not match") {
 		t.Fatalf("VerifyArtifacts image mismatch error=%v", err)
+	}
+}
+
+func TestVerifyArtifactsRejectsImageDirectoryMismatch(t *testing.T) {
+	for _, imageDir := range []string{"stable-image", "recovery-input"} {
+		t.Run(imageDir, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			unexpected := filepath.Join(root, "artifacts", "witness-a", imageDir, "empty-wal")
+			if err := os.MkdirAll(unexpected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			err := VerifyArtifacts(root, []ChildManifest{manifest})
+			if err == nil || !strings.Contains(err.Error(), "contents do not match") {
+				t.Fatalf("VerifyArtifacts image directory mismatch error=%v", err)
+			}
+		})
 	}
 }
 

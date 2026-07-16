@@ -61,7 +61,8 @@ The evidence directory must be empty. Capture writes:
 
 - `operation_trace.json` with the declared cut and actual observed event count;
 - immutable `stable-image/` and `dirty-image/` trees plus deterministic tree
-  manifests;
+  manifests that bind the complete directory namespace (including empty
+  directories) and every regular file;
 - a separate `recovery-input/` copy so read-write recovery cannot mutate the
   crash-image evidence;
 - `recovery_trace.json` from the normal public open path, bound to the SHA-256
@@ -72,10 +73,11 @@ The evidence directory must be empty. Capture writes:
 Every modeled witness registers those five JSON files and
 `command_log.json` at their canonical names directly below its declared
 `TREEDB_POWERLOSS_EVIDENCE_DIR`. The verifier strictly parses every schema,
-rehashes every file named by both image-tree manifests, rejects extra image
-files and symlinks, cross-checks metrics against the trace and image trees, and
-binds the recovery trace to the immutable stable image. For read-only recovery,
-the preserved `recovery-input/` bytes must still match the stable tree exactly.
+rehashes every file named by both image-tree manifests, compares their exact
+directory sets, rejects extra image paths and symlinks, cross-checks metrics
+against the trace and image trees, and binds the recovery trace to the immutable
+stable image. For read-only recovery, the preserved `recovery-input/` namespace
+and bytes must still match the stable tree exactly.
 
 The command runner owns `command_log.json`. Its versioned JSON envelope records
 the exact repository SHA, test-binary path and SHA-256, package, test name,

@@ -1,6 +1,7 @@
 package powerlossoracle
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,9 @@ import (
 func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(source, "empty-wal"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	model, err := Capture(source)
@@ -59,6 +63,23 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	}
 	if strings.Contains(string(traceData), source) {
 		t.Fatalf("operation trace leaked host-specific source path: %s", traceData)
+	}
+	stableTreeData, err := os.ReadFile(filepath.Join(evidenceDir, "stable_image_tree.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stableTree evidenceTree
+	if err := json.Unmarshal(stableTreeData, &stableTree); err != nil {
+		t.Fatal(err)
+	}
+	if len(stableTree.Directories) != 1 || stableTree.Directories[0] != "empty-wal" {
+		t.Fatalf("stable image directories=%v want [empty-wal]", stableTree.Directories)
+	}
+	for _, image := range []string{"stable-image", "dirty-image", "recovery-input"} {
+		info, err := os.Stat(filepath.Join(evidenceDir, image, "empty-wal"))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("%s empty directory info=%v error=%v", image, info, err)
+		}
 	}
 	if err := session.RecordRecovery(map[string]any{"opened": true}); err != nil {
 		t.Fatal(err)
