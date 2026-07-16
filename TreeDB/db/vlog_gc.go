@@ -174,6 +174,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
 	var referenced map[uint32]struct{}
 	var scannedSeq uint64
+	var recoverableRoots *RecoverableRootSet
 	if !observedOnly {
 		// A full scan is O(N), so it must never run while publishPrepareMu is
 		// exclusively held. Safety invariant: GC never zombifies a segment from a
@@ -195,6 +196,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 
 			db.publishPrepareMu.Lock()
 			if db.currentCommitSeq() == scannedSeq {
+				db.publishPrepareMu.Unlock()
 				break
 			}
 			db.publishPrepareMu.Unlock()
@@ -202,11 +204,32 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				return stats, nil
 			}
 		}
-	} else if !opts.DryRun {
-		db.publishPrepareMu.Lock()
 	}
 	if !opts.DryRun {
+		var err error
+		recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+		if err != nil {
+			return stats, err
+		}
+		defer recoverableRoots.Release()
+		recoverableReferenced, err := db.referencedValueLogSegmentsForRecoverableRootSet(ctx, recoverableRoots)
+		if err != nil {
+			return stats, err
+		}
+		if !observedOnly {
+			if referenced == nil {
+				referenced = make(map[uint32]struct{}, len(recoverableReferenced))
+			}
+			for fileID := range recoverableReferenced {
+				referenced[fileID] = struct{}{}
+			}
+		}
+
+		db.publishPrepareMu.Lock()
 		defer db.publishPrepareMu.Unlock()
+		if !observedOnly && db.currentCommitSeq() != scannedSeq {
+			return stats, ErrRecoverableRootSetStale
+		}
 	}
 
 	// Commit-sequence equality fences published roots, not prepared output. The
@@ -325,6 +348,14 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			stats.SegmentsTotal++
 			stats.BytesTotal += size
 
+			if _, ok := referenced[id]; ok {
+				stats.SegmentsReferenced++
+				stats.BytesReferenced += size
+				stats.ObservedSourceSegmentsReferenced++
+				stats.ObservedSourceBytesReferenced += size
+				continue
+			}
+
 			if _, ok := pendingAppendIDs[id]; ok {
 				stats.SegmentsProtected++
 				stats.BytesProtected += size
@@ -392,14 +423,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				stats.ObservedSourceSegmentsPending++
 				stats.ObservedSourceBytesPending += size
 				continue
-			}
-			// MarkZombie only retires the file from future manager sets. Physical
-			// unlink separately acquires an exact-identity delete lease, so either
-			// durable meta slot, a visible candidate, or a snapshot retaining this
-			// identity keeps the path present for recovery. #3681 will unify logical
-			// eligibility and this physical gate under RecoverableRootSet.
-			if err := vm.MarkZombie(id); err != nil {
-				return stats, err
 			}
 			candidates[id] = candidate{path: f.Path, size: size, observed: true}
 		}
@@ -500,13 +523,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				}
 				continue
 			}
-			// Recovery-selectable durable slots retain exact identity tokens. The
-			// manager therefore cannot unlink this zombie until every older root and
-			// explicit pin releases the matching identity, even when this scan saw a
-			// newer visible root that no longer references the segment.
-			if err := vm.MarkZombie(id); err != nil {
-				return stats, err
-			}
 			candidates[id] = candidate{path: f.Path, size: size, observed: observed}
 		}
 	}
@@ -517,13 +533,41 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		}
 		return stats, nil
 	}
+	if len(candidates) > 0 {
+		// Consume the exact recovery authority only after classification is
+		// complete. publishPrepareMu remains held, so no new visible root can make
+		// one of these segments reachable between the final validation and zombie
+		// mutation. Keep the capability pinned through manager-topology publication:
+		// rewritten sources referenced only by an older recoverable root leave the
+		// current ValueLogSet immediately, while their exact physical identities
+		// remain unlink-protected until that recovery authority is retired.
+		if err := recoverableRoots.Revalidate(); err != nil {
+			return stats, err
+		}
+		for id := range candidates {
+			if err := vm.MarkZombie(id); err != nil {
+				return stats, err
+			}
+		}
+		if err := db.publishValueLogSetNoRefresh(); err != nil {
+			return stats, err
+		}
+		// The new current topology no longer selects these files. Persistent
+		// durable-root resource tokens and snapshot ValueLogSets now own any
+		// required physical retention, so the capability's cloned pins can drop
+		// before releasing this operation's local manager set.
+		recoverableRoots.Release()
+	}
 
 	if set != nil {
 		_ = vm.Release(set)
+		set = nil
 	}
 
-	if err := db.publishValueLogSetNoRefresh(); err != nil {
-		return stats, err
+	if len(candidates) == 0 {
+		if err := db.publishValueLogSetNoRefresh(); err != nil {
+			return stats, err
+		}
 	}
 
 	for _, info := range candidates {

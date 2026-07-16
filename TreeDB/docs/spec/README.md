@@ -114,6 +114,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - generated issue #3677 authority map for external resource fields, producers,
     identity/frontier evidence, namespace operations, recovery validation,
     deletion ownership, quarantines, and adjacent issue boundaries.
+- `TreeDB/docs/spec/recoverable-root-set-maintenance-3681.md`
+  - issue #3681 destructive-maintenance authority, checked call-site inventory,
+    stale-plan behavior, adjacent-issue boundaries, and convergence contract.
 - `TreeDB/docs/spec/recovery.md`
   - open-time recovery pipeline, replay ordering, truncated tail behavior, failure modes.
 - `TreeDB/docs/spec/user-command-wal.md`

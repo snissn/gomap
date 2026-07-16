@@ -1609,6 +1609,21 @@ func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []s
 }
 
 func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
+	recoverableRoots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	defer recoverableRoots.Release()
+	db.publishPrepareMu.Lock()
+	defer db.publishPrepareMu.Unlock()
+	if err := recoverableRoots.Revalidate(); err != nil {
+		return 0, err
+	}
+	// No root publication can advance while publishPrepareMu is held. Consume
+	// the capability so exact topology pins do not themselves prevent removal
+	// of a zero-byte file proven outside every recoverable root.
+	recoverableRoots.Release()
+
 	layout := resolveStorageLayout(db.dir)
 	entries, err := os.ReadDir(layout.valueVLogDir)
 	if err != nil {

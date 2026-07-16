@@ -354,6 +354,20 @@ func requireLeafGenerationGCResult(t *testing.T, done <-chan leafGenerationGCTes
 	return LeafGenerationGCStats{}
 }
 
+func requireLeafGenerationGCResultAllowRecoverableStale(t *testing.T, done <-chan leafGenerationGCTestResult) LeafGenerationGCStats {
+	t.Helper()
+	select {
+	case result := <-done:
+		if result.err != nil && !errors.Is(result.err, ErrRecoverableRootSetStale) {
+			t.Fatalf("LeafGenerationGC: %v", result.err)
+		}
+		return result.stats
+	case <-time.After(5 * time.Second):
+		t.Fatal("LeafGenerationGC did not finish after releasing live scan")
+	}
+	return LeafGenerationGCStats{}
+}
+
 func TestLeafGenerationView_SkipsRetiringAndDeletedGenerations(t *testing.T) {
 	manifest := &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
@@ -402,7 +416,7 @@ func TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite(t *testing.T) {
 	releaseScan, done := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{})
 	requireLeafGenerationForegroundSetCompletes(t, db, "scan-concurrent")
 	releaseScan()
-	_ = requireLeafGenerationGCResult(t, done)
+	_ = requireLeafGenerationGCResultAllowRecoverableStale(t, done)
 
 	got, err := db.Get([]byte("scan-concurrent"))
 	if err != nil {
@@ -437,7 +451,7 @@ func TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite(t *testing.T) {
 	requireLeafGenerationOperationCompletes(t, "Checkpoint while live scan paused", checkpointDone)
 	requireLeafGenerationOperationCompletes(t, "SetSync queued after Checkpoint", setDone)
 	releaseScan()
-	_ = requireLeafGenerationGCResult(t, gcDone)
+	_ = requireLeafGenerationGCResultAllowRecoverableStale(t, gcDone)
 
 	got, err := db.Get([]byte("checkpoint-scan-concurrent"))
 	if err != nil {
@@ -511,7 +525,7 @@ func TestLeafGenerationGC_RevalidationFailureSkipsStalePublish(t *testing.T) {
 		t.Fatalf("concurrent write did not advance CommitSeq: before=%+v after=%+v", before, afterWrite)
 	}
 	releaseScan()
-	stats := requireLeafGenerationGCResult(t, done)
+	stats := requireLeafGenerationGCResultAllowRecoverableStale(t, done)
 	if stats.GenerationsDeleted != 0 || stats.FilesDeleted != 0 {
 		t.Fatalf("stale scan applied deletion: stats=%+v", stats)
 	}
@@ -1381,6 +1395,10 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 		closeNoErr(t, snap)
 		t.Fatalf("pin count after republish=%d, want %d", got, want)
 	}
+	// Rotate both durable slots past the old generation so this assertion
+	// isolates the user snapshot pin rather than the independently recoverable
+	// fallback meta root now included by RecoverableRootSet.
+	advancePastRetainedDurableSlotForTest(t, db)
 
 	stats1, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
@@ -1421,7 +1439,6 @@ func TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses(t *testing.
 		t.Fatalf("pin count after close=%d, want 0", got)
 	}
 
-	advancePastRetainedDurableSlotForTest(t, db)
 	stats2, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC after close: %v", err)

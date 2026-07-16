@@ -745,7 +745,6 @@ func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
 }
 
 func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *testing.T) {
-	t.Skip("deferred to #3681: destructive column-asset GC requires RecoverableRootSet convergence")
 	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
