@@ -452,6 +452,9 @@ func TestColumnVectorGraphSearchSourceAllocationFreeAfterWarmup1968(t *testing.T
 	if _, err := plan.scoreSource.scoreOrdinalsScalar(plan, nil, query, queryInvNorm, ordinals, scores, scratch, &warmStats); err != nil {
 		t.Fatalf("warm score tile: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
 	var runErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		var stats columnVectorGraphNativeSearchStats
