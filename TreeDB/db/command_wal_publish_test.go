@@ -1970,10 +1970,55 @@ func TestCommandWALCheckpointScanDoesNotRemoveCoveredSegment(t *testing.T) {
 	}
 }
 
-func TestCommandWALCheckpointCleanupRejectsFilenameReuse(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows does not permit rebinding a retained open file")
+func TestCommandWALCleanupClosesScanHandleBeforeUnlink(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("scanCommandWALSegmentsCoveredByAppliedLSN: %v", err)
 	}
+	defer closeCommandWALCleanupDecisions(decisions)
+	target := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
+	foundOpenScanHandle := false
+	for i := range decisions {
+		if filepath.Clean(decisions[i].Path) == filepath.Clean(target) {
+			foundOpenScanHandle = decisions[i].file != nil
+		}
+	}
+	if !foundOpenScanHandle {
+		t.Fatal("covered segment scan did not retain its discovery handle")
+	}
+
+	sawBeforeUnlink := false
+	restoreObserver := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.BeforeWALOrAssetUnlink || filepath.Clean(event.Path) != filepath.Clean(target) {
+			return nil
+		}
+		sawBeforeUnlink = true
+		for i := range decisions {
+			if filepath.Clean(decisions[i].Path) == filepath.Clean(target) && decisions[i].file != nil {
+				return errors.New("command WAL scan handle remained open before unlink")
+			}
+		}
+		return nil
+	})
+	defer restoreObserver()
+
+	decisions, err = removeCoveredCommandWALSegments(decisions)
+	if err != nil {
+		t.Fatalf("removeCoveredCommandWALSegments: %v", err)
+	}
+	if !sawBeforeUnlink {
+		t.Fatal("cleanup did not reach the pre-unlink boundary")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat after removal=%v, want removed", err)
+	}
+}
+
+func TestCommandWALCheckpointCleanupRejectsFilenameReuse(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
 	writeCommandWALFrame(t, dir, 2, 2)

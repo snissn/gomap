@@ -690,6 +690,28 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		}
 		leases = append(leases, cleanupLease{decision: i, lease: lease})
 	}
+	// The scan handles keep the discovered physical objects alive while every
+	// deletion lease is acquired. Close those handles before the final pathname
+	// revalidation and unlink: Windows forbids removing an otherwise-closed WAL
+	// segment while our own scan handle remains open. Closing the handle here is
+	// safe because the next loop reopens the pathname and compares its physical
+	// identity immediately before each namespace mutation.
+	for _, entry := range leases {
+		decision := &decisions[entry.decision]
+		file := decision.file
+		decision.file = nil
+		if file == nil {
+			err := errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup target lost scan handle: %s", filepath.Base(decision.Path)))
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, err
+		}
+		if err := file.Close(); err != nil {
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, err
+		}
+	}
 	for leaseIndex := range leases {
 		entry := &leases[leaseIndex]
 		decision := &decisions[entry.decision]
