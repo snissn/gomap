@@ -91,6 +91,80 @@ func TestCompactStorageConcurrentChildDeletionIsAbsentFromUsageSnapshot(t *testi
 	}
 }
 
+type compactStorageInfoErrorDirEntry struct {
+	name string
+	err  error
+}
+
+func (entry compactStorageInfoErrorDirEntry) Name() string               { return entry.name }
+func (entry compactStorageInfoErrorDirEntry) IsDir() bool                { return false }
+func (entry compactStorageInfoErrorDirEntry) Type() os.FileMode          { return 0 }
+func (entry compactStorageInfoErrorDirEntry) Info() (os.FileInfo, error) { return nil, entry.err }
+
+func TestZeroByteValueLogScansIgnoreCompletedPostEnumerationDeletion(t *testing.T) {
+	dir := t.TempDir()
+	name := "value-l0-000001.log"
+	path := filepath.Join(dir, name)
+	entries := []os.DirEntry{compactStorageInfoErrorDirEntry{
+		name: name,
+		err:  &os.PathError{Op: "lstat", Path: path, Err: os.ErrNotExist},
+	}}
+
+	t.Run("plan", func(t *testing.T) {
+		count, err := zeroByteValueLogSegmentFilesFromEntries(dir, entries, nil, nil)
+		if err != nil {
+			t.Fatalf("zero-byte plan scan: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("zero-byte plan count=%d want 0", count)
+		}
+	})
+
+	t.Run("apply", func(t *testing.T) {
+		db := &DB{}
+		deleted, err := db.pruneZeroByteValueLogFilesFromEntries(dir, entries, nil)
+		if err != nil {
+			t.Fatalf("zero-byte apply scan: %v", err)
+		}
+		if deleted != 0 {
+			t.Fatalf("zero-byte apply deleted=%d want 0", deleted)
+		}
+	})
+}
+
+func TestZeroByteValueLogScansReturnPostEnumerationInfoErrors(t *testing.T) {
+	dir := t.TempDir()
+	wantErr := &os.PathError{
+		Op:   "lstat",
+		Path: filepath.Join(dir, "value-l0-000001.log"),
+		Err:  os.ErrPermission,
+	}
+	entries := []os.DirEntry{compactStorageInfoErrorDirEntry{
+		name: "value-l0-000001.log",
+		err:  wantErr,
+	}}
+
+	if _, err := zeroByteValueLogSegmentFilesFromEntries(dir, entries, nil, nil); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("zero-byte plan scan error=%v want permission", err)
+	}
+	db := &DB{}
+	if _, err := db.pruneZeroByteValueLogFilesFromEntries(dir, entries, nil); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("zero-byte apply scan error=%v want permission", err)
+	}
+}
+
+func TestZeroByteValueLogScansTreatAbsentDomainAsEmpty(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	if count, err := zeroByteValueLogSegmentFiles(missing, nil, nil); err != nil || count != 0 {
+		t.Fatalf("zero-byte plan absent domain: count=%d err=%v", count, err)
+	}
+	db := &DB{dir: filepath.Join(root, "missing-db")}
+	if deleted, err := db.pruneZeroByteValueLogFiles(nil); err != nil || deleted != 0 {
+		t.Fatalf("zero-byte apply absent domain: deleted=%d err=%v", deleted, err)
+	}
+}
+
 func TestCompactStorageDeletesZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{

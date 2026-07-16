@@ -1617,6 +1617,10 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		return 0, err
 	}
+	return db.pruneZeroByteValueLogFilesFromEntries(layout.valueVLogDir, entries, protectedPaths)
+}
+
+func (db *DB) pruneZeroByteValueLogFilesFromEntries(valueVLogDir string, entries []os.DirEntry, protectedPaths []string) (int, error) {
 	currentPaths, currentIDs := db.currentValueLogProtectedRefs()
 	protectedPaths = mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
 	protected := compactStorageProtectedPathSet(protectedPaths)
@@ -1630,7 +1634,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		if !compactStorageIsValueLogSegmentName(name) {
 			continue
 		}
-		path := filepath.Join(layout.valueVLogDir, name)
+		path := filepath.Join(valueVLogDir, name)
 		if _, ok := protected[filepath.Clean(path)]; ok {
 			continue
 		}
@@ -1641,6 +1645,9 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(valueVLogDir, path, err) {
+				continue
+			}
 			return deleted, err
 		}
 		if info.Size() != 0 {
@@ -1679,7 +1686,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 				}
 			}
 		}
-		removed, err := removePersistentFile(layout.valueVLogDir, path, durabilitycut.ResourceValueLog)
+		removed, err := removePersistentFile(valueVLogDir, path, durabilitycut.ResourceValueLog)
 		if err != nil {
 			if compactStorageIsBusyRemoveError(err) {
 				continue
@@ -1730,6 +1737,10 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protected
 		}
 		return 0, err
 	}
+	return zeroByteValueLogSegmentFilesFromEntries(dir, entries, protectedPaths, protectedFileIDs)
+}
+
+func zeroByteValueLogSegmentFilesFromEntries(dir string, entries []os.DirEntry, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
 	protected := compactStorageProtectedPathSet(protectedPaths)
 	protectedIDs := compactStorageProtectedFileIDSet(protectedPaths, protectedFileIDs)
 	count := 0
@@ -1749,6 +1760,9 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protected
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(dir, path, err) {
+				continue
+			}
 			return 0, err
 		}
 		if info.Size() == 0 {
