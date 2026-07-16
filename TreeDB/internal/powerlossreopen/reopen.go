@@ -3,8 +3,10 @@
 package powerlossreopen
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -30,7 +32,26 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 	if err != nil {
 		return Result{}, nil, nil, err
 	}
-	cleanup := func() error { return os.RemoveAll(dir) }
+	return stableAt(dir, model, opts, readOnly, true)
+}
+
+// StableAt materializes the stable-only crash image at a caller-owned path and
+// reopens it through the normal public API. The close callback releases the DB
+// and modeled identity scope but deliberately preserves dir for evidence.
+func StableAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
+	if err := requireEmptyDestination(dir); err != nil {
+		return Result{}, nil, nil, err
+	}
+	return stableAt(dir, model, opts, readOnly, false)
+}
+
+func stableAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
+	cleanup := func() error {
+		if removeOnClose {
+			return os.RemoveAll(dir)
+		}
+		return nil
+	}
 	if err := model.MaterializeStable(dir); err != nil {
 		_ = cleanup()
 		return Result{}, nil, nil, err
@@ -67,4 +88,25 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		return result, nil, nil, fmt.Errorf("powerlossreopen: public Open returned nil DB and nil error")
 	}
 	return result, db, closeFn, nil
+}
+
+func requireEmptyDestination(dir string) error {
+	if !filepath.IsAbs(dir) {
+		absolute, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("powerlossreopen: resolve destination %q: %w", dir, err)
+		}
+		dir = absolute
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("powerlossreopen: inspect destination %q: %w", dir, err)
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("powerlossreopen: destination %q is not empty", dir)
+	}
+	return nil
 }

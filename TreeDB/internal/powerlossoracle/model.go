@@ -716,40 +716,55 @@ func (m *Model) Crash() {
 // MaterializeStable writes only stable bytes reachable through stable names.
 // The result never contains process-volatile bytes.
 func (m *Model) MaterializeStable(root string) error {
+	return m.materialize(root, m.stableDirs, m.stable, func(node *inode) []byte { return node.stable }, "stable")
+}
+
+// MaterializeVolatile writes the process-visible namespace and bytes at the
+// modeled cut. It is evidence of the dirty pre-crash image and must never be
+// used as the recovery input.
+func (m *Model) MaterializeVolatile(root string) error {
+	return m.materialize(root, m.volatileDirs, m.volatile, func(node *inode) []byte { return node.volatile }, "volatile")
+}
+
+func (m *Model) materialize(root string, dirs map[string]rootpublication.StableIdentity, files map[string]uint64, bytesFor func(*inode) []byte, label string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	dirs := keys(m.stableDirs)
-	sort.Slice(dirs, func(i, j int) bool {
-		di, dj := strings.Count(dirs[i], "/"), strings.Count(dirs[j], "/")
+	dirPaths := keys(dirs)
+	sort.Slice(dirPaths, func(i, j int) bool {
+		di, dj := strings.Count(dirPaths[i], "/"), strings.Count(dirPaths[j], "/")
 		if di == dj {
-			return dirs[i] < dirs[j]
+			return dirPaths[i] < dirPaths[j]
 		}
 		return di < dj
 	})
-	for _, dir := range dirs {
+	for _, dir := range dirPaths {
 		if dir == "." {
 			continue
 		}
 		parent := cleanInternal(pathpkg.Dir(dir))
-		if _, ok := m.stableDirs[parent]; !ok {
-			return fmt.Errorf("powerlossoracle: stable directory %q has unstable parent %q", dir, parent)
+		if _, ok := dirs[parent]; !ok {
+			return fmt.Errorf("powerlossoracle: %s directory %q has missing parent %q", label, dir, parent)
 		}
 		if err := os.Mkdir(filepath.Join(root, filepath.FromSlash(dir)), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
 	}
-	paths := make([]string, 0, len(m.stable))
-	for path := range m.stable {
+	paths := make([]string, 0, len(files))
+	for path := range files {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
 		parent := cleanInternal(pathpkg.Dir(path))
-		if _, ok := m.stableDirs[parent]; !ok {
-			return fmt.Errorf("powerlossoracle: stable file %q has unstable parent %q", path, parent)
+		if _, ok := dirs[parent]; !ok {
+			return fmt.Errorf("powerlossoracle: %s file %q has missing parent %q", label, path, parent)
 		}
-		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(path)), m.inodes[m.stable[path]].stable, 0o644); err != nil {
+		node := m.inodes[files[path]]
+		if node == nil {
+			return fmt.Errorf("powerlossoracle: %s file %q references missing inode", label, path)
+		}
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(path)), bytesFor(node), 0o644); err != nil {
 			return err
 		}
 	}
