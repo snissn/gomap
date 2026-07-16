@@ -21,6 +21,13 @@ sys.modules[SPEC.name] = CHECKER
 SPEC.loader.exec_module(CHECKER)
 
 
+SYNTHETIC_RUNS = 8
+SYNTHETIC_NS_PER_OP = 100.0
+SYNTHETIC_BASE_BYTES_PER_OP = 10000.0
+SYNTHETIC_FAILED_BYTES_PER_OP = 10065.0
+SYNTHETIC_ALLOCS_PER_OP = 2.0
+
+
 class RawPathEquivalenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -33,17 +40,28 @@ class RawPathEquivalenceTests(unittest.TestCase):
         self, failed_benchmarks: set[str]
     ) -> list[dict[str, object]]:
         baseline = {
-            benchmark: [CHECKER.Sample(100.0, 10000.0, 2.0) for _ in range(8)]
+            benchmark: [
+                CHECKER.Sample(
+                    SYNTHETIC_NS_PER_OP,
+                    SYNTHETIC_BASE_BYTES_PER_OP,
+                    SYNTHETIC_ALLOCS_PER_OP,
+                )
+                for _ in range(SYNTHETIC_RUNS)
+            ]
             for benchmark in CHECKER.BENCHMARKS
         }
         candidate = {
             benchmark: [
                 CHECKER.Sample(
-                    100.0,
-                    10065.0 if benchmark in failed_benchmarks else 10000.0,
-                    2.0,
+                    SYNTHETIC_NS_PER_OP,
+                    (
+                        SYNTHETIC_FAILED_BYTES_PER_OP
+                        if benchmark in failed_benchmarks
+                        else SYNTHETIC_BASE_BYTES_PER_OP
+                    ),
+                    SYNTHETIC_ALLOCS_PER_OP,
                 )
-                for _ in range(8)
+                for _ in range(SYNTHETIC_RUNS)
             ]
             for benchmark in CHECKER.BENCHMARKS
         }
@@ -56,12 +74,17 @@ class RawPathEquivalenceTests(unittest.TestCase):
     @staticmethod
     def log_with_byte_regressions(failed_benchmarks: set[str]) -> str:
         lines: list[str] = []
-        for _ in range(8):
+        for _ in range(SYNTHETIC_RUNS):
             for benchmark in CHECKER.BENCHMARKS:
-                bytes_per_op = 10065.0 if benchmark in failed_benchmarks else 10000.0
+                bytes_per_op = (
+                    SYNTHETIC_FAILED_BYTES_PER_OP
+                    if benchmark in failed_benchmarks
+                    else SYNTHETIC_BASE_BYTES_PER_OP
+                )
                 lines.append(
-                    f"{benchmark}-1 1000 100.000 ns/op "
-                    f"{bytes_per_op:.3f} B/op 2.000 allocs/op"
+                    f"{benchmark}-1 1000 {SYNTHETIC_NS_PER_OP:.3f} ns/op "
+                    f"{bytes_per_op:.3f} B/op "
+                    f"{SYNTHETIC_ALLOCS_PER_OP:.3f} allocs/op"
                 )
         return "\n".join(lines) + "\n"
 

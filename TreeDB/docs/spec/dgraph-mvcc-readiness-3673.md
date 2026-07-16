@@ -133,16 +133,19 @@ The point-read and batch-write rows use separate invocations so one row cannot
 delay the base/head pair for the other. Eight samples provide exactly four AB
 and four BA pairs; odd sample counts are rejected. The gate rejects a median
 paired candidate/base timing regression over 5%, any allocation increase, or a material `B/op`
-increase. A distinct `EQUIVALENT` acceptance is available only when the checker
-hashes all six actual test-binary paths and every row-producing base/head pair
-matches (`db`, `caching`, and `treedb`). `EQUIVALENT` preserves the measured
-PASS/FAIL base/head medians and paired timing deltas but states that no observed difference can be
-attributed to the candidate code; mixed, missing, or malformed binary evidence
-fails closed and cannot produce equivalence acceptance.
-The verdict truth table is `PASS` for a passing measurement, `EQUIVALENT` only
-for a failed measurement with all row binaries matching, and `FAIL` otherwise.
-Machine-readable `no_attributable_regression` is true exactly when the verdict
-is accepted (`PASS` or `EQUIVALENT`).
+increase. The checker hashes all six actual test-binary paths and attributes
+each row to its owning `db`, `caching`, or `treedb` base/head binary pair.
+Raw PASS/FAIL medians and paired timing deltas remain reported for every row.
+A failed row with a byte-identical owning binary is reported as
+non-attributable (`EQUIVALENT` at row level); a row whose owning binary changed
+remains threshold-enforced. Mixed binary evidence may produce aggregate
+`EQUIVALENT` only when every changed-owning-binary row passes. Missing,
+malformed, duplicated, or mismatched binary evidence fails closed and cannot
+produce equivalence acceptance.
+The aggregate verdict is `PASS` when all measurements pass, `EQUIVALENT` when
+only equivalent-owning-binary rows fail, and `FAIL` when any changed-owning
+binary row fails. Machine-readable `no_attributable_regression` is true exactly
+when the verdict is accepted (`PASS` or `EQUIVALENT`).
 
 `scripts/mvcc_adapter_overhead_gate.sh` separately compares public MVCC commit,
 get, and all-version iteration rows with their direct TreeDB/physical controls.
