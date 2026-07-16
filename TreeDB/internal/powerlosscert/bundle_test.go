@@ -51,7 +51,7 @@ func TestVerifyArtifactsChecksContentAndRejectsEscapes(t *testing.T) {
 	}
 
 	manifest = testChildManifest("witness-a")
-	manifest.Witnesses[0].Artifacts[0].Path = "../escape"
+	manifest.TestBinaries[0].Path = "../escape"
 	if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "unsafe path") {
 		t.Fatalf("VerifyArtifacts escape error=%v", err)
 	}
