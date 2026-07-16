@@ -692,11 +692,24 @@ jobs:
           # #1529 intentionally makes this a strict parity-plus gate. The
           # geometric mean of every balanced pair must exceed 1.01x; one lucky
           # sample cannot override a mostly failing sample set.
+          summary_log="vlog_auto_incompressible_summary.txt"
+          set +e
           go run .github/scripts/check_vlog_auto_incompressible.go \
             "${checker_args[@]}" \
             -min-samples "${sample_count}" \
             -min-throughput-frac 1.01 \
-            -max-size-frac 1.02
+            -max-size-frac 1.02 \
+            2>&1 | tee "${summary_log}"
+          checker_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "## Incompressible value-log aggregate"
+            echo '```text'
+            cat "${summary_log}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${checker_status}"
 
       - name: Upload value-log performance evidence
         if: always()
@@ -705,6 +718,7 @@ jobs:
           name: vlog-perf-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             vlog_dict_bench.txt
+            vlog_auto_incompressible_summary.txt
             vlog_auto_incompressible_off_sample*.txt
             vlog_auto_incompressible_auto_sample*.txt
           if-no-files-found: warn
