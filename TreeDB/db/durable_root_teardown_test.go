@@ -178,6 +178,19 @@ func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 			}
 			closeDone := make(chan error, 1)
 			go func() { closeDone <- database.Close() }()
+			// Wait until Close is queued on (or owns) the exclusive teardown
+			// gate. With the required shutdown ordering, the prepared publisher's
+			// read lease keeps the coordinator alive until releasePublish. Without
+			// that ordering, Close stops the coordinator before it reaches this
+			// same gate and the subsequent enqueue fails deterministically.
+			deadline := time.Now().Add(5 * time.Second)
+			for database.teardownMu.TryRLock() {
+				database.teardownMu.RUnlock()
+				if time.Now().After(deadline) {
+					t.Fatal("Close did not reach the teardown gate")
+				}
+				time.Sleep(time.Millisecond)
+			}
 			close(releasePublish)
 			if err := <-publishDone; err != nil {
 				t.Fatalf("publication: %v", err)

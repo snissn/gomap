@@ -2665,6 +2665,14 @@ func (db *DB) closeAfterHooks() error {
 	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
 
+	// A root producer releases writeMu after transferring its immutable build to
+	// the durable publisher, but it keeps teardownMu for reading until enqueue,
+	// admission, and ordered post-work have completed. Cross the teardown gate
+	// before stopping the coordinator so Close cannot strand such an admitted
+	// producer between build handoff and enqueue. Release the gate before taking
+	// maintenanceMu below: a closing dry-run maintenance caller may already hold
+	// maintenanceMu while waiting to observe the teardown barrier.
+	db.teardownMu.Lock()
 	var (
 		rootRuntime *rootPublicationRuntimeV1
 		rootHandoff *rootpublication.RecoveryResourceHandoff
@@ -2683,6 +2691,7 @@ func (db *DB) closeAfterHooks() error {
 		}
 		db.rootPublication = nil
 	}
+	db.teardownMu.Unlock()
 
 	// No stable root I/O can begin beyond this point. Maintenance and teardown
 	// may now close producer resources and the index without racing Publisher.
