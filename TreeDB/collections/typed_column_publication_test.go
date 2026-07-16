@@ -1612,7 +1612,6 @@ func TestTypedColumnMultipartPartSetRefsRetainedDuringGC1787(t *testing.T) {
 }
 
 func TestTypedColumnMultipartPartSetRefsRewriteAndGCSafe1787(t *testing.T) {
-	t.Skip("deferred to #3681: destructive typed-column asset cleanup requires RecoverableRootSet convergence")
 	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	dir := d.Dir()
@@ -1669,6 +1668,9 @@ func TestTypedColumnMultipartPartSetRefsRewriteAndGCSafe1787(t *testing.T) {
 	// longer retains the pre-rewrite column-asset closure.
 	if _, err := NewCollectionManager(reopened).CreateCollection(&CollectionMeta{Name: "slot_rollover"}); err != nil {
 		t.Fatalf("CreateCollection slot rollover after multipart rewrite: %v", err)
+	}
+	if err := reopened.Checkpoint(); err != nil {
+		t.Fatalf("wait durable slot rollover after multipart rewrite: %v", err)
 	}
 	gcStats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
@@ -1835,7 +1837,6 @@ func TestTypedColumnSnapshotReadsOldRefsAfterDelete(t *testing.T) {
 }
 
 func TestTypedColumnPublicationColumnAssetRewriteRoundTrip(t *testing.T) {
-	t.Skip("deferred to #3681: destructive typed-column asset cleanup requires RecoverableRootSet convergence")
 	runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t)
 }
 
@@ -1844,7 +1845,6 @@ func TestTypedColumnColumnAssetRewriteRoundTripMixedRefs(t *testing.T) {
 }
 
 func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
-	t.Skip("deferred to #3681: destructive typed-column asset cleanup requires RecoverableRootSet convergence")
 	requireColumnAssetExactDestructiveGCTest(t)
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	dir := d.Dir()
@@ -1911,6 +1911,9 @@ func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
 	// longer retains the pre-rewrite column-asset closure.
 	if _, err := NewCollectionManager(reopened).CreateCollection(&CollectionMeta{Name: "slot_rollover"}); err != nil {
 		t.Fatalf("CreateCollection slot rollover after rewrite: %v", err)
+	}
+	if err := reopened.Checkpoint(); err != nil {
+		t.Fatalf("wait durable slot rollover after rewrite: %v", err)
 	}
 	gcStats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
