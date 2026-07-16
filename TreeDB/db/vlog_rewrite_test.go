@@ -2122,11 +2122,12 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 	if err != nil {
 		t.Fatalf("ValueLogGC without active reclaim: %v", err)
 	}
-	if activeStats.ObservedSourceSegmentsActive != 1 || activeStats.ObservedSourceSegmentsDeleted != 0 {
-		t.Fatalf("observed active source should remain without reclaim option: %+v", activeStats)
+	if activeStats.ObservedSourceSegmentsDeleted != 0 ||
+		activeStats.ObservedSourceSegmentsReferenced+activeStats.ObservedSourceSegmentsActive != 1 {
+		t.Fatalf("observed source should remain while active or recoverable: %+v", activeStats)
 	}
 	if _, err := os.Stat(sourcePath); err != nil {
-		t.Fatalf("active source should remain without reclaim option, stat=%v", err)
+		t.Fatalf("active or recoverable source should remain without reclaim option, stat=%v", err)
 	}
 
 	advancePastRetainedDurableSlotForTest(t, db)
@@ -4652,8 +4653,31 @@ func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	if state == nil || state.ValueLogSet == nil {
 		t.Fatalf("db state missing ValueLogSet after rewrite")
 	}
+	if _, ok := state.ValueLogSet.Files[oldID]; !ok {
+		t.Fatalf("old segment %d missing while an older durable root can still select it", oldID)
+	}
+
+	advancePastRetainedDurableSlotForTest(t, db)
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{oldID},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	}); err != nil {
+		t.Fatalf("ValueLogGC after durable-slot advance: %v", err)
+	}
+	state = db.State()
+	if state == nil || state.ValueLogSet == nil {
+		t.Fatalf("db state missing ValueLogSet after source retirement")
+	}
 	if _, ok := state.ValueLogSet.Files[oldID]; ok {
-		t.Fatalf("old segment %d still visible in current state after rewrite", oldID)
+		t.Fatalf("old segment %d still visible after every recoverable root released it", oldID)
+	}
+	gotSnap, err = snap.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("snapshot get k2 after source retirement: %v", err)
+	}
+	if !bytes.Equal(gotSnap, bytes.Repeat([]byte{11}, 512)) {
+		t.Fatalf("snapshot value mismatch after source retirement")
 	}
 }
 

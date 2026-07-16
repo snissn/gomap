@@ -655,6 +655,40 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return result.valueLogRefCounts, commitSeq, nil
 }
 
+func (db *DB) referencedValueLogSegmentsForRecoverableRootSet(ctx context.Context, roots *RecoverableRootSet) (map[uint32]struct{}, error) {
+	if roots == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	captured := roots.Roots()
+	if len(captured) == 0 {
+		return nil, ErrRecoverableRootSetStale
+	}
+	snap := roots.AcquireSnapshotForRoot(captured[0])
+	if snap == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	protectedRootIDs := make([]uint64, 0, len(captured))
+	protectedSystemRootIDs := make([]uint64, 0, len(captured))
+	for _, root := range captured {
+		protectedRootIDs = append(protectedRootIDs, root.UserRootPageID)
+		protectedSystemRootIDs = append(protectedSystemRootIDs, root.SystemRootPageID)
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:               maintenanceReachabilityValueLogRefCounts,
+		ProtectedRootIDs:         protectedRootIDs,
+		ProtectedSystemRootIDs:   protectedSystemRootIDs,
+		ProjectProtectedValueLog: true,
+	})
+	closeErr := snap.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return result.valueLogReferencedSegments, nil
+}
+
 func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iterator.UnsafeIterator {
 	opts := tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}
 	if snap != nil && root.kind == maintenanceRootUser && root.rootID == snap.treeRoot {

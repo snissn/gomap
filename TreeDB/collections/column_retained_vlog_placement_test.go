@@ -54,7 +54,6 @@ func TestColumnRetainedPayloadValueLogPlacementReopen(t *testing.T) {
 }
 
 func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
-	t.Skip("deferred to #3681: destructive value-log GC requires RecoverableRootSet convergence")
 	dir := t.TempDir()
 	enableColumnRetainedPlacementCommandWAL(t, dir)
 
@@ -98,11 +97,19 @@ func TestColumnRetainedPayloadValueLogPlacementGCRewrite(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("Delete doc-a: %v", err)
 	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("settle deletion before durable slot rollover: %v", err)
+	}
 	// Advance the alternate durable slot so neither selectable closure retains
 	// doc-a's value-log segment before destructive GC.
 	if _, err := col.InsertBatch([][]byte{[]byte("doc-d")}, [][]byte{retainedPlacementDocument("slot-rollover", 4)}); err != nil {
 		_ = d.Close()
 		t.Fatalf("InsertBatch doc-d slot rollover: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("wait durable doc-d slot rollover: %v", err)
 	}
 
 	gcStats, err := d.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
