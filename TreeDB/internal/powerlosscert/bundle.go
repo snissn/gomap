@@ -78,6 +78,7 @@ type commandLogArtifact struct {
 	TestName      string            `json:"test_name"`
 	Args          []string          `json:"args"`
 	Env           map[string]string `json:"env"`
+	Outcome       string            `json:"outcome"`
 	Completed     bool              `json:"completed"`
 	ExitCode      int               `json:"exit_code"`
 	Stdout        string            `json:"stdout"`
@@ -104,9 +105,13 @@ func LoadBundle(root string) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, fmt.Errorf("powerlosscert: resolve bundle root: %w", err)
 	}
-	inventoryData, err := os.ReadFile(filepath.Join(root, "risk_inventory.json"))
+	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return Bundle{}, fmt.Errorf("powerlosscert: read risk inventory: %w", err)
+		return Bundle{}, fmt.Errorf("powerlosscert: resolve bundle root symlinks: %w", err)
+	}
+	inventoryData, err := readBundleMetadata(root, realRoot, filepath.Join(root, "risk_inventory.json"), "risk inventory")
+	if err != nil {
+		return Bundle{}, err
 	}
 	inventory, err := ParseRiskInventory(inventoryData)
 	if err != nil {
@@ -121,9 +126,9 @@ func LoadBundle(root string) (Bundle, error) {
 	}
 	manifests := make([]ChildManifest, 0, len(paths))
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := readBundleMetadata(root, realRoot, path, fmt.Sprintf("child manifest %q", path))
 		if err != nil {
-			return Bundle{}, fmt.Errorf("powerlosscert: read child manifest %q: %w", path, err)
+			return Bundle{}, err
 		}
 		manifest, err := ParseChildManifest(data)
 		if err != nil {
@@ -138,6 +143,34 @@ func LoadBundle(root string) (Bundle, error) {
 		return manifests[i].ManifestID < manifests[j].ManifestID
 	})
 	return Bundle{Root: root, Inventory: inventory, Manifests: manifests}, nil
+}
+
+func readBundleMetadata(root, realRoot, path, label string) ([]byte, error) {
+	if !pathWithin(root, path) {
+		return nil, fmt.Errorf("powerlosscert: %s has unsafe path %q", label, path)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("powerlosscert: read %s: %w", label, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("powerlosscert: %s %q is a symlink", label, path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("powerlosscert: %s %q is not a regular file", label, path)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, fmt.Errorf("powerlosscert: resolve %s: %w", label, err)
+	}
+	if !pathWithin(realRoot, resolvedPath) {
+		return nil, fmt.Errorf("powerlosscert: %s %q resolves through a symlink outside the bundle", label, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("powerlosscert: read %s: %w", label, err)
+	}
+	return data, nil
 }
 
 func VerifyArtifacts(root string, manifests []ChildManifest) error {
@@ -457,11 +490,11 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 		return recoveryTraceArtifact{}, fmt.Errorf("%s does not identify the captured stable image", prefix)
 	}
 	if recovery.Rejected {
-		if recovery.ErrorType == "" || recovery.Error == "" || witness.TypedError != recovery.ErrorType {
-			return recoveryTraceArtifact{}, fmt.Errorf("%s rejected result does not match typed_error=%q", prefix, witness.TypedError)
+		if recovery.ErrorType == "" || recovery.Error == "" || witness.TypedError != recovery.ErrorType || modeledOutcomeClass(witness.ActualOutcome) != "rejected" {
+			return recoveryTraceArtifact{}, fmt.Errorf("%s rejected result does not match outcome=%q and typed_error=%q", prefix, witness.ActualOutcome, witness.TypedError)
 		}
-	} else if recovery.ErrorType != "" || recovery.Error != "" || witness.TypedError != "none" {
-		return recoveryTraceArtifact{}, fmt.Errorf("%s accepted result has error metadata or typed_error=%q", prefix, witness.TypedError)
+	} else if recovery.ErrorType != "" || recovery.Error != "" || witness.TypedError != "none" || modeledOutcomeClass(witness.ActualOutcome) != "accepted" {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s accepted result does not match outcome=%q and typed_error=%q", prefix, witness.ActualOutcome, witness.TypedError)
 	}
 	recoveryDir := filepath.Join(root, filepath.FromSlash(evidenceDir), recovery.Dir)
 	if !pathWithin(root, recoveryDir) {
@@ -494,7 +527,7 @@ func verifyCommandLog(root string, manifest ChildManifest, witness Witness, arti
 			break
 		}
 	}
-	if log.SchemaVersion != commandLogSchemaVersion || log.RepositorySHA != manifest.RepositorySHA || normalizedArtifactPath(log.BinaryPath) != normalizedArtifactPath(witness.Command.BinaryPath) || log.BinarySHA256 != binarySHA || log.Package != witness.Command.Package || log.TestName != witness.Command.TestName || !reflect.DeepEqual(log.Args, witness.Command.Args) || !reflect.DeepEqual(log.Env, witness.Command.Env) {
+	if log.SchemaVersion != commandLogSchemaVersion || log.RepositorySHA != manifest.RepositorySHA || normalizedArtifactPath(log.BinaryPath) != normalizedArtifactPath(witness.Command.BinaryPath) || log.BinarySHA256 != binarySHA || log.Package != witness.Command.Package || log.TestName != witness.Command.TestName || !reflect.DeepEqual(log.Args, witness.Command.Args) || !reflect.DeepEqual(log.Env, witness.Command.Env) || log.Outcome != witness.ActualOutcome {
 		return fmt.Errorf("%s does not match the manifest command and test binary", prefix)
 	}
 	if !log.Completed || log.ExitCode != 0 || log.Stdout == "" && log.Stderr == "" {

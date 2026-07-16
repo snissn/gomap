@@ -412,6 +412,9 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	if witness.ExpectedOutcome != witness.ActualOutcome {
 		return fmt.Errorf("%s actual_outcome=%q want expected_outcome=%q", prefix, witness.ActualOutcome, witness.ExpectedOutcome)
 	}
+	if witness.EvidenceTier == EvidenceTierModeledCrash && modeledOutcomeClass(witness.ActualOutcome) == "" {
+		return fmt.Errorf("%s actual_outcome=%q must identify an accepted or rejected public-open outcome", prefix, witness.ActualOutcome)
+	}
 	state := witness.State
 	if state.RootMetaGeneration == "" || state.FreelistGeneration == "" || state.ExternalFrontiers == "" || state.NamespaceGeneration == "" || state.WALLineage == "" || state.DurableLSN == "" || state.CleanupPins == "" {
 		return fmt.Errorf("%s has incomplete recovery-state metadata", prefix)
@@ -467,6 +470,16 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 		}
 	}
 	return nil
+}
+
+func modeledOutcomeClass(outcome string) string {
+	for _, class := range []string{"accepted", "rejected"} {
+		prefix := class + ":"
+		if strings.HasPrefix(outcome, prefix) && len(outcome) > len(prefix) {
+			return class
+		}
+	}
+	return ""
 }
 
 func validateArtifact(prefix string, artifact Artifact) error {

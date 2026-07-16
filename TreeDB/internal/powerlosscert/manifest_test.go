@@ -85,6 +85,17 @@ func TestValidateBundleAcceptsZeroBasedFirstCutOccurrence(t *testing.T) {
 	}
 }
 
+func TestValidateBundleRejectsUnclassifiedModeledOutcome(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	manifest.Witnesses[0].ExpectedOutcome = "old-root"
+	manifest.Witnesses[0].ActualOutcome = "old-root"
+
+	err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "accepted or rejected public-open outcome") {
+		t.Fatalf("ValidateBundle outcome class error=%v", err)
+	}
+}
+
 func TestBuildCoverageReportRequiresModeledCrashOwnership(t *testing.T) {
 	inventory := testRiskInventory()
 	manifest := testChildManifest("witness-a")
@@ -232,8 +243,8 @@ func testChildManifest(witnessID string) ChildManifest {
 			WritebackVariant:       "target-metadata-alone",
 			FailureClasses:         []string{"fallback-older-complete-root"},
 			ExpectedDurableHorizon: "older dependency-closed durable root",
-			ExpectedOutcome:        "old-root",
-			ActualOutcome:          "old-root",
+			ExpectedOutcome:        "accepted:old-root",
+			ActualOutcome:          "accepted:old-root",
 			TypedError:             "none",
 			State: WitnessState{
 				RootMetaGeneration:  "old=1,new=2",

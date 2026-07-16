@@ -79,9 +79,12 @@ the preserved `recovery-input/` bytes must still match the stable tree exactly.
 
 The command runner owns `command_log.json`. Its versioned JSON envelope records
 the exact repository SHA, test-binary path and SHA-256, package, test name,
-arguments, replay environment, completion status, exit code, and captured
-stdout/stderr. The verifier requires a completed zero exit and an exact match
-to the child manifest; a hashed arbitrary log file is not evidence.
+arguments, replay environment, observed outcome, completion status, exit code,
+and captured stdout/stderr. Modeled outcomes use `accepted:<state>` or
+`rejected:<reason>`; the verifier binds that class to the public-open recovery
+result and the full outcome to the command log. It requires a completed zero
+exit and an exact match to the child manifest; a hashed arbitrary log file is
+not evidence.
 
 ## Current fail-closed status
 

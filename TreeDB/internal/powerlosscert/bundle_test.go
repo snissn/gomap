@@ -31,6 +31,63 @@ func TestLoadBundleIsStrictAndDeterministic(t *testing.T) {
 	}
 }
 
+func TestLoadBundleRejectsSymlinkedMetadataOutsideBundle(t *testing.T) {
+	for _, name := range []string{"risk inventory", "child manifest"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeBundleFixture(t, root, "a.json", testChildManifest("witness-a"))
+			path := filepath.Join(root, "risk_inventory.json")
+			if name == "child manifest" {
+				path = filepath.Join(root, "manifests", "a.json")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), filepath.Base(path))
+			if err := os.WriteFile(outside, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, path); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			if _, err := LoadBundle(root); err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Fatalf("LoadBundle %s symlink error=%v", name, err)
+			}
+		})
+	}
+}
+
+func TestLoadBundleRejectsManifestParentSymlinkOutsideBundle(t *testing.T) {
+	root := t.TempDir()
+	writeBundleFixture(t, root, "a.json", testChildManifest("witness-a"))
+	manifestData, err := os.ReadFile(filepath.Join(root, "manifests", "a.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsideManifests := filepath.Join(t.TempDir(), "manifests")
+	if err := os.MkdirAll(outsideManifests, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideManifests, "a.json"), manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "manifests")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideManifests, filepath.Join(root, "manifests")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := LoadBundle(root); err == nil || !strings.Contains(err.Error(), "outside the bundle") {
+		t.Fatalf("LoadBundle parent symlink error=%v", err)
+	}
+}
+
 func TestVerifyArtifactsChecksContentAndRejectsEscapes(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
@@ -114,6 +171,26 @@ func TestVerifyArtifactsRejectsImageBytesThatDoNotMatchTree(t *testing.T) {
 	err := VerifyArtifacts(root, []ChildManifest{manifest})
 	if err == nil || !strings.Contains(err.Error(), "contents do not match") {
 		t.Fatalf("VerifyArtifacts image mismatch error=%v", err)
+	}
+}
+
+func TestVerifyArtifactsRejectsAcceptedOutcomeForRejectedOpen(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	manifest.Witnesses[0].TypedError = "*errors.errorString"
+	rewriteArtifactJSONFields(t, root, &manifest.Witnesses[0], ArtifactKindRecoveryTrace, map[string]any{
+		"rejected":   true,
+		"error_type": "*errors.errorString",
+		"error":      "rejected modeled image",
+	})
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "outcome") {
+		t.Fatalf("VerifyArtifacts rejected-open outcome error=%v", err)
 	}
 }
 
@@ -276,6 +353,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		TestName:      witness.Command.TestName,
 		Args:          witness.Command.Args,
 		Env:           witness.Command.Env,
+		Outcome:       witness.ActualOutcome,
 		Completed:     true,
 		ExitCode:      0,
 		Stdout:        "PASS\n",
@@ -301,6 +379,11 @@ func artifactByKind(t *testing.T, witness Witness, kind ArtifactKind) Artifact {
 
 func rewriteArtifactJSONField(t *testing.T, root string, witness *Witness, kind ArtifactKind, field string, value any) {
 	t.Helper()
+	rewriteArtifactJSONFields(t, root, witness, kind, map[string]any{field: value})
+}
+
+func rewriteArtifactJSONFields(t *testing.T, root string, witness *Witness, kind ArtifactKind, fields map[string]any) {
+	t.Helper()
 	for index, artifact := range witness.Artifacts {
 		if artifact.Kind != kind {
 			continue
@@ -314,7 +397,9 @@ func rewriteArtifactJSONField(t *testing.T, root string, witness *Witness, kind 
 		if err := json.Unmarshal(data, &document); err != nil {
 			t.Fatal(err)
 		}
-		document[field] = value
+		for field, value := range fields {
+			document[field] = value
+		}
 		witness.Artifacts[index] = writeArtifactFixture(t, root, kind, artifact.Path, mustJSON(t, document))
 		return
 	}
