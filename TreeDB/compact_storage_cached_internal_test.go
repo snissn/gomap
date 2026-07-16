@@ -545,17 +545,25 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 		t.Fatalf("rewrite copied no value records: %+v", rewrite)
 	}
 	// The rewrite publishes replacement pointers, but the immediately previous
-	// durable slot may still retain the source segments. Publish one inline-only
-	// successor so both durable slots have crossed the rewrite before requiring
-	// CompactStorage to report zero physical GC debt.
-	if err := db.Set([]byte("raw/rewrite-gc-slot-advance"), []byte("advance")); err != nil {
-		t.Fatalf("publish durable-slot successor: %v", err)
-	}
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint durable-slot successor: %v", err)
-	}
+	// durable slot may still retain the source segments. Reopen before publishing
+	// an inline-only successor so the cached writer also starts from the rewritten
+	// leaf-log generation. Both durable slots have then crossed the rewrite before
+	// CompactStorage is required to report zero physical GC debt.
 	if err := db.Close(); err != nil {
 		t.Fatalf("close after rewrite: %v", err)
+	}
+	slotAdvancer, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open durable-slot advancer: %v", err)
+	}
+	if err := slotAdvancer.Set([]byte("raw/rewrite-gc-slot-advance"), []byte("advance")); err != nil {
+		t.Fatalf("publish durable-slot successor: %v", err)
+	}
+	if err := slotAdvancer.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint durable-slot successor: %v", err)
+	}
+	if err := slotAdvancer.Close(); err != nil {
+		t.Fatalf("close durable-slot advancer: %v", err)
 	}
 
 	compactor, err := Open(opts)
