@@ -117,11 +117,13 @@ func (db *DB) lockCommandWALRawPublishWithTeardown() func() {
 		return func() {}
 	}
 	db.teardownMu.RLock()
-	unlockRaw := db.lockCommandWALRawPublish()
-	return func() {
-		unlockRaw()
-		db.teardownMu.RUnlock()
-	}
+	db.commandWALRawPublishMu.Lock()
+	return db.unlockCommandWALRawPublishWithTeardown
+}
+
+func (db *DB) unlockCommandWALRawPublishWithTeardown() {
+	db.commandWALRawPublishMu.Unlock()
+	db.teardownMu.RUnlock()
 }
 
 // LockCommandWALPublish pins DB teardown and serializes a higher-level
