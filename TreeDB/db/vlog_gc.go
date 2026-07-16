@@ -569,6 +569,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		// during classification; eligible rewritten sources leave the current
 		// ValueLogSet here, while snapshot/resource pins retain their exact physical
 		// identities until every remaining reader releases them.
+		if hook := db.testValueLogGCBeforeRevalidateHook; hook != nil {
+			hook()
+		}
 		if err := recoverableRoots.Revalidate(); err != nil {
 			return stats, err
 		}

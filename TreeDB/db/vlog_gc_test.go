@@ -317,6 +317,69 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 }
 
+func TestMarkValueLogZombieTreatsStaleRecoverableRootSetAsDeferred(t *testing.T) {
+	dir := t.TempDir()
+
+	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+
+	path := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ptr, err := writer.Append(0, nil, 1, bytes.Repeat([]byte("stale-zombie|"), 128))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registerTestValueLogProducer(t, dir, path, fileID)
+
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte("stale-zombie"), ptr); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Delete([]byte("stale-zombie")); err != nil {
+		t.Fatal(err)
+	}
+	advancePastRetainedDurableSlotForTest(t, database)
+
+	originalEpoch := database.systemRootPublishEpoch.Load()
+	t.Cleanup(func() {
+		database.testValueLogGCBeforeRevalidateHook = nil
+		database.systemRootPublishEpoch.Store(originalEpoch)
+	})
+	var once sync.Once
+	database.testValueLogGCBeforeRevalidateHook = func() {
+		once.Do(func() { database.systemRootPublishEpoch.Add(1) })
+	}
+	err = database.MarkValueLogZombie(fileID)
+	database.testValueLogGCBeforeRevalidateHook = nil
+	database.systemRootPublishEpoch.Store(originalEpoch)
+	if !errors.Is(err, ErrValueLogZombieDeferred) || !errors.Is(err, ErrRecoverableRootSetStale) {
+		t.Fatalf("MarkValueLogZombie error=%v, want deferred stale capability", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stale zombie attempt removed segment: %v", err)
+	}
+}
+
 func TestValueLogGC_StableIdentityPinDefersUnreferencedSegmentDelete(t *testing.T) {
 	dir := t.TempDir()
 	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})

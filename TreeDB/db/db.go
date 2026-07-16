@@ -118,6 +118,9 @@ type DB struct {
 	// Test hook used to advance protected-root providers at deterministic
 	// capture boundaries.
 	compactStorageAuditProtectedBasisHook func(stage string, attempt int)
+	// Test hook used to invalidate a value-log GC recoverable-root capability
+	// immediately before its destructive revalidation.
+	testValueLogGCBeforeRevalidateHook func()
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -4163,6 +4166,12 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 		observedSourceMissingIsError:     true,
 	}, true)
 	if err != nil {
+		if errors.Is(err, ErrRecoverableRootSetStale) {
+			return errors.Join(
+				fmt.Errorf("%w: file_id=%d", ErrValueLogZombieDeferred, id),
+				err,
+			)
+		}
 		return err
 	}
 	if stats.ObservedSourceSegmentsEligible != 1 {
