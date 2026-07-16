@@ -157,6 +157,27 @@ func TestValidateBundleRejectsUndeclaredRiskValuesAndUnownedInteractions(t *test
 	}
 }
 
+func TestValidateBundleRejectsArtifactPathAliases(t *testing.T) {
+	t.Run("artifact kinds", func(t *testing.T) {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].Artifacts[1].Path = "artifacts/subdir/../witness-a-operation.json"
+
+		err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
+		if err == nil || !strings.Contains(err.Error(), "reuses artifact path") {
+			t.Fatalf("ValidateBundle artifact path alias error=%v", err)
+		}
+	})
+	t.Run("test binary", func(t *testing.T) {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].Artifacts[0].Path = "bin/subdir/../TreeDB.test"
+
+		err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
+		if err == nil || !strings.Contains(err.Error(), "reuses test-binary path") {
+			t.Fatalf("ValidateBundle test-binary path alias error=%v", err)
+		}
+	})
+}
+
 func testRiskInventory() RiskInventory {
 	return RiskInventory{
 		SchemaVersion: RiskInventorySchemaVersion,

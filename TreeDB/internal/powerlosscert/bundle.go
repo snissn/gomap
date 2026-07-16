@@ -91,14 +91,15 @@ func VerifyArtifacts(root string, manifests []ChildManifest) error {
 			if err := validateArtifact(prefix, artifact); err != nil {
 				return err
 			}
-			if prior, ok := seen[artifact.Path]; ok {
+			pathKey := normalizedArtifactPath(artifact.Path)
+			if prior, ok := seen[pathKey]; ok {
 				if prior != artifact.SHA256 {
 					return fmt.Errorf("%s %q has conflicting sha256 values %s and %s", prefix, artifact.Path, prior, artifact.SHA256)
 				}
 				continue
 			}
-			seen[artifact.Path] = artifact.SHA256
-			fullPath := filepath.Join(root, filepath.FromSlash(artifact.Path))
+			seen[pathKey] = artifact.SHA256
+			fullPath := filepath.Join(root, filepath.FromSlash(pathKey))
 			if !pathWithin(root, fullPath) {
 				return fmt.Errorf("%s has unsafe path %q", prefix, artifact.Path)
 			}
@@ -151,7 +152,7 @@ func verifyOperationTrace(root, manifestID string, witness Witness) error {
 	if traceArtifact == nil {
 		return fmt.Errorf("%s is missing", prefix)
 	}
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(traceArtifact.Path)))
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(normalizedArtifactPath(traceArtifact.Path))))
 	if err != nil {
 		return fmt.Errorf("%s: %w", prefix, err)
 	}

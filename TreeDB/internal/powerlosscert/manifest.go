@@ -367,10 +367,11 @@ func validateChildManifest(manifest ChildManifest) error {
 		if err := validateArtifact(prefix+" test binary", artifact); err != nil {
 			return err
 		}
-		if binaries[artifact.Path] {
+		pathKey := normalizedArtifactPath(artifact.Path)
+		if binaries[pathKey] {
 			return fmt.Errorf("%s duplicates test binary path %q", prefix, artifact.Path)
 		}
-		binaries[artifact.Path] = true
+		binaries[pathKey] = true
 	}
 	if len(manifest.Witnesses) == 0 {
 		return fmt.Errorf("%s has no witnesses", prefix)
@@ -430,7 +431,7 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	if err := validateUniqueStrings(prefix+" command arguments", witness.Command.Args); err != nil {
 		return err
 	}
-	if !binaries[witness.Command.BinaryPath] {
+	if !binaries[normalizedArtifactPath(witness.Command.BinaryPath)] {
 		return fmt.Errorf("%s references unregistered test binary %q", prefix, witness.Command.BinaryPath)
 	}
 	if !witness.CutExercised {
@@ -445,13 +446,14 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 		if err := validateArtifact(prefix+" artifact", artifact); err != nil {
 			return err
 		}
-		if binaries[artifact.Path] {
+		pathKey := normalizedArtifactPath(artifact.Path)
+		if binaries[pathKey] {
 			return fmt.Errorf("%s reuses test-binary path %q as artifact kind %q", prefix, artifact.Path, artifact.Kind)
 		}
-		if priorKind, duplicate := artifactPaths[artifact.Path]; duplicate {
+		if priorKind, duplicate := artifactPaths[pathKey]; duplicate {
 			return fmt.Errorf("%s reuses artifact path %q for kinds %q and %q", prefix, artifact.Path, priorKind, artifact.Kind)
 		}
-		artifactPaths[artifact.Path] = artifact.Kind
+		artifactPaths[pathKey] = artifact.Kind
 		if artifactKinds[artifact.Kind] {
 			return fmt.Errorf("%s duplicates artifact kind %q", prefix, artifact.Kind)
 		}
@@ -471,13 +473,18 @@ func validateArtifact(prefix string, artifact Artifact) error {
 	if !validArtifactKind(artifact.Kind) {
 		return fmt.Errorf("%s has unknown kind %q", prefix, artifact.Kind)
 	}
-	if artifact.Path == "" || filepath.IsAbs(artifact.Path) || artifact.Path == "." || strings.HasPrefix(filepath.ToSlash(filepath.Clean(artifact.Path)), "../") {
+	cleanPath := normalizedArtifactPath(artifact.Path)
+	if artifact.Path == "" || filepath.IsAbs(artifact.Path) || cleanPath == "." || strings.HasPrefix(cleanPath, "../") {
 		return fmt.Errorf("%s has unsafe path %q", prefix, artifact.Path)
 	}
 	if !validHex(artifact.SHA256, 64) {
 		return fmt.Errorf("%s %q has invalid sha256", prefix, artifact.Path)
 	}
 	return nil
+}
+
+func normalizedArtifactPath(path string) string {
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
 }
 
 func validArtifactKind(kind ArtifactKind) bool {
