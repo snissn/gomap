@@ -2247,9 +2247,10 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("expected retained closed bytes after rotate, got %d", retainedBefore)
 	}
 
-	// Delete the key and checkpoint. Retained segments with only unreachable
-	// payloads should be pruned. The active segment stays open for writing, but
-	// it is not counted as a retained closed segment.
+	// Delete the key and checkpoint. The prior durable slot can still select the
+	// value-bearing root, so let the first prune retain that segment before
+	// recommitting the current root to advance the recovery horizon. The active
+	// segment stays open for writing, but it is not counted as retained closed.
 	if err := cache.Delete(key); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -2258,6 +2259,10 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	}
 	forceRetainedPruneIdle(cache)
 	cache.waitForRetainedValueLogPrune()
+	if err := backend.Commit(backend.State().RootPageID); err != nil {
+		t.Fatalf("commit durable-slot successor: %v", err)
+	}
+	cache.PruneRetainedValueLogsForMaintenance()
 	stats = cache.Stats()
 	segments, err = strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
 	if err != nil {
