@@ -662,14 +662,11 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
 	// The pre-pack durable slot remains independently recovery-selectable until
-	// one later checkpoint overwrites it. Publish an inline successor so the
-	// packed source generation is no longer reachable from either durable slot
-	// before asserting physical reclamation.
-	if err := d.Set([]byte("raw/leaf-pack-gc-slot-advance"), []byte("advance")); err != nil {
-		t.Fatalf("publish durable-slot successor: %v", err)
-	}
+	// one later checkpoint overwrites it. Re-checkpoint the packed root without
+	// publishing a new cached leaf-log dependency before asserting physical
+	// reclamation.
 	if err := d.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint durable-slot successor: %v", err)
+		t.Fatalf("checkpoint packed durable-slot successor: %v", err)
 	}
 
 	gcCtx, gcCancel := collectionMaintenanceTestContext(t)

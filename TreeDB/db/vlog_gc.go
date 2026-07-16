@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -15,6 +16,12 @@ import (
 // before reachability is re-evaluated; keeping a small recent window prevents
 // deleting freshly rotated segments that may still back in-memory pointers.
 const valueLogKeepRecentSegmentsPerLane = 2
+
+// ErrValueLogZombieDeferred reports that MarkValueLogZombie retained the
+// requested segment because it is still reachable or otherwise protected.
+// Callers should keep their cleanup record and retry after recovery roots or
+// other lifecycle pins advance.
+var ErrValueLogZombieDeferred = errors.New("treedb: value-log zombie marking deferred")
 
 // valueLogGCPostRefreshCurrentSetNoRefresh is a narrow test seam for the
 // second no-refresh read after the fallback Refresh call.
@@ -285,6 +292,11 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		}
 		return stats, nil
 	}
+	defer func() {
+		if set != nil {
+			_ = vm.Release(set)
+		}
+	}()
 	valueSet := &valuelog.Set{Files: files}
 	keptIDs := currentValueLogIDs(valueSet)
 	protectedAll := mergeUniqueNonEmptyPaths(opts.ProtectedPaths, opts.ProtectedInUsePaths, opts.ProtectedRetainedPaths)
@@ -545,6 +557,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if opts.DryRun {
 		if set != nil {
 			_ = vm.Release(set)
+			set = nil
 		}
 		return stats, nil
 	}

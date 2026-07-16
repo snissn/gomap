@@ -608,6 +608,9 @@ func TestValueLogGC_ObservedSourceCannotZombieOlderRecoverableRootSegment(t *tes
 	if stats.ObservedSourceSegmentsReferenced != 1 || stats.ObservedSourceSegmentsEligible != 0 || stats.ObservedSourceSegmentsDeleted != 0 {
 		t.Fatalf("observed-only GC did not retain older-root reference: %+v", stats)
 	}
+	if err := database.MarkValueLogZombie(oldPtr.FileID); !errors.Is(err, ErrValueLogZombieDeferred) {
+		t.Fatalf("MarkValueLogZombie older-root error=%v want ErrValueLogZombieDeferred", err)
+	}
 	oldPath := valueLogSegmentPath(t, dir, oldPtr.FileID)
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("observed-only GC removed older-root segment: %v", err)

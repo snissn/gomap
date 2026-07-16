@@ -179,8 +179,8 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		}
 	}()
 
-	db.rootReuseMu.RLock()
 	db.durablePublishMu.Lock()
+	db.rootReuseMu.RLock()
 	durable := recoverableDurableBasis{
 		slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit,
 		slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending,

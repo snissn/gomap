@@ -482,15 +482,53 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	return stats, nil
 }
 
+type recoverableColumnAssetReplayBasis struct {
+	appliedCommandLSN  uint64
+	manifestGeneration uint64
+	collection         string
+	config             ColumnStoreConfig
+}
+
+type recoverableColumnAssetReplayClassifier func(ColumnAssetRef, recoverableColumnAssetReplayBasis) (bool, error)
+
+func recoverableColumnAssetReplayRefs(
+	candidateRefs []ColumnAssetRef,
+	bases []recoverableColumnAssetReplayBasis,
+	requiresReplayBefore func(uint64) bool,
+	classify recoverableColumnAssetReplayClassifier,
+) ([]ColumnAssetRef, error) {
+	if len(candidateRefs) == 0 || len(bases) == 0 || requiresReplayBefore == nil || classify == nil {
+		return nil, nil
+	}
+	replayRefs := make([]ColumnAssetRef, 0, len(candidateRefs))
+	for _, ref := range candidateRefs {
+		if ref.Generation == 0 {
+			continue
+		}
+		for _, basis := range bases {
+			if basis.appliedCommandLSN == 0 || basis.manifestGeneration == 0 ||
+				ref.Generation > basis.manifestGeneration || !requiresReplayBefore(basis.appliedCommandLSN) {
+				continue
+			}
+			replayable, err := classify(ref, basis)
+			if err != nil {
+				return nil, err
+			}
+			if replayable {
+				replayRefs = append(replayRefs, ref)
+				break
+			}
+		}
+	}
+	return replayRefs, nil
+}
+
 func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef) error {
 	if c == nil || c.db == nil || roots == nil {
 		return backenddb.ErrRecoverableRootSetStale
 	}
 	seenPaths := make(map[string]struct{})
-	var visibleRecoveryLSN uint64
-	var visibleRecoveryGeneration uint64
-	var visibleRecoveryCollection string
-	var visibleRecoveryConfig *ColumnStoreConfig
+	visibleReplayBases := make([]recoverableColumnAssetReplayBasis, 0, 2)
 	pinRefs := func(refs []ColumnAssetRef) error {
 		for _, ref := range refs {
 			path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
@@ -575,44 +613,39 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 			return closeErr
 		}
 		if root.Visible {
-			if view.FullConfig.RecoveryAuthoritativeAppliedCommandLSN > visibleRecoveryLSN {
-				visibleRecoveryLSN = view.FullConfig.RecoveryAuthoritativeAppliedCommandLSN
-				visibleRecoveryCollection = catalog.meta.Name
-				cfg := view.FullConfig
-				visibleRecoveryConfig = &cfg
-			}
-			if identity := view.FullConfig.RecoveryAuthoritativeManifest; identity != nil && identity.Generation > visibleRecoveryGeneration {
-				visibleRecoveryGeneration = identity.Generation
+			if identity := view.FullConfig.RecoveryAuthoritativeManifest; identity != nil &&
+				identity.Generation != 0 && view.FullConfig.RecoveryAuthoritativeAppliedCommandLSN != 0 {
+				visibleReplayBases = append(visibleReplayBases, recoverableColumnAssetReplayBasis{
+					appliedCommandLSN:  view.FullConfig.RecoveryAuthoritativeAppliedCommandLSN,
+					manifestGeneration: identity.Generation,
+					collection:         catalog.meta.Name,
+					config:             view.FullConfig,
+				})
 			}
 		}
 		if err := pinRefs(columnPhysicalScanSnapshotViewAssetRefs(view)); err != nil {
 			return err
 		}
 	}
-	if roots.RequiresReplayBefore(visibleRecoveryLSN) && visibleRecoveryGeneration != 0 && visibleRecoveryConfig != nil {
-		// A durable fallback behind the visible command-WAL frontier can replay
-		// authoritative generations that the current manifest has since
-		// superseded. Only format-valid authoritative typed-row/typed-column
-		// candidates at or below the visible generation are replay inputs; derived
-		// accelerators and arbitrary unpublished candidate bytes are not roots.
-		replayRefs := make([]ColumnAssetRef, 0, len(candidateRefs))
-		for _, ref := range candidateRefs {
-			if ref.Generation == 0 || ref.Generation > visibleRecoveryGeneration {
-				continue
-			}
-			replayable, err := recoverableColumnAssetReplayCandidate(
-				c.db.ColumnAssetRootDir(), ref, visibleRecoveryCollection, *visibleRecoveryConfig, visibleRecoveryLSN,
+	// A durable fallback behind any visible command-WAL frontier can replay
+	// authoritative generations that the corresponding visible manifest has
+	// since superseded. Preserve each root's LSN, generation, collection, and
+	// configuration as one basis so candidate parsing never mixes authorities.
+	replayRefs, err := recoverableColumnAssetReplayRefs(
+		candidateRefs,
+		visibleReplayBases,
+		roots.RequiresReplayBefore,
+		func(ref ColumnAssetRef, basis recoverableColumnAssetReplayBasis) (bool, error) {
+			return recoverableColumnAssetReplayCandidate(
+				c.db.ColumnAssetRootDir(), ref, basis.collection, basis.config, basis.appliedCommandLSN,
 			)
-			if err != nil {
-				return err
-			}
-			if replayable {
-				replayRefs = append(replayRefs, ref)
-			}
-		}
-		if err := pinRefs(replayRefs); err != nil {
-			return err
-		}
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if err := pinRefs(replayRefs); err != nil {
+		return err
 	}
 	return roots.Revalidate()
 }
@@ -623,10 +656,10 @@ func recoverableColumnAssetReplayCandidate(rootDir string, ref ColumnAssetRef, c
 	}
 	raw, err := readColumnPhysicalAssetFromManager(rootDir, ref)
 	if err != nil {
-		// Exact namespace/identity validation immediately before deletion owns
-		// filesystem races. Bytes that cannot validate as this ref are not a
-		// replayable published asset and therefore do not gain a replay pin.
-		return false, nil
+		// An unreadable candidate is ambiguous until exact namespace/identity
+		// validation immediately before deletion. Fail closed so a transient I/O
+		// error cannot silently drop a required replay input.
+		return false, fmt.Errorf("collections: read recoverable column asset kind=%q namespace=%q file_id=%d: %w", ref.Kind, ref.Namespace, ref.FileID, err)
 	}
 	switch ref.Kind {
 	case ColumnAssetKindTCS1PartImage:

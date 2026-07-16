@@ -4156,13 +4156,26 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 	if db == nil || db.valueLogManager == nil {
 		return fmt.Errorf("value log manager unavailable")
 	}
-	_, err := db.valueLogGC(context.Background(), ValueLogGCOptions{
+	stats, err := db.valueLogGC(context.Background(), ValueLogGCOptions{
 		ObservedSourceFileIDs:            []uint32{id},
 		ObservedSourceAssumeUnreferenced: true,
 		ObservedSourceReclaimActive:      true,
 		observedSourceMissingIsError:     true,
 	}, true)
-	return err
+	if err != nil {
+		return err
+	}
+	if stats.ObservedSourceSegmentsEligible != 1 {
+		return fmt.Errorf(
+			"%w: file_id=%d referenced=%d active=%d protected=%d",
+			ErrValueLogZombieDeferred,
+			id,
+			stats.ObservedSourceSegmentsReferenced,
+			stats.ObservedSourceSegmentsActive,
+			stats.ObservedSourceSegmentsProtected,
+		)
+	}
+	return nil
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
