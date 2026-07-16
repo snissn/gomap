@@ -957,8 +957,10 @@ Implementation evidence expected for this milestone:
 - read-write opens keep typed command frames with `LSN <= AppliedCommandLSN`
   out of legacy raw batch replay and fail closed on higher typed LSNs until the
   PR3 typed replay dispatcher is present;
-- cleanup removes only non-active typed command WAL segments whose max complete
-  LSN is covered by durable `AppliedCommandLSN`;
+- cleanup follows `durable-wal-cleanup-proof-3682.md`: it removes only exact
+  non-active segment identities whose complete LSN range is covered by every
+  recovery-selectable durable root, whose lineage and journal namespace still
+  revalidate, and whose physical identity is outside every active/retry pin;
 - benchmark evidence records shared journal allocation/append overhead and
   root/meta publication overhead with `AppliedCommandLSN`.
 

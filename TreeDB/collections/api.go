@@ -106,6 +106,7 @@ var (
 	errCollectionNil                           = errors.New("collections: collection is nil")
 	errCollectionDBNil                         = errors.New("collections: db is nil")
 	errCollectionNotFound                      = ErrCollectionNotFound
+	errConcurrentSchemaModification            = errors.New("collections: concurrent schema modification")
 	errCollectionRootOverlaysRequireCompaction = errors.New("collections: collection root overlays require compaction before writes")
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
@@ -19429,7 +19430,7 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 		return nil, errCollectionNotFound
 	}
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
-		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+		return nil, fmt.Errorf("%w detected for %q", errConcurrentSchemaModification, baseMeta.Name)
 	}
 	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
 	if baseRootID, ok := baseRootIDs[primaryRootName]; ok {
@@ -19469,7 +19470,7 @@ func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta,
 		return nil, errCollectionNotFound
 	}
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
-		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+		return nil, fmt.Errorf("%w detected for %q", errConcurrentSchemaModification, baseMeta.Name)
 	}
 	updates := map[string][]byte{
 		systemCollectionMetaKey(baseMeta.Name): encodedMeta,

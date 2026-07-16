@@ -8,6 +8,7 @@ BASELINE_HASH="${BASELINE_HASH:?BASELINE_HASH is required}"
 CANDIDATE_HASH="${CANDIDATE_HASH:-HEAD}"
 RUNS="${RUNS:-8}"
 BENCHTIME="${BENCHTIME:-2s}"
+BATCH_WRITE_BENCHTIME="${BATCH_WRITE_BENCHTIME:-1000x}"
 CPUSET="${CPUSET:-0}"
 MAX_REGRESSION_PERCENT="${MAX_REGRESSION_PERCENT:-5}"
 MAX_BYTES_REGRESSION_PERCENT="${MAX_BYTES_REGRESSION_PERCENT:-1}"
@@ -30,6 +31,10 @@ if ((RUNS % 2 != 0)); then
 fi
 if ! [[ "$BENCHTIME" =~ ^[1-9][0-9]*(ms|s|x)$ ]]; then
   echo "BENCHTIME must be a positive Go benchmark duration or iteration count" >&2
+  exit 2
+fi
+if ! [[ "$BATCH_WRITE_BENCHTIME" =~ ^[1-9][0-9]*x$ ]]; then
+  echo "BATCH_WRITE_BENCHTIME must be a positive Go benchmark iteration count" >&2
   exit 2
 fi
 for command in git go lscpu ps python3 realpath taskset sha256sum; do
@@ -85,6 +90,7 @@ CANDIDATE_TREEDB_BIN="$TMP_ROOT/candidate-treedb.test"
   echo "candidate_sha=$CANDIDATE_SHA"
   echo "runs=$RUNS"
   echo "benchtime=$BENCHTIME"
+  echo "batch_write_benchtime=$BATCH_WRITE_BENCHTIME"
   echo "cpuset=$CPUSET"
   echo "gomaxprocs=1"
   echo "max_regression_percent=$MAX_REGRESSION_PERCENT"
@@ -128,6 +134,7 @@ run_sample() {
   local binary="$4"
   local regex="$5"
   local output="$6"
+  local benchtime="$7"
   {
     echo "--- before revision=$revision sample=$sample group=$group at $(date -Iseconds) ---"
     ps -eo pid,ppid,etime,%cpu,cmd --sort=-%cpu | head -20 || true
@@ -136,7 +143,7 @@ run_sample() {
     -test.run '^$' \
     -test.bench "$regex" \
     -test.benchmem \
-    -test.benchtime="$BENCHTIME" \
+    -test.benchtime="$benchtime" \
     -test.count=1 >>"$output"
 }
 
@@ -146,21 +153,22 @@ run_pair() {
   local baseline_binary="$3"
   local candidate_binary="$4"
   local regex="$5"
+  local benchtime="$6"
   if ((sample % 2 == 1)); then
-    run_sample baseline "$sample" "$group" "$baseline_binary" "$regex" "$BASELINE_LOG"
-    run_sample candidate "$sample" "$group" "$candidate_binary" "$regex" "$CANDIDATE_LOG"
+    run_sample baseline "$sample" "$group" "$baseline_binary" "$regex" "$BASELINE_LOG" "$benchtime"
+    run_sample candidate "$sample" "$group" "$candidate_binary" "$regex" "$CANDIDATE_LOG" "$benchtime"
   else
-    run_sample candidate "$sample" "$group" "$candidate_binary" "$regex" "$CANDIDATE_LOG"
-    run_sample baseline "$sample" "$group" "$baseline_binary" "$regex" "$BASELINE_LOG"
+    run_sample candidate "$sample" "$group" "$candidate_binary" "$regex" "$CANDIDATE_LOG" "$benchtime"
+    run_sample baseline "$sample" "$group" "$baseline_binary" "$regex" "$BASELINE_LOG" "$benchtime"
   fi
 }
 
 for ((sample = 1; sample <= RUNS; sample++)); do
-  run_pair "$sample" get_versioned "$BASELINE_DB_BIN" "$CANDIDATE_DB_BIN" "$GET_VERSIONED_BENCH_REGEX"
-  run_pair "$sample" batch_write "$BASELINE_DB_BIN" "$CANDIDATE_DB_BIN" "$BATCH_WRITE_BENCH_REGEX"
-  run_pair "$sample" snapshot_seek "$BASELINE_TREEDB_BIN" "$CANDIDATE_TREEDB_BIN" "$SNAPSHOT_BENCH_REGEX"
-  run_pair "$sample" repeated_iterator "$BASELINE_CACHING_BIN" "$CANDIDATE_CACHING_BIN" "$CACHING_BENCH_REGEX"
-  run_pair "$sample" durable_sync "$BASELINE_TREEDB_BIN" "$CANDIDATE_TREEDB_BIN" "$DURABILITY_BENCH_REGEX"
+  run_pair "$sample" get_versioned "$BASELINE_DB_BIN" "$CANDIDATE_DB_BIN" "$GET_VERSIONED_BENCH_REGEX" "$BENCHTIME"
+  run_pair "$sample" batch_write "$BASELINE_DB_BIN" "$CANDIDATE_DB_BIN" "$BATCH_WRITE_BENCH_REGEX" "$BATCH_WRITE_BENCHTIME"
+  run_pair "$sample" snapshot_seek "$BASELINE_TREEDB_BIN" "$CANDIDATE_TREEDB_BIN" "$SNAPSHOT_BENCH_REGEX" "$BENCHTIME"
+  run_pair "$sample" repeated_iterator "$BASELINE_CACHING_BIN" "$CANDIDATE_CACHING_BIN" "$CACHING_BENCH_REGEX" "$BENCHTIME"
+  run_pair "$sample" durable_sync "$BASELINE_TREEDB_BIN" "$CANDIDATE_TREEDB_BIN" "$DURABILITY_BENCH_REGEX" "$BENCHTIME"
 done
 
 # Hash the six actual benchmark executables while TMP_ROOT is still live. The

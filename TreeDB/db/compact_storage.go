@@ -427,7 +427,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "checkpoint", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(true)
 	}); err != nil {
 		return stats, err
 	}
@@ -510,7 +510,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-value-log-rewrite", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -523,7 +523,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-value-log-gc", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -571,7 +571,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			return stats, err
 		}
 		if err := db.runCompactStoragePhase(&stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-			return db.Checkpoint()
+			return db.checkpoint(maintenanceLocked)
 		}); err != nil {
 			return stats, err
 		}
@@ -590,7 +590,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 	compactLeafPackPlanState.invalidate()
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-leaf-generation-gc", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -616,7 +616,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			stats.Phases[len(stats.Phases)-1].SkipReason = indexVacuumSkipReason
 		}
 	} else if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -780,7 +780,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.Checkpoint()
+				return db.checkpoint(!lockMaintenance)
 			}); err != nil {
 				return err
 			}
@@ -806,7 +806,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.Checkpoint()
+				return db.checkpoint(!lockMaintenance)
 			}); err != nil {
 				return err
 			}
@@ -835,7 +835,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 					return err
 				}
 				if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-					return db.Checkpoint()
+					return db.checkpoint(!lockMaintenance)
 				}); err != nil {
 					return err
 				}
@@ -856,7 +856,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.Checkpoint()
+				return db.checkpoint(!lockMaintenance)
 			}); err != nil {
 				return err
 			}
@@ -1609,6 +1609,21 @@ func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []s
 }
 
 func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
+	recoverableRoots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	defer recoverableRoots.Release()
+	db.publishPrepareMu.Lock()
+	defer db.publishPrepareMu.Unlock()
+	if err := recoverableRoots.Revalidate(); err != nil {
+		return 0, err
+	}
+	// No root publication can advance while publishPrepareMu is held. Consume
+	// the capability so exact topology pins do not themselves prevent removal
+	// of a zero-byte file proven outside every recoverable root.
+	recoverableRoots.Release()
+
 	layout := resolveStorageLayout(db.dir)
 	entries, err := os.ReadDir(layout.valueVLogDir)
 	if err != nil {
