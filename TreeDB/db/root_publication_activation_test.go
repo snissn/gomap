@@ -223,6 +223,10 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	}
 	database.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
 	database.testFailWriteMeta.Store(true)
+	const staleSubtreePageID = ^uint64(0)
+	database.storeLeafGenerationSubtreeStats(staleSubtreePageID, leafGenerationSubtreeStats{
+		1: {LivePages: 1, LiveBytes: 1},
+	})
 	err = final.WriteSync()
 	database.testFailWriteMeta.Store(false)
 	if !errors.Is(err, errTestWriteMetaFailpoint) {
@@ -230,6 +234,9 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	}
 	if errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("accepted build-group wait error=%v unexpectedly requires recovery", err)
+	}
+	if _, ok := database.loadLeafGenerationSubtreeStats(staleSubtreePageID); ok {
+		t.Fatal("accepted build-group wait error left stale leaf-generation reachability state cached")
 	}
 	if got := database.State().AppliedCommandLSN; got != lsn {
 		t.Fatalf("visible AppliedCommandLSN after accepted build-group error=%d, want %d", got, lsn)

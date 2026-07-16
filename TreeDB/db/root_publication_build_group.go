@@ -294,6 +294,13 @@ func (group *RootPublicationBuildGroup) touchedValueLogSegmentSliceLocked() []ui
 	return ids
 }
 
+func (group *RootPublicationBuildGroup) observeAcceptedOutputLocked() {
+	group.accepted = true
+	group.vlogRefDelta = nil
+	group.db.observeFlushApplyInstalledOutput(group.metrics, len(group.retired))
+	group.db.invalidateLeafGenerationSubtreeStats(group.tracker.Pages())
+}
+
 func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool) error {
 	db := group.db
 	group.releaseWriteLocked()
@@ -360,18 +367,14 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 			db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		if post.accepted {
-			group.accepted = true
-			group.vlogRefDelta = nil
-			db.observeFlushApplyInstalledOutput(group.metrics, len(group.retired))
+			group.observeAcceptedOutputLocked()
+			db.clearLeafGenerationReachabilityCaches()
 		} else {
 			db.observeFlushApplyAbandonedOutput(group.metrics, len(group.retired))
 		}
 		return err
 	}
-	group.accepted = true
-	group.vlogRefDelta = nil
-	db.observeFlushApplyInstalledOutput(group.metrics, len(group.retired))
-	db.invalidateLeafGenerationSubtreeStats(group.tracker.Pages())
+	group.observeAcceptedOutputLocked()
 	db.finalizeCommitPostWork(post)
 	db.clearLeafGenerationReachabilityCaches()
 	return nil
