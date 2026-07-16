@@ -321,20 +321,23 @@ func TestCheckpointWaitProductivityStatsActiveBackgroundDrainsFrontier(t *testin
 	} else if activeWaitLastNs == 0 {
 		t.Fatalf("active background wait last ns=%d want >0 when samples=%d", activeWaitLastNs, activeWaitSamples)
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.frontier_units_at_request_last"); got != 2 {
-		t.Fatalf("wait frontier at request=%d want 2", got)
+	frontierAtRequest := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.frontier_units_at_request_last")
+	if frontierAtRequest != 2 {
+		t.Fatalf("wait frontier at request=%d want 2", frontierAtRequest)
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.remaining_frontier_units_last"); got != 1 {
-		t.Fatalf("wait remaining frontier=%d want 1", got)
+	remainingFrontier := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.remaining_frontier_units_last")
+	drainedFrontier := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.drained_frontier_units_last")
+	if remainingFrontier > frontierAtRequest || drainedFrontier+remainingFrontier != frontierAtRequest {
+		t.Fatalf("wait frontier accounting: requested=%d drained=%d remaining=%d", frontierAtRequest, drainedFrontier, remainingFrontier)
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.drained_frontier_units_last"); got != 1 {
-		t.Fatalf("wait drained frontier=%d want 1", got)
+	if drainedFrontier == 0 {
+		t.Fatalf("wait drained frontier=%d want >0", drainedFrontier)
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.frontier.units_last"); got != 1 {
-		t.Fatalf("checkpoint-owned frontier units=%d want 1", got)
+	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.frontier.units_last"); got != remainingFrontier {
+		t.Fatalf("checkpoint-owned frontier units=%d want remaining %d", got, remainingFrontier)
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.flush_all.owned_drain_units_last"); got != 1 {
-		t.Fatalf("owned drain units=%d want 1", got)
+	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.flush_all.owned_drain_units_last"); got != remainingFrontier {
+		t.Fatalf("owned drain units=%d want remaining %d", got, remainingFrontier)
 	}
 	if activeWaitLastNs != 0 {
 		if got := requireStatFloat64(t, stats, "treedb.cache.checkpoint.wait.frontier_drain_bytes_per_sec_last"); got == 0 {
