@@ -264,6 +264,13 @@ func TestVacuumIndexOnlinePagerSyncRunsOutsideWriteMu(t *testing.T) {
 	if _, err := publishVacuumSnapshotCollectionVersion(db, 0, 0, 2048); err != nil {
 		t.Fatalf("publish collection: %v", err)
 	}
+	// The helper publishes through the activated coordinator. Drain that exact
+	// root before entering the legacy vacuum test seam so an outstanding stable
+	// index pin cannot race the direct index replacement below. Production
+	// online vacuum remains fenced pending RecoverableRootSet integration.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint collection: %v", err)
+	}
 
 	var preflushCalls, finalCalls int
 	var hookErr error
