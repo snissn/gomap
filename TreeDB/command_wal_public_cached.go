@@ -302,7 +302,7 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
 	}
-	return tdb.backend.CleanupCommandWALCoveredSegments(sync)
+	return tdb.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(sync)
 }
 
 func (tdb *DB) syncPublicCommandWAL() error {

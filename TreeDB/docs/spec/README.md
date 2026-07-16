@@ -106,6 +106,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/command-wal-durable-write-contract.md`
   - current cached command-WAL `Write`/`WriteSync` ordering, logical versus
     physical sync counters, crash boundaries, and the M3 optimization guardrail.
+- `TreeDB/docs/spec/durable-wal-cleanup-proof-3682.md`
+  - exact durable-root/WAL-lineage authority for ordinary command-WAL segment
+    cleanup, destructive-surface inventory, retryable namespace debt, metrics,
+    and focused evidence for issue #3682.
 - `TreeDB/docs/spec/publication-readability-3245.md`
   - issue #3245 publication/readability map for collection catalog metadata and
     root descriptors, ordered/system-root publication, value-log pointer

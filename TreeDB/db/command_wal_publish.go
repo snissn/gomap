@@ -308,11 +308,15 @@ type commandWALSegmentCleanupDecision struct {
 	Size         int64
 	ScannedBytes int64
 	Frames       uint64
+	MinLSN       uint64
 	MaxLSN       uint64
 	Active       bool
 	Covered      bool
 	Removed      bool
+	Pinned       bool
 	Error        string
+	identity     rootpublication.StableIdentity
+	file         *os.File
 }
 
 type commandWALSegmentScanResult struct {
@@ -325,10 +329,9 @@ type commandWALSegmentScanResult struct {
 }
 
 type commandWALSegmentScanOptions struct {
-	seenLSNs                         map[uint64]struct{}
-	seenLSNAppliedLSN                uint64
-	stopAfterFirstLSNGreaterThan     uint64
-	stopAfterFirstLSNGreaterThanSeen bool
+	seenLSNs          map[uint64]struct{}
+	seenLSNAppliedLSN uint64
+	seenLSNMax        uint64
 }
 
 func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
@@ -400,7 +403,19 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 		return commandWALSegmentScanResult{}, err
 	}
 	defer r.Close()
+	return scanCommandWALSegmentReader(r, allowTerminalTail, opts)
+}
 
+func scanCommandWALSegmentFileWithOptions(file *os.File, maxSegmentBytes int64, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
+	r, err := commitlog.NewReaderFromFileWithOptions(file, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	if err != nil {
+		return commandWALSegmentScanResult{}, err
+	}
+	defer r.Close()
+	return scanCommandWALSegmentReader(r, allowTerminalTail, opts)
+}
+
+func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
 	var lastLSN uint64
 	var scan commandWALSegmentScanResult
 	for {
@@ -430,7 +445,9 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
-		if opts.seenLSNs != nil && (opts.seenLSNAppliedLSN == 0 || frame.LSN > opts.seenLSNAppliedLSN) {
+		if opts.seenLSNs != nil &&
+			(opts.seenLSNAppliedLSN == 0 || frame.LSN > opts.seenLSNAppliedLSN) &&
+			(opts.seenLSNMax == 0 || frame.LSN <= opts.seenLSNMax) {
 			if _, ok := opts.seenLSNs[frame.LSN]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
@@ -445,9 +462,6 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 		}
 		if frame.LSN > scan.maxLSN {
 			scan.maxLSN = frame.LSN
-		}
-		if opts.stopAfterFirstLSNGreaterThanSeen && scan.minLSN > opts.stopAfterFirstLSNGreaterThan {
-			return scan, nil
 		}
 	}
 }
@@ -507,15 +521,14 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 	return filtered, nil
 }
 
-func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
-	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, appliedLSN, maxSegmentBytes)
-	if err != nil {
-		return decisions, err
-	}
-	return removeCoveredCommandWALSegments(decisions)
+func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	return scanCommandWALSegmentsForCleanupProof(dir, appliedLSN, appliedLSN, maxSegmentBytes)
 }
 
-func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, durableWALLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	if durableWALLSN < cleanupThrough {
+		return nil, fmt.Errorf("%w: durable WAL LSN %d is behind cleanup frontier %d", ErrCommandWALAppliedLSNNonContig, durableWALLSN, cleanupThrough)
+	}
 	// PR2 cleanup deliberately streams segments on demand. It is intended for
 	// checkpoint/maintenance boundaries; a later manifest/catalog can cache
 	// results if this moves onto a hotter path.
@@ -535,18 +548,36 @@ func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, ma
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegmentWithOptions(seg.path, maxSegmentBytes, active, commandWALSegmentScanOptions{
-			seenLSNs:                         seenLSNs,
-			seenLSNAppliedLSN:                appliedLSN,
-			stopAfterFirstLSNGreaterThan:     appliedLSN,
-			stopAfterFirstLSNGreaterThanSeen: true,
+		file, err := os.Open(seg.path)
+		if err != nil {
+			scanErr = errors.Join(scanErr, fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err))
+			continue
+		}
+		identity, identityErr := rootpublication.StableIdentityFromFile(file)
+		if identityErr != nil {
+			_ = file.Close()
+			scanErr = errors.Join(scanErr, fmt.Errorf("identify command WAL segment %s: %w", filepath.Base(seg.path), identityErr))
+			continue
+		}
+		info, statErr := file.Stat()
+		if statErr != nil {
+			_ = file.Close()
+			scanErr = errors.Join(scanErr, fmt.Errorf("stat command WAL segment %s: %w", filepath.Base(seg.path), statErr))
+			continue
+		}
+		scan, err := scanCommandWALSegmentFileWithOptions(file, maxSegmentBytes, active, commandWALSegmentScanOptions{
+			seenLSNs:          seenLSNs,
+			seenLSNAppliedLSN: cleanupThrough,
+			seenLSNMax:        durableWALLSN,
 		})
 		if err != nil {
+			_ = file.Close()
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:         seg.path,
-				Size:         seg.size,
+				Size:         info.Size(),
 				ScannedBytes: scan.scannedBytes,
 				Frames:       scan.frames,
+				MinLSN:       scan.minLSN,
 				MaxLSN:       scan.maxLSN,
 				Active:       active,
 				Error:        err.Error(),
@@ -555,55 +586,194 @@ func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, ma
 			continue
 		}
 		if !scan.typed {
+			_ = file.Close()
 			continue
 		}
 		decision := commandWALSegmentCleanupDecision{
 			Path:         seg.path,
-			Size:         seg.size,
+			Size:         info.Size(),
 			ScannedBytes: scan.scannedBytes,
 			Frames:       scan.frames,
+			MinLSN:       scan.minLSN,
 			MaxLSN:       scan.maxLSN,
 			Active:       active,
-			Covered:      scan.maxLSN <= appliedLSN,
+			Covered:      scan.maxLSN <= cleanupThrough,
+			identity:     identity,
+			file:         file,
 		}
 		decisions = append(decisions, decision)
 	}
+	if lineageErr := validateCommandWALCleanupReplayLineage(seenLSNs, cleanupThrough, durableWALLSN); lineageErr != nil {
+		scanErr = errors.Join(scanErr, lineageErr)
+	}
 	if scanErr != nil {
+		closeCommandWALCleanupDecisions(decisions)
 		return decisions, scanErr
 	}
 	return decisions, nil
 }
 
+// validateCommandWALCleanupReplayLineage proves that every LSN which the
+// oldest recoverable root may need is still present exactly once. Frames at
+// or below cleanupThrough are already represented by every durable root and
+// may legitimately be sparse after earlier multi-lane cleanup batches.
+func validateCommandWALCleanupReplayLineage(seenLSNs map[uint64]struct{}, cleanupThrough uint64, durableWALLSN uint64) error {
+	if durableWALLSN < cleanupThrough {
+		return fmt.Errorf("%w: durable WAL LSN %d is behind cleanup frontier %d", ErrCommandWALAppliedLSNNonContig, durableWALLSN, cleanupThrough)
+	}
+	if durableWALLSN == cleanupThrough {
+		return nil
+	}
+	want := durableWALLSN - cleanupThrough
+	if uint64(len(seenLSNs)) != want {
+		return fmt.Errorf("%w: retained replay range [%d,%d] has %d complete frames, want %d", ErrCommandWALAppliedLSNNonContig, cleanupThrough+1, durableWALLSN, len(seenLSNs), want)
+	}
+	return nil
+}
+
 func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision) ([]commandWALSegmentCleanupDecision, error) {
-	for i := range decisions {
-		decision := &decisions[i]
-		if decision.Covered && !decision.Active {
-			if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
-				return decisions, err
-			}
-			removeErr := os.Remove(decision.Path)
-			if removeErr != nil && !os.IsNotExist(removeErr) {
-				return decisions, removeErr
-			}
-			after := durabilitycut.Event{
-				Point:    durabilitycut.AfterWALOrAssetUnlink,
-				Resource: durabilitycut.ResourceCommandWAL,
-				Path:     decision.Path,
-			}
-			if removeErr == nil {
-				after.Namespace = durabilitycut.NamespaceUnlink
-				after.OldPath = decision.Path
-			}
-			// Preserve the completed namespace mutation in the returned decisions
-			// even when the post-unlink observer reports a simulated crash cut.
-			decision.Removed = true
-			if err := durabilitycut.Emit(after); err != nil {
-				if removeErr == nil {
-					return decisions, errors.Join(err, ErrRecoveryRequired)
-				}
-				return decisions, err
+	return removeCoveredCommandWALSegmentsWithRegistry(decisions, nil)
+}
+
+func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) ([]commandWALSegmentCleanupDecision, error) {
+	defer closeCommandWALCleanupDecisions(decisions)
+	type cleanupLease struct {
+		decision int
+		lease    *rootpublication.IdentityDeleteLease
+	}
+	leases := make([]cleanupLease, 0, len(decisions))
+	abortLeases := func() {
+		for i := range leases {
+			if leases[i].lease != nil {
+				leases[i].lease.Abort()
 			}
 		}
 	}
+	for i := range decisions {
+		decision := &decisions[i]
+		if !decision.Covered || decision.Active {
+			continue
+		}
+		current, err := os.Open(decision.Path)
+		if err != nil {
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("reopen command WAL cleanup target %s: %w", filepath.Base(decision.Path), err))
+		}
+		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		closeErr := current.Close()
+		if identityErr != nil {
+			decision.Error = identityErr.Error()
+			abortLeases()
+			return decisions, identityErr
+		}
+		if closeErr != nil {
+			decision.Error = closeErr.Error()
+			abortLeases()
+			return decisions, closeErr
+		}
+		if decision.file == nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+			err := errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path)))
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, err
+		}
+		var lease *rootpublication.IdentityDeleteLease
+		if registry != nil {
+			lease, err = registry.BeginDeleteAt(decision.identity, filepath.Clean(decision.Path))
+			if err != nil {
+				decision.Pinned = errors.Is(err, rootpublication.ErrResourcePinned)
+				decision.Error = err.Error()
+				abortLeases()
+				return decisions, err
+			}
+		}
+		leases = append(leases, cleanupLease{decision: i, lease: lease})
+	}
+	for leaseIndex := range leases {
+		entry := &leases[leaseIndex]
+		decision := &decisions[entry.decision]
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, "", decision.Path); err != nil {
+			decision.Error = err.Error()
+			for i := leaseIndex; i < len(leases); i++ {
+				if leases[i].lease != nil {
+					leases[i].lease.Abort()
+				}
+			}
+			return decisions, err
+		}
+		current, openErr := os.Open(decision.Path)
+		if openErr != nil {
+			decision.Error = openErr.Error()
+			for i := leaseIndex; i < len(leases); i++ {
+				if leases[i].lease != nil {
+					leases[i].lease.Abort()
+				}
+			}
+			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("revalidate command WAL cleanup target %s: %w", filepath.Base(decision.Path), openErr))
+		}
+		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		closeErr := current.Close()
+		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+			revalidateErr := errors.Join(identityErr, closeErr)
+			if revalidateErr == nil {
+				revalidateErr = fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path))
+			}
+			decision.Error = revalidateErr.Error()
+			for i := leaseIndex; i < len(leases); i++ {
+				if leases[i].lease != nil {
+					leases[i].lease.Abort()
+				}
+			}
+			return decisions, errors.Join(ErrRecoveryRequired, revalidateErr)
+		}
+		removeErr := os.Remove(decision.Path)
+		if removeErr != nil && !os.IsNotExist(removeErr) {
+			decision.Error = removeErr.Error()
+			for i := leaseIndex; i < len(leases); i++ {
+				if leases[i].lease != nil {
+					leases[i].lease.Abort()
+				}
+			}
+			return decisions, removeErr
+		}
+		if entry.lease != nil {
+			entry.lease.CommitDeleted()
+			entry.lease = nil
+		}
+		after := durabilitycut.Event{
+			Point:    durabilitycut.AfterWALOrAssetUnlink,
+			Resource: durabilitycut.ResourceCommandWAL,
+			Path:     decision.Path,
+		}
+		if removeErr == nil {
+			after.Namespace = durabilitycut.NamespaceUnlink
+			after.OldPath = decision.Path
+		}
+		// Preserve the completed namespace mutation in the returned decisions
+		// even when the post-unlink observer reports a simulated crash cut.
+		decision.Removed = true
+		if err := durabilitycut.Emit(after); err != nil {
+			decision.Error = err.Error()
+			for i := leaseIndex + 1; i < len(leases); i++ {
+				if leases[i].lease != nil {
+					leases[i].lease.Abort()
+				}
+			}
+			if removeErr == nil {
+				return decisions, errors.Join(err, ErrRecoveryRequired)
+			}
+			return decisions, err
+		}
+	}
 	return decisions, nil
+}
+
+func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) {
+	for i := range decisions {
+		if decisions[i].file != nil {
+			_ = decisions[i].file.Close()
+			decisions[i].file = nil
+		}
+	}
 }

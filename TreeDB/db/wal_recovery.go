@@ -354,8 +354,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		})
 	}
 	if len(frames) == 0 {
-		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
-		return err
+		return nil
 	}
 	replayDependencies, err := captureCommandWALReplayRelaxedDependencies(db, frames, classification.DurableFrontier, ridMap)
 	if err != nil {
@@ -463,8 +462,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		restoreValueLogAppender()
 		restoreLeafPageLog()
 	}
-	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
-	return err
+	return nil
 }
 
 // captureCommandWALReplayRelaxedDependencies reconstructs the exact physical
