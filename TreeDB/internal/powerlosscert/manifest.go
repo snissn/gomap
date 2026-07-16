@@ -440,10 +440,18 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 		return fmt.Errorf("%s has no hashed artifacts", prefix)
 	}
 	artifactKinds := make(map[ArtifactKind]bool, len(witness.Artifacts))
+	artifactPaths := make(map[string]ArtifactKind, len(witness.Artifacts))
 	for _, artifact := range witness.Artifacts {
 		if err := validateArtifact(prefix+" artifact", artifact); err != nil {
 			return err
 		}
+		if binaries[artifact.Path] {
+			return fmt.Errorf("%s reuses test-binary path %q as artifact kind %q", prefix, artifact.Path, artifact.Kind)
+		}
+		if priorKind, duplicate := artifactPaths[artifact.Path]; duplicate {
+			return fmt.Errorf("%s reuses artifact path %q for kinds %q and %q", prefix, artifact.Path, priorKind, artifact.Kind)
+		}
+		artifactPaths[artifact.Path] = artifact.Kind
 		if artifactKinds[artifact.Kind] {
 			return fmt.Errorf("%s duplicates artifact kind %q", prefix, artifact.Kind)
 		}
