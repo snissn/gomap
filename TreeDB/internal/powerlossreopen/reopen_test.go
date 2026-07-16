@@ -74,17 +74,23 @@ func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	evidenceDir := filepath.Join(t.TempDir(), "evidence")
 	t.Setenv(powerlossoracle.EnvEvidenceDir, evidenceDir)
 	t.Setenv(powerlossoracle.EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
-	result, reopened, closeFn, err := powerlossreopen.Stable(model, opts, true)
+	result, reopened, closeFn, err := powerlossreopen.Stable(model, opts, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Dir != filepath.Join(evidenceDir, "stable-image") || result.Rejected || reopened == nil {
+	if result.Dir != filepath.Join(evidenceDir, "recovery-input") || result.Rejected || reopened == nil {
 		t.Fatalf("Stable evidence result=%+v reopened=%v", result, reopened)
+	}
+	if err := reopened.SetSync([]byte("recovery/mutation"), []byte("must-not-change-evidence")); err != nil {
+		t.Fatal(err)
 	}
 	if err := closeFn(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(evidenceDir, "recovery_trace.json")); err != nil {
 		t.Fatalf("missing recovery evidence: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(evidenceDir, "stable-image")); err != nil {
+		t.Fatalf("missing immutable stable image: %v", err)
 	}
 }
