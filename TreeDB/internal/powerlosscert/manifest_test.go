@@ -59,6 +59,24 @@ func TestValidateBundleRejectsPassingWitnessWithoutDeclaredCutOrArtifacts(t *tes
 	}
 }
 
+func TestValidateBundleAcceptsZeroBasedFirstCutOccurrence(t *testing.T) {
+	inventory := testRiskInventory()
+	manifest := testChildManifest("witness-a")
+	witness := &manifest.Witnesses[0]
+	witness.CutID = "cut/checkpoint-generation-2/after-meta-write/000"
+	witness.CutOccurrence = 0
+	witness.ObservedEventCount = 1
+	witness.Command.Env["TREEDB_POWERLOSS_CUT_ID"] = witness.CutID
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err != nil {
+		t.Fatalf("ValidateBundle first zero-based occurrence: %v", err)
+	}
+
+	witness.ObservedEventCount = 0
+	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "observed event count") {
+		t.Fatalf("ValidateBundle unobserved first occurrence error=%v", err)
+	}
+}
+
 func TestBuildCoverageReportRequiresModeledCrashOwnership(t *testing.T) {
 	inventory := testRiskInventory()
 	manifest := testChildManifest("witness-a")
@@ -203,16 +221,18 @@ func testChildManifest(witnessID string) ChildManifest {
 			CutID:              "cut/checkpoint-generation-2/after-meta-write/001",
 			CutPoint:           "after-meta-write",
 			CutOccurrence:      1,
-			ObservedEventCount: 1,
+			ObservedEventCount: 2,
 			Command: TestCommand{
 				BinaryPath: "bin/TreeDB.test",
 				Package:    "./TreeDB",
 				TestName:   "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
 				Args:       []string{"-test.run", "^TestPowerLossOracleCounterexampleNewMetaMissingClosure$", "-test.v"},
 				Env: map[string]string{
-					"TREEDB_POWERLOSS_CUT_ID":     "cut/checkpoint-generation-2/after-meta-write/001",
-					"TREEDB_POWERLOSS_VARIANT_ID": "variant-a",
-					"TREEDB_POWERLOSS_SEED":       "1",
+					"TREEDB_POWERLOSS_CUT_ID":           "cut/checkpoint-generation-2/after-meta-write/001",
+					"TREEDB_POWERLOSS_VARIANT_ID":       "variant-a",
+					"TREEDB_POWERLOSS_SEED":             "1",
+					"TREEDB_POWERLOSS_EVIDENCE_DIR":     "artifacts/witness-a",
+					"TREEDB_POWERLOSS_EXPECT_CUT_POINT": "after-meta-write",
 				},
 			},
 			CutExercised:  true,

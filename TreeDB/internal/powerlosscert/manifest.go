@@ -418,10 +418,10 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	if witness.Seed == 0 {
 		return fmt.Errorf("%s has zero seed", prefix)
 	}
-	if witness.CutID == "" || witness.CutPoint == "" || witness.CutOccurrence <= 0 {
+	if witness.CutID == "" || witness.CutPoint == "" || witness.CutOccurrence < 0 {
 		return fmt.Errorf("%s has incomplete declared cut metadata", prefix)
 	}
-	if witness.ObservedEventCount < witness.CutOccurrence {
+	if witness.ObservedEventCount <= witness.CutOccurrence {
 		return fmt.Errorf("%s observed event count=%d does not reach declared occurrence=%d", prefix, witness.ObservedEventCount, witness.CutOccurrence)
 	}
 	if witness.Command.BinaryPath == "" || witness.Command.Package == "" || witness.Command.TestName == "" || len(witness.Command.Args) == 0 {

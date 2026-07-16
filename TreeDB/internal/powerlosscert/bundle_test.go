@@ -148,6 +148,10 @@ func writeArtifactFixture(t *testing.T, root string, kind ArtifactKind, path, co
 
 func testOperationTraceJSON(t *testing.T, witness Witness, cutPoint string) string {
 	t.Helper()
+	events := make([]string, witness.ObservedEventCount)
+	for index := range events {
+		events[index] = "cut:" + cutPoint + ":meta:meta.db:0"
+	}
 	trace := map[string]any{
 		"schema_version":       "treedb-power-loss-operation-trace/v1",
 		"cut_id":               witness.CutID,
@@ -155,7 +159,7 @@ func testOperationTraceJSON(t *testing.T, witness Witness, cutPoint string) stri
 		"seed":                 fmt.Sprint(witness.Seed),
 		"declared_cut_point":   cutPoint,
 		"observed_event_count": witness.ObservedEventCount,
-		"events":               []string{"cut:" + cutPoint + ":meta:meta.db:0"},
+		"events":               events,
 	}
 	data, err := json.Marshal(trace)
 	if err != nil {
