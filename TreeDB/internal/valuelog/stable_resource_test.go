@@ -15,6 +15,32 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestStableExistingPhysicalResourceTokenRejectsDiagnosticPathWithoutParentNamespace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, rootpublication.NewIdentityPinRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.StableExistingPhysicalResourceToken(fileID, rootpublication.StableResourceSpec{
+		DiagnosticPath: "value-l0-000001.log",
+	}, func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error) {
+		t.Fatal("constructor called for a resource with no parent namespace")
+		return nil, nil
+	})
+	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("base-only diagnostic path error=%v want ErrUnresolvedResource", err)
+	}
+}
+
 func TestOrdinaryOuterLeafCreationClassifiesFallbackDirectorySync(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "leaf_vlog")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

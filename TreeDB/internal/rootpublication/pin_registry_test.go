@@ -53,6 +53,38 @@ func TestIdentityPinRegistrySerializesPinAndDelete(t *testing.T) {
 	pin.Release()
 }
 
+func TestIdentityDeleteLeaseCommitForgetsStableNamespaceLinksForDeletedChild(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatalf("open parent: %v", err)
+	}
+	defer parent.Close()
+	childPath := filepath.Join(dir, "000001.vlog")
+	child, err := os.OpenFile(childPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	defer child.Close()
+
+	registry := NewIdentityPinRegistry()
+	if err := registry.RememberStableNamespaceLink(parent, child, filepath.Base(childPath)); err != nil {
+		t.Fatalf("remember stable namespace link: %v", err)
+	}
+	identity, err := StableIdentityFromFile(child)
+	if err != nil {
+		t.Fatalf("child identity: %v", err)
+	}
+	lease, err := registry.BeginDelete(identity)
+	if err != nil {
+		t.Fatalf("begin delete: %v", err)
+	}
+	lease.CommitDeleted()
+	if got := registry.ActiveStableNamespaceLinks(); got != 0 {
+		t.Fatalf("stable namespace links after delete commit=%d want 0", got)
+	}
+}
+
 func TestIdentityPinRegistryCoalescesLogicalGenerations(t *testing.T) {
 	registry := NewIdentityPinRegistry()
 	first := testStableIdentity(1)
