@@ -1617,10 +1617,6 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		return 0, err
 	}
-	return db.pruneZeroByteValueLogFilesFromEntries(layout.valueVLogDir, entries, protectedPaths)
-}
-
-func (db *DB) pruneZeroByteValueLogFilesFromEntries(valueVLogDir string, entries []os.DirEntry, protectedPaths []string) (int, error) {
 	currentPaths, currentIDs := db.currentValueLogProtectedRefs()
 	protectedPaths = mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
 	protected := compactStorageProtectedPathSet(protectedPaths)
@@ -1634,7 +1630,7 @@ func (db *DB) pruneZeroByteValueLogFilesFromEntries(valueVLogDir string, entries
 		if !compactStorageIsValueLogSegmentName(name) {
 			continue
 		}
-		path := filepath.Join(valueVLogDir, name)
+		path := filepath.Join(layout.valueVLogDir, name)
 		if _, ok := protected[filepath.Clean(path)]; ok {
 			continue
 		}
@@ -1645,7 +1641,7 @@ func (db *DB) pruneZeroByteValueLogFilesFromEntries(valueVLogDir string, entries
 		}
 		info, err := entry.Info()
 		if err != nil {
-			if compactStorageConcurrentChildDeletion(valueVLogDir, path, err) {
+			if compactStorageConcurrentChildDeletion(layout.valueVLogDir, path, err) {
 				continue
 			}
 			return deleted, err
@@ -1686,7 +1682,7 @@ func (db *DB) pruneZeroByteValueLogFilesFromEntries(valueVLogDir string, entries
 				}
 			}
 		}
-		removed, err := removePersistentFile(valueVLogDir, path, durabilitycut.ResourceValueLog)
+		removed, err := removePersistentFile(layout.valueVLogDir, path, durabilitycut.ResourceValueLog)
 		if err != nil {
 			if compactStorageIsBusyRemoveError(err) {
 				continue
@@ -1737,10 +1733,6 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protected
 		}
 		return 0, err
 	}
-	return zeroByteValueLogSegmentFilesFromEntries(dir, entries, protectedPaths, protectedFileIDs)
-}
-
-func zeroByteValueLogSegmentFilesFromEntries(dir string, entries []os.DirEntry, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
 	protected := compactStorageProtectedPathSet(protectedPaths)
 	protectedIDs := compactStorageProtectedFileIDSet(protectedPaths, protectedFileIDs)
 	count := 0

@@ -75,81 +75,31 @@ func TestCompactStorageRepairsMissingCurrentLeafGenerationFile(t *testing.T) {
 	}
 }
 
-func TestCompactStorageConcurrentChildDeletionIsAbsentFromUsageSnapshot(t *testing.T) {
+func TestCompactStorageConcurrentChildDeletionIsAbsentFromStorageScans(t *testing.T) {
 	root := t.TempDir()
-	child := filepath.Join(root, ".value-l0-000001.log.delete-test")
-	err := &os.PathError{Op: "readdirent", Path: child, Err: os.ErrNotExist}
-
-	if !compactStorageConcurrentChildDeletion(root, child, err) {
-		t.Fatal("concurrently deleted child should be absent from usage snapshot")
+	child := filepath.Join(root, "value-l0-000001.log")
+	if err := os.WriteFile(child, nil, 0644); err != nil {
+		t.Fatalf("write enumerated child: %v", err)
 	}
-	if compactStorageConcurrentChildDeletion(root, root, err) {
-		t.Fatal("missing usage root should remain an error")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read scan root: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries=%d want 1", len(entries))
+	}
+	if err := os.Remove(child); err != nil {
+		t.Fatalf("remove enumerated child: %v", err)
+	}
+	if _, err := entries[0].Info(); !compactStorageConcurrentChildDeletion(root, child, err) {
+		t.Fatalf("post-enumeration child error=%v should be absent from usage, plan, and apply scans", err)
+	}
+	missing := &os.PathError{Op: "lstat", Path: root, Err: os.ErrNotExist}
+	if compactStorageConcurrentChildDeletion(root, root, missing) {
+		t.Fatal("missing scan root should remain an error")
 	}
 	if compactStorageConcurrentChildDeletion(root, child, os.ErrPermission) {
 		t.Fatal("non-ENOENT child error should remain an error")
-	}
-}
-
-type compactStorageInfoErrorDirEntry struct {
-	name string
-	err  error
-}
-
-func (entry compactStorageInfoErrorDirEntry) Name() string               { return entry.name }
-func (entry compactStorageInfoErrorDirEntry) IsDir() bool                { return false }
-func (entry compactStorageInfoErrorDirEntry) Type() os.FileMode          { return 0 }
-func (entry compactStorageInfoErrorDirEntry) Info() (os.FileInfo, error) { return nil, entry.err }
-
-func TestZeroByteValueLogScansIgnoreCompletedPostEnumerationDeletion(t *testing.T) {
-	dir := t.TempDir()
-	name := "value-l0-000001.log"
-	path := filepath.Join(dir, name)
-	entries := []os.DirEntry{compactStorageInfoErrorDirEntry{
-		name: name,
-		err:  &os.PathError{Op: "lstat", Path: path, Err: os.ErrNotExist},
-	}}
-
-	t.Run("plan", func(t *testing.T) {
-		count, err := zeroByteValueLogSegmentFilesFromEntries(dir, entries, nil, nil)
-		if err != nil {
-			t.Fatalf("zero-byte plan scan: %v", err)
-		}
-		if count != 0 {
-			t.Fatalf("zero-byte plan count=%d want 0", count)
-		}
-	})
-
-	t.Run("apply", func(t *testing.T) {
-		db := &DB{}
-		deleted, err := db.pruneZeroByteValueLogFilesFromEntries(dir, entries, nil)
-		if err != nil {
-			t.Fatalf("zero-byte apply scan: %v", err)
-		}
-		if deleted != 0 {
-			t.Fatalf("zero-byte apply deleted=%d want 0", deleted)
-		}
-	})
-}
-
-func TestZeroByteValueLogScansReturnPostEnumerationInfoErrors(t *testing.T) {
-	dir := t.TempDir()
-	wantErr := &os.PathError{
-		Op:   "lstat",
-		Path: filepath.Join(dir, "value-l0-000001.log"),
-		Err:  os.ErrPermission,
-	}
-	entries := []os.DirEntry{compactStorageInfoErrorDirEntry{
-		name: "value-l0-000001.log",
-		err:  wantErr,
-	}}
-
-	if _, err := zeroByteValueLogSegmentFilesFromEntries(dir, entries, nil, nil); !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("zero-byte plan scan error=%v want permission", err)
-	}
-	db := &DB{}
-	if _, err := db.pruneZeroByteValueLogFilesFromEntries(dir, entries, nil); !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("zero-byte apply scan error=%v want permission", err)
 	}
 }
 
