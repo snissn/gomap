@@ -153,6 +153,46 @@ func TestFormatConfig_PersistsAndGatesCanonicalDurabilityProfile(t *testing.T) {
 	}
 }
 
+func TestLoadPersistedDurabilityProfile_ReadsOnlyContractGate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		want      DurabilityProfile
+		wantFound bool
+		wantErr   string
+	}{
+		{name: "missing"},
+		{name: "legacy", body: `{"version":2}`, wantFound: false},
+		{name: "production", body: `{"version":4,"durability_profile":"no_wal_fast","future_field":{"nested":true}}`, want: ProfileNoWALFast, wantFound: true},
+		{name: "benchmark", body: `{"version":4,"durability_profile":"bench_unsafe"}`, want: ProfileBenchUnsafe, wantFound: true},
+		{name: "unrelated_malformed_legacy", body: `{"version":2,"future_field":`, wantFound: false},
+		{name: "malformed_profile_gate", body: `{"version":4,"durability_profile":`, wantErr: "durability-profile gate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.body != "" {
+				if err := os.WriteFile(filepath.Join(dir, formatConfigFileName), []byte(tc.body), 0o600); err != nil {
+					t.Fatalf("write format.json: %v", err)
+				}
+			}
+
+			got, found, err := LoadPersistedDurabilityProfile(dir)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadPersistedDurabilityProfile error=%v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadPersistedDurabilityProfile: %v", err)
+			}
+			if got != tc.want || found != tc.wantFound {
+				t.Fatalf("LoadPersistedDurabilityProfile=(%q,%t), want (%q,%t)", got, found, tc.want, tc.wantFound)
+			}
+		})
+	}
+}
+
 func TestSaveFormatConfig_CannotClearOrReplacePersistedDurabilityProfile(t *testing.T) {
 	dir := t.TempDir()
 	if err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {

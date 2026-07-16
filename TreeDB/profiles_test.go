@@ -117,35 +117,82 @@ func TestOpen_RejectsBenchUnsafeWithoutExplicitBoundary(t *testing.T) {
 	}
 }
 
+func TestOpen_PersistedProductionProfileImplicitlyReopensSameContract(t *testing.T) {
+	for _, profile := range []Profile{ProfileCommandWALRelaxed, ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(OptionsFor(profile, dir))
+			if err != nil {
+				t.Fatalf("Open %s: %v", profile, err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatalf("Close %s: %v", profile, err)
+			}
+
+			reopen, err := Open(Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("implicit reopen %s: %v", profile, err)
+			}
+			if got := reopen.ResolvedProfile(); got != profile {
+				t.Fatalf("implicit reopen profile=%q want %q", got, profile)
+			}
+			if err := reopen.Close(); err != nil {
+				t.Fatalf("close implicit reopen %s: %v", profile, err)
+			}
+		})
+	}
+}
+
 func TestOpen_PersistedProfileCannotChangeContracts(t *testing.T) {
 	dir := t.TempDir()
-	database, err := Open(OptionsFor(ProfileNoWALFast, dir))
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.ValueLog.PointerThreshold = 1
+	database, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open no_wal_fast: %v", err)
+	}
+	if err := database.Set([]byte("profile/reopen"), []byte("persisted value-log record")); err != nil {
+		_ = database.Close()
+		t.Fatalf("Set no_wal_fast: %v", err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		_ = database.Close()
+		t.Fatalf("Checkpoint no_wal_fast: %v", err)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatalf("Close no_wal_fast: %v", err)
 	}
 
-	reopen, err := Open(OptionsFor(ProfileNoWALFast, dir))
+	reopen, err := Open(Options{Dir: dir, IgnoreFormatConfig: true})
 	if err != nil {
-		t.Fatalf("reopen matching no_wal_fast: %v", err)
+		t.Fatalf("IgnoreFormatConfig implicit reopen no_wal_fast: %v", err)
+	}
+	if got := reopen.ResolvedProfile(); got != ProfileNoWALFast {
+		t.Fatalf("IgnoreFormatConfig implicit reopen profile=%q want %q", got, ProfileNoWALFast)
 	}
 	if err := reopen.Close(); err != nil {
-		t.Fatalf("close matching no_wal_fast: %v", err)
+		t.Fatalf("close IgnoreFormatConfig implicit reopen no_wal_fast: %v", err)
 	}
 
-	if _, err := Open(Options{Dir: dir}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-		t.Fatalf("default reopen error=%v, want ErrLegacyFormatRebuildRequired", err)
+	backend, cleanup, err := OpenBackend(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("OpenBackend implicit no_wal_fast: %v", err)
 	}
-	if _, err := Open(Options{Dir: dir, IgnoreFormatConfig: true}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-		t.Fatalf("IgnoreFormatConfig reopen error=%v, want ErrLegacyFormatRebuildRequired", err)
+	if got := backend.ResolvedProfile(); got != ProfileNoWALFast {
+		t.Fatalf("OpenBackend implicit profile=%q want %q", got, ProfileNoWALFast)
 	}
-	if err := VacuumIndexOffline(Options{Dir: dir}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-		t.Fatalf("default offline vacuum error=%v, want ErrLegacyFormatRebuildRequired", err)
+	if err := cleanup(); err != nil {
+		t.Fatalf("OpenBackend cleanup: %v", err)
 	}
-	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-		t.Fatalf("default offline rewrite error=%v, want ErrLegacyFormatRebuildRequired", err)
+	if err := VacuumIndexOffline(Options{Dir: dir}); err != nil {
+		t.Fatalf("implicit-profile offline vacuum: %v", err)
+	}
+	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); err != nil {
+		t.Fatalf("implicit-profile offline rewrite: %v", err)
+	}
+
+	if _, err := Open(OptionsFor(ProfileCommandWALDurable, dir)); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+		t.Fatalf("explicit mismatched reopen error=%v, want ErrLegacyFormatRebuildRequired", err)
 	}
 }
 
@@ -159,8 +206,19 @@ func TestOpen_BenchUnsafeManifestCannotBecomeProductionDefault(t *testing.T) {
 		t.Fatalf("Close bench_unsafe: %v", err)
 	}
 
-	if _, err := Open(Options{Dir: dir}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
-		t.Fatalf("production reopen error=%v, want ErrLegacyFormatRebuildRequired", err)
+	if _, err := Open(Options{Dir: dir}); err == nil || !strings.Contains(err.Error(), "OptionsForBenchmark") {
+		t.Fatalf("production reopen error=%v, want explicit benchmark-boundary rejection", err)
+	}
+	if _, err := Open(Options{Dir: dir, UnsafeBenchmarkProfile: true}); err == nil || !strings.Contains(err.Error(), "OptionsForBenchmark") {
+		t.Fatalf("flag-only benchmark reopen error=%v, want explicit benchmark-boundary rejection", err)
+	}
+
+	reopen, err := Open(OptionsForBenchmark(ProfileBenchUnsafe, dir))
+	if err != nil {
+		t.Fatalf("explicit benchmark reopen: %v", err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("close explicit benchmark reopen: %v", err)
 	}
 }
 

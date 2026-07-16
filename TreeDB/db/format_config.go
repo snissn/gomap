@@ -233,24 +233,37 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 	return cfg, true, nil
 }
 
-// ValidateDurabilityProfileGate binds a persisted production DB directory to
-// the exact canonical durability profile selected by its public constructor.
-// The gate remains active even when IgnoreFormatConfig is set, just like the
-// required-feature gate: neither option may bypass an acknowledgement contract.
-func ValidateDurabilityProfileGate(dir string, selected DurabilityProfile) error {
+type durabilityProfileGateState struct {
+	persisted            DurabilityProfile
+	legacyWithoutProfile bool
+}
+
+// LoadPersistedDurabilityProfile reads only the durability-profile gate from
+// format.json. It intentionally ignores unrelated malformed or future format
+// fields so callers can resolve the acknowledgement contract even when
+// IgnoreFormatConfig is set.
+func LoadPersistedDurabilityProfile(dir string) (DurabilityProfile, bool, error) {
+	state, err := loadDurabilityProfileGate(dir)
+	if err != nil {
+		return "", false, err
+	}
+	return state.persisted, state.persisted != "", nil
+}
+
+func loadDurabilityProfileGate(dir string) (durabilityProfileGateState, error) {
 	path := formatConfigPath(dir)
 	if path == "" {
-		return errors.New("missing db dir")
+		return durabilityProfileGateState{}, errors.New("missing db dir")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return durabilityProfileGateState{}, nil
 		}
-		return err
+		return durabilityProfileGateState{}, err
 	}
 	if len(data) == 0 {
-		return nil
+		return durabilityProfileGateState{}, nil
 	}
 	var gate struct {
 		Version           int                `json:"version"`
@@ -258,44 +271,57 @@ func ValidateDurabilityProfileGate(dir string, selected DurabilityProfile) error
 	}
 	if err := json.Unmarshal(data, &gate); err != nil {
 		if gate.Version >= formatConfigDurabilityProfileVersion || gate.DurabilityProfile != nil || bytes.Contains(data, []byte("durability_profile")) {
-			return fmt.Errorf("treedb: decode %s durability-profile gate: %w", filepath.Base(path), err)
+			return durabilityProfileGateState{}, fmt.Errorf("treedb: decode %s durability-profile gate: %w", filepath.Base(path), err)
 		}
-		return nil
+		return durabilityProfileGateState{}, nil
 	}
 	if gate.DurabilityProfile == nil {
 		if gate.Version >= formatConfigDurabilityProfileVersion {
-			return fmt.Errorf("treedb: decode %s: format version %d requires durability_profile", filepath.Base(path), formatConfigDurabilityProfileVersion)
+			return durabilityProfileGateState{}, fmt.Errorf("treedb: decode %s: format version %d requires durability_profile", filepath.Base(path), formatConfigDurabilityProfileVersion)
 		}
-		if selected == "" {
-			return nil
-		}
-		return fmt.Errorf(
-			"%w: %s has no persisted durability_profile; rebuild the pre-alpha DB directory before selecting %q",
-			ErrLegacyFormatRebuildRequired,
-			filepath.Base(path),
-			selected,
-		)
+		return durabilityProfileGateState{legacyWithoutProfile: true}, nil
 	}
 	persisted := *gate.DurabilityProfile
 	if gate.Version < formatConfigDurabilityProfileVersion {
-		return fmt.Errorf("treedb: decode %s: durability_profile requires format version %d", filepath.Base(path), formatConfigDurabilityProfileVersion)
+		return durabilityProfileGateState{}, fmt.Errorf("treedb: decode %s: durability_profile requires format version %d", filepath.Base(path), formatConfigDurabilityProfileVersion)
 	}
 	if !persisted.Valid() {
-		return fmt.Errorf("treedb: decode %s: unsupported durability_profile %q", filepath.Base(path), persisted)
+		return durabilityProfileGateState{}, fmt.Errorf("treedb: decode %s: unsupported durability_profile %q", filepath.Base(path), persisted)
 	}
+	return durabilityProfileGateState{persisted: persisted}, nil
+}
+
+// ValidateDurabilityProfileGate binds a persisted production DB directory to
+// the exact canonical durability profile selected by its public constructor.
+// The gate remains active even when IgnoreFormatConfig is set, just like the
+// required-feature gate: neither option may bypass an acknowledgement contract.
+func ValidateDurabilityProfileGate(dir string, selected DurabilityProfile) error {
+	state, err := loadDurabilityProfileGate(dir)
+	if err != nil {
+		return err
+	}
+	if state.persisted == "" {
+		if !state.legacyWithoutProfile || selected == "" {
+			return nil
+		}
+		return fmt.Errorf(
+			"%w: format.json has no persisted durability_profile; rebuild the pre-alpha DB directory before selecting %q",
+			ErrLegacyFormatRebuildRequired,
+			selected,
+		)
+	}
+	persisted := state.persisted
 	if selected == "" {
 		return fmt.Errorf(
-			"%w: %s requires explicit canonical durability profile %q",
+			"%w: format.json requires explicit canonical durability profile %q",
 			ErrLegacyFormatRebuildRequired,
-			filepath.Base(path),
 			persisted,
 		)
 	}
 	if persisted != selected {
 		return fmt.Errorf(
-			"%w: %s durability_profile=%q conflicts with selected profile %q; rebuild the pre-alpha DB directory to change contracts",
+			"%w: format.json durability_profile=%q conflicts with selected profile %q; rebuild the pre-alpha DB directory to change contracts",
 			ErrLegacyFormatRebuildRequired,
-			filepath.Base(path),
 			persisted,
 			selected,
 		)

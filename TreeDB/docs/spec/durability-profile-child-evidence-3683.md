@@ -14,7 +14,7 @@ replace latest-head CI or the successor's own end-to-end review.
 | forced value-log pointers, delete/reuse, command-WAL rotation, checkpoint, and reopen in every production profile | `TestProductionProfilesForcedPointersDeleteReuseRotationReopen` |
 | process-crash reopen for relaxed WAL, durable WAL, and production no-WAL sync boundaries | `TestCrashRecovery_DurabilityTiers` |
 | benchmark-only selection cannot enter the production parser/constructor path | `TestParsePublicProfile_RejectsDeprecatedAndUnknownNames`, `TestOpen_RejectsBenchUnsafeWithoutExplicitBoundary` |
-| persisted main-DB profile cannot change contracts or promote `bench_unsafe` to the production default | `TestOpen_PersistedProfileCannotChangeContracts`, `TestOpen_BenchUnsafeManifestCannotBecomeProductionDefault`, `TestFormatConfig_PersistsAndGatesCanonicalDurabilityProfile` |
+| profile-less reopen and maintenance adopt the persisted production contract, while explicit mismatches still fail and persisted `bench_unsafe` never becomes a production default | `TestOpen_PersistedProductionProfileImplicitlyReopensSameContract`, `TestOpen_PersistedProfileCannotChangeContracts`, `TestOpen_BenchUnsafeManifestCannotBecomeProductionDefault`, `TestFormatConfig_PersistsAndGatesCanonicalDurabilityProfile`, `TestLoadPersistedDurabilityProfile_ReadsOnlyContractGate` |
 | deprecated Go aliases map exactly and expose a diagnostic | `TestApplyProfile_DeprecatedAliasesResolveToFrozenMappings` |
 
 ## Publication and asset closure inherited from merged children

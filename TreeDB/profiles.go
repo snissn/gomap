@@ -55,6 +55,9 @@ import (
 // The resolved profile is immutable at Open: profile-owned durability and
 // integrity fields are reapplied so later low-level mutations cannot silently
 // change the selected contract. Non-contract tuning fields remain caller-owned.
+// A profile-less reopen adopts an existing DB's persisted production profile;
+// only a new DB defaults to command_wal_durable. Persisted bench_unsafe DBs
+// still require the explicit benchmark constructor boundary.
 type Profile = db.DurabilityProfile
 
 const commandWALProfileSegmentBytes int64 = 256 << 20
@@ -171,15 +174,28 @@ func resolveOpenProfileOptions(opts *Options) error {
 		return err
 	}
 	source := Profile(opts.ResolvedProfile)
-	defaulted := source == ""
+	applyPreset := false
 	if source == "" {
-		source = ProfileCommandWALDurable
+		layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+		if err != nil {
+			return err
+		}
+		persisted, ok, err := db.LoadPersistedDurabilityProfile(layout.mainDir)
+		if err != nil {
+			return err
+		}
+		if ok {
+			source = Profile(persisted)
+		} else {
+			source = ProfileCommandWALDurable
+		}
+		applyPreset = true
 	}
 	resolved, sourceAlias, ok := resolveProfile(source)
 	if !ok {
 		return fmt.Errorf("treedb: unsupported resolved profile %q", source)
 	}
-	if resolved == ProfileBenchUnsafe && !opts.UnsafeBenchmarkProfile {
+	if resolved == ProfileBenchUnsafe && (applyPreset || !opts.UnsafeBenchmarkProfile) {
 		return fmt.Errorf("treedb: profile %q requires OptionsForBenchmark or ApplyBenchmarkProfile", resolved)
 	}
 
@@ -193,7 +209,7 @@ func resolveOpenProfileOptions(opts *Options) error {
 		alias = sourceAlias
 	}
 
-	if defaulted {
+	if applyPreset {
 		applyResolvedProfile(opts, resolved, false)
 	} else {
 		applyResolvedDurabilityContract(opts, resolved)
