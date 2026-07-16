@@ -4710,12 +4710,15 @@ func TestVlogGenerationRewriteQueue_PrefersGreaterStaleImprovementAmongExpiredRe
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
 
-	opts, calls := recorder.recordedRewrite()
-	if calls != 1 {
-		t.Fatalf("rewrite calls=%d want=1", calls)
+	// A useful first rewrite may immediately schedule the remaining debt.
+	// Assert the first selection instead of racing that intentional follow-up.
+	rewrites := recorder.recordedRewrites()
+	if len(rewrites) == 0 {
+		t.Fatal("rewrite calls=0 want>=1")
 	}
+	opts := rewrites[0]
 	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+		t.Fatalf("first rewrite SourceFileIDs=%v want=%v", got, want)
 	}
 }
 
