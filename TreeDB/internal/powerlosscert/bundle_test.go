@@ -297,6 +297,28 @@ func TestVerifyArtifactsRejectsSymlinkOutsideBundle(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsRejectsSymlinkedEvidenceDirectoryComponent(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	artifactsDir := filepath.Join(root, "artifacts")
+	realArtifactsDir := filepath.Join(root, "real-artifacts")
+	if err := os.Rename(artifactsDir, realArtifactsDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realArtifactsDir, artifactsDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "symlinked evidence directory") {
+		t.Fatalf("VerifyArtifacts evidence-directory symlink error=%v", err)
+	}
+}
+
 func writeBundleFixture(t *testing.T, root, name string, manifest ChildManifest) {
 	t.Helper()
 	if name == "a.json" {

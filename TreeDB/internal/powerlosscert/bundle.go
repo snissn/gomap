@@ -186,6 +186,7 @@ func VerifyArtifacts(root string, manifests []ChildManifest) error {
 	}
 	seen := make(map[string]string)
 	modeledEvidenceDirs := make(map[string]string)
+	resolvedEvidenceDirs := make(map[string]string)
 	for _, manifest := range manifests {
 		for _, witness := range manifest.Witnesses {
 			if err := registerModeledEvidenceDir(manifest.ManifestID, witness, modeledEvidenceDirs); err != nil {
@@ -242,11 +243,48 @@ func VerifyArtifacts(root string, manifests []ChildManifest) error {
 			if witness.EvidenceTier != EvidenceTierModeledCrash {
 				continue
 			}
+			if err := verifyModeledEvidenceDir(root, realRoot, manifest.ManifestID, witness, resolvedEvidenceDirs); err != nil {
+				return err
+			}
 			if err := verifyModeledEvidence(root, manifest, witness); err != nil {
 				return err
 			}
 		}
 	}
+	return nil
+}
+
+func verifyModeledEvidenceDir(root, realRoot, manifestID string, witness Witness, seen map[string]string) error {
+	if witness.EvidenceTier != EvidenceTierModeledCrash {
+		return nil
+	}
+	dir := normalizedArtifactPath(witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"])
+	fullPath := root
+	for _, component := range strings.Split(filepath.FromSlash(dir), string(filepath.Separator)) {
+		fullPath = filepath.Join(fullPath, component)
+		info, err := os.Lstat(fullPath)
+		if err != nil {
+			return fmt.Errorf("powerlosscert: manifest %q witness %q inspect evidence directory %q: %w", manifestID, witness.ID, dir, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("powerlosscert: manifest %q witness %q has symlinked evidence directory component %q", manifestID, witness.ID, fullPath)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("powerlosscert: manifest %q witness %q evidence directory component %q is not a directory", manifestID, witness.ID, fullPath)
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		return fmt.Errorf("powerlosscert: manifest %q witness %q resolve evidence directory %q: %w", manifestID, witness.ID, dir, err)
+	}
+	if !pathWithin(realRoot, resolved) {
+		return fmt.Errorf("powerlosscert: manifest %q witness %q evidence directory %q resolves outside the bundle", manifestID, witness.ID, dir)
+	}
+	key := filepath.Clean(resolved)
+	if owner, reused := seen[key]; reused {
+		return fmt.Errorf("powerlosscert: witness %q reuses resolved modeled evidence directory %q owned by witness %q", witness.ID, dir, owner)
+	}
+	seen[key] = witness.ID
 	return nil
 }
 

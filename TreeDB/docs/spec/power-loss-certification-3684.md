@@ -75,9 +75,9 @@ The evidence directory must be empty. Capture writes:
 
 Every modeled witness registers those five JSON files and
 `command_log.json` at their canonical names directly below its declared
-`TREEDB_POWERLOSS_EVIDENCE_DIR`; modeled witnesses may not reuse that directory
-or its evidence as independent coverage. The verifier strictly parses every
-schema,
+`TREEDB_POWERLOSS_EVIDENCE_DIR`; modeled witnesses may not reuse that lexical or
+resolved directory as independent coverage, and no evidence-directory component
+may be a symlink. The verifier strictly parses every schema,
 rehashes every file named by both image-tree manifests, compares their exact
 directory sets, rejects extra image paths and symlinks, cross-checks metrics
 against the trace and image trees, and binds the recovery trace to the immutable
