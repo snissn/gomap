@@ -206,30 +206,41 @@ def evaluate(
 def annotate_binary_equivalence(
     results: list[dict[str, object]],
     binary_digests: dict[str, dict[str, str]],
-) -> tuple[bool, list[dict[str, object]]]:
+) -> list[dict[str, object]]:
     annotated: list[dict[str, object]] = []
-    all_equivalent = True
     for result in results:
         benchmark = result["benchmark"]
         assert isinstance(benchmark, str)
+        measurement_pass = result["measurement_pass"]
+        assert isinstance(measurement_pass, bool)
         package = BINARY_PACKAGE_BY_BENCHMARK[benchmark]
         package_digests = binary_digests[package]
         equivalent = package_digests["baseline"] == package_digests["candidate"]
-        all_equivalent = all_equivalent and equivalent
         annotated.append(
             {
                 **result,
                 "binary_package": package,
                 "binary_equivalent": equivalent,
+                "attribution": (
+                    "NON_ATTRIBUTABLE" if equivalent else "CANDIDATE"
+                ),
+                "acceptance_pass": measurement_pass or equivalent,
+                "acceptance_verdict": (
+                    "PASS"
+                    if measurement_pass
+                    else "EQUIVALENT"
+                    if equivalent
+                    else "FAIL"
+                ),
             }
         )
-    return all_equivalent, annotated
+    return annotated
 
 
-def acceptance_verdict(measurement_pass: bool, all_equivalent: bool) -> str:
-    if measurement_pass:
+def acceptance_verdict(results: list[dict[str, object]]) -> str:
+    if all(row["measurement_pass"] for row in results):
         return "PASS"
-    return "EQUIVALENT" if all_equivalent else "FAIL"
+    return "EQUIVALENT" if all(row["acceptance_pass"] for row in results) else "FAIL"
 
 
 def render_markdown(
@@ -262,9 +273,10 @@ def render_markdown(
     if verdict == "EQUIVALENT":
         lines.extend(
             [
-                "- equivalence acceptance: every row-producing base/head benchmark binary "
-                "is byte-identical, so the measured delta is retained but is not "
-                "attributable to the candidate revision",
+                "- equivalence acceptance: failed rows whose owning base/head benchmark "
+                "binary is byte-identical remain measured and reported, but are not "
+                "attributable to the candidate revision; rows with changed binaries "
+                "remain threshold-enforced",
             ]
         )
     lines.extend(
@@ -284,8 +296,8 @@ def render_markdown(
     lines.extend(
         [
             "",
-            "| Benchmark | Binary | Base ns/op | Head ns/op | Median delta | Paired delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Measured |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| Benchmark | Binary | Base ns/op | Head ns/op | Median delta | Paired delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Measured | Attribution | Acceptance |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
         ]
     )
     for row in results:
@@ -296,7 +308,7 @@ def render_markdown(
         lines.append(
             "| {benchmark} | {binary} | {base_ns:.3f} | {head_ns:.3f} | {delta:+.2f}% | {paired_delta:+.2f}% | "
             "{base_bytes:.3f} | {head_bytes:.3f} | {bytes_tolerance:.3f} | {base_allocs:.3f} | "
-            "{head_allocs:.3f} | {status} |".format(
+            "{head_allocs:.3f} | {status} | {attribution} | {acceptance} |".format(
                 benchmark=row["benchmark"],
                 binary=(
                     f"{row['binary_package']} EQUIVALENT"
@@ -313,6 +325,8 @@ def render_markdown(
                 base_allocs=base["allocs_per_op"],
                 head_allocs=head["allocs_per_op"],
                 status="PASS" if row["measurement_pass"] else "FAIL",
+                attribution=row["attribution"],
+                acceptance=row["acceptance_verdict"],
             )
         )
     lines.append("")
@@ -519,15 +533,22 @@ def main() -> int:
         args.max_bytes_regression_percent,
         args.max_bytes_regression_absolute,
     )
-    all_equivalent, results = annotate_binary_equivalence(results, binary_digests)
-    verdict = acceptance_verdict(measurement_pass, all_equivalent)
+    results = annotate_binary_equivalence(results, binary_digests)
+    verdict = acceptance_verdict(results)
     accepted = verdict in {"PASS", "EQUIVALENT"}
     payload = {
         "accepted": accepted,
         "no_attributable_regression": accepted,
         "verdict": verdict,
         "measurement_pass": measurement_pass,
-        "all_row_binaries_equivalent": all_equivalent,
+        "attributable_measurement_pass": all(
+            row["measurement_pass"]
+            for row in results
+            if not row["binary_equivalent"]
+        ),
+        "all_row_binaries_equivalent": all(
+            row["binary_equivalent"] for row in results
+        ),
         "binary_digests": binary_digests,
         "baseline_sha": args.baseline_sha,
         "candidate_sha": args.candidate_sha,
