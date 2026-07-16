@@ -735,7 +735,8 @@ func demoBackendOptions(cfg config, dir string) treedb.Options {
 
 func demoCommandWALFormatConfig(opts treedb.Options) backenddb.FormatConfig {
 	return backenddb.FormatConfig{
-		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+		RequiredFeatures:  []string{backenddb.RequiredFeatureCommandWALV1},
+		DurabilityProfile: opts.ResolvedProfile,
 
 		IndexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
 
@@ -1132,7 +1133,9 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	if cfg.vacuumIndex {
 		vacuumStart := time.Now()
-		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir, KeepRecent: 1}); err != nil {
+		vacuumOpts := demoBackendOptions(cfg, dir)
+		vacuumOpts.KeepRecent = 1
+		if err := treedb.VacuumIndexOffline(vacuumOpts); err != nil {
 			return result{}, fmt.Errorf("index vacuum: %w", err)
 		}
 		res.IndexVacuum = phaseSince(vacuumStart)

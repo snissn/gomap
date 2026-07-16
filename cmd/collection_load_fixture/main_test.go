@@ -481,7 +481,7 @@ func TestVacuumIndexOfflinePreservesTemplateV1TwoIndexDatabase(t *testing.T) {
 		t.Fatal("expected pre-vacuum smoke verification samples")
 	}
 
-	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+	if err := treedb.VacuumIndexOffline(backendOptions(cfg, false)); err != nil {
 		t.Fatalf("vacuum index offline: %v", err)
 	}
 

@@ -1325,13 +1325,7 @@ func maybeVacuumIndex(cfg config, backend *backenddb.DB, cleanup func() error, c
 			return out, indexStorageSummary{}, fmt.Errorf("close backend before offline index vacuum: %w", err)
 		}
 		*closed = true
-		opts := treedb.Options{
-			Dir:        cfg.Dir,
-			KeepRecent: cfg.KeepRecent,
-		}
-		if cfg.ChunkSize > 0 {
-			opts.ChunkSize = cfg.ChunkSize
-		}
+		opts := backendOptions(cfg, false)
 		if err := treedb.VacuumIndexOffline(opts); err != nil {
 			return out, indexStorageSummary{}, fmt.Errorf("index vacuum offline: %w", err)
 		}

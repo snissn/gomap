@@ -216,7 +216,11 @@ func TestExecuteMatrixSearchProfileDirUsesCaseSubdirectories(t *testing.T) {
 }
 
 func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
-	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
+	opts := demoBackendOptions(config{}, t.TempDir())
+	cfg := demoCommandWALFormatConfig(opts)
+	if cfg.DurabilityProfile != opts.ResolvedProfile {
+		t.Fatalf("durability profile=%q want %q", cfg.DurabilityProfile, opts.ResolvedProfile)
+	}
 	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v2" {
 		t.Fatalf("required features=%v, want command_wal_v2", cfg.RequiredFeatures)
 	}
