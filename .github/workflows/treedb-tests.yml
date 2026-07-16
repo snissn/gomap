@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout))\.py$|\.github/workflows/treedb-tests\.yml$)'
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
     steps:
       - name: Resolve open PR and relevant paths
         id: scope
@@ -95,6 +95,7 @@ jobs:
           python3 .github/scripts/test_mvcc_benchmark_pairing.py
           python3 .github/scripts/test_summarize_mvcc_closeout.py
           python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
+          python3 .github/scripts/test_treedb_windows_core_headroom.py
           for path in \
             TreeDB/snapshot_seek_iterator_bench_test.go \
             TreeDB/command_wal_public_test.go \
@@ -111,7 +112,8 @@ jobs:
             scripts/mvcc_candidate_checkout_guard.sh \
             .github/scripts/summarize_mvcc_closeout.py \
             .github/scripts/test_summarize_mvcc_closeout.py \
-            .github/scripts/test_mvcc_candidate_checkout_guard.py; do
+            .github/scripts/test_mvcc_candidate_checkout_guard.py \
+            .github/scripts/test_treedb_windows_core_headroom.py; do
             if ! grep -Eq "$MVCC_GATE_PATH_RE" <<< "$path"; then
               echo "MVCC gate path scope unexpectedly excludes: $path" >&2
               exit 1

@@ -33,6 +33,19 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
         self.assertEqual(matrix_timeout(workflow, "windows-core-2"), 30)
         self.assertIn("timeout-minutes: ${{ matrix.timeout }}", workflow)
 
+    def test_caching_shards_keep_their_existing_bounded_caps(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+
+        for job_name in (
+            "windows-caching-heavy-1",
+            "windows-caching-heavy-2",
+            "windows-caching-rest-1",
+            "windows-caching-rest-2",
+            "windows-caching-rest-3",
+        ):
+            with self.subTest(job_name=job_name):
+                self.assertEqual(matrix_timeout(workflow, job_name), 25)
+
 
 if __name__ == "__main__":
     unittest.main()
