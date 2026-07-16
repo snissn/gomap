@@ -599,7 +599,18 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 			Active:       active,
 			Covered:      scan.maxLSN <= cleanupThrough,
 			identity:     identity,
-			file:         file,
+		}
+		// Only deletion candidates need their discovery handles retained until
+		// exact identity leases are acquired. Keeping handles for active or
+		// uncovered replay segments makes cleanup descriptor usage grow with the
+		// entire retained WAL lineage even though those objects cannot be unlinked.
+		if decision.Covered && !decision.Active {
+			decision.file = file
+		} else if closeErr := file.Close(); closeErr != nil {
+			decision.Error = closeErr.Error()
+			decisions = append(decisions, decision)
+			scanErr = errors.Join(scanErr, fmt.Errorf("close retained command WAL segment %s: %w", filepath.Base(seg.path), closeErr))
+			continue
 		}
 		decisions = append(decisions, decision)
 	}

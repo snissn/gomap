@@ -2018,6 +2018,44 @@ func TestCommandWALCleanupClosesScanHandleBeforeUnlink(t *testing.T) {
 	}
 }
 
+func TestCommandWALCleanupRetainedLineageDoesNotHoldScanHandles(t *testing.T) {
+	dir := t.TempDir()
+	const segmentCount = 96
+	for lsn := uint64(1); lsn <= segmentCount; lsn++ {
+		writeCommandWALFrame(t, dir, lsn, lsn)
+	}
+
+	decisions, err := scanCommandWALSegmentsForCleanupProof(dir, 1, segmentCount, 0)
+	if err != nil {
+		t.Fatalf("scanCommandWALSegmentsForCleanupProof: %v", err)
+	}
+	defer closeCommandWALCleanupDecisions(decisions)
+
+	openHandles := 0
+	deletionCandidates := 0
+	for _, decision := range decisions {
+		if decision.file != nil {
+			openHandles++
+		}
+		if decision.Covered && !decision.Active {
+			deletionCandidates++
+			if decision.file == nil {
+				t.Fatalf("deletion candidate %s lost discovery handle", filepath.Base(decision.Path))
+			}
+			continue
+		}
+		if decision.file != nil {
+			t.Fatalf("retained segment %s kept a scan handle", filepath.Base(decision.Path))
+		}
+	}
+	if deletionCandidates != 1 {
+		t.Fatalf("deletion candidates=%d, want 1", deletionCandidates)
+	}
+	if openHandles != deletionCandidates {
+		t.Fatalf("open scan handles=%d, want deletion candidates=%d", openHandles, deletionCandidates)
+	}
+}
+
 func TestCommandWALCheckpointCleanupRejectsFilenameReuse(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
