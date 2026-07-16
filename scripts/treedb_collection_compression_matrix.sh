@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCS="${DOCS:-100000}"
 BATCH="${BATCH:-16000}"
 RUN_DIR="${RUN_DIR:-/tmp/treedb_collection_compression_$(date +%Y%m%d_%H%M%S)}"
-PROFILE="${PROFILE:-bench}"
+PROFILE="${PROFILE:-bench_unsafe}"
 COLLECTION_INDEXES="${COLLECTION_INDEXES:-0 1 2}"
 COMPACT_MODE="${COMPACT_MODE:-full}"
 

@@ -204,6 +204,35 @@ func TestDurabilityProfileChildEvidenceManifestCoversSuccessorInputs(t *testing.
 	}
 }
 
+func TestBenchmarkProfileWrappersUseCanonicalBenchUnsafe(t *testing.T) {
+	_, repoRoot := repoRoots(t)
+	checks := map[string][]string{
+		filepath.Join(repoRoot, "scripts", "leafgen_cached_dwell_validate.sh"):        {"PROFILE=${TREEDB_PROFILE:-bench_unsafe}"},
+		filepath.Join(repoRoot, "scripts", "leafgen_target_sweep.sh"):                 {"PROFILE=${TREEDB_PROFILE:-bench_unsafe}"},
+		filepath.Join(repoRoot, "scripts", "treedb_collection_compression_matrix.sh"): {"PROFILE=\"${PROFILE:-bench_unsafe}\""},
+		filepath.Join(repoRoot, "scripts", "bench_collections_report.sh"):             {"TREEDB_COLLECTION_BENCH_ENGINE:-bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "treedb_insert_compression_profile.sh"):    {"TREEDB_COLLECTION_BENCH_ENGINE:-bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "bench_collections_matrix.sh"):             {"bench_unsafe_data_vlog_index_leaf bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "mongo_gateway_scaling_bench.sh"):          {"TREEDB_PROFILE:-bench_unsafe", "Default: bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "mongo_gateway_compare.sh"):                {"TREEDB_PROFILE:-bench_unsafe", "Default: bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "mongo_gateway_ycsb_attribution.sh"):       {"TREEDB_PROFILE:-bench_unsafe"},
+		filepath.Join(repoRoot, "cmd", "mongo_gateway_bench", "README.md"):            {"-treedb-profile bench_unsafe"},
+		filepath.Join(repoRoot, "cmd", "treedb_vector_search_demo", "README.md"):      {"`bench_unsafe` profile", "|bench_unsafe`"},
+	}
+	for path, required := range checks {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		for _, want := range required {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing canonical benchmark profile token %q", path, want)
+			}
+		}
+	}
+}
+
 func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 	treeRoot, repoRoot := repoRoots(t)
 	paths := []string{
