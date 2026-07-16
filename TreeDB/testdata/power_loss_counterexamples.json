@@ -112,11 +112,10 @@
       "variant_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/001/variant/target-meta-only/index%2Fchunked-intermediate-root",
       "seed": 5391730289620176643,
       "variant_families": ["target-meta-only"],
-      "expected_result": "corruption",
-      "observed_result": "corruption",
+      "expected_result": "new-root",
+      "observed_result": "new-root",
       "owner": "#3680",
-      "disposition": "known-counterexample",
-      "known_violation": {"kind": "named-invariant", "invariant": "key-state-mismatch"},
+      "disposition": "resolved",
       "replay": {"package": "./TreeDB", "test_name": "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot", "cut_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/001", "variant_id": "cut/chunked-checkpoint-intermediate-root/after-meta-write/001/variant/target-meta-only/index%2Fchunked-intermediate-root", "seed": 5391730289620176643}
     },
     {

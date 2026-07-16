@@ -469,12 +469,17 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
-	state := db.state.Load()
-	if state == nil || state.AppliedCommandLSN == 0 {
+	// Cleanup authority is the recovery-selectable root, never the newer
+	// visible frontier that may still be queued behind asynchronous root
+	// publication.
+	db.durablePublishMu.Lock()
+	durableAppliedLSN := db.durableRoot.record.AppliedCommandLSN
+	db.durablePublishMu.Unlock()
+	if durableAppliedLSN == 0 {
 		return nil
 	}
 	scanStart := time.Now()
-	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, durableAppliedLSN, db.walMaxSegmentBytes)
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
@@ -529,7 +534,7 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		}
 	}
 	if err == nil && sync {
-		db.closeCommandWALDurablePrefixThrough(state.AppliedCommandLSN)
+		db.closeCommandWALDurablePrefixThrough(durableAppliedLSN)
 	}
 	return err
 }
@@ -1322,11 +1327,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
 		return 0, err
 	}
+	defer unlockCommandWALPublish()
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
 	}
@@ -1374,11 +1379,11 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
 		return 0, err
 	}
+	defer unlockCommandWALPublish()
 	if db.closing.Load() {
 		return 0, ErrClosed
 	}
@@ -1439,14 +1444,14 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 		publishStart = time.Now()
 		requestTiming.PublishLockBarrierWaitObserved = true
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
 		if measured {
 			requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 		}
 		return 0, requestTiming, err
 	}
+	defer unlockCommandWALPublish()
 	if measured {
 		requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 	}
@@ -1498,8 +1503,8 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 }
 
 // PublishStagedCommandWALNoop publishes an already-staged command-WAL no-op.
-// Callers must hold a higher-level raw publish or staging guard from the frame
-// append through this publish call.
+// Callers must hold a higher-level raw publish or staging guard, including its
+// teardown lease, from the frame append through this publish call.
 func (db *DB) PublishStagedCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	return db.publishCommandWALNoop(intent, sync)
 }
@@ -1518,12 +1523,21 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 		return ErrCommandWALUnsupported
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
+	builder, err := db.acquireRootPublicationBuilderV1()
+	if err != nil {
+		return err
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 	durablePublishLocked := false
-	defer func() {
+	releaseDurablePublish := func() {
 		if durablePublishLocked {
 			db.durablePublishMu.Unlock()
+			durablePublishLocked = false
 		}
-	}()
+	}
+	defer releaseDurablePublish()
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		db.writeMu.Unlock()
@@ -1563,17 +1577,24 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
 	finalizeOpts.skipPrePublishFlush = true
 	finalizeOpts.durablePublishLocked = true
+	finalizeOpts.durablePublishRelease = releaseDurablePublish
+	finalizeOpts.rootPublicationBuilder = builder
+	finalizeOpts.closeTeardownPinned = true
+	finalizeOpts.expectedBaseCommitSeq = baseSeq
+	finalizeOpts.hasExpectedBaseCommitSeq = true
 	finalizeOpts.releaseRootSerialization = func() {}
 	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, vlogRefDelta, nil, nil, finalizeOpts)
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
-		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		if !post.accepted {
+			db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		} else {
+			intent.inner.staged = false
+		}
 		return err
 	}
-	db.durablePublishMu.Unlock()
-	durablePublishLocked = false
 	db.finalizeCommitPostWork(post)
 	intent.inner.staged = false
 	return nil

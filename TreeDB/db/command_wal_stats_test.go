@@ -530,6 +530,7 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 
 	db := &DB{dir: dir, commandWAL: true}
 	db.state.Store(&DBState{AppliedCommandLSN: 1})
+	db.durableRoot.record.AppliedCommandLSN = 1
 
 	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)

@@ -226,6 +226,72 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	tests := []struct {
+		name    string
+		publish func(*testing.T, *DB, *CommandWALIntent, *uint64) error
+	}{
+		{
+			name: "iterator-group",
+			publish: func(t *testing.T, db *DB, intent *CommandWALIntent, seenLSN *uint64) error {
+				_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					intent,
+					func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						*seenLSN = ctx.AppliedCommandLSN
+						return mustFrozenSystemMemtable(t, "system/accepted-iterator", strconv.FormatUint(ctx.AppliedCommandLSN, 10)).NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "batch-group",
+			publish: func(t *testing.T, db *DB, intent *CommandWALIntent, seenLSN *uint64) error {
+				_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					intent,
+					func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						*seenLSN = ctx.AppliedCommandLSN
+						return mustFrozenSystemMemtable(t, "system/accepted-batch", strconv.FormatUint(ctx.AppliedCommandLSN, 10)).NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			defer db.Close()
+
+			intent := mustRawKVCommandWALIntent(t, db, "ordered/"+test.name, "covered")
+			db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+			db.testFailWriteMeta.Store(true)
+			var seenLSN uint64
+			err := test.publish(t, db, intent, &seenLSN)
+			db.testFailWriteMeta.Store(false)
+			if !errors.Is(err, errTestWriteMetaFailpoint) {
+				t.Fatalf("accepted ordered-root wait error=%v, want retryable meta failpoint", err)
+			}
+			if errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("accepted ordered-root wait error=%v unexpectedly requires recovery", err)
+			}
+			if got := db.State().AppliedCommandLSN; seenLSN == 0 || got != seenLSN {
+				t.Fatalf("visible AppliedCommandLSN after accepted error=%d, want builder LSN %d", got, seenLSN)
+			}
+			if err := db.CheckCommandWALPublishReady(); err != nil {
+				t.Fatalf("CheckCommandWALPublishReady after accepted ordered-root error: %v", err)
+			}
+			if err := db.SetSync([]byte("after-"+test.name), []byte("same-handle-progress")); err != nil {
+				t.Fatalf("SetSync after accepted ordered-root error: %v", err)
+			}
+		})
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextUsesCommandWALRouteForSystemDelta(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

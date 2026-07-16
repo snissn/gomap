@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -26,6 +27,16 @@ type CommandWALLSNRange struct {
 	Last  uint64
 }
 
+type conditionalCommitMutation struct {
+	entries    []batchpkg.Entry
+	ranges     []batchpkg.DeleteRange
+	ownerTxnID uint64
+}
+
+func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
+	db.conditionalRecordCommittedEntries(mutation.entries, mutation.ranges, mutation.ownerTxnID, commitSeq)
+}
+
 type finalizeCommitOptions struct {
 	commandWALPublish           bool
 	appliedCommandLSN           uint64
@@ -35,6 +46,14 @@ type finalizeCommitOptions struct {
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
 	durablePublishLocked        bool
+	// durablePublishRelease transfers a caller-owned durablePublishMu lease to
+	// the finalizer and clears the caller's ownership flag exactly once. It is
+	// required whenever durablePublishLocked is true.
+	durablePublishRelease func()
+	// rootPublicationBuilder is an admitted builder lease acquired before any
+	// caller-owned durable publication lock. The finalizer consumes its final
+	// handle atomically with the visible candidate handoff.
+	rootPublicationBuilder *rootpublication.BuilderToken
 	// closeTeardownPinned proves the caller acquired teardownMu for reading
 	// before Close could revoke write admission and will retain that lease
 	// through commit post-work. It permits an already-admitted publication to
@@ -59,6 +78,11 @@ type finalizeCommitOptions struct {
 	// acquires that same fence before stopping and draining the recorder, so a
 	// visible old-generation commit cannot fall between publication and capture.
 	recordVacuumMutation func()
+	// conditionalMutation installs exact point/range conflict evidence at
+	// the same visibility cut as the new root. It runs while db.mu still excludes
+	// readers from sampling that root, so a conditional transaction cannot
+	// validate in the gap between root visibility and oracle publication.
+	conditionalMutation conditionalCommitMutation
 	// durableResources transfers producer-owned exact external handles into the
 	// candidate root's dependency manifest. The finalizer consumes the set.
 	durableResources *rootpublication.StableResourceSet
@@ -77,25 +101,40 @@ type finalizeCommitOptions struct {
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false)
+	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false, false)
 }
 
 func (db *DB) publishCurrentCommandWALRoots(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true)
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, false)
 }
 
-func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool) error {
+func (db *DB) publishCurrentCommandWALRootsTeardownPinned(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, true)
+}
+
+func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool, teardownPinned bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	if !teardownPinned {
+		db.teardownMu.RLock()
+		defer db.teardownMu.RUnlock()
+	}
+	builder, err := db.acquireRootPublicationBuilderV1()
+	if err != nil {
+		return err
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 	durablePublishLocked := false
-	defer func() {
+	releaseDurablePublish := func() {
 		if durablePublishLocked {
 			db.durablePublishMu.Unlock()
+			durablePublishLocked = false
 		}
-	}()
+	}
+	defer releaseDurablePublish()
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
 		db.writeMu.Unlock()
@@ -149,12 +188,12 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		appliedRanges:            covered,
 		skipPrePublishFlush:      true,
 		durablePublishLocked:     true,
+		durablePublishRelease:    releaseDurablePublish,
+		rootPublicationBuilder:   builder,
 		closeTeardownPinned:      true,
 		releaseRootSerialization: func() {},
-	}
-	if !currentRoots {
-		finalizeOpts.expectedBaseCommitSeq = baseSeq
-		finalizeOpts.hasExpectedBaseCommitSeq = true
+		expectedBaseCommitSeq:    baseSeq,
+		hasExpectedBaseCommitSeq: true,
 	}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
@@ -169,8 +208,6 @@ func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64,
 		nil,
 		finalizeOpts,
 	)
-	db.durablePublishMu.Unlock()
-	durablePublishLocked = false
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -188,9 +225,9 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	if db == nil {
 		return ErrClosed
 	}
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
 	defer unlockCommandWALPublish()
-	return db.publishCurrentCommandWALRoots(appliedLSN, covered, sync)
+	return db.publishCurrentCommandWALRootsTeardownPinned(appliedLSN, covered, sync)
 }
 
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {

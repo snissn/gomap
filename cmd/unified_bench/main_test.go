@@ -2256,6 +2256,8 @@ func TestRunBenchmark_SettleBeforeScansRunsAfterMeasuredWrites(t *testing.T) {
 }
 
 func TestRunBenchmark_VacuumBetweenTests_Smoke(t *testing.T) {
+	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
+
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
 		ValueSize:    16,

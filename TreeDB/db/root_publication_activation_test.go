@@ -1,0 +1,439 @@
+package db
+
+import (
+	"bytes"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+)
+
+func TestActivatedRootPublicationTripsFormerDirectPublisher(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	idx := database.idx.Load()
+	if idx == nil {
+		t.Fatal("missing active index")
+	}
+	_, err = database.publishDurableRootV1(idx, database.meta, nil, nil)
+	if !errors.Is(err, errDirectDurableRootPublisherDisabledV1) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("former direct publisher error=%v, want disabled tripwire and ErrRecoveryRequired", err)
+	}
+}
+
+func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	leafLog := &registeredLeafPageLog{db: database, dir: database.dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	database.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, database, leafLog)
+
+	// The first publication into a producer segment establishes its exact
+	// dependency basis. Subsequent COW writes in the same segment must reuse that
+	// basis rather than project the whole candidate tree again.
+	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("p")); err != nil {
+		t.Fatalf("prime SetSync: %v", err)
+	}
+	scans := 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	if err := database.SetSync([]byte("outer-leaf-hot-path"), []byte("v")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	database.testScanCandidateExternalReferencesHook = nil
+	if scans != 0 {
+		t.Fatalf("ordinary outer-leaf write candidate scans=%d want 0", scans)
+	}
+
+	// Replacing an existing key can make the old physical leaf record
+	// unreachable even when the producer is still appending to the same segment.
+	// Apply-fed removal evidence must therefore restore exact projection.
+	scans = 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("r")); err != nil {
+		t.Fatalf("overwrite SetSync: %v", err)
+	}
+	database.testScanCandidateExternalReferencesHook = nil
+	if scans == 0 {
+		t.Fatal("outer-leaf overwrite did not scan candidate tree")
+	}
+}
+
+func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                       dir,
+		Durability:                DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:    true,
+		rootPublicationFixedDelay: 100 * time.Millisecond,
+	}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if database != nil {
+			_ = database.Close()
+		}
+	}()
+
+	coordinator := database.rootPublication.coordinator
+	before := coordinator.Stats()
+	group, err := database.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+	}
+	defer group.Close()
+
+	stagedKey := []byte("staged-intermediate")
+	stagedValue := []byte("private-root-only")
+	intermediate := database.NewPhysicalBatch().(*Batch)
+	if err := intermediate.Set(stagedKey, stagedValue); err != nil {
+		t.Fatalf("intermediate Set: %v", err)
+	}
+	if err := intermediate.SetRootPublicationBuildGroup(group, false); err != nil {
+		t.Fatalf("intermediate SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := intermediate.Write(); err != nil {
+		t.Fatalf("intermediate Write: %v", err)
+	}
+	if err := intermediate.Close(); err != nil {
+		t.Fatalf("intermediate Close: %v", err)
+	}
+
+	staged := coordinator.Stats()
+	if staged.VisibleCommitSeq != before.VisibleCommitSeq ||
+		staged.DurableCommitSeq != before.DurableCommitSeq ||
+		staged.PendingCommits != before.PendingCommits ||
+		staged.PublishCalls != before.PublishCalls {
+		t.Fatalf("intermediate publication stats=%+v, want frontiers/debt/publishes unchanged from %+v", staged, before)
+	}
+	if staged.ActiveBuilders != before.ActiveBuilders+1 {
+		t.Fatalf("intermediate active builders=%d want %d", staged.ActiveBuilders, before.ActiveBuilders+1)
+	}
+	if got, err := database.Get(stagedKey); err != nil || got != nil {
+		t.Fatalf("intermediate Get=(%q,%v) want (nil,nil)", got, err)
+	}
+
+	finalKey := []byte("staged-final")
+	finalValue := []byte("complete-logical-root")
+	final := database.NewPhysicalBatch().(*Batch)
+	if err := final.Set(finalKey, finalValue); err != nil {
+		t.Fatalf("final Set: %v", err)
+	}
+	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
+		t.Fatalf("final SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := final.WriteSync(); err != nil {
+		t.Fatalf("final WriteSync: %v", err)
+	}
+	if err := final.Close(); err != nil {
+		t.Fatalf("final Close: %v", err)
+	}
+	if err := group.Close(); err != nil {
+		t.Fatalf("group Close after final: %v", err)
+	}
+
+	completed := coordinator.Stats()
+	if completed.VisibleCommitSeq != before.VisibleCommitSeq+1 ||
+		completed.DurableCommitSeq != completed.VisibleCommitSeq ||
+		completed.PendingCommits != 0 ||
+		completed.PublishCalls != before.PublishCalls+1 ||
+		completed.LastGroupSize != 1 ||
+		completed.ActiveBuilders != before.ActiveBuilders {
+		t.Fatalf("completed publication stats=%+v, want one durable candidate from %+v", completed, before)
+	}
+	for key, want := range map[string][]byte{
+		string(stagedKey): stagedValue,
+		string(finalKey):  finalValue,
+	} {
+		got, err := database.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q)=%q want %q", key, got, want)
+		}
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	database = nil
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	for key, want := range map[string][]byte{
+		string(stagedKey): stagedValue,
+		string(finalKey):  finalValue,
+	} {
+		got, err := reopened.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("reopened Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopened Get(%q)=%q want %q", key, got, want)
+		}
+	}
+}
+
+func TestVacuumBaseSnapshotWaitsForPrivateRootPublicationBuildGroup(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                    t.TempDir(),
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	group, err := database.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+	}
+	defer group.Close()
+
+	intermediateKey := []byte("vacuum-fence-intermediate")
+	intermediate := database.NewPhysicalBatch().(*Batch)
+	if err := intermediate.Set(intermediateKey, []byte("private-before-vacuum")); err != nil {
+		t.Fatalf("intermediate Set: %v", err)
+	}
+	if err := intermediate.SetRootPublicationBuildGroup(group, false); err != nil {
+		t.Fatalf("intermediate SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := intermediate.Write(); err != nil {
+		t.Fatalf("intermediate Write: %v", err)
+	}
+	if err := intermediate.Close(); err != nil {
+		t.Fatalf("intermediate Close: %v", err)
+	}
+
+	fenceAttempted := make(chan struct{})
+	database.vacuumBeforeRecorderFenceHook = func() { close(fenceAttempted) }
+	defer func() { database.vacuumBeforeRecorderFenceHook = nil }()
+	baseSnapshot := make(chan *Snapshot, 1)
+	go func() { baseSnapshot <- database.startVacuumRecorderWithBaseSnapshot() }()
+	defer database.vacuum.Stop()
+	<-fenceAttempted
+	select {
+	case snap := <-baseSnapshot:
+		if snap != nil {
+			_ = snap.Close()
+		}
+		t.Fatal("vacuum captured its base snapshot while a private root build was active")
+	default:
+	}
+
+	finalKey := []byte("vacuum-fence-final")
+	final := database.NewPhysicalBatch().(*Batch)
+	if err := final.Set(finalKey, []byte("published-before-vacuum-base")); err != nil {
+		t.Fatalf("final Set: %v", err)
+	}
+	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
+		t.Fatalf("final SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := final.WriteSync(); err != nil {
+		t.Fatalf("final WriteSync: %v", err)
+	}
+	if err := final.Close(); err != nil {
+		t.Fatalf("final Close: %v", err)
+	}
+
+	var snap *Snapshot
+	select {
+	case snap = <-baseSnapshot:
+	case <-time.After(5 * time.Second):
+		t.Fatal("vacuum base snapshot remained blocked after the root build published")
+	}
+	if snap == nil {
+		t.Fatal("vacuum base snapshot is nil")
+	}
+	defer snap.Close()
+	for _, key := range [][]byte{intermediateKey, finalKey} {
+		got, err := snap.Get(key)
+		if err != nil {
+			t.Fatalf("snapshot Get(%q): %v", key, err)
+		}
+		if got == nil {
+			t.Fatalf("vacuum base snapshot omitted published build-group key %q", key)
+		}
+	}
+}
+
+func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	database := openCommandWALDB(t, dir)
+	defer database.Close()
+
+	intent := mustRawKVCommandWALIntent(t, database, "group-accepted", "visible-before-durable")
+	lsn, err := database.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	group, err := database.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+	}
+	defer group.Close()
+
+	final := database.NewPhysicalBatch().(*Batch)
+	defer final.Close()
+	if err := final.Set([]byte("group-accepted"), []byte("visible-before-durable")); err != nil {
+		t.Fatalf("final Set: %v", err)
+	}
+	if err := final.SetCommandWALPublish(lsn, []CommandWALLSNRange{{First: lsn, Last: lsn}}); err != nil {
+		t.Fatalf("SetCommandWALPublish: %v", err)
+	}
+	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
+		t.Fatalf("SetRootPublicationBuildGroup: %v", err)
+	}
+	database.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	database.testFailWriteMeta.Store(true)
+	const staleSubtreePageID = ^uint64(0)
+	database.storeLeafGenerationSubtreeStats(staleSubtreePageID, leafGenerationSubtreeStats{
+		1: {LivePages: 1, LiveBytes: 1},
+	})
+	err = final.WriteSync()
+	database.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted build-group wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted build-group wait error=%v unexpectedly requires recovery", err)
+	}
+	if _, ok := database.loadLeafGenerationSubtreeStats(staleSubtreePageID); ok {
+		t.Fatal("accepted build-group wait error left stale leaf-generation reachability state cached")
+	}
+	if got := database.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("visible AppliedCommandLSN after accepted build-group error=%d, want %d", got, lsn)
+	}
+	if got, getErr := database.Get([]byte("group-accepted")); getErr != nil || string(got) != "visible-before-durable" {
+		t.Fatalf("accepted build-group value=(%q,%v), want visible value", got, getErr)
+	}
+	if err := database.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after accepted build-group error: %v", err)
+	}
+	if err := database.SetSync([]byte("after-group"), []byte("same-handle-progress")); err != nil {
+		t.Fatalf("SetSync after accepted build-group error: %v", err)
+	}
+}
+
+func TestDurableRootDependencyObservationPathV1(t *testing.T) {
+	tests := map[string]string{
+		"plain":            "/tmp/value.log",
+		"cloned-sync-pins": "/tmp/value.log#stable-sync-pin#stable-sync-pin#stable-sync-pin",
+		"mixed-pins":       "/tmp/value.log#stable-pin#stable-sync-pin#stable-pin",
+	}
+	for name, path := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := durableRootDependencyObservationPathV1(path); got != "/tmp/value.log" {
+				t.Fatalf("durableRootDependencyObservationPathV1(%q)=%q want %q", path, got, "/tmp/value.log")
+			}
+		})
+	}
+}
+
+func TestRootPublicationBuildGroupAbortDiscardsStagedRoot(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                       dir,
+		Durability:                DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:    true,
+		rootPublicationFixedDelay: 100 * time.Millisecond,
+	}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if database != nil {
+			_ = database.Close()
+		}
+	}()
+
+	coordinator := database.rootPublication.coordinator
+	before := coordinator.Stats()
+	group, err := database.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatalf("BeginRootPublicationBuildGroup: %v", err)
+	}
+	stagedKey := []byte("aborted-staged-root")
+	intermediate := database.NewPhysicalBatch().(*Batch)
+	if err := intermediate.Set(stagedKey, []byte("must-not-publish")); err != nil {
+		t.Fatalf("intermediate Set: %v", err)
+	}
+	if err := intermediate.SetRootPublicationBuildGroup(group, false); err != nil {
+		t.Fatalf("intermediate SetRootPublicationBuildGroup: %v", err)
+	}
+	if err := intermediate.Write(); err != nil {
+		t.Fatalf("intermediate Write: %v", err)
+	}
+	if err := intermediate.Close(); err != nil {
+		t.Fatalf("intermediate Close: %v", err)
+	}
+	if err := group.Close(); err != nil {
+		t.Fatalf("abort group Close: %v", err)
+	}
+	if err := group.Close(); err != nil {
+		t.Fatalf("idempotent group Close: %v", err)
+	}
+
+	aborted := coordinator.Stats()
+	if aborted.VisibleCommitSeq != before.VisibleCommitSeq ||
+		aborted.DurableCommitSeq != before.DurableCommitSeq ||
+		aborted.PendingCommits != before.PendingCommits ||
+		aborted.PublishCalls != before.PublishCalls ||
+		aborted.ActiveBuilders != before.ActiveBuilders {
+		t.Fatalf("aborted publication stats=%+v want unchanged from %+v", aborted, before)
+	}
+	if got, err := database.Get(stagedKey); err != nil || got != nil {
+		t.Fatalf("aborted staged Get=(%q,%v) want (nil,nil)", got, err)
+	}
+
+	survivorKey := []byte("post-abort-write")
+	survivorValue := []byte("normal-admission-still-works")
+	if err := database.SetSync(survivorKey, survivorValue); err != nil {
+		t.Fatalf("SetSync after abort: %v", err)
+	}
+	if got, err := database.Get(stagedKey); err != nil || got != nil {
+		t.Fatalf("post-write aborted staged Get=(%q,%v) want (nil,nil)", got, err)
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	database = nil
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	if got, err := reopened.Get(stagedKey); err != nil || got != nil {
+		t.Fatalf("reopened aborted staged Get=(%q,%v) want (nil,nil)", got, err)
+	}
+	got, err := reopened.Get(survivorKey)
+	if err != nil {
+		t.Fatalf("reopened survivor Get: %v", err)
+	}
+	if !bytes.Equal(got, survivorValue) {
+		t.Fatalf("reopened survivor=%q want %q", got, survivorValue)
+	}
+}

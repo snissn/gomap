@@ -53,6 +53,9 @@ func TestApplyWithOptionsCollectsOldPointerRefsForPointsAndRange(t *testing.T) {
 	if got, want := result.OldPointerRefs.Count(fileID), uint64(192); got != want {
 		t.Fatalf("old pointer refs=%d want %d", got, want)
 	}
+	if got, want := result.OldEntriesRemoved, uint64(192); got != want {
+		t.Fatalf("old entries removed=%d want %d", got, want)
+	}
 	if got := result.OldPointerRefs.Count(page.ValueLogFileID(2)); got != 0 {
 		t.Fatalf("new pointer file appeared in old refs: %d", got)
 	}
@@ -92,6 +95,9 @@ func TestApplyWithOptionsParallelCollectsOldPointerRefsExactlyOnce(t *testing.T)
 	if got, want := result.OldPointerRefs.Count(fileID), uint64(9000); got != want {
 		t.Fatalf("parallel old pointer refs=%d want %d", got, want)
 	}
+	if got, want := result.OldEntriesRemoved, uint64(9000); got != want {
+		t.Fatalf("parallel old entries removed=%d want %d", got, want)
+	}
 }
 
 func TestApplyWithOptionsSpanNativeCollectsOldPointerRefsExactlyOnce(t *testing.T) {
@@ -123,6 +129,9 @@ func TestApplyWithOptionsSpanNativeCollectsOldPointerRefsExactlyOnce(t *testing.
 	}
 	if got, want := result.OldPointerRefs.Count(fileID), uint64(1500); got != want {
 		t.Fatalf("span-native old pointer refs=%d want %d", got, want)
+	}
+	if got, want := result.OldEntriesRemoved, uint64(1500); got != want {
+		t.Fatalf("span-native old entries removed=%d want %d", got, want)
 	}
 }
 
@@ -186,6 +195,9 @@ func TestApplyWithOptionsSpanNativeCollectsMixedOldPointerRefsByUpdatedKey(t *te
 	}
 	if got := result.OldPointerRefs.Count(fileC); got != 0 {
 		t.Fatalf("new pointer file appeared in old refs: %d", got)
+	}
+	if got, want := result.OldEntriesRemoved, wantA+wantB; got != want {
+		t.Fatalf("mixed old entries removed=%d want %d", got, want)
 	}
 	livePages, err := tree.New(z.pager, nil, result.RootID).CollectPageIDs()
 	if err != nil {

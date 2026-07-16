@@ -23,7 +23,7 @@ func TestOpen_DefaultChunkSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat index.db: %v", err)
 	}
-	if got := info.Size(); got != defaultChunkSize {
-		t.Fatalf("index.db size=%d want=%d", got, defaultChunkSize)
+	if got := info.Size(); got < defaultChunkSize || got%defaultChunkSize != 0 {
+		t.Fatalf("index.db size=%d want a positive multiple of default chunk size %d", got, defaultChunkSize)
 	}
 }

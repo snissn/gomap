@@ -137,8 +137,8 @@ Later children update these stable test names rather than duplicating them.
 | `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: the target meta is written only after the durable-root record, manifest, index, value-log, and outer-leaf closure is stable; incomplete candidates fall back | DUR-09 #3679 |
 | `TestPowerLossOracleCounterexampleRecoverablePageReuse` | resolved for synchronous publication: the root-reuse admission fence prevents reuse from racing older-root capture, and both durable slots retain their exact COW generations | DUR-04 #3678 and DUR-09 #3679; maintenance horizon remains DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3718 |
-| `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | `caching.DB.publishCommandWALCheckpointApplied` or cleanup removes command WAL/assets before sealed coverage | DUR-07 #3682 and DUR-08 #3681 |
-| `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | `caching.DB.Checkpoint`, `caching.DB.flushSyncRequested`, or chunked cached flush apply exposes an incomplete intermediate root | DUR-06 #3680 |
+| `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | resolved for activation: cleanup retains the command-WAL source until AppliedCommandLSN coverage is stable; complete cleanup convergence remains downstream | DUR-06 #3680; convergence remains DUR-07 #3682 and DUR-08 #3681 |
+| `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | resolved: cached Checkpoint and sync boundaries publish only the complete final root, never an intermediate chunk | DUR-06 #3680 |
 
 `TestPowerLossOracleFixtureInventoryReopensStableOnly` covers inline values,
 `ValueLog.PointerThreshold=1` forced pointers, forced outer leaves, combined

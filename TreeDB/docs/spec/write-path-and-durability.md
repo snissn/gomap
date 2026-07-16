@@ -119,8 +119,10 @@ request and no public fast-close/abort alias in this contract.
 
 - Command WAL and the legacy compatibility cached redo journal are disabled.
 - Value log remains enabled.
-- Sync operations are relaxed.
-- Durable boundary for recent writes is checkpoint/flush based, not per-write journal replay.
+- Ordinary writes may acknowledge ahead of sealed-root publication.
+- Explicit sync operations wait for a sealed complete root covering the call.
+- `Flush` is a visibility/draining boundary. `Checkpoint` and clean `Close`
+  wait for a sealed complete root covering their captured frontier.
 
 This document owns the canonical durability-mode matrix. Other docs may
 summarize these modes but should not maintain independent durability matrices.
@@ -289,9 +291,10 @@ must remain outside that final serialized boundary.
 
 ### 5.2 Sync APIs
 
-- `SetSync`, `DeleteSync`, `Batch.WriteSync`: in durable mode, an fsync
-  durability boundary; in command-WAL relaxed mode, a durable V2 prefix; in
-  legacy relaxed modes without command WAL, a relaxed boundary only.
+- `SetSync`, `DeleteSync`, `Batch.WriteSync`: in command-WAL profiles, a durable
+  command-frame prefix; in `no_wal_fast`, a sealed complete root covering the
+  call. Legacy profiles without command WAL retain their historical journal
+  boundary semantics.
 
 ### 5.3 External-version MVCC commits
 

@@ -147,6 +147,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			return stats, err
 		}
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if lockMaintenance {
 		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
 			hook("value-log-gc")
@@ -163,9 +166,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				return stats, err
 			}
 		}
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	vm := db.valueLogManager
 	if vm == nil {
@@ -393,6 +393,11 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				stats.ObservedSourceBytesPending += size
 				continue
 			}
+			// MarkZombie only retires the file from future manager sets. Physical
+			// unlink separately acquires an exact-identity delete lease, so either
+			// durable meta slot, a visible candidate, or a snapshot retaining this
+			// identity keeps the path present for recovery. #3681 will unify logical
+			// eligibility and this physical gate under RecoverableRootSet.
 			if err := vm.MarkZombie(id); err != nil {
 				return stats, err
 			}
@@ -495,6 +500,10 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				}
 				continue
 			}
+			// Recovery-selectable durable slots retain exact identity tokens. The
+			// manager therefore cannot unlink this zombie until every older root and
+			// explicit pin releases the matching identity, even when this scan saw a
+			// newer visible root that no longer references the segment.
 			if err := vm.MarkZombie(id); err != nil {
 				return stats, err
 			}

@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -72,6 +72,22 @@ func TestCompactStorageRepairsMissingCurrentLeafGenerationFile(t *testing.T) {
 		if exists, err := leafGenerationRawFileExists(dir, rawFileID); err != nil || !exists {
 			t.Fatalf("view references missing raw file %d: exists=%v err=%v", rawFileID, exists, err)
 		}
+	}
+}
+
+func TestCompactStorageConcurrentChildDeletionIsAbsentFromUsageSnapshot(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, ".value-l0-000001.log.delete-test")
+	err := &os.PathError{Op: "readdirent", Path: child, Err: os.ErrNotExist}
+
+	if !compactStorageConcurrentChildDeletion(root, child, err) {
+		t.Fatal("concurrently deleted child should be absent from usage snapshot")
+	}
+	if compactStorageConcurrentChildDeletion(root, root, err) {
+		t.Fatal("missing usage root should remain an error")
+	}
+	if compactStorageConcurrentChildDeletion(root, child, os.ErrPermission) {
+		t.Fatal("non-ENOENT child error should remain an error")
 	}
 }
 
@@ -847,7 +863,7 @@ func openCompactStorageRewritePolicyFixture(t *testing.T, liveRecords, staleReco
 	return db
 }
 
-func TestCompactStorageRetainsValueLogGCDebtWhileOlderSlotProtectsSegment(t *testing.T) {
+func TestCompactStorageReclaimsCoalescedSupersededValueLogDependency(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{Dir: dir})
@@ -926,17 +942,21 @@ func TestCompactStorageRetainsValueLogGCDebtWhileOlderSlotProtectsSegment(t *tes
 	if err != nil {
 		t.Fatalf("CompactStorage: %v", err)
 	}
-	if stats.ValueLogGC.SegmentsEligible == 0 || stats.ValueLogGC.SegmentsPending == 0 {
-		t.Fatalf("older-slot ValueLogGC debt was not preserved: %+v", stats.ValueLogGC)
+	// CompactStorage checkpoints the visible frontier before GC. Both ordinary
+	// writes above are therefore coalesced into one durable root that names only
+	// the final live dependency; the superseded intermediate root never occupies
+	// a recovery-selectable slot and must not pin ptr1.
+	if stats.ValueLogGC.SegmentsEligible == 0 || stats.ValueLogGC.SegmentsDeleted == 0 {
+		t.Fatalf("coalesced superseded value-log dependency was not reclaimed: %+v", stats.ValueLogGC)
 	}
-	if stats.ValueLogGC.SegmentsDeleted != 0 || stats.ValueLogGC.BytesDeleted != 0 {
-		t.Fatalf("segment reachable from the older durable slot was deleted: %+v", stats.ValueLogGC)
+	if stats.ValueLogGC.SegmentsPending != 0 || stats.ValueLogGC.BytesPending != 0 {
+		t.Fatalf("coalesced superseded value-log dependency remained pending: %+v", stats.ValueLogGC)
 	}
-	if stats.RemainingDebt.ValueLogGCSegments == 0 || stats.RemainingDebt.ValueLogGCBytes == 0 {
-		t.Fatalf("remaining GC debt=%+v, want retained older-slot debt", stats.RemainingDebt)
+	if stats.RemainingDebt.ValueLogGCSegments != 0 || stats.RemainingDebt.ValueLogGCBytes != 0 {
+		t.Fatalf("remaining GC debt=%+v, want no debt from a non-selectable intermediate root", stats.RemainingDebt)
 	}
-	if _, err := os.Stat(path1); err != nil {
-		t.Fatalf("older-slot segment was not retained: %v", err)
+	if _, err := os.Stat(path1); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("coalesced superseded segment still exists: %v", err)
 	}
 }
 
@@ -2146,7 +2166,7 @@ func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
 	}
 }
 
-func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
+func TestCompactStorageKeepsRetiringLeafGenerationWhenIndexVacuumIsFenced(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("index vacuum is unsupported on Windows; skipped-vacuum guard intentionally keeps leaf sources pinned")
 	}
@@ -2191,25 +2211,16 @@ func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) 
 	if !stats.FullyCompacted {
 		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
 	}
-	if !compactStoragePhaseSeen(stats.Phases, "settle-leaf-generation-gc-1") {
-		t.Fatalf("settle leaf GC phase missing: %+v", stats.Phases)
+	if !compactStoragePhaseSkippedWithReason(stats.Phases, "index-vacuum", ErrVacuumRecoverableRootSetRequired.Error()) {
+		t.Fatalf("recoverable-root-set index vacuum fence missing: %+v", stats.Phases)
 	}
-	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
-		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("retiring leaf source removed while index vacuum is fenced: %v", err)
 	}
 	manifest := loadLeafGenerationManifestOrFatal(t, dir)
-	for _, gen := range manifest.Generations {
-		if gen.GenerationID == 0 {
-			t.Fatalf("invalid generation in manifest: %+v", gen)
-		}
-		if gen.State == leafGenerationStateRetiring || gen.State == leafGenerationStateDeleted {
-			t.Fatalf("generation %d state=%q after compact storage; manifest=%+v", gen.GenerationID, gen.State, manifest.Generations)
-		}
-		for _, fileID := range gen.FileIDs {
-			if fileID == rawFileID1 {
-				t.Fatalf("dead generation file %d still present in manifest: %+v", rawFileID1, manifest.Generations)
-			}
-		}
+	gen := findLeafGenerationByFileID(t, manifest, rawFileID1)
+	if got, want := gen.State, leafGenerationStateRetiring; got != want {
+		t.Fatalf("generation state after fenced vacuum=%q want %q manifest=%+v", got, want, manifest.Generations)
 	}
 }
 
@@ -3129,6 +3140,15 @@ func TestCompactStorageNormalizeExhaustiveForcesUnboundedLeafPack(t *testing.T) 
 func compactStoragePhaseSeen(phases []CompactStoragePhaseStats, name string) bool {
 	for _, phase := range phases {
 		if phase.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func compactStoragePhaseSkippedWithReason(phases []CompactStoragePhaseStats, name, reason string) bool {
+	for _, phase := range phases {
+		if phase.Name == name && phase.Skipped && strings.Contains(phase.SkipReason, reason) {
 			return true
 		}
 	}

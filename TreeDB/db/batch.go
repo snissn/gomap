@@ -19,6 +19,8 @@ type Batch struct {
 	commandWALPublishIntent            *commandWALBatchIntent
 	conditionalTxnID                   uint64
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
+	rootPublicationBuildGroup          *RootPublicationBuildGroup
+	rootPublicationBuildGroupFinal     bool
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -80,6 +82,28 @@ func (b *Batch) SetFlushApplySpanNativeFallback(reason FlushSpanRunFallbackReaso
 		return
 	}
 	b.flushApplySpanNativeFallbackReason = reason
+}
+
+// SetRootPublicationBuildGroup attaches one batch of a logical chunked cached
+// apply. Exactly one attached batch must be marked final. Intermediate batches
+// build private roots; only the final batch creates a publication candidate.
+func (b *Batch) SetRootPublicationBuildGroup(group *RootPublicationBuildGroup, final bool) error {
+	if b == nil || b.db == nil || group == nil {
+		return errors.New("missing root publication build group")
+	}
+	if !b.physicalOnly {
+		return errors.New("root publication build group requires a physical batch")
+	}
+	if b.rootPublicationBuildGroup != nil {
+		return errors.New("root publication build group already attached")
+	}
+	runtime := b.db.rootPublication
+	if runtime == nil || runtime.coordinator == nil || group.coordinator != runtime.coordinator {
+		return errors.New("root publication build group belongs to another database")
+	}
+	b.rootPublicationBuildGroup = group
+	b.rootPublicationBuildGroupFinal = final
+	return nil
 }
 
 func (b *Batch) flushApplyOptions() zipper.ApplyOptions {
@@ -270,6 +294,13 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
+	if group := b.rootPublicationBuildGroup; group != nil {
+		if !b.physicalOnly {
+			return errors.New("root publication build group requires a physical batch")
+		}
+		maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
+		return group.writeBatch(b, sync, maxEntryRevision)
+	}
 	b.db.teardownMu.RLock()
 	defer b.db.teardownMu.RUnlock()
 	if err := b.db.publicationPoisonedError(); err != nil {
@@ -405,7 +436,10 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	recordVacuumMutation := func() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldPointerRefsCollected)
+	conditionalMutation := conditionalCommitMutation{
+		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID,
+	}
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -533,7 +567,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	}
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -557,20 +591,16 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.hasExpectedBaseCommitSeq = true
 		opts.releaseRootSerialization = releaseRootSerialization
 		opts.recordVacuumMutation = recordVacuumMutation
+		opts.conditionalMutation = conditionalMutation
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
-		// Poison while still holding commitMu so that no concurrent writer can
-		// slip past the poison check in appendRawKVCommandWALIntent and publish a
-		// root that covers the unapplied frame's LSN.
-		if err != nil {
+		// Poison while still holding commitMu only when the frame remains
+		// unapplied. An accepted candidate already made the LSN visible even when
+		// its admission wait reports a retryable publisher failure.
+		if err != nil && !post.accepted {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
-	if err == nil {
-		if b.db.conditionalActiveTxnCount.Load() > 0 {
-			b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
-		}
-	}
 	if !rootLocksReleased {
 		b.db.commitMu.Unlock()
 	}
@@ -613,13 +643,22 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
+	builder, err := b.db.acquireRootPublicationBuilderV1()
+	if err != nil {
+		return err
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 
 	durablePublishLocked := false
-	defer func() {
+	releaseDurablePublish := func() {
 		if durablePublishLocked {
 			b.db.durablePublishMu.Unlock()
+			durablePublishLocked = false
 		}
-	}()
+	}
+	defer releaseDurablePublish()
 	commitWaitStart := time.Now()
 	b.db.writeMu.Lock()
 	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
@@ -669,7 +708,6 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	var newRoot uint64
 	var retired []uint64
 	var metrics adaptive.Metrics
-	var err error
 	var applyResult zipper.ApplyResult
 	var spanNativePublishSnapshot flushApplySpanNativePublishSnapshot
 	applyWithOptions := flushApplyUseOptions(applyOpts)
@@ -699,7 +737,10 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	recordVacuumMutation := func() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldPointerRefsCollected)
+	conditionalMutation := conditionalCommitMutation{
+		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID,
+	}
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -739,7 +780,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision, durablePublishLocked: true, durablePublishRelease: releaseDurablePublish, rootPublicationBuilder: builder, closeTeardownPinned: true, expectedBaseCommitSeq: baseSeq, hasExpectedBaseCommitSeq: true, releaseRootSerialization: releaseRootSerialization, recordVacuumMutation: recordVacuumMutation, conditionalMutation: conditionalMutation})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -755,27 +796,25 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
 		opts.durablePublishLocked = true
+		opts.durablePublishRelease = releaseDurablePublish
+		opts.rootPublicationBuilder = builder
 		opts.closeTeardownPinned = true
 		opts.expectedBaseCommitSeq = baseSeq
 		opts.hasExpectedBaseCommitSeq = true
 		opts.releaseRootSerialization = releaseRootSerialization
 		opts.recordVacuumMutation = recordVacuumMutation
+		opts.conditionalMutation = conditionalMutation
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
-	b.db.durablePublishMu.Unlock()
-	durablePublishLocked = false
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-		if intent != nil {
+		if intent != nil && !post.accepted {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		return err
-	}
-	if b.db.conditionalActiveTxnCount.Load() > 0 {
-		b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
 	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
 	vlogRefDelta = nil
@@ -826,12 +865,16 @@ func (b *Batch) Close() error {
 		b.commandWALPublishIntent = nil
 		b.conditionalTxnID = 0
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
+		b.rootPublicationBuildGroup = nil
+		b.rootPublicationBuildGroupFinal = false
 		return err
 	}
 	b.batch = nil
 	b.commandWALPublishIntent = nil
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
+	b.rootPublicationBuildGroup = nil
+	b.rootPublicationBuildGroupFinal = false
 	return nil
 }
 
@@ -844,6 +887,8 @@ func (b *Batch) Reset() {
 	b.commandWALPublishIntent = nil
 	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
+	b.rootPublicationBuildGroup = nil
+	b.rootPublicationBuildGroupFinal = false
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

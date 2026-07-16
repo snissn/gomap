@@ -46,8 +46,14 @@ func TestPruneReclaimsRetiredPagesAfterKeepRecentWindow(t *testing.T) {
 	}
 
 	commit(val1) // seq 1
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint seq1: %v", err)
+	}
 
 	commit(val2) // seq 2; retires pages last reachable at seq 1
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint seq2: %v", err)
+	}
 
 	rep2, err := d.FragmentationReport()
 	if err != nil {
@@ -74,6 +80,9 @@ func TestPruneReclaimsRetiredPagesAfterKeepRecentWindow(t *testing.T) {
 			t.Fatalf("write seq3: %v", err)
 		}
 		_ = b.Close()
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint seq3: %v", err)
 	}
 
 	rep3, err := d.FragmentationReport()

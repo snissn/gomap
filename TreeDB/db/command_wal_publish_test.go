@@ -1098,6 +1098,7 @@ func TestCommandWALCleanupDoesNotEmitAfterDeletionSyncOnSyncFailure(t *testing.T
 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
 	db.state.Store(&DBState{AppliedCommandLSN: 1})
+	db.durableRoot.record.AppliedCommandLSN = 1
 
 	originalSyncDir := syncDirFn
 	defer func() { syncDirFn = originalSyncDir }()
@@ -1132,6 +1133,7 @@ func TestCommandWALCleanupPartialUnlinkFailureRequiresRecoveryWithoutSync(t *tes
 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
 	db.state.Store(&DBState{AppliedCommandLSN: 2})
+	db.durableRoot.record.AppliedCommandLSN = 2
 
 	wantErr := errors.New("injected second-unlink cut")
 	var unlinkAttempts int

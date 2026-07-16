@@ -596,11 +596,14 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	indexVacuumSkipped := false
+	indexVacuumSkipReason := ""
 	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
 		indexVacuumSkipped = false
+		indexVacuumSkipReason = ""
 		err := db.vacuumIndexOnline(ctx, !maintenanceLocked)
 		if errors.Is(err, ErrVacuumUnsupported) {
 			indexVacuumSkipped = true
+			indexVacuumSkipReason = err.Error()
 			return nil
 		}
 		return err
@@ -610,7 +613,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if indexVacuumSkipped {
 		if len(stats.Phases) > 0 {
 			stats.Phases[len(stats.Phases)-1].Skipped = true
-			stats.Phases[len(stats.Phases)-1].SkipReason = ErrVacuumUnsupported.Error()
+			stats.Phases[len(stats.Phases)-1].SkipReason = indexVacuumSkipReason
 		}
 	} else if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
 		return db.Checkpoint()
@@ -1424,6 +1427,13 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 	}
 	err = filepath.WalkDir(path, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// Identity-based deletion quarantines a segment before removing it.
+			// A released quarantine directory can therefore disappear after
+			// WalkDir enumerates it but before WalkDir reads its children. That
+			// completed deletion should simply be absent from this usage snapshot.
+			if compactStorageConcurrentChildDeletion(usage.Path, path, walkErr) {
+				return nil
+			}
 			return walkErr
 		}
 		if entry.IsDir() {
@@ -1431,6 +1441,9 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(usage.Path, path, err) {
+				return nil
+			}
 			return err
 		}
 		usage.Files++
@@ -1441,6 +1454,10 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 		return nil
 	})
 	return usage, err
+}
+
+func compactStorageConcurrentChildDeletion(root, path string, err error) bool {
+	return path != root && os.IsNotExist(err)
 }
 
 func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
