@@ -527,6 +527,9 @@ func TestVacuumIndexOnlineCollectionRecloneAllowsMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish initial collection: %v", err)
 	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint initial collection: %v", err)
+	}
 
 	var publishOnce sync.Once
 	var hookErr error
