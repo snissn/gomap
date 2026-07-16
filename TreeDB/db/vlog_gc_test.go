@@ -479,8 +479,8 @@ func TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment(t *testing.
 	if publication.VisibleCommitSeq <= durableBefore || publication.DurableCommitSeq != durableBefore {
 		t.Fatalf("post-delete visible/durable frontier=(%d,%d), want visible > durable=%d", publication.VisibleCommitSeq, publication.DurableCommitSeq, durableBefore)
 	}
-	if stats.SegmentsEligible == 0 || stats.SegmentsPending == 0 {
-		t.Fatalf("GC did not logically retire the older-root segment: %+v", stats)
+	if stats.SegmentsReferenced == 0 || stats.BytesReferenced == 0 || stats.SegmentsEligible != 0 || stats.SegmentsPending != 0 {
+		t.Fatalf("GC did not classify the older-root segment as recoverably referenced: %+v", stats)
 	}
 	oldPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
 	if _, err := os.Stat(oldPath); err != nil {
@@ -512,6 +512,17 @@ func TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment(t *testing.
 	restoreCuts = func() {}
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
+	}
+	advancePastRetainedDurableSlotForTest(t, database)
+	converged, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC after durable-root advance: %v", err)
+	}
+	if converged.SegmentsDeleted == 0 || converged.BytesDeleted == 0 {
+		t.Fatalf("older-root value-log debt did not converge after both slots advanced: %+v", converged)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("older-root segment still present after convergence GC: %v", err)
 	}
 }
 

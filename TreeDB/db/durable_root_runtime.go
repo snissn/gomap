@@ -380,7 +380,7 @@ func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]
 	if err := registerValuePointers(primaryRootIDs); err != nil {
 		return nil, err
 	}
-	roots, _, err := maintenanceReachabilityRoots(context.Background(), snapshot, nil, nil, false)
+	roots, _, err := maintenanceReachabilityRoots(context.Background(), snapshot, nil, nil, false, false)
 	if err != nil {
 		return nil, err
 	}

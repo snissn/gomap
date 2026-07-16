@@ -104,6 +104,27 @@ type Coordinator struct {
 	resourcePinHighWater map[ResourceKind]uint64
 	durableRootLineage   DurableRootLineageID
 	durableRootSequence  uint64
+	reachabilityEpoch    uint64
+}
+
+// ReachabilitySnapshot is a bounded, independently pinned view of every root
+// and stable resource that can still become recovery-selectable. The epoch is
+// opaque to callers; it is used only for exact pre-mutation revalidation.
+type ReachabilitySnapshot struct {
+	Epoch     uint64
+	Visible   Frontier
+	Durable   Frontier
+	Pending   []Frontier
+	Resources *StableResourceSet
+}
+
+// Release drops the independently cloned resource pins owned by the snapshot.
+func (snapshot *ReachabilitySnapshot) Release() {
+	if snapshot == nil {
+		return
+	}
+	snapshot.Resources.Release()
+	snapshot.Resources = nil
 }
 
 // PublishAttempt is an opaque identity for exactly one captured callback.
@@ -147,6 +168,7 @@ func New(options Options) (*Coordinator, error) {
 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
 		resourceActivePins: make(map[ResourceKind]uint64), resourcePinHighWater: make(map[ResourceKind]uint64),
 		durableRootLineage: options.DurableRootLineage, durableRootSequence: options.DurableRootSequence,
+		reachabilityEpoch: 1,
 	}
 	if c.oldestRecoverable == 0 {
 		c.oldestRecoverable = c.durable.commitSeq
@@ -260,6 +282,7 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	}
 	c.observeResourcePinHighWaterLocked()
 	c.visible = candidate.frontier
+	c.reachabilityEpoch++
 	if wasEmpty {
 		c.firstPendingAt = c.clock.Now()
 		c.installTimerLocked()
@@ -273,6 +296,62 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 		c.requestPublishLocked(WakeHardAdmission)
 	}
 	return enqueueDecision{sequence: candidate.frontier.commitSeq, failureGeneration: c.failureGeneration, hard: hard}, nil
+}
+
+// CaptureReachability independently pins the exact pending/recovery resource
+// union while copying the scalar visible, durable, and pending root frontiers.
+// It performs no tree scan and its work is bounded by coordinator debt.
+func (c *Coordinator) CaptureReachability() (ReachabilitySnapshot, error) {
+	if c == nil {
+		return ReachabilitySnapshot{}, ErrClosed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.terminalErrorLocked(); err != nil {
+		return ReachabilitySnapshot{}, err
+	}
+
+	sets := make([]*StableResourceSet, 0, len(c.pending)+len(c.recoverySets))
+	pending := make([]Frontier, 0, len(c.pending))
+	for _, entry := range c.pending {
+		pending = append(pending, entry.candidate.frontier)
+		if resources := entry.candidate.resourceSet(); resources != nil {
+			sets = append(sets, resources)
+		}
+	}
+	sets = append(sets, c.recoverySets...)
+	var resources *StableResourceSet
+	if len(sets) != 0 {
+		view, err := UnionStableResourceSets(sets...)
+		if err != nil {
+			return ReachabilitySnapshot{}, err
+		}
+		resources, err = CloneStableResourceSetExcludingKinds(view)
+		if err != nil {
+			return ReachabilitySnapshot{}, err
+		}
+	}
+	return ReachabilitySnapshot{
+		Epoch: c.reachabilityEpoch, Visible: c.visible, Durable: c.durable,
+		Pending: pending, Resources: resources,
+	}, nil
+}
+
+// RevalidateReachability proves that no candidate was enqueued and no durable
+// prefix was consumed since CaptureReachability returned.
+func (c *Coordinator) RevalidateReachability(epoch uint64) error {
+	if c == nil {
+		return ErrClosed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.terminalErrorLocked(); err != nil {
+		return err
+	}
+	if epoch == 0 || epoch != c.reachabilityEpoch {
+		return ErrInvalidCandidate
+	}
+	return nil
 }
 
 func (c *Coordinator) preflightDurableRootLocked(candidate *PreparedRootCandidate) error {
@@ -733,6 +812,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		c.durable = candidate.frontier
 		c.durable.commitSeq = durableSeq
 		c.oldestRecoverable = oldest
+		c.reachabilityEpoch++
 		if latest := (DurableRootGroup{members: group.members}).Latest(); latest != nil {
 			c.durableRootLineage = latest.Lineage()
 			c.durableRootSequence = latest.Sequence()

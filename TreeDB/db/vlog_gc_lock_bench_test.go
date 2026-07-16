@@ -16,12 +16,16 @@ import (
 func BenchmarkValueLogGCPublishDuringPausedFullScan(b *testing.B) {
 	const scanPause = 25 * time.Millisecond
 	type gcResult struct {
-		stats ValueLogGCStats
-		err   error
+		stats   ValueLogGCStats
+		elapsed time.Duration
+		err     error
 	}
 
 	var publishElapsed time.Duration
+	var gcElapsed time.Duration
 	var segmentsDeleted int
+	var bytesScanned, bytesReclaimed int64
+	var bytesReferenced, bytesActive, bytesProtected, bytesPending int64
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		db, err := Open(Options{Dir: b.TempDir()})
@@ -47,8 +51,9 @@ func BenchmarkValueLogGCPublishDuringPausedFullScan(b *testing.B) {
 		})
 		gcDone := make(chan gcResult, 1)
 		go func() {
+			started := time.Now()
 			stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
-			gcDone <- gcResult{stats: stats, err: err}
+			gcDone <- gcResult{stats: stats, elapsed: time.Since(started), err: err}
 		}()
 		<-scanStarted
 		key := []byte(fmt.Sprintf("publish-during-scan-%d", i))
@@ -70,13 +75,27 @@ func BenchmarkValueLogGCPublishDuringPausedFullScan(b *testing.B) {
 			_ = db.Close()
 			b.Fatalf("ValueLogGC: %v", result.err)
 		}
+		gcElapsed += result.elapsed
 		segmentsDeleted += result.stats.SegmentsDeleted
+		bytesScanned += result.stats.BytesTotal
+		bytesReclaimed += result.stats.BytesDeleted
+		bytesReferenced += result.stats.BytesReferenced
+		bytesActive += result.stats.BytesActive
+		bytesProtected += result.stats.BytesProtected
+		bytesPending += result.stats.BytesPending
 		if err := db.Close(); err != nil {
 			b.Fatalf("close: %v", err)
 		}
 	}
 
 	b.ReportMetric(float64(publishElapsed.Nanoseconds())/float64(b.N), "publish-ns/op")
+	b.ReportMetric(float64(gcElapsed.Nanoseconds())/float64(b.N), "gc-convergence-ns/op")
 	b.ReportMetric(float64(scanPause.Nanoseconds()), "scan-pause-ns/op")
 	b.ReportMetric(float64(segmentsDeleted)/float64(b.N), "segments-deleted/op")
+	b.ReportMetric(float64(bytesScanned)/float64(b.N), "bytes-scanned/op")
+	b.ReportMetric(float64(bytesReclaimed)/float64(b.N), "bytes-reclaimed/op")
+	b.ReportMetric(float64(bytesReferenced)/float64(b.N), "bytes-retained-referenced/op")
+	b.ReportMetric(float64(bytesActive)/float64(b.N), "bytes-retained-active/op")
+	b.ReportMetric(float64(bytesProtected)/float64(b.N), "bytes-retained-protected/op")
+	b.ReportMetric(float64(bytesPending)/float64(b.N), "bytes-retained-pending/op")
 }

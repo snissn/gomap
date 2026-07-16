@@ -107,6 +107,14 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 	if err != nil || !prepared {
 		return stats, false, err
 	}
+	var recoverableRoots *RecoverableRootSet
+	if !opts.DryRun {
+		recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+		if err != nil {
+			return stats, false, err
+		}
+		defer recoverableRoots.Release()
+	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -131,6 +139,14 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		_ = snap.Close()
 		return stats, false, err
 	}
+	var recoverableLive map[uint64]struct{}
+	if recoverableRoots != nil {
+		recoverableLive, err = db.collectRecoverableLeafGenerationIDs(ctx, recoverableRoots, snap.state.LeafGenerations)
+		if err != nil {
+			_ = snap.Close()
+			return stats, false, err
+		}
+	}
 	if err := snap.Close(); err != nil {
 		return stats, false, err
 	}
@@ -140,7 +156,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 	if opts.DryRun {
 		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations)
 	}
-	stats, err = db.leafGenerationGCApplyScan(basis, liveGenerations)
+	stats, err = db.leafGenerationGCApplyScan(basis, liveGenerations, recoverableLive, recoverableRoots)
 	return stats, false, err
 }
 
@@ -269,11 +285,11 @@ func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, li
 	runLeafGenerationGCExclusivePhaseHook(false)
 	db.writeMu.Unlock()
 
-	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, true)
+	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, nil, basis.commitSeq, true)
 	return decision.stats, false, nil
 }
 
-func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, error) {
+func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations, recoverableGenerations map[uint64]struct{}, recoverableRoots *RecoverableRootSet) (LeafGenerationGCStats, error) {
 	var stats LeafGenerationGCStats
 
 	db.writeMu.Lock()
@@ -295,8 +311,12 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 		return stats, err
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
-	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, false)
+	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, recoverableGenerations, basis.commitSeq, false)
 	stats = decision.stats
+	if err := recoverableRoots.Revalidate(); err != nil {
+		return stats, err
+	}
+	recoverableRoots.Release()
 
 	if len(decision.zombieFileIDs) > 0 {
 		for fileID := range decision.zombieFileIDs {
@@ -343,7 +363,37 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	return stats, nil
 }
 
-func (db *DB) buildLeafGenerationGCDecision(manifest *leafGenerationManifest, filePaths map[uint32]string, currentLeafLogRawFileIDs map[uint32]struct{}, liveGenerations map[uint64]struct{}, currentCommitSeq uint64, dryRun bool) leafGenerationGCDecision {
+func (db *DB) collectRecoverableLeafGenerationIDs(ctx context.Context, roots *RecoverableRootSet, current *leafGenerationView) (map[uint64]struct{}, error) {
+	captured := roots.Roots()
+	if len(captured) == 0 {
+		return nil, ErrRecoverableRootSetStale
+	}
+	snap := roots.AcquireSnapshotForRoot(captured[0])
+	if snap == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	protectedRootIDs := make([]uint64, 0, len(captured))
+	protectedSystemRootIDs := make([]uint64, 0, len(captured))
+	for _, root := range captured {
+		protectedRootIDs = append(protectedRootIDs, root.UserRootPageID)
+		protectedSystemRootIDs = append(protectedSystemRootIDs, root.SystemRootPageID)
+	}
+	scan, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:             maintenanceReachabilityLeafFileIDs,
+		ProtectedRootIDs:       protectedRootIDs,
+		ProtectedSystemRootIDs: protectedSystemRootIDs,
+	})
+	closeErr := snap.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return roots.leafGenerationIDsForFiles(scan.leafFileIDs, current)
+}
+
+func (db *DB) buildLeafGenerationGCDecision(manifest *leafGenerationManifest, filePaths map[uint32]string, currentLeafLogRawFileIDs map[uint32]struct{}, liveGenerations, recoverableGenerations map[uint64]struct{}, currentCommitSeq uint64, dryRun bool) leafGenerationGCDecision {
 	decision := leafGenerationGCDecision{zombieFileIDs: make(map[uint32]struct{})}
 	activeFileRefs := leafGenerationActiveFileRefCounts(manifest)
 	for i := range manifest.Generations {
@@ -402,6 +452,20 @@ func (db *DB) buildLeafGenerationGCDecision(manifest *leafGenerationManifest, fi
 			decision.stats.GenerationsLive++
 			if gen.State != leafGenerationStateSealed {
 				gen.State = leafGenerationStateSealed
+				decision.intermediateChanged = true
+			}
+			continue
+		}
+		// A generation referenced only by an independently recoverable root is
+		// retained debt, not part of the currently visible tree. Keep it retiring
+		// so a later pass can reclaim it after every durable fallback advances.
+		if _, ok := recoverableGenerations[gen.GenerationID]; ok {
+			decision.stats.GenerationsRetiring++
+			if gen.State != leafGenerationStateRetiring {
+				gen.State = leafGenerationStateRetiring
+				if currentCommitSeq > gen.RetiredCommitSeq {
+					gen.RetiredCommitSeq = currentCommitSeq
+				}
 				decision.intermediateChanged = true
 			}
 			continue
