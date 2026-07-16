@@ -101,19 +101,25 @@ type finalizeCommitOptions struct {
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false)
+	return db.publishCommandWALRootsWithMode(newRootID, sysRootID, appliedLSN, covered, sync, false, false)
 }
 
 func (db *DB) publishCurrentCommandWALRoots(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
-	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true)
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, false)
 }
 
-func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool) error {
+func (db *DB) publishCurrentCommandWALRootsTeardownPinned(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	return db.publishCommandWALRootsWithMode(0, 0, appliedLSN, covered, sync, true, true)
+}
+
+func (db *DB) publishCommandWALRootsWithMode(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool, currentRoots bool, teardownPinned bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	if !teardownPinned {
+		db.teardownMu.RLock()
+		defer db.teardownMu.RUnlock()
+	}
 	builder, err := db.acquireRootPublicationBuilderV1()
 	if err != nil {
 		return err
@@ -219,9 +225,9 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	if db == nil {
 		return ErrClosed
 	}
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	unlockCommandWALPublish := db.lockCommandWALRawPublishWithTeardown()
 	defer unlockCommandWALPublish()
-	return db.publishCurrentCommandWALRoots(appliedLSN, covered, sync)
+	return db.publishCurrentCommandWALRootsTeardownPinned(appliedLSN, covered, sync)
 }
 
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {

@@ -1826,9 +1826,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(or
 
 // PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder is
 // like PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder, but
-// assumes the caller already holds the command-WAL raw publish lock.
+// assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithOptions(ordered, nil, intent, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishLogical, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithOptions(ordered, nil, intent, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishLogical, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder is
@@ -1853,9 +1854,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSys
 
 // PublishStagedOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
-// but assumes the caller already holds the command-WAL raw publish lock.
+// but assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder
@@ -1867,9 +1869,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSyste
 
 // PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder,
-// but assumes the caller already holds the command-WAL raw publish lock.
+// but assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, nil, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, nil, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
@@ -1883,9 +1886,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuil
 
 // PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder,
-// but assumes the caller already holds the command-WAL raw publish lock.
+// but assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder is like
@@ -2059,9 +2063,10 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuild
 
 // PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder is
 // like PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder, but
-// assumes the caller already holds the command-WAL raw publish lock.
+// assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered, nil, intent, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered, nil, intent, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder is
@@ -2084,9 +2089,10 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderA
 
 // PublishStagedOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
-// but assumes the caller already holds the command-WAL raw publish lock.
+// but assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder
@@ -2099,9 +2105,10 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemD
 
 // PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder,
-// but assumes the caller already holds the command-WAL raw publish lock.
+// but assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered, preflight, intent, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered, preflight, intent, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextAndSystemDeltaBuilder
@@ -2122,9 +2129,10 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRoo
 
 // PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder,
-// but assumes the caller already holds the command-WAL raw publish lock.
+// but assumes the caller already holds the command-WAL raw publish lock and its
+// teardown lease.
 func (db *DB) PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true, teardownPinned: true})
 }
 
 // PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder is like
@@ -2160,12 +2168,14 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	if db.closing.Load() {
 		return 0, nil, preApplyErr(ErrClosed)
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	if !opts.teardownPinned {
+		db.teardownMu.RLock()
+		defer db.teardownMu.RUnlock()
+	}
 
 	rawPublishLocked := !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false)
 	if rawPublishLocked {
-		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
+		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if lockErr != nil {
 			return 0, nil, preApplyErr(lockErr)
 		}
@@ -2352,12 +2362,14 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	if !opts.teardownPinned {
+		db.teardownMu.RLock()
+		defer db.teardownMu.RUnlock()
+	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
-		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
+		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if lockErr != nil {
 			return 0, nil, lockErr
 		}
@@ -3086,11 +3098,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	if !opts.teardownPinned {
+		db.teardownMu.RLock()
+		defer db.teardownMu.RUnlock()
+	}
 
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, false) {
-		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
+		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if lockErr != nil {
 			return 0, nil, lockErr
 		}
@@ -3272,12 +3286,14 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
+	if !opts.teardownPinned {
+		db.teardownMu.RLock()
+		defer db.teardownMu.RUnlock()
+	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
-		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
+		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if lockErr != nil {
 			return 0, nil, lockErr
 		}
@@ -3519,7 +3535,10 @@ func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUser
 }
 
 type orderedRootCommandWALPublishOptions struct {
-	rawPublishLocked            bool
+	rawPublishLocked bool
+	// teardownPinned accompanies rawPublishLocked for staged public callers.
+	// Internal root publishers leave both false and acquire their own leases.
+	teardownPinned              bool
 	durableResources            *rootpublication.StableResourceSet
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
 }
@@ -3545,7 +3564,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
-		unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+		unlockCommandWALPublish, err := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if err != nil {
 			return err
 		}

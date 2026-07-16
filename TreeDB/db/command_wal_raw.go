@@ -1327,11 +1327,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
 		return 0, err
 	}
+	defer unlockCommandWALPublish()
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
 	}
@@ -1379,11 +1379,11 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
 		return 0, err
 	}
+	defer unlockCommandWALPublish()
 	if db.closing.Load() {
 		return 0, ErrClosed
 	}
@@ -1444,14 +1444,14 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 		publishStart = time.Now()
 		requestTiming.PublishLockBarrierWaitObserved = true
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
 		if measured {
 			requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 		}
 		return 0, requestTiming, err
 	}
+	defer unlockCommandWALPublish()
 	if measured {
 		requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 	}
@@ -1503,8 +1503,8 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 }
 
 // PublishStagedCommandWALNoop publishes an already-staged command-WAL no-op.
-// Callers must hold a higher-level raw publish or staging guard from the frame
-// append through this publish call.
+// Callers must hold a higher-level raw publish or staging guard, including its
+// teardown lease, from the frame append through this publish call.
 func (db *DB) PublishStagedCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	return db.publishCommandWALNoop(intent, sync)
 }
@@ -1516,8 +1516,6 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if db == nil {
 		return ErrClosed
 	}
-	db.teardownMu.RLock()
-	defer db.teardownMu.RUnlock()
 	if db.readOnly {
 		return ErrReadOnly
 	}
