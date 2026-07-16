@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -30,7 +31,7 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		meta, stats, err := c.createTextIndexOnce(def)
-		if !isRetriableCollectionMutationError(err) {
+		if !isRetriableTextIndexMutationError(err) {
 			return meta, stats, err
 		}
 		lastErr = err
@@ -143,13 +144,20 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		meta, err := c.dropTextIndexOnce(name)
-		if !isRetriableCollectionMutationError(err) {
+		if !isRetriableTextIndexMutationError(err) {
 			return meta, err
 		}
 		lastErr = err
 		waitBeforeCollectionMutationRetry(attempt)
 	}
 	return nil, collectionMutationRetryExhausted(lastErr)
+}
+
+func isRetriableTextIndexMutationError(err error) bool {
+	if isRetriableCollectionMutationError(err) {
+		return true
+	}
+	return errors.Is(err, errConcurrentSchemaModification)
 }
 
 func (c *Collection) dropTextIndexOnce(name string) (*CollectionMeta, error) {

@@ -343,6 +343,13 @@ func TestLeafPageLogLanes_IteratorSnapshotSurvivesMultiLaneGC(t *testing.T) {
 		t.Fatalf("Iterator: %v", err)
 	}
 	writeLeafLaneReadBatch(t, db, count, "final")
+	// Settle the activated publication before destructive maintenance captures
+	// its recoverable-root capability. The open iterator still pins the mid root
+	// and is the retention boundary this test is intended to exercise.
+	if err := db.Checkpoint(); err != nil {
+		_ = it.Close()
+		t.Fatalf("Checkpoint final batch with iterator open: %v", err)
+	}
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		_ = it.Close()
 		t.Fatalf("LeafGenerationGC with iterator open: %v", err)
