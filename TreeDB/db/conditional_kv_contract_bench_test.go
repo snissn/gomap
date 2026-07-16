@@ -59,7 +59,7 @@ func BenchmarkConditionalTxnReadSet10000(b *testing.B) {
 }
 
 func BenchmarkConditionalTxnBaselineBatchWrite(b *testing.B) {
-	d, err := Open(Options{Dir: b.TempDir()})
+	d, err := Open(Options{Dir: b.TempDir(), rootPublicationFixedDelay: 100 * time.Millisecond})
 	if err != nil {
 		b.Fatalf("Open: %v", err)
 	}
@@ -76,19 +76,47 @@ func BenchmarkConditionalTxnBaselineBatchWrite(b *testing.B) {
 
 	key := []byte("conditional-baseline-write")
 	val := []byte("value")
+	coordinator := d.rootPublication.coordinator
+	// Go's benchmark allocation accounting is process-wide, so allowing the
+	// asynchronous root publisher to run during this row attributes its stable
+	// publication work to the foreground Batch.Write path. Keep each bounded
+	// group well below the fixed 100 ms production timer and the coordinator's
+	// soft/hard debt triggers, then drain it outside the measured interval. The
+	// gate pins this row to a fixed iteration count so base and head accumulate
+	// the same amount of generation history.
+	const foregroundGroup = 8
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		batch := d.NewBatch().(*Batch)
-		batch.Reserve(1)
-		if err := batch.Set(key, val); err != nil {
-			b.Fatalf("Set: %v", err)
+	b.StopTimer()
+	for groupStart := 0; groupStart < b.N; groupStart += foregroundGroup {
+		groupEnd := min(groupStart+foregroundGroup, b.N)
+		before := coordinator.Stats()
+		b.StartTimer()
+		for i := groupStart; i < groupEnd; i++ {
+			batch := d.NewBatch().(*Batch)
+			batch.Reserve(1)
+			if err := batch.Set(key, val); err != nil {
+				b.Fatalf("Set: %v", err)
+			}
+			if err := batch.Write(); err != nil {
+				b.Fatalf("Write: %v", err)
+			}
+			if err := batch.Close(); err != nil {
+				b.Fatalf("Close batch: %v", err)
+			}
 		}
-		if err := batch.Write(); err != nil {
-			b.Fatalf("Write: %v", err)
+		b.StopTimer()
+		after := coordinator.Stats()
+		if after.PublishCalls != before.PublishCalls {
+			b.Fatalf("root publisher ran during foreground group: before=%d after=%d", before.PublishCalls, after.PublishCalls)
 		}
-		if err := batch.Close(); err != nil {
-			b.Fatalf("Close batch: %v", err)
+		if err := d.Checkpoint(); err != nil {
+			b.Fatalf("Checkpoint: %v", err)
+		}
+		drained := coordinator.Stats()
+		if drained.PendingCommits != 0 || drained.DurableCommitSeq != drained.VisibleCommitSeq {
+			b.Fatalf("checkpoint left publication debt: pending=%d visible=%d durable=%d",
+				drained.PendingCommits, drained.VisibleCommitSeq, drained.DurableCommitSeq)
 		}
 	}
 }

@@ -644,7 +644,11 @@ Coverage:
   Raw and adapter gates require balanced even AB/BA sample counts and default
   to eight samples per revision. The raw-gate timing verdict uses the median
   per-pair candidate/base relative delta; base/head timing medians remain
-  reported as context.
+  reported as context. Its raw batch-write row pins 1,000 iterations per
+  sample and measures bounded eight-write foreground groups under a fixed
+  100 ms coordinator delay. Publisher execution and checkpoint drains remain
+  outside the timed/allocation interval, and an unexpected publisher call
+  during a group fails the benchmark instead of contaminating the sample.
 - The `performance-observation-only` PR label is the narrow exception for a
   ticket whose frozen performance class explicitly replaces the raw-path
   percentage budget with matched observational fixtures. CI still runs the
