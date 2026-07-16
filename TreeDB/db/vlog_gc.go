@@ -183,6 +183,17 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
 	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
+	missingObservedSourceError := func() error {
+		if !observedOnly || !opts.observedSourceMissingIsError {
+			return nil
+		}
+		for _, id := range opts.ObservedSourceFileIDs {
+			if id != 0 {
+				return fmt.Errorf("%w: file_id=%d", valuelog.ErrFileNotFound, id)
+			}
+		}
+		return nil
+	}
 	var referenced map[uint32]struct{}
 	var scannedSeq uint64
 	var recoverableRoots *RecoverableRootSet
@@ -277,6 +288,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if set != nil {
 			_ = vm.Release(set)
 		}
+		if err := missingObservedSourceError(); err != nil {
+			return stats, err
+		}
 		if !opts.DryRun && !db.readOnly {
 			db.persistValueLogRefTrackerBestEffort()
 		}
@@ -286,6 +300,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if len(files) == 0 {
 		if set != nil {
 			_ = vm.Release(set)
+		}
+		if err := missingObservedSourceError(); err != nil {
+			return stats, err
 		}
 		if !opts.DryRun && !db.readOnly {
 			db.persistValueLogRefTrackerBestEffort()

@@ -1120,6 +1120,22 @@ func TestMarkValueLogZombie_PreservesMissingSegmentSignal(t *testing.T) {
 	}
 }
 
+func TestMarkValueLogZombie_PreservesMissingSegmentSignalWhenValueLogIsEmpty(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	missingID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("missing fileid: %v", err)
+	}
+	if err := db.MarkValueLogZombie(missingID); !errors.Is(err, valuelog.ErrFileNotFound) {
+		t.Fatalf("MarkValueLogZombie missing error=%v, want ErrFileNotFound", err)
+	}
+}
+
 func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 	dir := t.TempDir()
 
