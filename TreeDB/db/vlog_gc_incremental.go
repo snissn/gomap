@@ -101,10 +101,11 @@ func runLookupValueLogRefAtKeyHook() {
 }
 
 type valueLogRefDelta struct {
-	inline    [16]valueLogRefDeltaEntry
-	inlineN   int
-	changes   map[uint32]int64
-	positives map[uint32]int64
+	inline                      [16]valueLogRefDeltaEntry
+	inlineN                     int
+	changes                     map[uint32]int64
+	positives                   map[uint32]int64
+	requiresCandidateProjection bool
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -145,6 +146,7 @@ func (d *valueLogRefDelta) resetForReuse() {
 		clear(d.inline[:d.inlineN])
 		d.inlineN = 0
 	}
+	d.requiresCandidateProjection = false
 	if d.changes != nil {
 		// Keep small/typical maps warm for reuse; drop unusually large maps.
 		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
@@ -662,15 +664,26 @@ func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iter
 }
 
 func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
-	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	if db == nil {
+		return false
+	}
+	// Outer-leaf publication consumes this apply-local delta independently of
+	// the persisted GC tracker. It proves the common additive/unchanged
+	// transition without rescanning the candidate tree; subtractive transitions
+	// still fall back to exact projection.
+	if db.indexOuterLeavesInValueLog {
+		return true
+	}
+	return db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq)
 }
 
-func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
+func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
 	if !db.shouldCollectValueLogRefDelta(baseSeq) {
 		return nil, nil
 	}
 	delta := newValueLogRefDelta()
 	if oldPointerRefsCollected {
+		delta.requiresCandidateProjection = db.indexOuterLeavesInValueLog && oldEntriesRemoved > 0
 		var countErr error
 		oldPointerRefs.ForEach(func(fileID uint32, count uint64) bool {
 			if !page.IsValueLogFileID(fileID) {
@@ -737,10 +750,13 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 }
 
 func (db *DB) newNoopValueLogRefDeltaIfTrackable(baseSeq uint64) *valueLogRefDelta {
-	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+	if db == nil {
 		return nil
 	}
 	if db.indexOuterLeavesInValueLog {
+		return newValueLogRefDelta()
+	}
+	if db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil
 	}
 	return newValueLogRefDelta()

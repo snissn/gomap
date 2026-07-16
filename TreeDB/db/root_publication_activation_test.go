@@ -24,6 +24,53 @@ func TestActivatedRootPublicationTripsFormerDirectPublisher(t *testing.T) {
 	}
 }
 
+func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	leafLog := &registeredLeafPageLog{db: database, dir: database.dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	database.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, database, leafLog)
+
+	// The first publication into a producer segment establishes its exact
+	// dependency basis. Subsequent COW writes in the same segment must reuse that
+	// basis rather than project the whole candidate tree again.
+	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("p")); err != nil {
+		t.Fatalf("prime SetSync: %v", err)
+	}
+	scans := 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	if err := database.SetSync([]byte("outer-leaf-hot-path"), []byte("v")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	database.testScanCandidateExternalReferencesHook = nil
+	if scans != 0 {
+		t.Fatalf("ordinary outer-leaf write candidate scans=%d want 0", scans)
+	}
+
+	// Replacing an existing key can make the old physical leaf record
+	// unreachable even when the producer is still appending to the same segment.
+	// Apply-fed removal evidence must therefore restore exact projection.
+	scans = 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("r")); err != nil {
+		t.Fatalf("overwrite SetSync: %v", err)
+	}
+	database.testScanCandidateExternalReferencesHook = nil
+	if scans == 0 {
+		t.Fatal("outer-leaf overwrite did not scan candidate tree")
+	}
+}
+
 func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{

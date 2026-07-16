@@ -30,7 +30,10 @@ import (
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
 
-var errDurableRootCandidateStale = errors.New("durable-root candidate base changed")
+var (
+	errDurableRootCandidateStale               = errors.New("durable-root candidate base changed")
+	errDurableRootDependencyProjectionRequired = errors.New("durable-root dependency projection required")
+)
 
 const maxDurableRootPreMetaRetriesV1 = 64
 
@@ -318,6 +321,9 @@ func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]
 	if db == nil || db.valueLogManager == nil || snapshot == nil || snapshot.state == nil || snapshot.idx == nil || snapshot.idx.pager == nil {
 		return nil, errors.New("scan candidate external references: missing snapshot state")
 	}
+	if hook := db.testScanCandidateExternalReferencesHook; hook != nil {
+		hook()
+	}
 	references := make(map[uint32]struct{})
 	registerOuterLeaves := func(rootIDs []uint64) error {
 		if err := leafrefscan.WalkRoots(context.Background(), rootIDs, snapshot.idx.pager.Get, nil, func(ptr page.LeafLogPtr) error {
@@ -494,10 +500,95 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 	return db.captureRegisteredDurableValueLogResourcesV1(references)
 }
 
+// planOuterLeafBaseDependencyReuseV1 recognizes the common COW transition in
+// which the preceding visible root's exact resource identities remain a
+// complete bounded projection for the next candidate. Their handles are still
+// recaptured so an append to an existing segment advances the stable frontier.
+// Logical value-pointer additions are supplied by the apply delta. Raw
+// outer-leaf identities remain complete for insert-only writes until the
+// producer rotates to a new segment; rotation and every destructive/unknown
+// transition deliberately fall back to the exact candidate scanner so
+// maintenance can retire unreachable files without granting authority to
+// unrelated inventory.
+func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta, hasReplacementManifest bool) (map[uint32]struct{}, bool, error) {
+	if db == nil || !db.indexOuterLeavesInValueLog || delta == nil || hasReplacementManifest {
+		return nil, false, nil
+	}
+	if delta.requiresCandidateProjection {
+		return nil, false, nil
+	}
+	known := make(map[uint32]struct{})
+	references := make(map[uint32]struct{})
+	additionalReferences := make(map[uint32]struct{})
+	for _, item := range []struct {
+		resources  *rootpublication.StableResourceSet
+		additional bool
+	}{{resources: base}, {resources: additional, additional: true}} {
+		resources := item.resources
+		for _, descriptor := range resources.Descriptors() {
+			switch descriptor.Kind() {
+			case rootpublication.ResourceValueLog, rootpublication.ResourceOuterLeafLog:
+				if descriptor.Generation() <= uint64(^uint32(0)) {
+					fileID := uint32(descriptor.Generation())
+					known[fileID] = struct{}{}
+					if item.additional {
+						additionalReferences[fileID] = struct{}{}
+					} else {
+						references[fileID] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	current, err := leafPageLogCurrentSegments(db.leafPageLog)
+	if err != nil {
+		return nil, false, err
+	}
+	if db.leafPageLog != nil && len(current) == 0 {
+		// A producer that cannot report its current stable identity cannot prove
+		// which raw leaf segment the new COW pages reference. Preserve the
+		// fail-closed contract by projecting the candidate instead.
+		return nil, false, nil
+	}
+	for _, segment := range current {
+		if segment.FileID == 0 {
+			continue
+		}
+		if _, ok := known[segment.FileID]; !ok {
+			// The first publication into a new raw-leaf segment is the bounded
+			// point where the old segment set is re-projected exactly.
+			return nil, false, nil
+		}
+	}
+	if err := delta.forEachChange(func(fileID uint32, change int64) error {
+		if change < 0 {
+			// Membership alone cannot prove whether a subtractive count reached
+			// zero. Use the exact scanner rather than retaining or deleting on a
+			// guess.
+			return errDurableRootDependencyProjectionRequired
+		}
+		if change > 0 {
+			if _, ownedByAdditional := additionalReferences[fileID]; !ownedByAdditional {
+				references[fileID] = struct{}{}
+			}
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, errDurableRootDependencyProjectionRequired) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	for fileID := range additionalReferences {
+		delete(references, fileID)
+	}
+	return references, true, nil
+}
+
 // captureDurableRootResourcesV1 builds the candidate root's complete external
 // closure. Immutable resources already retained by the selected durable slot
 // are cloned from their exact handles; value-log and raw outer-leaf resources
-// are replaced by a fresh candidate-root reachability scan. additional is a
+// are replaced by a fresh candidate dependency capture. additional is a
 // producer-owned exact closure for resources made reachable by this publish
 // and is consumed on both success and failure.
 func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, valueLogPublicationLocked bool) (*rootpublication.StableResourceSet, error) {
@@ -549,6 +640,10 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 			}
 		}
 	}
+	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, delta, hasReplacementManifest)
+	if err != nil {
+		return nil, fmt.Errorf("plan outer-leaf candidate dependencies: %w", err)
+	}
 	excludedInheritedKinds := []rootpublication.ResourceKind{
 		rootpublication.ResourceValueLog,
 		rootpublication.ResourceOuterLeafLog,
@@ -567,7 +662,15 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	if err := merge(inherited); err != nil {
 		return nil, fmt.Errorf("merge base durable-root resources: %w", err)
 	}
-	fresh, err := db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked)
+	var fresh *rootpublication.StableResourceSet
+	if reuseOuterLeafBase {
+		for fileID := range exactPackedFileIDs {
+			delete(freshOuterLeafReferences, fileID)
+		}
+		fresh, err = db.captureRegisteredDurableValueLogResourcesV1(freshOuterLeafReferences)
+	} else {
+		fresh, err = db.captureDurableValueLogResourcesV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked)
+	}
 	if err != nil {
 		return nil, err
 	}

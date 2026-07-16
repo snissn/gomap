@@ -439,7 +439,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	conditionalMutation := conditionalCommitMutation{
 		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID,
 	}
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldPointerRefsCollected)
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -740,7 +740,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 	conditionalMutation := conditionalCommitMutation{
 		entries: entries, ranges: ranges, ownerTxnID: b.conditionalTxnID,
 	}
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldPointerRefsCollected)
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldEntriesRemoved, applyResult.OldPointerRefsCollected)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)

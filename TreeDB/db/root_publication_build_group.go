@@ -181,6 +181,7 @@ func (group *RootPublicationBuildGroup) mergeValueLogRefDeltaLocked(delta *value
 	if group.vlogRefDelta == nil {
 		group.vlogRefDelta = newValueLogRefDelta()
 	}
+	group.vlogRefDelta.requiresCandidateProjection = group.vlogRefDelta.requiresCandidateProjection || delta.requiresCandidateProjection
 	_ = delta.forEachChange(func(fileID uint32, change int64) error {
 		group.vlogRefDelta.addChange(fileID, change)
 		return nil
@@ -250,7 +251,7 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 	entries, ranges := b.batch.ApplyPlan()
 	delta, err := db.buildValueLogRefDelta(
 		group.idx.pager, rootID, group.baseSeq, entries, ranges,
-		&result.OldPointerRefs, result.OldPointerRefsCollected,
+		&result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected,
 	)
 	if err != nil {
 		db.observeRawBatchSpanNativePublishFallback(b.rawSpanNativeBatchPlan(), spanState, FlushSpanRunFallbackOutputOwnershipFailure)
