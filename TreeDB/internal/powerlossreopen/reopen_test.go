@@ -2,6 +2,9 @@ package powerlossreopen_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,8 +90,24 @@ func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	if err := closeFn(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(evidenceDir, "recovery_trace.json")); err != nil {
+	recoveryData, err := os.ReadFile(filepath.Join(evidenceDir, "recovery_trace.json"))
+	if err != nil {
 		t.Fatalf("missing recovery evidence: %v", err)
+	}
+	stableTreeData, err := os.ReadFile(filepath.Join(evidenceDir, "stable_image_tree.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovery struct {
+		InputTreeSHA256   string `json:"input_image_tree_sha256"`
+		StableFingerprint string `json:"stable_fingerprint"`
+	}
+	if err := json.Unmarshal(recoveryData, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	stableTreeDigest := sha256.Sum256(stableTreeData)
+	if recovery.InputTreeSHA256 != fmt.Sprintf("%x", stableTreeDigest) || len(recovery.StableFingerprint) != 64 {
+		t.Fatalf("recovery evidence binding=%+v", recovery)
 	}
 	if _, err := os.Stat(filepath.Join(evidenceDir, "stable-image")); err != nil {
 		t.Fatalf("missing immutable stable image: %v", err)

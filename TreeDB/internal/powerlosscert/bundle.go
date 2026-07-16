@@ -4,15 +4,23 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-const operationTraceSchemaVersion = "treedb-power-loss-operation-trace/v1"
+const (
+	operationTraceSchemaVersion = "treedb-power-loss-operation-trace/v1"
+	imageTreeSchemaVersion      = "treedb-power-loss-image-tree/v1"
+	recoveryTraceSchemaVersion  = "treedb-power-loss-recovery-trace/v1"
+	metricsSchemaVersion        = "treedb-power-loss-metrics/v1"
+	commandLogSchemaVersion     = "treedb-power-loss-command-log/v1"
+)
 
 type operationTraceArtifact struct {
 	SchemaVersion      string   `json:"schema_version"`
@@ -22,6 +30,67 @@ type operationTraceArtifact struct {
 	DeclaredCutPoint   string   `json:"declared_cut_point"`
 	ObservedEventCount int      `json:"observed_event_count"`
 	Events             []string `json:"events"`
+}
+
+type imageTreeArtifact struct {
+	SchemaVersion string                  `json:"schema_version"`
+	Kind          string                  `json:"kind"`
+	Files         []imageTreeFileArtifact `json:"files"`
+	TotalBytes    int64                   `json:"total_bytes"`
+}
+
+type imageTreeFileArtifact struct {
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+type recoveryTraceArtifact struct {
+	SchemaVersion     string `json:"schema_version"`
+	PublicAPI         string `json:"public_api"`
+	Dir               string `json:"dir"`
+	InputTreeSHA256   string `json:"input_image_tree_sha256"`
+	StableFingerprint string `json:"stable_fingerprint"`
+	ReadOnly          bool   `json:"read_only"`
+	Rejected          bool   `json:"rejected"`
+	ErrorType         string `json:"error_type"`
+	Error             string `json:"error"`
+	CommitSeq         uint64 `json:"commit_seq"`
+	AppliedLSN        uint64 `json:"applied_lsn"`
+}
+
+type metricsArtifact struct {
+	SchemaVersion     string `json:"schema_version"`
+	StableImageBytes  int64  `json:"stable_image_bytes"`
+	DirtyImageBytes   int64  `json:"dirty_image_bytes"`
+	StableFiles       int    `json:"stable_files"`
+	DirtyFiles        int    `json:"dirty_files"`
+	TraceEvents       int    `json:"trace_events"`
+	StableFingerprint string `json:"stable_fingerprint"`
+}
+
+type commandLogArtifact struct {
+	SchemaVersion string            `json:"schema_version"`
+	RepositorySHA string            `json:"repository_sha"`
+	BinaryPath    string            `json:"binary_path"`
+	BinarySHA256  string            `json:"binary_sha256"`
+	Package       string            `json:"package"`
+	TestName      string            `json:"test_name"`
+	Args          []string          `json:"args"`
+	Env           map[string]string `json:"env"`
+	Completed     bool              `json:"completed"`
+	ExitCode      int               `json:"exit_code"`
+	Stdout        string            `json:"stdout"`
+	Stderr        string            `json:"stderr"`
+}
+
+var modeledArtifactNames = map[ArtifactKind]string{
+	ArtifactKindOperationTrace:  "operation_trace.json",
+	ArtifactKindStableImageTree: "stable_image_tree.json",
+	ArtifactKindDirtyImageTree:  "dirty_image_tree.json",
+	ArtifactKindRecoveryTrace:   "recovery_trace.json",
+	ArtifactKindMetrics:         "metrics.json",
+	ArtifactKindLog:             "command_log.json",
 }
 
 type Bundle struct {
@@ -132,7 +201,7 @@ func VerifyArtifacts(root string, manifests []ChildManifest) error {
 			if witness.EvidenceTier != EvidenceTierModeledCrash {
 				continue
 			}
-			if err := verifyOperationTrace(root, manifest.ManifestID, witness); err != nil {
+			if err := verifyModeledEvidence(root, manifest, witness); err != nil {
 				return err
 			}
 		}
@@ -140,48 +209,86 @@ func VerifyArtifacts(root string, manifests []ChildManifest) error {
 	return nil
 }
 
-func verifyOperationTrace(root, manifestID string, witness Witness) error {
-	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q operation trace", manifestID, witness.ID)
-	var traceArtifact *Artifact
-	for index := range witness.Artifacts {
-		if witness.Artifacts[index].Kind == ArtifactKindOperationTrace {
-			traceArtifact = &witness.Artifacts[index]
-			break
+func verifyModeledEvidence(root string, manifest ChildManifest, witness Witness) error {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q", manifest.ManifestID, witness.ID)
+	evidenceDir := normalizedArtifactPath(witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"])
+	if evidenceDir == "." || strings.HasPrefix(evidenceDir, "../") {
+		return fmt.Errorf("%s has unsafe evidence directory %q", prefix, witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"])
+	}
+	artifacts := make(map[ArtifactKind]Artifact, len(witness.Artifacts))
+	for _, artifact := range witness.Artifacts {
+		artifacts[artifact.Kind] = artifact
+		name, modeled := modeledArtifactNames[artifact.Kind]
+		if modeled {
+			wantPath := normalizedArtifactPath(filepath.ToSlash(filepath.Join(evidenceDir, name)))
+			if normalizedArtifactPath(artifact.Path) != wantPath {
+				return fmt.Errorf("%s artifact kind %q path=%q want=%q", prefix, artifact.Kind, artifact.Path, wantPath)
+			}
 		}
 	}
-	if traceArtifact == nil {
-		return fmt.Errorf("%s is missing", prefix)
+	trace, err := verifyOperationTrace(root, manifest.ManifestID, witness, artifacts[ArtifactKindOperationTrace])
+	if err != nil {
+		return err
+	}
+	stableTree, err := verifyImageTree(root, evidenceDir, manifest.ManifestID, witness.ID, artifacts[ArtifactKindStableImageTree], "stable-image")
+	if err != nil {
+		return err
+	}
+	dirtyTree, err := verifyImageTree(root, evidenceDir, manifest.ManifestID, witness.ID, artifacts[ArtifactKindDirtyImageTree], "dirty-image")
+	if err != nil {
+		return err
+	}
+	metrics, err := verifyMetrics(root, manifest.ManifestID, witness, artifacts[ArtifactKindMetrics], trace, stableTree, dirtyTree)
+	if err != nil {
+		return err
+	}
+	recovery, err := verifyRecoveryTrace(root, evidenceDir, manifest.ManifestID, witness, artifacts[ArtifactKindRecoveryTrace], artifacts[ArtifactKindStableImageTree], metrics)
+	if err != nil {
+		return err
+	}
+	if recovery.ReadOnly {
+		if _, err := verifyImageDirectory(root, evidenceDir, manifest.ManifestID, witness.ID, "recovery-input", stableTree); err != nil {
+			return err
+		}
+	}
+	return verifyCommandLog(root, manifest, witness, artifacts[ArtifactKindLog])
+}
+
+func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifact Artifact) (operationTraceArtifact, error) {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q operation trace", manifestID, witness.ID)
+	if traceArtifact.Kind != ArtifactKindOperationTrace {
+		return operationTraceArtifact{}, fmt.Errorf("%s is missing", prefix)
 	}
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(normalizedArtifactPath(traceArtifact.Path))))
 	if err != nil {
-		return fmt.Errorf("%s: %w", prefix, err)
+		return operationTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
 	}
 	var trace operationTraceArtifact
 	if err := decodeStrict(data, &trace); err != nil {
-		return fmt.Errorf("%s decode: %w", prefix, err)
+		return operationTraceArtifact{}, fmt.Errorf("%s decode: %w", prefix, err)
 	}
 	if trace.SchemaVersion != operationTraceSchemaVersion {
-		return fmt.Errorf("%s schema_version=%q want=%q", prefix, trace.SchemaVersion, operationTraceSchemaVersion)
+		return operationTraceArtifact{}, fmt.Errorf("%s schema_version=%q want=%q", prefix, trace.SchemaVersion, operationTraceSchemaVersion)
 	}
 	if trace.CutID != witness.CutID {
-		return fmt.Errorf("%s cut_id=%q want=%q", prefix, trace.CutID, witness.CutID)
+		return operationTraceArtifact{}, fmt.Errorf("%s cut_id=%q want=%q", prefix, trace.CutID, witness.CutID)
 	}
 	if trace.DeclaredCutPoint != witness.CutPoint {
-		return fmt.Errorf("%s declared_cut_point=%q want=%q", prefix, trace.DeclaredCutPoint, witness.CutPoint)
+		return operationTraceArtifact{}, fmt.Errorf("%s declared_cut_point=%q want=%q", prefix, trace.DeclaredCutPoint, witness.CutPoint)
 	}
 	cutPoint, occurrence, err := parseCutAddress(trace.CutID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", prefix, err)
+		return operationTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
 	}
 	if cutPoint != witness.CutPoint || occurrence != witness.CutOccurrence {
-		return fmt.Errorf("%s cut address=(%s,%d) want=(%s,%d)", prefix, cutPoint, occurrence, witness.CutPoint, witness.CutOccurrence)
+		return operationTraceArtifact{}, fmt.Errorf("%s cut address=(%s,%d) want=(%s,%d)", prefix, cutPoint, occurrence, witness.CutPoint, witness.CutOccurrence)
 	}
 	wantSeed := strconv.FormatUint(witness.Seed, 10)
 	if trace.Seed != wantSeed {
-		return fmt.Errorf("%s seed=%q want=%q", prefix, trace.Seed, wantSeed)
+		return operationTraceArtifact{}, fmt.Errorf("%s seed=%q want=%q", prefix, trace.Seed, wantSeed)
 	}
 	if trace.VariantID == "" {
-		return fmt.Errorf("%s has empty variant_id", prefix)
+		return operationTraceArtifact{}, fmt.Errorf("%s has empty variant_id", prefix)
 	}
 	matchingEvents := 0
 	cutPrefix := "cut:" + witness.CutPoint + ":"
@@ -191,10 +298,10 @@ func verifyOperationTrace(root, manifestID string, witness Witness) error {
 		}
 	}
 	if trace.ObservedEventCount != matchingEvents || trace.ObservedEventCount != witness.ObservedEventCount {
-		return fmt.Errorf("%s observed_event_count=%d matching_events=%d witness=%d", prefix, trace.ObservedEventCount, matchingEvents, witness.ObservedEventCount)
+		return operationTraceArtifact{}, fmt.Errorf("%s observed_event_count=%d matching_events=%d witness=%d", prefix, trace.ObservedEventCount, matchingEvents, witness.ObservedEventCount)
 	}
 	if matchingEvents <= witness.CutOccurrence {
-		return fmt.Errorf("%s matching events=%d do not reach occurrence=%d", prefix, matchingEvents, witness.CutOccurrence)
+		return operationTraceArtifact{}, fmt.Errorf("%s matching events=%d do not reach occurrence=%d", prefix, matchingEvents, witness.CutOccurrence)
 	}
 	wantEnv := map[string]string{
 		"TREEDB_POWERLOSS_CUT_ID":           witness.CutID,
@@ -204,11 +311,194 @@ func verifyOperationTrace(root, manifestID string, witness Witness) error {
 	}
 	for name, want := range wantEnv {
 		if got := witness.Command.Env[name]; got != want {
-			return fmt.Errorf("%s command env %s=%q want=%q", prefix, name, got, want)
+			return operationTraceArtifact{}, fmt.Errorf("%s command env %s=%q want=%q", prefix, name, got, want)
 		}
 	}
 	if witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"] == "" {
-		return fmt.Errorf("%s command env TREEDB_POWERLOSS_EVIDENCE_DIR is empty", prefix)
+		return operationTraceArtifact{}, fmt.Errorf("%s command env TREEDB_POWERLOSS_EVIDENCE_DIR is empty", prefix)
+	}
+	return trace, nil
+}
+
+func verifyImageTree(root, evidenceDir, manifestID, witnessID string, artifact Artifact, kind string) (imageTreeArtifact, error) {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q %s image tree", manifestID, witnessID, strings.TrimSuffix(kind, "-image"))
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(normalizedArtifactPath(artifact.Path))))
+	if err != nil {
+		return imageTreeArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	var tree imageTreeArtifact
+	if err := decodeStrict(data, &tree); err != nil {
+		return imageTreeArtifact{}, fmt.Errorf("%s decode: %w", prefix, err)
+	}
+	if tree.SchemaVersion != imageTreeSchemaVersion {
+		return imageTreeArtifact{}, fmt.Errorf("%s schema_version=%q want=%q", prefix, tree.SchemaVersion, imageTreeSchemaVersion)
+	}
+	if tree.Kind != kind {
+		return imageTreeArtifact{}, fmt.Errorf("%s kind=%q want=%q", prefix, tree.Kind, kind)
+	}
+	if err := validateDeclaredImageTree(prefix, tree); err != nil {
+		return imageTreeArtifact{}, err
+	}
+	return verifyImageDirectory(root, evidenceDir, manifestID, witnessID, kind, tree)
+}
+
+func validateDeclaredImageTree(prefix string, tree imageTreeArtifact) error {
+	var total int64
+	prior := ""
+	for index, file := range tree.Files {
+		pathKey := normalizedArtifactPath(file.Path)
+		if file.Path == "" || filepath.IsAbs(file.Path) || pathKey == "." || strings.HasPrefix(pathKey, "../") || pathKey != file.Path {
+			return fmt.Errorf("%s file %d has unsafe or non-canonical path %q", prefix, index, file.Path)
+		}
+		if prior != "" && file.Path <= prior {
+			return fmt.Errorf("%s files are not strictly sorted at %q", prefix, file.Path)
+		}
+		if file.Bytes < 0 || !validHex(file.SHA256, 64) {
+			return fmt.Errorf("%s file %q has invalid bytes or sha256", prefix, file.Path)
+		}
+		if file.Bytes > int64(^uint64(0)>>1)-total {
+			return fmt.Errorf("%s byte total overflows", prefix)
+		}
+		total += file.Bytes
+		prior = file.Path
+	}
+	if tree.TotalBytes != total {
+		return fmt.Errorf("%s total_bytes=%d want=%d", prefix, tree.TotalBytes, total)
+	}
+	return nil
+}
+
+func verifyImageDirectory(root, evidenceDir, manifestID, witnessID, kind string, declared imageTreeArtifact) (imageTreeArtifact, error) {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q %s image", manifestID, witnessID, strings.TrimSuffix(kind, "-image"))
+	dir := filepath.Join(root, filepath.FromSlash(evidenceDir), kind)
+	if !pathWithin(root, dir) {
+		return imageTreeArtifact{}, fmt.Errorf("%s has unsafe directory", prefix)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return imageTreeArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return imageTreeArtifact{}, fmt.Errorf("%s directory is not a real directory", prefix)
+	}
+	actual := imageTreeArtifact{SchemaVersion: imageTreeSchemaVersion, Kind: declared.Kind}
+	err = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("%s contains non-regular path %q", prefix, path)
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		digest, err := fileSHA256(path)
+		if err != nil {
+			return err
+		}
+		actual.Files = append(actual.Files, imageTreeFileArtifact{Path: filepath.ToSlash(rel), Bytes: entryInfo.Size(), SHA256: digest})
+		actual.TotalBytes += entryInfo.Size()
+		return nil
+	})
+	if err != nil {
+		return imageTreeArtifact{}, err
+	}
+	sort.Slice(actual.Files, func(i, j int) bool { return actual.Files[i].Path < actual.Files[j].Path })
+	if !reflect.DeepEqual(actual.Files, declared.Files) || actual.TotalBytes != declared.TotalBytes {
+		return imageTreeArtifact{}, fmt.Errorf("%s contents do not match hashed tree manifest", prefix)
+	}
+	return actual, nil
+}
+
+func verifyMetrics(root, manifestID string, witness Witness, artifact Artifact, trace operationTraceArtifact, stable, dirty imageTreeArtifact) (metricsArtifact, error) {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q metrics", manifestID, witness.ID)
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(normalizedArtifactPath(artifact.Path))))
+	if err != nil {
+		return metricsArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	var metrics metricsArtifact
+	if err := decodeStrict(data, &metrics); err != nil {
+		return metricsArtifact{}, fmt.Errorf("%s decode: %w", prefix, err)
+	}
+	if metrics.SchemaVersion != metricsSchemaVersion {
+		return metricsArtifact{}, fmt.Errorf("%s schema_version=%q want=%q", prefix, metrics.SchemaVersion, metricsSchemaVersion)
+	}
+	if metrics.StableImageBytes != stable.TotalBytes || metrics.DirtyImageBytes != dirty.TotalBytes || metrics.StableFiles != len(stable.Files) || metrics.DirtyFiles != len(dirty.Files) || metrics.TraceEvents != len(trace.Events) {
+		return metricsArtifact{}, fmt.Errorf("%s does not match operation trace and captured image trees", prefix)
+	}
+	if !validHex(metrics.StableFingerprint, 64) {
+		return metricsArtifact{}, fmt.Errorf("%s has invalid stable_fingerprint", prefix)
+	}
+	return metrics, nil
+}
+
+func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, artifact, stableArtifact Artifact, metrics metricsArtifact) (recoveryTraceArtifact, error) {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q recovery trace", manifestID, witness.ID)
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(normalizedArtifactPath(artifact.Path))))
+	if err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	var recovery recoveryTraceArtifact
+	if err := decodeStrict(data, &recovery); err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s decode: %w", prefix, err)
+	}
+	if recovery.SchemaVersion != recoveryTraceSchemaVersion || recovery.PublicAPI != "treedb.Open" || recovery.Dir != "recovery-input" {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s has invalid schema, public_api, or dir", prefix)
+	}
+	if recovery.InputTreeSHA256 != stableArtifact.SHA256 || recovery.StableFingerprint != metrics.StableFingerprint {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s does not identify the captured stable image", prefix)
+	}
+	if recovery.Rejected {
+		if recovery.ErrorType == "" || recovery.Error == "" || witness.TypedError != recovery.ErrorType {
+			return recoveryTraceArtifact{}, fmt.Errorf("%s rejected result does not match typed_error=%q", prefix, witness.TypedError)
+		}
+	} else if recovery.ErrorType != "" || recovery.Error != "" || witness.TypedError != "none" {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s accepted result has error metadata or typed_error=%q", prefix, witness.TypedError)
+	}
+	recoveryDir := filepath.Join(root, filepath.FromSlash(evidenceDir), recovery.Dir)
+	if !pathWithin(root, recoveryDir) {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s has unsafe recovery directory", prefix)
+	}
+	info, err := os.Lstat(recoveryDir)
+	if err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s recovery directory: %w", prefix, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s recovery directory is not a real directory", prefix)
+	}
+	return recovery, nil
+}
+
+func verifyCommandLog(root string, manifest ChildManifest, witness Witness, artifact Artifact) error {
+	prefix := fmt.Sprintf("powerlosscert: manifest %q witness %q command log", manifest.ManifestID, witness.ID)
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(normalizedArtifactPath(artifact.Path))))
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	var log commandLogArtifact
+	if err := decodeStrict(data, &log); err != nil {
+		return fmt.Errorf("%s decode: %w", prefix, err)
+	}
+	var binarySHA string
+	for _, binary := range manifest.TestBinaries {
+		if normalizedArtifactPath(binary.Path) == normalizedArtifactPath(witness.Command.BinaryPath) {
+			binarySHA = binary.SHA256
+			break
+		}
+	}
+	if log.SchemaVersion != commandLogSchemaVersion || log.RepositorySHA != manifest.RepositorySHA || normalizedArtifactPath(log.BinaryPath) != normalizedArtifactPath(witness.Command.BinaryPath) || log.BinarySHA256 != binarySHA || log.Package != witness.Command.Package || log.TestName != witness.Command.TestName || !reflect.DeepEqual(log.Args, witness.Command.Args) || !reflect.DeepEqual(log.Env, witness.Command.Env) {
+		return fmt.Errorf("%s does not match the manifest command and test binary", prefix)
+	}
+	if !log.Completed || log.ExitCode != 0 || log.Stdout == "" && log.Stderr == "" {
+		return fmt.Errorf("%s does not record a completed successful command with captured output", prefix)
 	}
 	return nil
 }

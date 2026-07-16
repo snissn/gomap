@@ -38,6 +38,9 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	if session == nil || session.ObservedEventCount != 1 {
 		t.Fatalf("session=%+v", session)
 	}
+	if len(session.StableImageTreeSHA256()) != 64 || len(session.StableFingerprint()) != 64 {
+		t.Fatalf("session evidence identities tree=%q fingerprint=%q", session.StableImageTreeSHA256(), session.StableFingerprint())
+	}
 	for _, path := range []string{
 		"operation_trace.json",
 		"stable_image_tree.json",

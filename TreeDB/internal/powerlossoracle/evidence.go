@@ -21,6 +21,8 @@ type EvidenceSession struct {
 	Root               string
 	CutPoint           string
 	ObservedEventCount int
+	stableTreeSHA256   string
+	stableFingerprint  string
 }
 
 type evidenceTrace struct {
@@ -113,8 +115,13 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if err := writeEvidenceJSON(filepath.Join(root, "stable_image_tree.json"), stableTree); err != nil {
+	stableTreePath := filepath.Join(root, "stable_image_tree.json")
+	if err := writeEvidenceJSON(stableTreePath, stableTree); err != nil {
 		return nil, err
+	}
+	stableTreeSHA256, err := evidenceFileSHA256(stableTreePath)
+	if err != nil {
+		return nil, fmt.Errorf("powerlossoracle: hash stable image tree: %w", err)
 	}
 	if err := writeEvidenceJSON(filepath.Join(root, "dirty_image_tree.json"), dirtyTree); err != nil {
 		return nil, err
@@ -130,7 +137,13 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	}); err != nil {
 		return nil, err
 	}
-	return &EvidenceSession{Root: root, CutPoint: cutPoint, ObservedEventCount: observed}, nil
+	return &EvidenceSession{
+		Root:               root,
+		CutPoint:           cutPoint,
+		ObservedEventCount: observed,
+		stableTreeSHA256:   stableTreeSHA256,
+		stableFingerprint:  model.StableFingerprint(),
+	}, nil
 }
 
 func portableEvidenceTrace(trace []string) []string {
@@ -155,6 +168,24 @@ func (session *EvidenceSession) RecoveryInputDir() string {
 		return ""
 	}
 	return filepath.Join(session.Root, "recovery-input")
+}
+
+// StableImageTreeSHA256 binds recovery evidence to the immutable manifest of
+// the exact stable-byte image copied into RecoveryInputDir before public open.
+func (session *EvidenceSession) StableImageTreeSHA256() string {
+	if session == nil {
+		return ""
+	}
+	return session.stableTreeSHA256
+}
+
+// StableFingerprint identifies the modeled stable namespace, identities, and
+// bytes from which the immutable image and recovery input were materialized.
+func (session *EvidenceSession) StableFingerprint() string {
+	if session == nil {
+		return ""
+	}
+	return session.stableFingerprint
 }
 
 func (session *EvidenceSession) RecordRecovery(value any) error {

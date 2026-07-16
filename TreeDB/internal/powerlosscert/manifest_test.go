@@ -160,7 +160,7 @@ func TestValidateBundleRejectsUndeclaredRiskValuesAndUnownedInteractions(t *test
 func TestValidateBundleRejectsArtifactPathAliases(t *testing.T) {
 	t.Run("artifact kinds", func(t *testing.T) {
 		manifest := testChildManifest("witness-a")
-		manifest.Witnesses[0].Artifacts[1].Path = "artifacts/subdir/../witness-a-operation.json"
+		manifest.Witnesses[0].Artifacts[1].Path = "artifacts/witness-a/subdir/../operation_trace.json"
 
 		err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
 		if err == nil || !strings.Contains(err.Error(), "reuses artifact path") {
@@ -267,12 +267,12 @@ func testChildManifest(witnessID string) ChildManifest {
 			CutExercised:  true,
 			ClaimBoundary: "normal public reopen from modeled stable bytes",
 			Artifacts: []Artifact{
-				{Kind: ArtifactKindOperationTrace, Path: "artifacts/witness-a-operation.json", SHA256: strings.Repeat("e", 64)},
-				{Kind: ArtifactKindStableImageTree, Path: "artifacts/witness-a-stable.json", SHA256: strings.Repeat("e", 64)},
-				{Kind: ArtifactKindDirtyImageTree, Path: "artifacts/witness-a-dirty.json", SHA256: strings.Repeat("e", 64)},
-				{Kind: ArtifactKindRecoveryTrace, Path: "artifacts/witness-a-recovery.json", SHA256: strings.Repeat("e", 64)},
-				{Kind: ArtifactKindMetrics, Path: "artifacts/witness-a-metrics.json", SHA256: strings.Repeat("e", 64)},
-				{Kind: ArtifactKindLog, Path: "artifacts/witness-a.log", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindOperationTrace, Path: "artifacts/witness-a/operation_trace.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindStableImageTree, Path: "artifacts/witness-a/stable_image_tree.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindDirtyImageTree, Path: "artifacts/witness-a/dirty_image_tree.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindRecoveryTrace, Path: "artifacts/witness-a/recovery_trace.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindMetrics, Path: "artifacts/witness-a/metrics.json", SHA256: strings.Repeat("e", 64)},
+				{Kind: ArtifactKindLog, Path: "artifacts/witness-a/command_log.json", SHA256: strings.Repeat("e", 64)},
 			},
 		}},
 	}

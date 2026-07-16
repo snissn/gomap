@@ -37,14 +37,7 @@ func TestVerifyArtifactsChecksContentAndRejectsEscapes(t *testing.T) {
 	for index := range manifest.TestBinaries {
 		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
 	}
-	for index := range manifest.Witnesses[0].Artifacts {
-		artifact := manifest.Witnesses[0].Artifacts[index]
-		contents := string(artifact.Kind)
-		if artifact.Kind == ArtifactKindOperationTrace {
-			contents = testOperationTraceJSON(t, manifest.Witnesses[0], "after-meta-write")
-		}
-		manifest.Witnesses[0].Artifacts[index] = writeArtifactFixture(t, root, artifact.Kind, artifact.Path, contents)
-	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
 	if err := VerifyArtifacts(root, []ChildManifest{manifest}); err != nil {
 		t.Fatal(err)
 	}
@@ -67,18 +60,81 @@ func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.
 	for index := range manifest.TestBinaries {
 		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
 	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-index-sync")
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "declared_cut_point") {
+		t.Fatalf("VerifyArtifacts operation-trace mismatch error=%v", err)
+	}
+}
+
+func TestVerifyArtifactsRejectsMalformedOrUnboundModeledArtifacts(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  ArtifactKind
+		field string
+		value any
+		want  string
+	}{
+		{name: "stable tree schema", kind: ArtifactKindStableImageTree, field: "schema_version", value: "wrong/v1", want: "stable image tree"},
+		{name: "dirty tree totals", kind: ArtifactKindDirtyImageTree, field: "total_bytes", value: 999, want: "dirty image tree"},
+		{name: "metrics cross reference", kind: ArtifactKindMetrics, field: "trace_events", value: 999, want: "does not match"},
+		{name: "recovery input binding", kind: ArtifactKindRecoveryTrace, field: "input_image_tree_sha256", value: strings.Repeat("0", 64), want: "does not identify"},
+		{name: "command completion", kind: ArtifactKindLog, field: "completed", value: false, want: "completed successful"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			rewriteArtifactJSONField(t, root, &manifest.Witnesses[0], test.kind, test.field, test.value)
+
+			err := VerifyArtifacts(root, []ChildManifest{manifest})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("VerifyArtifacts error=%v want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestVerifyArtifactsRejectsImageBytesThatDoNotMatchTree(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	if err := os.WriteFile(filepath.Join(root, "artifacts", "witness-a", "stable-image", "index.db"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "contents do not match") {
+		t.Fatalf("VerifyArtifacts image mismatch error=%v", err)
+	}
+}
+
+func TestVerifyArtifactsRejectsUnstructuredModeledEvidence(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
 	for index := range manifest.Witnesses[0].Artifacts {
 		artifact := manifest.Witnesses[0].Artifacts[index]
 		contents := string(artifact.Kind)
 		if artifact.Kind == ArtifactKindOperationTrace {
-			contents = testOperationTraceJSON(t, manifest.Witnesses[0], "after-index-sync")
+			contents = testOperationTraceJSON(t, manifest.Witnesses[0], "after-meta-write")
 		}
 		manifest.Witnesses[0].Artifacts[index] = writeArtifactFixture(t, root, artifact.Kind, artifact.Path, contents)
 	}
 
 	err := VerifyArtifacts(root, []ChildManifest{manifest})
-	if err == nil || !strings.Contains(err.Error(), "declared_cut_point") {
-		t.Fatalf("VerifyArtifacts operation-trace mismatch error=%v", err)
+	if err == nil || !strings.Contains(err.Error(), "stable image tree") {
+		t.Fatalf("VerifyArtifacts unstructured modeled evidence error=%v", err)
 	}
 }
 
@@ -144,6 +200,134 @@ func writeArtifactFixture(t *testing.T, root string, kind ArtifactKind, path, co
 	}
 	digest := sha256.Sum256([]byte(contents))
 	return Artifact{Kind: kind, Path: path, SHA256: fmt.Sprintf("%x", digest)}
+}
+
+func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManifest, cutPoint string) {
+	t.Helper()
+	witness := &manifest.Witnesses[0]
+	evidenceDir := filepath.Join(root, filepath.FromSlash(witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"]))
+	stableContents := []byte("stable")
+	dirtyContents := []byte("dirty")
+	for _, image := range []struct {
+		dir      string
+		contents []byte
+	}{
+		{dir: "stable-image", contents: stableContents},
+		{dir: "dirty-image", contents: dirtyContents},
+		{dir: "recovery-input", contents: stableContents},
+	} {
+		if err := os.MkdirAll(filepath.Join(evidenceDir, image.dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(evidenceDir, image.dir, "index.db"), image.contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stableDigest := sha256.Sum256(stableContents)
+	dirtyDigest := sha256.Sum256(dirtyContents)
+	stableTree := imageTreeArtifact{
+		SchemaVersion: imageTreeSchemaVersion,
+		Kind:          "stable-image",
+		Files:         []imageTreeFileArtifact{{Path: "index.db", Bytes: int64(len(stableContents)), SHA256: fmt.Sprintf("%x", stableDigest)}},
+		TotalBytes:    int64(len(stableContents)),
+	}
+	dirtyTree := imageTreeArtifact{
+		SchemaVersion: imageTreeSchemaVersion,
+		Kind:          "dirty-image",
+		Files:         []imageTreeFileArtifact{{Path: "index.db", Bytes: int64(len(dirtyContents)), SHA256: fmt.Sprintf("%x", dirtyDigest)}},
+		TotalBytes:    int64(len(dirtyContents)),
+	}
+	stableFingerprint := strings.Repeat("a", 64)
+	contents := map[ArtifactKind]string{
+		ArtifactKindOperationTrace:  testOperationTraceJSON(t, *witness, cutPoint),
+		ArtifactKindStableImageTree: mustJSON(t, stableTree),
+		ArtifactKindDirtyImageTree:  mustJSON(t, dirtyTree),
+		ArtifactKindMetrics: mustJSON(t, metricsArtifact{
+			SchemaVersion:     metricsSchemaVersion,
+			StableImageBytes:  stableTree.TotalBytes,
+			DirtyImageBytes:   dirtyTree.TotalBytes,
+			StableFiles:       len(stableTree.Files),
+			DirtyFiles:        len(dirtyTree.Files),
+			TraceEvents:       witness.ObservedEventCount,
+			StableFingerprint: stableFingerprint,
+		}),
+	}
+	for index := range witness.Artifacts {
+		artifact := witness.Artifacts[index]
+		if content, ok := contents[artifact.Kind]; ok {
+			witness.Artifacts[index] = writeArtifactFixture(t, root, artifact.Kind, artifact.Path, content)
+		}
+	}
+	stableArtifact := artifactByKind(t, *witness, ArtifactKindStableImageTree)
+	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recoveryTraceArtifact{
+		SchemaVersion:     recoveryTraceSchemaVersion,
+		PublicAPI:         "treedb.Open",
+		Dir:               "recovery-input",
+		InputTreeSHA256:   stableArtifact.SHA256,
+		StableFingerprint: stableFingerprint,
+		ReadOnly:          true,
+	})
+	contents[ArtifactKindLog] = mustJSON(t, commandLogArtifact{
+		SchemaVersion: commandLogSchemaVersion,
+		RepositorySHA: manifest.RepositorySHA,
+		BinaryPath:    witness.Command.BinaryPath,
+		BinarySHA256:  manifest.TestBinaries[0].SHA256,
+		Package:       witness.Command.Package,
+		TestName:      witness.Command.TestName,
+		Args:          witness.Command.Args,
+		Env:           witness.Command.Env,
+		Completed:     true,
+		ExitCode:      0,
+		Stdout:        "PASS\n",
+	})
+	for index := range witness.Artifacts {
+		artifact := witness.Artifacts[index]
+		if content, ok := contents[artifact.Kind]; ok && (artifact.Kind == ArtifactKindRecoveryTrace || artifact.Kind == ArtifactKindLog) {
+			witness.Artifacts[index] = writeArtifactFixture(t, root, artifact.Kind, artifact.Path, content)
+		}
+	}
+}
+
+func artifactByKind(t *testing.T, witness Witness, kind ArtifactKind) Artifact {
+	t.Helper()
+	for _, artifact := range witness.Artifacts {
+		if artifact.Kind == kind {
+			return artifact
+		}
+	}
+	t.Fatalf("missing artifact kind %q", kind)
+	return Artifact{}
+}
+
+func rewriteArtifactJSONField(t *testing.T, root string, witness *Witness, kind ArtifactKind, field string, value any) {
+	t.Helper()
+	for index, artifact := range witness.Artifacts {
+		if artifact.Kind != kind {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(artifact.Path))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(data, &document); err != nil {
+			t.Fatal(err)
+		}
+		document[field] = value
+		witness.Artifacts[index] = writeArtifactFixture(t, root, kind, artifact.Path, mustJSON(t, document))
+		return
+	}
+	t.Fatalf("missing artifact kind %q", kind)
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func testOperationTraceJSON(t *testing.T, witness Witness, cutPoint string) string {
