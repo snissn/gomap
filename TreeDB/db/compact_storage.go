@@ -1427,6 +1427,13 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 	}
 	err = filepath.WalkDir(path, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// Identity-based deletion quarantines a segment before removing it.
+			// A released quarantine directory can therefore disappear after
+			// WalkDir enumerates it but before WalkDir reads its children. That
+			// completed deletion should simply be absent from this usage snapshot.
+			if compactStorageConcurrentChildDeletion(usage.Path, path, walkErr) {
+				return nil
+			}
 			return walkErr
 		}
 		if entry.IsDir() {
@@ -1434,6 +1441,9 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(usage.Path, path, err) {
+				return nil
+			}
 			return err
 		}
 		usage.Files++
@@ -1444,6 +1454,10 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 		return nil
 	})
 	return usage, err
+}
+
+func compactStorageConcurrentChildDeletion(root, path string, err error) bool {
+	return path != root && os.IsNotExist(err)
 }
 
 func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string, protectedFileIDs []uint32) (int, error) {

@@ -75,6 +75,22 @@ func TestCompactStorageRepairsMissingCurrentLeafGenerationFile(t *testing.T) {
 	}
 }
 
+func TestCompactStorageConcurrentChildDeletionIsAbsentFromUsageSnapshot(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, ".value-l0-000001.log.delete-test")
+	err := &os.PathError{Op: "readdirent", Path: child, Err: os.ErrNotExist}
+
+	if !compactStorageConcurrentChildDeletion(root, child, err) {
+		t.Fatal("concurrently deleted child should be absent from usage snapshot")
+	}
+	if compactStorageConcurrentChildDeletion(root, root, err) {
+		t.Fatal("missing usage root should remain an error")
+	}
+	if compactStorageConcurrentChildDeletion(root, child, os.ErrPermission) {
+		t.Fatal("non-ENOENT child error should remain an error")
+	}
+}
+
 func TestCompactStorageDeletesZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{
