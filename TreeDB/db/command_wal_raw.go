@@ -1516,6 +1516,8 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if db == nil {
 		return ErrClosed
 	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -1579,6 +1581,7 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	finalizeOpts.durablePublishLocked = true
 	finalizeOpts.durablePublishRelease = releaseDurablePublish
 	finalizeOpts.rootPublicationBuilder = builder
+	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.expectedBaseCommitSeq = baseSeq
 	finalizeOpts.hasExpectedBaseCommitSeq = true
 	finalizeOpts.releaseRootSerialization = func() {}

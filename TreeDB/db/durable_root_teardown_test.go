@@ -136,6 +136,32 @@ func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 				)
 			},
 		},
+		{
+			name:       "PublishCommandWALNoop",
+			commandWAL: true,
+			run: func(t *testing.T, database *DB) error {
+				return database.PublishCommandWALNoop(
+					mustRawKVCommandWALIntent(t, database, "command-wal/noop", "value"),
+					false,
+				)
+			},
+		},
+		{
+			name:       "PublishStagedCommandWALNoop",
+			commandWAL: true,
+			run: func(t *testing.T, database *DB) error {
+				unlock := database.lockCommandWALRawPublish()
+				defer unlock()
+				if err := database.runCommandWALRawPublishBarriers(); err != nil {
+					return err
+				}
+				intent := mustRawKVCommandWALIntent(t, database, "command-wal/staged-noop", "value")
+				if _, err := database.AppendStagedCommandWALIntent(intent, false); err != nil {
+					return err
+				}
+				return database.PublishStagedCommandWALNoop(intent, false)
+			},
+		},
 	}
 
 	for _, test := range tests {
