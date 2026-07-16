@@ -19,6 +19,10 @@ var (
 	ErrReadOnly        = errors.New("pager is read-only")
 )
 
+// testHookTruncateAfterPageCount is a package-local scheduling barrier for
+// proving that overlapping grow intents do not append stale page-count deltas.
+var testHookTruncateAfterPageCount func(uint64)
+
 type chunkList struct {
 	data [][]byte
 }
@@ -522,18 +526,25 @@ func (p *Pager) Truncate(targetPages uint64) error {
 		return ErrReadOnly
 	}
 	currentPages := p.numPages.Load()
-
+	if testHookTruncateAfterPageCount != nil {
+		testHookTruncateAfterPageCount(currentPages)
+	}
 	if targetPages < currentPages {
 		return fmt.Errorf("truncation (shrinking) is forbidden: current %d, target %d", currentPages, targetPages)
 	}
-
 	if targetPages == currentPages {
+		return nil
+	}
+	p.allocMu.Lock()
+	defer p.allocMu.Unlock()
+	currentPages = p.numPages.Load()
+	if targetPages <= currentPages {
 		return nil
 	}
 
 	// diff is guaranteed positive
 	diff := int(targetPages - currentPages)
-	_, err := p.Alloc(diff)
+	_, err := p.allocLocked(diff)
 	return err
 }
 
@@ -545,7 +556,10 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 	}
 	p.allocMu.Lock()
 	defer p.allocMu.Unlock()
+	return p.allocLocked(count)
+}
 
+func (p *Pager) allocLocked(count int) (uint64, error) {
 	p.mu.Lock()
 	startID := p.numPages.Load()
 	newTotal := startID + uint64(count)
