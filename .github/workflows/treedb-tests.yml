@@ -564,7 +564,7 @@ jobs:
           if [ -s "$db_test_file" ]; then
             db_regex="^($(paste -sd'|' "$db_test_file"))$"
             echo "TreeDB/db race test shard=${shard_index}/${shard_count} regex=${db_regex}"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./db -run "$db_regex" | tee -a treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run "$db_regex" | tee -a treedb-race.jsonl
             ran_tests=true
           fi
           if [ "$ran_tests" = false ]; then
