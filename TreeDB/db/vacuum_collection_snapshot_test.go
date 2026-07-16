@@ -596,6 +596,12 @@ func TestVacuumIndexOnlineDefersRangeOnlyTailOverLimit(t *testing.T) {
 	if _, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "user/present", "value").NewIterator(nil, nil)); err != nil {
 		t.Fatalf("publish user root: %v", err)
 	}
+	// command_wal_durable acknowledges the dependency-closed WAL prefix before
+	// the root necessarily becomes stable. Drain that publication before using
+	// the legacy direct-vacuum seam, which cannot replace a pinned index.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint user root: %v", err)
+	}
 
 	var once sync.Once
 	db.vacuumBeforeCutoverHook = func(_ int) {
