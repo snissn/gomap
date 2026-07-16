@@ -109,9 +109,24 @@ func TestZeroByteValueLogScansTreatAbsentDomainAsEmpty(t *testing.T) {
 	if count, err := zeroByteValueLogSegmentFiles(missing, nil, nil); err != nil || count != 0 {
 		t.Fatalf("zero-byte plan absent domain: count=%d err=%v", count, err)
 	}
-	db := &DB{dir: filepath.Join(root, "missing-db")}
-	if deleted, err := db.pruneZeroByteValueLogFiles(nil); err != nil || deleted != 0 {
-		t.Fatalf("zero-byte apply absent domain: deleted=%d err=%v", deleted, err)
+	dbDir := filepath.Join(root, "db")
+	db, err := Open(Options{Dir: dbDir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	valueLogDir := ValueLogDirPath(dbDir)
+	if err := os.Remove(valueLogDir); err != nil {
+		t.Fatalf("remove empty value-log domain: %v", err)
+	}
+	db.maintenanceMu.Lock()
+	deleted, pruneErr := db.pruneZeroByteValueLogFiles(nil)
+	db.maintenanceMu.Unlock()
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("restore value-log domain: %v", err)
+	}
+	if pruneErr != nil || deleted != 0 {
+		t.Fatalf("zero-byte apply absent domain: deleted=%d err=%v", deleted, pruneErr)
 	}
 }
 
