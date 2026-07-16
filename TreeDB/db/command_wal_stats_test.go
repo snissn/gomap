@@ -518,7 +518,7 @@ func TestCommandWALStatsScanRefreshesWithoutAppliedLSNChange(t *testing.T) {
 func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
-	writeCommandWALSegmentFrames(t, dir, 2, 3, 2)
+	writeCommandWALSegmentFrames(t, dir, 2, 2, 3)
 	coveredInfo, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
 	if err != nil {
 		t.Fatalf("stat covered segment: %v", err)
@@ -530,13 +530,53 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 
 	db := &DB{dir: dir, commandWAL: true}
 	db.state.Store(&DBState{AppliedCommandLSN: 1})
-	db.durableRoot.record.AppliedCommandLSN = 1
+	installCommandWALCleanupRootForTest(t, db, 1, 1)
 
 	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
 	}
 	stats := make(map[string]string)
 	writeCommandWALStats(stats, db)
+	for key, want := range map[string]uint64{
+		"treedb.command_wal.cleanup.proof.count_total":                        1,
+		"treedb.command_wal.cleanup.proof.frontier_lsn":                       1,
+		"treedb.command_wal.cleanup.proof.durable_wal_lsn":                    1,
+		"treedb.command_wal.cleanup.proof.selected_root_commit_seq":           1,
+		"treedb.command_wal.cleanup.proof.older_root_commit_seq":              0,
+		"treedb.command_wal.cleanup.covered_segments_total":                   1,
+		"treedb.command_wal.cleanup.retained_segments_total":                  1,
+		"treedb.command_wal.cleanup.retained.reason.active_segments_total":    0,
+		"treedb.command_wal.cleanup.retained.reason.uncovered_segments_total": 1,
+		"treedb.command_wal.cleanup.retained.reason.pinned_segments_total":    0,
+		"treedb.command_wal.cleanup.retained.reason.error_segments_total":     0,
+		"treedb.command_wal.cleanup.removed_segments_total":                   1,
+		"treedb.command_wal.cleanup.retries_total":                            0,
+		"treedb.command_wal.cleanup.namespace_sync.calls_total":               1,
+		"treedb.command_wal.cleanup.namespace_sync.errors_total":              0,
+		"treedb.command_wal.cleanup.oldest_pinned_lsn":                        0,
+	} {
+		if got := commandWALTestStatUint64(t, stats, key); got != want {
+			t.Fatalf("%s=%d, want %d (stats=%#v)", key, got, want, stats)
+		}
+	}
+	// The exact counts and byte totals are the observed-work signals. On
+	// platforms with coarse monotonic clock resolution, both short phases can
+	// legitimately measure 0ns; still require their stats to exist and parse.
+	for _, key := range []string{
+		"treedb.command_wal.cleanup.proof.ns_total",
+		"treedb.command_wal.cleanup.ns_total",
+	} {
+		_ = commandWALTestStatUint64(t, stats, key)
+	}
+	for _, key := range []string{
+		"treedb.command_wal.cleanup.covered_bytes_total",
+		"treedb.command_wal.cleanup.retained_bytes_total",
+		"treedb.command_wal.cleanup.removed_bytes_total",
+	} {
+		if got := commandWALTestStatUint64(t, stats, key); got == 0 {
+			t.Fatalf("%s=0, want observed cleanup work (stats=%#v)", key, stats)
+		}
+	}
 
 	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
 	if err != nil {
@@ -549,16 +589,13 @@ func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
 			break
 		}
 	}
-	if active.ScannedBytes <= 0 || active.ScannedBytes >= active.Size {
-		t.Fatalf("active scanned bytes=%d size=%d, want partial scan decision", active.ScannedBytes, active.Size)
+	if active.ScannedBytes != active.Size {
+		t.Fatalf("active scanned bytes=%d size=%d, want full lineage scan", active.ScannedBytes, active.Size)
 	}
 	got := commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.scanned_bytes_total")
-	if got <= uint64(active.ScannedBytes) {
-		t.Fatalf("scanned_bytes_total=%d, want covered segment plus active partial scan > %d", got, active.ScannedBytes)
-	}
 	fullSegmentBytes := uint64(coveredInfo.Size() + activeInfo.Size())
-	if got >= fullSegmentBytes {
-		t.Fatalf("scanned_bytes_total=%d full_segment_bytes=%d, want consumed bytes below full segment bytes", got, fullSegmentBytes)
+	if got != fullSegmentBytes {
+		t.Fatalf("scanned_bytes_total=%d full_segment_bytes=%d, want complete cleanup lineage scan", got, fullSegmentBytes)
 	}
 }
 
@@ -590,6 +627,12 @@ func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 		"treedb.command_wal.cleanup.scan.ns_total",
 		"treedb.command_wal.cleanup.scanned_bytes_total",
 		"treedb.command_wal.cleanup.scanned_frames_total",
+		"treedb.command_wal.cleanup.proof.count_total",
+		"treedb.command_wal.cleanup.covered_segments_total",
+		"treedb.command_wal.cleanup.retained_segments_total",
+		"treedb.command_wal.cleanup.removed_segments_total",
+		"treedb.command_wal.cleanup.retries_total",
+		"treedb.command_wal.cleanup.namespace_sync.calls_total",
 	} {
 		if got := commandWALTestStatUint64(t, stats, key); got != 0 {
 			t.Fatalf("%s=%d, want 0 for disabled command WAL (stats=%#v)", key, got, stats)

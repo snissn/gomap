@@ -41,6 +41,7 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 	}
 	registry := store.backend.StableResourceIdentityPinRegistry()
 	baselinePins := registry.ActivePins()
+	baselineLinks := registry.ActiveStableNamespaceLinks()
 
 	resources, err := store.CaptureDictionaryResources(ctx, reusedID)
 	if err != nil {
@@ -53,6 +54,17 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 	if got := registry.ActivePins(); got != baselinePins+2 {
 		t.Fatalf("active index/value-log identity pins=%d want baseline %d + 2 capture pins", got, baselinePins)
 	}
+	if got := registry.ActiveStableNamespaceLinks(); got != baselineLinks+1 {
+		t.Fatalf("stable namespace links=%d want baseline %d + 1 value-log link", got, baselineLinks)
+	}
+	reusedResources, err := store.CaptureDictionaryResources(ctx, reusedID)
+	if err != nil {
+		t.Fatalf("recapture reused dictionary: %v", err)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != baselineLinks+1 {
+		t.Fatalf("stable namespace links after recapture=%d want cached %d", got, baselineLinks+1)
+	}
+	reusedResources.Release()
 
 	wantDigest := sha256.Sum256(payload)
 	paths := make(map[string]bool, 2)
@@ -66,6 +78,9 @@ func TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointer
 		paths[token.DiagnosticPath()] = true
 		if token.DiagnosticPath() == "index.db" && token.Namespace() == nil {
 			t.Fatal("index token missing stable namespace evidence")
+		}
+		if token.DiagnosticPath() == "value_vlog/value-l0-000001.log" && token.Namespace() == nil {
+			t.Fatal("value-log token missing stable namespace evidence")
 		}
 		obligations := token.LogicalObligations()
 		if len(obligations) != 1 {
@@ -127,8 +142,14 @@ func TestCaptureDictionaryResourcesReopenedPointerUsesExactRecordFrontier(t *tes
 	}
 	defer resources.Release()
 	for _, token := range resources.Tokens() {
-		if token.DiagnosticPath() == "value_vlog/value-l0-000001.log" && token.Frontier().Bytes != wantFrontier {
+		if token.DiagnosticPath() != "value_vlog/value-l0-000001.log" {
+			continue
+		}
+		if token.Frontier().Bytes != wantFrontier {
 			t.Fatalf("value-log frontier=%d want exact record end %d", token.Frontier().Bytes, wantFrontier)
+		}
+		if token.Namespace() == nil {
+			t.Fatal("reopened value-log token missing stable namespace evidence")
 		}
 	}
 }

@@ -415,9 +415,9 @@ func validateStableExternalRIDMembership(file *File, child StableExternalRIDSegm
 }
 
 // StableExistingPhysicalResourceToken captures an exact manager-owned segment
-// for a producer outside the value-log domain. The segment's namespace was
-// durably installed before it entered the manager; the returned token adds the
-// shared physical deletion pin and the caller's producer classification.
+// for a producer outside the value-log domain. The returned token certifies or
+// reuses the segment's exact durable namespace link, then adds the shared
+// physical deletion pin and the caller's producer classification.
 func (m *Manager) StableExistingPhysicalResourceToken(
 	fileID uint32,
 	spec rootpublication.StableResourceSpec,
@@ -437,7 +437,59 @@ func (m *Manager) StableExistingPhysicalResourceToken(
 	}
 	spec.File = file.File
 	spec.PinRegistry = m.stableResourcePins
+	if spec.Namespace == nil {
+		namespace, err := m.stableExistingPhysicalNamespaceToken(file, spec.DiagnosticPath)
+		if err != nil {
+			return nil, err
+		}
+		defer namespace.Release()
+		spec.Namespace = namespace
+	}
 	return constructor(spec)
+}
+
+func (m *Manager) stableExistingPhysicalNamespaceToken(file *File, diagnosticPath string) (*rootpublication.StableNamespaceToken, error) {
+	if m == nil || file == nil || file.File == nil || m.stableResourcePins == nil {
+		return nil, fmt.Errorf("%w: stable physical namespace capture unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	parent, err := captureStableValueLogParent(file.Path, file.File)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	parentGeneration, err := rootpublication.StableNamespaceParentGeneration(parent)
+	if err != nil {
+		return nil, err
+	}
+	namespaceDiagnosticPath := filepath.Dir(diagnosticPath)
+	if namespaceDiagnosticPath == "." {
+		return nil, fmt.Errorf("%w: stable physical resource diagnostic path has no parent namespace", rootpublication.ErrUnresolvedResource)
+	}
+	namespaceSpec := rootpublication.StableNamespaceSpec{
+		Parent: parent, LinkedResource: file.File, ParentGeneration: parentGeneration,
+		Operation: rootpublication.NamespaceCreate, NewName: filepath.Base(file.Path),
+		DiagnosticPath: namespaceDiagnosticPath,
+	}
+	namespace, err := m.stableResourcePins.NewStableNamespaceTokenForKnownLink(namespaceSpec)
+	if err == nil {
+		return namespace, nil
+	}
+	if !errors.Is(err, rootpublication.ErrNamespaceUnstable) {
+		return nil, err
+	}
+	namespace, err = newValueLogStableNamespaceToken(namespaceSpec)
+	if err != nil {
+		return nil, err
+	}
+	if err := namespace.Stabilize(); err != nil {
+		namespace.Release()
+		return nil, err
+	}
+	if err := m.stableResourcePins.RememberStableNamespaceLink(parent, file.File, filepath.Base(file.Path)); err != nil {
+		namespace.Release()
+		return nil, err
+	}
+	return namespace, nil
 }
 
 func (m *Manager) observeStableFileLocked(file *File) error {

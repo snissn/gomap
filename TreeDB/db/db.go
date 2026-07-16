@@ -118,6 +118,9 @@ type DB struct {
 	// Test hook used to advance protected-root providers at deterministic
 	// capture boundaries.
 	compactStorageAuditProtectedBasisHook func(stage string, attempt int)
+	// Test hook used to invalidate a value-log GC recoverable-root capability
+	// immediately before its destructive revalidation.
+	testValueLogGCBeforeRevalidateHook func()
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -543,6 +546,7 @@ type DB struct {
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
+	testCommandWALCleanupAfterScanHook             func()
 	testDurableRootCandidatePreparedHook           func()
 	testRootPublicationDependencyBytes             atomic.Uint64
 	testScanCandidateExternalReferencesHook        func()
@@ -562,7 +566,12 @@ type DB struct {
 	// unrecoverable LSN gap.
 	commandWALFlushPoisoned atomic.Bool
 	commandWALDurableLSN    atomic.Uint64
-	commandWALDebt          CommandWALDependencyDebt
+	// commandWALSessionAppliedLSN is the durable-root applied frontier used to
+	// seed this journal owner's LSN sequence. When recovery classified a lower
+	// physical durable-WAL frontier, checkpoint must not bridge that pre-session
+	// gap merely by syncing an empty or newly-created successor segment.
+	commandWALSessionAppliedLSN uint64
+	commandWALDebt              CommandWALDependencyDebt
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
 	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
@@ -599,6 +608,31 @@ type DB struct {
 	commandWALCleanupScanNs          atomic.Uint64
 	commandWALCleanupScanBytes       atomic.Uint64
 	commandWALCleanupScanFrames      atomic.Uint64
+	commandWALCleanupProofs          atomic.Uint64
+	commandWALCleanupProofNs         atomic.Uint64
+	commandWALCleanupNs              atomic.Uint64
+	commandWALCleanupCovered         atomic.Uint64
+	commandWALCleanupCoveredBytes    atomic.Uint64
+	commandWALCleanupRetained        atomic.Uint64
+	commandWALCleanupRetainedBytes   atomic.Uint64
+	commandWALCleanupRetainedActive  atomic.Uint64
+	commandWALCleanupRetainedUncover atomic.Uint64
+	commandWALCleanupRetainedPinned  atomic.Uint64
+	commandWALCleanupRetainedError   atomic.Uint64
+	commandWALCleanupRetries         atomic.Uint64
+	commandWALCleanupNamespaceSyncs  atomic.Uint64
+	commandWALCleanupNamespaceErrors atomic.Uint64
+	commandWALCleanupProofFrontier   atomic.Uint64
+	commandWALCleanupProofDurableLSN atomic.Uint64
+	commandWALCleanupSelectedRoot    atomic.Uint64
+	commandWALCleanupOlderRoot       atomic.Uint64
+	commandWALCleanupCaptureEpoch    atomic.Uint64
+	commandWALCleanupNamespaceGen    atomic.Uint64
+	commandWALCleanupOldestPinnedLSN atomic.Uint64
+	commandWALCleanupNamespaceDirty  atomic.Bool
+	commandWALCleanupUnlinkedPending atomic.Uint64
+	commandWALCleanupBytesPending    atomic.Uint64
+	commandWALCleanupMu              sync.Mutex
 	commandWALCleanupRemoved         atomic.Uint64
 	commandWALCleanupBytes           atomic.Uint64
 	commandWALClosedBytes            atomic.Int64
@@ -2171,9 +2205,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
-		// Re-list segments after replay: replayCommandWALIntoBackend may call
-		// cleanupCommandWALSegmentsCoveredByAppliedLSN, which deletes covered
-		// non-active segments. Open the default writer on lane 0. When lane 0's
+		// Re-list segments after replay because V2 recovery may repair or remove
+		// an incomplete suffix. Open the default writer on lane 0 before ordinary
+		// cleanup so every destructive proof includes the owned journal namespace
+		// generation and active identity. When lane 0's
 		// active segment has a terminal tail, reopen that segment so
 		// OpenCommandJournal can truncate the tail. Otherwise, append to a fresh
 		// lane-0 segment to avoid extending a covered segment.
@@ -2214,8 +2249,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
-		db.commandWALDurableLSN.Store(db.meta.AppliedCommandLSN)
+		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
+		// replayCommandWALIntoBackend records the physically classified durable
+		// frontier. A recovered durable root may advance AppliedCommandLSN beyond
+		// that WAL frontier, but opening a writer does not sync the recovered WAL
+		// lineage and therefore must not mint cleanup authority from root state.
 		db.refreshCommandWALClosedBytes()
+		if !db.readOnly {
+			if err := db.CleanupCommandWALCoveredSegments(true); err != nil &&
+				!errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				_ = db.Close()
+				return nil, err
+			}
+		}
 		db.cacheCommandWALRequiredFeatureStats()
 	} else {
 		// If a directory requires command replay but this open is not command-WAL
@@ -2695,6 +2741,22 @@ func (db *DB) closeAfterHooks() error {
 		db.rootPublication = nil
 	}
 	db.teardownMu.Unlock()
+	// Writers and durable-root publication are now drained, while the command
+	// journal and its exact active namespace identity are still owned by this
+	// handle. Unavailable proof is the expected conservative result when relaxed
+	// roots run ahead of the dependency-closed WAL frontier; retain those files
+	// and let a later checkpoint/reopen converge. A pre-existing post-append or
+	// publication poison is likewise not cleanup authority: retain the complete
+	// WAL unchanged for the next owner. Healthy handles surface actual cleanup
+	// failures, but teardown continues so cleanup errors never strand resources.
+	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
+		if err := db.cleanupCommandWALCoveredSegmentsV1(); err != nil &&
+			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
+			!errors.Is(err, errDurableWALCleanupProofStale) &&
+			!errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+			errs = append(errs, fmt.Errorf("cleanup command WAL during close: %w", err))
+		}
+	}
 
 	// No stable root I/O can begin beyond this point. Maintenance and teardown
 	// may now close producer resources and the index without racing Publisher.
@@ -3613,6 +3675,13 @@ func (db *DB) Commit(newRootID uint64) error {
 // intended for callers that already made writes visible with relaxed durability
 // and now need those writes durable on disk.
 func (db *DB) Checkpoint() error {
+	return db.checkpoint(false)
+}
+
+// checkpoint runs with maintenanceAlreadyHeld only for an enclosing backend
+// maintenance operation such as CompactStorage. Command-WAL cleanup must not
+// recursively acquire maintenanceMu in that case.
+func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
 	}
@@ -3625,6 +3694,12 @@ func (db *DB) Checkpoint() error {
 	if db.testCheckpointAfterPoisonPreflightHook != nil {
 		db.testCheckpointAfterPoisonPreflightHook()
 	}
+
+	// Command publishers take raw-publish before writeMu. Checkpoint must use
+	// the same order so its command-WAL frontier cannot deadlock a writer that
+	// has appended a frame and is waiting to publish the matching root.
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer func() { unlockCommandWALPublish() }()
 
 	db.writeMu.Lock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
@@ -3646,27 +3721,41 @@ func (db *DB) Checkpoint() error {
 		visibleCommitSeq := db.meta.CommitSeq
 		db.mu.RUnlock()
 		db.writeMu.Unlock()
+		// Let post-cut writers enter while the coordinator makes the captured
+		// root prefix durable. Reacquire raw-publish afterwards and close the
+		// exact then-current WAL prefix; a durable WAL frontier may safely run
+		// ahead of the cleanup frontier selected from recovery-safe roots.
+		unlockCommandWALPublish()
+		unlockCommandWALPublish = func() {}
 		// Checkpoint is a root durability boundary in every profile. Waiting is
 		// deliberately outside write/commit/root-build locks; Publisher owns the
 		// dependency -> index -> alternate-meta ordering for this exact prefix.
 		if err := runtime.coordinator.WaitThrough(context.Background(), visibleCommitSeq); err != nil {
 			return publicRootPublicationErrorV1(err)
 		}
-		rotatedCommandWAL := false
-		if db.commandWAL && db.commandJournal != nil && db.CommandWALActiveBytes() > 0 {
-			if err := db.RotateCommandWALActiveSegment(true); err != nil {
-				return err
-			}
-			rotatedCommandWAL = true
+		unlockCommandWALPublish = db.lockCommandWALRawPublish()
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+		if err != nil {
+			return err
 		}
-		if rotatedCommandWAL {
-			if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+		if rotatedCommandWAL || commandWALPrefixAdvanced {
+			// Cleanup captures and revalidates its own exact journal namespace
+			// snapshot. Release raw-publish before maintenance admission so a
+			// concurrent maintenance checkpoint cannot invert those locks.
+			unlockCommandWALPublish()
+			unlockCommandWALPublish = func() {}
+			if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	defer db.writeMu.Unlock()
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	debugTiming := commitTimingEnabled()
 	var (
 		start      time.Time
@@ -3687,12 +3776,9 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 	}
-	rotatedCommandWAL := false
-	if db.commandWAL && db.commandJournal != nil && db.CommandWALActiveBytes() > 0 {
-		if err := db.RotateCommandWALActiveSegment(true); err != nil {
-			return err
-		}
-		rotatedCommandWAL = true
+	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+	if err != nil {
+		return err
 	}
 	if debugTiming {
 		t1 := time.Now()
@@ -3709,12 +3795,66 @@ func (db *DB) Checkpoint() error {
 	} else if err := idx.pager.Sync(); err != nil {
 		return err
 	}
-	if rotatedCommandWAL {
-		if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+	if rotatedCommandWAL || commandWALPrefixAdvanced {
+		// The cleanup proof independently rejects new appends and namespace
+		// changes. Drop write/raw-publish before maintenance admission to keep
+		// the global maintenance -> raw-publish -> write order acyclic.
+		db.writeMu.Unlock()
+		writeLocked = false
+		unlockCommandWALPublish()
+		unlockCommandWALPublish = func() {}
+		if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// closeCommandWALCheckpointPrefix establishes the dependency-closed physical
+// WAL frontier used by cleanup proofs. The caller must hold raw-publish so the
+// latest assigned LSN, dependency debt, active segment sync, and frontier
+// publication describe one append-serialization cut.
+func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err error) {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return false, false, nil
+	}
+	nextLSN := db.CommandWALNextLSN()
+	if nextLSN <= 1 {
+		return false, false, nil
+	}
+	frontier := nextLSN - 1
+	durableWALLSN := db.commandWALDurableLSN.Load()
+	// A relaxed frame can be recovered into a durable root while remaining
+	// above the physically classified durable-WAL frontier. The writer then
+	// starts at AppliedCommandLSN+1, often with an empty successor. Syncing that
+	// successor proves nothing about the older recovered segment, so only a
+	// session whose classified frontier already covers its initial applied LSN
+	// may promote the prefix through this checkpoint path. A later reopen can
+	// establish that recovery baseline; an explicit durable append/barrier may
+	// independently advance commandWALDurableLSN through its own contract.
+	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+	if advanced {
+		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
+			return false, false, err
+		}
+	}
+	if db.CommandWALActiveBytes() > 0 {
+		if err := db.RotateCommandWALActiveSegment(true); err != nil {
+			return false, false, err
+		}
+		rotated = true
+	} else if advanced {
+		// Automatic rotations retain exact stable handles in dependency debt.
+		// Sync the current (possibly empty) active target as the final journal
+		// boundary after those older exact handles have crossed their barriers.
+		if err := db.FlushCommandWAL(true); err != nil {
+			return false, false, err
+		}
+	}
+	if advanced {
+		db.closeCommandWALDurablePrefixThrough(frontier)
+	}
+	return rotated, advanced, nil
 }
 
 // Prune reclaims pages from the graveyard.
@@ -4156,7 +4296,32 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 	if db == nil || db.valueLogManager == nil {
 		return fmt.Errorf("value log manager unavailable")
 	}
-	return db.valueLogManager.MarkZombie(id)
+	stats, err := db.valueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{id},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+		observedSourceMissingIsError:     true,
+	}, true)
+	if err != nil {
+		if errors.Is(err, ErrRecoverableRootSetStale) {
+			return errors.Join(
+				fmt.Errorf("%w: file_id=%d", ErrValueLogZombieDeferred, id),
+				err,
+			)
+		}
+		return err
+	}
+	if stats.ObservedSourceSegmentsEligible != 1 {
+		return fmt.Errorf(
+			"%w: file_id=%d referenced=%d active=%d protected=%d",
+			ErrValueLogZombieDeferred,
+			id,
+			stats.ObservedSourceSegmentsReferenced,
+			stats.ObservedSourceSegmentsActive,
+			stats.ObservedSourceSegmentsProtected,
+		)
+	}
+	return nil
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.

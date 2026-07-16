@@ -158,6 +158,23 @@ func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
 	db.clearVlogGenerationRewriteStageConfirmation()
 }
 
+func holdVlogGenerationDeferredMaintenanceRunnerForTest(t *testing.T, db *DB) {
+	t.Helper()
+	if db == nil {
+		return
+	}
+	if db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatalf("deferred maintenance unexpectedly pending before test ownership barrier")
+	}
+	if !db.vlogGenerationDeferredMaintenanceRunning.CompareAndSwap(false, true) {
+		t.Fatalf("deferred maintenance runner unexpectedly active before test ownership barrier")
+	}
+	t.Cleanup(func() {
+		db.vlogGenerationDeferredMaintenancePending.Store(false)
+		db.vlogGenerationDeferredMaintenanceRunning.Store(false)
+	})
+}
+
 func disableVlogGenerationLoop(t *testing.T) {
 	t.Helper()
 	t.Setenv(envDisableVlogGenerationLoop, "1")
@@ -7340,6 +7357,7 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueStageConfirm(t *t
 
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	t.Cleanup(func() { db.vlogGenerationCheckpointKickPending.Store(false) })
+	holdVlogGenerationDeferredMaintenanceRunnerForTest(t, db)
 
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
@@ -7357,6 +7375,9 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueStageConfirm(t *t
 	}
 	if !db.vlogGenerationCheckpointKickPending.Load() {
 		t.Fatalf("checkpoint-pending retry should remain queued while due stage confirmation is pending")
+	}
+	if !db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatalf("due stage confirmation should remain queued behind the test-owned deferred runner")
 	}
 }
 
@@ -7399,6 +7420,7 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueAgeBlockedRetry(t
 
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	t.Cleanup(func() { db.vlogGenerationCheckpointKickPending.Store(false) })
+	holdVlogGenerationDeferredMaintenanceRunnerForTest(t, db)
 
 	_, planCallsBefore := recorder.recordedPlan()
 	_, rewriteCallsBefore := recorder.recordedRewrite()
@@ -7427,6 +7449,9 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueAgeBlockedRetry(t
 	}
 	if !db.vlogGenerationCheckpointKickPending.Load() {
 		t.Fatalf("checkpoint-pending retry should remain queued while due age-blocked retry is pending")
+	}
+	if !db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatalf("due age-blocked retry should remain queued behind the test-owned deferred runner")
 	}
 }
 

@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -41,6 +42,30 @@ func TestTextAnalyzerSimpleFixtures(t *testing.T) {
 			}
 			if !slices.Equal(terms, tc.terms) {
 				t.Fatalf("terms=%q want %q", terms, tc.terms)
+			}
+		})
+	}
+}
+
+func TestRetriableTextIndexMutationErrorClassifiesOnlyExpectedConflicts(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "general concurrent mutation", err: ErrConcurrentMutation, want: true},
+		{name: "ordered root conflict", err: errors.New("concurrent modification detected during ordered root group publish"), want: true},
+		{name: "schema conflict", err: fmt.Errorf(`%w detected for "volatile"`, errConcurrentSchemaModification), want: true},
+		{name: "wrapped schema conflict", err: fmt.Errorf("outer: %w", fmt.Errorf(`%w detected for "volatile"`, errConcurrentSchemaModification)), want: true},
+		{name: "plain schema text", err: errors.New(`collections: concurrent schema modification detected for "volatile"`), want: false},
+		{name: "root conflict", err: errors.New(`collections: concurrent root modification detected for "volatile/primary"`), want: false},
+		{name: "unrelated", err: errors.New("boom"), want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetriableTextIndexMutationError(tc.err); got != tc.want {
+				t.Fatalf("isRetriableTextIndexMutationError(%v)=%t want %t", tc.err, got, tc.want)
 			}
 		})
 	}

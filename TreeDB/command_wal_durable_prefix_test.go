@@ -399,16 +399,28 @@ func TestPublicCommandWALCheckpointReleasesCoveredRotationDebtBeforeNextBarrier(
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	after := publicCommandWALSegmentNames(t, dir)
-	if len(after) >= len(before) {
-		t.Fatalf("command WAL segments before=%v after=%v, want covered segment deletion", before, after)
-	}
 	stats := db.Stats()
 	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
 		t.Fatalf("durable_wal_lsn after checkpoint=%q, want covered LSN 2", got)
 	}
 	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
 		t.Fatalf("pending debt entries after checkpoint=%q, want 0", got)
+	}
+	if err := db.Set([]byte("fallback-advance"), []byte("value")); err != nil {
+		t.Fatalf("Set fallback-advance: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint fallback-advance: %v", err)
+	}
+	after := publicCommandWALSegmentNames(t, dir)
+	afterSet := make(map[string]struct{}, len(after))
+	for _, name := range after {
+		afterSet[name] = struct{}{}
+	}
+	for _, name := range before {
+		if _, ok := afterSet[name]; ok {
+			t.Fatalf("command WAL retained covered segment %s after fallback advance; before=%v after=%v", name, before, after)
+		}
 	}
 	if err := writeEmptyPublicCommandWALSync(db); err != nil {
 		t.Fatalf("empty WriteSync after checkpoint cleanup: %v", err)

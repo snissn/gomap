@@ -6959,6 +6959,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 					_ = db.valueLogReader.EvictSegment(id)
 				}
 				if err := marker.MarkValueLogZombie(id); err != nil {
+					if errors.Is(err, backenddb.ErrValueLogZombieDeferred) {
+						continue
+					}
 					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLogExpected(path, expectedIdentity) {
 						removed = true
 						out.RemovedSegments++
@@ -7102,6 +7105,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 				_ = db.valueLogReader.EvictSegment(id)
 			}
 			if err := marker.MarkValueLogZombie(id); err != nil {
+				if errors.Is(err, backenddb.ErrValueLogZombieDeferred) {
+					continue
+				}
 				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLogExpected(path, expectedIdentity) {
 					removed = true
 					out.RemovedSegments++

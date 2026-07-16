@@ -198,7 +198,14 @@ func TestStableNamespaceCreationSyncsExactChildWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer parent.Close()
-	resource, err := OpenStableChildFile(parent, "child", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	created, err := OpenStableChildFile(parent, "child", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resource, err := OpenStableChildFile(parent, "child", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

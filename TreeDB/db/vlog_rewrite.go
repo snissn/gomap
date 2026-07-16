@@ -112,6 +112,10 @@ type ValueLogRewriteStats struct {
 	// SourceBytesReclaimed is the number of unreferenced source bytes deleted by
 	// a caller-managed reclaim path after rewrite.
 	SourceBytesReclaimed int64
+	// SourceSegmentsRetainedRecoverableRootStale reports retirement candidates
+	// retained because the recoverable-root basis changed during cleanup.
+	SourceSegmentsRetainedRecoverableRootStale int
+	SourceBytesRetainedRecoverableRootStale    int64
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int
@@ -2142,12 +2146,13 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			_ = db.valueLogManager.Release(currentSet)
 		}
 	}
-	markZombieCandidate := func(id uint32, existedBefore bool) error {
+	retirementCandidates := make([]uint32, 0, len(oldValueIDs)+len(newValueIDs))
+	addRetirementCandidate := func(id uint32, existedBefore bool) {
 		if _, ok := referencedAfter[id]; ok {
-			return nil
+			return
 		}
 		if _, ok := protectedIDs[id]; ok {
-			return nil
+			return
 		}
 		// When active-segment skipping is enabled, avoid marking currently
 		// active pre-existing segments zombie. Concurrent writers may still be
@@ -2155,28 +2160,52 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// index.
 		if existedBefore && allowActiveSkip {
 			if _, ok := activeIDs[id]; ok {
-				return nil
+				return
 			}
 		}
-		if err := db.valueLogManager.MarkZombie(id); err != nil {
-			return err
-		}
-		return nil
+		retirementCandidates = append(retirementCandidates, id)
 	}
 	for id := range oldValueIDs {
-		if err := markZombieCandidate(id, true); err != nil {
-			return stats, err
-		}
+		addRetirementCandidate(id, true)
 	}
 	for _, id := range newValueIDs {
 		if _, existed := oldValueIDs[id]; existed {
 			continue
 		}
-		if err := markZombieCandidate(id, false); err != nil {
-			return stats, err
-		}
+		addRetirementCandidate(id, false)
 	}
-	if err := db.publishValueLogSetNoRefresh(); err != nil {
+	if len(retirementCandidates) > 0 {
+		// Source retirement is delegated to the same recoverable-root capability
+		// used by standalone GC. The rewrite's visible-root scan is only an
+		// optimization; GC rechecks every selectable durable/pending root and
+		// revalidates immediately before zombie mutation.
+		if _, err := db.valueLogGC(context.WithoutCancel(ctx), ValueLogGCOptions{
+			ProtectedPaths:                   opts.ProtectedPaths,
+			ObservedSourceFileIDs:            retirementCandidates,
+			ObservedSourceAssumeUnreferenced: true,
+			ObservedSourceReclaimActive:      true,
+		}, false); err != nil {
+			if !errors.Is(err, ErrRecoverableRootSetStale) {
+				return stats, err
+			}
+			stats.SourceSegmentsRetainedRecoverableRootStale = len(retirementCandidates)
+			currentSet := db.valueLogManager.CurrentSetNoRefresh()
+			for _, id := range retirementCandidates {
+				if currentSet != nil {
+					stats.SourceBytesRetainedRecoverableRootStale += fileSize(currentSet.Files[id])
+				}
+			}
+			if currentSet != nil {
+				_ = db.valueLogManager.Release(currentSet)
+			}
+			// Pointer swaps are already committed. Publish the non-destructive
+			// manager topology and leave every stale candidate intact for a later
+			// maintenance pass.
+			if err := db.publishValueLogSetNoRefresh(); err != nil {
+				return stats, err
+			}
+		}
+	} else if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err
 	}
 	postSet := db.valueLogManager.CurrentSetNoRefresh()
