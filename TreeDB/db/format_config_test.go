@@ -1,8 +1,10 @@
 package db
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -121,6 +123,85 @@ func TestLoadFormatConfig_UnsupportedVersion(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("expected ok=false for unsupported format.json version")
+	}
+}
+
+func TestFormatConfig_PersistsAndGatesCanonicalDurabilityProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := formatConfigFromOptions(Options{ResolvedProfile: ProfileNoWALFast})
+	if err := SaveFormatConfig(dir, cfg); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	loaded, ok, err := LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok {
+		t.Fatal("format config missing")
+	}
+	if loaded.Version != formatConfigDurabilityProfileVersion || loaded.DurabilityProfile != ProfileNoWALFast {
+		t.Fatalf("loaded profile manifest=(version=%d profile=%q)", loaded.Version, loaded.DurabilityProfile)
+	}
+	if err := ValidateDurabilityProfileGate(dir, ProfileNoWALFast); err != nil {
+		t.Fatalf("matching profile gate: %v", err)
+	}
+	if err := ValidateDurabilityProfileGate(dir, ProfileCommandWALDurable); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+		t.Fatalf("mismatched profile gate error=%v, want ErrLegacyFormatRebuildRequired", err)
+	}
+	if err := ValidateDurabilityProfileGate(dir, ""); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+		t.Fatalf("missing selected profile gate error=%v, want ErrLegacyFormatRebuildRequired", err)
+	}
+}
+
+func TestSaveFormatConfig_CannotClearOrReplacePersistedDurabilityProfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, formatConfigFromOptions(Options{ResolvedProfile: ProfileCommandWALRelaxed})); err != nil {
+		t.Fatalf("SaveFormatConfig initial: %v", err)
+	}
+	if err := SaveFormatConfig(dir, FormatConfig{LeafPrefixCompression: true}); err != nil {
+		t.Fatalf("SaveFormatConfig preserving profile: %v", err)
+	}
+	loaded, ok, err := LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok || loaded.DurabilityProfile != ProfileCommandWALRelaxed || loaded.Version != formatConfigDurabilityProfileVersion {
+		t.Fatalf("profile binding lost after resave: ok=%t cfg=%+v", ok, loaded)
+	}
+	if err := SaveFormatConfig(dir, FormatConfig{DurabilityProfile: ProfileNoWALFast}); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+		t.Fatalf("profile replacement error=%v, want ErrLegacyFormatRebuildRequired", err)
+	}
+}
+
+func TestLoadFormatConfig_RejectsInvalidDurabilityProfileManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "missing", body: `{"version":4}`, want: "requires durability_profile"},
+		{name: "unknown", body: `{"version":4,"durability_profile":"fast"}`, want: "unsupported durability_profile"},
+		{name: "old_version", body: `{"version":3,"durability_profile":"no_wal_fast"}`, want: "requires format version 4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, formatConfigFileName), []byte(tc.body), 0o600); err != nil {
+				t.Fatalf("write format.json: %v", err)
+			}
+			if _, _, err := LoadFormatConfig(dir); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("LoadFormatConfig error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateDurabilityProfileGate_RejectsLegacyManifestForPublicProfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, FormatConfig{}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	if err := ValidateDurabilityProfileGate(dir, ProfileCommandWALDurable); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+		t.Fatalf("legacy profile gate error=%v, want ErrLegacyFormatRebuildRequired", err)
 	}
 }
 

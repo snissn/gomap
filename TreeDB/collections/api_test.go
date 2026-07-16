@@ -437,11 +437,8 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 }
 
 func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes(t *testing.T) {
-	opts := treedb.Options{
-		Dir:                        t.TempDir(),
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.IndexOuterLeavesInValueLog = true
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("open db: %v", err)

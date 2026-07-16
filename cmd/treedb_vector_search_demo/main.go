@@ -353,7 +353,7 @@ func parseConfig(args []string) (config, error) {
 		compact:               false,
 		vacuumIndex:           true,
 		disableExactFallback:  true,
-		profile:               treedb.ProfileBench,
+		profile:               treedb.ProfileBenchUnsafe,
 		vectorIndexStrategy:   collections.VectorIndexStrategyNativeRuntime,
 		vectorQueryMode:       collections.VectorIndexQueryModeExact,
 	}
@@ -368,7 +368,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.datasetDir, "dataset-dir", "", "Optional exported vector dataset directory to load documents and queries from")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
-	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: "+treedb.ProfileFlagHelp)
+	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
 	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: native_runtime or column_graph")
 	fs.StringVar(&vectorQueryModeRaw, "vector-query-mode", vectorQueryModeRaw, "TreeDB vector query mode: exact, quantized_only, or quantized_rerank")
 	fs.StringVar(&validationExactSourceRaw, "validation-exact-source", validationExactSourceRaw, "Exact baseline source for recall validation: treedb or dataset")
@@ -400,21 +400,33 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	profileExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "profile" {
+			profileExplicit = true
+		}
+	})
 	searchConcurrency, err := parseSearchConcurrency(searchConcurrencyRaw)
 	if err != nil {
 		return config{}, err
 	}
 	cfg.searchConcurrency = searchConcurrency
-	profile, err := parseProfile(profileRaw)
-	if err != nil {
-		return config{}, err
-	}
-	cfg.profile = profile
 	strategy, err := parseVectorIndexStrategy(vectorIndexStrategyRaw)
 	if err != nil {
 		return config{}, err
 	}
 	cfg.vectorIndexStrategy = strategy
+	profile, err := parseProfile(profileRaw)
+	if err != nil {
+		return config{}, err
+	}
+	if !profileExplicit && strategy == collections.VectorIndexStrategyColumnGraph {
+		profile = treedb.ProfileCommandWALDurable
+	}
+	cfg.profile = profile
+	if err := validateDemoProfile(cfg.profile, cfg.vectorIndexStrategy); err != nil {
+		return config{}, err
+	}
 	queryMode, err := parseVectorQueryMode(vectorQueryModeRaw)
 	if err != nil {
 		return config{}, err
@@ -617,9 +629,9 @@ func vectorQueryModeIsQuantized(mode collections.VectorIndexQueryMode) bool {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
+	profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileBenchUnsafe)
 	if !ok {
-		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 	}
 	return profile, nil
 }
@@ -664,11 +676,24 @@ func applySearchBenchmarkDefaults(cfg *config) error {
 	return nil
 }
 
-func defaultProfile(profile treedb.Profile) treedb.Profile {
+func defaultProfileForStrategy(profile treedb.Profile, strategy collections.VectorIndexStrategy) treedb.Profile {
+	if profile == "" && strategy == collections.VectorIndexStrategyColumnGraph {
+		return treedb.ProfileCommandWALDurable
+	}
 	if profile == "" {
-		return treedb.ProfileBench
+		return treedb.ProfileBenchUnsafe
 	}
 	return profile
+}
+
+func validateDemoProfile(profile treedb.Profile, strategy collections.VectorIndexStrategy) error {
+	if strategy != collections.VectorIndexStrategyColumnGraph {
+		return nil
+	}
+	if !treedb.OptionsForBenchmark(profile, "").CommandWAL {
+		return fmt.Errorf("-vector-index-strategy column_graph requires a command-WAL profile; got %q", profile)
+	}
+	return nil
 }
 
 func normalizeDemoDir(dir string) (string, error) {
@@ -691,10 +716,7 @@ func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error
 }
 
 func demoBackendOptions(cfg config, dir string) treedb.Options {
-	opts := treedb.OptionsFor(defaultProfile(cfg.profile), dir)
-	if cfg.vectorIndexStrategy == collections.VectorIndexStrategyColumnGraph {
-		opts.Durability = treedb.DurabilityDurable
-	}
+	opts := treedb.OptionsForBenchmark(defaultProfileForStrategy(cfg.profile, cfg.vectorIndexStrategy), dir)
 	if cfg.indexOuterLeavesInValueLog != nil {
 		opts.IndexOuterLeavesInValueLog = *cfg.indexOuterLeavesInValueLog
 		opts.IndexInternalBaseDelta = !*cfg.indexOuterLeavesInValueLog
@@ -852,9 +874,12 @@ func columnGraphDemoColumnStoreConfig(dims int) *collections.ColumnStoreConfig {
 }
 
 func execute(ctx context.Context, cfg config) (result, error) {
-	cfg.profile = defaultProfile(cfg.profile)
 	if cfg.vectorIndexStrategy == "" {
 		cfg.vectorIndexStrategy = collections.VectorIndexStrategyNativeRuntime
+	}
+	cfg.profile = defaultProfileForStrategy(cfg.profile, cfg.vectorIndexStrategy)
+	if err := validateDemoProfile(cfg.profile, cfg.vectorIndexStrategy); err != nil {
+		return result{}, err
 	}
 	if cfg.vectorQueryMode == "" {
 		cfg.vectorQueryMode = collections.VectorIndexQueryModeExact
@@ -1253,7 +1278,13 @@ func allocDeltaBytes(after, before uint64) int64 {
 }
 
 func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
-	cfg.profile = defaultProfile(cfg.profile)
+	if cfg.vectorIndexStrategy == "" {
+		cfg.vectorIndexStrategy = collections.VectorIndexStrategyNativeRuntime
+	}
+	cfg.profile = defaultProfileForStrategy(cfg.profile, cfg.vectorIndexStrategy)
+	if err := validateDemoProfile(cfg.profile, cfg.vectorIndexStrategy); err != nil {
+		return matrixResult{}, err
+	}
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return matrixResult{}, err
 	}

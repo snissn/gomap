@@ -61,7 +61,7 @@ type result struct {
 func main() {
     var (
         dbDir       = flag.String("db", "", "application.db directory")
-        profile     = flag.String("profile", string(treedb.ProfileBench), "profile")
+        profile     = flag.String("profile", string(treedb.ProfileBenchUnsafe), "profile")
         leafTarget  = flag.Int64("leaf-target", 0, "leaf_vlog segment target bytes")
         keyCount    = flag.Int("key-count", 100000, "total initial keys")
         hotKeyCount = flag.Int("hot-key-count", 25000, "keys rewritten each round")
@@ -82,11 +82,11 @@ func main() {
         fatalf("mkdir parent: %v", err)
     }
 
-    profileValue, ok := treedb.ParsePublicProfile(*profile, treedb.ProfileBench)
+    profileValue, ok := treedb.ParseBenchmarkProfile(*profile, treedb.ProfileBenchUnsafe)
     if !ok {
-        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.ProfileFlagHelp)
+        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.BenchmarkProfileFlagHelp)
     }
-    opts := treedb.OptionsFor(profileValue, *dbDir)
+    opts := treedb.OptionsForBenchmark(profileValue, *dbDir)
     opts.BackgroundCheckpointInterval = -1
     opts.BackgroundCheckpointIdleDuration = -1
     opts.MaxWALBytes = -1

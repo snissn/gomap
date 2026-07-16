@@ -141,7 +141,7 @@ type sample struct {
 func main() {
     var (
         dbDir         = flag.String("db", "", "application.db directory")
-        profile       = flag.String("profile", string(treedb.ProfileBench), "TreeDB profile")
+        profile       = flag.String("profile", string(treedb.ProfileBenchUnsafe), "TreeDB profile")
         dwellSeconds  = flag.Int("dwell-seconds", 180, "how long to keep the DB open")
         sampleSeconds = flag.Int("sample-interval-seconds", 15, "sample interval")
         emitFullStats = flag.Bool("full-stats", false, "embed the full Stats map into each sample")
@@ -157,11 +157,11 @@ func main() {
         fatalf("invalid -sample-interval-seconds %d", *sampleSeconds)
     }
 
-    profileValue, ok := treedb.ParsePublicProfile(*profile, treedb.ProfileBench)
+    profileValue, ok := treedb.ParseBenchmarkProfile(*profile, treedb.ProfileBenchUnsafe)
     if !ok {
-        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.ProfileFlagHelp)
+        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.BenchmarkProfileFlagHelp)
     }
-    opts := treedb.OptionsFor(profileValue, *dbDir)
+    opts := treedb.OptionsForBenchmark(profileValue, *dbDir)
     if opts.ValueLog.Generational.Policy == treedb.ValueLogGenerationDefault {
         opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
     }

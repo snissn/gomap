@@ -441,7 +441,7 @@ func TestTemplateV1EncoderLearnsIDsAfterInsertBatch(t *testing.T) {
 
 func TestTemplateV1MaterializesPointerizedCompressedTemplateRootAfterReopen(t *testing.T) {
 	dir := t.TempDir()
-	opts := treedb.OptionsFor(treedb.ProfileBench, dir)
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dir)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 

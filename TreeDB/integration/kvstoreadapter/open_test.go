@@ -20,13 +20,14 @@ func TestParseProfileUsesStandardNames(t *testing.T) {
 	}{
 		{raw: "", fallback: "", want: treedb.ProfileCommandWALRelaxed},
 		{raw: "", fallback: treedb.ProfileWALOnFast, want: treedb.ProfileWALOnFast},
-		{raw: "fast", fallback: treedb.ProfileDurable, want: treedb.ProfileFast},
-		{raw: "walonfast", fallback: treedb.ProfileDurable, want: treedb.ProfileWALOnFast},
-		{raw: "durable", fallback: treedb.ProfileFast, want: treedb.ProfileDurable},
-		{raw: "command-wal-durable", fallback: treedb.ProfileFast, want: treedb.ProfileCommandWALDurable},
-		{raw: "legacy_wal_relaxed_fast", fallback: treedb.ProfileFast, want: treedb.ProfileLegacyWALRelaxedFast},
+		{raw: "fast", fallback: treedb.ProfileDurable, want: treedb.ProfileDurable},
+		{raw: "walonfast", fallback: treedb.ProfileDurable, want: treedb.ProfileDurable},
+		{raw: "durable", fallback: treedb.ProfileFast, want: treedb.ProfileFast},
+		{raw: "command_wal_durable", fallback: treedb.ProfileFast, want: treedb.ProfileCommandWALDurable},
+		{raw: "legacy_wal_relaxed_fast", fallback: treedb.ProfileFast, want: treedb.ProfileFast},
 		{raw: "no_wal_fast", fallback: treedb.ProfileDurable, want: treedb.ProfileNoWALFast},
-		{raw: "bench", fallback: treedb.ProfileFast, want: treedb.ProfileBench},
+		{raw: "bench_unsafe", fallback: treedb.ProfileFast, want: treedb.ProfileBenchUnsafe},
+		{raw: "bench", fallback: treedb.ProfileFast, want: treedb.ProfileFast},
 		{raw: "unknown", fallback: treedb.ProfileFast, want: treedb.ProfileFast},
 	}
 	for _, tc := range cases {
@@ -46,9 +47,9 @@ func TestParsePublicProfileUsesPublicNames(t *testing.T) {
 	}{
 		{raw: "", fallback: "", want: treedb.ProfileCommandWALRelaxed},
 		{raw: "", fallback: treedb.ProfileCommandWALDurable, want: treedb.ProfileCommandWALDurable},
-		{raw: "command-wal-durable", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileCommandWALDurable},
+		{raw: "command_wal_durable", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileCommandWALDurable},
 		{raw: "command_wal_relaxed", fallback: treedb.ProfileCommandWALDurable, want: treedb.ProfileCommandWALRelaxed},
-		{raw: "bench", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileBench},
+		{raw: "no_wal_fast", fallback: treedb.ProfileCommandWALRelaxed, want: treedb.ProfileNoWALFast},
 	}
 	for _, tc := range cases {
 		got, err := ParsePublicProfile(tc.raw, tc.fallback)
@@ -64,7 +65,7 @@ func TestParsePublicProfileUsesPublicNames(t *testing.T) {
 func TestParsePublicProfileRejectsDeprecatedAndUnknownNames(t *testing.T) {
 	t.Parallel()
 
-	for _, raw := range []string{"fast", "walonfast", "durable", "legacy_wal_relaxed_fast", "no_wal_fast", "unknown"} {
+	for _, raw := range []string{"fast", "walonfast", "durable", "legacy_wal_relaxed_fast", "bench", "bench_unsafe", "command-wal-durable", "unknown"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
 			if err == nil {

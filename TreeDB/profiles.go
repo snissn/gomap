@@ -3,6 +3,8 @@ package treedb
 import (
 	"fmt"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/db"
 )
 
 // Profiles are intentionally defined in the public package so downstream users
@@ -19,9 +21,10 @@ import (
 //
 // In practice, most public callers should choose one of these explicit bundles:
 //
-//   - "Command WAL durable": command WAL plus durable sync/integrity.
-//   - "Command WAL relaxed": command WAL plus relaxed sync/integrity.
-//   - "Bench":               no-WAL benchmark ceiling only.
+//   - "Command WAL durable": command WAL plus durable ordinary ACKs.
+//   - "Command WAL relaxed": command WAL plus relaxed ordinary ACKs.
+//   - "No WAL fast":         no WAL plus relaxed ordinary ACKs.
+//   - "Bench unsafe":        benchmark/test-only ceiling with no durability promise.
 //
 // Additional legacy/no-WAL constants remain temporarily available for
 // compatibility and low-level tests while the public profile surface is being
@@ -43,104 +46,43 @@ import (
 //     opts.FlushThreshold = 128 << 20 // optional tuning
 //     db, err := treedb.Open(opts)
 //
-//  2. Existing Options (merge without clobbering explicit overrides):
+//  2. Explicit benchmark/test-only options:
 //     opts := treedb.Options{Dir: "/path/to/db"}
-//     treedb.ApplyProfile(&opts, treedb.ProfileBench)
-//     opts.FlushThreshold = 64 << 20 // explicit overrides always win
+//     treedb.ApplyBenchmarkProfile(&opts, treedb.ProfileBenchUnsafe)
+//     opts.FlushThreshold = 64 << 20
 //     db, err := treedb.Open(opts)
 //
-// Note: Profiles are a convenience API. TreeDB still honors the established
-// "0 uses a default; <0 disables" convention for background knobs, and callers
-// can always override any field directly after applying a profile.
-type Profile string
+// The resolved profile is immutable at Open: profile-owned durability and
+// integrity fields are reapplied so later low-level mutations cannot silently
+// change the selected contract. Non-contract tuning fields remain caller-owned.
+type Profile = db.DurabilityProfile
 
 const commandWALProfileSegmentBytes int64 = 256 << 20
 
 const (
-	// ProfileCommandWALDurable is the explicit command-WAL production profile for
-	// callers that want command-WAL recovery, durable fsync boundaries, corruption
-	// detection, and the fast collection/index layout bundle.
-	ProfileCommandWALDurable Profile = "command_wal_durable"
+	// The four canonical profile strings are the only accepted parser tokens.
+	ProfileCommandWALDurable = db.ProfileCommandWALDurable
+	ProfileCommandWALRelaxed = db.ProfileCommandWALRelaxed
+	ProfileNoWALFast         = db.ProfileNoWALFast
+	ProfileBenchUnsafe       = db.ProfileBenchUnsafe
 
-	// ProfileCommandWALRelaxed is the explicit command-WAL relaxed profile for
-	// write-heavy benchmark and ingest workloads. It enables command WAL but uses
-	// relaxed sync and read-integrity semantics.
-	ProfileCommandWALRelaxed Profile = "command_wal_relaxed"
-
-	// ProfileLegacyWALDurable is the explicit name for the pre-command-WAL durable
-	// profile. It keeps WAL and checksums enabled, but does not enable CommandWAL.
-	ProfileLegacyWALDurable Profile = "legacy_wal_durable"
-
-	// ProfileLegacyWALRelaxedFast is the explicit name for the pre-command-WAL
-	// relaxed fast profile. It is equivalent to ProfileWALOnFast.
+	// Deprecated Go aliases. They retain distinct source tokens so resolution can
+	// expose a deprecation signal, but each maps to exactly one canonical profile.
+	ProfileDurable              Profile = "durable"
+	ProfileWALOnFast            Profile = "wal_on_fast"
+	ProfileFast                 Profile = "fast"
+	ProfileBench                Profile = "bench"
+	ProfileLegacyWALDurable     Profile = "legacy_wal_durable"
 	ProfileLegacyWALRelaxedFast Profile = "legacy_wal_relaxed_fast"
-
-	// ProfileNoWALFast is the explicit name for the no-WAL fast profile. It is
-	// equivalent to ProfileFast.
-	ProfileNoWALFast Profile = "no_wal_fast"
-
-	// ProfileDurable is the legacy-compatible short name for
-	// ProfileLegacyWALDurable.
-	//
-	// Prefer ProfileCommandWALDurable for new command-WAL durability decisions, or
-	// ProfileLegacyWALDurable when the old/raw WAL path is intentional.
-	//
-	// This profile keeps WAL and checksums enabled and leaves background
-	// maintenance at its default settings, but it does not enable CommandWAL.
-	//
-	// Deprecated: use ProfileCommandWALDurable or ProfileLegacyWALDurable to make
-	// the WAL path explicit.
-	ProfileDurable Profile = "durable"
-
-	// ProfileFast prioritizes throughput by relaxing durability/integrity knobs.
-	//
-	// This profile is appropriate when:
-	//   - you are running on top of an external durability boundary (e.g. you
-	//     snapshot at higher layers), or
-	//   - you are exploring performance limits, and crashes/corruption detection
-	//     are acceptable trade-offs.
-	//
-	// Collection writes under this profile use DurabilityWALOffRelaxed. A
-	// successful collection write is not a durable-at-ack promise; use Flush,
-	// FlushAll, Checkpoint, or Close for a persistence boundary.
-	//
-	// It also pins the current run_celestia-style value-log compression policy:
-	// auto compression, balanced auto policy, snappy block fallback, and medium
-	// autotune.
-	//
-	// Background maintenance is left enabled by default; it is generally helpful
-	// for keeping the index compact and read-friendly.
-	//
-	// Deprecated: use ProfileNoWALFast when the no-WAL path is intentional.
-	ProfileFast Profile = "fast"
-
-	// ProfileWALOnFast is a legacy-compatible short name for
-	// ProfileLegacyWALRelaxedFast. It is a "WAL on + relaxed durability" profile
-	// intended for write-heavy benchmarks and ingest workloads.
-	//
-	// It keeps the legacy/raw WAL path enabled but disables fsync and value-log
-	// read checksums.
-	//
-	// It also pins the same value-log compression policy as ProfileNoWALFast.
-	//
-	// Deprecated: use ProfileLegacyWALRelaxedFast when the legacy/raw WAL path is
-	// intentional, or ProfileCommandWALRelaxed for the command-WAL relaxed path.
-	ProfileWALOnFast Profile = "wal_on_fast"
-
-	// ProfileBench is a "fast + deterministic" profile intended specifically for
-	// benchmarking.
-	//
-	// It disables background workers that can inject heavy work mid-run (e.g.
-	// background index vacuum). This makes comparisons more stable across runs.
-	//
-	// IMPORTANT: This is not a recommended production profile.
-	ProfileBench Profile = "bench"
 )
 
 // ProfileFlagHelp is the recommended public profile vocabulary for CLI flag
 // help. Legacy profile constants are intentionally omitted here; they are
 // transitional/internal compatibility surfaces, not normal public choices.
-const ProfileFlagHelp = "command_wal_durable, command_wal_relaxed, or bench (benchmark-only no-WAL)"
+const ProfileFlagHelp = "command_wal_durable, command_wal_relaxed, or no_wal_fast"
+
+// BenchmarkProfileFlagHelp is the explicit benchmark/test parser vocabulary.
+const BenchmarkProfileFlagHelp = "command_wal_durable, command_wal_relaxed, no_wal_fast, or bench_unsafe"
 
 const fastProfileChunkSize = 4 << 20
 
@@ -149,65 +91,161 @@ const fastProfileChunkSize = 4 << 20
 // fallback was accepted.
 func ParseProfile(raw string, fallback Profile) (Profile, bool) {
 	if strings.TrimSpace(raw) == "" {
-		return fallback, true
+		return parseCanonicalProfile(string(fallback), true)
 	}
-	return NormalizeProfile(Profile(raw))
+	return parseCanonicalProfile(raw, true)
 }
 
 // ParsePublicProfile parses the public server/profile vocabulary. Empty input
 // returns fallback only when fallback is also a public profile. Deprecated
-// compatibility names such as fast, wal_on_fast, durable, legacy_wal_* and
-// no_wal_fast are intentionally rejected here.
+// compatibility names such as fast, wal_on_fast, durable, and legacy_wal_* are
+// intentionally rejected here.
 func ParsePublicProfile(raw string, fallback Profile) (Profile, bool) {
 	if strings.TrimSpace(raw) == "" {
-		return NormalizePublicProfile(fallback)
+		return parseCanonicalProfile(string(fallback), false)
 	}
-	return NormalizePublicProfile(Profile(raw))
+	return parseCanonicalProfile(raw, false)
 }
 
-// NormalizePublicProfile normalizes supported public profile names and aliases.
-func NormalizePublicProfile(profile Profile) (Profile, bool) {
-	switch normalizeProfileToken(string(profile)) {
+// ParseBenchmarkProfile parses the explicit benchmark/test vocabulary. Unlike
+// ParsePublicProfile, it accepts bench_unsafe.
+func ParseBenchmarkProfile(raw string, fallback Profile) (Profile, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return parseCanonicalProfile(string(fallback), true)
+	}
+	return parseCanonicalProfile(raw, true)
+}
+
+func parseCanonicalProfile(raw string, allowBenchUnsafe bool) (Profile, bool) {
+	switch strings.TrimSpace(raw) {
 	case string(ProfileCommandWALDurable):
 		return ProfileCommandWALDurable, true
 	case string(ProfileCommandWALRelaxed):
 		return ProfileCommandWALRelaxed, true
-	case string(ProfileBench):
-		return ProfileBench, true
-	default:
-		return "", false
-	}
-}
-
-// NormalizeProfile normalizes supported profile names and aliases to their
-// public Profile constants.
-func NormalizeProfile(profile Profile) (Profile, bool) {
-	switch normalizeProfileToken(string(profile)) {
-	case string(ProfileCommandWALDurable):
-		return ProfileCommandWALDurable, true
-	case string(ProfileCommandWALRelaxed):
-		return ProfileCommandWALRelaxed, true
-	case string(ProfileLegacyWALDurable):
-		return ProfileLegacyWALDurable, true
-	case string(ProfileLegacyWALRelaxedFast):
-		return ProfileLegacyWALRelaxedFast, true
 	case string(ProfileNoWALFast):
 		return ProfileNoWALFast, true
-	case string(ProfileDurable):
-		return ProfileDurable, true
-	case string(ProfileFast):
-		return ProfileFast, true
-	case string(ProfileWALOnFast), "walonfast":
-		return ProfileWALOnFast, true
-	case string(ProfileBench):
-		return ProfileBench, true
+	case string(ProfileBenchUnsafe):
+		if allowBenchUnsafe {
+			return ProfileBenchUnsafe, true
+		}
+	}
+	return "", false
+}
+
+// NormalizePublicProfile accepts only canonical production profile values.
+func NormalizePublicProfile(profile Profile) (Profile, bool) {
+	return parseCanonicalProfile(string(profile), false)
+}
+
+// NormalizeProfile resolves canonical profiles and deprecated Go aliases to one
+// of the four immutable canonical values. String parsers must use ParseProfile,
+// ParsePublicProfile, or ParseBenchmarkProfile so ambiguous alias tokens never
+// become configuration vocabulary.
+func NormalizeProfile(profile Profile) (Profile, bool) {
+	resolved, _, ok := resolveProfile(profile)
+	return resolved, ok
+}
+
+func resolveProfile(profile Profile) (resolved Profile, deprecatedAlias Profile, ok bool) {
+	switch profile {
+	case ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast, ProfileBenchUnsafe:
+		return profile, "", true
+	case ProfileDurable, ProfileLegacyWALDurable:
+		return ProfileCommandWALDurable, profile, true
+	case ProfileWALOnFast, ProfileLegacyWALRelaxedFast:
+		return ProfileCommandWALRelaxed, profile, true
+	case ProfileFast:
+		return ProfileNoWALFast, profile, true
+	case ProfileBench:
+		return ProfileBenchUnsafe, profile, true
 	default:
-		return "", false
+		return "", "", false
 	}
 }
 
-func normalizeProfileToken(raw string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(raw)), "-", "_")
+func resolveOpenProfileOptions(opts *Options) error {
+	if opts == nil {
+		return fmt.Errorf("treedb: nil options")
+	}
+	if err := validateProfileOwnedOptionEnums(*opts); err != nil {
+		return err
+	}
+	source := Profile(opts.ResolvedProfile)
+	defaulted := source == ""
+	if source == "" {
+		source = ProfileCommandWALDurable
+	}
+	resolved, sourceAlias, ok := resolveProfile(source)
+	if !ok {
+		return fmt.Errorf("treedb: unsupported resolved profile %q", source)
+	}
+	if resolved == ProfileBenchUnsafe && !opts.UnsafeBenchmarkProfile {
+		return fmt.Errorf("treedb: profile %q requires OptionsForBenchmark or ApplyBenchmarkProfile", resolved)
+	}
+
+	alias := Profile(opts.DeprecatedProfileAlias)
+	if alias != "" {
+		aliasResolved, _, aliasOK := resolveProfile(alias)
+		if !aliasOK || aliasResolved != resolved || alias == resolved {
+			return fmt.Errorf("treedb: invalid deprecated profile alias %q for %q", alias, resolved)
+		}
+	} else {
+		alias = sourceAlias
+	}
+
+	if defaulted {
+		applyResolvedProfile(opts, resolved, false)
+	} else {
+		applyResolvedDurabilityContract(opts, resolved)
+	}
+	opts.DeprecatedProfileAlias = alias
+	return nil
+}
+
+// validateProfileOwnedOptionEnums rejects corrupt or misspelled low-level enum
+// values before the selected profile reapplies its immutable contract. Valid
+// legacy values may be superseded by the resolved profile, but invalid values
+// must never be silently normalized into a different configuration.
+func validateProfileOwnedOptionEnums(opts Options) error {
+	switch opts.Durability {
+	case DurabilityDurable, DurabilityWALOnRelaxed, DurabilityWALOffRelaxed:
+	default:
+		return fmt.Errorf("treedb: invalid durability mode %d", opts.Durability)
+	}
+	switch opts.ValueLog.ReadIntegrity {
+	case IntegrityVerify, IntegritySkipChecksums:
+	default:
+		return fmt.Errorf("treedb: invalid value-log integrity mode %d", opts.ValueLog.ReadIntegrity)
+	}
+	return nil
+}
+
+// applyResolvedDurabilityContract makes the selected acknowledgement,
+// durability, and integrity contract immutable at Open while preserving
+// caller-owned layout and tuning overrides applied after OptionsFor.
+func applyResolvedDurabilityContract(opts *Options, resolved Profile) {
+	opts.ResolvedProfile = resolved
+	opts.UnsafeBenchmarkProfile = resolved == ProfileBenchUnsafe
+	switch resolved {
+	case ProfileCommandWALDurable:
+		opts.CommandWAL = true
+		opts.Durability = DurabilityDurable
+		opts.ValueLog.ReadIntegrity = IntegrityVerify
+		opts.ValueLog.CurrentWritableMmap = false
+	case ProfileCommandWALRelaxed:
+		opts.CommandWAL = true
+		opts.Durability = DurabilityWALOnRelaxed
+		opts.ValueLog.ReadIntegrity = IntegrityVerify
+		opts.ValueLog.CurrentWritableMmap = false
+	case ProfileNoWALFast:
+		opts.CommandWAL = false
+		opts.Durability = DurabilityWALOffRelaxed
+		opts.ValueLog.ReadIntegrity = IntegrityVerify
+		opts.ValueLog.CurrentWritableMmap = false
+	case ProfileBenchUnsafe:
+		opts.CommandWAL = false
+		opts.Durability = DurabilityWALOffRelaxed
+	}
 }
 
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
@@ -222,6 +260,14 @@ func normalizeProfileToken(raw string) string {
 func OptionsFor(profile Profile, dir string) Options {
 	opts := Options{Dir: dir}
 	ApplyProfile(&opts, profile)
+	return opts
+}
+
+// OptionsForBenchmark is the explicit benchmark/test constructor boundary. It
+// is the only options constructor that can select bench_unsafe.
+func OptionsForBenchmark(profile Profile, dir string) Options {
+	opts := Options{Dir: dir}
+	ApplyBenchmarkProfile(&opts, profile)
 	return opts
 }
 
@@ -241,28 +287,36 @@ func OptionsFor(profile Profile, dir string) Options {
 // ApplyProfile panics for unknown profiles so misspelled programmatic profile
 // tokens cannot silently select bare default options.
 func ApplyProfile(opts *Options, profile Profile) {
-	normalized, ok := NormalizeProfile(profile)
-	if !ok {
+	applyResolvedProfile(opts, profile, false)
+}
+
+// ApplyBenchmarkProfile is the explicit benchmark/test application boundary.
+// Production code should use ApplyProfile.
+func ApplyBenchmarkProfile(opts *Options, profile Profile) {
+	applyResolvedProfile(opts, profile, true)
+}
+
+func applyResolvedProfile(opts *Options, profile Profile, allowBenchUnsafe bool) {
+	resolved, deprecatedAlias, ok := resolveProfile(profile)
+	if !ok || (resolved == ProfileBenchUnsafe && !allowBenchUnsafe) {
 		panic(fmt.Sprintf("treedb: unsupported profile %q", profile))
 	}
-
 	if opts == nil {
 		return
 	}
 
-	switch normalized {
+	opts.ResolvedProfile = resolved
+	opts.DeprecatedProfileAlias = deprecatedAlias
+	opts.UnsafeBenchmarkProfile = resolved == ProfileBenchUnsafe
+	switch resolved {
 	case ProfileCommandWALDurable:
 		applyCommandWALDurableProfile(opts)
 	case ProfileCommandWALRelaxed:
 		applyCommandWALRelaxedProfile(opts)
-	case ProfileDurable, ProfileLegacyWALDurable:
-		applyDurableProfile(opts)
-	case ProfileFast, ProfileNoWALFast:
-		applyFastProfile(opts)
-	case ProfileWALOnFast, ProfileLegacyWALRelaxedFast:
-		applyWALOnFastProfile(opts)
-	case ProfileBench:
-		applyBenchProfile(opts)
+	case ProfileNoWALFast:
+		applyNoWALFastProfile(opts)
+	case ProfileBenchUnsafe:
+		applyBenchUnsafeProfile(opts)
 	}
 }
 
@@ -308,7 +362,8 @@ func applyFastPagerSyncProfile(opts *Options) {
 	}
 }
 
-func applyFastProfile(opts *Options) {
+func applyUnsafeFastProfile(opts *Options) {
+	opts.CommandWAL = false
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
@@ -325,35 +380,23 @@ func applyFastProfile(opts *Options) {
 	applyIndexOptimizationsProfile(opts)
 }
 
-func applyWALOnFastProfile(opts *Options) {
-	opts.Durability = DurabilityWALOnRelaxed
-	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
-	opts.IndexOuterLeavesInValueLog = true
-	applyFastPagerSyncProfile(opts)
-	applyRunCelestiaVLogCompressionProfile(opts)
-	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
-		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
-	}
-	if opts.ValueLog.DictProbeIntervalBytes == 0 {
-		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
-	}
-	opts.ValueLog.CurrentWritableMmap = true
-
-	applyIndexOptimizationsProfile(opts)
+func applyNoWALFastProfile(opts *Options) {
+	applyUnsafeFastProfile(opts)
+	opts.ValueLog.ReadIntegrity = IntegrityVerify
+	opts.ValueLog.CurrentWritableMmap = false
 }
 
 func applyCommandWALDurableProfile(opts *Options) {
-	applyWALOnFastProfile(opts)
+	applyNoWALFastProfile(opts)
 	opts.CommandWAL = true
 	opts.Durability = DurabilityDurable
-	opts.ValueLog.ReadIntegrity = IntegrityVerify
-	opts.ValueLog.CurrentWritableMmap = false
 	applyCommandWALProfileSegmentDefaults(opts)
 }
 
 func applyCommandWALRelaxedProfile(opts *Options) {
-	applyWALOnFastProfile(opts)
+	applyNoWALFastProfile(opts)
 	opts.CommandWAL = true
+	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.CurrentWritableMmap = false
 	applyCommandWALProfileSegmentDefaults(opts)
 }
@@ -367,8 +410,8 @@ func applyCommandWALProfileSegmentDefaults(opts *Options) {
 	}
 }
 
-func applyBenchProfile(opts *Options) {
-	applyFastProfile(opts)
+func applyBenchUnsafeProfile(opts *Options) {
+	applyUnsafeFastProfile(opts)
 
 	// Determinism: disable background workers that can inject large, unrelated
 	// work mid-benchmark.

@@ -13,7 +13,9 @@ func TestStatsReportsValueLogReadIntegrityAndReadCounters(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := OptionsFor(ProfileCommandWALDurable, t.TempDir())
-			opts.ValueLog.ReadIntegrity = tt.mode
+			if tt.mode == IntegritySkipChecksums {
+				opts = OptionsForBenchmark(ProfileBenchUnsafe, opts.Dir)
+			}
 			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("Open: %v", err)

@@ -32,6 +32,9 @@ var (
 	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
 	// feature this binary does not understand.
 	ErrUnsupportedRequiredFeature = db.ErrUnsupportedRequiredFeature
+	// ErrLegacyFormatRebuildRequired indicates a pre-alpha directory has no
+	// compatible persisted durability-profile contract.
+	ErrLegacyFormatRebuildRequired = db.ErrLegacyFormatRebuildRequired
 	// ErrConditionalTxnClosed indicates a conditional transaction was used after
 	// Commit, CommitSync, or Close.
 	ErrConditionalTxnClosed = db.ErrConditionalTxnClosed

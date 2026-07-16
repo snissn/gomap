@@ -18,6 +18,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func legacyCachedRecoveryOptions(dir string) treedb.Options {
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.ChunkSize = 64 * 1024
+	opts.AllowLegacyCachedRedoJournalReplay = true
+	return opts
+}
+
 func assertCommitLogCleared(t *testing.T, path string) {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -184,20 +191,17 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
+	emptySync := os.Getenv("TREEDB_CRASH_EMPTY_SYNC") == "1"
 
-	durability := treedb.DurabilityDurable
+	profile := treedb.ProfileCommandWALDurable
 	if disableWAL {
-		durability = treedb.DurabilityWALOffRelaxed
+		profile = treedb.ProfileNoWALFast
 	} else if relaxedSync {
-		durability = treedb.DurabilityWALOnRelaxed
+		profile = treedb.ProfileCommandWALRelaxed
 	}
 
-	opts := treedb.Options{
-		Dir:        dir,
-		ChunkSize:  64 * 1024,
-		Durability: durability,
-		CommandWAL: !disableWAL,
-	}
+	opts := treedb.OptionsFor(profile, dir)
+	opts.ChunkSize = 64 * 1024
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -209,7 +213,19 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		val = bytes.Repeat([]byte("x"), 4096)
 	}
 
-	if err := db.SetSync([]byte("k"), val); err != nil {
+	if emptySync {
+		if err := db.Set([]byte("k"), val); err != nil {
+			t.Fatalf("Set before empty WriteSync: %v", err)
+		}
+		empty := db.NewBatch()
+		if err := empty.WriteSync(); err != nil {
+			_ = empty.Close()
+			t.Fatalf("empty WriteSync: %v", err)
+		}
+		if err := empty.Close(); err != nil {
+			t.Fatalf("empty batch Close: %v", err)
+		}
+	} else if err := db.SetSync([]byte("k"), val); err != nil {
 		t.Fatalf("SetSync: %v", err)
 	}
 	os.Exit(0)
@@ -721,13 +737,15 @@ func TestCrashRecovery_CommandWALRelaxedRotatedDependenciesSurviveEmptySyncBarri
 func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 	type tier struct {
 		name        string
+		profile     treedb.Profile
 		env         []string
 		expectLarge bool
 	}
 
 	tiers := []tier{
 		{
-			name: "wal_off_strict_sync_large_value",
+			name:    "wal_off_strict_sync_large_value",
+			profile: treedb.ProfileNoWALFast,
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=1",
 				"TREEDB_CRASH_RELAXED_SYNC=0",
@@ -736,7 +754,19 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			expectLarge: true,
 		},
 		{
-			name: "wal_on_relaxed_sync_large_value",
+			name:    "wal_off_relaxed_write_empty_sync_large_value",
+			profile: treedb.ProfileNoWALFast,
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=1",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+				"TREEDB_CRASH_EMPTY_SYNC=1",
+			},
+			expectLarge: true,
+		},
+		{
+			name:    "wal_on_relaxed_sync_large_value",
+			profile: treedb.ProfileCommandWALRelaxed,
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=0",
 				"TREEDB_CRASH_RELAXED_SYNC=1",
@@ -745,7 +775,8 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			expectLarge: true,
 		},
 		{
-			name: "wal_on_strict_sync_large_value",
+			name:    "wal_on_strict_sync_large_value",
+			profile: treedb.ProfileCommandWALDurable,
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=0",
 				"TREEDB_CRASH_RELAXED_SYNC=0",
@@ -760,7 +791,8 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			dir := t.TempDir()
 			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
 
-			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
+			opts := treedb.OptionsFor(tc.profile, dir)
+			opts.ChunkSize = 64 * 1024
 			db, err := treedb.Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)
@@ -875,7 +907,7 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	backend, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -947,7 +979,7 @@ func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	db, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1016,7 +1048,7 @@ func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	db, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -1082,7 +1114,7 @@ func TestRecovery_MultiLaneOrdering(t *testing.T) {
 		t.Fatalf("commitlog.Close lane1: %v", err)
 	}
 
-	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	backend, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -1112,7 +1144,7 @@ func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
 		t.Fatalf("write commit header: %v", err)
 	}
 
-	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	backend, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -1216,7 +1248,7 @@ func TestRecovery_MissingDictFails(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	if _, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true}); err == nil {
+	if _, err := treedb.Open(legacyCachedRecoveryOptions(dir)); err == nil {
 		t.Fatalf("expected recovery error due to missing dict")
 	}
 	if _, err := os.Stat(commitPath); err != nil {
@@ -1261,7 +1293,7 @@ func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
 	_, _ = f.Write([]byte{0x01, 0x02, 0x03})
 	_ = f.Close()
 
-	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	backend, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -1332,7 +1364,7 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 	_, _ = f.Write([]byte{0x01, 0x02, 0x03})
 	_ = f.Close()
 
-	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024, AllowLegacyCachedRedoJournalReplay: true})
+	backend, err := treedb.Open(legacyCachedRecoveryOptions(dir))
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}

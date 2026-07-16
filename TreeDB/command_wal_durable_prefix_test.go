@@ -18,7 +18,7 @@ import (
 
 func relaxedCommandWALDurablePrefixOptions(dir string) Options {
 	opts := commandWALDurabilityProofOptions(dir)
-	opts.Durability = DurabilityWALOnRelaxed
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
 	return opts
 }
 

@@ -81,14 +81,14 @@ serialization locks are held.
 
 ### 0.2 Normative mode and API matrix
 
-These canonical profiles are the target production surface. `bench_unsafe` is
+These canonical profiles define the current public surface. `bench_unsafe` is
 explicitly outside the production guarantee.
 
 | Profile | Ordinary acknowledgement | Public `*Sync` | `Flush` / `FlushAll` | `Checkpoint` and clean `Close` | Modeled power-loss result |
 |---|---|---|---|---|---|
 | `command_wal_durable` | waits for stable complete command-frame closure | same durable frame closure; root publication is not required | visibility/draining only | waits for a sealed complete root covering the captured frontier | every durable acknowledgement recovers; selected root is complete |
 | `command_wal_relaxed` | may lead WAL and root sync | waits for stable complete command-frame closure | visibility/draining only | waits for a sealed complete root covering the captured frontier | may lose only a complete recent suffix; replay remains contiguous |
-| `no_wal_fast` (canonical target name retaining legacy-compatible spelling) | may lead sealed-root publication | waits for a sealed complete root covering the call | visibility/draining only | waits for a sealed complete root covering the captured frontier | may lose only a complete recent suffix back to the last sealed root |
+| `no_wal_fast` | may lead sealed-root publication | waits for a sealed complete root covering the call | visibility/draining only | waits for a sealed complete root covering the captured frontier | may lose only a complete recent suffix back to the last sealed root |
 | `bench_unsafe` | benchmark-defined | benchmark-defined | benchmark-defined | benchmark-defined | no production guarantee |
 
 All production profiles enable integrity checks. `Flush` never means file or
@@ -97,13 +97,17 @@ request and no public fast-close/abort alias in this contract.
 
 ## 1. Durability Modes
 
-`Options.Durability` selects one of three modes.
+The resolved profile owns `Options.Durability`; the durability enum alone is
+not a public acknowledgement contract.
 
-### 1.1 `DurabilityDurable` (default)
+### 1.1 `DurabilityDurable` (`command_wal_durable`, default)
 
-- Commit log (WAL/journal): enabled.
-- Sync operations (`SetSync`, `WriteSync`, `DeleteSync`) use fsync durability boundaries.
-- Non-sync operations may be lost on power loss.
+- Command WAL is enabled.
+- Ordinary supported public acknowledgements wait for a stable,
+  dependency-complete command-WAL prefix.
+- Sync operations (`SetSync`, `WriteSync`, `DeleteSync`) use the same durable
+  prefix boundary; they need not checkpoint the backend root per call.
+- Checkpoint and clean close publish a sealed complete root.
 
 ### 1.2 `DurabilityWALOnRelaxed` command-WAL relaxed / legacy compatibility
 
@@ -338,19 +342,20 @@ behavior is flush-boundary durable, as defined in
 `collections-write-domain.md`. The bullets below describe the target collection
 user-command WAL overlay for command kinds that have passed the support matrix:
 
-- `DurabilityDurable`: non-sync collection mutator success is process-crash
-  recoverable through command WAL. It is not by itself a power-loss fsync
-  guarantee. `Flush`, `FlushAll`, `Checkpoint`, `Close`, or native-wire
-  `ack_policy=synced` can add the configured fsync boundary when the server can
-  actually satisfy that boundary.
-- `DurabilityWALOnRelaxed`: in the current command-WAL relaxed overlay,
-  collection mutator success is process-crash recoverable once the typed frame and required external
-  refs are fresh-process-readable. It is not a power-loss guarantee. Native-wire
-  `synced` must be rejected unless the server advertises a separately named
-  mode-relative relaxed sync policy.
-- `DurabilityWALOffRelaxed`: in benchmark/compatibility mode, collection mutator
-  success is not durable-at-ack. `Flush`, `FlushAll`, `Checkpoint`, and `Close`
-  are the public persistence boundaries for pending collection state.
+- `DurabilityDurable`: ordinary supported collection/catalog mutator success
+  waits for the typed command and all required external refs to form a stable,
+  dependency-complete command-WAL prefix. It is power-loss durable without an
+  immediate backend-root checkpoint.
+- `DurabilityWALOnRelaxed`: in the command-WAL relaxed profile, ordinary
+  collection/catalog success may lead the
+  stable WAL frontier. An explicit sync/barrier persists the typed prefix and
+  required external refs; recent ordinary acknowledgements may lose only a
+  complete suffix.
+- `DurabilityWALOffRelaxed`: under production `no_wal_fast`, ordinary success
+  may lead sealed-root publication and an explicit sync waits for a sealed root
+  covering the call. `Flush` and `FlushAll` remain visibility/drain operations;
+  `Checkpoint` and clean `Close` are sealed-root boundaries. The separate
+  `bench_unsafe` profile carries no production guarantee.
 
 `Flush` and `FlushAll` publish roots and advance `AppliedLSN` when they cover
 typed command frames. `Checkpoint` is the database-wide durability/cleanup
@@ -462,14 +467,23 @@ These bound uncheckpointed log growth in long-running workloads.
 The current public profile surface maps high-level intent to command-WAL-backed
 durability/integrity bundles:
 
-- `ProfileCommandWALDurable`: command-WAL raw and collection writes with durable sync/checksum settings. This is the recommended default server profile.
-- `ProfileCommandWALRelaxed`: command-WAL raw and collection writes with relaxed sync/read-integrity settings for high-throughput ingest and benchmark comparisons.
-- `ProfileBench`: no-WAL benchmark-only ceiling with deterministic background maintenance behavior. It is not a production durability profile.
+- `ProfileCommandWALDurable`: ordinary acknowledgements and explicit syncs wait
+  for a durable dependency-complete command-WAL prefix. This is the recommended
+  default server profile.
+- `ProfileCommandWALRelaxed`: ordinary acknowledgements are relaxed; explicit
+  syncs wait for a durable dependency-complete command-WAL prefix.
+- `ProfileNoWALFast`: production no-WAL profile; ordinary acknowledgements are
+  relaxed and explicit syncs wait for a sealed complete root.
+- `ProfileBenchUnsafe`: benchmark/test-only ceiling with no durability promise
+  and an explicit benchmark constructor/parser boundary.
+
+All production profiles verify value-log integrity. `Open` makes their owned
+durability and integrity fields immutable while preserving caller-owned tuning.
 
 Deprecated raw cached-journal bundles remain available only for low-level
 compatibility tests and forensic reproduction. Public servers, wrappers, and new
-documentation should present the command-WAL profiles plus the explicit
-benchmark-only ceiling as the supported profile surface.
+documentation should present the three canonical production profiles, and
+benchmark documentation may additionally present the explicit unsafe ceiling.
 
 ## 9. Required Invariants
 

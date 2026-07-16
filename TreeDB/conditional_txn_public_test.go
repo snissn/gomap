@@ -8,7 +8,7 @@ import (
 )
 
 func TestPublicConditionalTxnCachedHandleCommitsThroughMemtable(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestPublicConditionalTxnCachedHandleCommitsThroughMemtable(t *testing.T) {
 }
 
 func TestPublicConditionalTxnCachedHandleConflictsOnConcurrentWrite(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestPublicConditionalTxnCachedHandleConflictsOnConcurrentWrite(t *testing.T
 }
 
 func TestPublicConditionalTxnCachedHandleConflictsWhenKeyChangesBeforeFirstRead(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestPublicConditionalTxnCachedHandleConflictsWhenKeyChangesBeforeFirstRead(
 }
 
 func TestPublicConditionalTxnCachedHandleReadsStagedWrites(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestPublicConditionalTxnCachedHandleReadsStagedWrites(t *testing.T) {
 }
 
 func TestPublicConditionalTxnCachedHandleReadsStagedDelete(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestPublicConditionalTxnCachedHandleReadsStagedDelete(t *testing.T) {
 }
 
 func TestPublicConditionalTxnCachedHandleConflictsOnAbsentInsertDelete(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestPublicConditionalTxnCachedHandleConflictsOnAbsentInsertDelete(t *testin
 }
 
 func TestPublicConditionalTxnCachedHandleConflictsOnDeleteRange(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestPublicConditionalTxnCachedHandleConflictsOnDeleteRange(t *testing.T) {
 }
 
 func TestPublicConditionalTxnCachedHandleReusableStorage(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir()})
+	db, err := Open(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestPublicConditionalTxnCachedHandleReusableStorage(t *testing.T) {
 }
 
 func TestPublicConditionalTxnCommandWALCachedHandleFailsClosed(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true})
+	db, err := Open(OptionsFor(ProfileCommandWALDurable, t.TempDir()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

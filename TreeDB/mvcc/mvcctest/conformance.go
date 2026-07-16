@@ -151,8 +151,8 @@ func runBoundaries(t *testing.T, open OpenFunc, durability DurabilityClass) {
 	if err := adapter.CommitAt(1, []mvcc.Mutation{{Key: nil}, {Key: []byte{}}}, mvcc.CommitRelaxed); !errors.Is(err, mvcc.ErrDuplicateKey) {
 		t.Fatalf("nil/empty duplicate err=%v", err)
 	}
-	if err := adapter.CommitAt(1, []mvcc.Mutation{{Key: []byte("k")}}, mvcc.CommitDurable); !errors.Is(err, mvcc.ErrDurabilityUnavailable) {
-		t.Fatalf("durable-on-relaxed err=%v", err)
+	if err := adapter.CommitAt(1, []mvcc.Mutation{{Key: []byte("k")}}, mvcc.CommitDurable); err != nil {
+		t.Fatalf("explicit durable boundary on relaxed ordinary-ACK profile: %v", err)
 	}
 	if err := adapter.CommitAt(5, []mvcc.Mutation{{Key: []byte("k"), Value: []byte("v")}}, mvcc.CommitRelaxed); err != nil {
 		t.Fatal(err)

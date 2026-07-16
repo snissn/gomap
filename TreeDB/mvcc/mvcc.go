@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -23,8 +22,9 @@ const (
 	// CommitRelaxed publishes one atomic TreeDB batch with Batch.Write. It does
 	// not promise an fsync boundary and may be lost after a crash.
 	CommitRelaxed CommitMode = iota
-	// CommitDurable requires a TreeDB opened in DurabilityDurable mode and
-	// publishes one atomic batch with Batch.WriteSync.
+	// CommitDurable publishes one atomic batch with Batch.WriteSync. Production
+	// profiles support this explicit durability opt-up even when ordinary ACKs
+	// are relaxed.
 	CommitDurable
 )
 
@@ -57,13 +57,12 @@ type Result struct {
 }
 
 var (
-	ErrZeroTimestamp         = errors.New("mvcc: timestamp zero is reserved")
-	ErrDuplicateKey          = errors.New("mvcc: duplicate logical key in batch")
-	ErrInvalidCommitMode     = errors.New("mvcc: invalid commit mode")
-	ErrDurabilityUnavailable = errors.New("mvcc: durable commit requires durable TreeDB mode")
-	ErrInvalidKey            = errors.New("mvcc: invalid logical key")
-	ErrMalformedRecord       = errors.New("mvcc: malformed physical record")
-	ErrStorage               = errors.New("mvcc: storage error")
+	ErrZeroTimestamp     = errors.New("mvcc: timestamp zero is reserved")
+	ErrDuplicateKey      = errors.New("mvcc: duplicate logical key in batch")
+	ErrInvalidCommitMode = errors.New("mvcc: invalid commit mode")
+	ErrInvalidKey        = errors.New("mvcc: invalid logical key")
+	ErrMalformedRecord   = errors.New("mvcc: malformed physical record")
+	ErrStorage           = errors.New("mvcc: storage error")
 )
 
 const (
@@ -74,7 +73,6 @@ const (
 type treeDB interface {
 	Iterator(start, end []byte) (treedb.Iterator, error)
 	NewBatchWithSize(size int) treedb.Batch
-	DurabilityMode() string
 }
 
 type pointSuccessorDB interface {
@@ -133,9 +131,6 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 	}
 	if len(mutations) == 0 {
 		return nil
-	}
-	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
-		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
 	}
 	type stagedMutation struct {
 		physical []byte
@@ -294,10 +289,6 @@ func decodePointResult(logical []byte, timestamp uint64, physical, record []byte
 	default:
 		return Result{}, fmt.Errorf("%w: unknown envelope tag 0x%02x", ErrMalformedRecord, record[0])
 	}
-}
-
-func durableTreeDBMode(mode string) bool {
-	return mode == "wal_on_sync" || strings.HasPrefix(mode, "wal_on_sync+")
 }
 
 func storageError(operation string, err error) error {

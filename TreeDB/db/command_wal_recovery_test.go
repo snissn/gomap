@@ -802,6 +802,67 @@ func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
 	}
 }
 
+func TestCommandWALIntentResolvedProfileControlsOrdinaryStagedAppendSync(t *testing.T) {
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	tests := []struct {
+		name       string
+		profile    DurabilityProfile
+		durability DurabilityMode
+		wantSyncs  uint64
+	}{
+		{name: "durable", profile: ProfileCommandWALDurable, durability: DurabilityDurable, wantSyncs: 1},
+		{name: "relaxed", profile: ProfileCommandWALRelaxed, durability: DurabilityWALOnRelaxed, wantSyncs: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := SaveFormatConfig(dir, FormatConfig{
+				RequiredFeatures:  []string{RequiredFeatureCommandWALV1},
+				DurabilityProfile: tc.profile,
+			}); err != nil {
+				t.Fatalf("SaveFormatConfig: %v", err)
+			}
+			database, err := Open(Options{
+				Dir:             dir,
+				CommandWAL:      true,
+				Durability:      tc.durability,
+				ResolvedProfile: tc.profile,
+				ValueLog: ValueLogOptions{
+					ReadIntegrity: IntegrityVerify,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer database.Close()
+
+			intent, err := database.NewCommandWALIntent(
+				commitlog.CommandKindRawKVBatch,
+				commitlog.CommandScopeRawKV,
+				commitlog.PayloadFormatRawKVBatchV1,
+				payload,
+			)
+			if err != nil {
+				t.Fatalf("NewCommandWALIntent: %v", err)
+			}
+			before := commandWALTestStatUint64(t, database.Stats(), "treedb.command_wal.sync.count_total")
+			if _, err := database.AppendStagedCommandWALIntent(intent, false); err != nil {
+				t.Fatalf("AppendStagedCommandWALIntent: %v", err)
+			}
+			after := commandWALTestStatUint64(t, database.Stats(), "treedb.command_wal.sync.count_total")
+			if got := after - before; got != tc.wantSyncs {
+				t.Fatalf("ordinary staged append command WAL syncs=%d want %d", got, tc.wantSyncs)
+			}
+			if err := database.PublishStagedCommandWALNoop(intent, false); err != nil {
+				t.Fatalf("PublishStagedCommandWALNoop: %v", err)
+			}
+		})
+	}
+}
+
 func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

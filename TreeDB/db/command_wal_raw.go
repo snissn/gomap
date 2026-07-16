@@ -781,6 +781,7 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 		payloadFormat:    payloadFormat,
 		payload:          payload,
 		maxEntryRevision: maxEntryRevision,
+		syncOnPublish:    db.resolvedProfile == ProfileCommandWALDurable,
 	}}, nil
 }
 
@@ -1465,6 +1466,7 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
+	sync = commandWALIntentPublishSync(intent, sync)
 	if !db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
 		return db.appendPublicCommandWALIntent(intent, sync)
 	}
@@ -1482,6 +1484,7 @@ func (db *DB) AppendStagedCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
+	sync = commandWALIntentPublishSync(intent, sync)
 	lsn, err := db.appendPublicCommandWALIntent(intent, sync)
 	if err != nil {
 		return 0, err

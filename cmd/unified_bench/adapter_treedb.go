@@ -144,6 +144,7 @@ func init() {
 	RegisterAlias("treedbcached", "treedb")
 	RegisterHiddenDB("treedb_public_command_wal", NewTreeDBPublicCommandWAL)
 	RegisterAlias("treedb_cached_command_wal", "treedb_public_command_wal")
+	RegisterHiddenDB("treedb_bench_unsafe", NewTreeDBBenchUnsafe)
 	RegisterHiddenDB("treedb_backend", NewTreeDBBackend)
 	RegisterHiddenDB("treedb_backend_command_wal", NewTreeDBBackendCommandWAL)
 	RegisterAlias("treedb_command_wal", "treedb_backend_command_wal")
@@ -406,6 +407,7 @@ func (r treeDBOptionsReport) hasReport() bool {
 
 func (r treeDBOptionsReport) formatText(indent string) string {
 	var lines []string
+	lines = append(lines, fmt.Sprintf("profile_resolved=%s", r.opts.ResolvedProfile))
 	lines = append(lines, fmt.Sprintf("durability=%s", formatTreeDBDurability(r.opts.Durability)))
 	lines = append(lines, fmt.Sprintf("read_integrity=%s", formatTreeDBIntegrity(r.opts.ValueLog.ReadIntegrity)))
 	if strings.TrimSpace(r.maintenanceMode) != "" {
@@ -685,7 +687,8 @@ func resolveIndexOptimizationBool(flagName string, flagValue bool, compositeValu
 }
 
 type treeDBOptionsBuildConfig struct {
-	forceWALOn bool
+	forceWALOn           bool
+	forceBenchmarkUnsafe bool
 }
 
 func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error) {
@@ -695,9 +698,17 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (treedb.Options, treeDBOptionsReport, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 
-	disableWALEffective := *treedbDisableWAL && !cfg.forceWALOn
-	if !*treedbAllowUnsafe && (disableWALEffective || *treedbRelaxedSync || *treedbDisableReadChecksum) {
+	if cfg.forceWALOn && cfg.forceBenchmarkUnsafe {
+		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("TreeDB: forceWALOn and forceBenchmarkUnsafe are mutually exclusive")
+	}
+	disableWALEffective := cfg.forceBenchmarkUnsafe || (*treedbDisableWAL && !cfg.forceWALOn)
+	manualUnsafe := (*treedbDisableWAL && !cfg.forceWALOn) || *treedbRelaxedSync || *treedbDisableReadChecksum
+	if !cfg.forceBenchmarkUnsafe && !*treedbAllowUnsafe && manualUnsafe {
 		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("TreeDB: unsafe flags require -treedb-allow-unsafe")
+	}
+	resolvedProfile, benchmarkProfile, err := resolveUnifiedBenchTreeDBProfile(disableWALEffective, cfg.forceBenchmarkUnsafe)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	maintenanceMode, err := normalizeTreeDBMaintenanceMode(*treedbMaintenanceMode)
 	if err != nil {
@@ -711,7 +722,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		durability = treedb.DurabilityWALOnRelaxed
 	}
 	readIntegrity := treedb.IntegrityVerify
-	if *treedbDisableReadChecksum {
+	if cfg.forceBenchmarkUnsafe || *treedbDisableReadChecksum {
 		readIntegrity = treedb.IntegritySkipChecksums
 	}
 
@@ -982,6 +993,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
 	}
+	attachUnifiedBenchTreeDBProfile(&opts, resolvedProfile, benchmarkProfile)
 	if _, err := treedbdb.ResolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
@@ -996,6 +1008,37 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 
 	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}
 	return opts, rep, nil
+}
+
+func resolveUnifiedBenchTreeDBProfile(disableWAL, forceBenchmarkUnsafe bool) (treedb.Profile, bool, error) {
+	if forceBenchmarkUnsafe {
+		return treedb.ProfileBenchUnsafe, true, nil
+	}
+	if *treedbDisableReadChecksum {
+		if !disableWAL {
+			return "", false, fmt.Errorf("TreeDB: -treedb-disable-read-checksum is only available through the no-WAL bench_unsafe contract; use -profile fast or also set -treedb-disable-wal")
+		}
+		return treedb.ProfileBenchUnsafe, true, nil
+	}
+	if disableWAL {
+		return treedb.ProfileNoWALFast, false, nil
+	}
+	if *treedbRelaxedSync {
+		return treedb.ProfileCommandWALRelaxed, false, nil
+	}
+	return treedb.ProfileCommandWALDurable, false, nil
+}
+
+func attachUnifiedBenchTreeDBProfile(opts *treedb.Options, profile treedb.Profile, benchmark bool) {
+	proof := treedb.Options{}
+	if benchmark {
+		treedb.ApplyBenchmarkProfile(&proof, profile)
+	} else {
+		treedb.ApplyProfile(&proof, profile)
+	}
+	opts.ResolvedProfile = proof.ResolvedProfile
+	opts.DeprecatedProfileAlias = proof.DeprecatedProfileAlias
+	opts.UnsafeBenchmarkProfile = proof.UnsafeBenchmarkProfile
 }
 
 func treeDBResolvedOptionsText(indent string) (string, error) {
@@ -1045,6 +1088,18 @@ func NewTreeDBPublicCommandWAL(dir string) (kvstore.DB, error) {
 		return nil, err
 	}
 	return wrapTreeDBAdapter(db, "TreeDB (public cached command_wal_v1)"), nil
+}
+
+func NewTreeDBBenchUnsafe(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptionsWithConfig(dir, treeDBOptionsBuildConfig{forceBenchmarkUnsafe: true})
+	if err != nil {
+		return nil, err
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return wrapTreeDBAdapter(db, "TreeDB"), nil
 }
 
 func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {

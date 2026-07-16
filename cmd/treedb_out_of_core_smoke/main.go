@@ -280,7 +280,7 @@ func parseConfig(args []string) (config, error) {
 		ReadWorkers:            2,
 		FormatsCSV:             "template-v1,bson,json",
 		IndexesCSV:             "0,1,2",
-		Profile:                string(treedb.ProfileBench),
+		Profile:                string(treedb.ProfileBenchUnsafe),
 		LeafSegmentTargetBytes: 32 << 10,
 		CacheBudgetBytes:       32 << 10,
 		RetiredMmapBudgetBytes: 32 << 10,
@@ -295,7 +295,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ReadWorkers, "read-workers", cfg.ReadWorkers, "raw TreeDB parallel read workers")
 	fs.StringVar(&cfg.FormatsCSV, "formats", cfg.FormatsCSV, "collection formats CSV: template-v1,bson,json")
 	fs.StringVar(&cfg.IndexesCSV, "indexes", cfg.IndexesCSV, "collection index counts CSV")
-	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
+	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
 	fs.Int64Var(&cfg.LeafSegmentTargetBytes, "leaf-segment-target-bytes", cfg.LeafSegmentTargetBytes, "small leaf_vlog segment target used to force churn")
 	fs.Int64Var(&cfg.CacheBudgetBytes, "cache-budget-bytes", cfg.CacheBudgetBytes, "reported current-leaf/page cache budget for pressure validation")
 	fs.Int64Var(&cfg.RetiredMmapBudgetBytes, "retired-mmap-budget-bytes", cfg.RetiredMmapBudgetBytes, "reported retired mmap budget for pressure validation")
@@ -1005,7 +1005,7 @@ func runRawWorker(cfg config) error {
 	if err != nil {
 		return err
 	}
-	opts := treedb.OptionsFor(profile, cfg.rawDir)
+	opts := treedb.OptionsForBenchmark(profile, cfg.rawDir)
 	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 	opts.ValueLog.Generational.LeafSegmentTargetBytes = cfg.LeafSegmentTargetBytes
@@ -1092,10 +1092,10 @@ func runRawWorker(cfg config) error {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	if profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench); ok {
+	if profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileBenchUnsafe); ok {
 		return profile, nil
 	}
-	return "", fmt.Errorf("unsupported profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+	return "", fmt.Errorf("unsupported profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 }
 
 func rawBatchSet(db *treedb.DB, start, count, batchSize, valueSize, generation int) error {

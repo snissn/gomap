@@ -326,7 +326,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		DocumentFormat:             collections.DocumentFormatTemplateV1,
 		IndexCount:                 2,
 		BufferedIndexedWrites:      true,
-		Profile:                    treedb.ProfileBench,
+		Profile:                    treedb.ProfileBenchUnsafe,
 		DataOuterLeavesInValueLog:  true,
 		IndexOuterLeavesInValueLog: true,
 		KeepRecent:                 1,
@@ -363,7 +363,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "force-enable background indexed threshold publish; indexed schemas already enable this by default")
 	fs.BoolVar(&cfg.DisableBufferedIndexedAsyncFlush, "disable-buffered-indexed-async-flush", false, "disable background indexed threshold publish for foreground-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedAsyncFlushMaxQueuedUnits, "buffered-indexed-async-flush-max-queued-units", 0, "max immutable indexed flush units queued for background publish; 0 uses the collection default when async flush is enabled")
-	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: "+treedb.ProfileFlagHelp)
+	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
 	fs.Int64Var(&cfg.ChunkSize, "chunk-size", 0, "override TreeDB pager chunk size in bytes")
@@ -527,10 +527,10 @@ func parseDocumentFormat(raw string) (collections.DocumentFormat, error) {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	if profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench); ok {
+	if profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileBenchUnsafe); ok {
 		return profile, nil
 	}
-	return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+	return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 }
 
 func runFixture(cfg config) (loadSummary, error) {
@@ -808,7 +808,7 @@ func openBackendReadOnly(cfg config, readOnly bool) (*backenddb.DB, func() error
 }
 
 func backendOptions(cfg config, readOnly bool) treedb.Options {
-	opts := treedb.OptionsFor(cfg.Profile, cfg.Dir)
+	opts := treedb.OptionsForBenchmark(cfg.Profile, cfg.Dir)
 	opts.ReadOnly = readOnly
 	opts.IndexOuterLeavesInValueLog = cfg.DataOuterLeavesInValueLog || cfg.IndexOuterLeavesInValueLog
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog

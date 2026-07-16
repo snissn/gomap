@@ -7,8 +7,14 @@ import (
 	"testing"
 )
 
+func snapshotNoWALFastOptions(dir string) Options {
+	opts := OptionsFor(ProfileNoWALFast, dir)
+	opts.FlushThreshold = 1 << 30
+	return opts
+}
+
 func TestSnapshotIterateUsesPinnedView(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -53,7 +59,7 @@ func TestSnapshotIterateUsesPinnedView(t *testing.T) {
 }
 
 func TestSnapshotIterateBackendFastPathUsesPinnedView(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -89,7 +95,7 @@ func TestSnapshotIterateBackendFastPathUsesPinnedView(t *testing.T) {
 }
 
 func TestSnapshotIterateNilCallbackFailsClosed(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -110,7 +116,7 @@ func TestSnapshotIterateNilCallbackFailsClosed(t *testing.T) {
 }
 
 func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -229,7 +235,7 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 }
 
 func TestConditionalTxnSnapshotGetManyViewNormalizesMissingNilKey(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -269,7 +275,7 @@ func TestConditionalTxnSnapshotGetManyViewNormalizesMissingNilKey(t *testing.T) 
 }
 
 func TestConditionalTxnSnapshotRequiresWithSnapshotInitializer(t *testing.T) {
-	cached, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	cached, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
 	}
@@ -286,7 +292,7 @@ func TestConditionalTxnSnapshotRequiresWithSnapshotInitializer(t *testing.T) {
 		t.Fatalf("cached tx Close: %v", err)
 	}
 
-	backend, cleanup, err := OpenBackend(Options{Dir: t.TempDir()})
+	backend, cleanup, err := OpenBackend(OptionsFor(ProfileNoWALFast, t.TempDir()))
 	if err != nil {
 		t.Fatalf("OpenBackend: %v", err)
 	}
@@ -306,7 +312,7 @@ func TestConditionalTxnSnapshotRequiresWithSnapshotInitializer(t *testing.T) {
 }
 
 func TestConditionalTxnRequireReadVersionConflictsAfterSnapshotRead(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -354,7 +360,7 @@ func TestConditionalTxnRequireReadVersionConflictsAfterSnapshotRead(t *testing.T
 }
 
 func TestConditionalTxnRequireReadVersionRejectsPreTxnSnapshotRevision(t *testing.T) {
-	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	d, err := Open(snapshotNoWALFastOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

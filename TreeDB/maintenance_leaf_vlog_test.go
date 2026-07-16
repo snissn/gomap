@@ -350,14 +350,9 @@ func TestValueLogRewriteOnline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 
 func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	dir := t.TempDir()
-	opts := treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -388,7 +383,7 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 		t.Fatalf("expected leaf_vlog files before rewrite")
 	}
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
+	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)
 	}
@@ -422,14 +417,9 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 
 func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline(t *testing.T) {
 	dir := t.TempDir()
-	opts := treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 127, // keep small values inline
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 127 // keep small values inline
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -456,7 +446,7 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenVal
 	metaBefore := readMainMeta(t, dir)
 	requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
+	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)
 	}
@@ -488,18 +478,13 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
 		keyCount = 20000
 		valSize  = 100
 	)
-	opts := treedb.Options{
-		Dir:                        dir,
-		DisableSideStores:          true,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-		ValueLog: treedb.ValueLogOptions{
-			// Disable compression/dict/template so the only value-log reachability
-			// comes from leaf-log child refs (mirrors the original data-loss report).
-			Compression:      treedb.ValueLogCompressionOff,
-			PointerThreshold: 127, // keep values inline (no value-log pointers)
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.DisableSideStores = true
+	opts.IndexOuterLeavesInValueLog = true
+	// Disable compression/dict/template so the only value-log reachability
+	// comes from leaf-log child refs (mirrors the original data-loss report).
+	opts.ValueLog.Compression = treedb.ValueLogCompressionOff
+	opts.ValueLog.PointerThreshold = 127 // keep values inline (no value-log pointers)
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -529,8 +514,13 @@ func TestLeafGenerationGC_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T)
 	// The backend open path must honor persisted format.json so split-log leaf
 	// maintenance still sees live leaf generations after reopen.
 	backend, err := treedbdb.Open(treedbdb.Options{
-		Dir:      dir,
-		ReadOnly: false,
+		Dir:             dir,
+		ReadOnly:        false,
+		Durability:      treedbdb.DurabilityWALOffRelaxed,
+		ResolvedProfile: treedbdb.ProfileNoWALFast,
+		ValueLog: treedbdb.ValueLogOptions{
+			ReadIntegrity: treedbdb.IntegrityVerify,
+		},
 	})
 	if err != nil {
 		t.Fatalf("backend open: %v", err)

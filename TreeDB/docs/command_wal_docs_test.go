@@ -131,10 +131,10 @@ func TestCommandWALCurrentDocsStateDurabilityContract(t *testing.T) {
 		{
 			rel: filepath.Join("docs", "contracts", "DURABILITY.md"),
 			wants: []string{
-				"TreeDB provides explicit durability calls (`SetSync`, `DeleteSync`,",
-				"`*Sync` means command-WAL/value-log sync",
-				"it does not require a full backend `Checkpoint()` per write",
-				"`Checkpoint()` and `Close()` are backend publication/drain boundaries",
+				"`command_wal_durable` ordinary acknowledgements",
+				"`command_wal_relaxed` ordinary acknowledgements",
+				"`no_wal_fast` ordinary acknowledgements",
+				"`Flush` and `FlushAll` are visibility/drain operations",
 				"Current command-WAL directories fail closed on replayable legacy redo",
 			},
 		},
@@ -175,6 +175,31 @@ func TestCommandWALCurrentDocsStateDurabilityContract(t *testing.T) {
 			if !strings.Contains(string(text), want) {
 				t.Fatalf("%s missing current command-WAL contract wording %q", tc.rel, want)
 			}
+		}
+	}
+}
+
+func TestDurabilityProfileChildEvidenceManifestCoversSuccessorInputs(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "durability-profile-child-evidence-3683.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read child evidence manifest: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"#3683 -> #3684",
+		"TestDurabilityProfilePublicEntrypointInventory",
+		"TestProductionProfileLifecycleFrontiersMatchFrozenContract",
+		"TestProductionProfilesForcedPointersDeleteReuseRotationReopen",
+		"TestCrashRecovery_DurabilityTiers",
+		"TestProductionAuthorityExecutableCompositeOmissionMatrix",
+		"TestCommandWALIntentResolvedProfileControlsOrdinaryStagedAppendSync",
+		"TestFlushCoordinatorHardOverloadFallsBackToForegroundAssist",
+		"benchmarks/dgraph_durability",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s missing successor evidence %q", path, want)
 		}
 	}
 }
@@ -247,12 +272,10 @@ func mentionsLegacyWALTerm(line string) bool {
 	for _, term := range []string{
 		"legacy_wal",
 		"wal_on_fast",
-		"no_wal_fast",
 		"profilefast",
 		"profilewalonfast",
 		"profilelegacy",
 		"profiledurable",
-		"profilenowalfast",
 		"durabilitywaloffrelaxed",
 		"durabilitywalonrelaxed",
 		"disablejournal",
@@ -332,7 +355,6 @@ func mentionsLegacyProfileAlias(lower string) bool {
 	for _, alias := range []string{
 		"legacy_wal_relaxed_fast",
 		"legacy_wal_durable",
-		"no_wal_fast",
 		"wal_on_fast",
 		"walonfast",
 		"durable",
@@ -518,6 +540,10 @@ func hasLegacyWALContext(context string) bool {
 		"command-wal durable",
 		"command-wal relaxed",
 		"durable command-wal",
+		"no_wal_fast",
+		"profilenowalfast",
+		"no-wal production",
+		"no wal production",
 	} {
 		if strings.Contains(context, term) {
 			return true

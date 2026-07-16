@@ -185,7 +185,9 @@ func TestCompactCommandReplaysCommandWALBeforeCompaction(t *testing.T) {
 		runCompact(dir, []string{"-rw"})
 	})
 
-	db, err := treedb.Open(treedb.Options{Dir: dir, ReadOnly: true})
+	opts := treedb.Options{Dir: dir, ReadOnly: true}
+	applyPersistedFormatConfig(dir, &opts)
+	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open read-only after compact: %v", err)
 	}
