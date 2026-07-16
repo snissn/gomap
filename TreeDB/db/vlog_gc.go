@@ -209,9 +209,13 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 		}
 	}
-	if !opts.DryRun {
+	{
 		var err error
-		recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+		if opts.DryRun {
+			recoverableRoots, err = db.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx)
+		} else {
+			recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+		}
 		if err != nil {
 			return stats, err
 		}
@@ -227,10 +231,12 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			referenced[fileID] = struct{}{}
 		}
 
-		db.publishPrepareMu.Lock()
-		defer db.publishPrepareMu.Unlock()
-		if !observedOnly && db.currentCommitSeq() != scannedSeq {
-			return stats, ErrRecoverableRootSetStale
+		if !opts.DryRun {
+			db.publishPrepareMu.Lock()
+			defer db.publishPrepareMu.Unlock()
+			if !observedOnly && db.currentCommitSeq() != scannedSeq {
+				return stats, ErrRecoverableRootSetStale
+			}
 		}
 	}
 

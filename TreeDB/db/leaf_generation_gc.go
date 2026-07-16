@@ -108,13 +108,15 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		return stats, false, err
 	}
 	var recoverableRoots *RecoverableRootSet
-	if !opts.DryRun {
+	if opts.DryRun {
+		recoverableRoots, err = db.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx)
+	} else {
 		recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
-		if err != nil {
-			return stats, false, err
-		}
-		defer recoverableRoots.Release()
 	}
+	if err != nil {
+		return stats, false, err
+	}
+	defer recoverableRoots.Release()
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -144,6 +146,9 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 		recoverableLive, err = db.collectRecoverableLeafGenerationIDs(ctx, recoverableRoots, snap.state.LeafGenerations)
 		if err != nil {
 			_ = snap.Close()
+			if opts.DryRun && errors.Is(err, ErrRecoverableRootSetStale) {
+				return stats, true, nil
+			}
 			return stats, false, err
 		}
 	}
@@ -154,7 +159,7 @@ func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGC
 	releaseTeardown()
 
 	if opts.DryRun {
-		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations)
+		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations, recoverableLive, recoverableRoots)
 	}
 	stats, err = db.leafGenerationGCApplyScan(basis, liveGenerations, recoverableLive, recoverableRoots)
 	return stats, false, err
@@ -259,7 +264,7 @@ func (db *DB) leafGenerationGCValidatedManifestClone(basis leafGenerationGCScanB
 	return manifest, true
 }
 
-func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, bool, error) {
+func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, liveGenerations, recoverableGenerations map[uint64]struct{}, recoverableRoots *RecoverableRootSet) (LeafGenerationGCStats, bool, error) {
 	var stats LeafGenerationGCStats
 
 	db.writeMu.Lock()
@@ -282,10 +287,19 @@ func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, li
 		return stats, false, err
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
+	if err := recoverableRoots.Revalidate(); err != nil {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+		if errors.Is(err, ErrRecoverableRootSetStale) {
+			return stats, true, nil
+		}
+		return stats, false, err
+	}
+	recoverableRoots.Release()
 	runLeafGenerationGCExclusivePhaseHook(false)
 	db.writeMu.Unlock()
 
-	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, nil, basis.commitSeq, true)
+	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, recoverableGenerations, basis.commitSeq, true)
 	return decision.stats, false, nil
 }
 

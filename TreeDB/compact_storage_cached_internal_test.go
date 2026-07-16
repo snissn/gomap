@@ -544,6 +544,16 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 	if rewrite.ValueRecordsCopied == 0 {
 		t.Fatalf("rewrite copied no value records: %+v", rewrite)
 	}
+	// The rewrite publishes replacement pointers, but the immediately previous
+	// durable slot may still retain the source segments. Publish one inline-only
+	// successor so both durable slots have crossed the rewrite before requiring
+	// CompactStorage to report zero physical GC debt.
+	if err := db.Set([]byte("raw/rewrite-gc-slot-advance"), []byte("advance")); err != nil {
+		t.Fatalf("publish durable-slot successor: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint durable-slot successor: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close after rewrite: %v", err)
 	}

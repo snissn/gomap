@@ -94,14 +94,30 @@ func (db *DB) CaptureRecoverableRootSet(ctx context.Context) (*RecoverableRootSe
 const recoverableRootSetCaptureAttempts = 8
 
 func (db *DB) captureRecoverableRootSetWithMaintenanceLockHeld(ctx context.Context) (*RecoverableRootSet, error) {
+	return db.captureRecoverableRootSetWithMaintenanceLockHeldMode(ctx, true)
+}
+
+// captureRecoverableRootSetForInspectionWithMaintenanceLockHeld captures the
+// same recovery closure for read-only audit paths. Unlike the destructive
+// capability path, it remains available on read-only or recovery-required
+// handles because callers may only inspect the captured roots and resources.
+func (db *DB) captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx context.Context) (*RecoverableRootSet, error) {
+	return db.captureRecoverableRootSetWithMaintenanceLockHeldMode(ctx, false)
+}
+
+func (db *DB) captureRecoverableRootSetWithMaintenanceLockHeldMode(ctx context.Context, requireMaintenanceReady bool) (*RecoverableRootSet, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := db.CheckStorageMaintenanceReady(); err != nil {
-		return nil, err
+	if requireMaintenanceReady {
+		if err := db.CheckStorageMaintenanceReady(); err != nil {
+			return nil, err
+		}
+	} else if db == nil || db.closing.Load() {
+		return nil, ErrClosed
 	}
 	stable := db.acquireStableSnapshotWithMaintenanceLockHeld()
 	if stable == nil || stable.idx == nil || stable.idx.registry == nil {

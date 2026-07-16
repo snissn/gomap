@@ -778,6 +778,38 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "recoverable", 64, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "recoverable", 64, 'b')
+
+	manifest := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
+	if got, want := gen1.State, leafGenerationStateSealed; got != want {
+		t.Fatalf("older generation state=%q, want %q", got, want)
+	}
+
+	stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC dry-run: %v", err)
+	}
+	if got, want := stats.GenerationsRetiring, 1; got != want {
+		t.Fatalf("GenerationsRetiring=%d, want %d for older recoverable root (stats=%+v)", got, want, stats)
+	}
+	if stats.GenerationsEligible != 0 || stats.BytesEligible != 0 {
+		t.Fatalf("dry-run reported older recoverable generation eligible: %+v", stats)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("dry-run disturbed older recoverable generation: %v", err)
+	}
+}
+
 func TestLeafPageLogLanes_CheckpointReopenPublishesEveryCurrentLane(t *testing.T) {
 	db, leafLog, opts := openLeafLogLaneGCTestDB(t, 0)
 	closed := false

@@ -468,7 +468,7 @@ func TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment(t *testing.
 		}
 	}
 
-	stats, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	dryRun, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,6 +478,14 @@ func TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment(t *testing.
 	publication := database.rootPublication.coordinator.Stats()
 	if publication.VisibleCommitSeq <= durableBefore || publication.DurableCommitSeq != durableBefore {
 		t.Fatalf("post-delete visible/durable frontier=(%d,%d), want visible > durable=%d", publication.VisibleCommitSeq, publication.DurableCommitSeq, durableBefore)
+	}
+	if dryRun.SegmentsReferenced == 0 || dryRun.BytesReferenced == 0 || dryRun.SegmentsEligible != 0 || dryRun.SegmentsPending != 0 {
+		t.Fatalf("dry-run GC did not classify the older-root segment as recoverably referenced: %+v", dryRun)
+	}
+
+	stats, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if stats.SegmentsReferenced == 0 || stats.BytesReferenced == 0 || stats.SegmentsEligible != 0 || stats.SegmentsPending != 0 {
 		t.Fatalf("GC did not classify the older-root segment as recoverably referenced: %+v", stats)
