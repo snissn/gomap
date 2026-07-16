@@ -100,6 +100,7 @@ type Coordinator struct {
 	rejectedCandidates   uint64
 	recoverySets         []*StableResourceSet
 	recoveryDurableRoots []*DurableRootTransaction
+	resourceActivePins   map[ResourceKind]uint64
 	resourcePinHighWater map[ResourceKind]uint64
 	durableRootLineage   DurableRootLineageID
 	durableRootSequence  uint64
@@ -144,6 +145,7 @@ func New(options Options) (*Coordinator, error) {
 		wake: make(chan struct{}, 1), changed: make(chan struct{}), done: make(chan struct{}), wakeReason: WakeNone,
 		visible: options.InitialDurableFrontier, durable: options.InitialDurableFrontier,
 		oldestRecoverable:  options.OldestRecoverableCommitSeq,
+		resourceActivePins: make(map[ResourceKind]uint64), resourcePinHighWater: make(map[ResourceKind]uint64),
 		durableRootLineage: options.DurableRootLineage, durableRootSequence: options.DurableRootSequence,
 	}
 	if c.oldestRecoverable == 0 {
@@ -253,6 +255,9 @@ func (c *Coordinator) enqueueLocked(candidate *PreparedRootCandidate, supersede 
 	entryBytes := candidate.OwnedBytes()
 	c.pending = append(c.pending, pendingEntry{candidate: candidate, bytes: entryBytes})
 	c.pendingBytes = saturatingAdd(c.pendingBytes, entryBytes)
+	if candidateSet := candidate.resourceSet(); candidateSet != nil {
+		candidateSet.adjustActivePinsByKind(c.resourceActivePins, true)
+	}
 	c.observeResourcePinHighWaterLocked()
 	c.visible = candidate.frontier
 	if wasEmpty {
@@ -715,6 +720,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
 			if set := entry.candidate.resourceSet(); set != nil {
+				set.adjustActivePinsByKind(c.resourceActivePins, false)
 				set.releaseFrom(ResourceOwnerCoordinator)
 			}
 		}
@@ -1030,10 +1036,9 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 		return nil
 	}
 	current := union.Stats(c.clock.Now())
-	activePins := activeResourcePinsByKind(sets, c.clock.Now())
 	byKind := make(map[ResourceKind]ResourceKindStats, len(current)+len(c.resourcePinHighWater))
 	for _, stats := range current {
-		stats.ActivePins = activePins[stats.Kind]
+		stats.ActivePins = c.resourceActivePins[stats.Kind]
 		if highWater := c.resourcePinHighWater[stats.Kind]; highWater > stats.PinHighWater {
 			stats.PinHighWater = highWater
 		}
@@ -1041,7 +1046,7 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 	}
 	for kind, highWater := range c.resourcePinHighWater {
 		if _, ok := byKind[kind]; !ok {
-			byKind[kind] = ResourceKindStats{Kind: kind, ActivePins: activePins[kind], PinHighWater: highWater}
+			byKind[kind] = ResourceKindStats{Kind: kind, ActivePins: c.resourceActivePins[kind], PinHighWater: highWater}
 		}
 	}
 	result := make([]ResourceKindStats, 0, len(byKind))
@@ -1053,33 +1058,11 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 }
 
 func (c *Coordinator) observeResourcePinHighWaterLocked() {
-	sets := make([]*StableResourceSet, 0, len(c.pending))
-	for _, entry := range c.pending {
-		if set := entry.candidate.resourceSet(); set != nil {
-			sets = append(sets, set)
-		}
-	}
-	if c.resourcePinHighWater == nil {
-		c.resourcePinHighWater = make(map[ResourceKind]uint64)
-	}
-	for kind, activePins := range activeResourcePinsByKind(sets, c.clock.Now()) {
+	for kind, activePins := range c.resourceActivePins {
 		if activePins > c.resourcePinHighWater[kind] {
 			c.resourcePinHighWater[kind] = activePins
 		}
 	}
-}
-
-// activeResourcePinsByKind deliberately does not union resource identities:
-// each candidate owns a distinct duplicated descriptor until success/recovery,
-// even when publication can coalesce their logical durability obligation.
-func activeResourcePinsByKind(sets []*StableResourceSet, now time.Time) map[ResourceKind]uint64 {
-	active := make(map[ResourceKind]uint64)
-	for _, set := range sets {
-		for _, stats := range set.Stats(now) {
-			active[stats.Kind] = saturatingAdd(active[stats.Kind], stats.ActivePins)
-		}
-	}
-	return active
 }
 
 func (c *Coordinator) captureRecoveryResourcesLocked() {
@@ -1127,6 +1110,7 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 	}
 	c.pending = nil
 	c.pendingBytes = 0
+	clear(c.resourceActivePins)
 	c.firstPendingAt = time.Time{}
 }
 

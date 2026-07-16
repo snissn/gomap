@@ -1178,6 +1178,48 @@ func (set *StableResourceSet) Stats(now time.Time) []ResourceKindStats {
 	return result
 }
 
+// adjustActivePinsByKind updates a coordinator-owned aggregate without
+// allocating per-set statistics. A pending candidate contributes one active
+// pin per live resource entry, matching Stats.ActivePins. The coordinator owns
+// every set while it is pending, so additions at enqueue and subtractions just
+// before release form an exact running total.
+func (set *StableResourceSet) adjustActivePinsByKind(counts map[ResourceKind]uint64, add bool) {
+	if set == nil || counts == nil {
+		return
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	for _, entry := range set.entries {
+		token := activeEntryToken(entry)
+		if token == nil {
+			continue
+		}
+		active := false
+		if len(entry.pins) == 0 {
+			active = entry.token != nil && !entry.token.released.Load()
+		} else {
+			for _, pin := range entry.pins {
+				if pin != nil && !pin.released.Load() {
+					active = true
+					break
+				}
+			}
+		}
+		if !active {
+			continue
+		}
+		if add {
+			counts[token.kind] = saturatingAdd(counts[token.kind], 1)
+			continue
+		}
+		if counts[token.kind] <= 1 {
+			delete(counts, token.kind)
+		} else {
+			counts[token.kind]--
+		}
+	}
+}
+
 func (set *StableResourceSet) validateResolved() error {
 	if set == nil {
 		return nil
