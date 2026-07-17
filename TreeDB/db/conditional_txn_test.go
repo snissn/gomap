@@ -347,7 +347,7 @@ func TestConditionalTxnRejectsDirectRootPublishChangingReadKey(t *testing.T) {
 	}
 
 	newRoot := buildConditionalTxnManualRoot(t, d, "guard", "after")
-	if err := d.Commit(newRoot); err != nil {
+	if err := d.ForceCommit(newRoot); err != nil {
 		t.Fatalf("direct Commit: %v", err)
 	}
 	if err := tx.Set([]byte("target"), []byte("value")); err != nil {
@@ -382,7 +382,7 @@ func TestConditionalTxnAllowsDirectSameRootPublish(t *testing.T) {
 	if state == nil {
 		t.Fatalf("missing DB state")
 	}
-	if err := d.Commit(state.RootPageID); err != nil {
+	if err := d.ForceCommit(state.RootPageID); err != nil {
 		t.Fatalf("same-root Commit: %v", err)
 	}
 	if err := tx.Set([]byte("target"), []byte("value")); err != nil {

@@ -662,7 +662,7 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	// a later root publication overwrites it. Checkpoint alone does not advance
 	// CommitSeq, so recommit the packed root without publishing a new cached
 	// leaf-log dependency before asserting physical reclamation.
-	if err := d.Commit(d.State().RootPageID); err != nil {
+	if err := d.ForceCommit(d.State().RootPageID); err != nil {
 		t.Fatalf("commit packed durable-slot successor: %v", err)
 	}
 

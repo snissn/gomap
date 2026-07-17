@@ -82,6 +82,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
@@ -119,6 +120,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, false, metrics, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

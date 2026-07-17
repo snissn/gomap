@@ -2490,16 +2490,15 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing index")
 	}
-	state := db.state.Load()
-	if state == nil {
-		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
-	}
-
 	db.mu.RLock()
+	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
+	}
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2518,6 +2517,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
 		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -2556,16 +2556,15 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
-	state := db.state.Load()
-	if state == nil {
-		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
-	}
-
 	db.mu.RLock()
+	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
+	}
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2613,6 +2612,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			userRoot, systemRoot, retired, sync, metrics, touched,
 			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+			baseSeq,
 			func() {
 				db.writeMu.Unlock()
 				writeLocked = false
@@ -2647,6 +2647,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
 		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -2972,6 +2973,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 				db.vacuum.RecordEntries(entries)
 			},
 		},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

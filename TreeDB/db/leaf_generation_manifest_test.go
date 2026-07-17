@@ -812,7 +812,7 @@ func TestCommitRejectsClosingDBAfterWriteMuAcquisition(t *testing.T) {
 	db.writeMu.Lock()
 	db.closing.Store(true)
 	commitDone := make(chan error, 1)
-	go func() { commitDone <- db.Commit(rootID) }()
+	go func() { commitDone <- db.ForceCommit(rootID) }()
 	db.writeMu.Unlock()
 
 	select {
