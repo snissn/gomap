@@ -109,11 +109,13 @@ not evidence.
 `TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and run plan.
 The plan freezes the exact repository SHA, PR provenance, replay selector,
 profile, reopen mode, expected outcome, typed error, and complete expected
-recovery state before any case runs. The runner refuses a different SHA,
-tracked worktree changes, and a non-empty output directory. It builds and
-hashes distinct test binaries, executes each case once without retry, compares
-the observed recovery trace with the frozen expectation, and only then writes
-the child manifest.
+recovery state before any case runs. Before checking out evidence, the runner
+also proves that the frozen cases cover every inventory value, retained
+counterexample, negative control, and required interaction. It then refuses a
+different SHA, tracked worktree changes, and a non-empty output directory. It
+builds and hashes distinct test binaries, executes each case once without
+retry, compares the observed recovery trace with the frozen expectation, and
+only then writes the child manifest.
 
 The final pass verifies coverage, artifacts, image namespaces, command logs,
 and the reloaded bundle before reporting success. The performance report
@@ -134,12 +136,11 @@ GOWORK=off go run ./TreeDB/cmd/power_loss_certify \
 
 ## Current fail-closed status
 
-The infrastructure alone does not certify current main. Before #3684 can
-close, the frozen inventory must be committed and its validator must report
-complete modeled-public-reopen ownership at one exact `origin/main` SHA.
-Known current gaps include durable-profile modeled cuts, several public API and
-authoritative-resource interactions, maintenance/cleanup cuts, durable-prefix
-negative controls, and counterexample occurrences currently tolerated by the
-canonical enumerator without ledger identities. These gaps must be assigned
-and corrected; helper-only or clean/process tests must not be relabeled as
-modeled crash evidence.
+The infrastructure and candidate witnesses alone do not certify current main.
+This suite now contains modeled-public-reopen owners for the frozen inventory,
+including all retained counterexamples and negative controls, but #3684 stays
+open until all prerequisite corrections merge and one complete run plan passes
+preflight and executes from a clean exact `origin/main` SHA. The resulting
+bundle, hashes, retry history, performance report, and claim boundary must then
+be published as the certification evidence. Helper-only or clean/process tests
+must not be relabeled as modeled crash evidence.
