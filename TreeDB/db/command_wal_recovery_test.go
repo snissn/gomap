@@ -773,7 +773,7 @@ func TestCommandWALRejectsUnloggedCommit(t *testing.T) {
 	db := openCommandWALDB(t, dir)
 	defer db.Close()
 
-	if err := db.Commit(db.State().RootPageID + 1); !errors.Is(err, ErrCommandWALUnsupported) {
+	if err := db.ForceCommit(db.State().RootPageID + 1); !errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("Commit in command WAL mode error=%v, want ErrCommandWALUnsupported", err)
 	}
 	if err := db.CompactIndex(); !errors.Is(err, ErrCommandWALUnsupported) {
@@ -1562,7 +1562,7 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	_ = b.Close()
 	db.testFailFinalizeCommit.Store(false)
 
-	if err := db.Commit(db.State().RootPageID); !errors.Is(err, ErrRecoveryRequired) {
+	if err := db.ForceCommit(db.State().RootPageID); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("Commit after poison error=%v, want ErrRecoveryRequired", err)
 	}
 	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); !errors.Is(err, ErrRecoveryRequired) {

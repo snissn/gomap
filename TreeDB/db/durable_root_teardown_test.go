@@ -126,7 +126,7 @@ func TestRootPublicationPathsPinTeardownThroughPostWork(t *testing.T) {
 		{
 			name: "Commit",
 			run: func(_ *testing.T, database *DB) error {
-				return database.Commit(database.State().RootPageID)
+				return database.ForceCommit(database.State().RootPageID)
 			},
 		},
 		{

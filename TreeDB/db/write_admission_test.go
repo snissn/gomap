@@ -75,7 +75,7 @@ func TestExclusiveWritersRejectCloseAfterQueuingForWriteMu(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{name: "commit", call: func() error { return db.Commit(userRoot) }},
+		{name: "force-commit", call: func() error { return db.ForceCommit(userRoot) }},
 		{name: "checkpoint", call: db.Checkpoint},
 		{name: "compact-index", call: db.CompactIndex},
 		{name: "compact-storage-plan", call: func() error {

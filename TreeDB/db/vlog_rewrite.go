@@ -2490,16 +2490,15 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing index")
 	}
-	state := db.state.Load()
-	if state == nil {
-		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
-	}
-
 	db.mu.RLock()
+	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
+	}
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2557,16 +2556,15 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
-	state := db.state.Load()
-	if state == nil {
-		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
-	}
-
 	db.mu.RLock()
+	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
+	}
 	if systemRoot == 0 {
 		return nil
 	}

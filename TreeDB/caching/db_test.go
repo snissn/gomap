@@ -2259,7 +2259,7 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	}
 	forceRetainedPruneIdle(cache)
 	cache.waitForRetainedValueLogPrune()
-	if err := backend.Commit(backend.State().RootPageID); err != nil {
+	if err := backend.ForceCommit(backend.State().RootPageID); err != nil {
 		t.Fatalf("commit durable-slot successor: %v", err)
 	}
 	cache.PruneRetainedValueLogsForMaintenance()

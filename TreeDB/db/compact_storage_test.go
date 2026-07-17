@@ -3048,7 +3048,7 @@ func TestCompactStorageLeafPackMultiPassRescansAfterForegroundCommit(t *testing.
 			if state == nil {
 				t.Fatal("missing state before foreground commit")
 			}
-			if err := d.Commit(state.RootPageID); err != nil {
+			if err := d.ForceCommit(state.RootPageID); err != nil {
 				t.Fatalf("foreground same-root commit: %v", err)
 			}
 		case "leaf-generation-pack-2":

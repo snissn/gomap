@@ -3694,12 +3694,22 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 	return post, err
 }
 
-// Commit persists the new root (Sync=true by default).
-// Note: This is usually called internally by Batch.Write or externally if manual root management.
-// If manual, retired pages are unknown? `Commit` signature assumes manual root.
-// If external user calls Commit, they might not know retired pages.
-// We'll accept nil for retired if manual.
-func (db *DB) Commit(newRootID uint64) error {
+// CommitAtState synchronously persists a manually constructed user root only
+// when the visible commit sequence and roots still match the caller's basis.
+// Callers must capture basis before constructing newRootID.
+func (db *DB) CommitAtState(newRootID uint64, basis StateToken) error {
+	return db.commitManualRoot(newRootID, basis, true)
+}
+
+// ForceCommit synchronously force-sets a manually constructed user root. It
+// intentionally does not detect publications that occurred while newRootID was
+// constructed. Prefer CommitAtState unless last-writer-wins replacement is the
+// explicit operation.
+func (db *DB) ForceCommit(newRootID uint64) error {
+	return db.commitManualRoot(newRootID, StateToken{}, false)
+}
+
+func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -3708,8 +3718,6 @@ func (db *DB) Commit(newRootID uint64) error {
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
-	// Public Commit assumes the caller has built a new tree.
-	// We need to serialize with other writers.
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -3721,16 +3729,20 @@ func (db *DB) Commit(newRootID uint64) error {
 		return err
 	}
 
-	// Since we are committing a root provided by caller, we assume they based it on current state?
-	// If caller is external, they might have read old state.
-	// But Commit(newRoot) implies "Force Set Root".
-	// We just commit it.
-
-	// Need sysRootID.
 	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
 	sysRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if conditional && (baseSeq != basis.CommitSeq || userRoot != basis.RootPageID || sysRoot != basis.SystemRootPageID) {
+		return fmt.Errorf(
+			"%w: manual root basis commit=%d/%d user_root=%d/%d system_root=%d/%d",
+			ErrConcurrentModification,
+			basis.CommitSeq, baseSeq,
+			basis.RootPageID, userRoot,
+			basis.SystemRootPageID, sysRoot,
+		)
+	}
 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
@@ -3751,9 +3763,9 @@ func (db *DB) Commit(newRootID uint64) error {
 
 // Checkpoint forces a durable boundary for previously-published backend state.
 //
-// Unlike Commit, this does not publish a new root or advance CommitSeq. It is
-// intended for callers that already made writes visible with relaxed durability
-// and now need those writes durable on disk.
+// Unlike CommitAtState or ForceCommit, this does not publish a new root or
+// advance CommitSeq. It is intended for callers that already made writes
+// visible with relaxed durability and now need those writes durable on disk.
 func (db *DB) Checkpoint() error {
 	return db.checkpoint(false)
 }
