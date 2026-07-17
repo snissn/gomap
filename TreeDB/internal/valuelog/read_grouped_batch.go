@@ -55,7 +55,7 @@ func (f *File) readUnsafeAppendGroupedRecordBatch(ptrs []page.ValuePtr, verifyCR
 	if err := f.ensureCurrentWritableReadableFor(first); err != nil {
 		return true, err
 	}
-	if ok, err := f.readViaMmapAppendGroupedRecordBatch(ptrs, dst); ok {
+	if ok, err := f.readViaMmapAppendGroupedRecordBatch(ptrs, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return true, err
 	}
@@ -64,10 +64,10 @@ func (f *File) readUnsafeAppendGroupedRecordBatch(ptrs []page.ValuePtr, verifyCR
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
 	f.mmapReadFallbackReadAt.Add(1)
-	return true, f.readAtAppendGroupedRecordBatch(ptrs, dst)
+	return true, f.readAtAppendGroupedRecordBatch(ptrs, verifyCRC, dst)
 }
 
-func (f *File) readViaMmapAppendGroupedRecordBatch(ptrs []page.ValuePtr, dst [][]byte) (bool, error) {
+func (f *File) readViaMmapAppendGroupedRecordBatch(ptrs []page.ValuePtr, verifyCRC bool, dst [][]byte) (bool, error) {
 	data, _ := f.mmapData.Load().([]byte)
 	if data == nil {
 		f.mmapReadMissNoMapping.Add(1)
@@ -104,10 +104,10 @@ func (f *File) readViaMmapAppendGroupedRecordBatch(ptrs []page.ValuePtr, dst [][
 		}
 	}
 	payload := data[start+HeaderSize : end]
-	return true, f.appendGroupedRecordBatchFromRecord(header, payload, ptrs, true, dst)
+	return true, f.appendGroupedRecordBatchFromRecord(header, payload, ptrs, verifyCRC, dst)
 }
 
-func (f *File) readAtAppendGroupedRecordBatch(ptrs []page.ValuePtr, dst [][]byte) error {
+func (f *File) readAtAppendGroupedRecordBatch(ptrs []page.ValuePtr, verifyCRC bool, dst [][]byte) error {
 	ptr := ptrs[0]
 	if ptr.Offset < valueLogRecordCRCPrefixBytes {
 		return ErrCorrupt
@@ -138,7 +138,7 @@ func (f *File) readAtAppendGroupedRecordBatch(ptrs []page.ValuePtr, dst [][]byte
 		putDecodeScratch(payloadScratch)
 		return err
 	}
-	err := f.appendGroupedRecordBatchFromRecord(header[:], payload, ptrs, true, dst)
+	err := f.appendGroupedRecordBatchFromRecord(header[:], payload, ptrs, verifyCRC, dst)
 	putDecodeScratch(payloadScratch)
 	return err
 }
