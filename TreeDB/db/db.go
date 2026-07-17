@@ -3718,6 +3718,26 @@ func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional b
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
+	for {
+		post, err := db.commitManualRootAttempt(newRootID, basis, conditional)
+		if err == nil {
+			db.finalizeCommitPostWork(post)
+			return nil
+		}
+		if !errors.Is(err, errDurableRootCandidateStale) {
+			return err
+		}
+		if conditional {
+			return fmt.Errorf(
+				"%w: manual root basis advanced during publication from commit=%d",
+				ErrConcurrentModification,
+				basis.CommitSeq,
+			)
+		}
+	}
+}
+
+func (db *DB) commitManualRootAttempt(newRootID uint64, basis StateToken, conditional bool) (finalizeCommitPost, error) {
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -3726,7 +3746,7 @@ func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional b
 		}
 	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return err
+		return finalizeCommitPost{}, err
 	}
 
 	db.mu.RLock()
@@ -3735,7 +3755,7 @@ func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional b
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if conditional && (baseSeq != basis.CommitSeq || userRoot != basis.RootPageID || sysRoot != basis.SystemRootPageID) {
-		return fmt.Errorf(
+		return finalizeCommitPost{}, fmt.Errorf(
 			"%w: manual root basis commit=%d/%d user_root=%d/%d system_root=%d/%d",
 			ErrConcurrentModification,
 			basis.CommitSeq, baseSeq,
@@ -3744,7 +3764,7 @@ func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional b
 		)
 	}
 
-	post, err := db.finalizeCommitReleasingRootSerialization(
+	return db.finalizeCommitReleasingRootSerialization(
 		newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
 		finalizeCommitOptions{closeTeardownPinned: true},
 		baseSeq,
@@ -3754,18 +3774,6 @@ func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional b
 		},
 		nil,
 	)
-	if err != nil {
-		if conditional && errors.Is(err, errDurableRootCandidateStale) {
-			return fmt.Errorf(
-				"%w: manual root basis advanced during publication from commit=%d",
-				ErrConcurrentModification,
-				basis.CommitSeq,
-			)
-		}
-		return err
-	}
-	db.finalizeCommitPostWork(post)
-	return nil
 }
 
 // Checkpoint forces a durable boundary for previously-published backend state.
