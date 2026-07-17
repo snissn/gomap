@@ -538,6 +538,11 @@ func TestPowerLossCertificationMaintenanceUnlinkPublicReopen(t *testing.T) {
 	if profileName != "no_wal_fast" {
 		t.Fatalf("maintenance-unlink witness requires no_wal_fast, got %q", profileName)
 	}
+	// This witness exercises backend value-log maintenance directly. The public
+	// profile may enable outer leaves in the cached leaf log, but OpenBackend has
+	// no leaf-log manager; keep the fixture on inline index leaves so the modeled
+	// cut belongs solely to the value-log unlink and namespace-sync boundary.
+	opts.IndexOuterLeavesInValueLog = false
 	bootstrap, closeBootstrap, err := treedb.OpenBackend(opts)
 	if err != nil {
 		t.Fatal(err)
