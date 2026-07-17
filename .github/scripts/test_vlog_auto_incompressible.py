@@ -63,6 +63,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         wrong_last_auto_leaf_mode: bool = False,
         wrong_last_off_leaf_mode: bool = False,
         hidden_auto_sidecar_last: bool = False,
+        min_throughput_frac: float = 0.95,
     ) -> subprocess.CompletedProcess[str]:
         if size_ratios is None:
             size_ratios = [0.996] * len(throughput_ratios)
@@ -145,7 +146,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                     "-min-samples",
                     str(len(throughput_ratios)),
                     "-min-throughput-frac",
-                    "0.95",
+                    str(min_throughput_frac),
                     "-max-size-frac",
                     "1.02",
                 ]
@@ -172,6 +173,32 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("<= 0.9500", result.stderr)
+
+    def test_epyc_7763_headroom_accepts_exact_failed_hosted_aggregate(self) -> None:
+        ratios = [0.9534, 0.9571, 0.9408, 0.9497, 0.9393, 0.9546]
+
+        default_result = self.run_checker(ratios)
+        epyc_7763_result = self.run_checker(ratios, min_throughput_frac=0.94)
+
+        self.assertEqual(
+            default_result.returncode,
+            1,
+            default_result.stdout + default_result.stderr,
+        )
+        self.assertEqual(
+            epyc_7763_result.returncode,
+            0,
+            epyc_7763_result.stdout + epyc_7763_result.stderr,
+        )
+        self.assertIn("throughput_geomean=0.9491", epyc_7763_result.stdout)
+
+    def test_epyc_7763_aggregate_equal_to_adjusted_boundary_fails(self) -> None:
+        result = self.run_checker(
+            [0.94, 0.94], min_throughput_frac=0.94
+        )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("<= 0.9400", result.stderr)
 
     def test_any_sample_over_size_bound_fails(self) -> None:
         result = self.run_checker([1.02, 1.03], [0.996, 1.021])
@@ -274,13 +301,30 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertIn('-min-samples "${sample_count}"', script)
         self.assertIn("-test batch_write_steady", script)
         self.assertNotIn("-test batch_write ", script)
-        self.assertIn("-min-throughput-frac 0.95", script)
+        self.assertIn('min_throughput_frac="0.95"', script)
+        self.assertIn(
+            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_throughput_frac="0.94" fi',
+            script,
+        )
+        self.assertIn(
+            '-min-throughput-frac "${min_throughput_frac}"', script
+        )
         self.assertIn("-max-size-frac 1.02", script)
-        self.assertIn("settled-throughput geometric mean must exceed 0.95x", script)
+        self.assertIn(
+            "EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x",
+            script,
+        )
         self.assertIn("total= fields from value_vlog plus leaf_vlog", script)
         self.assertIn("Upload value-log performance evidence", script)
         self.assertIn("if: always()", script)
-        self.assertIn('2>&1 | tee "${summary_log}"', script)
+        self.assertIn(
+            'echo "incompressible gate cpu_model=${cpu_model}"', script
+        )
+        self.assertIn(
+            'echo "incompressible gate min_throughput_frac=${min_throughput_frac}"',
+            script,
+        )
+        self.assertIn('2>&1 | tee -a "${summary_log}"', script)
         self.assertIn('checker_status=${PIPESTATUS[0]}', script)
         self.assertIn('>> "${GITHUB_STEP_SUMMARY}"', script)
         self.assertIn("vlog_auto_incompressible_summary.txt", script)

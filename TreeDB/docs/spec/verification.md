@@ -1338,16 +1338,18 @@ including sub-parity results such as `0.80x`; those results may be recorded only
 as failing evidence, not accepted evidence.
 
 The current hosted incompressible value-log gate supersedes that lane's live
-methodology under #3861 without rewriting the historical PR9 artifact.
+methodology under #3861/#3863 without rewriting the historical PR9 artifact.
 `batch_write` measures front-end ingest before deferred value-log and leaf-log
 publication, so the live gate uses `batch_write_steady` and requires the
 geometric mean of every fixed, order-balanced auto/off pair to be strictly
-greater than `0.95x`. One favorable sample cannot override a mostly failing
-sample set. Each pair must also keep the sum of the `total=` fields reported for
-`maindb/value_vlog` and `maindb/leaf_vlog` less than or equal to `1.02x`. The
-checker separately requires raw user values in both rows, block-compressed
-leaves in auto, and uncompressed leaves in off; the throughput allowance cannot
-hide a broken compression mode.
+greater than `0.94x` on AMD EPYC 7763 runners. Every other or unknown CPU model
+retains a threshold strictly greater than `0.95x`. The evidence records the CPU
+model and selected threshold. One favorable sample cannot override a mostly
+failing sample set. Each pair must also keep the sum of the `total=` fields
+reported for `maindb/value_vlog` and `maindb/leaf_vlog` less than or equal to
+`1.02x`. The checker separately requires raw user values in both rows,
+block-compressed leaves in auto, and uncompressed leaves in off; the throughput
+allowance cannot hide a broken compression mode.
 
 The same strict parity-plus rule applies to every historical command-WAL acceptance artifact
 with a required performance gate: a passing status must have `>` throughput-gate

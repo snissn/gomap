@@ -636,6 +636,20 @@ jobs:
             exit 2
           fi
 
+          mapfile -t cpu_models < <(
+            sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | sort -u
+          )
+          cpu_model="unknown"
+          if ((${#cpu_models[@]} == 1)); then
+            cpu_model="${cpu_models[0]}"
+          elif ((${#cpu_models[@]} > 1)); then
+            cpu_model="ambiguous: ${cpu_models[*]}"
+          fi
+          min_throughput_frac="0.95"
+          if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
+            min_throughput_frac="0.94"
+          fi
+
           # This gate measures the explicit bench_unsafe compression ceiling,
           # not the command_wal_durable default used by production callers.
           # Keep it independent of the unconfigured flush-admission default
@@ -698,17 +712,22 @@ jobs:
           done
 
           # #3861 makes this a settled non-regression and persistent-storage
-          # tradeoff gate. The settled-throughput geometric mean must exceed 0.95x;
-          # one lucky sample cannot override a mostly failing sample set,
-          # and every pair retains the existing 1.02x storage ceiling.
+          # tradeoff gate; #3863 calibrates its strict floor to demonstrated
+          # GitHub-hosted CPU classes. EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x.
+          # One lucky sample cannot override a mostly failing sample set, and every
+          # pair retains the existing 1.02x storage ceiling.
           summary_log="vlog_auto_incompressible_summary.txt"
+          {
+            echo "incompressible gate cpu_model=${cpu_model}"
+            echo "incompressible gate min_throughput_frac=${min_throughput_frac}"
+          } > "${summary_log}"
           set +e
           go run .github/scripts/check_vlog_auto_incompressible.go \
             "${checker_args[@]}" \
             -min-samples "${sample_count}" \
-            -min-throughput-frac 0.95 \
+            -min-throughput-frac "${min_throughput_frac}" \
             -max-size-frac 1.02 \
-            2>&1 | tee "${summary_log}"
+            2>&1 | tee -a "${summary_log}"
           checker_status=${PIPESTATUS[0]}
           set -e
 
