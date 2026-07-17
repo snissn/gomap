@@ -83,6 +83,41 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
                     rf'\"\${tests_file}\"',
                 )
 
+    def test_collections_runnables_are_split_across_core_shards(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        test_job = workflow_job(workflow, "test")
+        core_case = re.search(
+            r"^            windows-core\)\n(?P<body>.*?)(?=^              ;;$)",
+            test_job,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(core_case, "missing windows-core shell case")
+        body = core_case.group("body")
+
+        self.assertIn(
+            "grep -v '^github.com/snissn/gomap/TreeDB/collections$'",
+            body,
+            "collections must not remain an indivisible package-modulo assignment",
+        )
+        self.assertIn(
+            r"go test ./collections -list '^(Test|Example|Fuzz).*' | tr -d '\r' | "
+            r"grep -E '^(Test|Example|Fuzz)' > "
+            '"$collections_all_file"',
+            body,
+            "collections enumeration must retain ordinary fuzz-seed coverage",
+        )
+        self.assertRegex(
+            body,
+            r'awk -v idx="\$package_shard_index" -v n="\$package_shard_count" .* '
+            r'"\$collections_all_file" > "\$collections_test_file"',
+        )
+        self.assertIn(
+            'run_named_test_file ./collections "TreeDB/collections test '
+            'shard=${package_shard_index}/${package_shard_count}" '
+            '"$collections_test_file" treedb-test.jsonl',
+            body,
+        )
+
     def test_caching_shards_keep_their_existing_bounded_caps(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
