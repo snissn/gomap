@@ -324,6 +324,36 @@ func TestStableAndVolatileBytesAreIndependent(t *testing.T) {
 	}
 }
 
+func TestMaterializeVolatileWritesProcessVisibleImage(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write("index.db", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Create("new/asset", []byte("dirty")); err != nil {
+		t.Fatal(err)
+	}
+	dirtyDir := t.TempDir()
+	if err := model.MaterializeVolatile(dirtyDir); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{"index.db": "new", "new/asset": "dirty"} {
+		got, err := os.ReadFile(filepath.Join(dirtyDir, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("volatile %s=%q want=%q", path, got, want)
+		}
+	}
+}
+
 func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
 	model := newModel()
 	if err := model.Create("a/b/value", []byte("stable")); err != nil {

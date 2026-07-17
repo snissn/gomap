@@ -3,8 +3,10 @@
 package powerlossreopen
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -26,14 +28,83 @@ type Result struct {
 // modeled identity scope and removes the materialized image whether Open
 // accepts or rejects it.
 func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
+	evidence, err := powerlossoracle.BeginEvidenceFromEnv(model)
+	if err != nil {
+		return Result{}, nil, nil, err
+	}
+	if evidence != nil {
+		result, db, closeFn, err := openAt(evidence.RecoveryInputDir(), model, opts, readOnly, false)
+		if err != nil {
+			return Result{}, nil, nil, err
+		}
+		recovery := struct {
+			SchemaVersion      string `json:"schema_version"`
+			PublicAPI          string `json:"public_api"`
+			Dir                string `json:"dir"`
+			PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
+			InputTreeSHA256    string `json:"input_image_tree_sha256"`
+			StableFingerprint  string `json:"stable_fingerprint"`
+			ReadOnly           bool   `json:"read_only"`
+			Rejected           bool   `json:"rejected"`
+			ErrorType          string `json:"error_type"`
+			Error              string `json:"error"`
+			CommitSeq          uint64 `json:"commit_seq"`
+			AppliedLSN         uint64 `json:"applied_lsn"`
+		}{
+			SchemaVersion:      "treedb-power-loss-recovery-trace/v1",
+			PublicAPI:          "treedb.Open",
+			Dir:                "recovery-input",
+			PreOpenSnapshotDir: "recovery-preopen",
+			InputTreeSHA256:    evidence.StableImageTreeSHA256(),
+			StableFingerprint:  evidence.StableFingerprint(),
+			ReadOnly:           result.ReadOnly,
+			Rejected:           result.Rejected,
+			CommitSeq:          result.CommitSeq,
+			AppliedLSN:         result.AppliedLSN,
+		}
+		if result.Err != nil {
+			recovery.ErrorType = fmt.Sprintf("%T", result.Err)
+			recovery.Error = result.Err.Error()
+		}
+		if err := evidence.RecordRecovery(recovery); err != nil {
+			_ = closeFn()
+			return Result{}, nil, nil, err
+		}
+		return result, db, closeFn, nil
+	}
 	dir, err := os.MkdirTemp("", "treedb-powerloss-stable-")
 	if err != nil {
 		return Result{}, nil, nil, err
 	}
-	cleanup := func() error { return os.RemoveAll(dir) }
-	if err := model.MaterializeStable(dir); err != nil {
-		_ = cleanup()
+	return stableAt(dir, model, opts, readOnly, true)
+}
+
+// StableAt materializes the stable-only crash image at a caller-owned path and
+// reopens it through the normal public API. The close callback releases the DB
+// and modeled identity scope but deliberately preserves dir for evidence.
+func StableAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
+	if err := requireEmptyDestination(dir); err != nil {
 		return Result{}, nil, nil, err
+	}
+	return stableAt(dir, model, opts, readOnly, false)
+}
+
+func stableAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
+	if err := model.MaterializeStable(dir); err != nil {
+		if removeOnClose {
+			_ = os.RemoveAll(dir)
+		}
+		return Result{}, nil, nil, err
+	}
+	return openAt(dir, model, opts, readOnly, removeOnClose)
+}
+
+func openAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
+	cleanup := func() error {
+		if removeOnClose {
+			return os.RemoveAll(dir)
+		}
+		return nil
 	}
 	releaseIdentities, err := model.InstallStableIdentityOverrides(dir)
 	if err != nil {
@@ -67,4 +138,35 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		return result, nil, nil, fmt.Errorf("powerlossreopen: public Open returned nil DB and nil error")
 	}
 	return result, db, closeFn, nil
+}
+
+func requireEmptyDestination(dir string) error {
+	if !filepath.IsAbs(dir) {
+		absolute, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("powerlossreopen: resolve destination %q: %w", dir, err)
+		}
+		dir = absolute
+	}
+	if err := powerlossoracle.EnsureNoSymlinkComponents(dir); err != nil {
+		return fmt.Errorf("powerlossreopen: inspect destination %q: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("powerlossreopen: inspect destination %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("powerlossreopen: destination %q is not a directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("powerlossreopen: inspect destination %q: %w", dir, err)
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("powerlossreopen: destination %q is not empty", dir)
+	}
+	return nil
 }
