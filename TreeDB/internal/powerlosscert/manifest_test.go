@@ -97,6 +97,17 @@ func TestValidateBundleAcceptsZeroBasedFirstCutOccurrence(t *testing.T) {
 	}
 }
 
+func TestValidateBundleRequiresModeledReopenMode(t *testing.T) {
+	inventory := testRiskInventory()
+	for _, mode := range []string{"", "reader-ish"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = mode
+		if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), powerLossReopenModeEnv) {
+			t.Fatalf("ValidateBundle reopen mode=%q error=%v", mode, err)
+		}
+	}
+}
+
 func TestValidateChildManifestScopesCutMetadataToModeledCrashes(t *testing.T) {
 	manifest := testChildManifest("witness-a")
 	for _, tier := range []EvidenceTier{EvidenceTierCleanProcess, EvidenceTierBlockDevice} {
@@ -326,6 +337,7 @@ func testChildManifest(witnessID string) ChildManifest {
 					"TREEDB_POWERLOSS_SEED":             "1",
 					"TREEDB_POWERLOSS_EVIDENCE_DIR":     "artifacts/witness-a",
 					"TREEDB_POWERLOSS_EXPECT_CUT_POINT": "after-meta-write",
+					"TREEDB_POWERLOSS_REOPEN_MODE":      "read-only",
 				},
 			},
 			CutExercised:  true,

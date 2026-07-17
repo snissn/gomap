@@ -28,7 +28,7 @@ type Result struct {
 // modeled identity scope and removes the materialized image whether Open
 // accepts or rejects it.
 func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
-	evidence, err := powerlossoracle.BeginEvidenceFromEnv(model)
+	evidence, err := powerlossoracle.BeginEvidenceFromEnv(model, readOnly)
 	if err != nil {
 		return Result{}, nil, nil, err
 	}

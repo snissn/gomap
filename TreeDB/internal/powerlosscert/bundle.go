@@ -325,6 +325,17 @@ func verifyModeledEvidence(root string, manifest ChildManifest, witness Witness)
 	if err != nil {
 		return err
 	}
+	wantReadOnly := false
+	switch mode := witness.Command.Env[powerLossReopenModeEnv]; mode {
+	case powerLossReopenModeReadOnly:
+		wantReadOnly = true
+	case powerLossReopenModeReadWrite:
+	default:
+		return fmt.Errorf("powerlosscert: manifest %q witness %q command env %s=%q is invalid", manifest.ManifestID, witness.ID, powerLossReopenModeEnv, mode)
+	}
+	if recovery.ReadOnly != wantReadOnly {
+		return fmt.Errorf("powerlosscert: manifest %q witness %q recovery read_only=%t does not match command reopen mode %q", manifest.ManifestID, witness.ID, recovery.ReadOnly, witness.Command.Env[powerLossReopenModeEnv])
+	}
 	if _, err := verifyImageDirectory(root, evidenceDir, manifest.ManifestID, witness.ID, recovery.PreOpenSnapshotDir, stableTree); err != nil {
 		return err
 	}

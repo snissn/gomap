@@ -125,6 +125,29 @@ func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.
 	}
 }
 
+func TestVerifyArtifactsBindsRecoveryTraceToReopenMode(t *testing.T) {
+	for _, mode := range []string{powerLossReopenModeReadOnly, powerLossReopenModeReadWrite} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = mode
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err != nil {
+				t.Fatalf("VerifyArtifacts valid reopen mode: %v", err)
+			}
+
+			witness := &manifest.Witnesses[0]
+			rewriteArtifactJSONField(t, root, witness, ArtifactKindRecoveryTrace, "read_only", mode != powerLossReopenModeReadOnly)
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "does not match command reopen mode") {
+				t.Fatalf("VerifyArtifacts mismatched reopen mode error=%v", err)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactsRequiresTraceToEndAtDeclaredCutOccurrence(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
@@ -255,11 +278,11 @@ func TestVerifyArtifactsRejectsAcceptedOutcomeForRejectedOpen(t *testing.T) {
 func TestVerifyArtifactsRejectsTamperedWritableRecoveryPreOpenSnapshot(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
+	manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = powerLossReopenModeReadWrite
 	for index := range manifest.TestBinaries {
 		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
 	}
 	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
-	rewriteArtifactJSONField(t, root, &manifest.Witnesses[0], ArtifactKindRecoveryTrace, "read_only", false)
 	snapshot := filepath.Join(root, "artifacts", "witness-a", "recovery-preopen", "index.db")
 	if err := os.WriteFile(snapshot, []byte("not the modeled input"), 0o600); err != nil {
 		t.Fatal(err)
@@ -436,6 +459,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		}
 	}
 	stableArtifact := artifactByKind(t, *witness, ArtifactKindStableImageTree)
+	readOnly := witness.Command.Env[powerLossReopenModeEnv] == powerLossReopenModeReadOnly
 	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recoveryTraceArtifact{
 		SchemaVersion:      recoveryTraceSchemaVersion,
 		PublicAPI:          "treedb.Open",
@@ -443,7 +467,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		PreOpenSnapshotDir: "recovery-preopen",
 		InputTreeSHA256:    stableArtifact.SHA256,
 		StableFingerprint:  stableFingerprint,
-		ReadOnly:           true,
+		ReadOnly:           readOnly,
 	})
 	contents[ArtifactKindLog] = mustJSON(t, commandLogArtifact{
 		SchemaVersion: commandLogSchemaVersion,

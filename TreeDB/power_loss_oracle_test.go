@@ -25,6 +25,105 @@ import (
 
 const powerLossOracleSeed = uint64(3674)
 
+const powerLossOracleEnumeratorVariantID = "public-command-wal-relaxed-stable-image"
+
+type powerLossOracleReplaySelection struct {
+	cutPoint   powerlossoracle.CutPoint
+	occurrence int
+	readOnly   *bool
+}
+
+func powerLossOracleReplaySelectionFromEnv() (powerLossOracleReplaySelection, error) {
+	selector, err := powerlossoracle.ReplaySelectorFromEnv()
+	if err != nil {
+		return powerLossOracleReplaySelection{}, err
+	}
+	request, err := powerlossoracle.EvidenceRequestFromEnv()
+	if err != nil {
+		return powerLossOracleReplaySelection{}, err
+	}
+	if selector == (powerlossoracle.ReplaySelector{}) {
+		if request.Enabled() {
+			return powerLossOracleReplaySelection{}, errors.New("evidence request has no replay selector")
+		}
+		return powerLossOracleReplaySelection{}, nil
+	}
+	if selector.VariantID != powerLossOracleEnumeratorVariantID {
+		return powerLossOracleReplaySelection{}, fmt.Errorf("replay variant=%q want=%q", selector.VariantID, powerLossOracleEnumeratorVariantID)
+	}
+	wantCutPrefix := "cut/" + powerLossOracleEnumeratorVariantID + "/"
+	if !strings.HasPrefix(selector.CutID, wantCutPrefix) {
+		return powerLossOracleReplaySelection{}, fmt.Errorf("replay cut id=%q must start with %q", selector.CutID, wantCutPrefix)
+	}
+	if selector.Seed != powerLossOracleSeed {
+		return powerLossOracleReplaySelection{}, fmt.Errorf("replay seed=%d want=%d", selector.Seed, powerLossOracleSeed)
+	}
+	cutPoint, occurrence, err := powerlossoracle.ParseReplayCutAddress(selector.CutID)
+	if err != nil {
+		return powerLossOracleReplaySelection{}, err
+	}
+	canonical := false
+	for _, cut := range powerlossoracle.CutPoints {
+		if string(cut) == cutPoint {
+			canonical = true
+			break
+		}
+	}
+	if !canonical {
+		return powerLossOracleReplaySelection{}, fmt.Errorf("replay cut point %q is not canonical", cutPoint)
+	}
+	selection := powerLossOracleReplaySelection{cutPoint: powerlossoracle.CutPoint(cutPoint), occurrence: occurrence}
+	if request.Enabled() {
+		readOnly := request.ReadOnly()
+		selection.readOnly = &readOnly
+	}
+	return selection, nil
+}
+
+func (selection powerLossOracleReplaySelection) enabled() bool {
+	return selection.cutPoint != ""
+}
+
+func TestPowerLossOracleReplaySelectionFromEnv(t *testing.T) {
+	t.Setenv(powerlossoracle.EnvReplayCut, "cut/"+powerLossOracleEnumeratorVariantID+"/after-dependency-file-sync/003")
+	t.Setenv(powerlossoracle.EnvReplayVariant, powerLossOracleEnumeratorVariantID)
+	t.Setenv(powerlossoracle.EnvReplaySeed, strconv.FormatUint(powerLossOracleSeed, 10))
+
+	selection, err := powerLossOracleReplaySelectionFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.cutPoint != powerlossoracle.AfterDependencyFileSync || selection.occurrence != 3 || selection.readOnly != nil {
+		t.Fatalf("selector-only selection=%+v", selection)
+	}
+	for _, mode := range []string{powerlossoracle.EvidenceReopenReadWrite, powerlossoracle.EvidenceReopenReadOnly} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv(powerlossoracle.EnvEvidenceDir, filepath.Join(t.TempDir(), "evidence"))
+			t.Setenv(powerlossoracle.EnvEvidenceCutPoint, string(powerlossoracle.AfterDependencyFileSync))
+			t.Setenv(powerlossoracle.EnvEvidenceReopenMode, mode)
+			selection, err := powerLossOracleReplaySelectionFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selection.readOnly == nil || *selection.readOnly != (mode == powerlossoracle.EvidenceReopenReadOnly) {
+				t.Fatalf("mode=%q selection=%+v", mode, selection)
+			}
+		})
+	}
+	t.Run("seed-mismatch", func(t *testing.T) {
+		t.Setenv(powerlossoracle.EnvReplaySeed, "3675")
+		if _, err := powerLossOracleReplaySelectionFromEnv(); err == nil || !strings.Contains(err.Error(), "replay seed") {
+			t.Fatalf("seed mismatch error=%v", err)
+		}
+	})
+	t.Run("cut-family-mismatch", func(t *testing.T) {
+		t.Setenv(powerlossoracle.EnvReplayCut, "cut/not-the-canonical-fixture/after-dependency-file-sync/003")
+		if _, err := powerLossOracleReplaySelectionFromEnv(); err == nil || !strings.Contains(err.Error(), "must start") {
+			t.Fatalf("cut family mismatch error=%v", err)
+		}
+	})
+}
+
 var retainedPowerLossCounterexamples = []string{
 	"new-meta-before-index-closure",
 	"new-meta-before-value-log-closure",
@@ -171,6 +270,10 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 		commandFrames          []observedPowerLossCommandFrame
 		durableAcknowledged    bool
 		durableAcknowledgement uint64
+	}
+	selection, err := powerLossOracleReplaySelectionFromEnv()
+	if err != nil {
+		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
@@ -348,6 +451,9 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	}
 	for _, cut := range powerlossoracle.CutPoints {
 		cut := cut
+		if selection.enabled() && cut != selection.cutPoint {
+			continue
+		}
 		t.Run(string(cut), func(t *testing.T) {
 			t.Logf("power-loss-oracle seed=%d cut=%s occurrences=%d", powerLossOracleSeed, cut, len(events[cut]))
 			cutSnapshots := snapshots[cut]
@@ -355,9 +461,22 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 				t.Fatalf("seed=%d cut=%s not emitted by actual TreeDB workload", powerLossOracleSeed, cut)
 			}
 			for occurrence, snapshot := range cutSnapshots {
+				if selection.enabled() && occurrence != selection.occurrence {
+					continue
+				}
 				t.Logf("cut occurrence=%d phase=%s resource=%s path=%s lsn=%d", occurrence, snapshot.phase, snapshot.event.Resource, snapshot.event.Path, snapshot.event.LSN)
-				validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, false, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
-				validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, true, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
+				if selection.readOnly == nil || !*selection.readOnly {
+					validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, false, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
+				}
+				if selection.readOnly == nil || *selection.readOnly {
+					validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, true, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
+				}
+				if selection.enabled() {
+					return
+				}
+			}
+			if selection.enabled() {
+				t.Fatalf("selected cut occurrence=%d not emitted; occurrences=%d", selection.occurrence, len(cutSnapshots))
 			}
 		})
 	}

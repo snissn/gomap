@@ -80,6 +80,7 @@ func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	evidenceDir := filepath.Join(canonicalTempDir(t), "evidence")
 	t.Setenv(powerlossoracle.EnvEvidenceDir, evidenceDir)
 	t.Setenv(powerlossoracle.EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(powerlossoracle.EnvEvidenceReopenMode, powerlossoracle.EvidenceReopenReadWrite)
 	t.Setenv(powerlossoracle.EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
 	t.Setenv(powerlossoracle.EnvReplayVariant, "variant-a")
 	t.Setenv(powerlossoracle.EnvReplaySeed, "1")
@@ -125,6 +126,9 @@ func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(evidenceDir, "recovery-preopen", "recovery", "mutation")); !os.IsNotExist(err) {
 		t.Fatalf("pre-open recovery snapshot was mutated: %v", err)
+	}
+	if _, _, _, err := powerlossreopen.Stable(model, opts, false); err == nil || !strings.Contains(err.Error(), "is not empty") {
+		t.Fatalf("second Stable reused evidence root: %v", err)
 	}
 }
 
