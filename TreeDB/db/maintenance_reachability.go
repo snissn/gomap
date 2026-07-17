@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type maintenanceReachabilityCollectors uint8
@@ -23,7 +24,12 @@ func (c maintenanceReachabilityCollectors) has(want maintenanceReachabilityColle
 }
 
 type maintenanceReachabilityScanOptions struct {
-	Collectors               maintenanceReachabilityCollectors
+	Collectors maintenanceReachabilityCollectors
+	// ExplicitRootIDs limits the scan to this already-discovered root frontier.
+	// A non-nil slice bypasses descriptor discovery so durable-root publication
+	// can register primary-root value-log dependencies before decoding any
+	// pointer-backed collection descriptors.
+	ExplicitRootIDs          []uint64
 	ProtectedRootIDs         []uint64
 	ProtectedSystemRootIDs   []uint64
 	ProjectProtectedValueLog bool
@@ -132,12 +138,32 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 			return result, err
 		}
 	}
-	roots, valueLogRootCount, err := maintenanceReachabilityRoots(
-		ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs,
-		collectValueLog, opts.ProjectProtectedValueLog,
-	)
-	if err != nil {
-		return result, err
+	var roots []maintenanceRoot
+	valueLogRootCount := 0
+	if opts.ExplicitRootIDs != nil {
+		seen := make(map[uint64]struct{}, len(opts.ExplicitRootIDs))
+		for _, rootID := range opts.ExplicitRootIDs {
+			if rootID == 0 {
+				continue
+			}
+			if _, ok := seen[rootID]; ok {
+				continue
+			}
+			seen[rootID] = struct{}{}
+			roots = append(roots, maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
+		}
+		if collectValueLog {
+			valueLogRootCount = len(roots)
+		}
+	} else {
+		var err error
+		roots, valueLogRootCount, err = maintenanceReachabilityRoots(
+			ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs,
+			collectValueLog, opts.ProjectProtectedValueLog,
+		)
+		if err != nil {
+			return result, err
+		}
 	}
 	result.counters.RootSets = uint64(len(roots))
 	directValueLogProjection := valueLogRootCount == 1
@@ -175,6 +201,11 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 	}
 	childStacks := make([][]uint64, 0, 8)
 	var leafScratch []byte
+	var leafBatchPtrs []page.LeafLogPtr
+	var leafBatchBuffers [][]byte
+	var leafBatchArena []byte
+	var leafBatchScratch uncheckedLeafPageBatchScratch
+	uncheckedLeafBatch := collectValueLog && !snap.reader.ReadChecksumEnabled()
 	if collectValueLog {
 		leafScratch = make([]byte, 0, page.PageSize)
 	}
@@ -285,11 +316,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		return nil
 	}
 
-	scanOuterLeaf := func(ptr page.LeafLogPtr, entry *memoEntry) error {
-		data, usedDst, state, err := snap.reader.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch[:0])
-		if err != nil {
-			return err
-		}
+	scanOuterLeafData := func(ptr page.LeafLogPtr, data []byte, state tree.LeafLogPageReadState, entry *memoEntry) error {
 		if len(data) != page.PageSize {
 			return fmt.Errorf("maintenance reachability: invalid outer leaf size %d for file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 		}
@@ -309,12 +336,16 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 		if err := scanLeafValues(n, entry); err != nil {
 			return err
 		}
-		if usedDst {
-			leafScratch = data[:0]
-		} else {
-			leafScratch = leafScratch[:0]
-		}
 		return nil
+	}
+	scanOuterLeaf := func(ptr page.LeafLogPtr, entry *memoEntry) error {
+		data, _, state, err := snap.reader.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch[:0])
+		if err != nil {
+			return err
+		}
+		err = scanOuterLeafData(ptr, data, state, entry)
+		leafScratch = leafScratch[:0]
+		return err
 	}
 
 	var walk func(uint64, int, bool) (leafGenerationSubtreeStats, error)
@@ -373,6 +404,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 				childStacks = append(childStacks, nil)
 			}
 			children := childStacks[depth][:0]
+			leafBatchPtrs = leafBatchPtrs[:0]
 			err := n.WalkInternalChildren(&children, func(ptr page.LeafLogPtr) error {
 				if collectLeafFiles && ptr.FileID != 0 {
 					result.leafFileIDs[ptr.FileID] = struct{}{}
@@ -386,12 +418,42 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 					}
 				}
 				if valueLogProjection {
+					if uncheckedLeafBatch {
+						leafBatchPtrs = append(leafBatchPtrs, ptr)
+						return nil
+					}
 					return scanOuterLeaf(ptr, &entry)
 				}
 				return nil
 			})
 			if err != nil {
 				return nil, err
+			}
+			if len(leafBatchPtrs) > 0 {
+				bytesNeeded := len(leafBatchPtrs) * page.PageSize
+				if cap(leafBatchArena) < bytesNeeded {
+					leafBatchArena = make([]byte, bytesNeeded)
+				} else {
+					leafBatchArena = leafBatchArena[:bytesNeeded]
+				}
+				if cap(leafBatchBuffers) < len(leafBatchPtrs) {
+					leafBatchBuffers = make([][]byte, len(leafBatchPtrs))
+				} else {
+					leafBatchBuffers = leafBatchBuffers[:len(leafBatchPtrs)]
+				}
+				for i := range leafBatchPtrs {
+					start := i * page.PageSize
+					leafBatchBuffers[i] = leafBatchArena[start : start : start+page.PageSize]
+				}
+				leafBatchBuffers, err = snap.reader.readLeafLogPagesUncheckedBatch(leafBatchPtrs, leafBatchBuffers, &leafBatchScratch)
+				if err != nil {
+					return nil, err
+				}
+				for i, ptr := range leafBatchPtrs {
+					if err := scanOuterLeafData(ptr, leafBatchBuffers[i], tree.LeafLogPageReadState{}, &entry); err != nil {
+						return nil, err
+					}
+				}
 			}
 			entry.children = append(entry.children, children...)
 			childStacks[depth] = children[:0]

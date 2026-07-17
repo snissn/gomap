@@ -1223,17 +1223,15 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 			fileID = ptr.FileID
 			f = next
 		}
-		if verifyCRC {
-			runEnd := groupedRecordBatchRun(ptrs, i)
-			if runEnd-i > 1 {
-				ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					i = runEnd
-					continue
-				}
+		runEnd := groupedRecordBatchRun(ptrs, i)
+		if runEnd-i > 1 {
+			ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				i = runEnd
+				continue
 			}
 		}
 		var err error
@@ -2016,17 +2014,15 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 			fileID = ptr.FileID
 			f = next
 		}
-		if verifyCRC {
-			runEnd := groupedRecordBatchRun(ptrs, i)
-			if runEnd-i > 1 {
-				ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					i = runEnd
-					continue
-				}
+		runEnd := groupedRecordBatchRun(ptrs, i)
+		if runEnd-i > 1 {
+			ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				i = runEnd
+				continue
 			}
 		}
 		var err error

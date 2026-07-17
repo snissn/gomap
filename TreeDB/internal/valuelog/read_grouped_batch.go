@@ -36,9 +36,11 @@ func (f *File) readUnsafeAppendGroupedRecordBatch(ptrs []page.ValuePtr, verifyCR
 	if f == nil || f.File == nil {
 		return true, errors.New("valuelog: nil file")
 	}
-	// The operation-local de-dupe is only needed for verified reads. Keep the
-	// checksum-disabled ceiling on the existing targeted subvalue path.
-	if !verifyCRC || len(ptrs) < 2 {
+	// A batch scan should decode a grouped record once regardless of checksum
+	// mode. Verified callers additionally amortize the record CRC; unchecked
+	// maintenance callers avoid retaining every decoded frame in the shared
+	// point-read cache.
+	if len(ptrs) < 2 {
 		return false, nil
 	}
 	first := ptrs[0]

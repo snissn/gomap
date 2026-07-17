@@ -25,7 +25,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type durablePagerSinkV1 struct{ pager *pager.Pager }
@@ -342,24 +341,15 @@ func (db *DB) scanCandidateExternalReferencesV1(snapshot *Snapshot) (map[uint32]
 		return db.rebindCandidateValueLogSetV1(snapshot)
 	}
 	registerValuePointers := func(rootIDs []uint64) error {
-		for _, rootID := range rootIDs {
-			if rootID == 0 {
-				continue
-			}
-			it := tree.New(snapshot.idx.pager, &snapshot.reader, rootID).IteratorWithOptions(nil, nil, tree.IteratorOptions{
-				Mode: tree.IteratorModePointerProjection,
-			})
-			for it.Valid() {
-				_, ptr, flags := it.UnsafeEntry()
-				if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
-					references[ptr.FileID] = struct{}{}
-				}
-				it.Next()
-			}
-			err := errors.Join(it.Error(), it.Close())
-			if err != nil {
-				return err
-			}
+		result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
+			Collectors:      maintenanceReachabilityValueLogRefCounts,
+			ExplicitRootIDs: rootIDs,
+		})
+		if err != nil {
+			return err
+		}
+		for fileID := range result.valueLogReferencedSegments {
+			references[fileID] = struct{}{}
 		}
 		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
 			return err
