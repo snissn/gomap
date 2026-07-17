@@ -1119,7 +1119,7 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		if err := tx.resources.FlushThrough(); err != nil {
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
-		dependencyPaths, err := durableRootDependencyObservationPathsV1(tx.resources, tx.dir)
+		dependencyPaths, err := stableResourceDependencyObservationPathsV1(tx.resources, tx.dir)
 		if err != nil {
 			return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
 		}
@@ -1192,11 +1192,11 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 	return true, nil
 }
 
-// durableRootDependencyObservationPathsV1 exposes only the names attached to
-// the exact handles already retained by the candidate. It never reopens a
+// stableResourceDependencyObservationPathsV1 exposes only the names attached to
+// the exact handles already retained by the resource set. It never reopens a
 // diagnostic path. The list is collected only while the deterministic cut
 // observer is active, so the production-disabled path remains allocation-free.
-func durableRootDependencyObservationPathsV1(resources *rootpublication.StableResourceSet, root string) ([]string, error) {
+func stableResourceDependencyObservationPathsV1(resources *rootpublication.StableResourceSet, root string) ([]string, error) {
 	if resources == nil || root == "" || !durabilitycut.Enabled() {
 		return nil, nil
 	}
@@ -1207,7 +1207,7 @@ func durableRootDependencyObservationPathsV1(resources *rootpublication.StableRe
 		}
 		var path string
 		if err := token.WithPinnedFile(func(file *os.File) error {
-			path = durableRootDependencyObservationPathV1(file.Name())
+			path = stableResourceDependencyObservationPathV1(file.Name())
 			if path == "" {
 				return errors.New("stable resource handle has no observation name")
 			}
@@ -1230,11 +1230,11 @@ func durableRootDependencyObservationPathsV1(resources *rootpublication.StableRe
 	return unique, nil
 }
 
-// durableRootDependencyObservationPathV1 strips the private handle suffixes
+// stableResourceDependencyObservationPathV1 strips the private handle suffixes
 // used by stable-resource pins. A resource may be cloned through several
 // candidate closures, so normalize every trailing layer before exposing the
 // underlying path to the deterministic power-loss observer.
-func durableRootDependencyObservationPathV1(path string) string {
+func stableResourceDependencyObservationPathV1(path string) string {
 	for {
 		switch {
 		case strings.HasSuffix(path, "#stable-sync-pin"):

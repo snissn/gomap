@@ -732,9 +732,32 @@ func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublicati
 	if err != nil {
 		return err
 	}
+	dependencyPaths, err := stableResourceDependencyObservationPathsV1(view, db.dir)
+	if err != nil {
+		db.commandWALDebt.noteRetryThrough(lsn)
+		return err
+	}
+	if len(dependencyPaths) != 0 {
+		if err := durabilitycut.Emit(durabilitycut.Event{
+			Point: durabilitycut.BeforeDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
+			Root: db.dir, Paths: dependencyPaths,
+		}); err != nil {
+			db.commandWALDebt.noteRetryThrough(lsn)
+			return err
+		}
+	}
 	if err := view.SyncThrough(); err != nil {
 		db.commandWALDebt.noteRetryThrough(lsn)
 		return err
+	}
+	if len(dependencyPaths) != 0 {
+		if err := durabilitycut.Emit(durabilitycut.Event{
+			Point: durabilitycut.AfterDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
+			Root: db.dir, Paths: dependencyPaths,
+		}); err != nil {
+			db.commandWALDebt.noteRetryThrough(lsn)
+			return err
+		}
 	}
 	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn); err != nil {
 		db.commandWALDebt.noteRetryThrough(lsn)
