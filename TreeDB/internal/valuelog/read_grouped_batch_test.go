@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -117,5 +118,73 @@ func TestManagerReadUnsafeAppendBatch_GroupedRecordChecksumMismatchFailsClosed(t
 		if len(val) != 0 {
 			t.Fatalf("dst[%d] was populated before checksum failure: %q", i, val)
 		}
+	}
+}
+
+func TestManagerReadUnsafeAppendBatch_GroupedRecordChecksumDisabledMatchesPointReads(t *testing.T) {
+	for _, useMmap := range []bool{false, true} {
+		name := "read-at"
+		if useMmap {
+			name = "mmap"
+		}
+		t.Run(name, func(t *testing.T) {
+			if useMmap && runtime.GOOS == "windows" {
+				t.Skip("mmap not supported on windows")
+			}
+			dir := t.TempDir()
+			fileID, path, ptrs, want := writeGroupedBatchTestFrame(t, dir, 4)
+
+			fh, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+			crcOff := int64(ptrs[0].Offset - valueLogRecordCRCPrefixBytes)
+			var b [1]byte
+			if _, err := fh.ReadAt(b[:], crcOff); err != nil {
+				_ = fh.Close()
+				t.Fatalf("ReadAt stored CRC: %v", err)
+			}
+			b[0] ^= 0xff
+			if _, err := fh.WriteAt(b[:], crcOff); err != nil {
+				_ = fh.Close()
+				t.Fatalf("WriteAt stored CRC: %v", err)
+			}
+			if err := fh.Close(); err != nil {
+				t.Fatalf("Close corrupt file: %v", err)
+			}
+
+			m, err := NewManager(dir)
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			defer func() { _ = m.Close() }()
+			m.SetDisableReadChecksum(true)
+			f := m.files[fileID]
+			if useMmap {
+				f.remapToFileSize()
+			} else {
+				f.mmapData.Store([]byte(nil))
+			}
+
+			point, _, err := m.ReadUnsafeTo(ptrs[0], nil)
+			if err != nil {
+				t.Fatalf("checksum-disabled point read: %v", err)
+			}
+			if !bytes.Equal(point, want[0]) {
+				t.Fatalf("point value=%q want %q", point, want[0])
+			}
+			got, err := m.ReadUnsafeAppendBatch(ptrs[:2], make([][]byte, 2))
+			if err != nil {
+				t.Fatalf("checksum-disabled grouped batch: %v", err)
+			}
+			for i := range got {
+				if !bytes.Equal(got[i], want[i]) {
+					t.Fatalf("batch value[%d]=%q want %q", i, got[i], want[i])
+				}
+			}
+			if got := m.ReadStats().RecordCRCChecks; got != 0 {
+				t.Fatalf("checksum-disabled reads performed %d CRC checks, want 0", got)
+			}
+		})
 	}
 }

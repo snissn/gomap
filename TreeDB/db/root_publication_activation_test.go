@@ -6,8 +6,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCommitPublicationAcceptedClassifiesOnlyPostAcceptanceErrors(t *testing.T) {
+	accepted := wrapAcceptedFinalizeCommitError(errTestWriteMetaFailpoint)
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "plain", err: errTestWriteMetaFailpoint, want: false},
+		{name: "pre-accept safe", err: wrapFinalizeCommitError(errTestWriteMetaFailpoint, true), want: false},
+		{name: "ambiguous not accepted", err: wrapFinalizeCommitError(ErrRecoveryRequired, false), want: false},
+		{name: "accepted", err: accepted, want: true},
+		{name: "wrapped accepted", err: errors.Join(errors.New("outer"), accepted), want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CommitPublicationAccepted(tc.err); got != tc.want {
+				t.Fatalf("CommitPublicationAccepted(%v)=%t want %t", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestActivatedRootPublicationTripsFormerDirectPublisher(t *testing.T) {
 	database, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed})
@@ -70,6 +94,111 @@ func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
 	database.testScanCandidateExternalReferencesHook = nil
 	if scans == 0 {
 		t.Fatal("outer-leaf overwrite did not scan candidate tree")
+	}
+}
+
+func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	leafLog := &registeredLeafPageLog{db: database, dir: database.dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	database.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, database, leafLog)
+	if err := database.SetSync([]byte("replacement-manifest-prime"), []byte("p")); err != nil {
+		t.Fatalf("prime SetSync: %v", err)
+	}
+
+	selected := database.durableRoot.slotResources[database.durableRoot.slot]
+	selectedClone, err := rootpublication.CloneStableResourceSetExcludingKinds(selected)
+	if err != nil {
+		t.Fatalf("clone selected durable resources: %v", err)
+	}
+	oldManifest := stableContractResourceSet(t, stableContractDescriptor{
+		generation: 1, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	})
+	baseBuilder := rootpublication.NewStableResourceSetBuilder()
+	if err := baseBuilder.Merge(selectedClone); err != nil {
+		selectedClone.Release()
+		baseBuilder.Abandon()
+		t.Fatalf("merge selected durable resources: %v", err)
+	}
+	if err := baseBuilder.Merge(oldManifest); err != nil {
+		oldManifest.Release()
+		baseBuilder.Abandon()
+		t.Fatalf("merge old manifest: %v", err)
+	}
+	base, err := baseBuilder.Freeze()
+	if err != nil {
+		baseBuilder.Abandon()
+		t.Fatalf("freeze base resources: %v", err)
+	}
+	defer base.Release()
+	additional := stableContractResourceSet(t, stableContractDescriptor{
+		generation: 2, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	})
+
+	appendOnly := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(appendOnly)
+	appendOnly.add(leafLog.fileID, 1)
+	scans := 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	captured, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, appendOnly, base, additional,
+		rootpublication.StableLogicalObligationRequirements{}, false,
+	)
+	database.testScanCandidateExternalReferencesHook = nil
+	if err != nil {
+		t.Fatalf("capture append-only replacement-manifest resources: %v", err)
+	}
+	defer captured.Release()
+	if scans != 0 {
+		t.Fatalf("append-only replacement manifest candidate scans=%d want 0", scans)
+	}
+	foundCurrentLeaf, foundNewManifest := false, false
+	for _, descriptor := range captured.Descriptors() {
+		switch descriptor.Kind() {
+		case rootpublication.ResourceOuterLeafLog:
+			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation() == uint64(leafLog.fileID)
+		case rootpublication.ResourceOuterLeafManifest:
+			if descriptor.Generation() == 1 {
+				t.Fatal("captured resources retained superseded outer-leaf manifest")
+			}
+			foundNewManifest = foundNewManifest || descriptor.Generation() == 2
+		}
+	}
+	if !foundCurrentLeaf || !foundNewManifest {
+		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", captured.Descriptors())
+	}
+
+	plannerBase := stableContractResourceSet(t, stableContractDescriptor{
+		generation: uint64(leafLog.fileID), kind: rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer, frontier: 4096,
+	})
+	defer plannerBase.Release()
+	plannerAdditional := stableContractResourceSet(t, stableContractDescriptor{
+		generation: 2, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	})
+	defer plannerAdditional.Release()
+
+	destructive := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(destructive)
+	destructive.add(leafLog.fileID, -1)
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, destructive); err != nil {
+		t.Fatalf("plan destructive replacement-manifest transition: %v", err)
+	} else if reuse || references != nil {
+		t.Fatalf("destructive replacement-manifest transition reused references=%v reuse=%t", references, reuse)
 	}
 }
 
@@ -316,6 +445,9 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	if !errors.Is(err, errTestWriteMetaFailpoint) {
 		t.Fatalf("accepted build-group wait error=%v, want retryable meta failpoint", err)
 	}
+	if !CommitPublicationAccepted(err) {
+		t.Fatalf("accepted build-group wait error=%v was not marked post-acceptance", err)
+	}
 	if errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("accepted build-group wait error=%v unexpectedly requires recovery", err)
 	}
@@ -333,6 +465,40 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	}
 	if err := database.SetSync([]byte("after-group"), []byte("same-handle-progress")); err != nil {
 		t.Fatalf("SetSync after accepted build-group error: %v", err)
+	}
+}
+
+func TestOrderedRootSystemBuilderAcceptedWaitErrorIsClassified(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                    t.TempDir(),
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		database.testFailWriteMeta.Store(false)
+		_ = database.Close()
+	}()
+
+	database.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	database.testFailWriteMeta.Store(true)
+	_, _, err = database.PublishOrderedRootDeltaGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "accepted/system-schema", "visible-before-durable").NewIterator(nil, nil), nil
+	})
+	database.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted ordered-root wait error=%v, want retryable meta failpoint", err)
+	}
+	if !CommitPublicationAccepted(err) {
+		t.Fatalf("accepted ordered-root wait error=%v was not marked post-acceptance", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted ordered-root wait error=%v unexpectedly requires recovery", err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint retrying accepted ordered-root publication: %v", err)
 	}
 }
 

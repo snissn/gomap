@@ -37,6 +37,15 @@ func TestIndexVacuumTriggerReportMatchesFragmentationSpan(t *testing.T) {
 func compareTriggerToFullFragmentationReport(t *testing.T, d *DB, label string) {
 	t.Helper()
 
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("%s checkpoint: %v", label, err)
+	}
+	settled := d.State()
+	if settled == nil {
+		t.Fatalf("%s missing settled state", label)
+	}
+	settledCommitSeq := settled.CommitSeq
+
 	full, err := d.FragmentationReport()
 	if err != nil {
 		t.Fatalf("%s FragmentationReport: %v", label, err)
@@ -80,6 +89,9 @@ func compareTriggerToFullFragmentationReport(t *testing.T, d *DB, label string) 
 	state := d.State()
 	if state == nil {
 		t.Fatalf("%s missing state", label)
+	}
+	if state.CommitSeq != settledCommitSeq {
+		t.Fatalf("%s state CommitSeq=%d want settled %d", label, state.CommitSeq, settledCommitSeq)
 	}
 	if trigger.CommitSeq != state.CommitSeq {
 		t.Fatalf("%s CommitSeq=%d want %d", label, trigger.CommitSeq, state.CommitSeq)

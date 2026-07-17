@@ -357,6 +357,13 @@ func TestTextV2RewriteStorageMaintenanceAndValueLogGC2630(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("old snapshot micro ok=%v len=%d err=%v want pinned old payload", ok, len(raw), err)
 	}
+	// Settle the activated rewrite publication before destructive maintenance
+	// captures its recoverable-root capability. The open snapshot still pins the
+	// old text-v2 root and is the retention boundary this test exercises.
+	if err := d.Checkpoint(); err != nil {
+		_ = snap.Close()
+		t.Fatalf("Checkpoint rewritten text-v2 index with snapshot pinned: %v", err)
+	}
 	pinnedLeafGC, err := d.LeafGenerationGC(context.Background(), backenddb.LeafGenerationGCOptions{})
 	if err != nil {
 		_ = snap.Close()

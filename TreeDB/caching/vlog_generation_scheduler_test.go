@@ -2761,6 +2761,17 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
+	// The setup checkpoint may have scheduled retained-prune work. Settle that
+	// request before this test schedules and inspects its own quiet waiter.
+	forceRetainedPruneIdle(db)
+	db.waitForRetainedValueLogPrune()
+	db.retainedPruneMu.Lock()
+	inheritedWaiting := db.retainedPruneDone != nil
+	inheritedRunning := db.retainedPruneRunningDone != nil
+	db.retainedPruneMu.Unlock()
+	if inheritedWaiting || inheritedRunning {
+		t.Fatalf("inherited retained prune after setup settlement: waiting=%t running=%t", inheritedWaiting, inheritedRunning)
+	}
 
 	retainedPath := filepath.Join(t.TempDir(), "value_vlog", "value-l0-000321.log")
 	seedRetainedPrunePressure(db, retainedPath, 2<<30)
@@ -2771,19 +2782,12 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	db.scheduleRetainedValueLogPrune()
 
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		db.retainedPruneMu.Lock()
-		waiting := db.retainedPruneDone != nil
-		running := db.retainedPruneRunningDone != nil
-		db.retainedPruneMu.Unlock()
-		if waiting && !running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("retained prune did not enter scheduled quiet-wait state in time")
-		}
-		time.Sleep(10 * time.Millisecond)
+	db.retainedPruneMu.Lock()
+	waiting := db.retainedPruneDone != nil
+	running := db.retainedPruneRunningDone != nil
+	db.retainedPruneMu.Unlock()
+	if !waiting || running {
+		t.Fatalf("owned retained prune after scheduling: waiting=%t running=%t, want waiting only", waiting, running)
 	}
 
 	start := time.Now()

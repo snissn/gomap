@@ -116,6 +116,10 @@ type ValueLogRewriteStats struct {
 	// retained because the recoverable-root basis changed during cleanup.
 	SourceSegmentsRetainedRecoverableRootStale int
 	SourceBytesRetainedRecoverableRootStale    int64
+	// LeafGenerationCleanupRetainedRecoverableRootStale reports that the
+	// post-rewrite leaf-generation cleanup retained its candidates because the
+	// recoverable-root basis changed after pointer swaps committed.
+	LeafGenerationCleanupRetainedRecoverableRootStale bool
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int
@@ -2216,10 +2220,11 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 	if db.indexOuterLeavesInValueLog && stats.RecordsCopied > 0 {
-		if _, err := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{
+		_, cleanupErr := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{
 			ProtectedRootIDs:       db.valueLogRewriteLeafGenerationProtectedRootIDs(opts),
 			ProtectedSystemRootIDs: db.valueLogRewriteLeafGenerationProtectedSystemRootIDs(opts),
-		}, false); err != nil {
+		}, false)
+		if err := finishValueLogRewriteLeafGenerationCleanup(&stats, cleanupErr); err != nil {
 			return stats, err
 		}
 	}
@@ -2238,6 +2243,19 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, canceledErr
 	}
 	return stats, nil
+}
+
+func finishValueLogRewriteLeafGenerationCleanup(stats *ValueLogRewriteStats, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ErrRecoverableRootSetStale) {
+		return err
+	}
+	if stats != nil {
+		stats.LeafGenerationCleanupRetainedRecoverableRootStale = true
+	}
+	return nil
 }
 
 func (db *DB) valueLogRewriteLeafGenerationProtectedRootIDs(opts ValueLogRewriteOnlineOptions) []uint64 {

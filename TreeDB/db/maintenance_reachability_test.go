@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -312,6 +313,83 @@ func TestMaintenanceReachabilityLeafSubtreeCachePolicy(t *testing.T) {
 	}
 	if second := scan(true); second.counters.PagesVisited == 0 {
 		t.Fatalf("disabled cache unexpectedly reused subtree: %+v", second.counters)
+	}
+}
+
+func TestScanCandidateExternalReferencesCompressedOuterLeavesDoNotPopulatePointReadCache(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		LeafPageReadCacheEntries:   -1,
+		ValueLog: ValueLogOptions{
+			Compression:   ValueLogCompressionAuto,
+			ReadIntegrity: IntegritySkipChecksums,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{
+		Compression: ValueLogCompressionAuto,
+	})
+	if err != nil {
+		closeNoErr(t, db)
+		t.Fatalf("NewStandaloneLeafPageLog: %v", err)
+	}
+	db.SetLeafPageLog(leafLog)
+	defer closeNoErr(t, leafLog)
+	defer closeNoErr(t, db)
+	writeLeafGenerationKeys(t, db, "compressed-scan", 2048, 'c')
+
+	// Reset any entries admitted while the write published its durable root. The
+	// maintenance scan is a one-pass projection and must not displace the point-
+	// read working set with every compressed outer-leaf frame it encounters.
+	db.valueLogManager.SetGroupedFrameCacheEntries(0)
+	db.valueLogManager.SetGroupedFrameCacheEntries(2048)
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer closeNoErr(t, snap)
+	var grouped page.LeafLogPtr
+	if err := leafrefscan.WalkRoots(context.Background(), []uint64{snap.state.RootPageID}, snap.idx.pager.Get, nil, func(ptr page.LeafLogPtr) error {
+		if grouped.FileID == 0 && page.ValuePtrIsGrouped(ptr.ValuePtr()) {
+			grouped = ptr
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk outer-leaf refs: %v", err)
+	}
+	if grouped.FileID == 0 {
+		t.Fatal("fixture produced no grouped outer-leaf pointer")
+	}
+	if data, _, err := db.valueLogManager.ReadUnsafeTo(grouped.ValuePtr(), make([]byte, 0, page.PageSize)); err != nil {
+		t.Fatalf("probe compressed grouped outer leaf: %v", err)
+	} else if len(data) != page.PageSize {
+		t.Fatalf("probe outer leaf size=%d want %d", len(data), page.PageSize)
+	}
+	if probe := db.valueLogManager.GroupedFrameCacheDetailedStats(); probe.Stores == 0 {
+		t.Fatalf("fixture grouped frame was not compressed/cacheable: %+v", probe)
+	}
+	db.valueLogManager.SetGroupedFrameCacheEntries(0)
+	db.valueLogManager.SetGroupedFrameCacheEntries(2048)
+
+	references, err := db.scanCandidateExternalReferencesV1(snap)
+	if err != nil {
+		t.Fatalf("scanCandidateExternalReferencesV1: %v", err)
+	}
+	if len(references) == 0 {
+		t.Fatal("candidate scan reported no outer-leaf segment dependencies")
+	}
+	stats := db.valueLogManager.GroupedFrameCacheDetailedStats()
+	if stats.Stores != 0 || stats.Entries != 0 || stats.RetainedBytes != 0 {
+		t.Fatalf("one-pass maintenance scan polluted grouped point-read cache: %+v", stats)
 	}
 }
 

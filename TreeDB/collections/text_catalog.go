@@ -28,11 +28,25 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, emptyStats, err
 	}
+	return c.createTextIndexWithRetry(def, c.createTextIndexOnce)
+}
+
+func (c *Collection) createTextIndexWithRetry(def TextIndexDefinition, run func(TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error)) (*CollectionMeta, TextIndexBackfillStats, error) {
+	var emptyStats TextIndexBackfillStats
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		meta, stats, err := c.createTextIndexOnce(def)
+		meta, stats, err := run(def)
+		if err == nil {
+			return meta, stats, nil
+		}
+		if backenddb.CommitPublicationAccepted(err) {
+			if !isRetriableOrderedRootPublishConflict(err) {
+				return nil, emptyStats, err
+			}
+			return c.reconcileAcceptedTextIndexCreate(def.Name, meta, stats, err)
+		}
 		if !isRetriableTextIndexMutationError(err) {
-			return meta, stats, err
+			return nil, emptyStats, err
 		}
 		lastErr = err
 		waitBeforeCollectionMutationRetry(attempt)
@@ -111,7 +125,7 @@ func (c *Collection) createTextIndexOnce(def TextIndexDefinition) (*CollectionMe
 		return c.buildSchemaAndRootDescriptorSystemIterator(baseMeta, newMeta, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
 	if err != nil {
-		return nil, emptyStats, err
+		return newMeta.copy(), plan.stats, err
 	}
 	if len(rootIDs) != len(plan.rootNames) {
 		return nil, emptyStats, unexpectedOrderedRootCountError(newMeta.Name, len(plan.rootNames), len(rootIDs))
@@ -141,11 +155,24 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	return c.dropTextIndexWithRetry(name, c.dropTextIndexOnce)
+}
+
+func (c *Collection) dropTextIndexWithRetry(name string, run func(string) (*CollectionMeta, error)) (*CollectionMeta, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		meta, err := c.dropTextIndexOnce(name)
+		meta, err := run(name)
+		if err == nil {
+			return meta, nil
+		}
+		if backenddb.CommitPublicationAccepted(err) {
+			if !isRetriableOrderedRootPublishConflict(err) {
+				return nil, err
+			}
+			return c.reconcileAcceptedTextIndexDrop(name, err)
+		}
 		if !isRetriableTextIndexMutationError(err) {
-			return meta, err
+			return nil, err
 		}
 		lastErr = err
 		waitBeforeCollectionMutationRetry(attempt)
@@ -154,6 +181,9 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 }
 
 func isRetriableTextIndexMutationError(err error) bool {
+	if backenddb.CommitPublicationAccepted(err) {
+		return false
+	}
 	if isRetriableCollectionMutationError(err) {
 		return true
 	}
@@ -219,7 +249,7 @@ func (c *Collection) dropTextIndexOnce(name string) (*CollectionMeta, error) {
 		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
 	})
 	if err != nil {
-		return nil, err
+		return newMeta.copy(), err
 	}
 	c.meta = newMeta
 	clearedRootIDs := make([]uint64, len(clearedRootNames))
@@ -227,6 +257,66 @@ func (c *Collection) dropTextIndexOnce(name string) (*CollectionMeta, error) {
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
+}
+
+func (c *Collection) reconcileAcceptedTextIndexCreate(name string, desired *CollectionMeta, stats TextIndexBackfillStats, publicationErr error) (*CollectionMeta, TextIndexBackfillStats, error) {
+	var emptyStats TextIndexBackfillStats
+	if desired == nil {
+		return nil, emptyStats, publicationErr
+	}
+	desiredDef, ok := findTextIndex(desired.TextIndexes, name)
+	if !ok {
+		return nil, emptyStats, publicationErr
+	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	if err := c.db.Checkpoint(); err != nil {
+		return nil, emptyStats, errors.Join(publicationErr, fmt.Errorf("collections: settle accepted text index create: %w", err))
+	}
+	catalog, err := c.loadCurrentCatalogForAcceptedTextIndexMutation()
+	if err != nil {
+		return nil, emptyStats, errors.Join(publicationErr, err)
+	}
+	got, ok := findTextIndex(catalog.meta.TextIndexes, desiredDef.Name)
+	if !ok || !textIndexDefinitionValuesEqual(got, desiredDef) {
+		return nil, emptyStats, errors.Join(publicationErr, fmt.Errorf("collections: accepted text index create did not reconcile exact index %q", desiredDef.Name))
+	}
+	return catalog.meta.copy(), stats, nil
+}
+
+func (c *Collection) reconcileAcceptedTextIndexDrop(name string, publicationErr error) (*CollectionMeta, error) {
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
+	if err := c.db.Checkpoint(); err != nil {
+		return nil, errors.Join(publicationErr, fmt.Errorf("collections: settle accepted text index drop: %w", err))
+	}
+	catalog, err := c.loadCurrentCatalogForAcceptedTextIndexMutation()
+	if err != nil {
+		return nil, errors.Join(publicationErr, err)
+	}
+	if _, ok := findTextIndex(catalog.meta.TextIndexes, name); ok {
+		return nil, errors.Join(publicationErr, fmt.Errorf("collections: accepted text index drop left index %q present", name))
+	}
+	return catalog.meta.copy(), nil
+}
+
+func (c *Collection) loadCurrentCatalogForAcceptedTextIndexMutation() (*collectionCatalog, error) {
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	c.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
+	return catalog, nil
 }
 
 // TextIndexStorageStats validates and summarizes persistent text roots for a

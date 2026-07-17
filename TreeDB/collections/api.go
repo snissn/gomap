@@ -9913,6 +9913,12 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 }
 
 func isRetriableCollectionMutationError(err error) bool {
+	// Once publication ownership transferred, running a logical mutation again
+	// can apply it twice. Callers with operation-specific reconciliation must
+	// handle this status before consulting ordinary pre-publication retry classes.
+	if backenddb.CommitPublicationAccepted(err) {
+		return false
+	}
 	return errors.Is(err, ErrConcurrentMutation) ||
 		isRetriableOrderedRootPublishConflict(err) ||
 		isRetriableCollectionCatalogReadEOF(err)
