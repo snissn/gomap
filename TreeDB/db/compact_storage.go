@@ -1709,14 +1709,14 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		deleted++
 	}
-	if deleted > 0 && db.valueLogManager != nil {
-		if err := db.valueLogManager.Refresh(); err != nil {
-			return deleted, err
-		}
-	}
 	if deleted > 0 {
 		if err := syncDeletionNamespaceDirectory(layout.valueVLogDir, durabilitycut.ResourceValueLog); err != nil {
 			return deleted, fmt.Errorf("compact storage: sync value-log deletion namespace: %w", err)
+		}
+		if db.valueLogManager != nil {
+			if err := db.valueLogManager.Refresh(); err != nil {
+				return deleted, err
+			}
 		}
 	}
 	return deleted, nil
