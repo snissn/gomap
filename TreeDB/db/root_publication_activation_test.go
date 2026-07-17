@@ -344,8 +344,8 @@ func TestDurableRootDependencyObservationPathV1(t *testing.T) {
 	}
 	for name, path := range tests {
 		t.Run(name, func(t *testing.T) {
-			if got := durableRootDependencyObservationPathV1(path); got != "/tmp/value.log" {
-				t.Fatalf("durableRootDependencyObservationPathV1(%q)=%q want %q", path, got, "/tmp/value.log")
+			if got := stableResourceDependencyObservationPathV1(path); got != "/tmp/value.log" {
+				t.Fatalf("stableResourceDependencyObservationPathV1(%q)=%q want %q", path, got, "/tmp/value.log")
 			}
 		})
 	}

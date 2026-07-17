@@ -356,8 +356,8 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 			}
 			for occurrence, snapshot := range cutSnapshots {
 				t.Logf("cut occurrence=%d phase=%s resource=%s path=%s lsn=%d", occurrence, snapshot.phase, snapshot.event.Resource, snapshot.event.Path, snapshot.event.LSN)
-				validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, snapshot.phase, false, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
-				validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, snapshot.phase, true, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
+				validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, false, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
+				validateActualCutReopen(t, snapshot.model, opts, cut, occurrence, true, snapshot.generations, snapshot.latestSealedSequence, snapshot.expectedByAppliedLSN, snapshot.commandFrames, snapshot.durableAcknowledgement, snapshot.durableAcknowledged)
 			}
 		})
 	}
@@ -1372,7 +1372,7 @@ func publicCommitSequence(t *testing.T, db *treedb.DB) uint64 {
 	return sequence
 }
 
-func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, cut powerlossoracle.CutPoint, occurrence int, phase string, readOnly bool, generations []powerlossoracle.Generation, latestSealedSequence uint64, expectedByAppliedLSN map[uint64]map[string]map[string]string, observedCommandFrames []observedPowerLossCommandFrame, durableSequence uint64, durableAcknowledged bool) {
+func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, cut powerlossoracle.CutPoint, occurrence int, readOnly bool, generations []powerlossoracle.Generation, latestSealedSequence uint64, expectedByAppliedLSN map[uint64]map[string]map[string]string, observedCommandFrames []observedPowerLossCommandFrame, durableSequence uint64, durableAcknowledged bool) {
 	t.Helper()
 	result, reopened, closeFn, err := powerlossreopen.Stable(model, opts, readOnly)
 	if err != nil {
@@ -1391,12 +1391,9 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 		}
 		stableFrameLSN := contiguousStablePowerLossCommandLSN(commandFrames, selectedAppliedLSN)
 		completeCommandLSN := contiguousCompletePowerLossCommandLSN(commandFrames, selectedAppliedLSN)
-		if readOnly && selectedAppliedOK && allRecoverableGenerationsComplete(generations, latestSealedSequence) && stableFrameLSN > selectedAppliedLSN && errors.Is(result.Err, treedb.ErrRecoveryRequired) {
-			if completeCommandLSN > selectedAppliedLSN {
-				t.Logf("expected read-only recovery-required seed=%d cut=%s occurrence=%d: %v", powerLossOracleSeed, cut, occurrence, result.Err)
-			} else {
-				t.Logf("known counterexample rejected by read-only Open seed=%d cut=%s occurrence=%d: checksum-valid command through LSN %d has incomplete RID closure", powerLossOracleSeed, cut, occurrence, stableFrameLSN)
-			}
+		if readOnly && selectedAppliedOK && allRecoverableGenerationsComplete(generations, latestSealedSequence) &&
+			stableFrameLSN > selectedAppliedLSN && completeCommandLSN > selectedAppliedLSN && errors.Is(result.Err, treedb.ErrRecoveryRequired) {
+			t.Logf("expected read-only recovery-required seed=%d cut=%s occurrence=%d: %v", powerLossOracleSeed, cut, occurrence, result.Err)
 			return
 		}
 		rejected := powerlossoracle.Scenario{
@@ -1408,13 +1405,6 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 			ReopenRejected:       true,
 		}
 		diagnosis := rejected.Validate()
-		if !readOnly && strings.Contains(result.Err.Error(), "command wal missing value-log rid") {
-			if err := powerlossoracle.RequireViolation(diagnosis, powerlossoracle.InvariantSelectedRootInvalid); err != nil {
-				t.Fatalf("seed=%d cut=%s occurrence=%d public Open rejected (%v), expected missing-RID diagnosis: %v", powerLossOracleSeed, cut, occurrence, result.Err, err)
-			}
-			t.Logf("known counterexample seed=%d cut=%s occurrence=%d: %v", powerLossOracleSeed, cut, occurrence, diagnosis)
-			return
-		}
 		if diagnosis != nil {
 			t.Fatalf("seed=%d cut=%s occurrence=%d readOnly=%t public Open rejected (%v), diagnosis: %v", powerLossOracleSeed, cut, occurrence, readOnly, result.Err, diagnosis)
 		}
@@ -1433,9 +1423,11 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 		"stable/": {},
 		"actual/": {},
 	}
+	// Every fixture value is non-empty. Public Get represents an absent key as
+	// an empty slice, so only non-empty reads are members of the observed map.
 	for _, key := range expectedPowerLossFixtureKeys() {
 		value, getErr := reopened.Get([]byte(key))
-		if getErr == nil {
+		if getErr == nil && len(value) != 0 {
 			prefix := "actual/"
 			if strings.HasPrefix(key, "stable/") {
 				prefix = "stable/"
@@ -1470,14 +1462,7 @@ func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts tr
 		CommandFrames:             commandFrames,
 		ReopenAttempted:           true,
 	}
-	validationErr := scenario.Validate()
-	if (phase == "relaxed-batch" || phase == "durable-set-sync") && validationErr != nil {
-		if err := powerlossoracle.RequireViolation(validationErr, powerlossoracle.InvariantKeyStateMismatch); err == nil {
-			t.Logf("known counterexample seed=%d cut=%s occurrence=%d: %v", powerLossOracleSeed, cut, occurrence, validationErr)
-			return
-		}
-	}
-	if validationErr != nil {
+	if validationErr := scenario.Validate(); validationErr != nil {
 		t.Fatalf("seed=%d cut=%s occurrence=%d readOnly=%t scenario: %v", powerLossOracleSeed, cut, occurrence, readOnly, validationErr)
 	}
 }

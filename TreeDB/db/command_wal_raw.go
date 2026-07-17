@@ -732,8 +732,9 @@ func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublicati
 	if err != nil {
 		return err
 	}
-	if err := view.SyncThrough(); err != nil {
+	if _, err := syncStableResourceDependenciesV1(view, db.dir, view.SyncThrough, func() {
 		db.commandWALDebt.noteRetryThrough(lsn)
+	}); err != nil {
 		return err
 	}
 	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn); err != nil {
