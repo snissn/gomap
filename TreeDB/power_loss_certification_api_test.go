@@ -158,6 +158,8 @@ func TestPowerLossCertificationAllExplicitSyncFormsPublicReopen(t *testing.T) {
 	if profileName != "no_wal_fast" {
 		t.Fatalf("all-explicit-sync witness requires no_wal_fast, got %q", profileName)
 	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatal(err)
