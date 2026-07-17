@@ -56,14 +56,92 @@ func TestRequireExactCleanRepositoryRejectsUntrackedSource(t *testing.T) {
 	runGit("add", "tracked.go")
 	runGit("commit", "-m", "fixture")
 	head := runGit("rev-parse", "HEAD")
-	if err := requireExactCleanRepository(repo, head); err != nil {
+	runGit("update-ref", CertifiedRepositoryRef, head)
+	if err := requireExactCleanRepository(repo, CertifiedRepositoryRef, head); err != nil {
 		t.Fatalf("clean repository: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "untracked.go"), []byte("package fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := requireExactCleanRepository(repo, head); err == nil || !strings.Contains(err.Error(), "untracked") {
+	if err := requireExactCleanRepository(repo, CertifiedRepositoryRef, head); err == nil || !strings.Contains(err.Error(), "untracked") {
 		t.Fatalf("untracked source error=%v", err)
+	}
+}
+
+func TestRequireExactCleanRepositoryRejectsHeadNotAtCertifiedMain(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init")
+	runGit("config", "user.email", "powerlosscert@example.invalid")
+	runGit("config", "user.name", "powerlosscert test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "main")
+	mainSHA := runGit("rev-parse", "HEAD")
+	runGit("update-ref", CertifiedRepositoryRef, mainSHA)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "feature")
+	featureSHA := runGit("rev-parse", "HEAD")
+	if err := requireExactCleanRepository(repo, CertifiedRepositoryRef, featureSHA); err == nil || !strings.Contains(err.Error(), "certified ref") {
+		t.Fatalf("non-main exact head error=%v", err)
+	}
+}
+
+func TestRequireCommittedRiskInventoryRejectsReducedCopy(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "TreeDB", "testdata", "power_loss_risk_inventory.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	committed := []byte(`{"schema_version":"treedb-power-loss-risk-inventory/v1","dimensions":{}}`)
+	if err := os.WriteFile(path, committed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireCommittedRiskInventory(repo, committed); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireCommittedRiskInventory(repo, []byte(`{"schema_version":"treedb-power-loss-risk-inventory/v1"}`)); err == nil || !strings.Contains(err.Error(), "byte-identical") {
+		t.Fatalf("reduced inventory error=%v", err)
+	}
+}
+
+func TestBoundedBufferCapsRetainedBytesAndCountsDiscardedBytes(t *testing.T) {
+	buffer := boundedBuffer{limit: 4}
+	written, err := buffer.Write([]byte("123456"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != 6 || buffer.total != 6 || !buffer.overflow || buffer.String() != "1234" {
+		t.Fatalf("bounded buffer written=%d total=%d overflow=%t retained=%q", written, buffer.total, buffer.overflow, buffer.String())
+	}
+}
+
+func TestCertificationRuntimeEnvironmentDoesNotInheritProcessConfiguration(t *testing.T) {
+	t.Setenv("GOFLAGS", "-overlay=attacker.json")
+	t.Setenv("TREEDB_PROFILE", "cached")
+	environment := certificationRuntimeEnvironment(map[string]string{"TREEDB_POWERLOSS_CASE_ID": "case-a"})
+	if environment["GOFLAGS"] != "" || environment["GOENV"] != "off" || environment["GOTOOLCHAIN"] != "local" || environment["GOWORK"] != "off" {
+		t.Fatalf("unsafe Go environment: %+v", environment)
+	}
+	if _, ok := environment["TREEDB_PROFILE"]; ok {
+		t.Fatalf("runtime environment inherited unrelated TreeDB configuration: %+v", environment)
+	}
+	if environment["TREEDB_POWERLOSS_CASE_ID"] != "case-a" {
+		t.Fatalf("runtime environment omitted explicit replay selector: %+v", environment)
 	}
 }
 

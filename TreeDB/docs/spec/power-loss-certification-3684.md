@@ -25,6 +25,7 @@ power_loss_certification/
   binaries/*.test
   evidence/<case-id>/
   inputs/power_loss_counterexamples.json
+  inputs/power_loss_witness_contracts.json
   risk_inventory.json
   run_plan.json
   performance.json
@@ -32,20 +33,27 @@ power_loss_certification/
   selection_plan.json
   summary.md
   manifests/*.json
+  bundle_seal.json
 ```
 
-The versioned risk inventory freezes required values, mandatory retained
-counterexamples, negative controls, and explicit covering interactions. Child
-manifests carry exact repository and PR provenance, structured test commands,
-observed cut metadata, recovery state, expected and actual outcomes, and
-SHA-256-addressed artifacts.
+The committed versioned risk inventory freezes required values, mandatory
+retained counterexamples, negative controls, and explicit covering
+interactions. The committed witness-contract file binds every replay selector
+and expected recovery state to the risk labels it is allowed to own. The runner
+requires the supplied inventory to be byte-identical to the exact-SHA committed
+copy and every plan case to be identical to its committed contract, so a caller
+cannot shrink or relabel coverage. Child manifests carry exact repository and
+PR provenance, structured test commands, observed cut metadata, recovery state,
+expected and actual outcomes, and SHA-256-addressed artifacts.
 
 `TreeDB/internal/powerlosscert` rejects unknown JSON fields, stale or partial
 SHAs, duplicate IDs, undeclared inventory values, incomplete interactions,
 non-production profiles, unobserved cuts, missing modeled-crash artifact
-classes, and artifact hash mismatches. Coverage and representative selection
-count only `modeled-crash` witnesses. Mandatory counterexamples and negative
-controls are selected before deterministic greedy set cover.
+classes, and artifact hash mismatches. `bundle_seal.json` additionally binds
+every regular file in the finished bundle; its own SHA-256 is printed for
+publication outside the artifact location. Coverage and representative
+selection count only `modeled-crash` witnesses. Mandatory counterexamples and
+negative controls are selected before deterministic greedy set cover.
 
 ## Replay artifact capture
 
@@ -106,23 +114,33 @@ not evidence.
 
 ## Exact-SHA runner
 
-`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and run plan.
-The plan freezes the exact repository SHA, PR provenance, replay selector,
-profile, reopen mode, expected outcome, typed error, and complete expected
-recovery state before any case runs. Before checking out evidence, the runner
-also proves that the frozen cases cover every inventory value, retained
+`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and version-2
+run plan. The plan freezes `refs/remotes/origin/main`, its exact repository SHA,
+PR provenance, replay selector, profile, reopen mode, expected outcome, typed
+error, complete expected recovery state, per-case timeout, captured-output
+limit, per-case evidence limit, and whole-bundle byte limit before any case
+runs. Before checking out evidence, the runner proves that the frozen cases
+match the committed witness contracts and cover every inventory value, retained
 counterexample, negative control, and required interaction. It then refuses a
-different SHA, tracked worktree changes, and a non-empty output directory. It
-builds and hashes distinct test binaries, executes each case once without
-retry, compares the observed recovery trace with the frozen expectation, and
+different current-main ref or HEAD, tracked or untracked worktree changes, and
+a non-empty output directory. It rechecks the ref, HEAD, and worktree after
+building and after execution to detect mid-run repository changes.
+
+The runner resolves one absolute Go binary, requires its reported version to
+match the Go runtime that built the runner, and builds with a minimal fixed
+environment (`GOENV=off`, empty `GOFLAGS`, `GOTOOLCHAIN=local`, and
+`GOWORK=off`). Witnesses run under a separately recorded minimal environment,
+with no inherited TreeDB configuration. It builds and hashes distinct test
+binaries, executes each case once without retry and within its frozen resource
+bounds, compares the observed recovery trace with the frozen expectation, and
 only then writes the child manifest.
 
 The final pass verifies coverage, artifacts, image namespaces, command logs,
-and the reloaded bundle before reporting success. The performance report
-records generation and execution runtime, cases per second, stable-image and
-artifact bytes, peak child memory when the platform exposes it, and explicit
-zero retry/flaky-retry counts. A failed attempt is retained separately; a rerun
-must use a new empty output directory.
+the whole-bundle seal, and the reloaded bundle before reporting success. The
+performance report records generation and execution runtime, cases per second,
+stable-image and artifact bytes, peak child memory when the platform exposes
+it, and explicit zero retry/flaky-retry counts. A failed attempt is retained
+separately; a rerun must use a new empty output directory.
 
 Example:
 

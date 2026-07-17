@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseRunPlanRejectsUnknownFields(t *testing.T) {
-	if _, err := ParseRunPlan([]byte(`{"schema_version":"treedb-power-loss-run-plan/v1","unknown":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, err := ParseRunPlan([]byte(`{"schema_version":"treedb-power-loss-run-plan/v2","unknown":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("ParseRunPlan unknown-field error=%v", err)
 	}
 }
@@ -73,13 +73,18 @@ func TestValidateRunPlanRejectsCircularOrMismatchedOutcomeContracts(t *testing.T
 func testRunPlan() RunPlan {
 	witness := testChildManifest("case-a").Witnesses[0]
 	return RunPlan{
-		SchemaVersion:   RunPlanSchemaVersion,
-		RepositorySHA:   testRepositorySHA,
-		Issue:           3684,
-		PullRequests:    testChildManifest("case-a").PullRequests,
-		ToolVersion:     "powerloss-cert/v1",
-		FilesystemModel: "deterministic-stable-dirty-v1",
-		ClaimBoundary:   "modeled stable-byte images; no block-device claim",
+		SchemaVersion:          RunPlanSchemaVersion,
+		RepositoryRef:          CertifiedRepositoryRef,
+		RepositorySHA:          testRepositorySHA,
+		Issue:                  3684,
+		PullRequests:           testChildManifest("case-a").PullRequests,
+		ToolVersion:            "powerloss-cert/v1",
+		FilesystemModel:        "deterministic-stable-dirty-v1",
+		ClaimBoundary:          "modeled stable-byte images; no block-device claim",
+		CaseTimeoutSeconds:     120,
+		MaxCaseEvidenceBytes:   64 << 20,
+		MaxCapturedOutputBytes: 8 << 20,
+		MaxBundleBytes:         1 << 30,
 		Cases: []RunCase{{
 			ID:                     "case-a",
 			Package:                "./TreeDB",

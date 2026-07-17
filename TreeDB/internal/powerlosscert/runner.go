@@ -2,6 +2,7 @@ package powerlosscert
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -45,10 +46,11 @@ type PerformanceReport struct {
 }
 
 type RunnerResult struct {
-	Bundle      Bundle
-	Coverage    CoverageReport
-	Selection   SelectionPlan
-	Performance PerformanceReport
+	Bundle           Bundle
+	Coverage         CoverageReport
+	Selection        SelectionPlan
+	Performance      PerformanceReport
+	BundleSealSHA256 string
 }
 
 type executedCase struct {
@@ -81,6 +83,9 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err != nil {
 		return RunnerResult{}, err
 	}
+	if err := requireCommittedRiskInventory(repoRoot, inventoryData); err != nil {
+		return RunnerResult{}, err
+	}
 	planData, err := os.ReadFile(planPath)
 	if err != nil {
 		return RunnerResult{}, fmt.Errorf("powerlosscert: read run plan: %w", err)
@@ -92,7 +97,19 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err := ValidateRunPlan(inventory, plan); err != nil {
 		return RunnerResult{}, err
 	}
-	if err := requireExactCleanRepository(repoRoot, plan.RepositorySHA); err != nil {
+	contractsPath := filepath.Join(repoRoot, "TreeDB", "testdata", "power_loss_witness_contracts.json")
+	contractsData, err := os.ReadFile(contractsPath)
+	if err != nil {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: read committed witness contracts: %w", err)
+	}
+	contracts, err := ParseWitnessContracts(contractsData)
+	if err != nil {
+		return RunnerResult{}, err
+	}
+	if err := ValidateWitnessContracts(plan, contracts); err != nil {
+		return RunnerResult{}, err
+	}
+	if err := requireExactCleanRepository(repoRoot, plan.RepositoryRef, plan.RepositorySHA); err != nil {
 		return RunnerResult{}, err
 	}
 	if err := requireEmptyOutputRoot(outputRoot); err != nil {
@@ -109,22 +126,32 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err := writeJSONExclusive(filepath.Join(outputRoot, "run_plan.json"), plan); err != nil {
 		return RunnerResult{}, err
 	}
+	if err := writeExclusive(filepath.Join(outputRoot, "inputs", "power_loss_witness_contracts.json"), contractsData, 0o600); err != nil {
+		return RunnerResult{}, err
+	}
 	ledgerSource := filepath.Join(repoRoot, "TreeDB", "testdata", "power_loss_counterexamples.json")
-	if ledgerData, readErr := os.ReadFile(ledgerSource); readErr == nil {
-		if err := writeExclusive(filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json"), ledgerData, 0o600); err != nil {
-			return RunnerResult{}, err
-		}
-	} else if !os.IsNotExist(readErr) {
-		return RunnerResult{}, fmt.Errorf("powerlosscert: read counterexample ledger: %w", readErr)
+	ledgerData, err := os.ReadFile(ledgerSource)
+	if err != nil {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: read committed counterexample ledger: %w", err)
+	}
+	if err := writeExclusive(filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json"), ledgerData, 0o600); err != nil {
+		return RunnerResult{}, err
 	}
 
 	goBinary := config.GoBinary
 	if goBinary == "" {
 		goBinary = "go"
 	}
+	goBinary, err = resolveGoBinary(goBinary)
+	if err != nil {
+		return RunnerResult{}, err
+	}
 	binaries, binaryPaths, err := buildTestBinaries(repoRoot, outputRoot, goBinary, plan.Cases)
 	if err != nil {
 		return RunnerResult{}, err
+	}
+	if err := requireExactCleanRepository(repoRoot, plan.RepositoryRef, plan.RepositorySHA); err != nil {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: repository changed while building exact-SHA binaries: %w", err)
 	}
 	generationRuntime := time.Since(started)
 
@@ -133,7 +160,7 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	var peakBytes uint64
 	peakAvailable := false
 	for _, runCase := range plan.Cases {
-		result, err := executeRunCase(repoRoot, outputRoot, plan.RepositorySHA, runCase, binaries[runCase.Package], binaryPaths[runCase.Package])
+		result, err := executeRunCase(outputRoot, plan, runCase, binaries[runCase.Package], binaryPaths[runCase.Package])
 		if err != nil {
 			return RunnerResult{}, err
 		}
@@ -142,6 +169,9 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 			peakBytes = result.peakBytes
 		}
 		peakAvailable = peakAvailable || result.peakBytes > 0
+	}
+	if err := requireExactCleanRepository(repoRoot, plan.RepositoryRef, plan.RepositorySHA); err != nil {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: repository changed during exact-SHA execution: %w", err)
 	}
 	executionRuntime := time.Since(executionStarted)
 
@@ -166,6 +196,9 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	artifactBytes, err := directoryRegularBytes(filepath.Join(outputRoot, "evidence"))
 	if err != nil {
 		return RunnerResult{}, err
+	}
+	if artifactBytes > plan.MaxBundleBytes {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: evidence bytes=%d exceed frozen bundle limit=%d", artifactBytes, plan.MaxBundleBytes)
 	}
 	performance.ArtifactBytes = artifactBytes
 	if err := writeJSONExclusive(filepath.Join(outputRoot, "performance.json"), performance); err != nil {
@@ -207,11 +240,32 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err := writeSummary(outputRoot, plan, coverage, selection, performance); err != nil {
 		return RunnerResult{}, err
 	}
+	bundleBytes, err := directoryRegularBytes(outputRoot)
+	if err != nil {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: inspect completed bundle bytes: %w", err)
+	}
+	if bundleBytes > plan.MaxBundleBytes {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: completed bundle bytes=%d exceed frozen limit=%d", bundleBytes, plan.MaxBundleBytes)
+	}
+	sealSHA, err := WriteBundleSeal(outputRoot, plan.RepositorySHA)
+	if err != nil {
+		return RunnerResult{}, err
+	}
+	sealedBundleBytes, err := directoryRegularBytes(outputRoot)
+	if err != nil {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: inspect sealed bundle bytes: %w", err)
+	}
+	if sealedBundleBytes > plan.MaxBundleBytes {
+		return RunnerResult{}, fmt.Errorf("powerlosscert: sealed bundle bytes=%d exceed frozen limit=%d", sealedBundleBytes, plan.MaxBundleBytes)
+	}
+	if err := VerifyBundleSeal(outputRoot, plan.RepositorySHA); err != nil {
+		return RunnerResult{}, err
+	}
 	bundle, err := LoadBundle(outputRoot)
 	if err != nil {
 		return RunnerResult{}, err
 	}
-	return RunnerResult{Bundle: bundle, Coverage: coverage, Selection: selection, Performance: performance}, nil
+	return RunnerResult{Bundle: bundle, Coverage: coverage, Selection: selection, Performance: performance, BundleSealSHA256: sealSHA}, nil
 }
 
 func resolveRunnerPaths(config RunnerConfig) (repoRoot, inventoryPath, planPath, outputRoot string, err error) {
@@ -233,7 +287,26 @@ func resolveRunnerPaths(config RunnerConfig) (repoRoot, inventoryPath, planPath,
 	return repoRoot, inventoryPath, planPath, outputRoot, nil
 }
 
-func requireExactCleanRepository(repoRoot, expectedSHA string) error {
+func requireCommittedRiskInventory(repoRoot string, supplied []byte) error {
+	committedPath := filepath.Join(repoRoot, "TreeDB", "testdata", "power_loss_risk_inventory.json")
+	committed, err := os.ReadFile(committedPath)
+	if err != nil {
+		return fmt.Errorf("powerlosscert: read committed risk inventory: %w", err)
+	}
+	if !bytes.Equal(supplied, committed) {
+		return fmt.Errorf("powerlosscert: supplied risk inventory is not byte-identical to the committed exact-SHA contract %q", committedPath)
+	}
+	return nil
+}
+
+func requireExactCleanRepository(repoRoot, repositoryRef, expectedSHA string) error {
+	refSHA, err := commandOutput(repoRoot, nil, "git", "rev-parse", "--verify", repositoryRef+"^{commit}")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(refSHA) != expectedSHA {
+		return fmt.Errorf("powerlosscert: certified ref %s=%s want exact plan SHA=%s", repositoryRef, strings.TrimSpace(refSHA), expectedSHA)
+	}
 	head, err := commandOutput(repoRoot, nil, "git", "rev-parse", "HEAD")
 	if err != nil {
 		return err
@@ -288,7 +361,7 @@ func buildTestBinaries(repoRoot, outputRoot, goBinary string, cases []RunCase) (
 		name := strings.NewReplacer("./", "", "/", "_", "\\", "_").Replace(pkg) + ".test"
 		relPath := filepath.ToSlash(filepath.Join("binaries", name))
 		absolute := filepath.Join(outputRoot, filepath.FromSlash(relPath))
-		output, err := commandOutput(repoRoot, []string{"GOWORK=off"}, goBinary, "test", "-c", "-o", absolute, pkg)
+		output, err := commandOutputWithEnvironment(repoRoot, certificationBuildEnvironment(), goBinary, "test", "-c", "-o", absolute, pkg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("powerlosscert: build test binary for %s: %w\n%s", pkg, err, output)
 		}
@@ -302,9 +375,33 @@ func buildTestBinaries(repoRoot, outputRoot, goBinary string, cases []RunCase) (
 	return artifacts, absolutePaths, nil
 }
 
-func executeRunCase(repoRoot, outputRoot, repositorySHA string, runCase RunCase, binary Artifact, binaryPath string) (executedCase, error) {
+func resolveGoBinary(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", fmt.Errorf("powerlosscert: resolve Go tool %q: %w", name, err)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("powerlosscert: resolve absolute Go tool path: %w", err)
+	}
+	version, err := commandOutputWithEnvironment("", certificationBuildEnvironment(), path, "env", "GOVERSION")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(version) != runtime.Version() {
+		return "", fmt.Errorf("powerlosscert: build Go version=%q does not match runner Go version=%q", strings.TrimSpace(version), runtime.Version())
+	}
+	return path, nil
+}
+
+func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Artifact, binaryPath string) (executedCase, error) {
 	evidenceDir := filepath.ToSlash(filepath.Join("evidence", runCase.ID))
-	args := []string{"-test.run", "^" + runCase.TestName + "$", "-test.v", "-test.count=1"}
+	args := []string{
+		"-test.run", "^" + runCase.TestName + "$",
+		"-test.v",
+		"-test.count=1",
+		"-test.timeout=" + strconv.Itoa(plan.CaseTimeoutSeconds) + "s",
+	}
 	env := map[string]string{
 		"GOWORK":                            "off",
 		"TREEDB_POWERLOSS_CASE_ID":          runCase.ID,
@@ -321,30 +418,42 @@ func executeRunCase(repoRoot, outputRoot, repositorySHA string, runCase RunCase,
 		env["TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"] = "inputs/power_loss_counterexamples.json"
 	}
 	command := TestCommand{BinaryPath: binary.Path, Package: runCase.Package, TestName: runCase.TestName, Args: args, Env: env}
-	execEnv := make([]string, 0, len(env))
-	for name, value := range env {
-		execEnv = append(execEnv, name+"="+value)
-	}
-	sort.Strings(execEnv)
-	cmd := exec.Command(binaryPath, args...)
+	runtimeEnv := certificationRuntimeEnvironment(env)
+	command.Env = runtimeEnv
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(plan.CaseTimeoutSeconds)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	cmd.Dir = outputRoot
-	cmd.Env = append(os.Environ(), execEnv...)
-	var stdout, stderr bytes.Buffer
+	cmd.Env = environmentList(runtimeEnv)
+	stdout := boundedBuffer{limit: plan.MaxCapturedOutputBytes}
+	stderr := boundedBuffer{limit: plan.MaxCapturedOutputBytes}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	started := time.Now()
 	err := cmd.Run()
-	_ = started
 	exitCode := 0
 	if err != nil {
 		exitCode = -1
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		}
+		if ctx.Err() != nil {
+			return executedCase{}, fmt.Errorf("powerlosscert: case %q exceeded frozen timeout %s: %w", runCase.ID, time.Duration(plan.CaseTimeoutSeconds)*time.Second, ctx.Err())
+		}
 		return executedCase{}, fmt.Errorf("powerlosscert: case %q failed with exit=%d: %w\nstdout:\n%s\nstderr:\n%s", runCase.ID, exitCode, err, stdout.String(), stderr.String())
+	}
+	if stdout.overflow || stderr.overflow || stdout.total+stderr.total > plan.MaxCapturedOutputBytes {
+		return executedCase{}, fmt.Errorf("powerlosscert: case %q captured output bytes=%d exceed frozen limit=%d", runCase.ID, stdout.total+stderr.total, plan.MaxCapturedOutputBytes)
 	}
 	peakBytes, _ := peakRSSBytes(cmd.ProcessState)
 	root := filepath.Join(outputRoot, filepath.FromSlash(evidenceDir))
+	evidenceBytes, err := directoryRegularBytes(root)
+	if err != nil {
+		return executedCase{}, fmt.Errorf("powerlosscert: case %q inspect evidence bytes: %w", runCase.ID, err)
+	}
+	if evidenceBytes > plan.MaxCaseEvidenceBytes {
+		return executedCase{}, fmt.Errorf("powerlosscert: case %q evidence bytes=%d exceed frozen limit=%d", runCase.ID, evidenceBytes, plan.MaxCaseEvidenceBytes)
+	}
 	trace, err := readStrictJSON[operationTraceArtifact](filepath.Join(root, "operation_trace.json"))
 	if err != nil {
 		return executedCase{}, fmt.Errorf("powerlosscert: case %q operation trace: %w", runCase.ID, err)
@@ -362,13 +471,13 @@ func executeRunCase(repoRoot, outputRoot, repositorySHA string, runCase RunCase,
 	}
 	log := commandLogArtifact{
 		SchemaVersion: commandLogSchemaVersion,
-		RepositorySHA: repositorySHA,
+		RepositorySHA: plan.RepositorySHA,
 		BinaryPath:    binary.Path,
 		BinarySHA256:  binary.SHA256,
 		Package:       runCase.Package,
 		TestName:      runCase.TestName,
 		Args:          args,
-		Env:           env,
+		Env:           runtimeEnv,
 		Outcome:       runCase.ExpectedOutcome,
 		Completed:     true,
 		ExitCode:      exitCode,
@@ -381,7 +490,90 @@ func executeRunCase(repoRoot, outputRoot, repositorySHA string, runCase RunCase,
 	if err := writeJSONExclusive(filepath.Join(root, "command_log.json"), log); err != nil {
 		return executedCase{}, err
 	}
+	evidenceBytes, err = directoryRegularBytes(root)
+	if err != nil {
+		return executedCase{}, fmt.Errorf("powerlosscert: case %q inspect completed evidence bytes: %w", runCase.ID, err)
+	}
+	if evidenceBytes > plan.MaxCaseEvidenceBytes {
+		return executedCase{}, fmt.Errorf("powerlosscert: case %q completed evidence bytes=%d exceed frozen limit=%d", runCase.ID, evidenceBytes, plan.MaxCaseEvidenceBytes)
+	}
 	return executedCase{runCase: runCase, command: command, trace: trace, recovery: recovery, metrics: metrics, stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode, peakBytes: peakBytes}, nil
+}
+
+type boundedBuffer struct {
+	buffer   bytes.Buffer
+	limit    int64
+	total    int64
+	overflow bool
+}
+
+func (buffer *boundedBuffer) Write(data []byte) (int, error) {
+	buffer.total += int64(len(data))
+	remaining := buffer.limit - int64(buffer.buffer.Len())
+	if remaining > 0 {
+		writeBytes := int64(len(data))
+		if writeBytes > remaining {
+			writeBytes = remaining
+		}
+		_, _ = buffer.buffer.Write(data[:writeBytes])
+	}
+	if buffer.total > buffer.limit {
+		buffer.overflow = true
+	}
+	return len(data), nil
+}
+
+func (buffer *boundedBuffer) String() string {
+	return buffer.buffer.String()
+}
+
+func certificationBuildEnvironment() []string {
+	values := certificationBaseEnvironment()
+	values["GOENV"] = "off"
+	values["GOFLAGS"] = ""
+	values["GOTOOLCHAIN"] = "local"
+	values["GOWORK"] = "off"
+	return environmentList(values)
+}
+
+func certificationRuntimeEnvironment(overrides map[string]string) map[string]string {
+	values := certificationBaseEnvironment()
+	values["GOENV"] = "off"
+	values["GOFLAGS"] = ""
+	values["GOTOOLCHAIN"] = "local"
+	values["GOWORK"] = "off"
+	for name, value := range overrides {
+		values[name] = value
+	}
+	return values
+}
+
+func certificationBaseEnvironment() map[string]string {
+	values := map[string]string{
+		"HOME":   os.TempDir(),
+		"LANG":   "C",
+		"LC_ALL": "C",
+		"PATH":   "/usr/bin:/bin:/usr/sbin:/sbin",
+		"TMPDIR": os.TempDir(),
+		"TZ":     "UTC",
+	}
+	if runtime.GOOS == "windows" {
+		for _, name := range []string{"COMSPEC", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "WINDIR"} {
+			if value := os.Getenv(name); value != "" {
+				values[name] = value
+			}
+		}
+	}
+	return values
+}
+
+func environmentList(values map[string]string) []string {
+	result := make([]string, 0, len(values))
+	for name, value := range values {
+		result = append(result, name+"="+value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, recovery recoveryTraceArtifact) error {
@@ -540,6 +732,17 @@ func commandOutput(dir string, extraEnv []string, name string, args ...string) (
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), extraEnv...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("powerlosscert: %s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return string(output), nil
+}
+
+func commandOutputWithEnvironment(dir string, environment []string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = environment
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("powerlosscert: %s %s: %w", name, strings.Join(args, " "), err)

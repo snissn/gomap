@@ -23,8 +23,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("verified exact-main power-loss bundle: sha=%s cases=%d selected=%d output=%s\n",
+	fmt.Printf("verified exact-main power-loss bundle: sha=%s seal_sha256=%s cases=%d selected=%d output=%s\n",
 		result.Bundle.Manifests[0].RepositorySHA,
+		result.BundleSealSHA256,
 		result.Performance.Cases,
 		len(result.Selection.CaseIDs),
 		result.Bundle.Root,

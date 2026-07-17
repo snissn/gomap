@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v1"
+const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v2"
+
+const CertifiedRepositoryRef = "refs/remotes/origin/main"
 
 const (
 	reopenModeReadWrite = "read-write"
@@ -62,14 +64,19 @@ type RunCase struct {
 // execution. PullRequests includes every implementation/review merge whose
 // behavior is certified by RepositorySHA.
 type RunPlan struct {
-	SchemaVersion   string        `json:"schema_version"`
-	RepositorySHA   string        `json:"repository_sha"`
-	Issue           int           `json:"issue"`
-	PullRequests    []PullRequest `json:"pull_requests"`
-	ToolVersion     string        `json:"tool_version"`
-	FilesystemModel string        `json:"filesystem_model"`
-	ClaimBoundary   string        `json:"claim_boundary"`
-	Cases           []RunCase     `json:"cases"`
+	SchemaVersion          string        `json:"schema_version"`
+	RepositoryRef          string        `json:"repository_ref"`
+	RepositorySHA          string        `json:"repository_sha"`
+	Issue                  int           `json:"issue"`
+	PullRequests           []PullRequest `json:"pull_requests"`
+	ToolVersion            string        `json:"tool_version"`
+	FilesystemModel        string        `json:"filesystem_model"`
+	ClaimBoundary          string        `json:"claim_boundary"`
+	CaseTimeoutSeconds     int           `json:"case_timeout_seconds"`
+	MaxCaseEvidenceBytes   int64         `json:"max_case_evidence_bytes"`
+	MaxCapturedOutputBytes int64         `json:"max_captured_output_bytes"`
+	MaxBundleBytes         int64         `json:"max_bundle_bytes"`
+	Cases                  []RunCase     `json:"cases"`
 }
 
 func ParseRunPlan(data []byte) (RunPlan, error) {
@@ -87,8 +94,23 @@ func ValidateRunPlan(inventory RiskInventory, plan RunPlan) error {
 	if plan.SchemaVersion != RunPlanSchemaVersion {
 		return fmt.Errorf("powerlosscert: run plan schema_version=%q want=%q", plan.SchemaVersion, RunPlanSchemaVersion)
 	}
+	if plan.RepositoryRef != CertifiedRepositoryRef {
+		return fmt.Errorf("powerlosscert: run plan repository_ref=%q want=%q", plan.RepositoryRef, CertifiedRepositoryRef)
+	}
 	if !validHex(plan.RepositorySHA, 40) || plan.Issue <= 0 || plan.ToolVersion == "" || plan.FilesystemModel == "" || plan.ClaimBoundary == "" {
 		return fmt.Errorf("powerlosscert: run plan has incomplete provenance or claim metadata")
+	}
+	if plan.CaseTimeoutSeconds < 1 || plan.CaseTimeoutSeconds > 3600 {
+		return fmt.Errorf("powerlosscert: run plan case_timeout_seconds=%d is outside [1,3600]", plan.CaseTimeoutSeconds)
+	}
+	if plan.MaxCapturedOutputBytes < 1024 || plan.MaxCapturedOutputBytes > 64<<20 {
+		return fmt.Errorf("powerlosscert: run plan max_captured_output_bytes=%d is outside [1024,67108864]", plan.MaxCapturedOutputBytes)
+	}
+	if plan.MaxCaseEvidenceBytes < 1024 || plan.MaxCaseEvidenceBytes > 1<<30 {
+		return fmt.Errorf("powerlosscert: run plan max_case_evidence_bytes=%d is outside [1024,1073741824]", plan.MaxCaseEvidenceBytes)
+	}
+	if plan.MaxBundleBytes < plan.MaxCaseEvidenceBytes || plan.MaxBundleBytes > 16<<30 {
+		return fmt.Errorf("powerlosscert: run plan max_bundle_bytes=%d must be at least one case limit and at most 17179869184", plan.MaxBundleBytes)
 	}
 	if len(plan.PullRequests) == 0 {
 		return fmt.Errorf("powerlosscert: run plan has no pull-request provenance")
