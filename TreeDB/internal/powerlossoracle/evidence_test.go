@@ -34,11 +34,12 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	evidenceDir := filepath.Join(canonicalTempDir(t), "evidence")
 	t.Setenv(EnvEvidenceDir, evidenceDir)
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
 	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
 	t.Setenv(EnvReplayVariant, "variant-a")
 	t.Setenv(EnvReplaySeed, "1")
 
-	session, err := BeginEvidenceFromEnv(model)
+	session, err := BeginEvidenceFromEnv(model, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,11 @@ func TestBeginEvidenceFromEnvRejectsUnobservedDeclaredCut(t *testing.T) {
 	}
 	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
-	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "was not observed") {
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
+	if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "was not observed") {
 		t.Fatalf("BeginEvidenceFromEnv error=%v", err)
 	}
 }
@@ -122,12 +127,69 @@ func TestBeginEvidenceFromEnvRequiresReplaySelector(t *testing.T) {
 	}
 	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
 	t.Setenv(EnvReplayCut, "")
 	t.Setenv(EnvReplayVariant, "")
 	t.Setenv(EnvReplaySeed, "")
 
-	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "evidence capture requires") {
+	if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "evidence capture requires") {
 		t.Fatalf("BeginEvidenceFromEnv missing replay selector error=%v", err)
+	}
+}
+
+func TestEvidenceRequestFromEnvRequiresValidReopenMode(t *testing.T) {
+	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
+	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
+
+	if _, err := EvidenceRequestFromEnv(); err == nil || !strings.Contains(err.Error(), EnvEvidenceReopenMode) {
+		t.Fatalf("EvidenceRequestFromEnv missing reopen mode error=%v", err)
+	}
+	t.Setenv(EnvEvidenceReopenMode, "reader-ish")
+	if _, err := EvidenceRequestFromEnv(); err == nil || !strings.Contains(err.Error(), "invalid evidence reopen mode") {
+		t.Fatalf("EvidenceRequestFromEnv invalid reopen mode error=%v", err)
+	}
+	for _, mode := range []string{EvidenceReopenReadWrite, EvidenceReopenReadOnly} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv(EnvEvidenceReopenMode, mode)
+			request, err := EvidenceRequestFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !request.Enabled() || request.Occurrence != 0 || request.ReadOnly() != (mode == EvidenceReopenReadOnly) {
+				t.Fatalf("request=%+v", request)
+			}
+		})
+	}
+}
+
+func TestBeginEvidenceFromEnvRejectsReopenModeMismatchBeforeCapture(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
+		t.Fatal(err)
+	}
+	evidenceDir := filepath.Join(canonicalTempDir(t), "evidence")
+	t.Setenv(EnvEvidenceDir, evidenceDir)
+	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadOnly)
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
+
+	if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "does not match readOnly=false") {
+		t.Fatalf("BeginEvidenceFromEnv reopen-mode mismatch error=%v", err)
+	}
+	if _, err := os.Stat(evidenceDir); !os.IsNotExist(err) {
+		t.Fatalf("mismatched reopen mode created evidence root: %v", err)
 	}
 }
 
@@ -147,11 +209,12 @@ func TestBeginEvidenceFromEnvRequiresTraceToEndAtReplayOccurrence(t *testing.T) 
 	}
 	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
 	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
 	t.Setenv(EnvReplayVariant, "variant-a")
 	t.Setenv(EnvReplaySeed, "1")
 
-	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "does not end at replay occurrence") {
+	if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "does not end at replay occurrence") {
 		t.Fatalf("BeginEvidenceFromEnv extra matching cut event error=%v", err)
 	}
 }
@@ -178,8 +241,12 @@ func TestBeginEvidenceFromEnvRejectsSymlinkedEvidenceRoot(t *testing.T) {
 	}
 	t.Setenv(EnvEvidenceDir, linkRoot)
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
 
-	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "symlink") {
+	if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("BeginEvidenceFromEnv symlinked root error=%v", err)
 	}
 }
@@ -206,11 +273,12 @@ func TestBeginEvidenceFromEnvRejectsSymlinkedEvidenceRootAncestor(t *testing.T) 
 	}
 	t.Setenv(EnvEvidenceDir, filepath.Join(linkParent, "new-evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
 	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
 	t.Setenv(EnvReplayVariant, "variant-a")
 	t.Setenv(EnvReplaySeed, "1")
 
-	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "symlink") {
+	if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("BeginEvidenceFromEnv symlinked ancestor error=%v", err)
 	}
 }

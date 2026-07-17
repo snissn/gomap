@@ -26,6 +26,13 @@ const (
 )
 
 const (
+	powerLossReopenModeEnv       = "TREEDB_POWERLOSS_REOPEN_MODE"
+	powerLossReopenModeReadWrite = "read-write"
+	powerLossReopenModeReadOnly  = "read-only"
+	powerLossProfileEnv          = "TREEDB_POWERLOSS_PROFILE"
+)
+
+const (
 	ArtifactKindTestBinary      ArtifactKind = "test-binary"
 	ArtifactKindOperationTrace  ArtifactKind = "operation-trace"
 	ArtifactKindStableImageTree ArtifactKind = "stable-image-tree"
@@ -451,6 +458,14 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 		}
 		if !witness.CutExercised {
 			return fmt.Errorf("%s passed but did not exercise its declared cut", prefix)
+		}
+		switch witness.Command.Env[powerLossReopenModeEnv] {
+		case powerLossReopenModeReadWrite, powerLossReopenModeReadOnly:
+		default:
+			return fmt.Errorf("%s command env %s=%q is invalid", prefix, powerLossReopenModeEnv, witness.Command.Env[powerLossReopenModeEnv])
+		}
+		if profile := witness.Command.Env[powerLossProfileEnv]; profile != witness.Profile {
+			return fmt.Errorf("%s command env %s=%q does not match witness profile %q", prefix, powerLossProfileEnv, profile, witness.Profile)
 		}
 	}
 	if witness.Command.BinaryPath == "" || witness.Command.Package == "" || witness.Command.TestName == "" || len(witness.Command.Args) == 0 {

@@ -22,22 +22,44 @@ A certification bundle contains:
 
 ```text
 power_loss_certification/
+  binaries/*.test
+  evidence/<case-id>/
+  inputs/power_loss_counterexamples.json
+  inputs/power_loss_witness_contracts.json
   risk_inventory.json
+  run_plan.json
+  performance.json
+  coverage_report.json
+  selection_plan.json
+  summary.md
   manifests/*.json
+  bundle_seal.json
 ```
 
-The versioned risk inventory freezes required values, mandatory retained
-counterexamples, negative controls, and explicit covering interactions. Child
-manifests carry exact repository and PR provenance, structured test commands,
-observed cut metadata, recovery state, expected and actual outcomes, and
-SHA-256-addressed artifacts.
+The committed versioned risk inventory freezes required values, mandatory
+retained counterexamples, negative controls, and explicit covering
+interactions. The committed witness-contract file binds the certification
+issue, the complete ordered graph PR-number sequence, every replay selector,
+and every expected recovery state to the risk labels they are allowed to own.
+The runner requires the supplied inventory to be byte-identical to the
+exact-SHA committed copy, the plan's PR-number sequence to equal the committed
+graph sequence, and every plan case to be identical to its committed contract,
+so a caller cannot omit implementation provenance or shrink or relabel
+coverage. The runner reads the inventory, witness contracts, counterexample
+ledger, and test sources from one private exact-SHA checkout; the caller's
+inventory path is only accepted when it is byte-identical to that checkout.
+Child manifests carry exact repository and PR provenance, structured
+test commands, observed cut metadata, recovery state, expected and actual
+outcomes, and SHA-256-addressed artifacts.
 
 `TreeDB/internal/powerlosscert` rejects unknown JSON fields, stale or partial
 SHAs, duplicate IDs, undeclared inventory values, incomplete interactions,
 non-production profiles, unobserved cuts, missing modeled-crash artifact
-classes, and artifact hash mismatches. Coverage and representative selection
-count only `modeled-crash` witnesses. Mandatory counterexamples and negative
-controls are selected before deterministic greedy set cover.
+classes, and artifact hash mismatches. `bundle_seal.json` additionally binds
+every regular file in the finished bundle; its own SHA-256 is printed for
+publication outside the artifact location. Coverage and representative
+selection count only `modeled-crash` witnesses. Mandatory counterexamples and
+negative controls are selected before deterministic greedy set cover.
 
 ## Replay artifact capture
 
@@ -49,12 +71,13 @@ TREEDB_POWERLOSS_VARIANT_ID
 TREEDB_POWERLOSS_SEED
 ```
 
-Setting both variables below enables fail-closed evidence capture for a public
-reopen:
+Setting all three variables below enables fail-closed evidence capture for a
+public reopen:
 
 ```text
 TREEDB_POWERLOSS_EVIDENCE_DIR
 TREEDB_POWERLOSS_EXPECT_CUT_POINT
+TREEDB_POWERLOSS_REOPEN_MODE=read-write|read-only
 ```
 
 The evidence directory must be empty. Capture writes:
@@ -81,8 +104,10 @@ may be a symlink. The verifier strictly parses every schema,
 rehashes every file named by both image-tree manifests, compares their exact
 directory sets, rejects extra image paths and symlinks, cross-checks metrics
 against the trace and image trees, and binds the recovery trace to the immutable
-stable image. The preserved `recovery-preopen/` namespace and bytes must always
-match the stable tree exactly. For read-only recovery, the unchanged
+stable image. The resolved production profile in the recovery trace must equal
+the profile required by the recorded witness command. The preserved
+`recovery-preopen/` namespace and bytes must always match the stable tree
+exactly. For read-only recovery, the unchanged
 `recovery-input/` must match it too; writable recovery may mutate only that
 working copy after public open begins.
 
@@ -95,14 +120,73 @@ result and the full outcome to the command log. It requires a completed zero
 exit and an exact match to the child manifest; a hashed arbitrary log file is
 not evidence.
 
+## Exact-SHA runner
+
+`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and version-2
+run plan. The plan freezes `refs/remotes/origin/main`, its exact repository SHA,
+PR provenance, replay selector, profile, reopen mode, expected outcome, typed
+error, complete expected recovery state, per-case timeout, captured-output
+limit, per-case evidence limit, and whole-bundle byte limit before any case
+runs. Before checking out evidence, the runner proves that the frozen cases
+match the committed witness contracts and cover every inventory value, retained
+counterexample, negative control, and required interaction. It then refuses a
+different current-main ref or HEAD, tracked or untracked worktree changes, and
+a non-empty output directory. It rechecks the ref, HEAD, and worktree after
+building and after execution to detect mid-run repository changes. Provenance
+validation first requires the plan to contain exactly the immutable ordered
+PR-number sequence in the committed witness contract. It then requires every
+claimed PR merge to be reachable from the certified repository SHA in that
+topological order, binds the PR number to the immutable merge subject, and
+requires the claimed head to be either a non-first merge parent,
+tree-identical to the squash merge, or the exact clean three-way input that
+produces a stale-base squash merge tree. Omitting a graph merge, substituting
+another valid PR, or supplying syntactically valid but unrelated PR metadata
+therefore cannot enter a sealed bundle. Provenance
+checks run with a constrained Git environment, so inherited repository,
+worktree, index, object-store, namespace, and configuration overrides cannot
+redirect validation away from the certified repository. Git is invoked from a
+fixed trusted system path rather than the inherited `PATH`.
+
+The runner materializes the planned commit in a private detached clone with an
+independent object store, an empty Git template and hooks directory, and
+sanitized checkout configuration. It builds only from that clone, so ignored
+files, repository-local hooks, and local configuration from the caller's
+worktree cannot alter a claimed exact-SHA binary. It resolves the default Go
+binary from the running tool's compiled GOROOT only when no `GOROOT` override
+is inherited; an inherited override requires an explicitly absolute `-go`
+path. The runner then requires the selected tool's reported version to
+match the Go runtime that built the runner, and builds with a minimal fixed
+environment (`GOENV=off`, empty `GOFLAGS`, `GOTOOLCHAIN=local`, and
+`GOWORK=off`). Witnesses run under a separately recorded minimal environment,
+with no inherited TreeDB configuration. It builds and hashes distinct test
+binaries, executes each case once without retry and within its frozen resource
+bounds, compares the observed recovery trace with the frozen expectation, and
+only then writes the child manifest.
+
+The final pass verifies coverage, artifacts, image namespaces, command logs,
+the whole-bundle seal, and the reloaded bundle before reporting success. The
+performance report records generation and execution runtime, cases per second,
+stable-image and artifact bytes, peak child memory when the platform exposes
+it, and explicit zero retry/flaky-retry counts. A failed attempt is retained
+separately; a rerun must use a new empty output directory.
+
+Example:
+
+```sh
+GOWORK=off go run ./TreeDB/cmd/power_loss_certify \
+  -repo-root . \
+  -inventory /path/to/risk_inventory.json \
+  -plan /path/to/run_plan.json \
+  -out /path/to/new/power_loss_certification
+```
+
 ## Current fail-closed status
 
-The infrastructure alone does not certify current main. Before #3684 can
-close, the frozen inventory must be committed and its validator must report
-complete modeled-public-reopen ownership at one exact `origin/main` SHA.
-Known current gaps include durable-profile modeled cuts, several public API and
-authoritative-resource interactions, maintenance/cleanup cuts, durable-prefix
-negative controls, and counterexample occurrences currently tolerated by the
-canonical enumerator without ledger identities. These gaps must be assigned
-and corrected; helper-only or clean/process tests must not be relabeled as
-modeled crash evidence.
+The infrastructure and candidate witnesses alone do not certify current main.
+This suite now contains modeled-public-reopen owners for the frozen inventory,
+including all retained counterexamples and negative controls, but #3684 stays
+open until all prerequisite corrections merge and one complete run plan passes
+preflight and executes from a clean exact `origin/main` SHA. The resulting
+bundle, hashes, retry history, performance report, and claim boundary must then
+be published as the certification evidence. Helper-only or clean/process tests
+must not be relabeled as modeled crash evidence.

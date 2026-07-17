@@ -125,6 +125,46 @@ func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.
 	}
 }
 
+func TestVerifyArtifactsBindsRecoveryTraceToReopenMode(t *testing.T) {
+	for _, mode := range []string{powerLossReopenModeReadOnly, powerLossReopenModeReadWrite} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = mode
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err != nil {
+				t.Fatalf("VerifyArtifacts valid reopen mode: %v", err)
+			}
+
+			witness := &manifest.Witnesses[0]
+			rewriteArtifactJSONField(t, root, witness, ArtifactKindRecoveryTrace, "read_only", mode != powerLossReopenModeReadOnly)
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "does not match command reopen mode") {
+				t.Fatalf("VerifyArtifacts mismatched reopen mode error=%v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyArtifactsBindsRecoveryTraceToCommandProfile(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	witness := &manifest.Witnesses[0]
+	witness.Profile = "no_wal_fast"
+	witness.Command.Env[powerLossProfileEnv] = witness.Profile
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "does not match command-required profile") {
+		t.Fatalf("VerifyArtifacts mismatched recovery profile error=%v", err)
+	}
+}
+
 func TestVerifyArtifactsRequiresTraceToEndAtDeclaredCutOccurrence(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
@@ -252,14 +292,49 @@ func TestVerifyArtifactsRejectsAcceptedOutcomeForRejectedOpen(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsRejectsScalarSelectedStateForRejectedOpen(t *testing.T) {
+	for name, scalars := range map[string]map[string]any{
+		"commit sequence": {"commit_seq": 1, "applied_lsn": 0},
+		"applied LSN":     {"commit_seq": 0, "applied_lsn": 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			witness := &manifest.Witnesses[0]
+			witness.ActualOutcome = "rejected:modeled-image"
+			witness.TypedError = "*errors.errorString"
+			witness.State = observedWitnessState(recoveryTraceArtifact{Rejected: true})
+			fields := map[string]any{
+				"rejected":   true,
+				"error_type": witness.TypedError,
+				"error":      "rejected modeled image",
+				"stats":      map[string]string{},
+			}
+			for field, value := range scalars {
+				fields[field] = value
+			}
+			rewriteArtifactJSONFields(t, root, witness, ArtifactKindRecoveryTrace, fields)
+
+			err := VerifyArtifacts(root, []ChildManifest{manifest})
+			if err == nil || !strings.Contains(err.Error(), "scalar selected state") {
+				t.Fatalf("VerifyArtifacts rejected scalar state error=%v", err)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactsRejectsTamperedWritableRecoveryPreOpenSnapshot(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
+	manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = powerLossReopenModeReadWrite
 	for index := range manifest.TestBinaries {
 		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
 	}
 	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
-	rewriteArtifactJSONField(t, root, &manifest.Witnesses[0], ArtifactKindRecoveryTrace, "read_only", false)
 	snapshot := filepath.Join(root, "artifacts", "witness-a", "recovery-preopen", "index.db")
 	if err := os.WriteFile(snapshot, []byte("not the modeled input"), 0o600); err != nil {
 		t.Fatal(err)
@@ -436,15 +511,31 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		}
 	}
 	stableArtifact := artifactByKind(t, *witness, ArtifactKindStableImageTree)
-	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recoveryTraceArtifact{
+	readOnly := witness.Command.Env[powerLossReopenModeEnv] == powerLossReopenModeReadOnly
+	recovery := recoveryTraceArtifact{
 		SchemaVersion:      recoveryTraceSchemaVersion,
 		PublicAPI:          "treedb.Open",
 		Dir:                "recovery-input",
 		PreOpenSnapshotDir: "recovery-preopen",
 		InputTreeSHA256:    stableArtifact.SHA256,
 		StableFingerprint:  stableFingerprint,
-		ReadOnly:           true,
-	})
+		ReadOnly:           readOnly,
+		Stats: map[string]string{
+			"treedb.profile.resolved":                 "command_wal_durable",
+			"treedb.commit_seq":                       "0",
+			"treedb.applied_command_lsn":              "0",
+			"treedb.durable_root.selected_slot":       "1",
+			"treedb.durable_root.commit_seq":          "2",
+			"treedb.durable_root.durable_seq":         "2",
+			"treedb.durable_root.freelist.generation": "2",
+			"treedb.durable_root.manifest.entries":    "1",
+			"treedb.durable_root.slot0.commit_seq":    "1",
+			"treedb.durable_root.slot1.commit_seq":    "2",
+			"treedb.command_wal.durable_wal_lsn":      "0",
+		},
+	}
+	witness.State = observedWitnessState(recovery)
+	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recovery)
 	contents[ArtifactKindLog] = mustJSON(t, commandLogArtifact{
 		SchemaVersion: commandLogSchemaVersion,
 		RepositorySHA: manifest.RepositorySHA,

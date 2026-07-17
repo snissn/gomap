@@ -1,12 +1,28 @@
 package powerlosscert
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 const testRepositorySHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestCommittedRiskInventoryIsValid(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "power_loss_risk_inventory.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := ParseRiskInventory(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRiskInventory(inventory); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestParseChildManifestRejectsUnknownFields(t *testing.T) {
 	data := []byte(`{"schema_version":"treedb-power-loss-child/v1","unexpected":true}`)
@@ -94,6 +110,17 @@ func TestValidateBundleAcceptsZeroBasedFirstCutOccurrence(t *testing.T) {
 	witness.ObservedEventCount = 0
 	if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "observed event count") {
 		t.Fatalf("ValidateBundle unobserved first occurrence error=%v", err)
+	}
+}
+
+func TestValidateBundleRequiresModeledReopenMode(t *testing.T) {
+	inventory := testRiskInventory()
+	for _, mode := range []string{"", "reader-ish"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].Command.Env[powerLossReopenModeEnv] = mode
+		if err := ValidateBundle(testRepositorySHA, inventory, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), powerLossReopenModeEnv) {
+			t.Fatalf("ValidateBundle reopen mode=%q error=%v", mode, err)
+		}
 	}
 }
 
@@ -326,6 +353,8 @@ func testChildManifest(witnessID string) ChildManifest {
 					"TREEDB_POWERLOSS_SEED":             "1",
 					"TREEDB_POWERLOSS_EVIDENCE_DIR":     "artifacts/witness-a",
 					"TREEDB_POWERLOSS_EXPECT_CUT_POINT": "after-meta-write",
+					"TREEDB_POWERLOSS_REOPEN_MODE":      "read-only",
+					"TREEDB_POWERLOSS_PROFILE":          "command_wal_durable",
 				},
 			},
 			CutExercised:  true,

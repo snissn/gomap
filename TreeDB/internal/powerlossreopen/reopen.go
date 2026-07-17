@@ -21,6 +21,21 @@ type Result struct {
 	Err        error
 	CommitSeq  uint64
 	AppliedLSN uint64
+	Stats      map[string]string
+}
+
+var recoveryStatKeys = []string{
+	"treedb.profile.resolved",
+	"treedb.commit_seq",
+	"treedb.applied_command_lsn",
+	"treedb.durable_root.selected_slot",
+	"treedb.durable_root.commit_seq",
+	"treedb.durable_root.durable_seq",
+	"treedb.durable_root.freelist.generation",
+	"treedb.durable_root.manifest.entries",
+	"treedb.durable_root.slot0.commit_seq",
+	"treedb.durable_root.slot1.commit_seq",
+	"treedb.command_wal.durable_wal_lsn",
 }
 
 // Stable materializes the model's stable image and passes it through the
@@ -28,7 +43,7 @@ type Result struct {
 // modeled identity scope and removes the materialized image whether Open
 // accepts or rejects it.
 func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
-	evidence, err := powerlossoracle.BeginEvidenceFromEnv(model)
+	evidence, err := powerlossoracle.BeginEvidenceFromEnv(model, readOnly)
 	if err != nil {
 		return Result{}, nil, nil, err
 	}
@@ -38,18 +53,19 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 			return Result{}, nil, nil, err
 		}
 		recovery := struct {
-			SchemaVersion      string `json:"schema_version"`
-			PublicAPI          string `json:"public_api"`
-			Dir                string `json:"dir"`
-			PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
-			InputTreeSHA256    string `json:"input_image_tree_sha256"`
-			StableFingerprint  string `json:"stable_fingerprint"`
-			ReadOnly           bool   `json:"read_only"`
-			Rejected           bool   `json:"rejected"`
-			ErrorType          string `json:"error_type"`
-			Error              string `json:"error"`
-			CommitSeq          uint64 `json:"commit_seq"`
-			AppliedLSN         uint64 `json:"applied_lsn"`
+			SchemaVersion      string            `json:"schema_version"`
+			PublicAPI          string            `json:"public_api"`
+			Dir                string            `json:"dir"`
+			PreOpenSnapshotDir string            `json:"pre_open_snapshot_dir"`
+			InputTreeSHA256    string            `json:"input_image_tree_sha256"`
+			StableFingerprint  string            `json:"stable_fingerprint"`
+			ReadOnly           bool              `json:"read_only"`
+			Rejected           bool              `json:"rejected"`
+			ErrorType          string            `json:"error_type"`
+			Error              string            `json:"error"`
+			CommitSeq          uint64            `json:"commit_seq"`
+			AppliedLSN         uint64            `json:"applied_lsn"`
+			Stats              map[string]string `json:"stats"`
 		}{
 			SchemaVersion:      "treedb-power-loss-recovery-trace/v1",
 			PublicAPI:          "treedb.Open",
@@ -61,6 +77,7 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 			Rejected:           result.Rejected,
 			CommitSeq:          result.CommitSeq,
 			AppliedLSN:         result.AppliedLSN,
+			Stats:              result.Stats,
 		}
 		if result.Err != nil {
 			recovery.ErrorType = fmt.Sprintf("%T", result.Err)
@@ -119,6 +136,10 @@ func openAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readO
 		stats := db.Stats()
 		result.CommitSeq, _ = strconv.ParseUint(stats["treedb.commit_seq"], 10, 64)
 		result.AppliedLSN, _ = strconv.ParseUint(stats["treedb.applied_command_lsn"], 10, 64)
+		result.Stats = make(map[string]string, len(recoveryStatKeys))
+		for _, key := range recoveryStatKeys {
+			result.Stats[key] = stats[key]
+		}
 	}
 	closeFn := func() error {
 		var closeErr error
