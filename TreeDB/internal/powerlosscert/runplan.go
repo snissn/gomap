@@ -107,6 +107,7 @@ func ValidateRunPlan(inventory RiskInventory, plan RunPlan) error {
 		return fmt.Errorf("powerlosscert: run plan has no cases")
 	}
 	seenCases := make(map[string]bool, len(plan.Cases))
+	coverageManifest := ChildManifest{Witnesses: make([]Witness, 0, len(plan.Cases))}
 	for _, runCase := range plan.Cases {
 		if seenCases[runCase.ID] {
 			return fmt.Errorf("powerlosscert: run plan duplicates case id %q", runCase.ID)
@@ -115,6 +116,25 @@ func ValidateRunPlan(inventory RiskInventory, plan RunPlan) error {
 		if err := validateRunCase(inventory, runCase); err != nil {
 			return err
 		}
+		coverageManifest.Witnesses = append(coverageManifest.Witnesses, Witness{
+			ID:                runCase.ID,
+			EvidenceTier:      EvidenceTierModeledCrash,
+			Profile:           runCase.Profile,
+			Acknowledgement:   runCase.Acknowledgement,
+			ResourceShapes:    runCase.ResourceShapes,
+			StorageBoundaries: runCase.StorageBoundaries,
+			WritebackVariant:  runCase.WritebackVariant,
+			FailureClasses:    runCase.FailureClasses,
+			CounterexampleID:  runCase.CounterexampleID,
+			NegativeControlID: runCase.NegativeControlID,
+		})
+	}
+	coverage, err := BuildCoverageReport(inventory, []ChildManifest{coverageManifest})
+	if err != nil {
+		return err
+	}
+	if !coverage.Complete {
+		return fmt.Errorf("powerlosscert: run plan has incomplete frozen risk coverage: %s", strings.Join(coverage.Gaps, ", "))
 	}
 	return nil
 }

@@ -18,6 +18,17 @@ func TestValidateRunPlanAcceptsFrozenExpectedRecovery(t *testing.T) {
 	}
 }
 
+func TestValidateRunPlanRejectsIncompleteFrozenRiskCoverage(t *testing.T) {
+	plan := testRunPlan()
+	plan.Cases[0].CounterexampleID = ""
+	plan.Cases[0].NegativeControlID = ""
+
+	err := ValidateRunPlan(testRiskInventory(), plan)
+	if err == nil || !strings.Contains(err.Error(), "incomplete frozen risk coverage") {
+		t.Fatalf("ValidateRunPlan incomplete-coverage error=%v", err)
+	}
+}
+
 func TestValidateRunPlanRejectsCircularOrMismatchedOutcomeContracts(t *testing.T) {
 	tests := []struct {
 		name   string
