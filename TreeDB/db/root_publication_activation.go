@@ -702,12 +702,12 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
 		post = db.finalizeAcceptedCommitPostWorkOnError(post)
-		return post, wrapFinalizeCommitError(publicRootPublicationErrorV1(err), false)
+		return post, wrapAcceptedFinalizeCommitError(publicRootPublicationErrorV1(err))
 	}
 	if syncWrite && !db.commandWAL {
 		if err := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil {
 			post = db.finalizeAcceptedCommitPostWorkOnError(post)
-			return post, wrapFinalizeCommitError(publicRootPublicationErrorV1(err), false)
+			return post, wrapAcceptedFinalizeCommitError(publicRootPublicationErrorV1(err))
 		}
 	}
 	return post, nil
