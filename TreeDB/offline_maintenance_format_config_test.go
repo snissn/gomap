@@ -117,15 +117,11 @@ func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {
 
 func TestValueLogRewriteOffline_LoadsPersistedFormatConfig(t *testing.T) {
 	dir := t.TempDir()
-	opts := treedb.Options{
-		Dir:                   dir,
-		DisableSideStores:     true,
-		Durability:            treedb.DurabilityWALOffRelaxed,
-		LeafPrefixCompression: true,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.DisableSideStores = true
+	opts.LeafPrefixCompression = true
+	opts.IndexOuterLeavesInValueLog = false
+	opts.ValueLog.PointerThreshold = 1
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -148,7 +144,7 @@ func TestValueLogRewriteOffline_LoadsPersistedFormatConfig(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
+	stats, err := treedb.ValueLogRewriteOffline(treedb.OptionsFor(treedb.ProfileNoWALFast, dir))
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)
 	}

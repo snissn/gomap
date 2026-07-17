@@ -1223,17 +1223,15 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 			fileID = ptr.FileID
 			f = next
 		}
-		if verifyCRC {
-			runEnd := groupedRecordBatchRun(ptrs, i)
-			if runEnd-i > 1 {
-				ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					i = runEnd
-					continue
-				}
+		runEnd := groupedRecordBatchRun(ptrs, i)
+		if runEnd-i > 1 {
+			ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				i = runEnd
+				continue
 			}
 		}
 		var err error
@@ -1276,6 +1274,7 @@ type Manager struct {
 	stableResourcePins          *rootpublication.IdentityPinRegistry
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
+	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -1340,6 +1339,32 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.disableReadChecksum = disable
+}
+
+// SetDeferredDeletionSync installs the durability boundary used when a zombie
+// segment can only be unlinked after its final snapshot or identity pin is
+// released. Immediate maintenance removals remain owned by their caller so a
+// caller can batch one directory sync across multiple unlinks.
+func (m *Manager) SetDeferredDeletionSync(sync func(dir string, resource durabilitycut.Resource) error) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.deferredDeletionSync = sync
+	m.mu.Unlock()
+}
+
+func (m *Manager) syncDeferredDeletion(path string) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	sync := m.deferredDeletionSync
+	m.mu.RUnlock()
+	if sync == nil {
+		return nil
+	}
+	return sync(filepath.Dir(path), segmentNamespaceResource(path))
 }
 
 // SetCurrentWritableMmapEnabled enables persistent read-only mmap views for
@@ -1989,17 +2014,15 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 			fileID = ptr.FileID
 			f = next
 		}
-		if verifyCRC {
-			runEnd := groupedRecordBatchRun(ptrs, i)
-			if runEnd-i > 1 {
-				ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					i = runEnd
-					continue
-				}
+		runEnd := groupedRecordBatchRun(ptrs, i)
+		if runEnd-i > 1 {
+			ok, err := f.readUnsafeAppendGroupedRecordBatch(ptrs[i:runEnd], verifyCRC, dst[i:runEnd])
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				i = runEnd
+				continue
 			}
 		}
 		var err error
@@ -2109,15 +2132,17 @@ func (m *Manager) retryZombieDelete(f *File) {
 
 		deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
 		if deleted {
+			syncErr := m.syncDeferredDeletion(f.Path)
 			commitStableDeleteLease(lease)
 			m.mu.Lock()
+			var unobserveErr error
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
 				delete(m.files, f.ID)
-				_ = m.unobserveStableFileLocked(f)
+				unobserveErr = m.unobserveStableFileLocked(f)
 			}
 			m.mu.Unlock()
-			if removeErr != nil {
-				log.Printf("valuelog: removed retired zombie %s after close error: %v", f.Path, removeErr)
+			if finishErr := errors.Join(removeErr, syncErr, unobserveErr); finishErr != nil {
+				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
 			}
 			return
 		} else if !isWindowsSharingViolationError(removeErr) {

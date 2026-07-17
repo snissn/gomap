@@ -7,8 +7,8 @@ Use this checklist before opening or updating downstream adapter PRs in
 
 - Pin the gomap commit or tag in the downstream module and record it in the
   report. Do not rely on a floating branch name.
-- State the TreeDB public profile used by the adapter:
-  `command_wal_durable`, `command_wal_relaxed`, or benchmark-only `bench`.
+- State the TreeDB profile used by the adapter: `command_wal_durable`,
+  `command_wal_relaxed`, `no_wal_fast`, or benchmark/test-only `bench_unsafe`.
 - State any adapter overrides after applying the profile, including value-log
   pointer threshold, compression policy, background maintenance, flush
   threshold, cache size, and memory limits.
@@ -100,7 +100,7 @@ suite that proves:
 
 ## Non-Claims
 
-- A benchmark-only `bench` profile result is an unsafe ceiling, not production
+- A benchmark-only `bench_unsafe` profile result is an unsafe ceiling, not production
   durability evidence.
 - Lower checkpoint time does not by itself prove better transaction throughput.
 - Higher TPS without command-WAL counters does not prove the adapter actually

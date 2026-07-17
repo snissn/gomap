@@ -333,9 +333,6 @@ func (s *Store) AdvanceDiscardFloor(timestamp uint64, mode CommitMode) error {
 	if s == nil || s.db == nil {
 		return storageError("advance discard floor", treedb.ErrClosed)
 	}
-	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
-		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
-	}
 	s.maintenanceMu.Lock()
 	defer s.maintenanceMu.Unlock()
 	s.mu.Lock()
@@ -398,9 +395,6 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 	}
 	if s == nil || s.db == nil {
 		return stats, storageError("prune versions", treedb.ErrClosed)
-	}
-	if options.Mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
-		return stats, fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
 	}
 	if options.BatchSize <= 0 {
 		options.BatchSize = 256

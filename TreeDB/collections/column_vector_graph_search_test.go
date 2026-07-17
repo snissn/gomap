@@ -1037,6 +1037,9 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	if collectionsRaceEnabled {
 		t.Skip("AllocsPerRun is not stable under -race")
 	}
+	if !enterIsolatedVectorAllocationGate(t, "native-search-warm-scratch") {
+		return
+	}
 	var hotErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		if hotErr != nil {

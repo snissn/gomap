@@ -221,6 +221,15 @@ func (db *DB) DurabilityMode() DurabilityMode {
 	return db.durability
 }
 
+// ResolvedProfile reports the immutable canonical profile carried into the
+// backend by a public constructor. Low-level internal opens may return empty.
+func (db *DB) ResolvedProfile() DurabilityProfile {
+	if db == nil {
+		return ""
+	}
+	return db.resolvedProfile
+}
+
 // GetMany returns values for keys.
 //
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
@@ -802,6 +811,11 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 func (db *DB) Stats() map[string]string {
 	stats := make(map[string]string)
 	stats["cosmos.db.type"] = "treedb"
+	stats["treedb.profile.resolved"] = string(db.resolvedProfile)
+	stats["treedb.profile.ordinary_ack_class"] = db.resolvedProfile.OrdinaryAckClass()
+	stats["treedb.profile.production"] = fmt.Sprintf("%t", db.resolvedProfile.Production())
+	stats["treedb.profile.bench_unsafe"] = fmt.Sprintf("%t", db.resolvedProfile == ProfileBenchUnsafe)
+	stats["treedb.profile.deprecated_alias"] = string(db.deprecatedProfileAlias)
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {

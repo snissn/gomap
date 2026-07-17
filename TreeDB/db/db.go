@@ -141,6 +141,8 @@ type DB struct {
 	freelistRegionRadius int
 
 	readOnly                       bool
+	resolvedProfile                DurabilityProfile
+	deprecatedProfileAlias         DurabilityProfile
 	durability                     DurabilityMode
 	commandWAL                     bool
 	commandWALStatsScan            bool
@@ -555,6 +557,7 @@ type DB struct {
 	testOrderedRootBatchAfterClosePreflightHook    func()
 	testStorageMaintenanceBeforeLockHook           func(string)
 	testStorageMaintenanceAfterLockHook            func(string) error
+	testCompactStorageRemoveValueLogSegmentHook    func(uint32) (bool, error)
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
 	commandWALReplayLSN                            atomic.Uint64
@@ -741,6 +744,47 @@ func wrapFinalizeCommitError(err error, cleanupCreatedSegmentsSafe bool) error {
 		err:                        err,
 		cleanupCreatedSegmentsSafe: cleanupCreatedSegmentsSafe,
 	}
+}
+
+type acceptedFinalizeCommitError struct {
+	err error
+}
+
+func (e *acceptedFinalizeCommitError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *acceptedFinalizeCommitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *acceptedFinalizeCommitError) CommitPublicationAccepted() bool {
+	return e != nil
+}
+
+func wrapAcceptedFinalizeCommitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &acceptedFinalizeCommitError{err: err}
+}
+
+// CommitPublicationAccepted reports whether err was returned after root
+// publication ownership transferred and the candidate became visible. Such an
+// error may still describe an unsatisfied admission or durability obligation;
+// callers must not replay the logical mutation as though publication never
+// happened.
+func CommitPublicationAccepted(err error) bool {
+	var accepted interface {
+		CommitPublicationAccepted() bool
+	}
+	return errors.As(err, &accepted) && accepted.CommitPublicationAccepted()
 }
 
 func finalizeCommitErrorAllowsCreatedSegmentCleanup(err error) bool {
@@ -1057,6 +1101,17 @@ type ValueLogOptions struct {
 
 type Options struct {
 	Dir string
+	// ResolvedProfile is the canonical public durability contract selected by
+	// the TreeDB profile resolver. Public constructors populate it before any
+	// backend or cached-layer routing decision is made.
+	ResolvedProfile DurabilityProfile
+	// DeprecatedProfileAlias records a legacy Go alias that resolved to
+	// ResolvedProfile. It is diagnostic-only and never controls behavior.
+	DeprecatedProfileAlias DurabilityProfile
+	// UnsafeBenchmarkProfile proves that bench_unsafe entered through an explicit
+	// benchmark/test constructor boundary. Ordinary production opens reject the
+	// profile when this marker is false.
+	UnsafeBenchmarkProfile bool
 	// IgnoreFormatConfig disables best-effort persisted format.json loading in
 	// TreeDB open paths that auto-apply index-format knobs from disk (e.g.
 	// treedb.Open, treedb.OpenBackend) and in offline maintenance helpers
@@ -1786,6 +1841,9 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
+	if err := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); err != nil {
+		return nil, err
+	}
 	if opts.IgnoreFormatConfig {
 		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
 		if err != nil {
@@ -1906,6 +1964,9 @@ func validateOptions(opts Options) error {
 	}
 	if !opts.FlushAdmissionPolicy.Valid() {
 		return fmt.Errorf("treedb: invalid flush admission policy %d", opts.FlushAdmissionPolicy)
+	}
+	if err := validateResolvedDurabilityProfile(opts); err != nil {
+		return err
 	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
@@ -2123,6 +2184,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
+		resolvedProfile:                opts.ResolvedProfile,
+		deprecatedProfileAlias:         opts.DeprecatedProfileAlias,
 		rootPublicationFixedDelay:      opts.rootPublicationFixedDelay,
 		commandWAL:                     opts.CommandWAL,
 		commandWALStatsScan:            opts.CommandWALStatsScan,
@@ -2140,6 +2203,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
+		return db.syncDeletionNamespaceDirectoryOrPoison(
+			dir,
+			resource,
+			"treedb: sync deferred value-log deletion namespace",
+		)
+	})
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()
 	db.idx.Store(gen)
@@ -2280,7 +2350,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, legacyCachedRedoJournalReplayDisabledError(legacySegments, opts.WALMaxSegmentBytes)
 		}
-		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal {
+		// The explicit compatibility escape hatch also classifies incomplete-only
+		// legacy segments. They contain no replayable batch, but the authorized
+		// forensic recovery pass must still remove the torn suffix so it is not
+		// rediscovered on every reopen.
+		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal || opts.AllowLegacyCachedRedoJournalReplay {
 			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
 				_ = db.Close()
 				return nil, err
@@ -2369,8 +2443,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// Best-effort: persist the format knobs used for this DB directory so
 	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
 	// the intended on-disk layout without requiring callers to re-specify flags.
-	if err := saveOpenFormatConfig(opts); err != nil && opts.NotifyError != nil {
-		opts.NotifyError(err)
+	if err := saveOpenFormatConfig(opts); err != nil {
+		if opts.ResolvedProfile != "" {
+			_ = db.Close()
+			return nil, fmt.Errorf("treedb: persist durability profile manifest: %w", err)
+		}
+		if opts.NotifyError != nil {
+			opts.NotifyError(err)
+		}
 	}
 
 	return db, nil

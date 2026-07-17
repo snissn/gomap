@@ -131,10 +131,10 @@ func TestCommandWALCurrentDocsStateDurabilityContract(t *testing.T) {
 		{
 			rel: filepath.Join("docs", "contracts", "DURABILITY.md"),
 			wants: []string{
-				"TreeDB provides explicit durability calls (`SetSync`, `DeleteSync`,",
-				"`*Sync` means command-WAL/value-log sync",
-				"it does not require a full backend `Checkpoint()` per write",
-				"`Checkpoint()` and `Close()` are backend publication/drain boundaries",
+				"`command_wal_durable` ordinary acknowledgements",
+				"`command_wal_relaxed` ordinary acknowledgements",
+				"`no_wal_fast` ordinary acknowledgements",
+				"`Flush` and `FlushAll` are visibility/drain operations",
 				"Current command-WAL directories fail closed on replayable legacy redo",
 			},
 		},
@@ -174,6 +174,60 @@ func TestCommandWALCurrentDocsStateDurabilityContract(t *testing.T) {
 		for _, want := range tc.wants {
 			if !strings.Contains(string(text), want) {
 				t.Fatalf("%s missing current command-WAL contract wording %q", tc.rel, want)
+			}
+		}
+	}
+}
+
+func TestDurabilityProfileChildEvidenceManifestCoversSuccessorInputs(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "durability-profile-child-evidence-3683.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read child evidence manifest: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"#3683 -> #3684",
+		"TestDurabilityProfilePublicEntrypointInventory",
+		"TestProductionProfileLifecycleFrontiersMatchFrozenContract",
+		"TestProductionProfilesForcedPointersDeleteReuseRotationReopen",
+		"TestCrashRecovery_DurabilityTiers",
+		"TestProductionAuthorityExecutableCompositeOmissionMatrix",
+		"TestCommandWALIntentResolvedProfileControlsOrdinaryStagedAppendSync",
+		"TestFlushCoordinatorHardOverloadFallsBackToForegroundAssist",
+		"benchmarks/dgraph_durability",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s missing successor evidence %q", path, want)
+		}
+	}
+}
+
+func TestBenchmarkProfileWrappersUseCanonicalBenchUnsafe(t *testing.T) {
+	_, repoRoot := repoRoots(t)
+	checks := map[string][]string{
+		filepath.Join(repoRoot, "scripts", "leafgen_cached_dwell_validate.sh"):        {"PROFILE=${TREEDB_PROFILE:-bench_unsafe}"},
+		filepath.Join(repoRoot, "scripts", "leafgen_target_sweep.sh"):                 {"PROFILE=${TREEDB_PROFILE:-bench_unsafe}"},
+		filepath.Join(repoRoot, "scripts", "treedb_collection_compression_matrix.sh"): {"PROFILE=\"${PROFILE:-bench_unsafe}\""},
+		filepath.Join(repoRoot, "scripts", "bench_collections_report.sh"):             {"TREEDB_COLLECTION_BENCH_ENGINE:-bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "treedb_insert_compression_profile.sh"):    {"TREEDB_COLLECTION_BENCH_ENGINE:-bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "bench_collections_matrix.sh"):             {"bench_unsafe_data_vlog_index_leaf bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "mongo_gateway_scaling_bench.sh"):          {"TREEDB_PROFILE:-bench_unsafe", "Default: bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "mongo_gateway_compare.sh"):                {"TREEDB_PROFILE:-bench_unsafe", "Default: bench_unsafe"},
+		filepath.Join(repoRoot, "scripts", "mongo_gateway_ycsb_attribution.sh"):       {"TREEDB_PROFILE:-bench_unsafe"},
+		filepath.Join(repoRoot, "cmd", "mongo_gateway_bench", "README.md"):            {"-treedb-profile bench_unsafe"},
+		filepath.Join(repoRoot, "cmd", "treedb_vector_search_demo", "README.md"):      {"`bench_unsafe` profile", "|bench_unsafe`"},
+	}
+	for path, required := range checks {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		for _, want := range required {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing canonical benchmark profile token %q", path, want)
 			}
 		}
 	}
@@ -247,12 +301,10 @@ func mentionsLegacyWALTerm(line string) bool {
 	for _, term := range []string{
 		"legacy_wal",
 		"wal_on_fast",
-		"no_wal_fast",
 		"profilefast",
 		"profilewalonfast",
 		"profilelegacy",
 		"profiledurable",
-		"profilenowalfast",
 		"durabilitywaloffrelaxed",
 		"durabilitywalonrelaxed",
 		"disablejournal",
@@ -332,7 +384,6 @@ func mentionsLegacyProfileAlias(lower string) bool {
 	for _, alias := range []string{
 		"legacy_wal_relaxed_fast",
 		"legacy_wal_durable",
-		"no_wal_fast",
 		"wal_on_fast",
 		"walonfast",
 		"durable",
@@ -518,6 +569,10 @@ func hasLegacyWALContext(context string) bool {
 		"command-wal durable",
 		"command-wal relaxed",
 		"durable command-wal",
+		"no_wal_fast",
+		"profilenowalfast",
+		"no-wal production",
+		"no wal production",
 	} {
 		if strings.Contains(context, term) {
 			return true

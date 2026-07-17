@@ -27,6 +27,9 @@ const (
 // index.db to reference the new log. This is an offline operation that requires
 // an exclusive lock and a clean commitlog.
 func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
+	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return ValueLogRewriteStats{}, err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return ValueLogRewriteStats{}, err

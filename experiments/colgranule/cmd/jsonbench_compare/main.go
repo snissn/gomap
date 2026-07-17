@@ -293,7 +293,7 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 		return out, fmt.Errorf("create remaining TreeDB dir: %w", err)
 	}
 
-	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dbDir)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -427,7 +427,7 @@ func measureRawJSONTreeDB(ctx context.Context, files []string, rows int, dbDir s
 		return out, fmt.Errorf("create raw TreeDB dir: %w", err)
 	}
 
-	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dbDir)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	db, err := treedb.Open(opts)
@@ -570,7 +570,7 @@ func insertRawJSONRows(files []string, rows int, db *treedb.DB, out *remainingTr
 }
 
 func validateRawJSONTreeDB(files []string, rows int, dbDir string) error {
-	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dbDir)
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return fmt.Errorf("open raw TreeDB for validation: %w", err)

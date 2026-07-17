@@ -310,11 +310,16 @@ func TestSaveFormatConfigNormalizesRequiredFeaturesToVersion3(t *testing.T) {
 
 func TestValidateFormatRequiredFeatureGateAllowsIgnoredOrdinaryFormatErrors(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		json string
+		name        string
+		json        string
+		wantOpenErr string
 	}{
 		{name: "malformed", json: `{"version":`},
-		{name: "future version without required features", json: `{"version":999}`},
+		{
+			name:        "future version without required features",
+			json:        `{"version":999}`,
+			wantOpenErr: "requires durability_profile",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -325,6 +330,12 @@ func TestValidateFormatRequiredFeatureGateAllowsIgnoredOrdinaryFormatErrors(t *t
 				t.Fatalf("ValidateFormatRequiredFeatureGate: %v", err)
 			}
 			db, err := Open(Options{Dir: dir, IgnoreFormatConfig: true})
+			if tc.wantOpenErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantOpenErr) {
+					t.Fatalf("Open IgnoreFormatConfig error=%v, want substring %q", err, tc.wantOpenErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Open IgnoreFormatConfig: %v", err)
 			}

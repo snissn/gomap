@@ -1295,7 +1295,7 @@ func TestMutationBarrierAckAPIs(t *testing.T) {
 	}
 }
 
-func TestNativewireAckSyncedRejectedInWALOnRelaxed(t *testing.T) {
+func TestNativewireAckSyncedOptsUpInWALOnRelaxed(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),
 		Durability: backenddb.DurabilityWALOnRelaxed,
@@ -1321,15 +1321,25 @@ func TestNativewireAckSyncedRejectedInWALOnRelaxed(t *testing.T) {
 		[][]byte{[]byte(`{"x":1}`)},
 		AckSynced,
 	)
-	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
-		t.Fatalf("InsertBatch synced relaxed err=%v want durability unavailable", err)
+	if err != nil {
+		t.Fatalf("InsertBatch synced relaxed: %v", err)
 	}
-	assertDocumentMissing(t, mgr, "users", "u1")
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Contains(doc, []byte(`"x":1`)) {
+		t.Fatalf("u1 after synced relaxed insert: %s", doc)
+	}
 	if err := client.Checkpoint(ctx); err != nil {
 		t.Fatalf("Checkpoint default relaxed: %v", err)
 	}
-	if err := client.CheckpointWithAck(ctx, AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
-		t.Fatalf("CheckpointWithAck synced relaxed err=%v want durability unavailable", err)
+	if err := client.CheckpointWithAck(ctx, AckSynced); err != nil {
+		t.Fatalf("CheckpointWithAck synced relaxed: %v", err)
 	}
 }
 

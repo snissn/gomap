@@ -18,7 +18,7 @@ import (
 
 func TestValueLogRewriteOfflineRejectsTemplateActivationBeforeSideStoreOpen(t *testing.T) {
 	root := t.TempDir()
-	database, err := Open(Options{Dir: root})
+	database, err := Open(OptionsFor(ProfileNoWALFast, root))
 	if err != nil {
 		t.Fatalf("open main database: %v", err)
 	}
@@ -33,10 +33,10 @@ func TestValueLogRewriteOfflineRejectsTemplateActivationBeforeSideStoreOpen(t *t
 	}
 	defer templateBackend.Close()
 
-	_, err = ValueLogRewriteOffline(Options{
-		Dir: root, IgnoreFormatConfig: true,
-		ValueLog: ValueLogOptions{TemplateMode: templ.TemplateOnly},
-	})
+	opts := OptionsFor(ProfileNoWALFast, root)
+	opts.IgnoreFormatConfig = true
+	opts.ValueLog.TemplateMode = templ.TemplateOnly
+	_, err = ValueLogRewriteOffline(opts)
 	if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
 		t.Fatalf("offline template rewrite error=%v want unresolved authority before side-store open", err)
 	}
@@ -101,14 +101,12 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(maindb): %v", err)
 	}
-	writer, err := treedbdb.Open(treedbdb.Options{
-		Dir: mainDir,
-		ValueLog: treedbdb.ValueLogOptions{
-			ForcePointers:    true,
-			PointerThreshold: 1,
-			Compression:      treedbdb.ValueLogCompressionOff,
-		},
-	})
+	writerOpts := OptionsFor(ProfileNoWALFast, mainDir)
+	writerOpts.IndexOuterLeavesInValueLog = false
+	writerOpts.ValueLog.ForcePointers = true
+	writerOpts.ValueLog.PointerThreshold = 1
+	writerOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+	writer, err := treedbdb.Open(writerOpts)
 	if err != nil {
 		t.Fatalf("Open(writer): %v", err)
 	}
@@ -177,7 +175,7 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 	}
 
 	verifyDecoded := func(stage string) {
-		reader, cleanup, err := OpenBackend(Options{Dir: dir})
+		reader, cleanup, err := OpenBackend(OptionsFor(ProfileNoWALFast, dir))
 		if err != nil {
 			t.Fatalf("OpenBackend(%s): %v", stage, err)
 		}
@@ -198,7 +196,7 @@ func TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup(t *testing.T)
 
 	verifyDecoded("before-vacuum")
 
-	if err := VacuumIndexOffline(Options{Dir: dir}); err != nil {
+	if err := VacuumIndexOffline(OptionsFor(ProfileNoWALFast, dir)); err != nil {
 		t.Fatalf("VacuumIndexOffline: %v", err)
 	}
 

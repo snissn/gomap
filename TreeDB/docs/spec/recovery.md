@@ -2,6 +2,12 @@
 
 This document defines startup recovery behavior.
 
+Recovery follows the immutable canonical profile selected at open:
+`command_wal_durable`, `command_wal_relaxed`, or production no-WAL
+`no_wal_fast`. `bench_unsafe` has no production recovery guarantee. Because
+TreeDB is pre-alpha, persisted feature/profile conflicts fail closed with a
+rebuild-required error; recovery does not infer a weaker hybrid contract.
+
 ## 1. Recovery Entry Points
 
 Recovery is executed during `Open` for read-write handles.

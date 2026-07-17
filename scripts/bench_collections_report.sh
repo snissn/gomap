@@ -10,7 +10,7 @@ COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
 # The default regex includes create-index backfill DDL coverage, which the
 # public command-WAL collection path does not support yet.
-BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-bench}"
+BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-bench_unsafe}"
 BATCH_SIZE="${TREEDB_COLLECTION_BENCH_BATCH_SIZE:-8000}"
 DOCUMENT_FORMAT="${TREEDB_COLLECTION_DOCUMENT_FORMAT:-json}"
 DATA_OUTER="${TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG:-true}"
@@ -199,10 +199,10 @@ cat >"$OUT_DIR/README.md" <<EOF
 - benchmark count: \`$COUNT\`
 - go test tags: \`${GO_TEST_TAGS:-none}\`
 $ARTIFACT_LINES
-- benchmark-only no-WAL default: \`TREEDB_COLLECTION_BENCH_ENGINE=bench scripts/bench_collections_report.sh\`
+- benchmark-only no-WAL default: \`TREEDB_COLLECTION_BENCH_ENGINE=bench_unsafe scripts/bench_collections_report.sh\`
 - command-WAL relaxed override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_relaxed BENCH_REGEX='Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)' scripts/bench_collections_report.sh\`
 - command-WAL durable override: \`TREEDB_COLLECTION_BENCH_ENGINE=command_wal_durable BENCH_REGEX='Benchmark(CollectionInsertProvidedID|CollectionInsertBatchProvidedID|CollectionGetByID|CollectionGetByIDParallel|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionInsertBatchWithSecondaryIndexes|CollectionInsertBatchCheckpointWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionOverheadPlanNoIndex|CollectionOverheadPlanIndexed|CollectionOverheadPlanIndexedTemplateV1|CollectionOverheadIndexStateJSONExtraction|CollectionOverheadIndexStateTemplateV1Extraction|CollectionOverheadPlanIndexedPrecomputedState)' scripts/bench_collections_report.sh\`
-- benchmark-only no-WAL storage-control override: \`TREEDB_COLLECTION_BENCH_ENGINE=bench TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
+- benchmark-only no-WAL storage-control override: \`TREEDB_COLLECTION_BENCH_ENGINE=bench_unsafe TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - data-root pager-leaf override: \`TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=false scripts/bench_collections_report.sh\`
 - index-root outer-leaf override: \`TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=true scripts/bench_collections_report.sh\`
 - pager chunk size override: \`TREEDB_COLLECTION_CHUNK_SIZE=65536 scripts/bench_collections_report.sh\`

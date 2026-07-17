@@ -48,7 +48,7 @@ func main() {
 	outDir := flag.String("dir", "", "DB directory (default: temp)")
 	seed := flag.Int64("seed", 1, "RNG seed")
 	scale := flag.Float64("scale", 1.0, "Scale factor for counts in summary")
-	profileRaw := flag.String("profile", string(treedb.ProfileCommandWALRelaxed), "TreeDB profile: "+treedb.ProfileFlagHelp)
+	profileRaw := flag.String("profile", string(treedb.ProfileCommandWALRelaxed), "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
 	flushThreshold := flag.Int("flush-threshold", 32*1024*1024, "Flush threshold bytes")
 	memtableShards := flag.Int("memtable-shards", 0, "Memtable shards (0 = default)")
 	flag.Parse()
@@ -90,7 +90,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	opts := treedb.OptionsFor(profile, dir)
+	opts := treedb.OptionsForBenchmark(profile, dir)
 	opts.FlushThreshold = int64(*flushThreshold)
 	opts.MemtableShards = *memtableShards
 	db, err := treedb.Open(opts)
@@ -124,9 +124,9 @@ func main() {
 }
 
 func parseTraceReplayProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
+	profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileCommandWALRelaxed)
 	if !ok {
-		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 	}
 	return profile, nil
 }

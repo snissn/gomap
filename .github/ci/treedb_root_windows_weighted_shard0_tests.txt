@@ -1,5 +1,0 @@
-# Windows-only additions to the shared root-package shard-0 pin list.
-# This oracle takes about 188s on windows-core-2 while shard 0 otherwise
-# finishes in seconds. Keep full coverage but move it off the deadline-bound
-# Windows shard without changing Linux race membership.
-TestPowerLossOracleEnumerateCutPoints

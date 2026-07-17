@@ -1881,8 +1881,8 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse defaults: %v", err)
 	}
-	if cfg.TreeDBProfile != treedb.ProfileBench {
-		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileBench)
+	if cfg.TreeDBProfile != treedb.ProfileBenchUnsafe {
+		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileBenchUnsafe)
 	}
 	if cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=true want false by default")
@@ -1922,20 +1922,20 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 }
 
-func TestParseTreeDBProfileRejectsDeprecatedPublicNames(t *testing.T) {
-	if got, err := parseTreeDBProfile("command-wal-durable"); err != nil || got != treedb.ProfileCommandWALDurable {
+func TestParseTreeDBProfileRejectsDeprecatedNames(t *testing.T) {
+	if got, err := parseTreeDBProfile("command_wal_durable"); err != nil || got != treedb.ProfileCommandWALDurable {
 		t.Fatalf("parseTreeDBProfile command WAL durable = %q err=%v", got, err)
 	}
-	if got, err := parseTreeDBProfile(""); err != nil || got != treedb.ProfileBench {
+	if got, err := parseTreeDBProfile(""); err != nil || got != treedb.ProfileBenchUnsafe {
 		t.Fatalf("parseTreeDBProfile empty = %q err=%v", got, err)
 	}
-	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "command-wal-durable"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := parseTreeDBProfile(raw)
 			if err == nil {
 				t.Fatal("parseTreeDBProfile succeeded, want error")
 			}
-			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+			if !strings.Contains(err.Error(), treedb.BenchmarkProfileFlagHelp) {
 				t.Fatalf("error=%v, want profile help", err)
 			}
 		})
@@ -2050,7 +2050,7 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-maintenance", treeDBMaintenanceNone}); err != nil {
 		t.Fatalf("parse command WAL none maintenance: %v", err)
 	}
-	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err == nil || !strings.Contains(err.Error(), "allowed: "+treedb.ProfileFlagHelp) {
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err == nil || !strings.Contains(err.Error(), "allowed: "+treedb.BenchmarkProfileFlagHelp) {
 		t.Fatalf("parse deprecated command WAL profile error=%v, want strict profile error", err)
 	}
 	cfg, err = parseConfig([]string{"-target", "treedb", "-treedb-profile", string(treedb.ProfileCommandWALDurable)})
@@ -2060,7 +2060,7 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false for command_wal_durable profile")
 	}
-	for _, profile := range []treedb.Profile{treedb.ProfileBench} {
+	for _, profile := range []treedb.Profile{treedb.ProfileBenchUnsafe, treedb.ProfileNoWALFast} {
 		_, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(profile)})
 		if err == nil || !strings.Contains(err.Error(), "treedb-command-wal requires a WAL-on treedb-profile") {
 			t.Fatalf("parse command WAL profile %q error=%v, want WAL-on profile error", profile, err)
@@ -2409,7 +2409,7 @@ func TestTreeDBProfileSmokeBench(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")
 	}
-	ops := runTreeDBProfileSmoke(t, treedb.ProfileBench)
+	ops := runTreeDBProfileSmoke(t, treedb.ProfileBenchUnsafe)
 	t.Logf("bench load_insert_many ops/sec=%.1f", ops)
 }
 
@@ -3153,7 +3153,7 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 		ConcurrentRangeReaders:     4,
 		ConcurrentRangeReaderSweep: []int{1, 4},
 		ConcurrentRangeReads:       8,
-		TreeDBProfile:              string(treedb.ProfileBench),
+		TreeDBProfile:              string(treedb.ProfileBenchUnsafe),
 		TreeDBReadState:            treeDBReadStateUnsettled,
 		Phases: []phaseResult{{
 			Name:           "load_insert_many",

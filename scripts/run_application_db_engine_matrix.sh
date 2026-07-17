@@ -480,7 +480,7 @@ func keySuccessor(key []byte) []byte {
 func runCompactTreeDB(args []string) {
 	fs := flag.NewFlagSet("compact-treedb", flag.ExitOnError)
 	destParent := fs.String("dest-parent", "", "destination parent directory")
-	profileRaw := fs.String("profile", "command_wal_relaxed", "command_wal_relaxed, command_wal_durable, bench, or a legacy compatibility profile")
+	profileRaw := fs.String("profile", "command_wal_relaxed", "production TreeDB profile: command_wal_durable, command_wal_relaxed, or no_wal_fast")
 	if err := fs.Parse(args); err != nil {
 		fatalErr(err)
 	}

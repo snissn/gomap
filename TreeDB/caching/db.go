@@ -8095,6 +8095,17 @@ type backendStorageDirProvider interface {
 	Dir() string
 }
 
+type backendPublicationReadinessChecker interface {
+	CheckCommandWALPublishReady() error
+}
+
+func backendPublicationReady(backend BackendDB) error {
+	if checker, ok := backend.(backendPublicationReadinessChecker); ok {
+		return checker.CheckCommandWALPublishReady()
+	}
+	return nil
+}
+
 // ValueLogIdentityPinRegistry lets nested wrappers share the same physical
 // deletion gate as the backend and cache value-log managers.
 func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
@@ -23203,6 +23214,18 @@ func (db *DB) beginDirectWrite() error {
 			return backenddb.ErrClosed
 		}
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			// A writer may have passed its public-wrapper preflight before waiting
+			// behind a checkpoint that subsequently poisoned root publication.
+			// Recheck at the actual cached admission boundary while writeMu keeps
+			// the checkpoint cutover from moving underneath this decision.
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.RUnlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
@@ -23235,6 +23258,14 @@ func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 			return backenddb.ErrClosed
 		}
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.RUnlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
@@ -23252,7 +23283,7 @@ func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 	}
 }
 
-func (db *DB) beginExclusiveWrite() {
+func (db *DB) beginExclusiveWrite() error {
 	for {
 		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
@@ -23261,12 +23292,20 @@ func (db *DB) beginExclusiveWrite() {
 		}
 		db.writeMu.Lock()
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.Unlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			db.observePostFrontierWriteAdmission()
-			return
+			return nil
 		}
 		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
@@ -23276,7 +23315,7 @@ func (db *DB) beginExclusiveWrite() {
 	}
 }
 
-func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
+func (db *DB) beginExclusiveWriteWithFlushMuHeld() error {
 	for {
 		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
@@ -23285,12 +23324,20 @@ func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
 		}
 		db.writeMu.Lock()
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.Unlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			db.observePostFrontierWriteAdmission()
-			return
+			return nil
 		}
 		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
@@ -24137,7 +24184,7 @@ func (db *DB) Checkpoint() error {
 				hook()
 			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
-				commandWALAppliedLSN, commandWALRanges, err := publishHook(!db.relaxedSync)
+				commandWALAppliedLSN, commandWALRanges, err := publishHook(true)
 				if err != nil {
 					return err
 				}
@@ -24150,7 +24197,7 @@ func (db *DB) Checkpoint() error {
 				if err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+				if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 					return err
 				}
 			}
@@ -24234,7 +24281,7 @@ func (db *DB) Checkpoint() error {
 	if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
 		commandWALPublishStart := time.Now()
-		commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+		commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
@@ -24322,7 +24369,7 @@ func (db *DB) Checkpoint() error {
 		if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 			var err error
 			commandWALPublishStart := time.Now()
-			commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+			commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 			recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 			if err != nil {
 				return err
@@ -24361,7 +24408,7 @@ func (db *DB) Checkpoint() error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 			return err
 		}
 	}
@@ -24410,7 +24457,7 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
 	}
-	if removed && !db.relaxedSync {
+	if removed {
 		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	db.observeCheckpointWALCleanupCoverage(cleanupConsidered, cleanupRemoved, cleanupSkippedCurrent, cleanupSkippedPreRotate, cleanupSkippedRetained)
@@ -24444,12 +24491,7 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 		_ = backendBatch.Close()
 		return false, err
 	}
-	var err error
-	if db.relaxedSync {
-		err = backendBatch.Write()
-	} else {
-		err = backendBatch.WriteSync()
-	}
+	err := backendBatch.WriteSync()
 	cerr := backendBatch.Close()
 	if err == nil {
 		err = cerr
@@ -25692,7 +25734,9 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 	db.waitForRangeSpanCheckpointDrain()
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.beginExclusiveWriteWithFlushMuHeld()
+	if err := db.beginExclusiveWriteWithFlushMuHeld(); err != nil {
+		return err
+	}
 	defer db.writeMu.Unlock()
 
 	db.mu.Lock()
@@ -25768,7 +25812,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
 	// post-journal apply divergence on partial batch failure.
 	if !db.disableJournal {
-		db.beginExclusiveWrite()
+		if err := db.beginExclusiveWrite(); err != nil {
+			return err
+		}
 		defer db.writeMu.Unlock()
 
 		it, err := db.Iterator(start, end)
@@ -26060,7 +26106,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		// rotating the memtable (which can allocate large arenas).
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
-		db.beginExclusiveWriteWithFlushMuHeld()
+		if err := db.beginExclusiveWriteWithFlushMuHeld(); err != nil {
+			return err
+		}
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
@@ -35633,7 +35681,9 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// a concurrent cached write can slip between the scan and the materialized
 	// point-delete batch, producing a non-serializable mix of range-deleted old
 	// keys and surviving newly inserted keys.
-	b.db.beginExclusiveWrite()
+	if err := b.db.beginExclusiveWrite(); err != nil {
+		return err
+	}
 	writeMuHeld := true
 	unlockWriteMu := func() {
 		if writeMuHeld {
@@ -35733,7 +35783,9 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 	b.db.waitForRangeSpanCheckpointDrain()
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
-	b.db.beginExclusiveWriteWithFlushMuHeld()
+	if err := b.db.beginExclusiveWriteWithFlushMuHeld(); err != nil {
+		return err
+	}
 	defer b.db.writeMu.Unlock()
 
 	b.db.mu.Lock()

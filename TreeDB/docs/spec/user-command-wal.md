@@ -1192,16 +1192,26 @@ Acceptance:
 - recovery preserves visible state and deletes after public batch writes;
 - the support matrix classifies public raw KV writes as `WAL-supported` and
   points at executable evidence;
-- point `Set`, focused `Batch.Write`, `unified_bench` batch-write, and
-  incompressible value-log auto/off throughput gates each require candidate
-  throughput strictly greater than `1.01x` of the relevant baseline. Any
-  required lane at or below `1.01x`, including sub-parity evidence such as
-  `0.80x`, is a failing gate rather than accepted evidence.
-- all required command-WAL acceptance performance gates use the same strict
-  parity-plus policy: passing evidence must include `>` semantics, explicit
-  `1.01x` minimum ratio thresholds, and comparative throughput ratios above the
-  threshold; stale or diagnostic evidence below that threshold is failing
-  evidence.
+- the historical PR9 point `Set`, focused `Batch.Write`, `unified_bench`
+  batch-write, and incompressible value-log auto/off throughput gates each
+  require candidate throughput strictly greater than `1.01x` of the relevant
+  baseline. Any required lane in that immutable acceptance artifact at or
+  below `1.01x`, including sub-parity evidence such as `0.80x`, is failing
+  rather than accepted evidence;
+- all historical required command-WAL acceptance performance gates use the
+  same strict parity-plus policy: passing evidence includes `>` semantics,
+  explicit `1.01x` minimum ratio thresholds, and comparative throughput ratios
+  above the threshold;
+- the current hosted incompressible value-log gate is the #3861/#3863 settled
+  throughput/storage contract. It uses `batch_write_steady`, records the CPU
+  model and selected threshold, and applies a strict `>0.94x` threshold on
+  AMD EPYC 7763 runners or a strict `>0.95x` threshold on all other or unknown
+  CPU models to the geometric mean of every fixed, order-balanced auto/off
+  pair. It keeps the sum of each pair's `total=` fields for
+  `maindb/value_vlog` plus `maindb/leaf_vlog` at or below `1.02x`. One
+  favorable sample cannot override a mostly failing sample set. Independent
+  mode checks require raw user values in both rows, block-compressed leaves in
+  auto, and uncompressed leaves in off.
 
 PR9 initial evidence:
 

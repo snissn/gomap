@@ -383,14 +383,10 @@ func TestReopenVerify_LeafPageLogGroupedFrameCRCIntegrityModes(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, _ := buildVerifyDataset(2000)
 
-	opts := treedb.Options{
-		Dir:                        dir,
-		IndexOuterLeavesInValueLog: true,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-			ReadIntegrity:    treedb.IntegrityVerify,
-		},
-	}
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ReadIntegrity = treedb.IntegrityVerify
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -1135,12 +1131,8 @@ func TestReopenVerify_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
 func TestReopenVerify_CompactIndex_ReopenParity(t *testing.T) {
 	dir := t.TempDir()
 	const total = 4000
-	opts := treedb.Options{
-		Dir: dir,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)

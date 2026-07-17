@@ -3147,7 +3147,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok || td == nil || td.DB == nil {
 				return math.NaN(), nil
 			}
-			if err := td.DB.CompactIndex(); err != nil {
+			var err error
+			switch td.DB.ResolvedProfile() {
+			case treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed:
+				err = td.DB.VacuumIndexOnline(context.Background())
+			default:
+				err = td.DB.CompactIndex()
+			}
+			if err != nil {
 				return 0, fmt.Errorf("vacuum_index: %w", err)
 			}
 			return math.NaN(), nil
@@ -7364,7 +7371,7 @@ func runChurnVacuumSuite(baseCfg BenchConfig) (string, error) {
 	// Churn + settled scans, then VACUUM and scan again on the same dataset.
 	cfg := baseCfg
 	cfg.Progress = false
-	cfg.DBsArg = "treedb,leveldb"
+	cfg.DBsArg = "treedb_bench_unsafe,leveldb"
 	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,vacuum_index,full_scan2,prefix_scan2"
 	cfg.SettleBeforeScans = true
 

@@ -18,7 +18,7 @@ import (
 
 func relaxedCommandWALDurablePrefixOptions(dir string) Options {
 	opts := commandWALDurabilityProofOptions(dir)
-	opts.Durability = DurabilityWALOnRelaxed
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
 	return opts
 }
 
@@ -282,6 +282,154 @@ func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
 		t.Fatalf("pending debt entries=%q, want 0 after SetSync", got)
+	}
+}
+
+func TestPublicCommandWALRelaxedPointerDebtEmitsExactDependencySyncCuts(t *testing.T) {
+	dir := t.TempDir()
+	opts := relaxedCommandWALDurablePrefixOptions(dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	defer restore()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+		_ = b.Close()
+		t.Fatalf("relaxed pointer batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("relaxed pointer batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("relaxed pointer batch Close: %v", err)
+	}
+
+	var relaxedValuePath string
+	for _, event := range events {
+		switch {
+		case event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.AfterDependencyAppend && event.Path != "":
+			relaxedValuePath = event.Path
+		case event.Resource == durabilitycut.ResourceValueLog && event.Namespace == durabilitycut.NamespaceCreate && event.NewPath != "":
+			relaxedValuePath = event.NewPath
+		}
+	}
+	if relaxedValuePath == "" {
+		t.Fatalf("relaxed pointer write emitted no exact value-log append path: %#v", events)
+	}
+	beforeDurable := len(events)
+	if err := db.SetSync([]byte("durable-inline"), []byte("value")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+
+	containsPath := func(event durabilitycut.Event, want string) bool {
+		if event.Path == want {
+			return true
+		}
+		for _, path := range event.Paths {
+			if path == want {
+				return true
+			}
+		}
+		return false
+	}
+	beforeSync, afterSync, durableAppend := -1, -1, -1
+	for i := beforeDurable; i < len(events); i++ {
+		event := events[i]
+		switch {
+		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.BeforeDependencyFileSync && containsPath(event, relaxedValuePath):
+			beforeSync = i
+		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.AfterDependencyFileSync && containsPath(event, relaxedValuePath):
+			afterSync = i
+		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 2:
+			durableAppend = i
+		}
+	}
+	if beforeSync < 0 || afterSync <= beforeSync || durableAppend <= afterSync {
+		t.Fatalf("exact dependency sync cuts must bracket the value-log fsync before durable frame append: before=%d after=%d append=%d path=%q events=%#v",
+			beforeSync, afterSync, durableAppend, relaxedValuePath, events)
+	}
+}
+
+func TestPublicCommandWALRelaxedPointerDependencySyncCutsRetainDebtForRetry(t *testing.T) {
+	for _, point := range []durabilitycut.Point{
+		durabilitycut.BeforeDependencyFileSync,
+		durabilitycut.AfterDependencyFileSync,
+	} {
+		point := point
+		t.Run(string(point), func(t *testing.T) {
+			dir := t.TempDir()
+			opts := relaxedCommandWALDurablePrefixOptions(dir)
+			opts.ValueLog.PointerThreshold = 1
+			opts.ValueLog.ForcePointers = true
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open relaxed command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			b := db.NewBatch()
+			if err := b.Set([]byte("relaxed-pointer"), bytes.Repeat([]byte("r"), 4096)); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch Set relaxed pointer: %v", err)
+			}
+			if err := b.Write(); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch Write relaxed pointer: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("batch Close relaxed pointer: %v", err)
+			}
+			cutErr := fmt.Errorf("injected pointer dependency cut at %s", point)
+			cut := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if !cut && event.Resource == durabilitycut.ResourceAuxiliary && event.Point == point {
+					cut = true
+					return cutErr
+				}
+				return nil
+			})
+			err = writeEmptyPublicCommandWALSync(db)
+			restore()
+			if !errors.Is(err, cutErr) || !cut {
+				t.Fatalf("empty WriteSync error=%v cut=%t, want injected %s cut", err, cut, point)
+			}
+			stats := db.Stats()
+			if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "0" {
+				t.Fatalf("durable_wal_lsn after pre-append cut=%q, want 0", got)
+			}
+			if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "1" {
+				t.Fatalf("pending debt entries after pre-append cut=%q, want retained 1", got)
+			}
+			if got := stats["treedb.command_wal.dependency_debt.retries_total"]; got != "1" {
+				t.Fatalf("pending debt retries after pre-append cut=%q, want 1", got)
+			}
+			if frames := scanPublicCommandWALV2(t, dir); len(frames) != 1 {
+				t.Fatalf("frames after pre-append cut=%+v, want only relaxed frame", frames)
+			}
+
+			if err := writeEmptyPublicCommandWALSync(db); err != nil {
+				t.Fatalf("retry empty WriteSync barrier: %v", err)
+			}
+			stats = db.Stats()
+			if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+				t.Fatalf("durable_wal_lsn after retry=%q, want 2", got)
+			}
+			if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
+				t.Fatalf("pending debt entries after retry=%q, want 0", got)
+			}
+		})
 	}
 }
 
