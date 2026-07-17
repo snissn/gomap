@@ -147,12 +147,14 @@ worktree, index, object-store, namespace, and configuration overrides cannot
 redirect validation away from the certified repository. Git is invoked from a
 fixed trusted system path rather than the inherited `PATH`.
 
-The runner materializes the planned commit in a private detached checkout and
-builds only from that checkout, so ignored files in the caller's worktree cannot
-alter a claimed exact-SHA binary. It resolves the default Go binary from the
-running tool's compiled GOROOT only when no `GOROOT` override is inherited; an
-inherited override requires an explicitly absolute `-go` path. The runner then
-requires the selected tool's reported version to
+The runner materializes the planned commit in a private detached clone with an
+independent object store, an empty Git template and hooks directory, and
+sanitized checkout configuration. It builds only from that clone, so ignored
+files, repository-local hooks, and local configuration from the caller's
+worktree cannot alter a claimed exact-SHA binary. It resolves the default Go
+binary from the running tool's compiled GOROOT only when no `GOROOT` override
+is inherited; an inherited override requires an explicitly absolute `-go`
+path. The runner then requires the selected tool's reported version to
 match the Go runtime that built the runner, and builds with a minimal fixed
 environment (`GOENV=off`, empty `GOFLAGS`, `GOTOOLCHAIN=local`, and
 `GOWORK=off`). Witnesses run under a separately recorded minimal environment,

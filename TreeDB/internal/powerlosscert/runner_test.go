@@ -290,7 +290,7 @@ func TestBuildTestBinariesUsesPrivateExactSHACheckout(t *testing.T) {
 	runGit("config", "user.email", "powerlosscert@example.invalid")
 	runGit("config", "user.name", "powerlosscert test")
 	files := map[string]string{
-		".gitignore":                 "fixturepkg/ignored_override_test.go\n",
+		".gitignore":                 "fixturepkg/ignored_override_test.go\nfixturepkg/ignored_hook_test.go\n",
 		"go.mod":                     "module powerlosscert-fixture\n\ngo 1.25\n",
 		"fixturepkg/fixture.go":      "package fixturepkg\n\nfunc Value() int { return 1 }\n",
 		"fixturepkg/fixture_test.go": "package fixturepkg\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 1 { t.Fatal(Value()) } }\n",
@@ -308,6 +308,25 @@ func TestBuildTestBinariesUsesPrivateExactSHACheckout(t *testing.T) {
 	runGit("commit", "-m", "fixture")
 	head := runGit("rev-parse", "HEAD")
 	runGit("update-ref", CertifiedRepositoryRef, head)
+	attackerHooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(attackerHooks, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		hook := []byte("#!/bin/sh\nmkdir -p fixturepkg\nprintf 'package fixturepkg\\n\\nfunc ignoredHookDoesNotCompile(\\n' > fixturepkg/ignored_hook_test.go\n")
+		if err := os.WriteFile(filepath.Join(attackerHooks, "post-checkout"), hook, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit("config", "core.hooksPath", attackerHooks)
+	if runtime.GOOS != "windows" {
+		vulnerableRoot := filepath.Join(t.TempDir(), "linked-worktree")
+		runGit("worktree", "add", "--detach", vulnerableRoot, head)
+		if _, err := os.Stat(filepath.Join(vulnerableRoot, "fixturepkg", "ignored_hook_test.go")); err != nil {
+			t.Fatalf("post-checkout hook fixture did not inject ignored source into a linked worktree: %v", err)
+		}
+		runGit("worktree", "remove", "--force", vulnerableRoot)
+	}
 	ignoredSource := filepath.Join(repo, "fixturepkg", "ignored_override_test.go")
 	if err := os.WriteFile(ignoredSource, []byte("package fixturepkg\n\nfunc ignoredInputDoesNotCompile(\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -339,6 +358,21 @@ func TestBuildTestBinariesUsesPrivateExactSHACheckout(t *testing.T) {
 	}()
 	if _, err := os.Stat(filepath.Join(sourceRoot, "fixturepkg", "ignored_override_test.go")); !os.IsNotExist(err) {
 		t.Fatalf("private exact-SHA checkout contains ignored source: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sourceRoot, "fixturepkg", "ignored_hook_test.go")); !os.IsNotExist(err) {
+		t.Fatalf("private exact-SHA checkout ran the source repository's post-checkout hook: %v", err)
+	}
+	checkoutConfig := exec.Command("git", "config", "--local", "--get", "core.hooksPath")
+	checkoutConfig.Dir = sourceRoot
+	configuredHooks, err := checkoutConfig.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read private exact-SHA checkout hooks path: %v\n%s", err, configuredHooks)
+	}
+	if strings.TrimSpace(string(configuredHooks)) == attackerHooks {
+		t.Fatalf("private exact-SHA checkout inherited source core.hooksPath=%q", attackerHooks)
+	}
+	if _, err := os.Stat(filepath.Join(sourceRoot, ".git", "objects", "info", "alternates")); !os.IsNotExist(err) {
+		t.Fatalf("private exact-SHA checkout retained a shared object-store alternate: %v", err)
 	}
 	output := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(output, "binaries"), 0o755); err != nil {

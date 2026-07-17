@@ -484,26 +484,63 @@ func createExactSourceCheckout(repoRoot, repositoryRef, repositorySHA string) (s
 	if err != nil {
 		return "", nil, err
 	}
-	checkoutRoot, err := os.MkdirTemp("", "treedb-power-loss-cert-source-*")
+	privateRoot, err := os.MkdirTemp("", "treedb-power-loss-cert-source-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("powerlosscert: create private exact-SHA source checkout: %w", err)
 	}
 	removeDirectory := true
 	defer func() {
 		if removeDirectory {
-			_ = os.RemoveAll(checkoutRoot)
+			_ = os.RemoveAll(privateRoot)
 		}
 	}()
-	output, err := commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "add", "--detach", checkoutRoot, repositorySHA)
+	if err := os.Chmod(privateRoot, 0o700); err != nil {
+		return "", nil, fmt.Errorf("powerlosscert: make exact-SHA source checkout private: %w", err)
+	}
+	checkoutRoot := filepath.Join(privateRoot, "source")
+	hooksRoot := filepath.Join(privateRoot, "hooks")
+	templateRoot := filepath.Join(privateRoot, "template")
+	for _, root := range []string{hooksRoot, templateRoot} {
+		if err := os.Mkdir(root, 0o700); err != nil {
+			return "", nil, fmt.Errorf("powerlosscert: create isolated exact-SHA Git directories: %w", err)
+		}
+	}
+	gitEnvironment := certificationGitEnvironment()
+	output, err := commandOutputWithEnvironment(
+		privateRoot,
+		gitEnvironment,
+		gitBinary,
+		"-c", "core.hooksPath="+hooksRoot,
+		"-c", "core.fsmonitor=false",
+		"clone",
+		"--local",
+		"--no-hardlinks",
+		"--dissociate",
+		"--no-checkout",
+		"--no-recurse-submodules",
+		"--template", templateRoot,
+		"--config", "core.hooksPath="+hooksRoot,
+		"--config", "core.fsmonitor=false",
+		repoRoot,
+		checkoutRoot,
+	)
 	if err != nil {
 		return "", nil, fmt.Errorf("powerlosscert: create private exact-SHA source checkout: %w\n%s", err, output)
 	}
 	if err := os.Chmod(checkoutRoot, 0o700); err != nil {
-		_, _ = commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "remove", "--force", checkoutRoot)
 		return "", nil, fmt.Errorf("powerlosscert: make exact-SHA source checkout private: %w", err)
 	}
+	safeGitArgs := []string{"-c", "core.hooksPath=" + hooksRoot, "-c", "core.fsmonitor=false"}
+	runSafeGit := func(args ...string) (string, error) {
+		return commandOutputWithEnvironment(checkoutRoot, gitEnvironment, gitBinary, append(safeGitArgs, args...)...)
+	}
+	if output, err = runSafeGit("update-ref", repositoryRef, repositorySHA); err != nil {
+		return "", nil, fmt.Errorf("powerlosscert: pin certified ref in private exact-SHA source checkout: %w\n%s", err, output)
+	}
+	if output, err = runSafeGit("checkout", "--detach", "--force", repositorySHA); err != nil {
+		return "", nil, fmt.Errorf("powerlosscert: materialize private exact-SHA source checkout: %w\n%s", err, output)
+	}
 	if err := requireExactCleanRepository(checkoutRoot, repositoryRef, repositorySHA); err != nil {
-		_, _ = commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "remove", "--force", checkoutRoot)
 		return "", nil, fmt.Errorf("powerlosscert: validate private exact-SHA source checkout: %w", err)
 	}
 	removeDirectory = false
@@ -513,9 +550,8 @@ func createExactSourceCheckout(repoRoot, repositoryRef, repositorySHA string) (s
 			return nil
 		}
 		cleaned = true
-		output, err := commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "remove", "--force", checkoutRoot)
-		if err != nil {
-			return fmt.Errorf("powerlosscert: remove private exact-SHA source checkout: %w\n%s", err, output)
+		if err := os.RemoveAll(privateRoot); err != nil {
+			return fmt.Errorf("powerlosscert: remove private exact-SHA source checkout: %w", err)
 		}
 		return nil
 	}
