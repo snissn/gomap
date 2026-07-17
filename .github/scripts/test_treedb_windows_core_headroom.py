@@ -132,6 +132,34 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
                 self.assertEqual(matrix_timeout(workflow, job_name), 25)
 
 
+class TreeDBLinuxAllPackagesHeadroomTest(unittest.TestCase):
+    def test_ubuntu_keeps_complete_serial_coverage_inside_a_bounded_cap(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        matrix_match = re.search(
+            r"- name: ubuntu-latest\s+"
+            r"os: ubuntu-latest\s+"
+            r"timeout: (?P<timeout>\d+)\s+"
+            r"shard_kind: (?P<shard_kind>\S+)\s+"
+            r"run_vet: (?P<run_vet>\S+)",
+            workflow,
+        )
+        self.assertIsNotNone(matrix_match, "missing Ubuntu all-package matrix entry")
+
+        # The failed hosted run consumed about 14m13s in vet plus the four
+        # dominant packages before the fixed 15-minute cap canceled it. Keep
+        # a bounded cap with meaningful runner-variability and artifact margin.
+        self.assertEqual(int(matrix_match.group("timeout")), 25)
+        self.assertEqual(matrix_match.group("shard_kind"), "all")
+        self.assertEqual(matrix_match.group("run_vet"), "true")
+
+        test_job = workflow_job(workflow, "test")
+        self.assertIn("GOMAXPROCS: 2", test_job)
+        self.assertIn(
+            "go test -json -timeout 30m -p 1 ./... | tee treedb-test.jsonl",
+            test_job,
+        )
+
+
 class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
     def test_db_package_timeout_is_bounded_inside_the_job_cap(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

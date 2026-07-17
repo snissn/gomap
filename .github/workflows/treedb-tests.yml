@@ -178,7 +178,7 @@ jobs:
         include:
           - name: ubuntu-latest
             os: ubuntu-latest
-            timeout: 15
+            timeout: 25
             shard_kind: all
             run_vet: true
           - name: macos-latest
