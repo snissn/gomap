@@ -144,6 +144,14 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
 
 
 class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
+    def test_perf_job_runs_aggregate_checker_self_tests(self) -> None:
+        workflow = normalized(WORKFLOW.read_text(encoding="utf-8"))
+
+        self.assertIn(
+            "name: Aggregate perf gate self-tests env: PYTHONDONTWRITEBYTECODE: \"1\" run: python3 .github/scripts/test_vlog_auto_incompressible.py",
+            workflow,
+        )
+
     def test_workflow_uses_full_balanced_sample_set_without_early_success(self) -> None:
         script = normalized(perf_job_script())
 

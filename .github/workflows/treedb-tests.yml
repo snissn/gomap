@@ -610,6 +610,11 @@ jobs:
           cache-dependency-path: |
             go.sum
 
+      - name: Aggregate perf gate self-tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_vlog_auto_incompressible.py
+
       - name: ValueLog dict compressibility bench
         run: |
           go test ./TreeDB/internal/valuelog -run '^$' \
