@@ -11,8 +11,10 @@ import (
 )
 
 var (
-	reBatchWrite = regexp.MustCompile(`Batch Write / .* = ([0-9][0-9,]*(?:\.[0-9]+)?)`)
-	reValueLog   = regexp.MustCompile(`maindb/(?:value_vlog|wal):[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)`)
+	reBatchWriteSteady = regexp.MustCompile(`(?m)^\s*Batch Write \(Steady\) / .* = ([0-9][0-9,]*(?:\.[0-9]+)?)\s*$`)
+	rePersistentVLog   = regexp.MustCompile(`(?m)^\s*maindb/(value_vlog|leaf_vlog):[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)\b`)
+	reUserWriteMode    = regexp.MustCompile(`(?m)^\s*vlog_write_mode\.([A-Za-z0-9_-]+):[^\n]*\braw_bytes=([0-9]+)\s+stored_bytes=([0-9]+)\b`)
+	reLeafWriteMode    = regexp.MustCompile(`(?m)^\s*vlog_leaf_scan\.write_mode\.([A-Za-z0-9_-]+):[^\n]*\braw_bytes=([0-9]+)\s+stored_bytes=([0-9]+)\b`)
 )
 
 type repeatedStringFlag []string
@@ -27,8 +29,14 @@ func (f *repeatedStringFlag) Set(value string) error {
 }
 
 type runMetrics struct {
-	OpsPerSec float64
-	WALValue  float64
+	OpsPerSec       float64
+	PersistentVLog  float64
+	UserWriteMode   string
+	UserRawBytes    uint64
+	UserStoredBytes uint64
+	LeafWriteMode   string
+	LeafRawBytes    uint64
+	LeafStoredBytes uint64
 }
 
 func main() {
@@ -41,8 +49,8 @@ func main() {
 	)
 	flag.Var(&offLogPaths, "off-log", "path to unified_bench output for treedb_vlog_off; repeat once per paired sample")
 	flag.Var(&autoLogPaths, "auto-log", "path to unified_bench output for treedb_vlog_auto; repeat once per paired sample")
-	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01, "strict #1529 parity-plus auto/off batch-write throughput fraction; values at or below this fail")
-	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off value-log bytes fraction")
+	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 0.95, "minimum settled auto/off batch-write throughput fraction; values at or below this fail")
+	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off combined persistent value-log bytes fraction")
 	flag.IntVar(&minSamples, "min-samples", 2, "minimum number of complete paired samples required")
 	flag.Parse()
 
@@ -81,24 +89,29 @@ func main() {
 			fmt.Fprintf(os.Stderr, "parse auto log sample %d: %v\n", idx+1, err)
 			os.Exit(2)
 		}
-		if off.OpsPerSec <= 0 || off.WALValue <= 0 {
-			fmt.Fprintf(os.Stderr, "invalid off metrics sample %d: ops=%.3f wal_value=%.0f\n", idx+1, off.OpsPerSec, off.WALValue)
+		if off.OpsPerSec <= 0 || off.PersistentVLog <= 0 {
+			fmt.Fprintf(os.Stderr, "invalid off metrics sample %d: ops=%.3f persistent_vlog=%.0f\n", idx+1, off.OpsPerSec, off.PersistentVLog)
 			os.Exit(2)
 		}
-		if auto.OpsPerSec <= 0 || auto.WALValue <= 0 {
-			fmt.Fprintf(os.Stderr, "invalid auto metrics sample %d: ops=%.3f wal_value=%.0f\n", idx+1, auto.OpsPerSec, auto.WALValue)
+		if auto.OpsPerSec <= 0 || auto.PersistentVLog <= 0 {
+			fmt.Fprintf(os.Stderr, "invalid auto metrics sample %d: ops=%.3f persistent_vlog=%.0f\n", idx+1, auto.OpsPerSec, auto.PersistentVLog)
+			os.Exit(2)
+		}
+		if err := validateModeMetrics(off, auto); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid mode metrics sample %d: %v\n", idx+1, err)
 			os.Exit(2)
 		}
 
 		throughputFrac := auto.OpsPerSec / off.OpsPerSec
-		sizeFrac := auto.WALValue / off.WALValue
+		sizeFrac := auto.PersistentVLog / off.PersistentVLog
 		throughputLogSum += math.Log(throughputFrac)
 		if sizeFrac > maxObservedSizeFrac {
 			maxObservedSizeFrac = sizeFrac
 		}
 
 		fmt.Printf("incompressible gate sample %d: off_ops=%.0f auto_ops=%.0f throughput_frac=%.4f\n", idx+1, off.OpsPerSec, auto.OpsPerSec, throughputFrac)
-		fmt.Printf("incompressible gate sample %d: off_value_log=%.0f auto_value_log=%.0f size_frac=%.4f\n", idx+1, off.WALValue, auto.WALValue, sizeFrac)
+		fmt.Printf("incompressible gate sample %d: off_persistent_vlog=%.0f auto_persistent_vlog=%.0f size_frac=%.4f\n", idx+1, off.PersistentVLog, auto.PersistentVLog, sizeFrac)
+		fmt.Printf("incompressible gate sample %d: user_mode=off raw_bytes=%d leaf_modes=off:%s/auto:%s leaf_raw_bytes=%d auto_leaf_stored_bytes=%d\n", idx+1, auto.UserRawBytes, off.LeafWriteMode, auto.LeafWriteMode, auto.LeafRawBytes, auto.LeafStoredBytes)
 		if sizeFrac > maxSizeFrac {
 			fmt.Fprintf(os.Stderr, "FAIL size gate sample %d: auto/off=%.4f > %.4f\n", idx+1, sizeFrac, maxSizeFrac)
 			fail = true
@@ -124,25 +137,110 @@ func parseMetrics(path string) (runMetrics, error) {
 	}
 	s := string(b)
 
-	opsMatches := reBatchWrite.FindAllStringSubmatch(s, -1)
+	opsMatches := reBatchWriteSteady.FindAllStringSubmatch(s, -1)
 	if len(opsMatches) == 0 {
-		return runMetrics{}, fmt.Errorf("missing Batch Write metric")
+		return runMetrics{}, fmt.Errorf("missing Batch Write (Steady) metric")
 	}
-	ops, err := parseNumeric(opsMatches[len(opsMatches)-1][1])
+	if len(opsMatches) != 1 {
+		return runMetrics{}, fmt.Errorf("ambiguous Batch Write (Steady) metrics: got %d", len(opsMatches))
+	}
+	ops, err := parseNumeric(opsMatches[0][1])
 	if err != nil {
 		return runMetrics{}, fmt.Errorf("parse ops: %w", err)
 	}
 
-	walMatch := reValueLog.FindStringSubmatch(s)
-	if len(walMatch) != 2 {
-		return runMetrics{}, fmt.Errorf("missing TreeDB value-log bytes")
+	persistentBytes := 0.0
+	seenPersistent := make(map[string]bool, 2)
+	for _, match := range rePersistentVLog.FindAllStringSubmatch(s, -1) {
+		name := match[1]
+		if seenPersistent[name] {
+			return runMetrics{}, fmt.Errorf("duplicate maindb/%s value bytes", name)
+		}
+		valueBytes, err := parseBytesToken(match[2])
+		if err != nil {
+			return runMetrics{}, fmt.Errorf("parse maindb/%s value bytes: %w", name, err)
+		}
+		seenPersistent[name] = true
+		persistentBytes += valueBytes
 	}
-	walBytes, err := parseBytesToken(walMatch[1])
-	if err != nil {
-		return runMetrics{}, fmt.Errorf("parse value-log bytes: %w", err)
+	for _, name := range []string{"value_vlog", "leaf_vlog"} {
+		if !seenPersistent[name] {
+			return runMetrics{}, fmt.Errorf("missing maindb/%s value bytes", name)
+		}
 	}
 
-	return runMetrics{OpsPerSec: ops, WALValue: walBytes}, nil
+	userMode, userRaw, userStored, err := parseModeMetrics(reUserWriteMode, s, "user")
+	if err != nil {
+		return runMetrics{}, err
+	}
+	leafMode, leafRaw, leafStored, err := parseModeMetrics(reLeafWriteMode, s, "leaf")
+	if err != nil {
+		return runMetrics{}, err
+	}
+
+	return runMetrics{
+		OpsPerSec:       ops,
+		PersistentVLog:  persistentBytes,
+		UserWriteMode:   userMode,
+		UserRawBytes:    userRaw,
+		UserStoredBytes: userStored,
+		LeafWriteMode:   leafMode,
+		LeafRawBytes:    leafRaw,
+		LeafStoredBytes: leafStored,
+	}, nil
+}
+
+func parseModeMetrics(re *regexp.Regexp, s, label string) (string, uint64, uint64, error) {
+	matches := re.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return "", 0, 0, fmt.Errorf("missing %s write-mode metrics", label)
+	}
+	if len(matches) != 1 {
+		return "", 0, 0, fmt.Errorf("ambiguous %s write-mode metrics: got %d", label, len(matches))
+	}
+	raw, err := strconv.ParseUint(matches[0][2], 10, 64)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("parse %s raw bytes: %w", label, err)
+	}
+	stored, err := strconv.ParseUint(matches[0][3], 10, 64)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("parse %s stored bytes: %w", label, err)
+	}
+	return matches[0][1], raw, stored, nil
+}
+
+func validateModeMetrics(off, auto runMetrics) error {
+	for _, item := range []struct {
+		label   string
+		metrics runMetrics
+	}{{"off", off}, {"auto", auto}} {
+		if item.metrics.UserWriteMode != "off" {
+			return fmt.Errorf("%s user write mode is %q, want %q", item.label, item.metrics.UserWriteMode, "off")
+		}
+		if item.metrics.UserRawBytes == 0 || item.metrics.UserStoredBytes != item.metrics.UserRawBytes {
+			return fmt.Errorf("%s user values are not raw: raw=%d stored=%d", item.label, item.metrics.UserRawBytes, item.metrics.UserStoredBytes)
+		}
+	}
+	if off.UserRawBytes != auto.UserRawBytes {
+		return fmt.Errorf("user raw-byte mismatch: off=%d auto=%d", off.UserRawBytes, auto.UserRawBytes)
+	}
+	if off.LeafWriteMode != "off" {
+		return fmt.Errorf("off leaf write mode is %q, want %q", off.LeafWriteMode, "off")
+	}
+	if off.LeafRawBytes == 0 || off.LeafStoredBytes != off.LeafRawBytes {
+		return fmt.Errorf("off leaf values are not raw: raw=%d stored=%d", off.LeafRawBytes, off.LeafStoredBytes)
+	}
+	if auto.LeafWriteMode != "block" {
+		return fmt.Errorf("auto leaf write mode is %q, want %q", auto.LeafWriteMode, "block")
+	}
+	if auto.LeafRawBytes == 0 || auto.LeafStoredBytes >= auto.LeafRawBytes {
+		return fmt.Errorf("auto block leaf values are not smaller: raw=%d stored=%d", auto.LeafRawBytes, auto.LeafStoredBytes)
+	}
+	if off.LeafRawBytes != auto.LeafRawBytes {
+		return fmt.Errorf("leaf raw-byte mismatch: off=%d auto=%d", off.LeafRawBytes, auto.LeafRawBytes)
+	}
+
+	return nil
 }
 
 func parseNumeric(v string) (float64, error) {

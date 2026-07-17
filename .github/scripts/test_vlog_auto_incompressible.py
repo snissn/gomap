@@ -57,6 +57,11 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         omit_last_auto: bool = False,
         off_ops_per_sec: float = 1_000_000,
         corrupt_last_auto: bool = False,
+        front_end_only_last_auto: bool = False,
+        missing_last_auto_leaf_storage: bool = False,
+        compress_last_auto_user_values: bool = False,
+        wrong_last_auto_leaf_mode: bool = False,
+        wrong_last_off_leaf_mode: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         if size_ratios is None:
             size_ratios = [0.996] * len(throughput_ratios)
@@ -69,17 +74,59 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
             ):
                 off_log = Path(temp_dir) / f"off-{index}.txt"
                 auto_log = Path(temp_dir) / f"auto-{index}.txt"
+                off_leaf_mode = (
+                    "block"
+                    if wrong_last_off_leaf_mode and index == len(throughput_ratios)
+                    else "off"
+                )
                 off_log.write_text(
-                    f"Batch Write / fixture = {off_ops_per_sec:.3f}\n"
-                    "maindb/value_vlog: fixture value=100 MB\n",
+                    f"Batch Write (Steady) / fixture = {off_ops_per_sec:.3f}\n"
+                    "maindb/value_vlog: fixture value=80 MB\n"
+                    "maindb/leaf_vlog: fixture value=20 MB\n"
+                    "vlog_write_mode.off: frames=1 raw_bytes=512000000 "
+                    "stored_bytes=512000000 stored_ratio=1.000000\n"
+                    f"vlog_leaf_scan.write_mode.{off_leaf_mode}: frames=1 "
+                    "raw_bytes=20000000 stored_bytes=20000000 stored_ratio=1.000000\n",
                     encoding="utf-8",
                 )
                 if corrupt_last_auto and index == len(throughput_ratios):
                     auto_log.write_text("missing benchmark rows\n", encoding="utf-8")
                 else:
+                    benchmark_name = (
+                        "Batch Write"
+                        if front_end_only_last_auto and index == len(throughput_ratios)
+                        else "Batch Write (Steady)"
+                    )
+                    leaf_storage = ""
+                    if not (
+                        missing_last_auto_leaf_storage
+                        and index == len(throughput_ratios)
+                    ):
+                        leaf_storage = (
+                            "maindb/leaf_vlog: fixture "
+                            f"value={size_ratio * 100 - 80:.3f} MB\n"
+                        )
+                    user_stored_bytes = (
+                        500000000
+                        if compress_last_auto_user_values
+                        and index == len(throughput_ratios)
+                        else 512000000
+                    )
+                    leaf_mode = (
+                        "off"
+                        if wrong_last_auto_leaf_mode
+                        and index == len(throughput_ratios)
+                        else "block"
+                    )
                     auto_log.write_text(
-                        f"Batch Write / fixture = {throughput_ratio * off_ops_per_sec:.3f}\n"
-                        f"maindb/value_vlog: fixture value={size_ratio * 100:.3f} MB\n",
+                        f"{benchmark_name} / fixture = "
+                        f"{throughput_ratio * off_ops_per_sec:.3f}\n"
+                        "maindb/value_vlog: fixture value=80 MB\n"
+                        f"{leaf_storage}"
+                        "vlog_write_mode.off: frames=1 raw_bytes=512000000 "
+                        f"stored_bytes={user_stored_bytes} stored_ratio=1.000000\n"
+                        f"vlog_leaf_scan.write_mode.{leaf_mode}: frames=1 "
+                        "raw_bytes=20000000 stored_bytes=5000000 stored_ratio=0.250000\n",
                         encoding="utf-8",
                     )
                 args.extend(["-off-log", str(off_log)])
@@ -90,7 +137,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                     "-min-samples",
                     str(len(throughput_ratios)),
                     "-min-throughput-frac",
-                    "1.01",
+                    "0.95",
                     "-max-size-frac",
                     "1.02",
                 ]
@@ -98,7 +145,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
             return subprocess.run(args, capture_output=True, text=True, check=False)
 
     def test_one_lucky_sample_cannot_override_mostly_failing_pairs(self) -> None:
-        ratios = [0.9955, 0.9988, 0.9896, 0.9593, 0.9807, 0.9763, 0.9890, 0.99, 1.0, 1.0186]
+        ratios = [0.94, 0.93, 0.92, 0.91, 0.90, 0.94, 0.93, 0.92, 0.91, 1.18]
         result = self.run_checker(ratios)
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -106,17 +153,17 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         self.assertIn(f"throughput_geomean={expected:.4f}", result.stdout)
         self.assertIn("FAIL aggregate throughput gate", result.stderr)
 
-    def test_complete_paired_aggregate_above_strict_boundary_passes(self) -> None:
-        result = self.run_checker([1.02, 1.03, 1.04, 1.05])
+    def test_complete_paired_settled_aggregate_above_boundary_passes(self) -> None:
+        result = self.run_checker([0.96, 0.98, 0.99, 1.01])
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS incompressible auto-vs-off aggregate gate", result.stdout)
 
     def test_aggregate_equal_to_boundary_fails(self) -> None:
-        result = self.run_checker([1.01, 1.01])
+        result = self.run_checker([0.95, 0.95])
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("<= 1.0100", result.stderr)
+        self.assertIn("<= 0.9500", result.stderr)
 
     def test_any_sample_over_size_bound_fails(self) -> None:
         result = self.run_checker([1.02, 1.03], [0.996, 1.021])
@@ -142,6 +189,42 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("parse auto log sample 2", result.stderr)
 
+    def test_front_end_only_batch_write_metric_fails_closed(self) -> None:
+        result = self.run_checker(
+            [0.98, 0.99], front_end_only_last_auto=True
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("missing Batch Write (Steady) metric", result.stderr)
+
+    def test_missing_leaf_storage_fails_closed(self) -> None:
+        result = self.run_checker(
+            [0.98, 0.99], missing_last_auto_leaf_storage=True
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("missing maindb/leaf_vlog value bytes", result.stderr)
+
+    def test_compressed_incompressible_user_values_fail_closed(self) -> None:
+        result = self.run_checker(
+            [0.98, 0.99], compress_last_auto_user_values=True
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("auto user values are not raw", result.stderr)
+
+    def test_wrong_auto_leaf_mode_fails_closed(self) -> None:
+        result = self.run_checker([0.98, 0.99], wrong_last_auto_leaf_mode=True)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("auto leaf write mode is \"off\", want \"block\"", result.stderr)
+
+    def test_wrong_off_leaf_mode_fails_closed(self) -> None:
+        result = self.run_checker([0.98, 0.99], wrong_last_off_leaf_mode=True)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("off leaf write mode is \"block\", want \"off\"", result.stderr)
+
 
 class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
     def test_perf_job_runs_aggregate_checker_self_tests(self) -> None:
@@ -165,7 +248,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
             script,
         )
 
-    def test_workflow_aggregates_every_pair_at_strict_existing_bounds(self) -> None:
+    def test_workflow_aggregates_every_settled_pair_at_balanced_bounds(self) -> None:
         script = normalized(perf_job_script())
 
         self.assertIn(
@@ -173,9 +256,12 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
             script,
         )
         self.assertIn('-min-samples "${sample_count}"', script)
-        self.assertIn("-min-throughput-frac 1.01", script)
+        self.assertIn("-test batch_write_steady", script)
+        self.assertNotIn("-test batch_write ", script)
+        self.assertIn("-min-throughput-frac 0.95", script)
         self.assertIn("-max-size-frac 1.02", script)
-        self.assertIn("geometric mean of every balanced pair must exceed 1.01x", script)
+        self.assertIn("settled-throughput geometric mean must exceed 0.95x", script)
+        self.assertIn("value_vlog plus leaf_vlog", script)
         self.assertIn("Upload value-log performance evidence", script)
         self.assertIn("if: always()", script)
         self.assertIn('2>&1 | tee "${summary_log}"', script)

@@ -640,9 +640,11 @@ jobs:
           # not the command_wal_durable default used by production callers.
           # Keep it independent of the unconfigured flush-admission default
           # under test in #2788. Force admission off for both rows so the
-          # strict auto/off comparison stays on the old serial/default-off
-          # flush boundary and measures value-log auto behavior rather than
-          # span-native admission changes.
+          # settled auto/off comparison stays on the old serial/default-off
+          # flush boundary and measures the deferred value-log and leaf-log
+          # work rather than span-native admission changes. The checker sums
+          # value_vlog plus leaf_vlog and verifies the intended raw-user and
+          # leaf-compression modes independently of the throughput bound.
           run_vlog_row() {
             local db="$1"
             local output="$2"
@@ -652,7 +654,7 @@ jobs:
               -valsize 512 \
               -batchsize 1024 \
               -dbs "${db}" \
-              -test batch_write \
+              -test batch_write_steady \
               -val-pattern random \
               -format markdown \
               -progress=false \
@@ -694,15 +696,16 @@ jobs:
             checker_args+=( -off-log "${off_logs[$sample]}" -auto-log "${auto_logs[$sample]}" )
           done
 
-          # #1529 intentionally makes this a strict parity-plus gate. The
-          # geometric mean of every balanced pair must exceed 1.01x; one lucky
-          # sample cannot override a mostly failing sample set.
+          # #3861 makes this a settled non-regression and persistent-storage
+          # tradeoff gate. The settled-throughput geometric mean must exceed 0.95x;
+          # one lucky sample cannot override a mostly failing sample set,
+          # and every pair retains the existing 1.02x storage ceiling.
           summary_log="vlog_auto_incompressible_summary.txt"
           set +e
           go run .github/scripts/check_vlog_auto_incompressible.go \
             "${checker_args[@]}" \
             -min-samples "${sample_count}" \
-            -min-throughput-frac 1.01 \
+            -min-throughput-frac 0.95 \
             -max-size-frac 1.02 \
             2>&1 | tee "${summary_log}"
           checker_status=${PIPESTATUS[0]}

@@ -1329,17 +1329,27 @@ The first PR9 public cutover gate is:
 
 - `TestPublicCommandWALRawKVWritesUseTypedFrames`
 
-The PR9 public cutover performance gate is strict parity-plus. Required point
+The historical strict PR9 performance gate is parity-plus. Its recorded point
 `Set`, focused `Batch.Write`, `unified_bench` batch-write, and incompressible
-value-log auto/off lanes must each report candidate throughput strictly greater
-than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
-a failing gate, including sub-parity results such as `0.80x`; those results may
-be recorded only as failing evidence, not accepted evidence.
-The incompressible value-log lane applies that threshold to the geometric mean
-of every fixed, order-balanced auto/off pair; one favorable sample cannot
-override a mostly failing sample set.
+value-log auto/off acceptance lanes must each report candidate throughput
+strictly greater than `1.01x` of the relevant baseline. Any required lane in
+that immutable acceptance artifact at or below `1.01x` is a failing gate,
+including sub-parity results such as `0.80x`; those results may be recorded only
+as failing evidence, not accepted evidence.
 
-The same strict parity-plus rule applies to every command-WAL acceptance artifact
+The current hosted incompressible value-log gate supersedes that lane's live
+methodology under #3861 without rewriting the historical PR9 artifact.
+`batch_write` measures front-end ingest before deferred value-log and leaf-log
+publication, so the live gate uses `batch_write_steady` and requires the
+geometric mean of every fixed, order-balanced auto/off pair to be strictly
+greater than `0.95x`. One favorable sample cannot override a mostly failing
+sample set. Each pair must also keep the combined persistent bytes reported for
+`maindb/value_vlog` and `maindb/leaf_vlog` less than or equal to `1.02x`. The
+checker separately requires raw user values in both rows, block-compressed
+leaves in auto, and uncompressed leaves in off; the throughput allowance cannot
+hide a broken compression mode.
+
+The same strict parity-plus rule applies to every historical command-WAL acceptance artifact
 with a required performance gate: a passing status must have `>` throughput-gate
 semantics, explicit `1.01x` minimum ratio thresholds, and recorded comparative
 throughput ratios above that bar. Historical or diagnostic results below that
