@@ -477,7 +477,22 @@ func TestPowerLossCertificationDurablePrefixHolePublicReopen(t *testing.T) {
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		return model.Observe(opts.Dir, event)
 	})
-	if err := db.SetSync([]byte("cert/durable-hole"), bytes.Repeat([]byte("h"), 4096)); err != nil {
+	// Point writes retain their value inline in the command-WAL frame, so
+	// recovery can legitimately reconstruct a missing value-log segment. The
+	// public batch path materializes the pointer first and journals its external
+	// RID, making the selected segment a real durable-prefix dependency.
+	batch := db.NewBatch()
+	if err := batch.Set([]byte("cert/durable-hole"), bytes.Repeat([]byte("h"), 4096)); err != nil {
+		_ = batch.Close()
+		restore()
+		t.Fatal(err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		_ = batch.Close()
+		restore()
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
 		restore()
 		t.Fatal(err)
 	}
