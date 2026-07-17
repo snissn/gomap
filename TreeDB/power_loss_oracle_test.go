@@ -27,13 +27,30 @@ const powerLossOracleSeed = uint64(3674)
 
 const powerLossOracleEnumeratorVariantID = "public-command-wal-relaxed-stable-image"
 
+const powerLossOracleDurableEnumeratorVariantID = "public-command-wal-durable-stable-image"
+
 type powerLossOracleReplaySelection struct {
 	cutPoint   powerlossoracle.CutPoint
 	occurrence int
 	readOnly   *bool
 }
 
+func powerLossOracleEnumeratorProfileFromEnv() (string, treedb.Profile, string, error) {
+	switch profile := os.Getenv("TREEDB_POWERLOSS_PROFILE"); profile {
+	case "", "command_wal_relaxed":
+		return "command_wal_relaxed", treedb.ProfileCommandWALRelaxed, powerLossOracleEnumeratorVariantID, nil
+	case "command_wal_durable":
+		return profile, treedb.ProfileCommandWALDurable, powerLossOracleDurableEnumeratorVariantID, nil
+	default:
+		return "", "", "", fmt.Errorf("TREEDB_POWERLOSS_PROFILE=%q is unsupported by the command-WAL enumerator", profile)
+	}
+}
+
 func powerLossOracleReplaySelectionFromEnv() (powerLossOracleReplaySelection, error) {
+	_, _, expectedVariant, err := powerLossOracleEnumeratorProfileFromEnv()
+	if err != nil {
+		return powerLossOracleReplaySelection{}, err
+	}
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
 		return powerLossOracleReplaySelection{}, err
@@ -48,10 +65,10 @@ func powerLossOracleReplaySelectionFromEnv() (powerLossOracleReplaySelection, er
 		}
 		return powerLossOracleReplaySelection{}, nil
 	}
-	if selector.VariantID != powerLossOracleEnumeratorVariantID {
-		return powerLossOracleReplaySelection{}, fmt.Errorf("replay variant=%q want=%q", selector.VariantID, powerLossOracleEnumeratorVariantID)
+	if selector.VariantID != expectedVariant {
+		return powerLossOracleReplaySelection{}, fmt.Errorf("replay variant=%q want=%q", selector.VariantID, expectedVariant)
 	}
-	wantCutPrefix := "cut/" + powerLossOracleEnumeratorVariantID + "/"
+	wantCutPrefix := "cut/" + expectedVariant + "/"
 	if !strings.HasPrefix(selector.CutID, wantCutPrefix) {
 		return powerLossOracleReplaySelection{}, fmt.Errorf("replay cut id=%q must start with %q", selector.CutID, wantCutPrefix)
 	}
@@ -201,7 +218,7 @@ func requirePublicReopen(t *testing.T, model *powerlossoracle.Model, opts treedb
 
 func loadPowerLossCounterexampleLedger(t *testing.T) powerlossoracle.CounterexampleLedger {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "power_loss_counterexamples.json"))
+	data, err := os.ReadFile(powerLossCounterexampleLedgerPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +227,20 @@ func loadPowerLossCounterexampleLedger(t *testing.T) powerlossoracle.Counterexam
 		t.Fatal(err)
 	}
 	return ledger
+}
+
+func powerLossCounterexampleLedgerPath() string {
+	if path := os.Getenv("TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"); path != "" {
+		return path
+	}
+	return filepath.Join("testdata", "power_loss_counterexamples.json")
+}
+
+func requirePowerLossProfile(t *testing.T, actual string) {
+	t.Helper()
+	if expected := os.Getenv("TREEDB_POWERLOSS_PROFILE"); expected != "" && expected != actual {
+		t.Fatalf("TREEDB_POWERLOSS_PROFILE=%q does not match exercised profile %q", expected, actual)
+	}
 }
 
 func bindPowerLossCounterexamples(t *testing.T, variants []powerlossoracle.Variant) map[string]powerlossoracle.CounterexampleLedgerEntry {
@@ -275,9 +306,14 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	profileName, profile, _, err := powerLossOracleEnumeratorProfileFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirePowerLossProfile(t, profileName)
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
-	treedb.ApplyProfile(&opts, treedb.ProfileCommandWALRelaxed)
+	treedb.ApplyProfile(&opts, profile)
 	opts.CommandWALSegmentTargetBytes = 4096
 	opts.WALMaxSegmentBytes = 64 * 1024
 	opts.ValueLog.PointerThreshold = 1
@@ -485,6 +521,7 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 // This family is the stable witness for finalizeCommitLockedWithOptions and
 // flushFinalizeCommitDurability publishing meta ahead of dependency closure.
 func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
+	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
 	opts.ValueLog.PointerThreshold = 1
@@ -758,6 +795,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 }
 
 func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
+	requirePowerLossProfile(t, "no_wal_fast")
 	model, opts, baseSequence := seedPowerLossImage(t)
 	const path = "adversarial-namespace/new-dependency.bin"
 	if err := model.Create(path, []byte("new dependency bytes")); err != nil {
@@ -829,7 +867,7 @@ func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 }
 
 func TestPowerLossOracleCounterexampleLedger(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "power_loss_counterexamples.json"))
+	data, err := os.ReadFile(powerLossCounterexampleLedgerPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,6 +1018,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 // frame above the durable prefix is discarded before its absent external RID
 // is treated as a dependency of the recoverable prefix.
 func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T) {
+	requirePowerLossProfile(t, "command_wal_relaxed")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
 	treedb.ApplyProfile(&opts, treedb.ProfileCommandWALRelaxed)
@@ -1141,6 +1180,7 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 // flushSyncRequested, and chunked cached apply publish only the final complete
 // root. No intermediate chunk is recovery-selectable.
 func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) {
+	requirePowerLossProfile(t, "no_wal_fast")
 	dir := t.TempDir()
 	opts := powerLossOptions(dir)
 	opts.FlushBackendMaxEntries = 4

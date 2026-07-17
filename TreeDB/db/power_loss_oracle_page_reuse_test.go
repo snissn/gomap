@@ -22,6 +22,9 @@ import (
 // production methods. The witness advances until the allocator actually
 // selects an A page instead of assuming a fixed generation-count horizon.
 func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
+	if expected := os.Getenv("TREEDB_POWERLOSS_PROFILE"); expected != "" && expected != "no_wal_fast" {
+		t.Fatalf("TREEDB_POWERLOSS_PROFILE=%q does not match exercised profile no_wal_fast", expected)
+	}
 	dir := t.TempDir()
 	opts := Options{
 		Dir:                    dir,
@@ -207,7 +210,11 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledgerData, err := os.ReadFile(filepath.Join("..", "testdata", "power_loss_counterexamples.json"))
+	ledgerPath := filepath.Join("..", "testdata", "power_loss_counterexamples.json")
+	if path := os.Getenv("TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"); path != "" {
+		ledgerPath = path
+	}
+	ledgerData, err := os.ReadFile(ledgerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
