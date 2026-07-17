@@ -383,6 +383,62 @@ func TestCompactStorageManagerSegmentDeletionSyncsNamespaceBeforeSuccess(t *test
 	}
 }
 
+func TestCompactStorageManagerSegmentDeletionSyncFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	const emptyName = "value-l42-000001.log"
+	emptyPath := filepath.Join(valueLogDir, emptyName)
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+	fileID, ok := compactStorageValueLogFileID(emptyName)
+	if !ok {
+		t.Fatalf("parse %s failed", emptyName)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
+	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
+	}
+
+	cutErr := errors.New("injected deletion directory sync cut")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceValueLog &&
+			event.Point == durabilitycut.BeforeDeletionDirectorySync &&
+			filepath.Clean(event.Path) == filepath.Clean(valueLogDir) {
+			return cutErr
+		}
+		return nil
+	})
+	_, compactErr := reopened.CompactStorage(context.Background(), CompactStorageOptions{})
+	restore()
+	if !errors.Is(compactErr, cutErr) || !errors.Is(compactErr, ErrRecoveryRequired) {
+		t.Fatalf("CompactStorage error=%v, want injected cut and ErrRecoveryRequired", compactErr)
+	}
+	if _, statErr := os.Stat(emptyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("post-unlink sync-cut path stat=%v, want removed", statErr)
+	}
+}
+
 func TestCompactStorageKeepsPinnedZombieZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{Dir: dir}
