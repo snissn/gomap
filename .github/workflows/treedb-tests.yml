@@ -191,14 +191,21 @@ jobs:
             timeout: 30
             shard_kind: windows-core
             package_shard_index: 0
-            package_shard_count: 2
+            package_shard_count: 3
             run_vet: true
           - name: windows-core-2
             os: windows-latest
             timeout: 30
             shard_kind: windows-core
             package_shard_index: 1
-            package_shard_count: 2
+            package_shard_count: 3
+            run_vet: false
+          - name: windows-core-3
+            os: windows-latest
+            timeout: 30
+            shard_kind: windows-core
+            package_shard_index: 2
+            package_shard_count: 3
             run_vet: false
           - name: windows-caching-heavy-1
             os: windows-latest
@@ -320,37 +327,13 @@ jobs:
               package_file="$(make_tmp)"
               root_all_file="$(make_tmp)"
               root_test_file="$(make_tmp)"
-              root_pin_file="$(make_tmp)"
-              root_windows_pin_file="$(make_tmp)"
               db_all_file="$(make_tmp)"
               db_test_file="$(make_tmp)"
-              db_pin_file="$(make_tmp)"
               go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
               go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
-              ci_list ../.github/ci/treedb_root_weighted_shard0_tests.txt > "$root_pin_file"
-              ci_list ../.github/ci/treedb_root_windows_weighted_shard0_tests.txt > "$root_windows_pin_file"
-              sort -u "$root_pin_file" "$root_windows_pin_file" -o "$root_pin_file"
-              ci_list ../.github/ci/treedb_db_weighted_shard0_tests.txt > "$db_pin_file"
-              if [ "$package_shard_count" -eq 2 ]; then
-                case "$package_shard_index" in
-                  0)
-                    grep -F -x -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
-                    grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
-                    ;;
-                  1)
-                    grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
-                    grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
-                    ;;
-                  *)
-                    : > "$root_test_file"
-                    : > "$db_test_file"
-                    ;;
-                esac
-              else
-                awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
-                awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
-              fi
+              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
+              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
               echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
               ran_tests=false
               if [ -s "$package_file" ]; then

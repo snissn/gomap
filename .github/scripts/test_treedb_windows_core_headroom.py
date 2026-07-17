@@ -22,6 +22,21 @@ def matrix_timeout(workflow: str, job_name: str) -> int:
     return int(match.group("timeout"))
 
 
+def core_matrix_partition(workflow: str, job_name: str) -> tuple[int, int]:
+    match = re.search(
+        rf"- name: {re.escape(job_name)}\s+"
+        r"os: windows-latest\s+"
+        r"timeout: \d+\s+"
+        r"shard_kind: windows-core\s+"
+        r"package_shard_index: (?P<index>\d+)\s+"
+        r"package_shard_count: (?P<count>\d+)",
+        workflow,
+    )
+    if match is None:
+        raise AssertionError(f"missing Windows core partition for {job_name}")
+    return int(match.group("index")), int(match.group("count"))
+
+
 def workflow_job(workflow: str, job_name: str) -> str:
     match = re.search(
         rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
@@ -34,15 +49,39 @@ def workflow_job(workflow: str, job_name: str) -> str:
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
-    def test_core_shards_have_equal_bounded_thirty_minute_caps(self) -> None:
+    def test_core_shards_use_equal_bounded_three_way_partition(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
-        # Hosted evidence reached 24m48s after every selected test passed. A
-        # 30-minute cap preserves the bounded job while restoring about 20%
-        # wall-clock headroom on the slow observation.
-        self.assertEqual(matrix_timeout(workflow, "windows-core-1"), 30)
-        self.assertEqual(matrix_timeout(workflow, "windows-core-2"), 30)
+        # The two-way pin/complement selector assigned almost every root and
+        # DB test to core-2, which repeatedly exhausted even this bounded cap.
+        # Three deterministic shards restore headroom without raising it.
+        for shard in range(3):
+            job_name = f"windows-core-{shard + 1}"
+            with self.subTest(job_name=job_name):
+                self.assertEqual(matrix_timeout(workflow, job_name), 30)
+                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 3))
         self.assertIn("timeout-minutes: ${{ matrix.timeout }}", workflow)
+
+    def test_core_selection_has_no_two_way_pin_complement_special_case(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        test_job = workflow_job(workflow, "test")
+        core_case = re.search(
+            r"^            windows-core\)\n(?P<body>.*?)(?=^              ;;$)",
+            test_job,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(core_case, "missing windows-core shell case")
+        body = core_case.group("body")
+
+        self.assertNotIn('if [ "$package_shard_count" -eq 2 ]', body)
+        self.assertNotIn("weighted_shard0_tests.txt", body)
+        for tests_file in ("package_file", "root_all_file", "db_all_file"):
+            with self.subTest(tests_file=tests_file):
+                self.assertRegex(
+                    body,
+                    rf"awk -v idx=\"\$package_shard_index\" -v n=\"\$package_shard_count\" .* "
+                    rf'\"\${tests_file}\"',
+                )
 
     def test_caching_shards_keep_their_existing_bounded_caps(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
