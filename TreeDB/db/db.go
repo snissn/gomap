@@ -3755,6 +3755,13 @@ func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional b
 		nil,
 	)
 	if err != nil {
+		if conditional && errors.Is(err, errDurableRootCandidateStale) {
+			return fmt.Errorf(
+				"%w: manual root basis advanced during publication from commit=%d",
+				ErrConcurrentModification,
+				basis.CommitSeq,
+			)
+		}
 		return err
 	}
 	db.finalizeCommitPostWork(post)
