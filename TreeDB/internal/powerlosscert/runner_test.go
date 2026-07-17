@@ -171,13 +171,31 @@ func TestRequirePullRequestProvenanceBindsClaimsToCertifiedGraph(t *testing.T) {
 	runGit("commit", "-m", "feature head")
 	headSHA := runGit("rev-parse", "HEAD")
 	runGit("checkout", "main")
+	if err := os.WriteFile(filepath.Join(repo, "main_only.go"), []byte("package fixture\n\nconst MainOnly = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main_only.go")
+	runGit("commit", "-m", "advance main before squash")
 	runGit("merge", "--squash", "feature")
 	runGit("commit", "-m", "Feature (#42)")
 	mergeSHA := runGit("rev-parse", "HEAD")
 
-	valid := []PullRequest{{Number: 42, HeadSHA: headSHA, MergeSHA: mergeSHA}}
-	if err := requirePullRequestProvenance(repo, mergeSHA, valid); err != nil {
+	squashValid := []PullRequest{{Number: 42, HeadSHA: headSHA, MergeSHA: mergeSHA}}
+	if err := requirePullRequestProvenance(repo, mergeSHA, squashValid); err != nil {
 		t.Fatalf("valid squash-merge provenance: %v", err)
+	}
+
+	runGit("checkout", "-b", "feature-normal")
+	writeSource("package fixture\n\nconst Feature = true\nconst NormalMerge = true\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "normal feature head")
+	normalHeadSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "main")
+	runGit("merge", "--no-ff", "-m", "Merge pull request #43 from snissn/feature-normal", "feature-normal")
+	normalMergeSHA := runGit("rev-parse", "HEAD")
+	allValid := append(squashValid, PullRequest{Number: 43, HeadSHA: normalHeadSHA, MergeSHA: normalMergeSHA})
+	if err := requirePullRequestProvenance(repo, normalMergeSHA, allValid); err != nil {
+		t.Fatalf("valid ordered squash and normal-merge provenance: %v", err)
 	}
 
 	tests := []struct {
@@ -196,18 +214,18 @@ func TestRequirePullRequestProvenanceBindsClaimsToCertifiedGraph(t *testing.T) {
 			name:          "wrong-pr-number",
 			repositorySHA: mergeSHA,
 			pullRequests:  []PullRequest{{Number: 43, HeadSHA: headSHA, MergeSHA: mergeSHA}},
-			want:          "does not end in (#43)",
+			want:          "does not identify pull request #43",
 		},
 		{
 			name:          "unrelated-head-tree",
 			repositorySHA: mergeSHA,
 			pullRequests:  []PullRequest{{Number: 42, HeadSHA: baseSHA, MergeSHA: mergeSHA}},
-			want:          "neither a merge parent nor tree-identical",
+			want:          "does not produce the exact squash merge tree",
 		},
 		{
 			name:          "merge-not-reachable-from-repository",
 			repositorySHA: baseSHA,
-			pullRequests:  valid,
+			pullRequests:  squashValid,
 			want:          "is not an ancestor",
 		},
 	}
@@ -379,6 +397,24 @@ func TestCertificationRuntimeEnvironmentDoesNotInheritProcessConfiguration(t *te
 	}
 	if environment["TREEDB_POWERLOSS_CASE_ID"] != "case-a" {
 		t.Fatalf("runtime environment omitted explicit replay selector: %+v", environment)
+	}
+}
+
+func TestCertificationBuildEnvironmentProvidesAbsoluteCache(t *testing.T) {
+	environment := make(map[string]string)
+	for _, entry := range certificationBuildEnvironment() {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			environment[name] = value
+		}
+	}
+	cache := environment["GOCACHE"]
+	if cache == "" || !filepath.IsAbs(cache) {
+		t.Fatalf("build environment GOCACHE=%q is not absolute", cache)
+	}
+	relative, err := filepath.Rel(os.TempDir(), cache)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		t.Fatalf("build environment GOCACHE=%q is not beneath temp root %q", cache, os.TempDir())
 	}
 }
 

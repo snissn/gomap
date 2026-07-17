@@ -372,8 +372,8 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 		if err != nil {
 			return fmt.Errorf("%s read merge subject: %w", prefix, err)
 		}
-		if !strings.HasSuffix(strings.TrimSpace(subject), fmt.Sprintf("(#%d)", pr.Number)) {
-			return fmt.Errorf("%s merge subject %q does not end in (#%d)", prefix, strings.TrimSpace(subject), pr.Number)
+		if !mergeSubjectIdentifiesPullRequest(subject, pr.Number) {
+			return fmt.Errorf("%s merge subject %q does not identify pull request #%d", prefix, strings.TrimSpace(subject), pr.Number)
 		}
 		parentsOutput, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-list", "--parents", "-n", "1", pr.MergeSHA)
 		if err != nil {
@@ -400,7 +400,17 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 				return fmt.Errorf("%s read merge tree: %w", prefix, err)
 			}
 			if strings.TrimSpace(headTree) != strings.TrimSpace(mergeTree) {
-				return fmt.Errorf("%s head_sha=%s is neither a merge parent nor tree-identical to merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
+				if len(parents) != 2 {
+					return fmt.Errorf("%s head_sha=%s is not a non-first merge parent and does not produce the exact squash merge tree for merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
+				}
+				prospectiveTree, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parents[1], pr.HeadSHA)
+				if err != nil {
+					return fmt.Errorf("%s compute exact squash merge tree from head_sha=%s: %w", prefix, pr.HeadSHA, err)
+				}
+				prospectiveFields := strings.Fields(prospectiveTree)
+				if len(prospectiveFields) != 1 || prospectiveFields[0] != strings.TrimSpace(mergeTree) {
+					return fmt.Errorf("%s head_sha=%s is not a non-first merge parent and does not produce the exact squash merge tree for merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
+				}
 			}
 		}
 		previousMergeSHA = pr.MergeSHA
@@ -427,6 +437,12 @@ func requireEmptyOutputRoot(root string) error {
 		return fmt.Errorf("powerlosscert: output root %q is not empty", root)
 	}
 	return nil
+}
+
+func mergeSubjectIdentifiesPullRequest(subject string, number int) bool {
+	subject = strings.TrimSpace(subject)
+	return strings.HasSuffix(subject, fmt.Sprintf("(#%d)", number)) ||
+		strings.HasPrefix(subject, fmt.Sprintf("Merge pull request #%d from ", number))
 }
 
 func createExactSourceCheckout(repoRoot, repositoryRef, repositorySHA string) (string, func() error, error) {
@@ -704,6 +720,7 @@ func (buffer *boundedBuffer) String() string {
 
 func certificationBuildEnvironment() []string {
 	values := certificationBaseEnvironment()
+	values["GOCACHE"] = filepath.Join(os.TempDir(), "treedb-powerlosscert", "go-build-cache")
 	values["GOENV"] = "off"
 	values["GOFLAGS"] = ""
 	values["GOTOOLCHAIN"] = "local"

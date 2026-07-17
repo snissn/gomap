@@ -38,13 +38,16 @@ power_loss_certification/
 
 The committed versioned risk inventory freezes required values, mandatory
 retained counterexamples, negative controls, and explicit covering
-interactions. The committed witness-contract file binds every replay selector
-and expected recovery state to the risk labels it is allowed to own. The runner
-requires the supplied inventory to be byte-identical to the exact-SHA committed
-copy and every plan case to be identical to its committed contract, so a caller
-cannot shrink or relabel coverage. Child manifests carry exact repository and
-PR provenance, structured test commands, observed cut metadata, recovery state,
-expected and actual outcomes, and SHA-256-addressed artifacts.
+interactions. The committed witness-contract file binds the certification
+issue, the complete ordered graph PR-number sequence, every replay selector,
+and every expected recovery state to the risk labels they are allowed to own.
+The runner requires the supplied inventory to be byte-identical to the
+exact-SHA committed copy, the plan's PR-number sequence to equal the committed
+graph sequence, and every plan case to be identical to its committed contract,
+so a caller cannot omit implementation provenance or shrink or relabel
+coverage. Child manifests carry exact repository and PR provenance, structured
+test commands, observed cut metadata, recovery state, expected and actual
+outcomes, and SHA-256-addressed artifacts.
 
 `TreeDB/internal/powerlosscert` rejects unknown JSON fields, stale or partial
 SHAs, duplicate IDs, undeclared inventory values, incomplete interactions,
@@ -127,11 +130,15 @@ counterexample, negative control, and required interaction. It then refuses a
 different current-main ref or HEAD, tracked or untracked worktree changes, and
 a non-empty output directory. It rechecks the ref, HEAD, and worktree after
 building and after execution to detect mid-run repository changes. Provenance
-validation also requires every claimed PR merge to be reachable from the
-certified repository SHA in topological order, binds the PR number to the
-immutable merge subject, and requires the claimed head to be either a merge
-parent or tree-identical to the squash merge. Syntactically valid but unrelated
-PR metadata therefore cannot enter a sealed bundle. Provenance
+validation first requires the plan to contain exactly the immutable ordered
+PR-number sequence in the committed witness contract. It then requires every
+claimed PR merge to be reachable from the certified repository SHA in that
+topological order, binds the PR number to the immutable merge subject, and
+requires the claimed head to be either a non-first merge parent,
+tree-identical to the squash merge, or the exact clean three-way input that
+produces a stale-base squash merge tree. Omitting a graph merge, substituting
+another valid PR, or supplying syntactically valid but unrelated PR metadata
+therefore cannot enter a sealed bundle. Provenance
 checks run with a constrained Git environment, so inherited repository,
 worktree, index, object-store, namespace, and configuration overrides cannot
 redirect validation away from the certified repository. Git is invoked from a
