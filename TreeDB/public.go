@@ -558,6 +558,17 @@ func (db *DB) beginPublicOperation() error {
 		db.lifecycleMu.RUnlock()
 		return ErrClosed
 	}
+	// Cached mutations can otherwise be admitted without entering the backend,
+	// even after an outcome-ambiguous root publication has poisoned it. Consult
+	// the backend poison gate while the lifecycle read lock keeps both layers
+	// stable; every caller of beginPublicOperation is a write, transaction,
+	// batch, or durability boundary.
+	if db.backend != nil {
+		if err := db.backend.CheckCommandWALPublishReady(); err != nil {
+			db.lifecycleMu.RUnlock()
+			return err
+		}
+	}
 	return nil
 }
 
