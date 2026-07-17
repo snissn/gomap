@@ -615,6 +615,9 @@ func validateRecoveryStats(recovery recoveryTraceArtifact, expectedProfile strin
 		if len(recovery.Stats) != 0 {
 			return fmt.Errorf("rejected recovery unexpectedly reports selected-state stats")
 		}
+		if recovery.CommitSeq != 0 || recovery.AppliedLSN != 0 {
+			return fmt.Errorf("rejected recovery unexpectedly reports scalar selected state")
+		}
 		return nil
 	}
 	if len(recovery.Stats) != len(requiredRecoveryStats) {

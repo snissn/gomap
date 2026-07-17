@@ -374,6 +374,71 @@ func TestRequireCommittedRiskInventoryRejectsReducedCopy(t *testing.T) {
 	}
 }
 
+func TestReadExactCertificationInputsIgnoresMutableWorktreeAfterCheckout(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init")
+	runGit("config", "user.email", "powerlosscert@example.invalid")
+	runGit("config", "user.name", "powerlosscert test")
+	testdataDir := filepath.Join(repo, "TreeDB", "testdata")
+	if err := os.MkdirAll(testdataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inventoryData := []byte(mustJSON(t, testRiskInventory()))
+	contractsData := []byte(mustJSON(t, testWitnessContracts(testRunPlan())))
+	ledgerData := []byte(`{"schema_version":"exact-ledger/v1"}`)
+	for name, data := range map[string][]byte{
+		"power_loss_risk_inventory.json":    inventoryData,
+		"power_loss_witness_contracts.json": contractsData,
+		"power_loss_counterexamples.json":   ledgerData,
+	} {
+		if err := os.WriteFile(filepath.Join(testdataDir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit("add", ".")
+	runGit("commit", "-m", "fixture")
+	head := runGit("rev-parse", "HEAD")
+	runGit("update-ref", CertifiedRepositoryRef, head)
+	sourceRoot, cleanup, err := createExactSourceCheckout(repo, CertifiedRepositoryRef, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup exact-SHA checkout: %v", err)
+		}
+	}()
+	for _, name := range []string{"power_loss_witness_contracts.json", "power_loss_counterexamples.json"} {
+		if err := os.WriteFile(filepath.Join(testdataDir, name), []byte(`{"mutable_worktree":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	inputs, err := readExactCertificationInputs(sourceRoot, filepath.Join(testdataDir, "power_loss_risk_inventory.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(inputs.contractsData) != string(contractsData) || string(inputs.ledgerData) != string(ledgerData) {
+		t.Fatal("mutable worktree certification input entered exact-SHA inputs")
+	}
+	if err := os.WriteFile(filepath.Join(testdataDir, "power_loss_risk_inventory.json"), []byte(`{"mutable_worktree":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readExactCertificationInputs(sourceRoot, filepath.Join(testdataDir, "power_loss_risk_inventory.json")); err == nil || !strings.Contains(err.Error(), "byte-identical") {
+		t.Fatalf("mutable supplied inventory error=%v", err)
+	}
+}
+
 func TestBoundedBufferCapsRetainedBytesAndCountsDiscardedBytes(t *testing.T) {
 	buffer := boundedBuffer{limit: 4}
 	written, err := buffer.Write([]byte("123456"))

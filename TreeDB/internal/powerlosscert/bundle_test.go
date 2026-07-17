@@ -292,6 +292,41 @@ func TestVerifyArtifactsRejectsAcceptedOutcomeForRejectedOpen(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsRejectsScalarSelectedStateForRejectedOpen(t *testing.T) {
+	for name, scalars := range map[string]map[string]any{
+		"commit sequence": {"commit_seq": 1, "applied_lsn": 0},
+		"applied LSN":     {"commit_seq": 0, "applied_lsn": 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("witness-a")
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			witness := &manifest.Witnesses[0]
+			witness.ActualOutcome = "rejected:modeled-image"
+			witness.TypedError = "*errors.errorString"
+			witness.State = observedWitnessState(recoveryTraceArtifact{Rejected: true})
+			fields := map[string]any{
+				"rejected":   true,
+				"error_type": witness.TypedError,
+				"error":      "rejected modeled image",
+				"stats":      map[string]string{},
+			}
+			for field, value := range scalars {
+				fields[field] = value
+			}
+			rewriteArtifactJSONFields(t, root, witness, ArtifactKindRecoveryTrace, fields)
+
+			err := VerifyArtifacts(root, []ChildManifest{manifest})
+			if err == nil || !strings.Contains(err.Error(), "scalar selected state") {
+				t.Fatalf("VerifyArtifacts rejected scalar state error=%v", err)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactsRejectsTamperedWritableRecoveryPreOpenSnapshot(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")

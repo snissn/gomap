@@ -45,7 +45,10 @@ The runner requires the supplied inventory to be byte-identical to the
 exact-SHA committed copy, the plan's PR-number sequence to equal the committed
 graph sequence, and every plan case to be identical to its committed contract,
 so a caller cannot omit implementation provenance or shrink or relabel
-coverage. Child manifests carry exact repository and PR provenance, structured
+coverage. The runner reads the inventory, witness contracts, counterexample
+ledger, and test sources from one private exact-SHA checkout; the caller's
+inventory path is only accepted when it is byte-identical to that checkout.
+Child manifests carry exact repository and PR provenance, structured
 test commands, observed cut metadata, recovery state, expected and actual
 outcomes, and SHA-256-addressed artifacts.
 

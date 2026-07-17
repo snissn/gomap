@@ -65,6 +65,14 @@ type executedCase struct {
 	peakBytes uint64
 }
 
+type exactCertificationInputs struct {
+	inventoryData []byte
+	inventory     RiskInventory
+	contractsData []byte
+	contracts     WitnessContracts
+	ledgerData    []byte
+}
+
 // Run executes an immutable certification plan from a clean exact repository
 // SHA, writes one self-contained bundle, and verifies the completed bundle
 // before returning. It never retries a failed witness: a rerun must use a new,
@@ -75,17 +83,6 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err != nil {
 		return RunnerResult{}, err
 	}
-	inventoryData, err := os.ReadFile(inventoryPath)
-	if err != nil {
-		return RunnerResult{}, fmt.Errorf("powerlosscert: read risk inventory: %w", err)
-	}
-	inventory, err := ParseRiskInventory(inventoryData)
-	if err != nil {
-		return RunnerResult{}, err
-	}
-	if err := requireCommittedRiskInventory(repoRoot, inventoryData); err != nil {
-		return RunnerResult{}, err
-	}
 	planData, err := os.ReadFile(planPath)
 	if err != nil {
 		return RunnerResult{}, fmt.Errorf("powerlosscert: read run plan: %w", err)
@@ -94,25 +91,31 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err != nil {
 		return RunnerResult{}, err
 	}
-	if err := ValidateRunPlan(inventory, plan); err != nil {
-		return RunnerResult{}, err
-	}
-	contractsPath := filepath.Join(repoRoot, "TreeDB", "testdata", "power_loss_witness_contracts.json")
-	contractsData, err := os.ReadFile(contractsPath)
-	if err != nil {
-		return RunnerResult{}, fmt.Errorf("powerlosscert: read committed witness contracts: %w", err)
-	}
-	contracts, err := ParseWitnessContracts(contractsData)
-	if err != nil {
-		return RunnerResult{}, err
-	}
-	if err := ValidateWitnessContracts(plan, contracts); err != nil {
-		return RunnerResult{}, err
-	}
 	if err := requireExactCleanRepository(repoRoot, plan.RepositoryRef, plan.RepositorySHA); err != nil {
 		return RunnerResult{}, err
 	}
+	sourceRoot, cleanupSource, err := createExactSourceCheckout(repoRoot, plan.RepositoryRef, plan.RepositorySHA)
+	if err != nil {
+		return RunnerResult{}, err
+	}
+	defer func() {
+		if cleanupSource != nil {
+			_ = cleanupSource()
+		}
+	}()
 	if err := requirePullRequestProvenance(repoRoot, plan.RepositorySHA, plan.PullRequests); err != nil {
+		return RunnerResult{}, err
+	}
+	inputs, err := readExactCertificationInputs(sourceRoot, inventoryPath)
+	if err != nil {
+		return RunnerResult{}, err
+	}
+	inventoryData, inventory := inputs.inventoryData, inputs.inventory
+	contractsData, contracts := inputs.contractsData, inputs.contracts
+	if err := ValidateRunPlan(inventory, plan); err != nil {
+		return RunnerResult{}, err
+	}
+	if err := ValidateWitnessContracts(plan, contracts); err != nil {
 		return RunnerResult{}, err
 	}
 	if err := requireEmptyOutputRoot(outputRoot); err != nil {
@@ -132,12 +135,7 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err := writeExclusive(filepath.Join(outputRoot, "inputs", "power_loss_witness_contracts.json"), contractsData, 0o600); err != nil {
 		return RunnerResult{}, err
 	}
-	ledgerSource := filepath.Join(repoRoot, "TreeDB", "testdata", "power_loss_counterexamples.json")
-	ledgerData, err := os.ReadFile(ledgerSource)
-	if err != nil {
-		return RunnerResult{}, fmt.Errorf("powerlosscert: read committed counterexample ledger: %w", err)
-	}
-	if err := writeExclusive(filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json"), ledgerData, 0o600); err != nil {
+	if err := writeExclusive(filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json"), inputs.ledgerData, 0o600); err != nil {
 		return RunnerResult{}, err
 	}
 
@@ -149,12 +147,9 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err != nil {
 		return RunnerResult{}, err
 	}
-	sourceRoot, cleanupSource, err := createExactSourceCheckout(repoRoot, plan.RepositoryRef, plan.RepositorySHA)
-	if err != nil {
-		return RunnerResult{}, err
-	}
 	binaries, binaryPaths, buildErr := buildTestBinaries(sourceRoot, outputRoot, goBinary, plan.Cases)
 	cleanupErr := cleanupSource()
+	cleanupSource = nil
 	if buildErr != nil {
 		if cleanupErr != nil {
 			return RunnerResult{}, fmt.Errorf("%v; additionally failed to remove private exact-SHA source checkout: %w", buildErr, cleanupErr)
@@ -302,15 +297,54 @@ func resolveRunnerPaths(config RunnerConfig) (repoRoot, inventoryPath, planPath,
 }
 
 func requireCommittedRiskInventory(repoRoot string, supplied []byte) error {
-	committedPath := filepath.Join(repoRoot, "TreeDB", "testdata", "power_loss_risk_inventory.json")
+	_, _, err := readExactRiskInventory(repoRoot, supplied)
+	return err
+}
+
+func readExactRiskInventory(sourceRoot string, supplied []byte) ([]byte, RiskInventory, error) {
+	committedPath := filepath.Join(sourceRoot, "TreeDB", "testdata", "power_loss_risk_inventory.json")
 	committed, err := os.ReadFile(committedPath)
 	if err != nil {
-		return fmt.Errorf("powerlosscert: read committed risk inventory: %w", err)
+		return nil, RiskInventory{}, fmt.Errorf("powerlosscert: read committed risk inventory: %w", err)
 	}
 	if !bytes.Equal(supplied, committed) {
-		return fmt.Errorf("powerlosscert: supplied risk inventory is not byte-identical to the committed exact-SHA contract %q", committedPath)
+		return nil, RiskInventory{}, fmt.Errorf("powerlosscert: supplied risk inventory is not byte-identical to the committed exact-SHA contract %q", committedPath)
 	}
-	return nil
+	inventory, err := ParseRiskInventory(committed)
+	if err != nil {
+		return nil, RiskInventory{}, err
+	}
+	return committed, inventory, nil
+}
+
+func readExactCertificationInputs(sourceRoot, suppliedInventoryPath string) (exactCertificationInputs, error) {
+	suppliedInventory, err := os.ReadFile(suppliedInventoryPath)
+	if err != nil {
+		return exactCertificationInputs{}, fmt.Errorf("powerlosscert: read risk inventory: %w", err)
+	}
+	inventoryData, inventory, err := readExactRiskInventory(sourceRoot, suppliedInventory)
+	if err != nil {
+		return exactCertificationInputs{}, err
+	}
+	contractsData, err := os.ReadFile(filepath.Join(sourceRoot, "TreeDB", "testdata", "power_loss_witness_contracts.json"))
+	if err != nil {
+		return exactCertificationInputs{}, fmt.Errorf("powerlosscert: read committed witness contracts: %w", err)
+	}
+	contracts, err := ParseWitnessContracts(contractsData)
+	if err != nil {
+		return exactCertificationInputs{}, err
+	}
+	ledgerData, err := os.ReadFile(filepath.Join(sourceRoot, "TreeDB", "testdata", "power_loss_counterexamples.json"))
+	if err != nil {
+		return exactCertificationInputs{}, fmt.Errorf("powerlosscert: read committed counterexample ledger: %w", err)
+	}
+	return exactCertificationInputs{
+		inventoryData: inventoryData,
+		inventory:     inventory,
+		contractsData: contractsData,
+		contracts:     contracts,
+		ledgerData:    ledgerData,
+	}, nil
 }
 
 func requireExactCleanRepository(repoRoot, repositoryRef, expectedSHA string) error {
