@@ -563,6 +563,9 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 			if err := snapshot.Overlay(dir); err != nil {
 				return err
 			}
+			if err := snapshot.UseObservedTrace(actualSnapshot); err != nil {
+				return err
+			}
 			return cutErr
 		}
 		return nil
@@ -701,7 +704,7 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:               "checkpoint-generation-2",
 		Point:            powerlossoracle.AfterMetaWrite,
-		Occurrence:       1,
+		Occurrence:       0,
 		Model:            snapshot,
 		TargetMeta:       &target,
 		Dependencies:     dependencies,
@@ -796,22 +799,86 @@ func TestPowerLossOracleCounterexampleNewMetaMissingClosure(t *testing.T) {
 
 func TestPowerLossOracleAdversarialNewFileNamespaceMismatch(t *testing.T) {
 	requirePowerLossProfile(t, "no_wal_fast")
-	model, opts, baseSequence := seedPowerLossImage(t)
-	const path = "adversarial-namespace/new-dependency.bin"
-	if err := model.Create(path, []byte("new dependency bytes")); err != nil {
+	dir := t.TempDir()
+	opts := powerLossOptions(dir)
+	db, err := treedb.Open(opts)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err := db.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	baseSequence := publicCommitSequence(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err = treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := powerlossoracle.Capture(dir)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	observed := baseline.Clone()
+	cutErr := errors.New("power-loss-oracle: stop after actual new value-log file directory sync")
+	var snapshot *powerlossoracle.Model
+	var createdPath string
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if err := observed.Observe(dir, event); err != nil {
+			return err
+		}
+		if event.Resource == durabilitycut.ResourceValueLog && event.Namespace == durabilitycut.NamespaceCreate {
+			createdPath = event.NewPath
+		}
+		if event.Point != durabilitycut.AfterNewFileDirectorySync || event.Resource != durabilitycut.ResourceValueLog {
+			return nil
+		}
+		actual := observed.Clone()
+		snapshot = baseline.Clone()
+		if err := snapshot.Overlay(dir); err != nil {
+			return err
+		}
+		if err := snapshot.UseObservedTrace(actual); err != nil {
+			return err
+		}
+		return cutErr
+	})
+	err = db.SetSync([]byte("new/pointer"), bytes.Repeat([]byte("n"), 4096))
+	restore()
+	if !errors.Is(err, cutErr) || snapshot == nil || createdPath == "" {
+		_ = db.Close()
+		t.Fatalf("actual new-file directory-sync cut err=%v snapshot=%t path=%q", err, snapshot != nil, createdPath)
+	}
+	if err := db.Close(); err != nil && !errors.Is(err, cutErr) {
+		t.Logf("close after injected new-file cut: %v", err)
+	}
+	path, err := filepath.Rel(dir, createdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.ToSlash(path)
+	parent := filepath.ToSlash(filepath.Dir(path))
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:         "new-auxiliary-namespace",
 		Point:      powerlossoracle.AfterNewFileDirectorySync,
-		Occurrence: 1,
-		Model:      model,
+		Occurrence: 0,
+		Model:      snapshot,
 		Dependencies: []powerlossoracle.DirtyResource{{
-			Kind:          powerlossoracle.ResourceAuxiliary,
+			Kind:          powerlossoracle.ResourceValueLog,
 			ID:            "new-asset-generation-2",
 			Path:          path,
 			NewName:       true,
-			NamespaceDirs: []string{".", "adversarial-namespace"},
+			NamespaceDirs: []string{parent},
 		}},
 		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData, powerlossoracle.VariantFullWriteback},
 		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
@@ -932,7 +999,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		{
 			ID:         "checkpoint-generation-2",
 			Point:      powerlossoracle.AfterMetaWrite,
-			Occurrence: 1,
+			Occurrence: 0,
 			Model:      model,
 			TargetMeta: &target,
 			Dependencies: []powerlossoracle.DirtyResource{
@@ -954,9 +1021,9 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		{
 			ID:               "new-auxiliary-namespace",
 			Point:            powerlossoracle.AfterNewFileDirectorySync,
-			Occurrence:       1,
+			Occurrence:       0,
 			Model:            model,
-			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceAuxiliary, ID: "new-asset-generation-2", Path: "maindb/assets/value-0002.vlog", NewName: true, NamespaceDirs: []string{"maindb/assets"}}},
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceValueLog, ID: "new-asset-generation-2", Path: "maindb/assets/value-0002.vlog", NewName: true, NamespaceDirs: []string{"maindb/assets"}}},
 			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantDataWithoutNamespace, powerlossoracle.VariantNamespaceWithoutData},
 			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
 				powerlossoracle.VariantSyncedOnly:           powerlossoracle.ExpectedOldRoot,
@@ -968,7 +1035,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		{
 			ID:               "relaxed-command-frame-external-rid",
 			Point:            powerlossoracle.AfterUserspaceFlush,
-			Occurrence:       1,
+			Occurrence:       0,
 			Model:            model,
 			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceCommandWAL, ID: "relaxed-frame-1", Path: "maindb/command.wal"}},
 			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
@@ -980,7 +1047,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		{
 			ID:               "chunked-checkpoint-intermediate-root",
 			Point:            powerlossoracle.AfterMetaWrite,
-			Occurrence:       1,
+			Occurrence:       0,
 			Model:            model,
 			TargetMeta:       &powerlossoracle.DirtyResource{Kind: powerlossoracle.ResourceIndex, ID: "chunked-intermediate-root", Path: "maindb/chunk.db"},
 			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantTargetMetaOnly},
@@ -1079,7 +1146,7 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:         "relaxed-command-frame-external-rid",
 		Point:      powerlossoracle.AfterUserspaceFlush,
-		Occurrence: 1,
+		Occurrence: 0,
 		Model:      snapshot,
 		Dependencies: []powerlossoracle.DirtyResource{{
 			Kind:   powerlossoracle.ResourceCommandWAL,
@@ -1245,7 +1312,7 @@ func TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot(t *testing.T) 
 	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
 		ID:               "chunked-checkpoint-intermediate-root",
 		Point:            powerlossoracle.AfterMetaWrite,
-		Occurrence:       1,
+		Occurrence:       0,
 		Model:            snapshot,
 		TargetMeta:       &target,
 		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantTargetMetaOnly, powerlossoracle.VariantFullWriteback},
