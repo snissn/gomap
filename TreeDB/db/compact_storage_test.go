@@ -437,6 +437,87 @@ func TestCompactStorageManagerSegmentDeletionSyncFailureRequiresRecovery(t *test
 	if _, statErr := os.Stat(emptyPath); !os.IsNotExist(statErr) {
 		t.Fatalf("post-unlink sync-cut path stat=%v, want removed", statErr)
 	}
+	if !reopened.publicationPoisoned.Load() {
+		t.Fatal("deletion namespace sync cut did not poison publication")
+	}
+	if err := reopened.SetSync([]byte("post-cut"), []byte("blocked")); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("SetSync after deletion namespace sync cut error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestCompactStorageManagerSuccessfulUnlinkCloseErrorSyncsBeforeReturn(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	const emptyName = "value-l42-000001.log"
+	emptyPath := filepath.Join(valueLogDir, emptyName)
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+	fileID, ok := compactStorageValueLogFileID(emptyName)
+	if !ok {
+		t.Fatalf("parse %s failed", emptyName)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.RefreshValueLogSet(); err != nil {
+		t.Fatalf("explicit maintenance refresh: %v", err)
+	}
+	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
+	}
+
+	closeErr := errors.New("injected close after successful unlink")
+	reopened.testCompactStorageRemoveValueLogSegmentHook = func(gotFileID uint32) (bool, error) {
+		if gotFileID != fileID {
+			t.Fatalf("remove file ID=%d want=%d", gotFileID, fileID)
+		}
+		removed, err := removePersistentFile(valueLogDir, emptyPath, durabilitycut.ResourceValueLog)
+		if err != nil {
+			t.Fatalf("remove persistent file: %v", err)
+		}
+		return removed, closeErr
+	}
+
+	var points []durabilitycut.Point
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceValueLog && filepath.Clean(event.Path) == filepath.Clean(valueLogDir) {
+			if event.Point == durabilitycut.BeforeDeletionDirectorySync || event.Point == durabilitycut.AfterDeletionDirectorySync {
+				points = append(points, event.Point)
+			}
+		}
+		return nil
+	})
+	stats, compactErr := reopened.CompactStorage(context.Background(), CompactStorageOptions{})
+	restore()
+	if stats.ZeroByteValueLogFilesDeleted != 1 {
+		t.Fatalf("CompactStorage deleted=%d want=1", stats.ZeroByteValueLogFilesDeleted)
+	}
+	if !errors.Is(compactErr, closeErr) || !errors.Is(compactErr, ErrRecoveryRequired) {
+		t.Fatalf("CompactStorage error=%v, want close error and ErrRecoveryRequired", compactErr)
+	}
+	want := []durabilitycut.Point{durabilitycut.BeforeDeletionDirectorySync, durabilitycut.AfterDeletionDirectorySync}
+	if !reflect.DeepEqual(points, want) {
+		t.Fatalf("deletion namespace sync points=%v want=%v", points, want)
+	}
+	if _, statErr := os.Stat(emptyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("post-unlink close-error path stat=%v, want removed", statErr)
+	}
 }
 
 func TestCompactStorageKeepsPinnedZombieZeroByteValueLogFiles(t *testing.T) {

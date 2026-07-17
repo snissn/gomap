@@ -557,6 +557,7 @@ type DB struct {
 	testOrderedRootBatchAfterClosePreflightHook    func()
 	testStorageMaintenanceBeforeLockHook           func(string)
 	testStorageMaintenanceAfterLockHook            func(string) error
+	testCompactStorageRemoveValueLogSegmentHook    func(uint32) (bool, error)
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
 	commandWALReplayLSN                            atomic.Uint64
