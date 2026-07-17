@@ -1,12 +1,28 @@
 package powerlosscert
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 const testRepositorySHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestCommittedRiskInventoryIsValid(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "power_loss_risk_inventory.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := ParseRiskInventory(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRiskInventory(inventory); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestParseChildManifestRejectsUnknownFields(t *testing.T) {
 	data := []byte(`{"schema_version":"treedb-power-loss-child/v1","unexpected":true}`)
