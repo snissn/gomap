@@ -439,26 +439,25 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	if state.RootMetaGeneration == "" || state.FreelistGeneration == "" || state.ExternalFrontiers == "" || state.NamespaceGeneration == "" || state.WALLineage == "" || state.DurableLSN == "" || state.CleanupPins == "" {
 		return fmt.Errorf("%s has incomplete recovery-state metadata", prefix)
 	}
-	if witness.Seed == 0 {
-		return fmt.Errorf("%s has zero seed", prefix)
-	}
-	if witness.CutID == "" || witness.CutPoint == "" || witness.CutOccurrence < 0 {
-		return fmt.Errorf("%s has incomplete declared cut metadata", prefix)
-	}
-	if witness.ObservedEventCount <= witness.CutOccurrence {
-		return fmt.Errorf("%s observed event count=%d does not reach declared occurrence=%d", prefix, witness.ObservedEventCount, witness.CutOccurrence)
+	if witness.EvidenceTier == EvidenceTierModeledCrash {
+		if witness.Seed == 0 {
+			return fmt.Errorf("%s has zero seed", prefix)
+		}
+		if witness.CutID == "" || witness.CutPoint == "" || witness.CutOccurrence < 0 {
+			return fmt.Errorf("%s has incomplete declared cut metadata", prefix)
+		}
+		if witness.ObservedEventCount <= witness.CutOccurrence {
+			return fmt.Errorf("%s observed event count=%d does not reach declared occurrence=%d", prefix, witness.ObservedEventCount, witness.CutOccurrence)
+		}
+		if !witness.CutExercised {
+			return fmt.Errorf("%s passed but did not exercise its declared cut", prefix)
+		}
 	}
 	if witness.Command.BinaryPath == "" || witness.Command.Package == "" || witness.Command.TestName == "" || len(witness.Command.Args) == 0 {
 		return fmt.Errorf("%s has incomplete structured command", prefix)
 	}
-	if err := validateUniqueStrings(prefix+" command arguments", witness.Command.Args); err != nil {
-		return err
-	}
 	if !binaries[normalizedArtifactPath(witness.Command.BinaryPath)] {
 		return fmt.Errorf("%s references unregistered test binary %q", prefix, witness.Command.BinaryPath)
-	}
-	if !witness.CutExercised {
-		return fmt.Errorf("%s passed but did not exercise its declared cut", prefix)
 	}
 	if len(witness.Artifacts) == 0 {
 		return fmt.Errorf("%s has no hashed artifacts", prefix)
@@ -507,8 +506,8 @@ func validateArtifact(prefix string, artifact Artifact) error {
 		return fmt.Errorf("%s has unknown kind %q", prefix, artifact.Kind)
 	}
 	cleanPath := normalizedArtifactPath(artifact.Path)
-	if artifact.Path == "" || filepath.IsAbs(artifact.Path) || cleanPath == "." || strings.HasPrefix(cleanPath, "../") {
-		return fmt.Errorf("%s has unsafe path %q", prefix, artifact.Path)
+	if artifact.Path == "" || filepath.IsAbs(artifact.Path) || cleanPath == "." || strings.HasPrefix(cleanPath, "../") || cleanPath != artifact.Path {
+		return fmt.Errorf("%s has unsafe path or non-canonical path %q", prefix, artifact.Path)
 	}
 	if !validHex(artifact.SHA256, 64) {
 		return fmt.Errorf("%s %q has invalid sha256", prefix, artifact.Path)

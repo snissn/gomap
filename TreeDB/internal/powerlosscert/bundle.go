@@ -382,8 +382,8 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 	if trace.ObservedEventCount != matchingEvents || trace.ObservedEventCount != witness.ObservedEventCount {
 		return operationTraceArtifact{}, fmt.Errorf("%s observed_event_count=%d matching_events=%d witness=%d", prefix, trace.ObservedEventCount, matchingEvents, witness.ObservedEventCount)
 	}
-	if matchingEvents <= witness.CutOccurrence {
-		return operationTraceArtifact{}, fmt.Errorf("%s matching events=%d do not reach occurrence=%d", prefix, matchingEvents, witness.CutOccurrence)
+	if matchingEvents != witness.CutOccurrence+1 {
+		return operationTraceArtifact{}, fmt.Errorf("%s matching events=%d does not end at declared occurrence=%d", prefix, matchingEvents, witness.CutOccurrence)
 	}
 	wantEnv := map[string]string{
 		"TREEDB_POWERLOSS_CUT_ID":           witness.CutID,

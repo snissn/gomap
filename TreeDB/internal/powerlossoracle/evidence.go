@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -82,6 +84,23 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	if observed == 0 {
 		return nil, errorsf("declared cut point %q was not observed", cutPoint)
 	}
+	selector, err := ReplaySelectorFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if selector == (ReplaySelector{}) {
+		return nil, errorsf("evidence capture requires %s, %s, and %s", EnvReplayCut, EnvReplayVariant, EnvReplaySeed)
+	}
+	replayCutPoint, replayOccurrence, err := parseReplayCutAddress(selector.CutID)
+	if err != nil {
+		return nil, err
+	}
+	if replayCutPoint != cutPoint {
+		return nil, errorsf("replay cut point %q does not match declared cut point %q", replayCutPoint, cutPoint)
+	}
+	if observed != replayOccurrence+1 {
+		return nil, errorsf("observed cut events=%d does not end at replay occurrence=%d", observed, replayOccurrence)
+	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
@@ -111,9 +130,9 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	}
 	if err := writeEvidenceJSON(filepath.Join(root, "operation_trace.json"), evidenceTrace{
 		SchemaVersion:      "treedb-power-loss-operation-trace/v1",
-		CutID:              os.Getenv(EnvReplayCut),
-		VariantID:          os.Getenv(EnvReplayVariant),
-		Seed:               os.Getenv(EnvReplaySeed),
+		CutID:              selector.CutID,
+		VariantID:          selector.VariantID,
+		Seed:               strconv.FormatUint(selector.Seed, 10),
 		DeclaredCutPoint:   cutPoint,
 		ObservedEventCount: observed,
 		Events:             trace,
@@ -201,10 +220,20 @@ func (session *EvidenceSession) RecordRecovery(value any) error {
 }
 
 func requireEmptyEvidenceRoot(root string) error {
-	entries, err := os.ReadDir(root)
+	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("powerlossoracle: inspect evidence directory %q: %w", root, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errorsf("evidence directory %q is a symlink", root)
+	}
+	if !info.IsDir() {
+		return errorsf("evidence directory %q is not a directory", root)
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return fmt.Errorf("powerlossoracle: inspect evidence directory %q: %w", root, err)
 	}
@@ -212,6 +241,22 @@ func requireEmptyEvidenceRoot(root string) error {
 		return errorsf("evidence directory %q is not empty", root)
 	}
 	return nil
+}
+
+func parseReplayCutAddress(cutID string) (string, int, error) {
+	parts := strings.Split(cutID, "/")
+	if len(parts) != 4 || parts[0] != "cut" || parts[1] == "" {
+		return "", 0, errorsf("invalid replay cut id %q", cutID)
+	}
+	cutPoint, err := url.PathUnescape(parts[2])
+	if err != nil || cutPoint == "" {
+		return "", 0, errorsf("invalid replay cut point in %q", cutID)
+	}
+	occurrence, err := strconv.Atoi(parts[3])
+	if err != nil || occurrence < 0 {
+		return "", 0, errorsf("invalid replay cut occurrence in %q", cutID)
+	}
+	return cutPoint, occurrence, nil
 }
 
 func buildEvidenceTree(root, kind string) (evidenceTree, error) {

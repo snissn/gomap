@@ -97,6 +97,35 @@ func TestValidateBundleAcceptsZeroBasedFirstCutOccurrence(t *testing.T) {
 	}
 }
 
+func TestValidateChildManifestScopesCutMetadataToModeledCrashes(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	for _, tier := range []EvidenceTier{EvidenceTierCleanProcess, EvidenceTierBlockDevice} {
+		corroborating := manifest.Witnesses[0]
+		corroborating.ID = string(tier) + "-witness"
+		corroborating.EvidenceTier = tier
+		corroborating.Seed = 0
+		corroborating.CutID = ""
+		corroborating.CutPoint = ""
+		corroborating.CutOccurrence = 0
+		corroborating.ObservedEventCount = 0
+		corroborating.CutExercised = false
+		manifest.Witnesses = append(manifest.Witnesses, corroborating)
+	}
+
+	if err := validateChildManifest(manifest); err != nil {
+		t.Fatalf("validateChildManifest clean-process witness: %v", err)
+	}
+}
+
+func TestValidateChildManifestAllowsRepeatedOrderedCommandArguments(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	manifest.Witnesses[0].Command.Args = []string{"-test.run", "first", "-test.run", "second"}
+
+	if err := validateChildManifest(manifest); err != nil {
+		t.Fatalf("validateChildManifest repeated command arguments: %v", err)
+	}
+}
+
 func TestValidateBundleRejectsUnclassifiedModeledOutcome(t *testing.T) {
 	manifest := testChildManifest("witness-a")
 	manifest.Witnesses[0].ExpectedOutcome = "old-root"
@@ -186,7 +215,7 @@ func TestValidateBundleRejectsArtifactPathAliases(t *testing.T) {
 		manifest.Witnesses[0].Artifacts[1].Path = "artifacts/witness-a/subdir/../operation_trace.json"
 
 		err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
-		if err == nil || !strings.Contains(err.Error(), "reuses artifact path") {
+		if err == nil || !strings.Contains(err.Error(), "non-canonical path") {
 			t.Fatalf("ValidateBundle artifact path alias error=%v", err)
 		}
 	})
@@ -195,10 +224,22 @@ func TestValidateBundleRejectsArtifactPathAliases(t *testing.T) {
 		manifest.Witnesses[0].Artifacts[0].Path = "bin/subdir/../TreeDB.test"
 
 		err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest})
-		if err == nil || !strings.Contains(err.Error(), "reuses test-binary path") {
+		if err == nil || !strings.Contains(err.Error(), "non-canonical path") {
 			t.Fatalf("ValidateBundle test-binary path alias error=%v", err)
 		}
 	})
+}
+
+func TestValidateArtifactRejectsStandaloneNonCanonicalPath(t *testing.T) {
+	artifact := Artifact{
+		Kind:   ArtifactKindMetrics,
+		Path:   "artifacts/witness-a/subdir/../metrics.json",
+		SHA256: strings.Repeat("a", 64),
+	}
+
+	if err := validateArtifact("test artifact", artifact); err == nil || !strings.Contains(err.Error(), "non-canonical") {
+		t.Fatalf("validateArtifact non-canonical path error=%v", err)
+	}
 }
 
 func testRiskInventory() RiskInventory {

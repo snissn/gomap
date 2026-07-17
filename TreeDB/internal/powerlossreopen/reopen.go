@@ -148,10 +148,20 @@ func requireEmptyDestination(dir string) error {
 		}
 		dir = absolute
 	}
-	entries, err := os.ReadDir(dir)
+	info, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("powerlossreopen: inspect destination %q: %w", dir, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("powerlossreopen: destination %q is a symlink", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("powerlossreopen: destination %q is not a directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("powerlossreopen: inspect destination %q: %w", dir, err)
 	}

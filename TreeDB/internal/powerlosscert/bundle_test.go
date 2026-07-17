@@ -125,6 +125,24 @@ func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.
 	}
 }
 
+func TestVerifyArtifactsRequiresTraceToEndAtDeclaredCutOccurrence(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	witness := &manifest.Witnesses[0]
+	witness.CutID = "cut/checkpoint-generation-2/after-meta-write/000"
+	witness.CutOccurrence = 0
+	witness.Command.Env["TREEDB_POWERLOSS_CUT_ID"] = witness.CutID
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "does not end at declared occurrence") {
+		t.Fatalf("VerifyArtifacts extra matching cut event error=%v", err)
+	}
+}
+
 func TestVerifyArtifactsRejectsModeledEvidenceReuseAcrossWitnesses(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
