@@ -2518,6 +2518,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
 		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -2613,6 +2614,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			userRoot, systemRoot, retired, sync, metrics, touched,
 			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+			baseSeq,
 			func() {
 				db.writeMu.Unlock()
 				writeLocked = false
@@ -2647,6 +2649,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
 		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -2972,6 +2975,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 				db.vacuum.RecordEntries(entries)
 			},
 		},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
