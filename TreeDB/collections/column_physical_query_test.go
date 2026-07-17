@@ -2916,6 +2916,9 @@ func TestColumnPhysicalQueryStringKeyFallbackAllocationsM13B(t *testing.T) {
 	if _, err := exec.stringKey(stringValue); err != nil {
 		t.Fatalf("warm string stringKey: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are not stable under race instrumentation")
+	}
 
 	if allocs := testing.AllocsPerRun(100, func() {
 		got, err := exec.stringKey(bytesValue)
@@ -2943,6 +2946,15 @@ func TestColumnPhysicalQueryAdapterAllocationSlopeM13B(t *testing.T) {
 	large, closeLarge := openColumnPhysicalQueryFixtureM13B(t, largeEvents)
 	defer closeLarge()
 	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	if _, err := small.RunColumnPhysicalQuery(req); err != nil {
+		t.Fatalf("warm small RunColumnPhysicalQuery: %v", err)
+	}
+	if _, err := large.RunColumnPhysicalQuery(req); err != nil {
+		t.Fatalf("warm large RunColumnPhysicalQuery: %v", err)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are not stable under race instrumentation")
+	}
 
 	smallAllocs := testing.AllocsPerRun(5, func() {
 		if _, err := small.RunColumnPhysicalQuery(req); err != nil {
@@ -2994,6 +3006,9 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 		if result.Diagnostics.SegmentFileCacheMisses != 0 {
 			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared dictionary-code setup", result.Diagnostics)
 		}
+	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are not stable under race instrumentation")
 	}
 
 	allocs := testing.AllocsPerRun(20, func() {
@@ -3047,6 +3062,9 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarParityAndAllocationM1634(t *tes
 		if result.Diagnostics.SegmentFileCacheMisses != 0 {
 			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared dictionary-code setup", result.Diagnostics)
 		}
+	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are not stable under race instrumentation")
 	}
 
 	allocs := testing.AllocsPerRun(20, func() {
@@ -3105,6 +3123,9 @@ func TestColumnPhysicalQueryRunnerInt64ValueSidecarParityAndAllocationM1634(t *t
 			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared int64 sidecar setup", result.Diagnostics)
 		}
 		wantGroups = len(result.Groups)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are not stable under race instrumentation")
 	}
 
 	allocs := testing.AllocsPerRun(20, func() {
@@ -3183,6 +3204,9 @@ func TestColumnPhysicalQueryRunnerDictInt64SidecarParityAndAllocationM1634(t *te
 					t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared sidecar setup", result.Diagnostics)
 				}
 				wantGroups = len(result.Groups)
+			}
+			if collectionsRaceEnabled {
+				t.Skip("exact allocation counts are not stable under race instrumentation")
 			}
 			allocs := testing.AllocsPerRun(20, func() {
 				result, err := runner.Run()
@@ -4048,6 +4072,9 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 			if result.Diagnostics.RowMaterializations != 0 {
 				t.Fatalf("preview diagnostics=%+v want sidecar path", result.Diagnostics)
 			}
+			if collectionsRaceEnabled {
+				t.Skip("exact allocation counts are not stable under race instrumentation")
+			}
 			allocs := testing.AllocsPerRun(20, func() {
 				result, err := collection.RunColumnPhysicalQuery(tc.req)
 				if err != nil {
@@ -4064,12 +4091,6 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 				// Windows CI carries extra runtime/path allocation noise in this
 				// routed one-shot path; keep the stricter budget on Unix hosts
 				// where the #1634 performance evidence is collected.
-				maxAllocs += 32
-			}
-			if collectionsRaceEnabled {
-				// The race detector instruments this routed allocation-budget
-				// path and shifts AllocsPerRun upward. Keep the normal budget
-				// strict for the performance evidence builds.
 				maxAllocs += 32
 			}
 			if allocs > maxAllocs {
@@ -4253,6 +4274,9 @@ func TestColumnPhysicalQueryRunnerAggregateMetadataParityAndAllocationM1634(t *t
 				if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned != baseline.Diagnostics.PhysicalBytesScanned {
 					t.Fatalf("runner physical bytes=%d want metadata bytes=%d", result.Diagnostics.PhysicalBytesScanned, baseline.Diagnostics.PhysicalBytesScanned)
 				}
+			}
+			if collectionsRaceEnabled {
+				t.Skip("exact allocation counts are not stable under race instrumentation")
 			}
 			allocs := testing.AllocsPerRun(20, func() {
 				result, err := runner.Run()
