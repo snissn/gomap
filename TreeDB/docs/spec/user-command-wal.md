@@ -1205,8 +1205,8 @@ Acceptance:
 - the current hosted incompressible value-log gate is the #3861 settled
   throughput/storage contract. It uses `batch_write_steady`, applies a strict
   `>0.95x` threshold to the geometric mean of every fixed, order-balanced
-  auto/off pair, and keeps each pair's combined persistent
-  `maindb/value_vlog` plus `maindb/leaf_vlog` bytes at or below `1.02x`. One
+  auto/off pair, and keeps the sum of each pair's `total=` fields for
+  `maindb/value_vlog` plus `maindb/leaf_vlog` at or below `1.02x`. One
   favorable sample cannot override a mostly failing sample set. Independent
   mode checks require raw user values in both rows, block-compressed leaves in
   auto, and uncompressed leaves in off.

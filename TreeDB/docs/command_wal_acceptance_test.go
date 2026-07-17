@@ -115,6 +115,7 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"current hosted incompressible value-log gate",
 		"`batch_write_steady`",
 		"strictly greater than `0.95x`",
+		"sum of the `total=` fields",
 		"`maindb/value_vlog` and `maindb/leaf_vlog`",
 		"less than or equal to `1.02x`",
 		"raw user values in both rows",
@@ -133,6 +134,7 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"current hosted incompressible value-log gate",
 		"`batch_write_steady`",
 		"strict `>0.95x` threshold",
+		"sum of each pair's `total=` fields",
 		"`maindb/value_vlog` plus `maindb/leaf_vlog`",
 		"at or below `1.02x`",
 		"raw user values in both rows",
@@ -155,7 +157,7 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 		"-test batch_write_steady",
 		"-min-throughput-frac 0.95",
 		"settled-throughput geometric mean must exceed 0.95x",
-		"value_vlog plus leaf_vlog",
+		"total= fields from value_vlog plus leaf_vlog",
 	)
 	gateStart := strings.Index(workflow, "name: Incompressible auto-vs-off gate")
 	gateEnd := strings.Index(workflow, "snapshot-iterator-perf:")

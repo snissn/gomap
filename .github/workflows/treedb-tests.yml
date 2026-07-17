@@ -643,8 +643,9 @@ jobs:
           # settled auto/off comparison stays on the old serial/default-off
           # flush boundary and measures the deferred value-log and leaf-log
           # work rather than span-native admission changes. The checker sums
-          # value_vlog plus leaf_vlog and verifies the intended raw-user and
-          # leaf-compression modes independently of the throughput bound.
+          # the total= fields from value_vlog plus leaf_vlog and verifies the
+          # intended raw-user and leaf-compression modes independently of the
+          # throughput bound.
           run_vlog_row() {
             local db="$1"
             local output="$2"

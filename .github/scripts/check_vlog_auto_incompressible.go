@@ -12,7 +12,7 @@ import (
 
 var (
 	reBatchWriteSteady = regexp.MustCompile(`(?m)^\s*Batch Write \(Steady\) / .* = ([0-9][0-9,]*(?:\.[0-9]+)?)\s*$`)
-	rePersistentVLog   = regexp.MustCompile(`(?m)^\s*maindb/(value_vlog|leaf_vlog):[^\n]*\bvalue=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)\b`)
+	rePersistentVLog   = regexp.MustCompile(`(?m)^\s*maindb/(value_vlog|leaf_vlog):[^\n]*\btotal=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)\b`)
 	reUserWriteMode    = regexp.MustCompile(`(?m)^\s*vlog_write_mode\.([A-Za-z0-9_-]+):[^\n]*\braw_bytes=([0-9]+)\s+stored_bytes=([0-9]+)\b`)
 	reLeafWriteMode    = regexp.MustCompile(`(?m)^\s*vlog_leaf_scan\.write_mode\.([A-Za-z0-9_-]+):[^\n]*\braw_bytes=([0-9]+)\s+stored_bytes=([0-9]+)\b`)
 )
@@ -154,18 +154,18 @@ func parseMetrics(path string) (runMetrics, error) {
 	for _, match := range rePersistentVLog.FindAllStringSubmatch(s, -1) {
 		name := match[1]
 		if seenPersistent[name] {
-			return runMetrics{}, fmt.Errorf("duplicate maindb/%s value bytes", name)
+			return runMetrics{}, fmt.Errorf("duplicate maindb/%s total bytes", name)
 		}
 		valueBytes, err := parseBytesToken(match[2])
 		if err != nil {
-			return runMetrics{}, fmt.Errorf("parse maindb/%s value bytes: %w", name, err)
+			return runMetrics{}, fmt.Errorf("parse maindb/%s total bytes: %w", name, err)
 		}
 		seenPersistent[name] = true
 		persistentBytes += valueBytes
 	}
 	for _, name := range []string{"value_vlog", "leaf_vlog"} {
 		if !seenPersistent[name] {
-			return runMetrics{}, fmt.Errorf("missing maindb/%s value bytes", name)
+			return runMetrics{}, fmt.Errorf("missing maindb/%s total bytes", name)
 		}
 	}
 

@@ -1343,7 +1343,7 @@ methodology under #3861 without rewriting the historical PR9 artifact.
 publication, so the live gate uses `batch_write_steady` and requires the
 geometric mean of every fixed, order-balanced auto/off pair to be strictly
 greater than `0.95x`. One favorable sample cannot override a mostly failing
-sample set. Each pair must also keep the combined persistent bytes reported for
+sample set. Each pair must also keep the sum of the `total=` fields reported for
 `maindb/value_vlog` and `maindb/leaf_vlog` less than or equal to `1.02x`. The
 checker separately requires raw user values in both rows, block-compressed
 leaves in auto, and uncompressed leaves in off; the throughput allowance cannot

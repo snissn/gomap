@@ -62,6 +62,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         compress_last_auto_user_values: bool = False,
         wrong_last_auto_leaf_mode: bool = False,
         wrong_last_off_leaf_mode: bool = False,
+        hidden_auto_sidecar_last: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         if size_ratios is None:
             size_ratios = [0.996] * len(throughput_ratios)
@@ -81,8 +82,8 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                 )
                 off_log.write_text(
                     f"Batch Write (Steady) / fixture = {off_ops_per_sec:.3f}\n"
-                    "maindb/value_vlog: fixture value=80 MB\n"
-                    "maindb/leaf_vlog: fixture value=20 MB\n"
+                    "maindb/value_vlog: total=80 MB files=1 value=80 MB\n"
+                    "maindb/leaf_vlog: total=20 MB files=1 value=20 MB\n"
                     "vlog_write_mode.off: frames=1 raw_bytes=512000000 "
                     "stored_bytes=512000000 stored_ratio=1.000000\n"
                     f"vlog_leaf_scan.write_mode.{off_leaf_mode}: frames=1 "
@@ -102,9 +103,16 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                         missing_last_auto_leaf_storage
                         and index == len(throughput_ratios)
                     ):
+                        leaf_value = size_ratio * 100 - 80
+                        leaf_total = leaf_value
+                        if (
+                            hidden_auto_sidecar_last
+                            and index == len(throughput_ratios)
+                        ):
+                            leaf_total += 3
                         leaf_storage = (
-                            "maindb/leaf_vlog: fixture "
-                            f"value={size_ratio * 100 - 80:.3f} MB\n"
+                            f"maindb/leaf_vlog: total={leaf_total:.3f} MB "
+                            f"files=2 value={leaf_value:.3f} MB\n"
                         )
                     user_stored_bytes = (
                         500000000
@@ -121,7 +129,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                     auto_log.write_text(
                         f"{benchmark_name} / fixture = "
                         f"{throughput_ratio * off_ops_per_sec:.3f}\n"
-                        "maindb/value_vlog: fixture value=80 MB\n"
+                        "maindb/value_vlog: total=80 MB files=1 value=80 MB\n"
                         f"{leaf_storage}"
                         "vlog_write_mode.off: frames=1 raw_bytes=512000000 "
                         f"stored_bytes={user_stored_bytes} stored_ratio=1.000000\n"
@@ -203,7 +211,15 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("missing maindb/leaf_vlog value bytes", result.stderr)
+        self.assertIn("missing maindb/leaf_vlog total bytes", result.stderr)
+
+    def test_non_value_sidecar_counts_toward_storage_bound(self) -> None:
+        result = self.run_checker(
+            [0.98, 0.99], hidden_auto_sidecar_last=True
+        )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL size gate sample 2", result.stderr)
 
     def test_compressed_incompressible_user_values_fail_closed(self) -> None:
         result = self.run_checker(
@@ -261,7 +277,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertIn("-min-throughput-frac 0.95", script)
         self.assertIn("-max-size-frac 1.02", script)
         self.assertIn("settled-throughput geometric mean must exceed 0.95x", script)
-        self.assertIn("value_vlog plus leaf_vlog", script)
+        self.assertIn("total= fields from value_vlog plus leaf_vlog", script)
         self.assertIn("Upload value-log performance evidence", script)
         self.assertIn("if: always()", script)
         self.assertIn('2>&1 | tee "${summary_log}"', script)
