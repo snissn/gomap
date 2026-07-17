@@ -557,6 +557,7 @@ type DB struct {
 	testOrderedRootBatchAfterClosePreflightHook    func()
 	testStorageMaintenanceBeforeLockHook           func(string)
 	testStorageMaintenanceAfterLockHook            func(string) error
+	testCompactStorageRemoveValueLogSegmentHook    func(uint32) (bool, error)
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
 	commandWALReplayLSN                            atomic.Uint64
@@ -2161,6 +2162,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
+		return db.syncDeletionNamespaceDirectoryOrPoison(
+			dir,
+			resource,
+			"treedb: sync deferred value-log deletion namespace",
+		)
+	})
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()
 	db.idx.Store(gen)

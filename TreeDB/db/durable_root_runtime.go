@@ -1106,6 +1106,15 @@ type durableRootStorageTransactionV1 struct {
 	beforeMetaSync  func() error
 }
 
+type stableResourceDependencySyncPhaseV1 uint8
+
+const (
+	stableResourceDependencyObserveV1 stableResourceDependencySyncPhaseV1 = iota + 1
+	stableResourceDependencyEmitBeforeV1
+	stableResourceDependencySyncV1
+	stableResourceDependencyEmitAfterV1
+)
+
 // executeDurableRootStorageTransactionV1 is the only V1 durable-meta mutation
 // implementation. Live commits, initialization, and replacement-index
 // maintenance all pass through the same dependency -> index -> meta ordering.
@@ -1119,26 +1128,14 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		if err := tx.resources.FlushThrough(); err != nil {
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
-		dependencyPaths, err := durableRootDependencyObservationPathsV1(tx.resources, tx.dir)
+		phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
 		if err != nil {
-			return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
-		}
-		if len(dependencyPaths) != 0 {
-			if err := durabilitycut.Emit(durabilitycut.Event{
-				Point: durabilitycut.BeforeDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
-				Root: tx.dir, Paths: dependencyPaths,
-			}); err != nil {
-				return false, err
-			}
-		}
-		if err := tx.resources.SyncThrough(); err != nil {
-			return false, fmt.Errorf("sync durable-root external dependencies: %w", err)
-		}
-		if len(dependencyPaths) != 0 {
-			if err := durabilitycut.Emit(durabilitycut.Event{
-				Point: durabilitycut.AfterDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
-				Root: tx.dir, Paths: dependencyPaths,
-			}); err != nil {
+			switch phase {
+			case stableResourceDependencyObserveV1:
+				return false, fmt.Errorf("observe durable-root external dependencies: %w", err)
+			case stableResourceDependencySyncV1:
+				return false, fmt.Errorf("sync durable-root external dependencies: %w", err)
+			default:
 				return false, err
 			}
 		}
@@ -1192,11 +1189,11 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 	return true, nil
 }
 
-// durableRootDependencyObservationPathsV1 exposes only the names attached to
-// the exact handles already retained by the candidate. It never reopens a
+// stableResourceDependencyObservationPathsV1 exposes only the names attached to
+// the exact handles already retained by the resource set. It never reopens a
 // diagnostic path. The list is collected only while the deterministic cut
 // observer is active, so the production-disabled path remains allocation-free.
-func durableRootDependencyObservationPathsV1(resources *rootpublication.StableResourceSet, root string) ([]string, error) {
+func stableResourceDependencyObservationPathsV1(resources *rootpublication.StableResourceSet, root string) ([]string, error) {
 	if resources == nil || root == "" || !durabilitycut.Enabled() {
 		return nil, nil
 	}
@@ -1207,7 +1204,7 @@ func durableRootDependencyObservationPathsV1(resources *rootpublication.StableRe
 		}
 		var path string
 		if err := token.WithPinnedFile(func(file *os.File) error {
-			path = durableRootDependencyObservationPathV1(file.Name())
+			path = stableResourceDependencyObservationPathV1(file.Name())
 			if path == "" {
 				return errors.New("stable resource handle has no observation name")
 			}
@@ -1230,11 +1227,52 @@ func durableRootDependencyObservationPathsV1(resources *rootpublication.StableRe
 	return unique, nil
 }
 
-// durableRootDependencyObservationPathV1 strips the private handle suffixes
+// syncStableResourceDependenciesV1 keeps stable-resource cut observation and
+// the corresponding sync operation in one sequence. onError lets callers
+// retain retry debt before any error is returned.
+func syncStableResourceDependenciesV1(
+	resources *rootpublication.StableResourceSet,
+	root string,
+	sync func() error,
+	onError func(),
+) (stableResourceDependencySyncPhaseV1, error) {
+	fail := func(phase stableResourceDependencySyncPhaseV1, err error) (stableResourceDependencySyncPhaseV1, error) {
+		if onError != nil {
+			onError()
+		}
+		return phase, err
+	}
+	dependencyPaths, err := stableResourceDependencyObservationPathsV1(resources, root)
+	if err != nil {
+		return fail(stableResourceDependencyObserveV1, err)
+	}
+	if len(dependencyPaths) != 0 {
+		if err := durabilitycut.Emit(durabilitycut.Event{
+			Point: durabilitycut.BeforeDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
+			Root: root, Paths: dependencyPaths,
+		}); err != nil {
+			return fail(stableResourceDependencyEmitBeforeV1, err)
+		}
+	}
+	if err := sync(); err != nil {
+		return fail(stableResourceDependencySyncV1, err)
+	}
+	if len(dependencyPaths) != 0 {
+		if err := durabilitycut.Emit(durabilitycut.Event{
+			Point: durabilitycut.AfterDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary,
+			Root: root, Paths: dependencyPaths,
+		}); err != nil {
+			return fail(stableResourceDependencyEmitAfterV1, err)
+		}
+	}
+	return 0, nil
+}
+
+// stableResourceDependencyObservationPathV1 strips the private handle suffixes
 // used by stable-resource pins. A resource may be cloned through several
 // candidate closures, so normalize every trailing layer before exposing the
 // underlying path to the deterministic power-loss observer.
-func durableRootDependencyObservationPathV1(path string) string {
+func stableResourceDependencyObservationPathV1(path string) string {
 	for {
 		switch {
 		case strings.HasSuffix(path, "#stable-sync-pin"):
