@@ -49,3 +49,40 @@ func TestPublicCachedHandleRejectsMutationAfterPostMetaFailure(t *testing.T) {
 		t.Fatalf("public CompactStorage after post-meta failure error=%v, want ErrRecoveryRequired", err)
 	}
 }
+
+func TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.DisableSideStores = true
+	opts.DisableBackgroundPrune = true
+	opts.BackgroundCheckpointInterval = -1
+	database, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if err := database.SetSync([]byte("stable/old"), []byte("old-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Set([]byte("dirty/new"), []byte("new-value")); err != nil {
+		t.Fatal(err)
+	}
+
+	cutErr := errors.New("public admission: stop before meta write")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeMetaWrite {
+			return cutErr
+		}
+		return nil
+	})
+	err = database.Checkpoint()
+	restore()
+	if !errors.Is(err, cutErr) || errors.Is(err, treedb.ErrRecoveryRequired) {
+		t.Fatalf("pre-meta checkpoint error=%v, want injected cut without ErrRecoveryRequired", err)
+	}
+	if err := database.Set([]byte("after/retryable"), []byte("accepted")); err != nil {
+		t.Fatalf("public Set after pre-meta failure: %v", err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatalf("retry checkpoint after pre-meta failure: %v", err)
+	}
+}
