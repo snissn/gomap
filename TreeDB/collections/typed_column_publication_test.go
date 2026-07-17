@@ -1586,6 +1586,12 @@ func TestTypedColumnMultipartPartSetRefsRetainedDuringGC1787(t *testing.T) {
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
 	extraRef := publishTypedColumnMultipartPartRef1787(t, d, col, 3)
+	// Settle the activated multipart-manifest publication before destructive
+	// maintenance captures its recoverable-root capability. The published extra
+	// part remains the exact retention boundary this test is intended to prove.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint multipart manifest before column asset GC: %v", err)
+	}
 	unreferenced := writeTypedColumnAssetGCCandidateSegment1787(t, d.ColumnAssetRootDir(), col, 178, []byte("unreferenced-multipart-typed-column-asset"))
 	unreferencedPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), unreferenced)
 	if err != nil {
