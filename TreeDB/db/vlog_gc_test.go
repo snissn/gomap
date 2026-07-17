@@ -227,6 +227,53 @@ func TestValueLogGC_IgnoresInlineLeafLogWhenDBDefaultUsesPagerLeaves(t *testing.
 	}
 }
 
+type valueLogGCDurableSlotState struct {
+	visibleCommit uint64
+	durableCommit uint64
+	activeSlot    uint64
+	slotCommits   [2]uint64
+}
+
+func captureValueLogGCDurableSlotState(t *testing.T, database *DB, phase string) valueLogGCDurableSlotState {
+	t.Helper()
+	visible, ok := database.StateToken()
+	if !ok {
+		t.Fatalf("%s: visible state unavailable", phase)
+	}
+	database.durablePublishMu.Lock()
+	database.rootReuseMu.RLock()
+	state := valueLogGCDurableSlotState{
+		visibleCommit: visible.CommitSeq,
+		durableCommit: database.durableRoot.record.CommitSeq,
+		activeSlot:    database.durableRoot.slot,
+		slotCommits:   database.durableRoot.slotCommit,
+	}
+	slotRecords := database.durableRoot.slotRecord
+	database.rootReuseMu.RUnlock()
+	database.durablePublishMu.Unlock()
+	t.Logf("%s: visible=%d durable=%d active_slot=%d slot_commits=%v slot_records=[{commit:%d user:%d system:%d lsn:%d} {commit:%d user:%d system:%d lsn:%d}]",
+		phase, state.visibleCommit, state.durableCommit, state.activeSlot, state.slotCommits,
+		slotRecords[0].CommitSeq, slotRecords[0].UserRootPageID,
+		slotRecords[0].SystemRootPageID, slotRecords[0].AppliedCommandLSN,
+		slotRecords[1].CommitSeq, slotRecords[1].UserRootPageID,
+		slotRecords[1].SystemRootPageID, slotRecords[1].AppliedCommandLSN)
+	return state
+}
+
+func recoverableValueLogSegmentsForTest(t *testing.T, database *DB) map[uint32]struct{} {
+	t.Helper()
+	set, err := database.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatalf("capture recoverable roots: %v", err)
+	}
+	defer set.Release()
+	referenced, err := database.referencedValueLogSegmentsForRecoverableRootSet(context.Background(), set)
+	if err != nil {
+		t.Fatalf("scan recoverable value-log references: %v", err)
+	}
+	return referenced
+}
+
 func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	dir := t.TempDir()
 
@@ -251,7 +298,8 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 		t.Fatalf("writer1: %v", err)
 	}
 	w1.SetBlockCompression(valuelog.BlockCodecSnappy, true)
-	ptr1, err := w1.Append(0, nil, 1, bytes.Repeat([]byte("value-1|"), 128))
+	value1 := bytes.Repeat([]byte("value-1|"), 128)
+	ptr1, err := w1.Append(0, nil, 1, value1)
 	if err != nil {
 		t.Fatalf("append1: %v", err)
 	}
@@ -269,7 +317,8 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writer2: %v", err)
 	}
-	ptr2, err := w2.Append(0, nil, 2, bytes.Repeat([]byte("value-2|"), 64))
+	value2 := bytes.Repeat([]byte("value-2|"), 64)
+	ptr2, err := w2.Append(0, nil, 2, value2)
 	if err != nil {
 		t.Fatalf("append2: %v", err)
 	}
@@ -295,12 +344,46 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	_ = b.Close()
+	// Make the pointer-bearing root recovery-selectable so this fixture cannot
+	// accidentally pass only because background publication skipped that state.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint pointer-bearing root: %v", err)
+	}
+	pointerState := captureValueLogGCDurableSlotState(t, db, "pointer-bearing root")
+	if pointerState.durableCommit < pointerState.visibleCommit {
+		t.Fatalf("pointer durable commit=%d want at least visible commit=%d", pointerState.durableCommit, pointerState.visibleCommit)
+	}
+	if _, ok := recoverableValueLogSegmentsForTest(t, db)[id1]; !ok {
+		t.Fatalf("pointer-bearing segment %d is not recovery-selectable", id1)
+	}
 
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("delete k1: %v", err)
 	}
-
+	deleteVisible := captureValueLogGCDurableSlotState(t, db, "delete visible")
+	if deleteVisible.visibleCommit <= pointerState.visibleCommit {
+		t.Fatalf("delete visible commit=%d want greater than pointer commit=%d", deleteVisible.visibleCommit, pointerState.visibleCommit)
+	}
+	// Publish the deletion into the alternate durable slot before the successor
+	// below overwrites the older pointer-bearing slot. Without this handoff, one
+	// recovery-selectable root can still retain k1 and GC must delete nothing.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint deleted pointer: %v", err)
+	}
+	deleteDurable := captureValueLogGCDurableSlotState(t, db, "delete durable")
+	if deleteDurable.durableCommit < deleteVisible.visibleCommit {
+		t.Fatalf("delete durable commit=%d want at least visible commit=%d", deleteDurable.durableCommit, deleteVisible.visibleCommit)
+	}
 	advancePastRetainedDurableSlotForTest(t, db)
+	settled := captureValueLogGCDurableSlotState(t, db, "both slots settled")
+	for slot, commit := range settled.slotCommits {
+		if commit < deleteVisible.visibleCommit {
+			t.Fatalf("recoverable slot %d commit=%d want at least delete commit=%d", slot, commit, deleteVisible.visibleCommit)
+		}
+	}
+	if _, ok := recoverableValueLogSegmentsForTest(t, db)[id1]; ok {
+		t.Fatalf("deleted pointer segment %d remains in recoverable roots", id1)
+	}
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
@@ -314,6 +397,13 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 	if _, err := os.Stat(path2); err != nil {
 		t.Fatalf("expected segment2 to remain, err=%v", err)
+	}
+	got, err := db.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("read retained segment value: %v", err)
+	}
+	if !bytes.Equal(got, value2) {
+		t.Fatalf("retained segment value=%q want %q", got, value2)
 	}
 }
 
