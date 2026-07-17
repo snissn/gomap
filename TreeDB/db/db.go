@@ -549,6 +549,8 @@ type DB struct {
 	testAfterOptimisticPublishPrepareHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
 	testCommandWALCleanupAfterScanHook             func()
+	testBeforeFinalizeCommitHook                   func()
+	testAfterFinalizeRootSerializationReleaseHook  func()
 	testDurableRootCandidatePreparedHook           func()
 	testRootPublicationDependencyBytes             atomic.Uint64
 	testScanCandidateExternalReferencesHook        func()
@@ -3131,13 +3133,9 @@ type finalizeCommitPost struct {
 	drainLeafGenerationPending        bool
 }
 
-// finalizeCommitLocked performs the durability-critical publish path.
-// Callers that already hold commit serialization may run post work after
-// releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) (finalizeCommitPost, error) {
-	return db.finalizeCommitLockedWithOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{})
-}
-
+// finalizeCommitLockedWithOptions performs the durability-critical publish
+// path. Every caller must bind its constructed roots to the exact visible
+// commit sequence from which they were derived.
 func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
@@ -3153,6 +3151,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
 		return post, err
+	}
+	if !opts.hasExpectedBaseCommitSeq {
+		return post, errors.New("missing expected base commit sequence")
 	}
 	rootRuntime := db.rootPublication
 	builder := opts.rootPublicationBuilder
@@ -3604,19 +3605,13 @@ func (db *DB) finalizeAcceptedCommitPostWorkOnError(post finalizeCommitPost) fin
 	return finalizeCommitPost{accepted: true, commitSeq: commitSeq}
 }
 
-// finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
-	if err != nil {
-		return err
-	}
-	db.finalizeCommitPostWork(post)
-	return nil
-}
-
 // finalizeCommitReleasingRootSerialization transfers a completed root build to
 // the durable publisher. The caller must hold every lock named by release. The
-// helper acquires publication serialization in root-lock order, releases those
+// expected base sequence must be the visible commit observed before root
+// construction began; sampling it in this helper would let a predecessor
+// activate after construction but before finalization and bless a stale root.
+//
+// The helper acquires publication serialization in root-lock order, releases those
 // locks before legacy dependency preparation, and keeps the durable publisher
 // locked through candidate preparation, exact I/O, and visible-state install.
 func (db *DB) finalizeCommitReleasingRootSerialization(
@@ -3631,21 +3626,21 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 	leafManifest *leafGenerationManifest,
 	leafManifestRawFileIDs []uint32,
 	opts finalizeCommitOptions,
+	expectedBaseCommitSeq uint64,
 	release func(),
 	onError func(error),
 ) (finalizeCommitPost, error) {
 	if release == nil {
 		return finalizeCommitPost{}, errors.New("missing root-serialization release")
 	}
+	if hook := db.testBeforeFinalizeCommitHook; hook != nil {
+		hook()
+	}
 	if opts.durableIndex == nil {
 		opts.durableIndex = db.idx.Load()
 	}
-	if !opts.hasExpectedBaseCommitSeq {
-		db.mu.RLock()
-		opts.expectedBaseCommitSeq = db.meta.CommitSeq
-		db.mu.RUnlock()
-		opts.hasExpectedBaseCommitSeq = true
-	}
+	opts.expectedBaseCommitSeq = expectedBaseCommitSeq
+	opts.hasExpectedBaseCommitSeq = true
 	rootRuntime := db.rootPublication
 	var builder *rootpublication.BuilderToken
 	if rootRuntime != nil {
@@ -3671,6 +3666,9 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 	durablePublishLocked = true
 	defer releaseDurablePublish()
 	release()
+	if hook := db.testAfterFinalizeRootSerializationReleaseHook; hook != nil {
+		hook()
+	}
 
 	guard, err := db.prepareFinalizeCommitDurability(sync)
 	if err != nil {
@@ -3696,12 +3694,22 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 	return post, err
 }
 
-// Commit persists the new root (Sync=true by default).
-// Note: This is usually called internally by Batch.Write or externally if manual root management.
-// If manual, retired pages are unknown? `Commit` signature assumes manual root.
-// If external user calls Commit, they might not know retired pages.
-// We'll accept nil for retired if manual.
-func (db *DB) Commit(newRootID uint64) error {
+// CommitAtState synchronously persists a manually constructed user root only
+// when the visible commit sequence and roots still match the caller's basis.
+// Callers must capture basis before constructing newRootID.
+func (db *DB) CommitAtState(newRootID uint64, basis StateToken) error {
+	return db.commitManualRoot(newRootID, basis, true)
+}
+
+// ForceCommit synchronously force-sets a manually constructed user root. It
+// intentionally does not detect publications that occurred while newRootID was
+// constructed. Prefer CommitAtState unless last-writer-wins replacement is the
+// explicit operation.
+func (db *DB) ForceCommit(newRootID uint64) error {
+	return db.commitManualRoot(newRootID, StateToken{}, false)
+}
+
+func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -3710,8 +3718,26 @@ func (db *DB) Commit(newRootID uint64) error {
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
-	// Public Commit assumes the caller has built a new tree.
-	// We need to serialize with other writers.
+	for {
+		post, err := db.commitManualRootAttempt(newRootID, basis, conditional)
+		if err == nil {
+			db.finalizeCommitPostWork(post)
+			return nil
+		}
+		if !errors.Is(err, errDurableRootCandidateStale) {
+			return err
+		}
+		if conditional {
+			return fmt.Errorf(
+				"%w: manual root basis advanced during publication from commit=%d",
+				ErrConcurrentModification,
+				basis.CommitSeq,
+			)
+		}
+	}
+}
+
+func (db *DB) commitManualRootAttempt(newRootID uint64, basis StateToken, conditional bool) (finalizeCommitPost, error) {
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -3720,40 +3746,41 @@ func (db *DB) Commit(newRootID uint64) error {
 		}
 	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return err
+		return finalizeCommitPost{}, err
 	}
 
-	// Since we are committing a root provided by caller, we assume they based it on current state?
-	// If caller is external, they might have read old state.
-	// But Commit(newRoot) implies "Force Set Root".
-	// We just commit it.
-
-	// Need sysRootID.
 	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
 	sysRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if conditional && (baseSeq != basis.CommitSeq || userRoot != basis.RootPageID || sysRoot != basis.SystemRootPageID) {
+		return finalizeCommitPost{}, fmt.Errorf(
+			"%w: manual root basis commit=%d/%d user_root=%d/%d system_root=%d/%d",
+			ErrConcurrentModification,
+			basis.CommitSeq, baseSeq,
+			basis.RootPageID, userRoot,
+			basis.SystemRootPageID, sysRoot,
+		)
+	}
 
-	post, err := db.finalizeCommitReleasingRootSerialization(
+	return db.finalizeCommitReleasingRootSerialization(
 		newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
 		finalizeCommitOptions{closeTeardownPinned: true},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
 		},
 		nil,
 	)
-	if err != nil {
-		return err
-	}
-	db.finalizeCommitPostWork(post)
-	return nil
 }
 
 // Checkpoint forces a durable boundary for previously-published backend state.
 //
-// Unlike Commit, this does not publish a new root or advance CommitSeq. It is
-// intended for callers that already made writes visible with relaxed durability
-// and now need those writes durable on disk.
+// Unlike CommitAtState or ForceCommit, this does not publish a new root or
+// advance CommitSeq. It is intended for callers that already made writes
+// visible with relaxed durability and now need those writes durable on disk.
 func (db *DB) Checkpoint() error {
 	return db.checkpoint(false)
 }
@@ -4436,6 +4463,7 @@ func (db *DB) CompactIndex() error {
 	reader := newValueReader(state.ValueLogSet)
 	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	// Collect pages in the old tree so they can be retired after the swap.
@@ -4473,6 +4501,7 @@ func (db *DB) CompactIndex() error {
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
 		finalizeCommitOptions{closeTeardownPinned: true},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

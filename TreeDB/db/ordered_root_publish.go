@@ -1597,6 +1597,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, systemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil,
 		finalizeCommitOptions{closeTeardownPinned: true},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -1792,7 +1793,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	var post finalizeCommitPost
 	post, err = db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil,
-		finalizeCommitOptions{closeTeardownPinned: true}, releaseWrite, nil,
+		finalizeCommitOptions{closeTeardownPinned: true}, baseSeq, releaseWrite, nil,
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
@@ -2237,6 +2238,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if preflight != nil {
 		phaseStart := time.Now()
@@ -2340,7 +2342,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	// tracker conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts, releaseWrite)
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2427,6 +2429,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if preflight != nil {
 		phaseStart := time.Now()
@@ -2575,6 +2578,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeOpts,
+		baseSeq,
 		func() {
 			db.commitMu.Unlock()
 			commitLocked = false
@@ -3161,6 +3165,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if preflight != nil {
 		phaseStart := time.Now()
@@ -3266,7 +3271,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts, releaseWrite)
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -3349,6 +3354,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	if preflight != nil {
 		phaseStart := time.Now()
@@ -3506,6 +3512,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeOpts,
+		baseSeq,
 		func() {
 			db.commitMu.Unlock()
 			commitLocked = false
@@ -3548,7 +3555,7 @@ type orderedRootCommandWALPublishOptions struct {
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
 }
 
-func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions, releaseRootSerialization func()) error {
+func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, baseSeq uint64, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions, releaseRootSerialization func()) error {
 	defer opts.durableResources.Release()
 	if intent == nil {
 		finalizeOpts := finalizeCommitOptions{
@@ -3559,7 +3566,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
 			forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs,
-			finalizeOpts, releaseRootSerialization, nil,
+			finalizeOpts, baseSeq, releaseRootSerialization, nil,
 		)
 		if err != nil {
 			return err
@@ -3588,7 +3595,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
 		forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs,
-		finalizeOpts,
+		finalizeOpts, baseSeq,
 		func() {
 			db.commitMu.Unlock()
 			commitLocked = false
@@ -3759,6 +3766,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeCommitOptions{closeTeardownPinned: true},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

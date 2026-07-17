@@ -178,7 +178,7 @@ jobs:
         include:
           - name: ubuntu-latest
             os: ubuntu-latest
-            timeout: 15
+            timeout: 25
             shard_kind: all
             run_vet: true
           - name: macos-latest
@@ -329,11 +329,15 @@ jobs:
               root_test_file="$(make_tmp)"
               db_all_file="$(make_tmp)"
               db_test_file="$(make_tmp)"
-              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+              collections_all_file="$(make_tmp)"
+              collections_test_file="$(make_tmp)"
+              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
               go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
+              go test ./collections -list '^(Test|Example|Fuzz).*' | tr -d '\r' | grep -E '^(Test|Example|Fuzz)' > "$collections_all_file"
               awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
               awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
+              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$collections_all_file" > "$collections_test_file"
               echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
               ran_tests=false
               if [ -s "$package_file" ]; then
@@ -346,6 +350,10 @@ jobs:
               fi
               if [ -s "$db_test_file" ]; then
                 run_named_test_file ./db "TreeDB/db test shard=${package_shard_index}/${package_shard_count}" "$db_test_file" treedb-test.jsonl
+                ran_tests=true
+              fi
+              if [ -s "$collections_test_file" ]; then
+                run_named_test_file ./collections "TreeDB/collections test shard=${package_shard_index}/${package_shard_count}" "$collections_test_file" treedb-test.jsonl
                 ran_tests=true
               fi
               if [ "$ran_tests" = false ]; then

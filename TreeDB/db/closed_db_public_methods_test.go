@@ -55,7 +55,7 @@ func TestClosedDB_Close(t *testing.T) {
 
 func TestClosedDB_Commit(t *testing.T) {
 	runClosedDBMethod(t, "Commit", func(d *DB) {
-		_ = d.Commit(0)
+		_ = d.ForceCommit(0)
 	})
 }
 

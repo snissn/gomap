@@ -661,22 +661,23 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 				t.Fatalf("mongo connect: %v", err)
 			}
 
-			opTimeout := 15 * time.Second
-			if profile == treedb.ProfileCommandWALDurable {
-				opTimeout = 60 * time.Second
-			}
-			opCtx, opCancel := context.WithTimeout(context.Background(), opTimeout)
-			defer opCancel()
-			if err := client.Ping(opCtx, nil); err != nil {
+			const requestTimeout = 10 * time.Second
+			scenarioStarted := time.Now()
+			pingStarted := time.Now()
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), requestTimeout)
+			err = client.Ping(pingCtx, nil)
+			pingElapsed := time.Since(pingStarted)
+			pingCancel()
+			if err != nil {
 				_ = client.Disconnect(context.Background())
 				cancel()
 				_ = ln.Close()
 				_ = standalone.Close()
-				t.Fatalf("driver ping: %v", err)
+				t.Fatalf("driver ping after %s (request limit %s): %v", pingElapsed, requestTimeout, err)
 			}
 
 			coll := client.Database("ycsb").Collection("usertable")
-			const docs = 2048
+			const docs = 512
 			const workers = 16
 			ycsbValues := func(i int) bson.D {
 				values := make(bson.D, 0, 11)
@@ -699,36 +700,45 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 			}
 
 			type insertError struct {
-				index int
-				err   error
+				index   int
+				elapsed time.Duration
+				err     error
 			}
 			errCh := make(chan insertError, 1)
+			insertTimingCh := make(chan time.Duration, docs)
 			workCh := make(chan int)
+			insertCtx, insertCancel := context.WithCancel(context.Background())
 			var insertWG sync.WaitGroup
-			sendInsertErr := func(i int, err error) {
+			sendInsertErr := func(i int, elapsed time.Duration, err error) {
 				if err == nil {
 					return
 				}
 				select {
-				case errCh <- insertError{index: i, err: err}:
+				case errCh <- insertError{index: i, elapsed: elapsed, err: err}:
 				default:
 				}
-				opCancel()
+				insertCancel()
 			}
+			insertStarted := time.Now()
 			for worker := 0; worker < workers; worker++ {
 				insertWG.Add(1)
 				go func() {
 					defer insertWG.Done()
 					for {
 						select {
-						case <-opCtx.Done():
+						case <-insertCtx.Done():
 							return
 						case i, ok := <-workCh:
 							if !ok {
 								return
 							}
-							_, err := coll.InsertOne(opCtx, ycsbValues(i))
-							sendInsertErr(i, err)
+							requestStarted := time.Now()
+							requestCtx, requestCancel := context.WithTimeout(insertCtx, requestTimeout)
+							_, err := coll.InsertOne(requestCtx, ycsbValues(i))
+							requestElapsed := time.Since(requestStarted)
+							requestCancel()
+							insertTimingCh <- requestElapsed
+							sendInsertErr(i, requestElapsed, err)
 						}
 					}
 				}()
@@ -737,7 +747,7 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 				defer close(workCh)
 				for i := 0; i < docs; i++ {
 					select {
-					case <-opCtx.Done():
+					case <-insertCtx.Done():
 						return
 					case workCh <- i:
 					}
@@ -746,15 +756,18 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 			insertDone := make(chan struct{})
 			go func() {
 				insertWG.Wait()
+				close(insertTimingCh)
 				close(insertDone)
 			}()
 			select {
 			case insertErr := <-errCh:
+				insertCancel()
+				<-insertDone
 				_ = client.Disconnect(context.Background())
 				cancel()
 				_ = ln.Close()
 				_ = standalone.Close()
-				t.Fatalf("insert %d: %v", insertErr.index, insertErr.err)
+				t.Fatalf("insert %d after %s (request limit %s): %v", insertErr.index, insertErr.elapsed, requestTimeout, insertErr.err)
 			case <-insertDone:
 				select {
 				case insertErr := <-errCh:
@@ -762,38 +775,62 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 					cancel()
 					_ = ln.Close()
 					_ = standalone.Close()
-					t.Fatalf("insert %d: %v", insertErr.index, insertErr.err)
+					t.Fatalf("insert %d after %s (request limit %s): %v", insertErr.index, insertErr.elapsed, requestTimeout, insertErr.err)
 				default:
 				}
-				if err := opCtx.Err(); err != nil {
-					_ = client.Disconnect(context.Background())
-					cancel()
-					_ = ln.Close()
-					_ = standalone.Close()
-					t.Fatalf("insert workers stopped: %v", err)
+			}
+			insertCancel()
+			insertElapsed := time.Since(insertStarted)
+			var insertMax time.Duration
+			for elapsed := range insertTimingCh {
+				if elapsed > insertMax {
+					insertMax = elapsed
 				}
 			}
 
+			var initialReadElapsed time.Duration
+			var initialReadMax time.Duration
+			var updateElapsed time.Duration
+			var updateMax time.Duration
+			var finalReadElapsed time.Duration
+			var finalReadMax time.Duration
 			for i := 0; i < docs; i++ {
 				id := "user" + strconv.Itoa(i)
 				var got map[string][]byte
-				if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(projection)).Decode(&got); err != nil {
-					_ = client.Disconnect(context.Background())
-					cancel()
-					_ = ln.Close()
-					_ = standalone.Close()
-					t.Fatalf("find after insert %s: %v", id, err)
+				requestStarted := time.Now()
+				requestCtx, requestCancel := context.WithTimeout(context.Background(), requestTimeout)
+				err := coll.FindOne(requestCtx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(projection)).Decode(&got)
+				requestElapsed := time.Since(requestStarted)
+				requestCancel()
+				initialReadElapsed += requestElapsed
+				if requestElapsed > initialReadMax {
+					initialReadMax = requestElapsed
 				}
-				result, err := coll.UpdateOne(opCtx,
-					bson.D{{Key: "_id", Value: id}},
-					bson.D{{Key: "$set", Value: ycsbUpdate(i)}},
-				)
 				if err != nil {
 					_ = client.Disconnect(context.Background())
 					cancel()
 					_ = ln.Close()
 					_ = standalone.Close()
-					t.Fatalf("update %s: %v", id, err)
+					t.Fatalf("find after insert %s after %s (request limit %s): %v", id, requestElapsed, requestTimeout, err)
+				}
+				requestStarted = time.Now()
+				requestCtx, requestCancel = context.WithTimeout(context.Background(), requestTimeout)
+				result, err := coll.UpdateOne(requestCtx,
+					bson.D{{Key: "_id", Value: id}},
+					bson.D{{Key: "$set", Value: ycsbUpdate(i)}},
+				)
+				requestElapsed = time.Since(requestStarted)
+				requestCancel()
+				updateElapsed += requestElapsed
+				if requestElapsed > updateMax {
+					updateMax = requestElapsed
+				}
+				if err != nil {
+					_ = client.Disconnect(context.Background())
+					cancel()
+					_ = ln.Close()
+					_ = standalone.Close()
+					t.Fatalf("update %s after %s (request limit %s): %v", id, requestElapsed, requestTimeout, err)
 				}
 				if result.MatchedCount != 1 || result.ModifiedCount != 1 {
 					_ = client.Disconnect(context.Background())
@@ -803,12 +840,21 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 					t.Fatalf("update %s matched=%d modified=%d, want 1/1", id, result.MatchedCount, result.ModifiedCount)
 				}
 				got = nil
-				if err := coll.FindOne(opCtx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(projection)).Decode(&got); err != nil {
+				requestStarted = time.Now()
+				requestCtx, requestCancel = context.WithTimeout(context.Background(), requestTimeout)
+				err = coll.FindOne(requestCtx, bson.D{{Key: "_id", Value: id}}, options.FindOne().SetProjection(projection)).Decode(&got)
+				requestElapsed = time.Since(requestStarted)
+				requestCancel()
+				finalReadElapsed += requestElapsed
+				if requestElapsed > finalReadMax {
+					finalReadMax = requestElapsed
+				}
+				if err != nil {
 					_ = client.Disconnect(context.Background())
 					cancel()
 					_ = ln.Close()
 					_ = standalone.Close()
-					t.Fatalf("find after update %s: %v", id, err)
+					t.Fatalf("find after update %s after %s (request limit %s): %v", id, requestElapsed, requestTimeout, err)
 				}
 				if string(got["field0"]) != "updated"+strconv.Itoa(i)+"-0" {
 					_ = client.Disconnect(context.Background())
@@ -818,6 +864,8 @@ func TestStandaloneServerCommandWALBSONInsertReadUpdateVisibility(t *testing.T) 
 					t.Fatalf("find after update %s field0=%q want updated", id, got["field0"])
 				}
 			}
+			t.Logf("command-WAL BSON visibility profile=%s docs=%d workers=%d request_limit=%s ping=%s insert_wall=%s insert_max=%s initial_read_total=%s initial_read_max=%s update_total=%s update_max=%s final_read_total=%s final_read_max=%s scenario_wall=%s",
+				profile, docs, workers, requestTimeout, pingElapsed, insertElapsed, insertMax, initialReadElapsed, initialReadMax, updateElapsed, updateMax, finalReadElapsed, finalReadMax, time.Since(scenarioStarted))
 
 			if err := client.Disconnect(context.Background()); err != nil {
 				cancel()

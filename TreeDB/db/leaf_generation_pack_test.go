@@ -39,7 +39,7 @@ func leafGenerationKey(prefix string, i int) []byte {
 func advanceLeafGenerationPackDurableRootHorizon(t *testing.T, db *DB, reason string) {
 	t.Helper()
 	state := db.State()
-	if err := db.Commit(state.RootPageID); err != nil {
+	if err := db.ForceCommit(state.RootPageID); err != nil {
 		t.Fatalf("advance recoverable-root horizon (%s): %v", reason, err)
 	}
 }
