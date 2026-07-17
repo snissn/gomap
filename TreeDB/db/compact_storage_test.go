@@ -483,33 +483,34 @@ func TestCompactStorageManagerSuccessfulUnlinkCloseErrorSyncsBeforeReturn(t *tes
 	}
 
 	closeErr := errors.New("injected close after successful unlink")
+	removeReturned := false
 	reopened.testCompactStorageRemoveValueLogSegmentHook = func(gotFileID uint32) (bool, error) {
 		if gotFileID != fileID {
 			t.Fatalf("remove file ID=%d want=%d", gotFileID, fileID)
 		}
-		removed, err := removePersistentFile(valueLogDir, emptyPath, durabilitycut.ResourceValueLog)
-		if err != nil {
-			t.Fatalf("remove persistent file: %v", err)
+		if err := os.Remove(emptyPath); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove value-log file: %v", err)
 		}
-		return removed, closeErr
+		removeReturned = true
+		return true, closeErr
 	}
 
 	var points []durabilitycut.Point
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Resource == durabilitycut.ResourceValueLog && filepath.Clean(event.Path) == filepath.Clean(valueLogDir) {
+		if removeReturned && event.Resource == durabilitycut.ResourceValueLog && filepath.Clean(event.Path) == filepath.Clean(valueLogDir) {
 			if event.Point == durabilitycut.BeforeDeletionDirectorySync || event.Point == durabilitycut.AfterDeletionDirectorySync {
 				points = append(points, event.Point)
 			}
 		}
 		return nil
 	})
-	stats, compactErr := reopened.CompactStorage(context.Background(), CompactStorageOptions{})
+	deleted, compactErr := reopened.pruneZeroByteValueLogFiles(nil)
 	restore()
-	if stats.ZeroByteValueLogFilesDeleted != 1 {
-		t.Fatalf("CompactStorage deleted=%d want=1", stats.ZeroByteValueLogFilesDeleted)
-	}
 	if !errors.Is(compactErr, closeErr) || !errors.Is(compactErr, ErrRecoveryRequired) {
-		t.Fatalf("CompactStorage error=%v, want close error and ErrRecoveryRequired", compactErr)
+		t.Fatalf("pruneZeroByteValueLogFiles error=%v, want close error and ErrRecoveryRequired", compactErr)
+	}
+	if deleted != 1 {
+		t.Fatalf("pruneZeroByteValueLogFiles deleted=%d want=1; error=%v", deleted, compactErr)
 	}
 	want := []durabilitycut.Point{durabilitycut.BeforeDeletionDirectorySync, durabilitycut.AfterDeletionDirectorySync}
 	if !reflect.DeepEqual(points, want) {

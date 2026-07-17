@@ -2163,12 +2163,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		notifyError:  opts.NotifyError,
 	}
 	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
-		err := syncDeletionNamespaceDirectory(dir, resource)
-		if err != nil {
-			db.publicationPoisoned.Store(true)
-			db.reportError(fmt.Errorf("treedb: sync deferred value-log deletion namespace: %w", err))
-		}
-		return err
+		return db.syncDeletionNamespaceDirectoryOrPoison(
+			dir,
+			resource,
+			"treedb: sync deferred value-log deletion namespace",
+		)
 	})
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()

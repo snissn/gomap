@@ -1681,11 +1681,29 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 					if err := db.publishValueLogSetNoRefresh(); err != nil {
 						return deleted, err
 					}
-					if removed, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil {
-						return deleted, errors.Join(err, ErrRecoveryRequired)
-					} else if removed {
+					var removed bool
+					var removeErr error
+					if hook := db.testCompactStorageRemoveValueLogSegmentHook; hook != nil {
+						removed, removeErr = hook(fileID)
+					} else {
+						removed, removeErr = db.valueLogManager.RemoveSegmentIfUnpinned(fileID)
+					}
+					if removed {
 						deleted++
 						deletionNamespaceDirty = true
+					}
+					if removeErr != nil {
+						var syncErr error
+						if deletionNamespaceDirty {
+							syncErr = db.syncDeletionNamespaceDirectoryOrPoison(
+								layout.valueVLogDir,
+								durabilitycut.ResourceValueLog,
+								"compact storage: sync value-log deletion namespace",
+							)
+						}
+						return deleted, errors.Join(removeErr, ErrRecoveryRequired, syncErr)
+					}
+					if removed {
 						continue
 					}
 					if _, err := os.Stat(path); err != nil {
@@ -1713,8 +1731,12 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		deletionNamespaceDirty = true
 	}
 	if deletionNamespaceDirty {
-		if err := syncDeletionNamespaceDirectory(layout.valueVLogDir, durabilitycut.ResourceValueLog); err != nil {
-			return deleted, fmt.Errorf("compact storage: sync value-log deletion namespace: %w", err)
+		if err := db.syncDeletionNamespaceDirectoryOrPoison(
+			layout.valueVLogDir,
+			durabilitycut.ResourceValueLog,
+			"compact storage: sync value-log deletion namespace",
+		); err != nil {
+			return deleted, err
 		}
 	}
 	if deleted > 0 {
