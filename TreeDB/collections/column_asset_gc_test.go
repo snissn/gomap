@@ -894,6 +894,14 @@ func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *te
 		t.Fatalf("Close pinned snapshot: %v", err)
 	}
 	pinnedClosed = true
+	// Closing the explicit snapshot releases its history pin, but the rewrite's
+	// visible root may still be crossing the asynchronous publication boundary.
+	// Settle that root before capturing destructive-maintenance authority so the
+	// test isolates fallback-slot retention instead of racing coordinator epoch
+	// advancement during RecoverableRootSet revalidation.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle rewrite publication after snapshot drain: %v", err)
+	}
 
 	drainedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: candidates,
