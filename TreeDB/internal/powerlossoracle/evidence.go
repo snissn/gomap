@@ -15,9 +15,29 @@ import (
 )
 
 const (
-	EnvEvidenceDir      = "TREEDB_POWERLOSS_EVIDENCE_DIR"
-	EnvEvidenceCutPoint = "TREEDB_POWERLOSS_EXPECT_CUT_POINT"
+	EnvEvidenceDir        = "TREEDB_POWERLOSS_EVIDENCE_DIR"
+	EnvEvidenceCutPoint   = "TREEDB_POWERLOSS_EXPECT_CUT_POINT"
+	EnvEvidenceReopenMode = "TREEDB_POWERLOSS_REOPEN_MODE"
+
+	EvidenceReopenReadWrite = "read-write"
+	EvidenceReopenReadOnly  = "read-only"
 )
+
+type EvidenceRequest struct {
+	Root       string
+	CutPoint   string
+	Selector   ReplaySelector
+	Occurrence int
+	ReopenMode string
+}
+
+func (request EvidenceRequest) Enabled() bool {
+	return request.Root != ""
+}
+
+func (request EvidenceRequest) ReadOnly() bool {
+	return request.ReopenMode == EvidenceReopenReadOnly
+}
 
 type EvidenceSession struct {
 	Root               string
@@ -61,20 +81,58 @@ type evidenceMetrics struct {
 	StableFingerprint string `json:"stable_fingerprint"`
 }
 
-func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
+func EvidenceRequestFromEnv() (EvidenceRequest, error) {
 	root := os.Getenv(EnvEvidenceDir)
 	cutPoint := os.Getenv(EnvEvidenceCutPoint)
-	if root == "" && cutPoint == "" {
+	reopenMode := os.Getenv(EnvEvidenceReopenMode)
+	if root == "" && cutPoint == "" && reopenMode == "" {
+		return EvidenceRequest{}, nil
+	}
+	if root == "" || cutPoint == "" || reopenMode == "" {
+		return EvidenceRequest{}, errorsf("evidence capture requires %s, %s, and %s", EnvEvidenceDir, EnvEvidenceCutPoint, EnvEvidenceReopenMode)
+	}
+	if reopenMode != EvidenceReopenReadWrite && reopenMode != EvidenceReopenReadOnly {
+		return EvidenceRequest{}, errorsf("invalid evidence reopen mode %q", reopenMode)
+	}
+	selector, err := ReplaySelectorFromEnv()
+	if err != nil {
+		return EvidenceRequest{}, err
+	}
+	if selector == (ReplaySelector{}) {
+		return EvidenceRequest{}, errorsf("evidence capture requires %s, %s, and %s", EnvReplayCut, EnvReplayVariant, EnvReplaySeed)
+	}
+	replayCutPoint, replayOccurrence, err := ParseReplayCutAddress(selector.CutID)
+	if err != nil {
+		return EvidenceRequest{}, err
+	}
+	if replayCutPoint != cutPoint {
+		return EvidenceRequest{}, errorsf("replay cut point %q does not match declared cut point %q", replayCutPoint, cutPoint)
+	}
+	return EvidenceRequest{
+		Root:       root,
+		CutPoint:   cutPoint,
+		Selector:   selector,
+		Occurrence: replayOccurrence,
+		ReopenMode: reopenMode,
+	}, nil
+}
+
+func BeginEvidenceFromEnv(model *Model, readOnly bool) (*EvidenceSession, error) {
+	request, err := EvidenceRequestFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if !request.Enabled() {
 		return nil, nil
 	}
-	if root == "" || cutPoint == "" {
-		return nil, errorsf("evidence capture requires %s and %s", EnvEvidenceDir, EnvEvidenceCutPoint)
+	if request.ReadOnly() != readOnly {
+		return nil, errorsf("evidence reopen mode %q does not match readOnly=%t", request.ReopenMode, readOnly)
 	}
-	if err := requireEmptyEvidenceRoot(root); err != nil {
+	if err := requireEmptyEvidenceRoot(request.Root); err != nil {
 		return nil, err
 	}
 	trace := portableEvidenceTrace(model.Trace())
-	cutPrefix := "cut:" + cutPoint + ":"
+	cutPrefix := "cut:" + request.CutPoint + ":"
 	observed := 0
 	for _, event := range trace {
 		if strings.HasPrefix(event, cutPrefix) {
@@ -82,32 +140,18 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 		}
 	}
 	if observed == 0 {
-		return nil, errorsf("declared cut point %q was not observed", cutPoint)
+		return nil, errorsf("declared cut point %q was not observed", request.CutPoint)
 	}
-	selector, err := ReplaySelectorFromEnv()
-	if err != nil {
+	if observed != request.Occurrence+1 {
+		return nil, errorsf("observed cut events=%d does not end at replay occurrence=%d", observed, request.Occurrence)
+	}
+	if err := os.MkdirAll(request.Root, 0o755); err != nil {
 		return nil, err
 	}
-	if selector == (ReplaySelector{}) {
-		return nil, errorsf("evidence capture requires %s, %s, and %s", EnvReplayCut, EnvReplayVariant, EnvReplaySeed)
-	}
-	replayCutPoint, replayOccurrence, err := parseReplayCutAddress(selector.CutID)
-	if err != nil {
-		return nil, err
-	}
-	if replayCutPoint != cutPoint {
-		return nil, errorsf("replay cut point %q does not match declared cut point %q", replayCutPoint, cutPoint)
-	}
-	if observed != replayOccurrence+1 {
-		return nil, errorsf("observed cut events=%d does not end at replay occurrence=%d", observed, replayOccurrence)
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, err
-	}
-	stableDir := filepath.Join(root, "stable-image")
-	dirtyDir := filepath.Join(root, "dirty-image")
-	preOpenDir := filepath.Join(root, "recovery-preopen")
-	recoveryDir := filepath.Join(root, "recovery-input")
+	stableDir := filepath.Join(request.Root, "stable-image")
+	dirtyDir := filepath.Join(request.Root, "dirty-image")
+	preOpenDir := filepath.Join(request.Root, "recovery-preopen")
+	recoveryDir := filepath.Join(request.Root, "recovery-input")
 	if err := model.MaterializeStable(stableDir); err != nil {
 		return nil, fmt.Errorf("powerlossoracle: materialize stable evidence: %w", err)
 	}
@@ -128,18 +172,18 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writeEvidenceJSON(filepath.Join(root, "operation_trace.json"), evidenceTrace{
+	if err := writeEvidenceJSON(filepath.Join(request.Root, "operation_trace.json"), evidenceTrace{
 		SchemaVersion:      "treedb-power-loss-operation-trace/v1",
-		CutID:              selector.CutID,
-		VariantID:          selector.VariantID,
-		Seed:               strconv.FormatUint(selector.Seed, 10),
-		DeclaredCutPoint:   cutPoint,
+		CutID:              request.Selector.CutID,
+		VariantID:          request.Selector.VariantID,
+		Seed:               strconv.FormatUint(request.Selector.Seed, 10),
+		DeclaredCutPoint:   request.CutPoint,
 		ObservedEventCount: observed,
 		Events:             trace,
 	}); err != nil {
 		return nil, err
 	}
-	stableTreePath := filepath.Join(root, "stable_image_tree.json")
+	stableTreePath := filepath.Join(request.Root, "stable_image_tree.json")
 	if err := writeEvidenceJSON(stableTreePath, stableTree); err != nil {
 		return nil, err
 	}
@@ -147,10 +191,10 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("powerlossoracle: hash stable image tree: %w", err)
 	}
-	if err := writeEvidenceJSON(filepath.Join(root, "dirty_image_tree.json"), dirtyTree); err != nil {
+	if err := writeEvidenceJSON(filepath.Join(request.Root, "dirty_image_tree.json"), dirtyTree); err != nil {
 		return nil, err
 	}
-	if err := writeEvidenceJSON(filepath.Join(root, "metrics.json"), evidenceMetrics{
+	if err := writeEvidenceJSON(filepath.Join(request.Root, "metrics.json"), evidenceMetrics{
 		SchemaVersion:     "treedb-power-loss-metrics/v1",
 		StableImageBytes:  stableTree.TotalBytes,
 		DirtyImageBytes:   dirtyTree.TotalBytes,
@@ -162,8 +206,8 @@ func BeginEvidenceFromEnv(model *Model) (*EvidenceSession, error) {
 		return nil, err
 	}
 	return &EvidenceSession{
-		Root:               root,
-		CutPoint:           cutPoint,
+		Root:               request.Root,
+		CutPoint:           request.CutPoint,
 		ObservedEventCount: observed,
 		stableTreeSHA256:   stableTreeSHA256,
 		stableFingerprint:  model.StableFingerprint(),
@@ -266,7 +310,9 @@ func EnsureNoSymlinkComponents(path string) error {
 	}
 }
 
-func parseReplayCutAddress(cutID string) (string, int, error) {
+// ParseReplayCutAddress returns the cut point and zero-based occurrence encoded
+// by a stable replay cut ID.
+func ParseReplayCutAddress(cutID string) (string, int, error) {
 	parts := strings.Split(cutID, "/")
 	if len(parts) != 4 || parts[0] != "cut" || parts[1] == "" {
 		return "", 0, errorsf("invalid replay cut id %q", cutID)

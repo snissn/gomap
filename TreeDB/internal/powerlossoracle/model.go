@@ -818,6 +818,19 @@ func (m *Model) VolatilePaths() []string {
 // Trace returns the deterministic operation trace used in failure diagnostics.
 func (m *Model) Trace() []string { return append([]string(nil), m.trace...) }
 
+// UseObservedTrace binds an adversarial selective-writeback model to the
+// operation trace captured from the corresponding real production cut. It
+// intentionally changes no namespace or byte state: callers first derive the
+// selective stable/dirty image from an older baseline, then attach the trace
+// from the independently observed cut that produced those dirty bytes.
+func (m *Model) UseObservedTrace(observed *Model) error {
+	if m == nil || observed == nil {
+		return errorsf("cannot bind an observed trace from a nil model")
+	}
+	m.trace = append(m.trace[:0], observed.trace...)
+	return nil
+}
+
 // StableFingerprint identifies the exact stable namespace, inode identities,
 // and bytes at a cut without materializing them.
 func (m *Model) StableFingerprint() string {

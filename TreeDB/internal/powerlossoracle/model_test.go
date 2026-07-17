@@ -617,3 +617,43 @@ func TestCloneAndCrashDiscardVolatileState(t *testing.T) {
 		t.Fatalf("crash volatile paths=%v stable=%v", clone.VolatilePaths(), model.StablePaths())
 	}
 }
+
+func TestUseObservedTraceDoesNotChangeModeledBytes(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "index.db")
+	if err := os.WriteFile(path, []byte("stable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selective, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := selective.Clone()
+	if err := os.WriteFile(path, []byte("dirty"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := observed.Observe(root, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta, Path: path}); err != nil {
+		t.Fatal(err)
+	}
+	stableBefore := selective.StableFingerprint()
+	pathsBefore := selective.VolatilePaths()
+	rangesBefore, err := selective.ChangedRanges("index.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := selective.UseObservedTrace(observed); err != nil {
+		t.Fatal(err)
+	}
+	if got := selective.Trace(); len(got) < 1 || !strings.HasPrefix(got[len(got)-1], "cut:after-meta-write:") {
+		t.Fatalf("bound trace=%v", got)
+	}
+	if got := selective.StableFingerprint(); got != stableBefore {
+		t.Fatalf("stable fingerprint changed: got=%s want=%s", got, stableBefore)
+	}
+	if got := selective.VolatilePaths(); !reflect.DeepEqual(got, pathsBefore) {
+		t.Fatalf("volatile paths changed: got=%v want=%v", got, pathsBefore)
+	}
+	if got, err := selective.ChangedRanges("index.db"); err != nil || !reflect.DeepEqual(got, rangesBefore) {
+		t.Fatalf("changed ranges=%v err=%v want=%v", got, err, rangesBefore)
+	}
+}
