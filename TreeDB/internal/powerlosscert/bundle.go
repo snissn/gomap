@@ -47,18 +47,33 @@ type imageTreeFileArtifact struct {
 }
 
 type recoveryTraceArtifact struct {
-	SchemaVersion      string `json:"schema_version"`
-	PublicAPI          string `json:"public_api"`
-	Dir                string `json:"dir"`
-	PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
-	InputTreeSHA256    string `json:"input_image_tree_sha256"`
-	StableFingerprint  string `json:"stable_fingerprint"`
-	ReadOnly           bool   `json:"read_only"`
-	Rejected           bool   `json:"rejected"`
-	ErrorType          string `json:"error_type"`
-	Error              string `json:"error"`
-	CommitSeq          uint64 `json:"commit_seq"`
-	AppliedLSN         uint64 `json:"applied_lsn"`
+	SchemaVersion      string            `json:"schema_version"`
+	PublicAPI          string            `json:"public_api"`
+	Dir                string            `json:"dir"`
+	PreOpenSnapshotDir string            `json:"pre_open_snapshot_dir"`
+	InputTreeSHA256    string            `json:"input_image_tree_sha256"`
+	StableFingerprint  string            `json:"stable_fingerprint"`
+	ReadOnly           bool              `json:"read_only"`
+	Rejected           bool              `json:"rejected"`
+	ErrorType          string            `json:"error_type"`
+	Error              string            `json:"error"`
+	CommitSeq          uint64            `json:"commit_seq"`
+	AppliedLSN         uint64            `json:"applied_lsn"`
+	Stats              map[string]string `json:"stats"`
+}
+
+var requiredRecoveryStats = []string{
+	"treedb.profile.resolved",
+	"treedb.commit_seq",
+	"treedb.applied_command_lsn",
+	"treedb.durable_root.selected_slot",
+	"treedb.durable_root.commit_seq",
+	"treedb.durable_root.durable_seq",
+	"treedb.durable_root.freelist.generation",
+	"treedb.durable_root.manifest.entries",
+	"treedb.durable_root.slot0.commit_seq",
+	"treedb.durable_root.slot1.commit_seq",
+	"treedb.command_wal.durable_wal_lsn",
 }
 
 type metricsArtifact struct {
@@ -569,11 +584,17 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 		return recoveryTraceArtifact{}, fmt.Errorf("%s does not identify the captured stable image", prefix)
 	}
 	if recovery.Rejected {
-		if recovery.ErrorType == "" || recovery.Error == "" || witness.TypedError != recovery.ErrorType || modeledOutcomeClass(witness.ActualOutcome) != "rejected" {
+		if recovery.ErrorType == "" || recovery.Error == "" || len(recovery.Stats) != 0 || witness.TypedError != recovery.ErrorType || modeledOutcomeClass(witness.ActualOutcome) != "rejected" {
 			return recoveryTraceArtifact{}, fmt.Errorf("%s rejected result does not match outcome=%q and typed_error=%q", prefix, witness.ActualOutcome, witness.TypedError)
 		}
 	} else if recovery.ErrorType != "" || recovery.Error != "" || witness.TypedError != "none" || modeledOutcomeClass(witness.ActualOutcome) != "accepted" {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s accepted result does not match outcome=%q and typed_error=%q", prefix, witness.ActualOutcome, witness.TypedError)
+	}
+	if err := validateRecoveryStats(recovery); err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	if got := observedWitnessState(recovery); got != witness.State {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s observed state=%+v does not match manifest state=%+v", prefix, got, witness.State)
 	}
 	recoveryDir := filepath.Join(root, filepath.FromSlash(evidenceDir), recovery.Dir)
 	if !pathWithin(root, recoveryDir) {
@@ -587,6 +608,36 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 		return recoveryTraceArtifact{}, fmt.Errorf("%s recovery directory is not a real directory", prefix)
 	}
 	return recovery, nil
+}
+
+func validateRecoveryStats(recovery recoveryTraceArtifact) error {
+	if recovery.Rejected {
+		if len(recovery.Stats) != 0 {
+			return fmt.Errorf("rejected recovery unexpectedly reports selected-state stats")
+		}
+		return nil
+	}
+	if len(recovery.Stats) != len(requiredRecoveryStats) {
+		return fmt.Errorf("accepted recovery stats=%d want=%d", len(recovery.Stats), len(requiredRecoveryStats))
+	}
+	for _, key := range requiredRecoveryStats {
+		value, ok := recovery.Stats[key]
+		if !ok || value == "" {
+			return fmt.Errorf("accepted recovery omits required stat %q", key)
+		}
+		if key != "treedb.profile.resolved" {
+			if _, err := strconv.ParseUint(value, 10, 64); err != nil {
+				return fmt.Errorf("accepted recovery stat %s=%q is not uint64", key, value)
+			}
+		}
+	}
+	if !productionProfiles[recovery.Stats["treedb.profile.resolved"]] {
+		return fmt.Errorf("accepted recovery has non-production profile %q", recovery.Stats["treedb.profile.resolved"])
+	}
+	if recovery.Stats["treedb.commit_seq"] != strconv.FormatUint(recovery.CommitSeq, 10) || recovery.Stats["treedb.applied_command_lsn"] != strconv.FormatUint(recovery.AppliedLSN, 10) {
+		return fmt.Errorf("accepted recovery scalar state does not match reported stats")
+	}
+	return nil
 }
 
 func verifyCommandLog(root string, manifest ChildManifest, witness Witness, artifact Artifact) error {

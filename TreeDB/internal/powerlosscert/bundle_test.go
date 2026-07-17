@@ -460,7 +460,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	}
 	stableArtifact := artifactByKind(t, *witness, ArtifactKindStableImageTree)
 	readOnly := witness.Command.Env[powerLossReopenModeEnv] == powerLossReopenModeReadOnly
-	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recoveryTraceArtifact{
+	recovery := recoveryTraceArtifact{
 		SchemaVersion:      recoveryTraceSchemaVersion,
 		PublicAPI:          "treedb.Open",
 		Dir:                "recovery-input",
@@ -468,7 +468,22 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		InputTreeSHA256:    stableArtifact.SHA256,
 		StableFingerprint:  stableFingerprint,
 		ReadOnly:           readOnly,
-	})
+		Stats: map[string]string{
+			"treedb.profile.resolved":                 "command_wal_durable",
+			"treedb.commit_seq":                       "0",
+			"treedb.applied_command_lsn":              "0",
+			"treedb.durable_root.selected_slot":       "1",
+			"treedb.durable_root.commit_seq":          "2",
+			"treedb.durable_root.durable_seq":         "2",
+			"treedb.durable_root.freelist.generation": "2",
+			"treedb.durable_root.manifest.entries":    "1",
+			"treedb.durable_root.slot0.commit_seq":    "1",
+			"treedb.durable_root.slot1.commit_seq":    "2",
+			"treedb.command_wal.durable_wal_lsn":      "0",
+		},
+	}
+	witness.State = observedWitnessState(recovery)
+	contents[ArtifactKindRecoveryTrace] = mustJSON(t, recovery)
 	contents[ArtifactKindLog] = mustJSON(t, commandLogArtifact{
 		SchemaVersion: commandLogSchemaVersion,
 		RepositorySHA: manifest.RepositorySHA,

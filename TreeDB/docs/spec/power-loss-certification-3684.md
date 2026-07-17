@@ -22,7 +22,15 @@ A certification bundle contains:
 
 ```text
 power_loss_certification/
+  binaries/*.test
+  evidence/<case-id>/
+  inputs/power_loss_counterexamples.json
   risk_inventory.json
+  run_plan.json
+  performance.json
+  coverage_report.json
+  selection_plan.json
+  summary.md
   manifests/*.json
 ```
 
@@ -49,12 +57,13 @@ TREEDB_POWERLOSS_VARIANT_ID
 TREEDB_POWERLOSS_SEED
 ```
 
-Setting both variables below enables fail-closed evidence capture for a public
-reopen:
+Setting all three variables below enables fail-closed evidence capture for a
+public reopen:
 
 ```text
 TREEDB_POWERLOSS_EVIDENCE_DIR
 TREEDB_POWERLOSS_EXPECT_CUT_POINT
+TREEDB_POWERLOSS_REOPEN_MODE=read-write|read-only
 ```
 
 The evidence directory must be empty. Capture writes:
@@ -94,6 +103,34 @@ and captured stdout/stderr. Modeled outcomes use `accepted:<state>` or
 result and the full outcome to the command log. It requires a completed zero
 exit and an exact match to the child manifest; a hashed arbitrary log file is
 not evidence.
+
+## Exact-SHA runner
+
+`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and run plan.
+The plan freezes the exact repository SHA, PR provenance, replay selector,
+profile, reopen mode, expected outcome, typed error, and complete expected
+recovery state before any case runs. The runner refuses a different SHA,
+tracked worktree changes, and a non-empty output directory. It builds and
+hashes distinct test binaries, executes each case once without retry, compares
+the observed recovery trace with the frozen expectation, and only then writes
+the child manifest.
+
+The final pass verifies coverage, artifacts, image namespaces, command logs,
+and the reloaded bundle before reporting success. The performance report
+records generation and execution runtime, cases per second, stable-image and
+artifact bytes, peak child memory when the platform exposes it, and explicit
+zero retry/flaky-retry counts. A failed attempt is retained separately; a rerun
+must use a new empty output directory.
+
+Example:
+
+```sh
+GOWORK=off go run ./TreeDB/cmd/power_loss_certify \
+  -repo-root . \
+  -inventory /path/to/risk_inventory.json \
+  -plan /path/to/run_plan.json \
+  -out /path/to/new/power_loss_certification
+```
 
 ## Current fail-closed status
 
