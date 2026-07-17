@@ -1637,6 +1637,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	protected := compactStorageProtectedPathSet(protectedPaths)
 	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, currentIDs)
 	deleted := 0
+	deletionNamespaceDirty := false
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -1684,6 +1685,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 						return deleted, errors.Join(err, ErrRecoveryRequired)
 					} else if removed {
 						deleted++
+						deletionNamespaceDirty = true
 						continue
 					}
 					if _, err := os.Stat(path); err != nil {
@@ -1708,11 +1710,14 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 			continue
 		}
 		deleted++
+		deletionNamespaceDirty = true
 	}
-	if deleted > 0 {
+	if deletionNamespaceDirty {
 		if err := syncDeletionNamespaceDirectory(layout.valueVLogDir, durabilitycut.ResourceValueLog); err != nil {
 			return deleted, fmt.Errorf("compact storage: sync value-log deletion namespace: %w", err)
 		}
+	}
+	if deleted > 0 {
 		if db.valueLogManager != nil {
 			if err := db.valueLogManager.Refresh(); err != nil {
 				return deleted, err

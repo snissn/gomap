@@ -2161,6 +2161,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
+		err := syncDeletionNamespaceDirectory(dir, resource)
+		if err != nil {
+			db.publicationPoisoned.Store(true)
+			db.reportError(fmt.Errorf("treedb: sync deferred value-log deletion namespace: %w", err))
+		}
+		return err
+	})
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()
 	db.idx.Store(gen)
