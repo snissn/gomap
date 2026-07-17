@@ -908,14 +908,16 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		}
 		return unlinkErr
 	}
+	syncErr := m.syncDeferredDeletion(file.Path)
 	commitStableDeleteLease(lease)
 	m.mu.Lock()
+	var unobserveErr error
 	if current, exists := m.files[file.ID]; exists && current == file && file.RefCount.Load() == 0 && file.IsZombie.Load() {
 		delete(m.files, file.ID)
-		_ = m.unobserveStableFileLocked(file)
+		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return unlinkErr
+	return errors.Join(unlinkErr, syncErr, unobserveErr)
 }
 
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {
