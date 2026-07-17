@@ -746,6 +746,47 @@ func wrapFinalizeCommitError(err error, cleanupCreatedSegmentsSafe bool) error {
 	}
 }
 
+type acceptedFinalizeCommitError struct {
+	err error
+}
+
+func (e *acceptedFinalizeCommitError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *acceptedFinalizeCommitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *acceptedFinalizeCommitError) CommitPublicationAccepted() bool {
+	return e != nil
+}
+
+func wrapAcceptedFinalizeCommitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &acceptedFinalizeCommitError{err: err}
+}
+
+// CommitPublicationAccepted reports whether err was returned after root
+// publication ownership transferred and the candidate became visible. Such an
+// error may still describe an unsatisfied admission or durability obligation;
+// callers must not replay the logical mutation as though publication never
+// happened.
+func CommitPublicationAccepted(err error) bool {
+	var accepted interface {
+		CommitPublicationAccepted() bool
+	}
+	return errors.As(err, &accepted) && accepted.CommitPublicationAccepted()
+}
+
 func finalizeCommitErrorAllowsCreatedSegmentCleanup(err error) bool {
 	var commitErr *finalizeCommitError
 	return errors.As(err, &commitErr) && commitErr.cleanupCreatedSegmentsSafe

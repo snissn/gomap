@@ -6,8 +6,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCommitPublicationAcceptedClassifiesOnlyPostAcceptanceErrors(t *testing.T) {
+	accepted := wrapAcceptedFinalizeCommitError(errTestWriteMetaFailpoint)
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "plain", err: errTestWriteMetaFailpoint, want: false},
+		{name: "pre-accept safe", err: wrapFinalizeCommitError(errTestWriteMetaFailpoint, true), want: false},
+		{name: "ambiguous not accepted", err: wrapFinalizeCommitError(ErrRecoveryRequired, false), want: false},
+		{name: "accepted", err: accepted, want: true},
+		{name: "wrapped accepted", err: errors.Join(errors.New("outer"), accepted), want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CommitPublicationAccepted(tc.err); got != tc.want {
+				t.Fatalf("CommitPublicationAccepted(%v)=%t want %t", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestActivatedRootPublicationTripsFormerDirectPublisher(t *testing.T) {
 	database, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed})
@@ -316,6 +340,9 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	if !errors.Is(err, errTestWriteMetaFailpoint) {
 		t.Fatalf("accepted build-group wait error=%v, want retryable meta failpoint", err)
 	}
+	if !CommitPublicationAccepted(err) {
+		t.Fatalf("accepted build-group wait error=%v was not marked post-acceptance", err)
+	}
 	if errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("accepted build-group wait error=%v unexpectedly requires recovery", err)
 	}
@@ -333,6 +360,40 @@ func TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpen
 	}
 	if err := database.SetSync([]byte("after-group"), []byte("same-handle-progress")); err != nil {
 		t.Fatalf("SetSync after accepted build-group error: %v", err)
+	}
+}
+
+func TestOrderedRootSystemBuilderAcceptedWaitErrorIsClassified(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                    t.TempDir(),
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		database.testFailWriteMeta.Store(false)
+		_ = database.Close()
+	}()
+
+	database.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	database.testFailWriteMeta.Store(true)
+	_, _, err = database.PublishOrderedRootDeltaGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "accepted/system-schema", "visible-before-durable").NewIterator(nil, nil), nil
+	})
+	database.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted ordered-root wait error=%v, want retryable meta failpoint", err)
+	}
+	if !CommitPublicationAccepted(err) {
+		t.Fatalf("accepted ordered-root wait error=%v was not marked post-acceptance", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted ordered-root wait error=%v unexpectedly requires recovery", err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint retrying accepted ordered-root publication: %v", err)
 	}
 }
 
