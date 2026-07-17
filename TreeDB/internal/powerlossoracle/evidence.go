@@ -220,15 +220,15 @@ func (session *EvidenceSession) RecordRecovery(value any) error {
 }
 
 func requireEmptyEvidenceRoot(root string) error {
+	if err := EnsureNoSymlinkComponents(root); err != nil {
+		return fmt.Errorf("powerlossoracle: inspect evidence directory %q: %w", root, err)
+	}
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("powerlossoracle: inspect evidence directory %q: %w", root, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return errorsf("evidence directory %q is a symlink", root)
 	}
 	if !info.IsDir() {
 		return errorsf("evidence directory %q is not a directory", root)
@@ -241,6 +241,29 @@ func requireEmptyEvidenceRoot(root string) error {
 		return errorsf("evidence directory %q is not empty", root)
 	}
 	return nil
+}
+
+// EnsureNoSymlinkComponents rejects any existing symlink in path, including
+// ancestors of a final component that does not exist yet.
+func EnsureNoSymlinkComponents(path string) error {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	for current := filepath.Clean(absolute); ; {
+		info, err := os.Lstat(current)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %q is a symlink", current)
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("inspect path component %q: %w", current, err)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+		current = parent
+	}
 }
 
 func parseReplayCutAddress(cutID string) (string, int, error) {

@@ -35,7 +35,7 @@ func TestStableAtPreservesCallerOwnedCrashImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	destination := filepath.Join(t.TempDir(), "preserved")
+	destination := filepath.Join(canonicalTempDir(t), "preserved")
 	result, reopened, closeFn, err := powerlossreopen.StableAt(destination, model, opts, true)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
 		t.Fatal(err)
 	}
-	evidenceDir := filepath.Join(t.TempDir(), "evidence")
+	evidenceDir := filepath.Join(canonicalTempDir(t), "evidence")
 	t.Setenv(powerlossoracle.EnvEvidenceDir, evidenceDir)
 	t.Setenv(powerlossoracle.EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
 	t.Setenv(powerlossoracle.EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
@@ -163,4 +163,51 @@ func TestStableAtRejectsSymlinkedDestination(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("StableAt symlinked destination result=%+v reopened=%v error=%v", result, reopened, err)
 	}
+}
+
+func TestStableAtRejectsSymlinkedDestinationAncestor(t *testing.T) {
+	source := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, source)
+	opts.DisableBackgroundPrune = true
+	opts.ValueLog.PointerThreshold = 1
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync([]byte("stable"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	model, err := powerlossoracle.Capture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realParent := filepath.Join(t.TempDir(), "real-parent")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkParent := filepath.Join(t.TempDir(), "linked-parent")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	destination := filepath.Join(linkParent, "new-destination")
+
+	result, reopened, closeFn, err := powerlossreopen.StableAt(destination, model, opts, true)
+	if closeFn != nil {
+		_ = closeFn()
+	}
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("StableAt symlinked destination ancestor result=%+v reopened=%v error=%v", result, reopened, err)
+	}
+}
+
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

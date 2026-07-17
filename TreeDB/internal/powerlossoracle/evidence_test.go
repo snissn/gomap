@@ -31,7 +31,7 @@ func TestBeginEvidenceFromEnvPersistsImagesTraceAndMetrics(t *testing.T) {
 	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
 		t.Fatal(err)
 	}
-	evidenceDir := filepath.Join(t.TempDir(), "evidence")
+	evidenceDir := filepath.Join(canonicalTempDir(t), "evidence")
 	t.Setenv(EnvEvidenceDir, evidenceDir)
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
 	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
@@ -101,7 +101,7 @@ func TestBeginEvidenceFromEnvRejectsUnobservedDeclaredCut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvEvidenceDir, filepath.Join(t.TempDir(), "evidence"))
+	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
 	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "was not observed") {
 		t.Fatalf("BeginEvidenceFromEnv error=%v", err)
@@ -120,7 +120,7 @@ func TestBeginEvidenceFromEnvRequiresReplaySelector(t *testing.T) {
 	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(EnvEvidenceDir, filepath.Join(t.TempDir(), "evidence"))
+	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
 	t.Setenv(EnvReplayCut, "")
 	t.Setenv(EnvReplayVariant, "")
@@ -145,7 +145,7 @@ func TestBeginEvidenceFromEnvRequiresTraceToEndAtReplayOccurrence(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	t.Setenv(EnvEvidenceDir, filepath.Join(t.TempDir(), "evidence"))
+	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
 	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
 	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
 	t.Setenv(EnvReplayVariant, "variant-a")
@@ -182,4 +182,44 @@ func TestBeginEvidenceFromEnvRejectsSymlinkedEvidenceRoot(t *testing.T) {
 	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("BeginEvidenceFromEnv symlinked root error=%v", err)
 	}
+}
+
+func TestBeginEvidenceFromEnvRejectsSymlinkedEvidenceRootAncestor(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
+		t.Fatal(err)
+	}
+	realParent := filepath.Join(t.TempDir(), "real-parent")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkParent := filepath.Join(t.TempDir(), "linked-parent")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv(EnvEvidenceDir, filepath.Join(linkParent, "new-evidence"))
+	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
+
+	if _, err := BeginEvidenceFromEnv(model); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("BeginEvidenceFromEnv symlinked ancestor error=%v", err)
+	}
+}
+
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
