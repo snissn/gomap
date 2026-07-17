@@ -101,6 +101,43 @@ func TestRequireExactCleanRepositoryRejectsHeadNotAtCertifiedMain(t *testing.T) 
 	}
 }
 
+func TestRequireExactCleanRepositoryIgnoresInheritedGitRepositoryOverrides(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit(repo, "init")
+	runGit(repo, "config", "user.email", "powerlosscert@example.invalid")
+	runGit(repo, "config", "user.name", "powerlosscert test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(repo, "add", "tracked.go")
+	runGit(repo, "commit", "-m", "fixture")
+	head := runGit(repo, "rev-parse", "HEAD")
+	runGit(repo, "update-ref", CertifiedRepositoryRef, head)
+
+	decoy := filepath.Join(t.TempDir(), "decoy")
+	runGit(t.TempDir(), "clone", repo, decoy)
+	runGit(decoy, "update-ref", CertifiedRepositoryRef, head)
+	if err := os.WriteFile(filepath.Join(repo, "untracked.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	t.Setenv("GIT_WORK_TREE", decoy)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(decoy, ".git", "index"))
+	if err := requireExactCleanRepository(repo, CertifiedRepositoryRef, head); err == nil || !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("inherited Git repository overrides bypassed source-tree validation: %v", err)
+	}
+}
+
 func TestRequireCommittedRiskInventoryRejectsReducedCopy(t *testing.T) {
 	repo := t.TempDir()
 	path := filepath.Join(repo, "TreeDB", "testdata", "power_loss_risk_inventory.json")

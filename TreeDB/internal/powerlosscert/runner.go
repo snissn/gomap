@@ -300,21 +300,22 @@ func requireCommittedRiskInventory(repoRoot string, supplied []byte) error {
 }
 
 func requireExactCleanRepository(repoRoot, repositoryRef, expectedSHA string) error {
-	refSHA, err := commandOutput(repoRoot, nil, "git", "rev-parse", "--verify", repositoryRef+"^{commit}")
+	gitEnvironment := certificationGitEnvironment()
+	refSHA, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, "git", "rev-parse", "--verify", repositoryRef+"^{commit}")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(refSHA) != expectedSHA {
 		return fmt.Errorf("powerlosscert: certified ref %s=%s want exact plan SHA=%s", repositoryRef, strings.TrimSpace(refSHA), expectedSHA)
 	}
-	head, err := commandOutput(repoRoot, nil, "git", "rev-parse", "HEAD")
+	head, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, "git", "rev-parse", "HEAD")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(head) != expectedSHA {
 		return fmt.Errorf("powerlosscert: repository HEAD=%s want exact plan SHA=%s", strings.TrimSpace(head), expectedSHA)
 	}
-	status, err := commandOutput(repoRoot, nil, "git", "status", "--porcelain", "--untracked-files=all")
+	status, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, "git", "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return err
 	}
@@ -548,6 +549,18 @@ func certificationRuntimeEnvironment(overrides map[string]string) map[string]str
 	return values
 }
 
+func certificationGitEnvironment() []string {
+	values := certificationBaseEnvironment()
+	values["GIT_CONFIG_GLOBAL"] = os.DevNull
+	values["GIT_CONFIG_NOSYSTEM"] = "1"
+	values["GIT_CONFIG_SYSTEM"] = os.DevNull
+	values["GIT_DISCOVERY_ACROSS_FILESYSTEM"] = "0"
+	values["GIT_OPTIONAL_LOCKS"] = "0"
+	values["GIT_PAGER"] = "cat"
+	values["GIT_TERMINAL_PROMPT"] = "0"
+	return environmentList(values)
+}
+
 func certificationBaseEnvironment() map[string]string {
 	values := map[string]string{
 		"HOME":   os.TempDir(),
@@ -726,17 +739,6 @@ func writeSummary(root string, plan RunPlan, coverage CoverageReport, selection 
 	fmt.Fprintf(&summary, "- Retries/flaky retries: %d/%d\n", performance.Retries, performance.FlakyRetries)
 	fmt.Fprintf(&summary, "\nClaim boundary: %s\n", plan.ClaimBoundary)
 	return writeExclusive(filepath.Join(root, "summary.md"), []byte(summary.String()), 0o600)
-}
-
-func commandOutput(dir string, extraEnv []string, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), extraEnv...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("powerlosscert: %s %s: %w", name, strings.Join(args, " "), err)
-	}
-	return string(output), nil
 }
 
 func commandOutputWithEnvironment(dir string, environment []string, name string, args ...string) (string, error) {
