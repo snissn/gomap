@@ -112,6 +112,9 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err := requireExactCleanRepository(repoRoot, plan.RepositoryRef, plan.RepositorySHA); err != nil {
 		return RunnerResult{}, err
 	}
+	if err := requirePullRequestProvenance(repoRoot, plan.RepositorySHA, plan.PullRequests); err != nil {
+		return RunnerResult{}, err
+	}
 	if err := requireEmptyOutputRoot(outputRoot); err != nil {
 		return RunnerResult{}, err
 	}
@@ -336,6 +339,71 @@ func requireExactCleanRepository(repoRoot, repositoryRef, expectedSHA string) er
 	}
 	if strings.TrimSpace(status) != "" {
 		return fmt.Errorf("powerlosscert: repository has tracked or untracked changes; exact-main evidence requires a clean tree")
+	}
+	return nil
+}
+
+func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests []PullRequest) error {
+	gitBinary, err := resolveGitBinary()
+	if err != nil {
+		return err
+	}
+	gitEnvironment := certificationGitEnvironment()
+	var previousMergeSHA string
+	for _, pr := range pullRequests {
+		prefix := fmt.Sprintf("powerlosscert: pull request #%d provenance", pr.Number)
+		headSHA, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-parse", "--verify", pr.HeadSHA+"^{commit}")
+		if err != nil || strings.TrimSpace(headSHA) != pr.HeadSHA {
+			return fmt.Errorf("%s head_sha=%s is not an exact commit in the certified repository", prefix, pr.HeadSHA)
+		}
+		mergeSHA, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-parse", "--verify", pr.MergeSHA+"^{commit}")
+		if err != nil || strings.TrimSpace(mergeSHA) != pr.MergeSHA {
+			return fmt.Errorf("%s merge_sha=%s is not an exact commit in the certified repository", prefix, pr.MergeSHA)
+		}
+		if _, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-base", "--is-ancestor", pr.MergeSHA, repositorySHA); err != nil {
+			return fmt.Errorf("%s merge_sha=%s is not an ancestor of repository_sha=%s", prefix, pr.MergeSHA, repositorySHA)
+		}
+		if previousMergeSHA != "" {
+			if _, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-base", "--is-ancestor", previousMergeSHA, pr.MergeSHA); err != nil {
+				return fmt.Errorf("%s merge_sha=%s is out of topological order after %s", prefix, pr.MergeSHA, previousMergeSHA)
+			}
+		}
+		subject, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "show", "-s", "--format=%s", pr.MergeSHA)
+		if err != nil {
+			return fmt.Errorf("%s read merge subject: %w", prefix, err)
+		}
+		if !strings.HasSuffix(strings.TrimSpace(subject), fmt.Sprintf("(#%d)", pr.Number)) {
+			return fmt.Errorf("%s merge subject %q does not end in (#%d)", prefix, strings.TrimSpace(subject), pr.Number)
+		}
+		parentsOutput, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-list", "--parents", "-n", "1", pr.MergeSHA)
+		if err != nil {
+			return fmt.Errorf("%s read merge parents: %w", prefix, err)
+		}
+		parents := strings.Fields(parentsOutput)
+		if len(parents) == 0 || parents[0] != pr.MergeSHA {
+			return fmt.Errorf("%s merge_sha=%s has invalid parent metadata", prefix, pr.MergeSHA)
+		}
+		headIsParent := false
+		for _, parent := range parents[2:] {
+			if parent == pr.HeadSHA {
+				headIsParent = true
+				break
+			}
+		}
+		if !headIsParent {
+			headTree, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-parse", "--verify", pr.HeadSHA+"^{tree}")
+			if err != nil {
+				return fmt.Errorf("%s read head tree: %w", prefix, err)
+			}
+			mergeTree, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-parse", "--verify", pr.MergeSHA+"^{tree}")
+			if err != nil {
+				return fmt.Errorf("%s read merge tree: %w", prefix, err)
+			}
+			if strings.TrimSpace(headTree) != strings.TrimSpace(mergeTree) {
+				return fmt.Errorf("%s head_sha=%s is neither a merge parent nor tree-identical to merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
+			}
+		}
+		previousMergeSHA = pr.MergeSHA
 	}
 	return nil
 }

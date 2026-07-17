@@ -139,6 +139,87 @@ func TestRequireExactCleanRepositoryIgnoresInheritedGitRepositoryOverrides(t *te
 	}
 }
 
+func TestRequirePullRequestProvenanceBindsClaimsToCertifiedGraph(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	writeSource := func(contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "powerlosscert@example.invalid")
+	runGit("config", "user.name", "powerlosscert test")
+	writeSource("package fixture\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "base")
+	baseSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "-b", "feature")
+	writeSource("package fixture\n\nconst Feature = true\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "feature head")
+	headSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "main")
+	runGit("merge", "--squash", "feature")
+	runGit("commit", "-m", "Feature (#42)")
+	mergeSHA := runGit("rev-parse", "HEAD")
+
+	valid := []PullRequest{{Number: 42, HeadSHA: headSHA, MergeSHA: mergeSHA}}
+	if err := requirePullRequestProvenance(repo, mergeSHA, valid); err != nil {
+		t.Fatalf("valid squash-merge provenance: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		repositorySHA string
+		pullRequests  []PullRequest
+		want          string
+	}{
+		{
+			name:          "missing-head",
+			repositorySHA: mergeSHA,
+			pullRequests:  []PullRequest{{Number: 42, HeadSHA: strings.Repeat("f", 40), MergeSHA: mergeSHA}},
+			want:          "is not an exact commit",
+		},
+		{
+			name:          "wrong-pr-number",
+			repositorySHA: mergeSHA,
+			pullRequests:  []PullRequest{{Number: 43, HeadSHA: headSHA, MergeSHA: mergeSHA}},
+			want:          "does not end in (#43)",
+		},
+		{
+			name:          "unrelated-head-tree",
+			repositorySHA: mergeSHA,
+			pullRequests:  []PullRequest{{Number: 42, HeadSHA: baseSHA, MergeSHA: mergeSHA}},
+			want:          "neither a merge parent nor tree-identical",
+		},
+		{
+			name:          "merge-not-reachable-from-repository",
+			repositorySHA: baseSHA,
+			pullRequests:  valid,
+			want:          "is not an ancestor",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := requirePullRequestProvenance(repo, tt.repositorySHA, tt.pullRequests); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("requirePullRequestProvenance error=%v want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestCertificationExecutableResolutionIgnoresInheritedPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell executable shadow fixture is Unix-specific")
