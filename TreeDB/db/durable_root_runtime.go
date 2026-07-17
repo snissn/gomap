@@ -499,9 +499,11 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // producer rotates to a new segment; rotation and every destructive/unknown
 // transition deliberately fall back to the exact candidate scanner so
 // maintenance can retire unreachable files without granting authority to
-// unrelated inventory.
-func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta, hasReplacementManifest bool) (map[uint32]struct{}, bool, error) {
-	if db == nil || !db.indexOuterLeavesInValueLog || delta == nil || hasReplacementManifest {
+// unrelated inventory. A replacement generation manifest does not invalidate
+// this proof: the caller replaces that authoritative namespace token
+// independently while this plan recaptures only the raw/value-log handles.
+func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
+	if db == nil || !db.indexOuterLeavesInValueLog || delta == nil {
 		return nil, false, nil
 	}
 	if delta.requiresCandidateProjection {
@@ -630,7 +632,7 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 			}
 		}
 	}
-	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, delta, hasReplacementManifest)
+	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, delta)
 	if err != nil {
 		return nil, fmt.Errorf("plan outer-leaf candidate dependencies: %w", err)
 	}

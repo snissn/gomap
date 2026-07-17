@@ -97,6 +97,111 @@ func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
 	}
 }
 
+func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	leafLog := &registeredLeafPageLog{db: database, dir: database.dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	database.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, database, leafLog)
+	if err := database.SetSync([]byte("replacement-manifest-prime"), []byte("p")); err != nil {
+		t.Fatalf("prime SetSync: %v", err)
+	}
+
+	selected := database.durableRoot.slotResources[database.durableRoot.slot]
+	selectedClone, err := rootpublication.CloneStableResourceSetExcludingKinds(selected)
+	if err != nil {
+		t.Fatalf("clone selected durable resources: %v", err)
+	}
+	oldManifest := stableContractResourceSet(t, stableContractDescriptor{
+		generation: 1, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	})
+	baseBuilder := rootpublication.NewStableResourceSetBuilder()
+	if err := baseBuilder.Merge(selectedClone); err != nil {
+		selectedClone.Release()
+		baseBuilder.Abandon()
+		t.Fatalf("merge selected durable resources: %v", err)
+	}
+	if err := baseBuilder.Merge(oldManifest); err != nil {
+		oldManifest.Release()
+		baseBuilder.Abandon()
+		t.Fatalf("merge old manifest: %v", err)
+	}
+	base, err := baseBuilder.Freeze()
+	if err != nil {
+		baseBuilder.Abandon()
+		t.Fatalf("freeze base resources: %v", err)
+	}
+	defer base.Release()
+	additional := stableContractResourceSet(t, stableContractDescriptor{
+		generation: 2, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	})
+
+	appendOnly := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(appendOnly)
+	appendOnly.add(leafLog.fileID, 1)
+	scans := 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	captured, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, appendOnly, base, additional,
+		rootpublication.StableLogicalObligationRequirements{}, false,
+	)
+	database.testScanCandidateExternalReferencesHook = nil
+	if err != nil {
+		t.Fatalf("capture append-only replacement-manifest resources: %v", err)
+	}
+	defer captured.Release()
+	if scans != 0 {
+		t.Fatalf("append-only replacement manifest candidate scans=%d want 0", scans)
+	}
+	foundCurrentLeaf, foundNewManifest := false, false
+	for _, descriptor := range captured.Descriptors() {
+		switch descriptor.Kind() {
+		case rootpublication.ResourceOuterLeafLog:
+			foundCurrentLeaf = foundCurrentLeaf || descriptor.Generation() == uint64(leafLog.fileID)
+		case rootpublication.ResourceOuterLeafManifest:
+			if descriptor.Generation() == 1 {
+				t.Fatal("captured resources retained superseded outer-leaf manifest")
+			}
+			foundNewManifest = foundNewManifest || descriptor.Generation() == 2
+		}
+	}
+	if !foundCurrentLeaf || !foundNewManifest {
+		t.Fatalf("captured descriptors=%+v, want current raw leaf and replacement manifest", captured.Descriptors())
+	}
+
+	plannerBase := stableContractResourceSet(t, stableContractDescriptor{
+		generation: uint64(leafLog.fileID), kind: rootpublication.ResourceOuterLeafLog,
+		reachability: rootpublication.ReachabilityOuterLeafRawPointer, frontier: 4096,
+	})
+	defer plannerBase.Release()
+	plannerAdditional := stableContractResourceSet(t, stableContractDescriptor{
+		generation: 2, kind: rootpublication.ResourceOuterLeafManifest,
+		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
+	})
+	defer plannerAdditional.Release()
+
+	destructive := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(destructive)
+	destructive.add(leafLog.fileID, -1)
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, destructive); err != nil {
+		t.Fatalf("plan destructive replacement-manifest transition: %v", err)
+	} else if reuse || references != nil {
+		t.Fatalf("destructive replacement-manifest transition reused references=%v reuse=%t", references, reuse)
+	}
+}
+
 func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
