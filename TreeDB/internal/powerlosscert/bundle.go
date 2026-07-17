@@ -590,7 +590,7 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 	} else if recovery.ErrorType != "" || recovery.Error != "" || witness.TypedError != "none" || modeledOutcomeClass(witness.ActualOutcome) != "accepted" {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s accepted result does not match outcome=%q and typed_error=%q", prefix, witness.ActualOutcome, witness.TypedError)
 	}
-	if err := validateRecoveryStats(recovery); err != nil {
+	if err := validateRecoveryStats(recovery, witness.Command.Env[powerLossProfileEnv]); err != nil {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
 	}
 	if got := observedWitnessState(recovery); got != witness.State {
@@ -610,7 +610,7 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 	return recovery, nil
 }
 
-func validateRecoveryStats(recovery recoveryTraceArtifact) error {
+func validateRecoveryStats(recovery recoveryTraceArtifact, expectedProfile string) error {
 	if recovery.Rejected {
 		if len(recovery.Stats) != 0 {
 			return fmt.Errorf("rejected recovery unexpectedly reports selected-state stats")
@@ -631,8 +631,12 @@ func validateRecoveryStats(recovery recoveryTraceArtifact) error {
 			}
 		}
 	}
-	if !productionProfiles[recovery.Stats["treedb.profile.resolved"]] {
-		return fmt.Errorf("accepted recovery has non-production profile %q", recovery.Stats["treedb.profile.resolved"])
+	resolvedProfile := recovery.Stats["treedb.profile.resolved"]
+	if !productionProfiles[resolvedProfile] {
+		return fmt.Errorf("accepted recovery has non-production profile %q", resolvedProfile)
+	}
+	if resolvedProfile != expectedProfile {
+		return fmt.Errorf("accepted recovery resolved profile %q does not match command-required profile %q", resolvedProfile, expectedProfile)
 	}
 	if recovery.Stats["treedb.commit_seq"] != strconv.FormatUint(recovery.CommitSeq, 10) || recovery.Stats["treedb.applied_command_lsn"] != strconv.FormatUint(recovery.AppliedLSN, 10) {
 		return fmt.Errorf("accepted recovery scalar state does not match reported stats")

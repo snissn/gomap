@@ -67,7 +67,6 @@ func TestPowerLossCertificationRecoverablePageReusePublicReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeReuse := certificationStatUint64(t, backend.Stats(), "treedb.freelist.reuse_alloc_pages_total")
 	cutErr := errors.New("power-loss-certification: stop before reused-page index sync")
 	var snapshot *powerlossoracle.Model
 	var indexPath string
@@ -96,6 +95,7 @@ func TestPowerLossCertificationRecoverablePageReusePublicReopen(t *testing.T) {
 		t.Fatalf("write first post-horizon generation: %v", err)
 	}
 	stableState = backend.State()
+	beforeReuse := certificationStatUint64(t, backend.Stats(), "treedb.freelist.reuse_alloc_pages_total")
 	err = writeGeneration('f')
 	restore()
 	if !errors.Is(err, cutErr) || snapshot == nil || indexPath == "" {

@@ -106,7 +106,7 @@ func testRunPlan() RunPlan {
 			CutID:                  witness.CutID,
 			VariantID:              "variant-a",
 			CutPoint:               witness.CutPoint,
-			ReopenMode:             reopenModeReadOnly,
+			ReopenMode:             powerLossReopenModeReadOnly,
 			ExpectedRecovery: RecoveryExpectation{
 				CommitSeq: 1,
 			},

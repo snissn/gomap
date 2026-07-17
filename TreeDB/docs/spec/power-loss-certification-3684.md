@@ -98,8 +98,10 @@ may be a symlink. The verifier strictly parses every schema,
 rehashes every file named by both image-tree manifests, compares their exact
 directory sets, rejects extra image paths and symlinks, cross-checks metrics
 against the trace and image trees, and binds the recovery trace to the immutable
-stable image. The preserved `recovery-preopen/` namespace and bytes must always
-match the stable tree exactly. For read-only recovery, the unchanged
+stable image. The resolved production profile in the recovery trace must equal
+the profile required by the recorded witness command. The preserved
+`recovery-preopen/` namespace and bytes must always match the stable tree
+exactly. For read-only recovery, the unchanged
 `recovery-input/` must match it too; writable recovery may mutate only that
 working copy after public open begins.
 
@@ -127,9 +129,15 @@ a non-empty output directory. It rechecks the ref, HEAD, and worktree after
 building and after execution to detect mid-run repository changes. Provenance
 checks run with a constrained Git environment, so inherited repository,
 worktree, index, object-store, namespace, and configuration overrides cannot
-redirect validation away from the source tree being built.
+redirect validation away from the certified repository. Git is invoked from a
+fixed trusted system path rather than the inherited `PATH`.
 
-The runner resolves one absolute Go binary, requires its reported version to
+The runner materializes the planned commit in a private detached checkout and
+builds only from that checkout, so ignored files in the caller's worktree cannot
+alter a claimed exact-SHA binary. It resolves the default Go binary from the
+running tool's compiled GOROOT only when no `GOROOT` override is inherited; an
+inherited override requires an explicitly absolute `-go` path. The runner then
+requires the selected tool's reported version to
 match the Go runtime that built the runner, and builds with a minimal fixed
 environment (`GOENV=off`, empty `GOFLAGS`, `GOTOOLCHAIN=local`, and
 `GOWORK=off`). Witnesses run under a separately recorded minimal environment,

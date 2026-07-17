@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -138,6 +139,124 @@ func TestRequireExactCleanRepositoryIgnoresInheritedGitRepositoryOverrides(t *te
 	}
 }
 
+func TestCertificationExecutableResolutionIgnoresInheritedPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell executable shadow fixture is Unix-specific")
+	}
+	shadowDir := t.TempDir()
+	for _, name := range []string{"git", "go"} {
+		if err := os.WriteFile(filepath.Join(shadowDir, name), []byte("#!/bin/sh\nexit 97\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", shadowDir)
+	t.Setenv("GOROOT", "")
+
+	gitBinary, err := resolveGitBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(gitBinary) == shadowDir {
+		t.Fatalf("resolved inherited PATH Git shim %q", gitBinary)
+	}
+	goBinary, err := resolveGoBinary("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(goBinary) == shadowDir {
+		t.Fatalf("resolved inherited PATH Go shim %q", goBinary)
+	}
+}
+
+func TestDefaultGoResolutionRejectsInheritedGOROOT(t *testing.T) {
+	t.Setenv("GOROOT", filepath.Join(t.TempDir(), "shadow-goroot"))
+	if _, err := resolveGoBinary("go"); err == nil || !strings.Contains(err.Error(), "inherited GOROOT") {
+		t.Fatalf("default Go resolution with inherited GOROOT error=%v", err)
+	}
+}
+
+func TestBuildTestBinariesUsesPrivateExactSHACheckout(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init")
+	runGit("config", "user.email", "powerlosscert@example.invalid")
+	runGit("config", "user.name", "powerlosscert test")
+	files := map[string]string{
+		".gitignore":                 "fixturepkg/ignored_override_test.go\n",
+		"go.mod":                     "module powerlosscert-fixture\n\ngo 1.25\n",
+		"fixturepkg/fixture.go":      "package fixturepkg\n\nfunc Value() int { return 1 }\n",
+		"fixturepkg/fixture_test.go": "package fixturepkg\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 1 { t.Fatal(Value()) } }\n",
+	}
+	for path, contents := range files {
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit("add", ".")
+	runGit("commit", "-m", "fixture")
+	head := runGit("rev-parse", "HEAD")
+	runGit("update-ref", CertifiedRepositoryRef, head)
+	ignoredSource := filepath.Join(repo, "fixturepkg", "ignored_override_test.go")
+	if err := os.WriteFile(ignoredSource, []byte("package fixturepkg\n\nfunc ignoredInputDoesNotCompile(\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireExactCleanRepository(repo, CertifiedRepositoryRef, head); err != nil {
+		t.Fatalf("ignored source should demonstrate the status gap: %v", err)
+	}
+
+	goBinary, err := resolveGoBinary(filepath.Join(runtime.GOROOT(), "bin", "go"+executableSuffix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directOutput := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directOutput, "binaries"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := buildTestBinaries(repo, directOutput, goBinary, []RunCase{{Package: "./fixturepkg"}}); err == nil {
+		t.Fatal("ignored source fixture did not affect a direct worktree build")
+	}
+
+	sourceRoot, cleanup, err := createExactSourceCheckout(repo, CertifiedRepositoryRef, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup exact-SHA checkout: %v", err)
+		}
+	}()
+	if _, err := os.Stat(filepath.Join(sourceRoot, "fixturepkg", "ignored_override_test.go")); !os.IsNotExist(err) {
+		t.Fatalf("private exact-SHA checkout contains ignored source: %v", err)
+	}
+	output := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(output, "binaries"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, paths, err := buildTestBinaries(sourceRoot, output, goBinary, []RunCase{{Package: "./fixturepkg"}})
+	if err != nil {
+		t.Fatalf("build from private exact-SHA checkout: %v", err)
+	}
+	if artifacts["./fixturepkg"].SHA256 == "" {
+		t.Fatal("private exact-SHA build omitted binary digest")
+	}
+	if _, err := os.Stat(paths["./fixturepkg"]); err != nil {
+		t.Fatalf("private exact-SHA build output: %v", err)
+	}
+}
+
 func TestRequireCommittedRiskInventoryRejectsReducedCopy(t *testing.T) {
 	repo := t.TempDir()
 	path := filepath.Join(repo, "TreeDB", "testdata", "power_loss_risk_inventory.json")
@@ -185,11 +304,12 @@ func TestCertificationRuntimeEnvironmentDoesNotInheritProcessConfiguration(t *te
 func TestValidateExecutedRecoveryMatchesFrozenExpectation(t *testing.T) {
 	runCase := RunCase{
 		ID:               "accepted-read-only",
+		Profile:          "command_wal_durable",
 		Seed:             3674,
 		CutID:            "cut/checkpoint/after-meta-write/002",
 		CutPoint:         "after-meta-write",
 		VariantID:        "variant/target-meta",
-		ReopenMode:       reopenModeReadOnly,
+		ReopenMode:       powerLossReopenModeReadOnly,
 		ExpectedRecovery: RecoveryExpectation{CommitSeq: 11, AppliedLSN: 7},
 	}
 	trace := operationTraceArtifact{
@@ -228,7 +348,7 @@ func TestValidateExecutedRecoveryRejectsPostHocOutcomeChange(t *testing.T) {
 		CutID:            "cut/checkpoint/after-meta-write/000",
 		CutPoint:         "after-meta-write",
 		VariantID:        "variant/torn-meta",
-		ReopenMode:       reopenModeReadWrite,
+		ReopenMode:       powerLossReopenModeReadWrite,
 		ExpectedRecovery: RecoveryExpectation{Rejected: true, ErrorType: "*treedb.CorruptionError"},
 	}
 	trace := operationTraceArtifact{

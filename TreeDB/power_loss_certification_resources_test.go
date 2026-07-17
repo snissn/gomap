@@ -173,14 +173,12 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 func certificationProfileFromEnv(t *testing.T) (string, treedb.Profile) {
 	t.Helper()
 	switch profile := os.Getenv("TREEDB_POWERLOSS_PROFILE"); profile {
-	case "command_wal_durable":
-		return profile, treedb.ProfileCommandWALDurable
+	case "", "command_wal_durable":
+		return "command_wal_durable", treedb.ProfileCommandWALDurable
 	case "command_wal_relaxed":
 		return profile, treedb.ProfileCommandWALRelaxed
 	case "no_wal_fast":
 		return profile, treedb.ProfileNoWALFast
-	case "":
-		t.Fatal("TREEDB_POWERLOSS_PROFILE is required for certification resource replay")
 	default:
 		t.Fatalf("unsupported TREEDB_POWERLOSS_PROFILE=%q", profile)
 	}

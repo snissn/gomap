@@ -146,9 +146,20 @@ func Run(config RunnerConfig) (RunnerResult, error) {
 	if err != nil {
 		return RunnerResult{}, err
 	}
-	binaries, binaryPaths, err := buildTestBinaries(repoRoot, outputRoot, goBinary, plan.Cases)
+	sourceRoot, cleanupSource, err := createExactSourceCheckout(repoRoot, plan.RepositoryRef, plan.RepositorySHA)
 	if err != nil {
 		return RunnerResult{}, err
+	}
+	binaries, binaryPaths, buildErr := buildTestBinaries(sourceRoot, outputRoot, goBinary, plan.Cases)
+	cleanupErr := cleanupSource()
+	if buildErr != nil {
+		if cleanupErr != nil {
+			return RunnerResult{}, fmt.Errorf("%v; additionally failed to remove private exact-SHA source checkout: %w", buildErr, cleanupErr)
+		}
+		return RunnerResult{}, buildErr
+	}
+	if cleanupErr != nil {
+		return RunnerResult{}, cleanupErr
 	}
 	if err := requireExactCleanRepository(repoRoot, plan.RepositoryRef, plan.RepositorySHA); err != nil {
 		return RunnerResult{}, fmt.Errorf("powerlosscert: repository changed while building exact-SHA binaries: %w", err)
@@ -300,22 +311,26 @@ func requireCommittedRiskInventory(repoRoot string, supplied []byte) error {
 }
 
 func requireExactCleanRepository(repoRoot, repositoryRef, expectedSHA string) error {
+	gitBinary, err := resolveGitBinary()
+	if err != nil {
+		return err
+	}
 	gitEnvironment := certificationGitEnvironment()
-	refSHA, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, "git", "rev-parse", "--verify", repositoryRef+"^{commit}")
+	refSHA, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-parse", "--verify", repositoryRef+"^{commit}")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(refSHA) != expectedSHA {
 		return fmt.Errorf("powerlosscert: certified ref %s=%s want exact plan SHA=%s", repositoryRef, strings.TrimSpace(refSHA), expectedSHA)
 	}
-	head, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, "git", "rev-parse", "HEAD")
+	head, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "rev-parse", "HEAD")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(head) != expectedSHA {
 		return fmt.Errorf("powerlosscert: repository HEAD=%s want exact plan SHA=%s", strings.TrimSpace(head), expectedSHA)
 	}
-	status, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, "git", "status", "--porcelain", "--untracked-files=all")
+	status, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return err
 	}
@@ -344,6 +359,49 @@ func requireEmptyOutputRoot(root string) error {
 		return fmt.Errorf("powerlosscert: output root %q is not empty", root)
 	}
 	return nil
+}
+
+func createExactSourceCheckout(repoRoot, repositoryRef, repositorySHA string) (string, func() error, error) {
+	gitBinary, err := resolveGitBinary()
+	if err != nil {
+		return "", nil, err
+	}
+	checkoutRoot, err := os.MkdirTemp("", "treedb-power-loss-cert-source-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("powerlosscert: create private exact-SHA source checkout: %w", err)
+	}
+	removeDirectory := true
+	defer func() {
+		if removeDirectory {
+			_ = os.RemoveAll(checkoutRoot)
+		}
+	}()
+	output, err := commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "add", "--detach", checkoutRoot, repositorySHA)
+	if err != nil {
+		return "", nil, fmt.Errorf("powerlosscert: create private exact-SHA source checkout: %w\n%s", err, output)
+	}
+	if err := os.Chmod(checkoutRoot, 0o700); err != nil {
+		_, _ = commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "remove", "--force", checkoutRoot)
+		return "", nil, fmt.Errorf("powerlosscert: make exact-SHA source checkout private: %w", err)
+	}
+	if err := requireExactCleanRepository(checkoutRoot, repositoryRef, repositorySHA); err != nil {
+		_, _ = commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "remove", "--force", checkoutRoot)
+		return "", nil, fmt.Errorf("powerlosscert: validate private exact-SHA source checkout: %w", err)
+	}
+	removeDirectory = false
+	cleaned := false
+	cleanup := func() error {
+		if cleaned {
+			return nil
+		}
+		cleaned = true
+		output, err := commandOutputWithEnvironment(repoRoot, certificationGitEnvironment(), gitBinary, "worktree", "remove", "--force", checkoutRoot)
+		if err != nil {
+			return fmt.Errorf("powerlosscert: remove private exact-SHA source checkout: %w\n%s", err, output)
+		}
+		return nil
+	}
+	return checkoutRoot, cleanup, nil
 }
 
 func buildTestBinaries(repoRoot, outputRoot, goBinary string, cases []RunCase) (map[string]Artifact, map[string]string, error) {
@@ -377,13 +435,21 @@ func buildTestBinaries(repoRoot, outputRoot, goBinary string, cases []RunCase) (
 }
 
 func resolveGoBinary(name string) (string, error) {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return "", fmt.Errorf("powerlosscert: resolve Go tool %q: %w", name, err)
+	if name == "go" {
+		if inherited := os.Getenv("GOROOT"); inherited != "" {
+			return "", fmt.Errorf("powerlosscert: inherited GOROOT is set; exact-SHA certification requires an explicit absolute Go tool path")
+		}
+		name = filepath.Join(runtime.GOROOT(), "bin", "go"+executableSuffix())
 	}
-	path, err = filepath.Abs(path)
+	if !filepath.IsAbs(name) {
+		return "", fmt.Errorf("powerlosscert: Go tool %q must be an absolute path or the trusted default name %q", name, "go")
+	}
+	path, err := filepath.Abs(name)
 	if err != nil {
 		return "", fmt.Errorf("powerlosscert: resolve absolute Go tool path: %w", err)
+	}
+	if err := requireExecutableFile(path); err != nil {
+		return "", fmt.Errorf("powerlosscert: resolve Go tool %q: %w", path, err)
 	}
 	version, err := commandOutputWithEnvironment("", certificationBuildEnvironment(), path, "env", "GOVERSION")
 	if err != nil {
@@ -393,6 +459,46 @@ func resolveGoBinary(name string) (string, error) {
 		return "", fmt.Errorf("powerlosscert: build Go version=%q does not match runner Go version=%q", strings.TrimSpace(version), runtime.Version())
 	}
 	return path, nil
+}
+
+func resolveGitBinary() (string, error) {
+	var candidates []string
+	if runtime.GOOS == "windows" {
+		candidates = []string{
+			`C:\Program Files\Git\cmd\git.exe`,
+			`C:\Program Files\Git\bin\git.exe`,
+			`C:\Program Files (x86)\Git\cmd\git.exe`,
+		}
+	} else {
+		candidates = []string{"/usr/bin/git", "/bin/git"}
+	}
+	for _, candidate := range candidates {
+		if err := requireExecutableFile(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("powerlosscert: trusted system Git executable not found in %s", strings.Join(candidates, ", "))
+}
+
+func requireExecutableFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file")
+	}
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		return fmt.Errorf("not executable")
+	}
+	return nil
+}
+
+func executableSuffix() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
 }
 
 func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Artifact, binaryPath string) (executedCase, error) {
@@ -412,7 +518,7 @@ func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Art
 		"TREEDB_POWERLOSS_EXPECT_CUT_POINT": runCase.CutPoint,
 		"TREEDB_POWERLOSS_EVIDENCE_DIR":     evidenceDir,
 		"TREEDB_POWERLOSS_REOPEN_MODE":      runCase.ReopenMode,
-		"TREEDB_POWERLOSS_PROFILE":          runCase.Profile,
+		powerLossProfileEnv:                 runCase.Profile,
 	}
 	ledgerPath := filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json")
 	if _, err := os.Stat(ledgerPath); err == nil {
@@ -601,7 +707,7 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 	if trace.ObservedEventCount != occurrence+1 {
 		return fmt.Errorf("%s observed events=%d want cut occurrence+1=%d", prefix, trace.ObservedEventCount, occurrence+1)
 	}
-	wantReadOnly := runCase.ReopenMode == reopenModeReadOnly
+	wantReadOnly := runCase.ReopenMode == powerLossReopenModeReadOnly
 	if recovery.ReadOnly != wantReadOnly {
 		return fmt.Errorf("%s recovery read_only=%t want=%t", prefix, recovery.ReadOnly, wantReadOnly)
 	}
@@ -615,7 +721,7 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 	if !recovery.Rejected && recovery.Error != "" {
 		return fmt.Errorf("%s accepted recovery has error text %q", prefix, recovery.Error)
 	}
-	if err := validateRecoveryStats(recovery); err != nil {
+	if err := validateRecoveryStats(recovery, runCase.Profile); err != nil {
 		return fmt.Errorf("%s: %w", prefix, err)
 	}
 	if got := observedWitnessState(recovery); got != runCase.State {
@@ -742,6 +848,9 @@ func writeSummary(root string, plan RunPlan, coverage CoverageReport, selection 
 }
 
 func commandOutputWithEnvironment(dir string, environment []string, name string, args ...string) (string, error) {
+	if !filepath.IsAbs(name) {
+		return "", fmt.Errorf("powerlosscert: executable %q must be an absolute path", name)
+	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = environment

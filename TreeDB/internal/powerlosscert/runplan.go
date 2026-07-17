@@ -11,11 +11,6 @@ const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v2"
 
 const CertifiedRepositoryRef = "refs/remotes/origin/main"
 
-const (
-	reopenModeReadWrite = "read-write"
-	reopenModeReadOnly  = "read-only"
-)
-
 var (
 	caseIDPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 	testNamePattern = regexp.MustCompile(`^Test[A-Za-z0-9_]+$`)
@@ -183,7 +178,7 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 	if cutPoint != runCase.CutPoint {
 		return fmt.Errorf("%s cut_id point=%q want=%q", prefix, cutPoint, runCase.CutPoint)
 	}
-	if runCase.ReopenMode != reopenModeReadWrite && runCase.ReopenMode != reopenModeReadOnly {
+	if runCase.ReopenMode != powerLossReopenModeReadWrite && runCase.ReopenMode != powerLossReopenModeReadOnly {
 		return fmt.Errorf("%s has invalid reopen mode %q", prefix, runCase.ReopenMode)
 	}
 	class := modeledOutcomeClass(runCase.ExpectedOutcome)
@@ -208,7 +203,7 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 		"TREEDB_POWERLOSS_EXPECT_CUT_POINT": runCase.CutPoint,
 		"TREEDB_POWERLOSS_EVIDENCE_DIR":     evidenceDir,
 		powerLossReopenModeEnv:              runCase.ReopenMode,
-		"TREEDB_POWERLOSS_PROFILE":          runCase.Profile,
+		powerLossProfileEnv:                 runCase.Profile,
 	}
 	witness := Witness{
 		ID:                     runCase.ID,

@@ -354,6 +354,7 @@ func testChildManifest(witnessID string) ChildManifest {
 					"TREEDB_POWERLOSS_EVIDENCE_DIR":     "artifacts/witness-a",
 					"TREEDB_POWERLOSS_EXPECT_CUT_POINT": "after-meta-write",
 					"TREEDB_POWERLOSS_REOPEN_MODE":      "read-only",
+					"TREEDB_POWERLOSS_PROFILE":          "command_wal_durable",
 				},
 			},
 			CutExercised:  true,

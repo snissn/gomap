@@ -148,6 +148,23 @@ func TestVerifyArtifactsBindsRecoveryTraceToReopenMode(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsBindsRecoveryTraceToCommandProfile(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("witness-a")
+	witness := &manifest.Witnesses[0]
+	witness.Profile = "no_wal_fast"
+	witness.Command.Env[powerLossProfileEnv] = witness.Profile
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+
+	err := VerifyArtifacts(root, []ChildManifest{manifest})
+	if err == nil || !strings.Contains(err.Error(), "does not match command-required profile") {
+		t.Fatalf("VerifyArtifacts mismatched recovery profile error=%v", err)
+	}
+}
+
 func TestVerifyArtifactsRequiresTraceToEndAtDeclaredCutOccurrence(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
