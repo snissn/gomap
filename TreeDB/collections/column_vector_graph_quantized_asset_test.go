@@ -941,6 +941,12 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 	if _, err := scorer.scoreOrdinal(1, &scratch, nil); err != nil {
 		t.Fatalf("warm scoreOrdinal: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
+	if !enterIsolatedVectorAllocationGate(t, "scalar-u8-centered-query-scratch") {
+		return
+	}
 	var stats columnVectorGraphNativeSearchStats
 	allocs := testing.AllocsPerRun(1000, func() {
 		scorer, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedOnly, def.QuantizedIndexes[0].Name, query, queryInvNorm, &scratch)
