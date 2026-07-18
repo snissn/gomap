@@ -1203,15 +1203,19 @@ Acceptance:
   explicit `1.01x` minimum ratio thresholds, and comparative throughput ratios
   above the threshold;
 - the current hosted incompressible value-log gate is the #3861/#3863 settled
-  throughput/storage contract. It uses `batch_write_steady`, records the CPU
-  model and selected threshold, and applies a strict `>0.94x` threshold on
-  AMD EPYC 7763 runners or a strict `>0.95x` threshold on all other or unknown
-  CPU models to the geometric mean of every fixed, order-balanced auto/off
-  pair. It keeps the sum of each pair's `total=` fields for
-  `maindb/value_vlog` plus `maindb/leaf_vlog` at or below `1.02x`. One
-  favorable sample cannot override a mostly failing sample set. Independent
-  mode checks require raw user values in both rows, block-compressed leaves in
-  auto, and uncompressed leaves in off.
+  CPU-efficiency/storage contract. It uses `batch_write_steady`, captures a
+  CPU profile around each exact timed row, and retains every raw wall-throughput
+  ratio as diagnostic evidence. The blocking ratio for each pair is off CPU
+  sample seconds divided by auto CPU sample seconds. The gate records the CPU
+  model and selected threshold and applies a strict `>0.94x` threshold on AMD
+  EPYC 7763 runners or a strict `>0.95x` threshold on all other or unknown CPU
+  models to the geometric mean of every fixed, order-balanced CPU-efficiency
+  pair. Missing, ambiguous, or shorter-than-`0.25s` CPU profiles fail closed;
+  no row is retried, selected, or discarded. The gate keeps the sum of each
+  pair's `total=` fields for `maindb/value_vlog` plus `maindb/leaf_vlog` at or
+  below `1.02x`. One favorable sample cannot override a mostly failing sample
+  set. Independent mode checks require raw user values in both rows,
+  block-compressed leaves in auto, and uncompressed leaves in off.
 
 PR9 initial evidence:
 

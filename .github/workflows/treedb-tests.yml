@@ -661,9 +661,9 @@ jobs:
           elif ((${#cpu_models[@]} > 1)); then
             cpu_model="ambiguous: ${cpu_models[*]}"
           fi
-          min_throughput_frac="0.95"
+          min_cpu_efficiency_frac="0.95"
           if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
-            min_throughput_frac="0.94"
+            min_cpu_efficiency_frac="0.94"
           fi
 
           # This gate measures the explicit bench_unsafe compression ceiling,
@@ -679,6 +679,7 @@ jobs:
           run_vlog_row() {
             local db="$1"
             local output="$2"
+            local cpu_profile_prefix="$3"
             if ! go run ./cmd/unified_bench \
               -profile fast \
               -keys 1000000 \
@@ -686,6 +687,8 @@ jobs:
               -batchsize 1024 \
               -dbs "${db}" \
               -test batch_write_steady \
+              -cpuprofile "${cpu_profile_prefix}" \
+              -cpuprofile-tests batch_write_steady \
               -val-pattern random \
               -format markdown \
               -progress=false \
@@ -704,44 +707,69 @@ jobs:
 
           off_logs=()
           auto_logs=()
+          off_cpu_profiles=()
+          auto_cpu_profiles=()
+          benchmark_failures=()
+          record_vlog_row() {
+            local db="$1"
+            local output="$2"
+            local cpu_profile_prefix="$3"
+            if ! run_vlog_row "${db}" "${output}" "${cpu_profile_prefix}"; then
+              benchmark_failures+=("${db}:${output}")
+            fi
+          }
           for sample in $(seq 1 "${sample_count}"); do
             off_log="vlog_auto_incompressible_off_sample${sample}.txt"
             auto_log="vlog_auto_incompressible_auto_sample${sample}.txt"
+            off_cpu_profile_prefix="vlog_auto_incompressible_off_sample${sample}"
+            auto_cpu_profile_prefix="vlog_auto_incompressible_auto_sample${sample}"
+            off_cpu_profile="${off_cpu_profile_prefix}_batch_write_steady_treedb_vlog_off.pprof"
+            auto_cpu_profile="${auto_cpu_profile_prefix}_batch_write_steady_treedb_vlog_auto.pprof"
             off_logs+=("${off_log}")
             auto_logs+=("${auto_log}")
+            off_cpu_profiles+=("${off_cpu_profile}")
+            auto_cpu_profiles+=("${auto_cpu_profile}")
             echo "incompressible gate sample ${sample}/${sample_count}"
 
             if ((sample % 2 == 1)); then
               echo "sample ${sample} order=off-auto"
-              run_vlog_row treedb_vlog_off "${off_log}"
-              run_vlog_row treedb_vlog_auto "${auto_log}"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
             else
               echo "sample ${sample} order=auto-off"
-              run_vlog_row treedb_vlog_auto "${auto_log}"
-              run_vlog_row treedb_vlog_off "${off_log}"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
             fi
           done
 
           checker_args=()
           for sample in $(seq 0 $((sample_count - 1))); do
             checker_args+=( -off-log "${off_logs[$sample]}" -auto-log "${auto_logs[$sample]}" )
+            checker_args+=( -off-cpu-profile "${off_cpu_profiles[$sample]}" -auto-cpu-profile "${auto_cpu_profiles[$sample]}" )
           done
 
           # #3861 makes this a settled non-regression and persistent-storage
-          # tradeoff gate; #3863 calibrates its strict floor to demonstrated
-          # GitHub-hosted CPU classes. EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x.
-          # One lucky sample cannot override a mostly failing sample set, and every
-          # pair retains the existing 1.02x storage ceiling.
+          # tradeoff gate; #3863 uses exact-function CPU samples so hosted runner
+          # descheduling remains visible in raw wall throughput without becoming
+          # the blocking product-work metric.
+          # EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x.
+          # One lucky sample cannot override a mostly
+          # failing sample set, and every pair retains the 1.02x storage ceiling.
           summary_log="vlog_auto_incompressible_summary.txt"
           {
             echo "incompressible gate cpu_model=${cpu_model}"
-            echo "incompressible gate min_throughput_frac=${min_throughput_frac}"
+            echo "incompressible gate min_cpu_efficiency_frac=${min_cpu_efficiency_frac}"
+            echo "incompressible gate benchmark_failures=${#benchmark_failures[@]}"
+            if ((${#benchmark_failures[@]} > 0)); then
+              printf 'incompressible gate benchmark_failure=%s\n' "${benchmark_failures[@]}"
+            fi
           } > "${summary_log}"
           set +e
           go run .github/scripts/check_vlog_auto_incompressible.go \
             "${checker_args[@]}" \
             -min-samples "${sample_count}" \
-            -min-throughput-frac "${min_throughput_frac}" \
+            -min-cpu-efficiency-frac "${min_cpu_efficiency_frac}" \
+            -min-cpu-seconds 0.25 \
             -max-size-frac 1.02 \
             2>&1 | tee -a "${summary_log}"
           checker_status=${PIPESTATUS[0]}
@@ -753,6 +781,9 @@ jobs:
             cat "${summary_log}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+          if ((${#benchmark_failures[@]} > 0)); then
+            exit 1
+          fi
           exit "${checker_status}"
 
       - name: Upload value-log performance evidence
@@ -765,6 +796,7 @@ jobs:
             vlog_auto_incompressible_summary.txt
             vlog_auto_incompressible_off_sample*.txt
             vlog_auto_incompressible_auto_sample*.txt
+            vlog_auto_incompressible_*_sample*.pprof
           if-no-files-found: warn
 
   snapshot-iterator-perf:

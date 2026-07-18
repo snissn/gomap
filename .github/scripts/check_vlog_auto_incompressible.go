@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ var (
 	rePersistentVLog   = regexp.MustCompile(`(?m)^\s*maindb/(value_vlog|leaf_vlog):[^\n]*\btotal=([0-9]+(?:\.[0-9]+)?\s*[A-Za-z]+)\b`)
 	reUserWriteMode    = regexp.MustCompile(`(?m)^\s*vlog_write_mode\.([A-Za-z0-9_-]+):[^\n]*\braw_bytes=([0-9]+)\s+stored_bytes=([0-9]+)\b`)
 	reLeafWriteMode    = regexp.MustCompile(`(?m)^\s*vlog_leaf_scan\.write_mode\.([A-Za-z0-9_-]+):[^\n]*\braw_bytes=([0-9]+)\s+stored_bytes=([0-9]+)\b`)
+	reCPUTotalSamples  = regexp.MustCompile(`(?m)^Duration:\s+[^,\n]+,\s+Total samples =\s+([0-9]+(?:\.[0-9]+)?)(ns|us|ms|s)\s+\(`)
 )
 
 type repeatedStringFlag []string
@@ -41,15 +43,21 @@ type runMetrics struct {
 
 func main() {
 	var (
-		offLogPaths       repeatedStringFlag
-		autoLogPaths      repeatedStringFlag
-		minThroughputFrac float64
-		maxSizeFrac       float64
-		minSamples        int
+		offLogPaths          repeatedStringFlag
+		autoLogPaths         repeatedStringFlag
+		offCPUProfilePaths   repeatedStringFlag
+		autoCPUProfilePaths  repeatedStringFlag
+		minCPUEfficiencyFrac float64
+		minCPUSeconds        float64
+		maxSizeFrac          float64
+		minSamples           int
 	)
 	flag.Var(&offLogPaths, "off-log", "path to unified_bench output for treedb_vlog_off; repeat once per paired sample")
 	flag.Var(&autoLogPaths, "auto-log", "path to unified_bench output for treedb_vlog_auto; repeat once per paired sample")
-	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 0.95, "minimum settled auto/off batch-write throughput fraction; values at or below this fail")
+	flag.Var(&offCPUProfilePaths, "off-cpu-profile", "path to exact-test CPU profile for treedb_vlog_off; repeat once per paired sample")
+	flag.Var(&autoCPUProfilePaths, "auto-cpu-profile", "path to exact-test CPU profile for treedb_vlog_auto; repeat once per paired sample")
+	flag.Float64Var(&minCPUEfficiencyFrac, "min-cpu-efficiency-frac", 0.95, "minimum settled auto/off CPU-efficiency fraction; values at or below this fail")
+	flag.Float64Var(&minCPUSeconds, "min-cpu-seconds", 0.25, "minimum total sampled CPU seconds required from every exact-test profile")
 	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off combined persistent value-log bytes fraction")
 	flag.IntVar(&minSamples, "min-samples", 2, "minimum number of complete paired samples required")
 	flag.Parse()
@@ -58,12 +66,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "paired sample count mismatch: off=%d auto=%d\n", len(offLogPaths), len(autoLogPaths))
 		os.Exit(2)
 	}
+	if len(offCPUProfilePaths) != len(autoCPUProfilePaths) {
+		fmt.Fprintf(os.Stderr, "CPU profile pair count mismatch: off=%d auto=%d\n", len(offCPUProfilePaths), len(autoCPUProfilePaths))
+		os.Exit(2)
+	}
+	if len(offCPUProfilePaths) != len(offLogPaths) {
+		fmt.Fprintf(os.Stderr, "CPU profile/log sample count mismatch: profiles=%d logs=%d\n", len(offCPUProfilePaths), len(offLogPaths))
+		os.Exit(2)
+	}
 	if minSamples < 2 {
 		fmt.Fprintf(os.Stderr, "invalid -min-samples %d: must be at least 2\n", minSamples)
 		os.Exit(2)
 	}
-	if minThroughputFrac <= 0 || math.IsNaN(minThroughputFrac) || math.IsInf(minThroughputFrac, 0) {
-		fmt.Fprintf(os.Stderr, "invalid -min-throughput-frac %.4f: must be finite and positive\n", minThroughputFrac)
+	if minCPUEfficiencyFrac <= 0 || math.IsNaN(minCPUEfficiencyFrac) || math.IsInf(minCPUEfficiencyFrac, 0) {
+		fmt.Fprintf(os.Stderr, "invalid -min-cpu-efficiency-frac %.4f: must be finite and positive\n", minCPUEfficiencyFrac)
+		os.Exit(2)
+	}
+	if minCPUSeconds <= 0 || math.IsNaN(minCPUSeconds) || math.IsInf(minCPUSeconds, 0) {
+		fmt.Fprintf(os.Stderr, "invalid -min-cpu-seconds %.4f: must be finite and positive\n", minCPUSeconds)
 		os.Exit(2)
 	}
 	if maxSizeFrac <= 0 || math.IsNaN(maxSizeFrac) || math.IsInf(maxSizeFrac, 0) {
@@ -76,7 +96,8 @@ func main() {
 	}
 
 	fail := false
-	throughputLogSum := 0.0
+	wallThroughputLogSum := 0.0
+	cpuEfficiencyLogSum := 0.0
 	maxObservedSizeFrac := 0.0
 	for idx := range offLogPaths {
 		off, err := parseMetrics(offLogPaths[idx])
@@ -101,15 +122,36 @@ func main() {
 			fmt.Fprintf(os.Stderr, "invalid mode metrics sample %d: %v\n", idx+1, err)
 			os.Exit(2)
 		}
+		offCPUSeconds, err := parseCPUProfile(offCPUProfilePaths[idx])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "parse off CPU profile sample %d: %v\n", idx+1, err)
+			os.Exit(2)
+		}
+		autoCPUSeconds, err := parseCPUProfile(autoCPUProfilePaths[idx])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "parse auto CPU profile sample %d: %v\n", idx+1, err)
+			os.Exit(2)
+		}
+		if offCPUSeconds < minCPUSeconds {
+			fmt.Fprintf(os.Stderr, "off CPU profile too short sample %d: total_samples=%.6fs want>=%.6fs\n", idx+1, offCPUSeconds, minCPUSeconds)
+			os.Exit(2)
+		}
+		if autoCPUSeconds < minCPUSeconds {
+			fmt.Fprintf(os.Stderr, "auto CPU profile too short sample %d: total_samples=%.6fs want>=%.6fs\n", idx+1, autoCPUSeconds, minCPUSeconds)
+			os.Exit(2)
+		}
 
-		throughputFrac := auto.OpsPerSec / off.OpsPerSec
+		wallThroughputFrac := auto.OpsPerSec / off.OpsPerSec
+		cpuEfficiencyFrac := offCPUSeconds / autoCPUSeconds
 		sizeFrac := auto.PersistentVLog / off.PersistentVLog
-		throughputLogSum += math.Log(throughputFrac)
+		wallThroughputLogSum += math.Log(wallThroughputFrac)
+		cpuEfficiencyLogSum += math.Log(cpuEfficiencyFrac)
 		if sizeFrac > maxObservedSizeFrac {
 			maxObservedSizeFrac = sizeFrac
 		}
 
-		fmt.Printf("incompressible gate sample %d: off_ops=%.0f auto_ops=%.0f throughput_frac=%.4f\n", idx+1, off.OpsPerSec, auto.OpsPerSec, throughputFrac)
+		fmt.Printf("incompressible gate sample %d: off_ops=%.0f auto_ops=%.0f wall_throughput_frac=%.4f\n", idx+1, off.OpsPerSec, auto.OpsPerSec, wallThroughputFrac)
+		fmt.Printf("incompressible gate sample %d: off_cpu_seconds=%.6f auto_cpu_seconds=%.6f cpu_efficiency_frac=%.4f\n", idx+1, offCPUSeconds, autoCPUSeconds, cpuEfficiencyFrac)
 		fmt.Printf("incompressible gate sample %d: off_persistent_vlog=%.0f auto_persistent_vlog=%.0f size_frac=%.4f\n", idx+1, off.PersistentVLog, auto.PersistentVLog, sizeFrac)
 		fmt.Printf("incompressible gate sample %d: user_mode=off raw_bytes=%d leaf_modes=off:%s/auto:%s leaf_raw_bytes=%d auto_leaf_stored_bytes=%d\n", idx+1, auto.UserRawBytes, off.LeafWriteMode, auto.LeafWriteMode, auto.LeafRawBytes, auto.LeafStoredBytes)
 		if sizeFrac > maxSizeFrac {
@@ -118,16 +160,58 @@ func main() {
 		}
 	}
 
-	aggregateThroughputFrac := math.Exp(throughputLogSum / float64(len(offLogPaths)))
-	fmt.Printf("incompressible gate aggregate: samples=%d throughput_geomean=%.4f (min=%.4f) max_size_frac=%.4f (max=%.4f)\n", len(offLogPaths), aggregateThroughputFrac, minThroughputFrac, maxObservedSizeFrac, maxSizeFrac)
-	if aggregateThroughputFrac <= minThroughputFrac {
-		fmt.Fprintf(os.Stderr, "FAIL aggregate throughput gate: auto/off geomean=%.4f <= %.4f\n", aggregateThroughputFrac, minThroughputFrac)
+	wallThroughputGeomean := math.Exp(wallThroughputLogSum / float64(len(offLogPaths)))
+	cpuEfficiencyGeomean := math.Exp(cpuEfficiencyLogSum / float64(len(offLogPaths)))
+	fmt.Printf("incompressible gate aggregate: samples=%d wall_throughput_geomean=%.4f cpu_efficiency_geomean=%.4f (min=%.4f) max_size_frac=%.4f (max=%.4f)\n", len(offLogPaths), wallThroughputGeomean, cpuEfficiencyGeomean, minCPUEfficiencyFrac, maxObservedSizeFrac, maxSizeFrac)
+	if cpuEfficiencyGeomean <= minCPUEfficiencyFrac {
+		fmt.Fprintf(os.Stderr, "FAIL aggregate CPU-efficiency gate: off/auto CPU geomean=%.4f <= %.4f\n", cpuEfficiencyGeomean, minCPUEfficiencyFrac)
 		fail = true
 	}
 	if fail {
 		os.Exit(1)
 	}
-	fmt.Println("PASS incompressible auto-vs-off aggregate gate")
+	fmt.Println("PASS incompressible auto-vs-off aggregate CPU-efficiency gate")
+}
+
+func parseCPUProfile(path string) (float64, error) {
+	output, err := exec.Command("go", "tool", "pprof", "-top", "-unit=seconds", path).CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("go tool pprof: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	matches := reCPUTotalSamples.FindAllStringSubmatch(string(output), -1)
+	if len(matches) == 0 {
+		return 0, fmt.Errorf("missing Total samples metric")
+	}
+	if len(matches) != 1 {
+		return 0, fmt.Errorf("ambiguous Total samples metrics: got %d", len(matches))
+	}
+	value, err := strconv.ParseFloat(matches[0][1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse Total samples: %w", err)
+	}
+	seconds, ok := cpuSeconds(value, matches[0][2])
+	if !ok {
+		return 0, fmt.Errorf("unsupported Total samples unit %q", matches[0][2])
+	}
+	if seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return 0, fmt.Errorf("invalid Total samples %.6fs", seconds)
+	}
+	return seconds, nil
+}
+
+func cpuSeconds(value float64, unit string) (float64, bool) {
+	switch unit {
+	case "ns":
+		return value / 1e9, true
+	case "us":
+		return value / 1e6, true
+	case "ms":
+		return value / 1e3, true
+	case "s":
+		return value, true
+	default:
+		return 0, false
+	}
 }
 
 func parseMetrics(path string) (runMetrics, error) {
