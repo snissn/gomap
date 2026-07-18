@@ -26,12 +26,18 @@ jobs:
             run_vet: false
             test_shard_index: 1
             test_shard_count: 2
-          - name: macos-latest
+          - name: macos-latest-1
             os: macos-latest
             run_docs_check: true
             run_vet: true
             test_shard_index: 0
-            test_shard_count: 1
+            test_shard_count: 2
+          - name: macos-latest-2
+            os: macos-latest
+            run_docs_check: false
+            run_vet: false
+            test_shard_index: 1
+            test_shard_count: 2
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -44,6 +50,12 @@ jobs:
           cache: true
           cache-dependency-path: |
             go.sum
+
+      - name: Root CI headroom contract
+        if: ${{ matrix.name == 'ubuntu-latest-1' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_root_ci_headroom.py
 
       - name: Docs check
         if: ${{ matrix.run_docs_check }}
