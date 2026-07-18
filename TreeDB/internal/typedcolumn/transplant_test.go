@@ -631,6 +631,10 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #2118 is the scoped production physical-accounting reporter that
 		// reads validated typed-column part images for byte accounting only.
 		filepath.Clean(filepath.Join(collectionsDir, "column_store_physical_accounting.go")): {},
+		// #3681 validates candidate typed-column part images only to determine
+		// whether an older recoverable root can replay them. The GC path owns no
+		// typed-column publication or query data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "column_asset_gc.go")): {},
 		// #3698 is the scoped query-independent generation-open seam. It binds
 		// validated QRBG/QRDG direct views to the existing collection physical
 		// identity and reader leases without exposing query-shaped operators or

@@ -957,8 +957,10 @@ Implementation evidence expected for this milestone:
 - read-write opens keep typed command frames with `LSN <= AppliedCommandLSN`
   out of legacy raw batch replay and fail closed on higher typed LSNs until the
   PR3 typed replay dispatcher is present;
-- cleanup removes only non-active typed command WAL segments whose max complete
-  LSN is covered by durable `AppliedCommandLSN`;
+- cleanup follows `durable-wal-cleanup-proof-3682.md`: it removes only exact
+  non-active segment identities whose complete LSN range is covered by every
+  recovery-selectable durable root, whose lineage and journal namespace still
+  revalidate, and whose physical identity is outside every active/retry pin;
 - benchmark evidence records shared journal allocation/append overhead and
   root/meta publication overhead with `AppliedCommandLSN`.
 
@@ -1190,16 +1192,30 @@ Acceptance:
 - recovery preserves visible state and deletes after public batch writes;
 - the support matrix classifies public raw KV writes as `WAL-supported` and
   points at executable evidence;
-- point `Set`, focused `Batch.Write`, `unified_bench` batch-write, and
-  incompressible value-log auto/off throughput gates each require candidate
-  throughput strictly greater than `1.01x` of the relevant baseline. Any
-  required lane at or below `1.01x`, including sub-parity evidence such as
-  `0.80x`, is a failing gate rather than accepted evidence.
-- all required command-WAL acceptance performance gates use the same strict
-  parity-plus policy: passing evidence must include `>` semantics, explicit
-  `1.01x` minimum ratio thresholds, and comparative throughput ratios above the
-  threshold; stale or diagnostic evidence below that threshold is failing
-  evidence.
+- the historical PR9 point `Set`, focused `Batch.Write`, `unified_bench`
+  batch-write, and incompressible value-log auto/off throughput gates each
+  require candidate throughput strictly greater than `1.01x` of the relevant
+  baseline. Any required lane in that immutable acceptance artifact at or
+  below `1.01x`, including sub-parity evidence such as `0.80x`, is failing
+  rather than accepted evidence;
+- all historical required command-WAL acceptance performance gates use the
+  same strict parity-plus policy: passing evidence includes `>` semantics,
+  explicit `1.01x` minimum ratio thresholds, and comparative throughput ratios
+  above the threshold;
+- the current hosted incompressible value-log gate is the #3861/#3863 settled
+  CPU-efficiency/storage contract. It uses `batch_write_steady`, captures a
+  CPU profile around each exact timed row, and retains every raw wall-throughput
+  ratio as diagnostic evidence. The blocking ratio for each pair is off CPU
+  sample seconds divided by auto CPU sample seconds. The gate records the CPU
+  model and selected threshold and applies a strict `>0.94x` threshold on AMD
+  EPYC 7763 runners or a strict `>0.95x` threshold on all other or unknown CPU
+  models to the geometric mean of every fixed, order-balanced CPU-efficiency
+  pair. Missing, ambiguous, or shorter-than-`0.25s` CPU profiles fail closed;
+  no row is retried, selected, or discarded. The gate keeps the sum of each
+  pair's `total=` fields for `maindb/value_vlog` plus `maindb/leaf_vlog` at or
+  below `1.02x`. One favorable sample cannot override a mostly failing sample
+  set. Independent mode checks require raw user values in both rows,
+  block-compressed leaves in auto, and uncompressed leaves in off.
 
 PR9 initial evidence:
 

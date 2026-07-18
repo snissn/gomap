@@ -98,7 +98,9 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if db == nil || db.backend == nil {
 		return backenddb.ErrClosed
 	}
-	db.beginExclusiveWrite()
+	if err := db.beginExclusiveWrite(); err != nil {
+		return err
+	}
 	defer db.writeMu.Unlock()
 	if db.closing.Load() {
 		return backenddb.ErrClosed
@@ -428,7 +430,9 @@ func (tx *ConditionalTxn) commit(sync bool) (err error) {
 		}
 	}()
 
-	tx.db.beginExclusiveWrite()
+	if err := tx.db.beginExclusiveWrite(); err != nil {
+		return err
+	}
 	writeMuHeld := true
 	unlockWriteMu := func() {
 		if writeMuHeld {

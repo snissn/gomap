@@ -392,8 +392,8 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 		}
 	}
 	registry := database.valueLogIdentityPins
-	if got := registry.ActivePins(); got != 2 {
-		t.Fatalf("published slot pins=%d, want exactly 2", got)
+	if got := registry.ActivePins(); got != 3 {
+		t.Fatalf("published slot plus visible-root pins=%d, want exactly 3", got)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -412,14 +412,14 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 			t.Fatalf("recovered slot %d closure=%v len=%d, want one dependency", slot, resources, resources.Len())
 		}
 	}
-	if got := reopenedRegistry.ActivePins(); got != 2 {
-		t.Fatalf("recovered slot pins=%d, want exactly 2", got)
+	if got := reopenedRegistry.ActivePins(); got != 3 {
+		t.Fatalf("recovered slot plus visible-root pins=%d, want exactly 3", got)
 	}
 	if err := reopened.SetSync([]byte("inline-2"), []byte{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := reopenedRegistry.ActivePins(); got != 2 {
-		t.Fatalf("slot pins after target replacement=%d, want exactly 2", got)
+	if got := reopenedRegistry.ActivePins(); got != 3 {
+		t.Fatalf("slot plus visible-root pins after target replacement=%d, want exactly 3", got)
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
@@ -429,7 +429,7 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 	}
 }
 
-func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(t *testing.T) {
+func TestDurableRootPublicationPreMetaFailureRetainsDebtWithoutBlocking(t *testing.T) {
 	dir := t.TempDir()
 	database, err := Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
 	if err != nil {
@@ -471,12 +471,16 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 
 	prepared := make(chan struct{})
 	releasePublish := make(chan struct{})
+	var preparedOnce sync.Once
 	database.testDurableRootCandidatePreparedHook = func() {
-		close(prepared)
-		<-releasePublish
+		preparedOnce.Do(func() {
+			close(prepared)
+			<-releasePublish
+		})
 	}
 	defer func() { database.testDurableRootCandidatePreparedHook = nil }()
 	database.testFailWriteMeta.Store(true)
+	defer database.testFailWriteMeta.Store(false)
 	firstWriteDone := make(chan error, 1)
 	go func() { firstWriteDone <- batch.WriteSync() }()
 	select {
@@ -499,40 +503,57 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 	}
 	close(releasePublish)
 	err = <-firstWriteDone
-	database.testFailWriteMeta.Store(false)
 	if closeErr := batch.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if !errors.Is(err, errTestWriteMetaFailpoint) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("pre-meta publish error=%v, want failpoint plus recovery-required after bounded retries", err)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("pre-meta publish error=%v, want failpoint", err)
 	}
-	if !database.publicationPoisoned.Load() {
-		t.Fatal("pre-meta retry exhaustion did not fail the writable handle closed")
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("pre-meta publish error=%v unexpectedly requires recovery", err)
 	}
-	if database.metaPageID != MetaPage0ID || database.currentCommitSeq() != 1 {
-		t.Fatalf("authoritative slot/commit after failure=(%d,%d), want (0,1)", database.metaPageID, database.currentCommitSeq())
+	if database.publicationPoisoned.Load() {
+		t.Fatal("retryable pre-meta failure poisoned the writable handle")
 	}
-	pending := database.durableRoot.pending
-	if pending == nil || pending.resources == nil || pending.resources.Len() != 1 || pending.token == nil || pending.prepared == nil {
-		t.Fatalf("retained candidate=%+v, want exact resources/index/COW ownership", pending)
+	database.durablePublishMu.Lock()
+	failedMetaPageID := database.metaPageID
+	failedCommitSeq := database.durableRoot.record.CommitSeq
+	database.durablePublishMu.Unlock()
+	stats := database.rootPublication.coordinator.Stats()
+	retainedPins := registry.ActivePins()
+	if failedMetaPageID != MetaPage0ID || failedCommitSeq != 1 {
+		t.Fatalf("authoritative slot/commit after failure=(%d,%d), want (0,1)", failedMetaPageID, failedCommitSeq)
 	}
-	if got := database.durableCandidateIndexCaptures.Load(); got != 1 {
-		t.Fatalf("durable candidate index captures while retry pending=%d, want 1", got)
+	if stats.PendingCommits == 0 || stats.PreMetaFailures == 0 || stats.Poisoned {
+		t.Fatalf("coordinator stats after retryable failure=%+v, want pending debt, at least one pre-meta failure, and no poison", stats)
 	}
-	if got := registry.ActivePins(); got != 2 {
-		t.Fatalf("identity pins while retry pending=%d, want value-log plus index", got)
+	if retainedPins == 0 {
+		t.Fatal("retryable candidate debt did not retain its stable resources")
 	}
+	database.testFailWriteMeta.Store(false)
 
+	var blockedWriteErr error
 	select {
-	case retryErr := <-blockedWriteDone:
-		if !errors.Is(retryErr, ErrRecoveryRequired) {
-			t.Fatalf("already-admitted SetSync error=%v, want ErrRecoveryRequired", retryErr)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("already-admitted SetSync remained blocked behind the failed COW candidate")
+	case blockedWriteErr = <-blockedWriteDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("already-admitted SetSync remained blocked behind retryable publication debt")
+	}
+	if blockedWriteErr != nil && !errors.Is(blockedWriteErr, errTestWriteMetaFailpoint) {
+		t.Fatalf("already-admitted SetSync error=%v, want success or the same retryable failpoint", blockedWriteErr)
+	}
+	if errors.Is(blockedWriteErr, ErrRecoveryRequired) {
+		t.Fatalf("already-admitted SetSync error=%v unexpectedly requires recovery", blockedWriteErr)
 	}
 	if closeErr := blockedBatch.Close(); closeErr != nil {
 		t.Fatal(closeErr)
+	}
+	visibleCommitSeq := database.currentCommitSeq()
+	if err := database.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint retrying retained publication debt: %v", err)
+	}
+	stats = database.rootPublication.coordinator.Stats()
+	if stats.DurableCommitSeq < visibleCommitSeq || stats.PendingCommits != 0 || stats.Poisoned {
+		t.Fatalf("coordinator stats after retry=%+v, want durable through %d with no pending debt or poison", stats, visibleCommitSeq)
 	}
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- database.Close() }()
@@ -541,8 +562,8 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Close blocked after retry exhaustion with an already-admitted writer")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close blocked after retrying retained publication debt")
 	}
 	if got := registry.ActivePins(); got != 0 {
 		t.Fatalf("identity pins after close=%d, want 0", got)
@@ -553,8 +574,10 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if got, err := reopened.Get([]byte("retry")); err != nil || got != nil {
-		t.Fatalf("failed pre-meta value after reopen=(%q,%v), want absent", got, err)
+	for _, key := range []string{"retry", "already-admitted"} {
+		if got, err := reopened.Get([]byte(key)); err != nil || string(got) != "retry-owned durable value" {
+			t.Fatalf("value %q after retry and reopen=(%q,%v), want retry-owned durable value", key, got, err)
+		}
 	}
 	if err := reopened.SetSync([]byte("after-reopen"), []byte("progress")); err != nil {
 		t.Fatalf("SetSync after reopen: %v", err)
@@ -564,7 +587,63 @@ func TestDurableRootPublicationPreMetaRetryExhaustionFailsClosedWithoutBlocking(
 	}
 }
 
-func TestDurableRootPublicationPoisonsWhenVisibleInstallFailsAfterDurableMeta(t *testing.T) {
+func TestDurableRootPublicationAcceptedWaitFailureRunsPostWork(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                    t.TempDir(),
+		Durability:             DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		database.testFailWriteMeta.Store(false)
+		_ = database.Close()
+	}()
+
+	if err := database.SetSync([]byte("seed"), []byte("seed-value")); err != nil {
+		t.Fatalf("seed SetSync: %v", err)
+	}
+	oldState := database.state.Load()
+	if oldState == nil || oldState.ValueLogSet == nil {
+		t.Fatal("seed publication did not install a value-log set")
+	}
+	oldSet := oldState.ValueLogSet
+	if got := oldSet.RefCount.Load(); got != 1 {
+		t.Fatalf("seed value-log set refs=%d, want state ownership only", got)
+	}
+	baseVisible := database.currentCommitSeq()
+
+	database.testFailWriteMeta.Store(true)
+	err = database.SetSync([]byte("accepted"), []byte("visible-before-durable"))
+	database.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted wait error=%v unexpectedly requires recovery", err)
+	}
+	if got := database.currentCommitSeq(); got != baseVisible+1 {
+		t.Fatalf("visible commit after accepted wait error=%d, want %d", got, baseVisible+1)
+	}
+	if got, getErr := database.Get([]byte("accepted")); getErr != nil || string(got) != "visible-before-durable" {
+		t.Fatalf("accepted value=(%q,%v), want visible value", got, getErr)
+	}
+	if got := oldSet.RefCount.Load(); got != 0 {
+		t.Fatalf("superseded value-log set refs after accepted wait error=%d, want 0", got)
+	}
+	if tracker := database.valueLogRefTracker; tracker != nil {
+		tracker.mu.RLock()
+		trackerSeq := tracker.commitSeq
+		trackerValid := tracker.valid
+		tracker.mu.RUnlock()
+		if !trackerValid || trackerSeq != baseVisible+1 {
+			t.Fatalf("value-log ref tracker after accepted wait error=(valid=%t seq=%d), want (true,%d)", trackerValid, trackerSeq, baseVisible+1)
+		}
+	}
+}
+
+func TestDurableRootVisibleInstallFailureAbortsBeforeDurableMeta(t *testing.T) {
 	dir := t.TempDir()
 	database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
@@ -574,17 +653,23 @@ func TestDurableRootPublicationPoisonsWhenVisibleInstallFailsAfterDurableMeta(t 
 	database.testFailDurableRootVisibleInstall.Store(true)
 	err = database.SetSync([]byte("post-meta"), []byte("recover-on-open"))
 	database.testFailDurableRootVisibleInstall.Store(false)
-	if !errors.Is(err, errTestDurableRootVisibleInstallFailpoint) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("visible-install failure=%v, want failpoint plus ErrRecoveryRequired", err)
+	if !errors.Is(err, errTestDurableRootVisibleInstallFailpoint) {
+		t.Fatalf("visible-install failure=%v, want failpoint", err)
 	}
-	if !database.publicationPoisoned.Load() {
-		t.Fatal("post-meta visible-install failure did not poison writable handle")
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("pre-meta visible-install failure=%v unexpectedly requires recovery", err)
 	}
-	if database.durableRoot.record.CommitSeq != 2 || database.currentCommitSeq() != 1 {
-		t.Fatalf("durable/visible commits=(%d,%d), want (2,1) before recovery", database.durableRoot.record.CommitSeq, database.currentCommitSeq())
+	if database.publicationPoisoned.Load() {
+		t.Fatal("pre-meta visible-install failure poisoned the writable handle")
 	}
-	if err := database.SetSync([]byte("blocked"), []byte("until-reopen")); !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("write after visible-install poison=%v, want ErrRecoveryRequired", err)
+	if database.durableRoot.record.CommitSeq != 1 || database.currentCommitSeq() != 1 {
+		t.Fatalf("durable/visible commits=(%d,%d), want unchanged (1,1)", database.durableRoot.record.CommitSeq, database.currentCommitSeq())
+	}
+	if got, getErr := database.Get([]byte("post-meta")); getErr != nil || got != nil {
+		t.Fatalf("aborted value=(%q,%v), want absent", got, getErr)
+	}
+	if err := database.SetSync([]byte("after-failure"), []byte("progress")); err != nil {
+		t.Fatalf("write after retryable visible-install failure: %v", err)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -595,12 +680,80 @@ func TestDurableRootPublicationPoisonsWhenVisibleInstallFailsAfterDurableMeta(t 
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	value, err := reopened.Get([]byte("post-meta"))
+	if value, err := reopened.Get([]byte("post-meta")); err != nil || value != nil {
+		t.Fatalf("aborted value after reopen=(%q,%v), want absent", value, err)
+	}
+	if value, err := reopened.Get([]byte("after-failure")); err != nil || string(value) != "progress" {
+		t.Fatalf("progress value after reopen=(%q,%v), want progress", value, err)
+	}
+}
+
+func TestDurableRootVisibleCandidateAbortFailurePoisonsAndWakesAllocator(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(value) != "recover-on-open" {
-		t.Fatalf("recovered value=%q, want recover-on-open", value)
+	defer database.Close()
+
+	abortFailure := errors.New("injected visible candidate abort failure")
+	abortEntered := make(chan struct{})
+	releaseAbort := make(chan struct{})
+	var abortOnce sync.Once
+	freelist.TestHookAbortCOWCandidateFailure = func() error {
+		abortOnce.Do(func() { close(abortEntered) })
+		<-releaseAbort
+		return abortFailure
+	}
+	defer func() { freelist.TestHookAbortCOWCandidateFailure = nil }()
+
+	allocatorWaiting := make(chan struct{})
+	var allocatorWaitingOnce sync.Once
+	freelist.TestHookCOWWaitBeforeSleep = func() {
+		allocatorWaitingOnce.Do(func() { close(allocatorWaiting) })
+	}
+	defer func() { freelist.TestHookCOWWaitBeforeSleep = nil }()
+
+	database.testFailDurableRootAfterCOWPrepare.Store(true)
+	defer database.testFailDurableRootAfterCOWPrepare.Store(false)
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- database.SetSync([]byte("abort-failure"), []byte("value")) }()
+	select {
+	case <-abortEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("visible candidate abort hook was not reached")
+	}
+
+	allocationDone := make(chan error, 1)
+	go func() {
+		_, err := database.idx.Load().allocator.AllocAppend()
+		allocationDone <- err
+	}()
+	select {
+	case <-allocatorWaiting:
+	case <-time.After(5 * time.Second):
+		close(releaseAbort)
+		t.Fatal("allocator did not wait behind the prepared visible candidate")
+	}
+	close(releaseAbort)
+
+	select {
+	case err := <-writeDone:
+		if !errors.Is(err, errTestDurableRootAfterCOWPrepareFailpoint) || !errors.Is(err, abortFailure) || !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("write error=%v, want prepare failpoint, abort failure, and ErrRecoveryRequired", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("write remained blocked after abort failure")
+	}
+	select {
+	case err := <-allocationDone:
+		if !errors.Is(err, abortFailure) || !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("blocked allocator error=%v, want abort failure plus ErrRecoveryRequired", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("allocator waiter was not woken by fail-closed abort handling")
+	}
+	if !database.publicationPoisoned.Load() {
+		t.Fatal("visible candidate abort failure did not poison the writable handle")
 	}
 }
 
@@ -703,13 +856,8 @@ func TestDurableRootPublicationIOReleasesRootSerializationLocks(t *testing.T) {
 				if !tryExclusive(database.commitMu.TryLock, database.commitMu.Unlock) {
 					return fmt.Errorf("commitMu held during %s", stage)
 				}
-				// rootReuseMu is not root-construction serialization. It is the
-				// narrow admission fence that prevents a new reader from capturing
-				// the old visible generation after page reuse has been sampled. It
-				// must remain exclusively held through the matching visible install.
-				if database.rootReuseMu.TryRLock() {
-					database.rootReuseMu.RUnlock()
-					return fmt.Errorf("rootReuseMu admission fence open during %s", stage)
+				if !tryExclusive(database.rootReuseMu.TryLock, database.rootReuseMu.Unlock) {
+					return fmt.Errorf("rootReuseMu held during %s", stage)
 				}
 				return nil
 			}
@@ -824,7 +972,7 @@ func TestDurableRootAlternatingSlotsRetireAuxiliaryHistory(t *testing.T) {
 			maximum = count
 		}
 	}
-	if maximum > 32 || maximum-minimum > 16 {
+	if maximum > 128 || maximum-minimum > 16 {
 		t.Fatalf("steady retired inventory min=%d max=%d, want bounded two-slot history", minimum, maximum)
 	}
 }

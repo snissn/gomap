@@ -102,31 +102,101 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 	}
 
 	spec := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/verification.md"))
-	assertContainsAll(t, spec, "strict PR9 performance gate",
-		"strict parity-plus",
+	assertContainsAll(t, spec, "historical strict PR9 performance gate",
+		"historical strict PR9 performance gate",
+		"parity-plus",
 		"strictly greater than `1.01x`",
 		"at or below `1.01x` is a failing gate",
 		"sub-parity results such as `0.80x`",
-		"every command-WAL acceptance artifact",
-		"incompressible value-log auto/off lanes",
+		"every historical command-WAL acceptance artifact",
+		"incompressible value-log auto/off acceptance lanes",
+	)
+	assertContainsAll(t, spec, "current hosted incompressible value-log gate",
+		"current hosted incompressible value-log gate",
+		"`batch_write_steady`",
+		"AMD EPYC 7763",
+		"strictly greater than `0.94x`",
+		"Every other or unknown CPU model",
+		"strictly greater than `0.95x`",
+		"records the CPU model and selected threshold",
+		"publishes every raw wall-throughput ratio for diagnosis",
+		"off CPU sample seconds divided by auto CPU sample seconds",
+		"shorter-than-`0.25s` CPU profiles fail closed",
+		"never retried, selected, or discarded",
+		"sum of the `total=` fields",
+		"`maindb/value_vlog` and `maindb/leaf_vlog`",
+		"less than or equal to `1.02x`",
+		"raw user values in both rows",
+		"block-compressed leaves in auto",
+		"geometric mean of every fixed, order-balanced CPU-efficiency pair",
+		"One favorable sample cannot override a mostly failing sample set",
 	)
 	userCommandWAL := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/user-command-wal.md"))
-	assertContainsAll(t, userCommandWAL, "PR9 user command WAL acceptance",
-		"all required command-WAL acceptance performance gates",
-		"incompressible value-log auto/off throughput gates",
+	assertContainsAll(t, userCommandWAL, "historical PR9 user command WAL acceptance",
+		"all historical required command-WAL acceptance performance gates",
+		"historical PR9 point `Set`",
 		"strictly greater than `1.01x`",
 		"sub-parity evidence such as `0.80x`",
 	)
+	assertContainsAll(t, userCommandWAL, "current hosted incompressible value-log acceptance",
+		"current hosted incompressible value-log gate",
+		"`batch_write_steady`",
+		"AMD EPYC 7763",
+		"strict `>0.94x` threshold",
+		"all other or unknown CPU models",
+		"strict `>0.95x` threshold",
+		"records the CPU model and selected threshold",
+		"retains every raw wall-throughput ratio as diagnostic evidence",
+		"off CPU sample seconds divided by auto CPU sample seconds",
+		"shorter-than-`0.25s` CPU profiles fail closed",
+		"no row is retried, selected, or discarded",
+		"sum of each pair's `total=` fields",
+		"`maindb/value_vlog` plus `maindb/leaf_vlog`",
+		"at or below `1.02x`",
+		"raw user values in both rows",
+		"block-compressed leaves in auto",
+		"geometric mean of every fixed, order-balanced CPU-efficiency pair",
+		"One favorable sample cannot override a mostly failing sample set",
+	)
 	checker := readRepoText(t, ".github/scripts/check_vlog_auto_incompressible.go")
-	assertContainsAll(t, checker, "PR9 incompressible checker",
-		`flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01`,
-		"throughputFrac <= minThroughputFrac",
+	assertContainsAll(t, checker, "current incompressible checker",
+		`flag.Float64Var(&minCPUEfficiencyFrac, "min-cpu-efficiency-frac", 0.95`,
+		`flag.Float64Var(&minCPUSeconds, "min-cpu-seconds", 0.25`,
+		`[]string{"value_vlog", "leaf_vlog"}`,
+		"validateModeMetrics(off, auto)",
+		"parseCPUProfile(offCPUProfilePaths[idx])",
+		"cpuEfficiencyGeomean <= minCPUEfficiencyFrac",
 	)
 	workflow := collapseWhitespace(readRepoText(t, ".github/workflows/treedb-tests.yml"))
-	assertContainsAll(t, workflow, "PR9 perf smoke workflow",
-		"-min-throughput-frac 1.01",
-		"result at or below 1.01x is failing evidence",
+	assertContainsAll(t, workflow, "current perf smoke workflow",
+		"sample_count=6",
+		"record_vlog_row treedb_vlog_off",
+		"record_vlog_row treedb_vlog_auto",
+		`benchmark_failures+=("${db}:${output}")`,
+		`incompressible gate benchmark_failures=${#benchmark_failures[@]}`,
+		`if ((${#benchmark_failures[@]} > 0)); then exit 1`,
+		"-test batch_write_steady",
+		`-cpuprofile "${cpu_profile_prefix}"`,
+		"-cpuprofile-tests batch_write_steady",
+		`min_cpu_efficiency_frac="0.95"`,
+		`[[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]`,
+		`min_cpu_efficiency_frac="0.94"`,
+		`-min-cpu-efficiency-frac "${min_cpu_efficiency_frac}"`,
+		"-min-cpu-seconds 0.25",
+		"EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x",
+		"incompressible gate cpu_model=${cpu_model}",
+		"incompressible gate min_cpu_efficiency_frac=${min_cpu_efficiency_frac}",
+		"vlog_auto_incompressible_*_sample*.pprof",
+		"total= fields from value_vlog plus leaf_vlog",
 	)
+	gateStart := strings.Index(workflow, "name: Incompressible auto-vs-off gate")
+	gateEnd := strings.Index(workflow, "snapshot-iterator-perf:")
+	if gateStart < 0 || gateEnd <= gateStart {
+		t.Fatal("PR9 incompressible workflow gate boundaries not found")
+	}
+	if got := strings.Count(workflow[gateStart:gateEnd], "-profile fast"); got != 1 {
+		t.Fatalf("PR9 incompressible workflow shared bench_unsafe selection count=%d, want 1", got)
+	}
 }
 
 func TestCommandWALAcceptancePerformanceGatesAreStrictParityPlus(t *testing.T) {

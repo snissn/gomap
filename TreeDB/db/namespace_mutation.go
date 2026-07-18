@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -117,4 +118,17 @@ func syncDeletionNamespaceDirectory(dir string, resource durabilitycut.Resource)
 		durabilitycut.BeforeDeletionDirectorySync,
 		durabilitycut.AfterDeletionDirectorySync,
 	)
+}
+
+func (db *DB) syncDeletionNamespaceDirectoryOrPoison(dir string, resource durabilitycut.Resource, operation string) error {
+	err := syncDeletionNamespaceDirectory(dir, resource)
+	if err == nil {
+		return nil
+	}
+	err = fmt.Errorf("%s: %w", operation, err)
+	if db != nil {
+		db.publicationPoisoned.Store(true)
+		db.reportError(err)
+	}
+	return err
 }

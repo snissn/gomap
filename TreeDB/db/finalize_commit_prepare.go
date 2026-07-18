@@ -138,7 +138,15 @@ func (db *DB) prepareFinalizeCommitDurability(sync bool) (*finalizeCommitPrepare
 	valueLogAppender := db.currentValueLogAppender()
 	db.publishPrepareMu.RLock()
 	guard := &finalizeCommitPrepareGuard{db: db}
-	if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
+	dependencySync := sync
+	if db.rootPublication != nil {
+		// Queued publication captures exact stable handles and owns the only
+		// dependency/index/meta sync transaction. Producer preparation exposes
+		// userspace buffers only; doing a stable sync here would run under caller
+		// serialization and duplicate the publisher barrier.
+		dependencySync = false
+	}
+	if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, dependencySync); err != nil {
 		guard.Release()
 		return nil, wrapFinalizeCommitError(err, true)
 	}

@@ -182,6 +182,8 @@ type DB struct {
 	notifyError                          func(error)
 	bgErrMu                              sync.Mutex
 	bgErr                                error
+	resolvedProfile                      Profile
+	deprecatedProfileAlias               Profile
 	durabilityMode                       string
 	valueLogReadIntegrity                string
 	dir                                  string
@@ -556,6 +558,17 @@ func (db *DB) beginPublicOperation() error {
 		db.lifecycleMu.RUnlock()
 		return ErrClosed
 	}
+	// Cached mutations can otherwise be admitted without entering the backend,
+	// even after an outcome-ambiguous root publication has poisoned it. Consult
+	// the backend poison gate while the lifecycle read lock keeps both layers
+	// stable; every caller of beginPublicOperation is a write, transaction,
+	// batch, or durability boundary.
+	if db.backend != nil {
+		if err := db.backend.CheckCommandWALPublishReady(); err != nil {
+			db.lifecycleMu.RUnlock()
+			return err
+		}
+	}
 	return nil
 }
 
@@ -662,6 +675,13 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
+	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return nil, err
+	}
+	return openResolved(opts)
+}
+
+func openResolved(opts Options) (*DB, error) {
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to
@@ -824,6 +844,9 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.Dir = dictdbDir
+		dictOpts.ResolvedProfile = ""
+		dictOpts.DeprecatedProfileAlias = ""
+		dictOpts.UnsafeBenchmarkProfile = false
 		dictOpts.CommandWAL = false
 		// Side stores are opened via the backend (no caching layer). They must
 		// not inherit outer-leaf-in-value-log from the main DB, since that mode
@@ -874,6 +897,9 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.Dir = templatedbDir
+		templateOpts.ResolvedProfile = ""
+		templateOpts.DeprecatedProfileAlias = ""
+		templateOpts.UnsafeBenchmarkProfile = false
 		templateOpts.CommandWAL = false
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
@@ -896,7 +922,7 @@ func Open(opts Options) (*DB, error) {
 		templateOpts.ChunkSize = templateChunkSize
 
 		var err error
-		templateDB, err = Open(templateOpts)
+		templateDB, err = openResolved(templateOpts)
 		if err != nil {
 			if dictBackend != nil {
 				_ = dictBackend.Close()
@@ -931,7 +957,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.ReadOnly {
-		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
+		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}, nil
 	}
 
 	normalizeBackpressureDefaults(&opts)
@@ -1050,7 +1076,7 @@ func Open(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
@@ -1088,24 +1114,10 @@ func Open(opts Options) (*DB, error) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
-	vacuumInterval := opts.BackgroundIndexVacuumInterval
-	if vacuumInterval == 0 {
-		vacuumInterval = 30 * time.Second
-	}
-	if vacuumInterval < 0 {
-		vacuumInterval = 0
-	}
-	if vacuumInterval > 0 {
-		out.bgVac.Start(out, bgIndexVacuumConfig{
-			Interval:                    vacuumInterval,
-			SpanRatioPPM:                opts.BackgroundIndexVacuumSpanRatioPPM,
-			MaxBacklogSkips:             opts.BackgroundIndexVacuumMaxBacklogSkips,
-			FreelistReclaimableRatioPPM: opts.BackgroundIndexVacuumFreelistReclaimableRatioPPM,
-			FreelistReclaimablePages:    opts.BackgroundIndexVacuumFreelistReclaimablePages,
-			CollectionRootSpanRatioPPM:  opts.BackgroundIndexVacuumCollectionRootSpanRatioPPM,
-			CollectionRootPages:         opts.BackgroundIndexVacuumCollectionRootPages,
-		})
-	}
+	// #3681 owns RecoverableRootSet convergence for destructive maintenance.
+	// Until that fence is available, do not launch a worker whose only online
+	// operation is deliberately unsupported. Explicit VacuumIndexOnline calls
+	// still fail closed with ErrVacuumRecoverableRootSetRequired.
 	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 
 	return out, nil
@@ -1870,7 +1882,9 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 	return snap.HasPrefixes(prefixes)
 }
 
-// Set writes a key/value pair without forcing an fsync boundary.
+// Set writes a key/value pair using the selected profile's ordinary ACK class.
+// command_wal_durable makes the command-WAL prefix durable before returning;
+// relaxed profiles do not force a durability boundary here.
 func (db *DB) Set(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
@@ -1881,7 +1895,7 @@ func (db *DB) Set(key, value []byte) error {
 	if db.cached != nil {
 		if db.commandWALCached {
 			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), false)
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), db.commandWALOrdinaryWriteRequiresSync())
 			})
 		}
 		return db.cached.Set(key, value)
@@ -2031,7 +2045,7 @@ func (db *DB) NewConditionalTxnWithSnapshot() (*ConditionalTxn, error) {
 	return tx, nil
 }
 
-// Delete removes a key without forcing an fsync boundary.
+// Delete removes a key using the selected profile's ordinary ACK class.
 func (db *DB) Delete(key []byte) error {
 	key = normalizeRawKVPointKey(key)
 	if err := db.beginPublicOperation(); err != nil {
@@ -2041,7 +2055,7 @@ func (db *DB) Delete(key []byte) error {
 	if db.cached != nil {
 		if db.commandWALCached {
 			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), false)
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), db.commandWALOrdinaryWriteRequiresSync())
 			})
 		}
 		return db.cached.Delete(key)
@@ -2064,7 +2078,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		}
 		appended := false
 		err := db.cached.DeleteRangeAfterCommandWALAppend(start, end, func() error {
-			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, false); err != nil {
+			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, db.commandWALOrdinaryWriteRequiresSync()); err != nil {
 				return err
 			}
 			appended = true
@@ -2234,6 +2248,7 @@ func (db *DB) Stats() map[string]string {
 			stats = make(map[string]string)
 		}
 		writePathStatsInto(stats, db.writePath)
+		db.profileStatsInto(stats)
 		db.publicCommandWALLiveStatsInto(stats)
 		db.publicCommandWALBatchStatsInto(stats)
 		db.publicRawSpanNativeStatsInto(stats)
@@ -2249,6 +2264,7 @@ func (db *DB) Stats() map[string]string {
 		stats = make(map[string]string)
 	}
 	writePathStatsInto(stats, db.writePath)
+	db.profileStatsInto(stats)
 	db.publicRawSpanNativeStatsInto(stats)
 	db.publicOperationStatsInto(stats)
 	stats["treedb.durability_mode"] = db.durabilityMode
@@ -2256,6 +2272,17 @@ func (db *DB) Stats() map[string]string {
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
+}
+
+func (db *DB) profileStatsInto(stats map[string]string) {
+	if db == nil || stats == nil {
+		return
+	}
+	stats["treedb.profile.resolved"] = string(db.resolvedProfile)
+	stats["treedb.profile.ordinary_ack_class"] = db.resolvedProfile.OrdinaryAckClass()
+	stats["treedb.profile.production"] = fmt.Sprintf("%t", db.resolvedProfile.Production())
+	stats["treedb.profile.bench_unsafe"] = fmt.Sprintf("%t", db.resolvedProfile == ProfileBenchUnsafe)
+	stats["treedb.profile.deprecated_alias"] = string(db.deprecatedProfileAlias)
 }
 
 func (db *DB) publicRawSpanNativeStatsInto(stats map[string]string) {
@@ -2306,6 +2333,14 @@ func (db *DB) DurabilityMode() string {
 		return ""
 	}
 	return db.durabilityMode
+}
+
+// ResolvedProfile reports the immutable canonical profile selected at open.
+func (db *DB) ResolvedProfile() Profile {
+	if db == nil {
+		return ""
+	}
+	return db.resolvedProfile
 }
 
 func (db *DB) MaintenancePhase() MaintenancePhase {
@@ -2368,7 +2403,7 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 		return err
 	}
 	if db.commandWALCached && db.backend != nil {
-		if err := db.backend.CleanupCommandWALCoveredSegments(true); err != nil {
+		if err := db.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(true); err != nil {
 			return err
 		}
 	}
@@ -2435,6 +2470,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 //
 // It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
+	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return err

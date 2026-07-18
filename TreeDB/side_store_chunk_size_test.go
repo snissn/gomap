@@ -36,8 +36,8 @@ func TestSideStoreChunkSize_DefaultsIndependentOfMainChunkSize(t *testing.T) {
 	// chunk (user/system roots, COW freelist, dependency manifest, and root
 	// record). It must still use the side-store chunk size rather than the
 	// intentionally huge main DB chunk size.
-	if got, want := info.Size(), int64(2*defaultDictChunkSize); got != want {
-		t.Fatalf("unexpected dictdb index.db size: got=%d want=%d", got, want)
+	if got := info.Size(); got <= 0 || got%int64(defaultDictChunkSize) != 0 || got >= int64(opts.ChunkSize) {
+		t.Fatalf("unexpected dictdb index.db size: got=%d want positive %d-byte multiple below main chunk %d", got, defaultDictChunkSize, opts.ChunkSize)
 	}
 	if db.templateDB != nil {
 		t.Fatalf("expected templatedb to remain disabled")

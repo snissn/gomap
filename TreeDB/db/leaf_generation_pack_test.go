@@ -39,7 +39,7 @@ func leafGenerationKey(prefix string, i int) []byte {
 func advanceLeafGenerationPackDurableRootHorizon(t *testing.T, db *DB, reason string) {
 	t.Helper()
 	state := db.State()
-	if err := db.Commit(state.RootPageID); err != nil {
+	if err := db.ForceCommit(state.RootPageID); err != nil {
 		t.Fatalf("advance recoverable-root horizon (%s): %v", reason, err)
 	}
 }
@@ -281,9 +281,20 @@ func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *test
 	if !db.publicationPoisoned.Load() {
 		t.Fatal("pre-meta retry exhaustion did not fail the writable handle closed")
 	}
-	pending := db.durableRoot.pending
-	if pending == nil || pending.resources == nil || pending.token == nil || pending.prepared == nil {
-		t.Fatalf("retained candidate=%+v, want exact resources/index/COW ownership", pending)
+	runtime := db.rootPublication
+	runtime.mu.Lock()
+	pending := runtime.activeSeal
+	pendingOwnsExactCandidate := pending != nil && pending.resources != nil && pending.token != nil && pending.prepared != nil && pending.manifest != nil
+	var pendingManifestEntries []rootpublication.DependencyManifestEntryV1
+	if pendingOwnsExactCandidate {
+		pendingManifestEntries = pending.manifest.Entries()
+	}
+	runtime.mu.Unlock()
+	if !pendingOwnsExactCandidate {
+		t.Fatalf("retained coordinator seal=%+v, want exact resources/index/COW ownership", pending)
+	}
+	if stats := runtime.coordinator.Stats(); stats.PendingCommits == 0 || stats.PreMetaFailures == 0 {
+		t.Fatalf("coordinator stats=%+v want retained pending debt and recorded pre-meta failure", stats)
 	}
 
 	afterFiles, err := listLeafGenerationBootstrapFiles(LeafLogDirPath(dir))
@@ -298,7 +309,7 @@ func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *test
 		t.Fatalf("manifest generations=%d, want retained packed revision beyond baseline %d", len(manifestAfter.Generations), len(manifestBefore.Generations))
 	}
 	var retainedManifest, retainedPack bool
-	for _, entry := range pending.manifest.Entries() {
+	for _, entry := range pendingManifestEntries {
 		for _, field := range entry.Reachability {
 			switch field {
 			case rootpublication.ReachabilityOuterLeafGeneration:
@@ -309,7 +320,7 @@ func TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate(t *test
 		}
 	}
 	if !retainedManifest || !retainedPack {
-		t.Fatalf("retained candidate manifest revision=%d manifest=%t pack=%t entries=%+v", manifestAfter.ManifestRevision, retainedManifest, retainedPack, pending.manifest.Entries())
+		t.Fatalf("retained candidate manifest revision=%d manifest=%t pack=%t entries=%+v", manifestAfter.ManifestRevision, retainedManifest, retainedPack, pendingManifestEntries)
 	}
 }
 

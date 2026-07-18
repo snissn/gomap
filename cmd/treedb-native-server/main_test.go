@@ -13,9 +13,9 @@ func TestParsePublicProfileFlagAcceptsPublicProfiles(t *testing.T) {
 		want treedb.Profile
 	}{
 		{raw: "", want: treedb.ProfileCommandWALDurable},
-		{raw: "command-wal-durable", want: treedb.ProfileCommandWALDurable},
+		{raw: "command_wal_durable", want: treedb.ProfileCommandWALDurable},
 		{raw: "command_wal_relaxed", want: treedb.ProfileCommandWALRelaxed},
-		{raw: "bench", want: treedb.ProfileBench},
+		{raw: "no_wal_fast", want: treedb.ProfileNoWALFast},
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
@@ -31,7 +31,7 @@ func TestParsePublicProfileFlagAcceptsPublicProfiles(t *testing.T) {
 }
 
 func TestParsePublicProfileFlagRejectsDeprecatedProfiles(t *testing.T) {
-	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "bench_unsafe", "command-wal-durable"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := parsePublicProfileFlag(raw)
 			if err == nil {

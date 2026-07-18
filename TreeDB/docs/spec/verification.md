@@ -137,8 +137,8 @@ Later children update these stable test names rather than duplicating them.
 | `TestPowerLossOracleCounterexampleNewMetaMissingClosure` | resolved: the target meta is written only after the durable-root record, manifest, index, value-log, and outer-leaf closure is stable; incomplete candidates fall back | DUR-09 #3679 |
 | `TestPowerLossOracleCounterexampleRecoverablePageReuse` | resolved for synchronous publication: the root-reuse admission fence prevents reuse from racing older-root capture, and both durable slots retain their exact COW generations | DUR-04 #3678 and DUR-09 #3679; maintenance horizon remains DUR-08 #3681 |
 | `TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID` | relaxed command-WAL external-RID replay applies a checksum-valid frame with a missing RID | DUR-05 #3718 |
-| `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | `caching.DB.publishCommandWALCheckpointApplied` or cleanup removes command WAL/assets before sealed coverage | DUR-07 #3682 and DUR-08 #3681 |
-| `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | `caching.DB.Checkpoint`, `caching.DB.flushSyncRequested`, or chunked cached flush apply exposes an incomplete intermediate root | DUR-06 #3680 |
+| `TestPowerLossOracleCounterexampleSourceDeletionBeforeStableCoverage` | resolved for activation: cleanup retains the command-WAL source until AppliedCommandLSN coverage is stable; complete cleanup convergence remains downstream | DUR-06 #3680; convergence remains DUR-07 #3682 and DUR-08 #3681 |
+| `TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot` | resolved: cached Checkpoint and sync boundaries publish only the complete final root, never an intermediate chunk | DUR-06 #3680 |
 
 `TestPowerLossOracleFixtureInventoryReopensStableOnly` covers inline values,
 `ValueLog.PointerThreshold=1` forced pointers, forced outer leaves, combined
@@ -538,7 +538,8 @@ Coverage:
 
 The raw regression gate uses unchanged existing point/batch benchmarks from the
 same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,
-any repeatable raw-path regression or allocation increase blocks closeout.
+any repeatable raw-path regression or allocation increase attributable to a
+changed row-owning binary blocks closeout.
 
 ## 10.4 Retained-Version Iteration and Safe Pruning
 
@@ -631,14 +632,23 @@ Coverage:
 - Existing MVCC tests retain direct fault-injection and abrupt-child-exit
   coverage that a generic in-process adapter factory cannot express.
 - `scripts/mvcc_raw_path_gate.sh` is the <=5% raw-path base/head gate. Its
-  machine-readable verdict distinguishes measured `PASS`/`FAIL` from overall
-  `EQUIVALENT` acceptance. Equivalence requires checker-computed matching
-  SHA-256 digests from all six actual row-producing benchmark binaries; mixed,
-  missing, or malformed binary evidence cannot override a failed measurement.
+  machine-readable report distinguishes raw measured `PASS`/`FAIL` from
+  per-row attribution and aggregate acceptance. The checker attributes every
+  row to the SHA-256 relation of its owning `db`, `caching`, or `treedb`
+  benchmark binary. A failed row with byte-identical base/head owner remains
+  reported but is non-attributable; a failed changed-owner row remains
+  threshold-enforced. Mixed evidence can receive aggregate `EQUIVALENT` only
+  if every changed-owner row passes. Missing, malformed, duplicated, or
+  mismatched binary evidence fails closed and cannot override a failed
+  measurement.
   Raw and adapter gates require balanced even AB/BA sample counts and default
   to eight samples per revision. The raw-gate timing verdict uses the median
   per-pair candidate/base relative delta; base/head timing medians remain
-  reported as context.
+  reported as context. Its raw batch-write row pins 1,000 iterations per
+  sample and measures bounded eight-write foreground groups under a fixed
+  100 ms coordinator delay. Publisher execution and checkpoint drains remain
+  outside the timed/allocation interval, and an unexpected publisher call
+  during a group fails the benchmark instead of contaminating the sample.
 - The `performance-observation-only` PR label is the narrow exception for a
   ticket whose frozen performance class explicitly replaces the raw-path
   percentage budget with matched observational fixtures. CI still runs the
@@ -1319,14 +1329,34 @@ The first PR9 public cutover gate is:
 
 - `TestPublicCommandWALRawKVWritesUseTypedFrames`
 
-The PR9 public cutover performance gate is strict parity-plus. Required point
+The historical strict PR9 performance gate is parity-plus. Its recorded point
 `Set`, focused `Batch.Write`, `unified_bench` batch-write, and incompressible
-value-log auto/off lanes must each report candidate throughput strictly greater
-than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
-a failing gate, including sub-parity results such as `0.80x`; those results may
-be recorded only as failing evidence, not accepted evidence.
+value-log auto/off acceptance lanes must each report candidate throughput
+strictly greater than `1.01x` of the relevant baseline. Any required lane in
+that immutable acceptance artifact at or below `1.01x` is a failing gate,
+including sub-parity results such as `0.80x`; those results may be recorded only
+as failing evidence, not accepted evidence.
 
-The same strict parity-plus rule applies to every command-WAL acceptance artifact
+The current hosted incompressible value-log gate supersedes that lane's live
+methodology under #3861/#3863 without rewriting the historical PR9 artifact.
+`batch_write` measures front-end ingest before deferred value-log and leaf-log
+publication, so the live gate uses `batch_write_steady` and profiles every exact
+timed row. It publishes every raw wall-throughput ratio for diagnosis, but the
+blocking pair ratio is off CPU sample seconds divided by auto CPU sample
+seconds. The geometric mean of every fixed, order-balanced CPU-efficiency pair
+must be strictly greater than `0.94x` on AMD EPYC 7763 runners. Every other or
+unknown CPU model retains a threshold strictly greater than `0.95x`. The
+evidence records the CPU model and selected threshold, plus wall ratios, CPU
+sample seconds, and CPU-efficiency ratios. Missing, ambiguous, or shorter-than-`0.25s`
+CPU profiles fail closed; rows are never retried, selected, or discarded. One
+favorable sample cannot override a mostly failing sample set. Each pair must
+also keep the sum of the `total=` fields reported for `maindb/value_vlog` and
+`maindb/leaf_vlog` less than or equal to `1.02x`. The checker separately
+requires raw user values in both rows, block-compressed leaves in auto, and
+uncompressed leaves in off; CPU-efficiency headroom cannot hide a broken
+compression mode.
+
+The same strict parity-plus rule applies to every historical command-WAL acceptance artifact
 with a required performance gate: a passing status must have `>` throughput-gate
 semantics, explicit `1.01x` minimum ratio thresholds, and recorded comparative
 throughput ratios above that bar. Historical or diagnostic results below that

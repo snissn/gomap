@@ -50,6 +50,9 @@ type MockBackend struct {
 	fragReport                   map[string]string
 	fragErr                      error
 	vacuumErr                    error
+	rootPublicationBuildGroups   int
+	rootPublicationGroupBatches  int
+	rootPublicationGroupFinals   int
 }
 
 func NewMockBackend() *MockBackend {
@@ -679,6 +682,13 @@ func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterato
 func (m *MockBackend) Print() error             { return nil }
 func (m *MockBackend) Stats() map[string]string { return nil }
 
+func (m *MockBackend) BeginRootPublicationBuildGroup() (*db.RootPublicationBuildGroup, error) {
+	m.mu.Lock()
+	m.rootPublicationBuildGroups++
+	m.mu.Unlock()
+	return &db.RootPublicationBuildGroup{}, nil
+}
+
 // NewBatch returns a struct that satisfies BatchInterface
 func (m *MockBackend) NewBatch() batch.Interface {
 	return &MockBatch{mb: m}
@@ -776,6 +786,16 @@ func (b *MockBatch) SetFlushApplySpanNativeFallback(reason db.FlushSpanRunFallba
 }
 
 func (b *MockBatch) SetCommandWALPublish(uint64, []db.CommandWALLSNRange) error { return nil }
+
+func (b *MockBatch) SetRootPublicationBuildGroup(_ *db.RootPublicationBuildGroup, final bool) error {
+	b.mb.mu.Lock()
+	b.mb.rootPublicationGroupBatches++
+	if final {
+		b.mb.rootPublicationGroupFinals++
+	}
+	b.mb.mu.Unlock()
+	return nil
+}
 
 func (b *MockBatch) Close() error              { return nil }
 func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
@@ -1410,7 +1430,7 @@ func TestCheckpoint_IgnoresUnsupportedSparseVacuum(t *testing.T) {
 	}
 }
 
-func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
+func TestCheckpoint_WALOffNoPendingStateSkipsRotationAndSyncsBackend(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -1461,6 +1481,7 @@ func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
 	}
 	backend.mu.RLock()
 	writeCallsBefore := backend.writeCalls
+	writeSyncsBefore := backend.writeSyncs
 	backend.mu.RUnlock()
 
 	if err := db.Checkpoint(); err != nil {
@@ -1480,9 +1501,13 @@ func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
 	}
 	backend.mu.RLock()
 	writeCallsAfter := backend.writeCalls
+	writeSyncsAfter := backend.writeSyncs
 	backend.mu.RUnlock()
-	if writeCallsAfter != writeCallsBefore {
-		t.Fatalf("backend writeCalls after checkpoint=%d want %d", writeCallsAfter, writeCallsBefore)
+	if writeCallsAfter != writeCallsBefore+1 {
+		t.Fatalf("backend writeCalls after checkpoint=%d want %d", writeCallsAfter, writeCallsBefore+1)
+	}
+	if writeSyncsAfter != writeSyncsBefore+1 {
+		t.Fatalf("backend writeSyncs after checkpoint=%d want %d", writeSyncsAfter, writeSyncsBefore+1)
 	}
 
 	got, err := db.Get(key)
@@ -1981,6 +2006,94 @@ func TestCachingDB_FlushPersistsValueLogPointer(t *testing.T) {
 	}
 }
 
+func TestCachingDB_ChunkedCheckpointPersistsGroupedValueLogPointersAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:             1 << 60,
+		ValueLogPointerThreshold:   1,
+		FlushBackendMaxEntries:     2,
+		FlushBackendMaxBatches:     -1,
+		FlushSpanRunTargetPlanning: true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = cache.Close()
+		}
+	}()
+
+	want := make(map[string][]byte, 5)
+	for i := 0; i < 5; i++ {
+		key := []byte(fmt.Sprintf("grouped-pointer-%02d", i))
+		value := bytes.Repeat([]byte{byte('a' + i)}, page.DefaultInlineThreshold+64+i)
+		if err := cache.Set(key, value); err != nil {
+			t.Fatalf("Set(%q): %v", key, err)
+		}
+		want[string(key)] = value
+	}
+	beforeCommitSeq, err := strconv.ParseUint(backend.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse pre-checkpoint backend commit_seq: %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	afterCommitSeq, err := strconv.ParseUint(backend.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse post-checkpoint backend commit_seq: %v", err)
+	}
+	if afterCommitSeq != beforeCommitSeq+1 {
+		t.Fatalf("backend commit_seq advanced %d -> %d, want one complete grouped root", beforeCommitSeq, afterCommitSeq)
+	}
+
+	snapshot := backend.AcquireSnapshot()
+	if snapshot == nil {
+		t.Fatal("snapshot nil")
+	}
+	for key := range want {
+		entry, err := snapshot.GetEntry([]byte(key))
+		if err != nil {
+			_ = snapshot.Close()
+			t.Fatalf("GetEntry(%q): %v", key, err)
+		}
+		if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+			_ = snapshot.Close()
+			t.Fatalf("GetEntry(%q) flags=%#x file_id=%#x, want value-log pointer", key, entry.Flags, entry.ValuePtr.FileID)
+		}
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatalf("snapshot Close: %v", err)
+	}
+
+	if err := cache.Close(); err != nil {
+		t.Fatalf("cache Close: %v", err)
+	}
+	closed = true
+	reopened, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend reopen: %v", err)
+	}
+	defer reopened.Close()
+	for key, value := range want {
+		got, err := reopened.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("reopened Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("reopened Get(%q) mismatch", key)
+		}
+	}
+}
+
 func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
@@ -2134,9 +2247,10 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("expected retained closed bytes after rotate, got %d", retainedBefore)
 	}
 
-	// Delete the key and checkpoint. Retained segments with only unreachable
-	// payloads should be pruned. The active segment stays open for writing, but
-	// it is not counted as a retained closed segment.
+	// Delete the key and checkpoint. The prior durable slot can still select the
+	// value-bearing root, so let the first prune retain that segment before
+	// recommitting the current root to advance the recovery horizon. The active
+	// segment stays open for writing, but it is not counted as retained closed.
 	if err := cache.Delete(key); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -2145,6 +2259,10 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	}
 	forceRetainedPruneIdle(cache)
 	cache.waitForRetainedValueLogPrune()
+	if err := backend.ForceCommit(backend.State().RootPageID); err != nil {
+		t.Fatalf("commit durable-slot successor: %v", err)
+	}
+	cache.PruneRetainedValueLogsForMaintenance()
 	stats = cache.Stats()
 	segments, err = strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
 	if err != nil {

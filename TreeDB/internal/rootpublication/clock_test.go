@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -56,5 +57,26 @@ func TestStaleStoppedTimerFiringCannotReplaceCurrentTimer(t *testing.T) {
 	c.handleTimerFiredLocked(currentGeneration)
 	if c.timer != nil || !c.publishNow || c.wakeReason != WakeTimer {
 		t.Fatalf("current timer firing was ignored: timer=%v now=%v reason=%v", c.timer, c.publishNow, c.wakeReason)
+	}
+}
+
+func TestFixedPublishDelayOverridesAdaptiveDelayWithinProductionBounds(t *testing.T) {
+	for _, delay := range []time.Duration{10 * time.Millisecond, 25 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond} {
+		c := &Coordinator{fixedPublishDelay: delay, ewmaService: time.Second}
+		if got := c.publishDelayLocked(); got != delay {
+			t.Fatalf("fixed delay=%s got=%s", delay, got)
+		}
+	}
+	for _, delay := range []time.Duration{time.Millisecond, 101 * time.Millisecond} {
+		c, err := New(Options{
+			Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+				return PublishResult{Outcome: PublishSucceeded, DurableCommitSeq: candidate.Frontier().CommitSeq()}
+			}),
+			FixedPublishDelay: delay,
+		})
+		if err == nil {
+			stopClean(t, c)
+			t.Fatalf("fixed delay %s unexpectedly accepted", delay)
+		}
 	}
 }

@@ -2,9 +2,13 @@ package db
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -54,6 +58,91 @@ func TestExecuteDurableRootStorageTransactionOrdersIndexBeforeMeta(t *testing.T)
 		t.Fatal("successful transaction did not report meta mutation")
 	}
 	want := []string{"materialize", "index-sync", "meta-write", "meta-sync"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events=%v want=%v", events, want)
+	}
+}
+
+func TestExecuteDurableRootStorageTransactionObservesExactDependencySyncBoundary(t *testing.T) {
+	root := t.TempDir()
+	dependencyPath := filepath.Join(root, "value_vlog", "value-l0-000001.log")
+	if err := os.MkdirAll(filepath.Dir(dependencyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dependency, err := os.OpenFile(dependencyPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dependency.Close()
+	if _, err := dependency.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+
+	events := make([]string, 0, 7)
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+		Kind: rootpublication.ResourceValueLog, LogicalLane: "main", ResourceID: "1", Generation: 1,
+		DiagnosticPath: "value_vlog/value-l0-000001.log", File: dependency,
+		Frontier: rootpublication.DurableFrontier{Bytes: 1}, Reachability: rootpublication.ReachabilityValueLogPointer,
+		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error {
+			events = append(events, "resource-sync")
+			return file.Sync()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityValueLogPointer)
+	if err := builder.Add(token); err != nil {
+		token.Release()
+		t.Fatal(err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatal(err)
+	}
+	defer resources.Release()
+
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch event.Point {
+		case durabilitycut.BeforeDependencyFileSync:
+			events = append(events, "before-dependency-sync")
+		case durabilitycut.AfterDependencyFileSync:
+			events = append(events, "after-dependency-sync")
+		default:
+			return nil
+		}
+		if !reflect.DeepEqual(event.Paths, []string{dependencyPath}) {
+			t.Fatalf("dependency observation paths=%v want exact retained-handle path %q", event.Paths, dependencyPath)
+		}
+		return nil
+	})
+	defer restore()
+
+	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		resources: resources,
+		materialize: func() error {
+			events = append(events, "materialize")
+			return nil
+		},
+		syncIndex: func() error {
+			events = append(events, "index-sync")
+			return nil
+		},
+		sink: recordingDurableRootSinkV1{events: &events}, target: MetaPage0ID, meta: testDurableMetaV1(t),
+		syncMeta: func() error {
+			events = append(events, "meta-sync")
+			return nil
+		},
+		dir: root, indexPath: filepath.Join(root, "index.db"),
+	})
+	if err != nil {
+		t.Fatalf("execute transaction: %v", err)
+	}
+	if !mutated {
+		t.Fatal("successful transaction did not report meta mutation")
+	}
+	want := []string{"before-dependency-sync", "resource-sync", "after-dependency-sync", "materialize", "index-sync", "meta-write", "meta-sync"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events=%v want=%v", events, want)
 	}

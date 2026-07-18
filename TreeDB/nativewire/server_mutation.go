@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -681,9 +680,6 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 		return nil, protocolError(iwire.ErrDurabilityUnavailable, "checkpoint requires a backend DB")
 	}
 	actualAck := iwire.AckSynced
-	if s.backend.DurabilityMode() != backenddb.DurabilityDurable {
-		actualAck = iwire.AckFlushed
-	}
 	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(actualAck))
 	if err != nil {
 		return nil, err
@@ -779,9 +775,6 @@ func (s *Server) satisfyAck(collection interface{ Flush() error }, requested iwi
 func (s *Server) admitSyncedAck() error {
 	if s.backend == nil {
 		return protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires a backend DB")
-	}
-	if s.backend.DurabilityMode() != backenddb.DurabilityDurable {
-		return protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires DurabilityDurable")
 	}
 	return nil
 }

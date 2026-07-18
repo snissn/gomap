@@ -64,9 +64,9 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
   - `balanced` (default)
   - `durable` (strict durability)
-  - `fast` (benchmark-runner no-sync preset; TreeDB currently maps this to a legacy no-WAL compatibility bundle with the Celestia-aligned auto/snappy/balanced value-log compression defaults; unsafe)
-  - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB currently maps this to a legacy compatibility bundle with the same compression defaults; unsafe)
-  - These names are unified-bench presets shared across database adapters, not the public TreeDB server profile vocabulary. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or explicit benchmark-only `bench`.
+  - `fast` (benchmark-runner no-sync preset; TreeDB enters the explicit `bench_unsafe` boundary with the Celestia-aligned auto/snappy/balanced value-log compression defaults; unsafe)
+  - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB maps this to `command_wal_relaxed` with verified read integrity and the same compression defaults)
+  - These names are unified-bench presets shared across database adapters, not the public TreeDB server profile vocabulary. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or `no_wal_fast`; benchmark-only `bench_unsafe` requires an explicit benchmark constructor boundary.
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,pebble,badger,leveldb`
   - Hidden TreeDB variants can be selected explicitly, including
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the

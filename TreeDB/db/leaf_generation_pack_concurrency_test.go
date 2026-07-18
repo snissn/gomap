@@ -274,8 +274,14 @@ func TestLeafGenerationPack_PrivatePagesRaceWithForegroundWriters(t *testing.T) 
 	for err := range errCh {
 		t.Fatalf("concurrent private-page stress: %v", err)
 	}
-	if got := idx.pager.PageCount(); got < mainPagesBefore || got != db.meta.TotalPages {
-		t.Fatalf("main pager pages=%d before=%d durable meta=%d", got, mainPagesBefore, db.meta.TotalPages)
+	if got := idx.pager.PageCount(); got < mainPagesBefore || got > db.meta.TotalPages {
+		t.Fatalf("main pager pages=%d before=%d visible high-water=%d", got, mainPagesBefore, db.meta.TotalPages)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint foreground roots: %v", err)
+	}
+	if got, durable := idx.pager.PageCount(), db.durableRoot.record.TotalPages; got < durable {
+		t.Fatalf("materialized pager pages=%d below durable root high-water=%d", got, durable)
 	}
 	for i := 0; i < iterations; i++ {
 		key := []byte(fmt.Sprintf("private-race-%04d", i))

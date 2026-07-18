@@ -48,7 +48,13 @@ func BenchmarkFinalizeCommitSameRoots(b *testing.B) {
 func benchmarkFinalizeCommitWithWriteMu(db *DB, root, sysRoot uint64) error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
-	post, err := db.finalizeCommitLockedWithOptions(root, sysRoot, nil, false, adaptiveMetricsZero(), nil, false, nil, nil, nil, finalizeCommitOptions{})
+	db.mu.RLock()
+	baseSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	post, err := db.finalizeCommitLockedWithOptions(root, sysRoot, nil, false, adaptiveMetricsZero(), nil, false, nil, nil, nil, finalizeCommitOptions{
+		expectedBaseCommitSeq:    baseSeq,
+		hasExpectedBaseCommitSeq: true,
+	})
 	if err != nil {
 		return err
 	}

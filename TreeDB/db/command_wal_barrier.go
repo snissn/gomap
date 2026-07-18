@@ -107,16 +107,49 @@ func (db *DB) lockCommandWALRawPublish() func() {
 	return db.commandWALRawPublishMu.Unlock
 }
 
-// LockCommandWALPublish serializes a higher-level command-WAL publish without
-// running raw-publish barriers. Callers must arrange any higher-level draining
-// required before appending or publishing under the returned lock.
+// lockCommandWALRawPublishWithTeardown preserves the global shutdown order:
+// root publishers and ordinary batches acquire teardown before raw publish, so
+// higher-level command-WAL guards must do the same. Release raw first so Close
+// can never observe a teardown reader that is waiting on a lock owned by a
+// later reader.
+func (db *DB) lockCommandWALRawPublishWithTeardown() func() {
+	if db == nil || !db.commandWAL {
+		return func() {}
+	}
+	db.teardownMu.RLock()
+	db.commandWALRawPublishMu.Lock()
+	return db.unlockCommandWALRawPublishWithTeardown
+}
+
+func (db *DB) unlockCommandWALRawPublishWithTeardown() {
+	db.commandWALRawPublishMu.Unlock()
+	db.teardownMu.RUnlock()
+}
+
+// LockCommandWALPublish pins DB teardown and serializes a higher-level
+// command-WAL publish without running raw-publish barriers. Callers must arrange
+// any higher-level draining required before appending or publishing under the
+// returned guard.
 func (db *DB) LockCommandWALPublish() func() {
-	return db.lockCommandWALRawPublish()
+	return db.lockCommandWALRawPublishWithTeardown()
 }
 
 // LockCommandWALPublishWithBarriers serializes a public command-WAL append and
 // drains registered staged-command barriers before the caller appends a frame.
+// The returned guard also pins teardown and must be released after raw publish.
 func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
+	unlock := db.lockCommandWALRawPublishWithTeardown()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
+}
+
+// lockCommandWALPublishWithBarriersTeardownPinned is the inner form for root
+// publishers that already own a teardown read lease. Reacquiring an RWMutex
+// read lease while Close is queued would deadlock under writer preference.
+func (db *DB) lockCommandWALPublishWithBarriersTeardownPinned() (func(), error) {
 	unlock := db.lockCommandWALRawPublish()
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
 		unlock()
@@ -125,13 +158,9 @@ func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
 	return unlock, nil
 }
 
-// LockCommandWALStaging prevents any command-WAL append/publish path from
-// starting while a higher-level command has appended a frame but not yet made it
-// publishable.
+// LockCommandWALStaging pins DB teardown and prevents any command-WAL
+// append/publish path from starting while a higher-level command has appended a
+// frame but not yet made it publishable. Staged publishers inherit both leases.
 func (db *DB) LockCommandWALStaging() func() {
-	if db == nil || !db.commandWAL {
-		return func() {}
-	}
-	db.commandWALRawPublishMu.Lock()
-	return db.commandWALRawPublishMu.Unlock
+	return db.lockCommandWALRawPublishWithTeardown()
 }

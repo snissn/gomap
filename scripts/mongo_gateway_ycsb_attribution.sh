@@ -26,8 +26,8 @@ COLLECTION="${COLLECTION:-usertable}"
 TIMEOUT="${TIMEOUT:-10m}"
 # Mixed-shape benchmark baseline: gateway-shape runs include secondary indexes.
 # Use command_wal_relaxed for command-WAL coverage once indexed catalog command
-# support is enabled for this workload; bench is the explicit no-WAL ceiling.
-TREEDB_PROFILE="${TREEDB_PROFILE:-bench}"
+# support is enabled for this workload; bench_unsafe is the explicit no-WAL ceiling.
+TREEDB_PROFILE="${TREEDB_PROFILE:-bench_unsafe}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-bson}"
 TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-none}"
 TREEDB_READ_STATE="${TREEDB_READ_STATE:-unsettled}"

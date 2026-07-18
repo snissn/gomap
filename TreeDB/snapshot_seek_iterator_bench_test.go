@@ -8,10 +8,24 @@ import (
 
 var snapshotIteratorBenchSink byte
 
+func snapshotIteratorBenchOptions(dir string) Options {
+	opts := OptionsForBenchmark(ProfileBenchUnsafe, dir)
+	opts.FlushThreshold = 1 << 30
+	// This benchmark isolates iterator seek/next overhead. Keep leaf pages in
+	// index.db and disable alternative encodings so profile-default storage
+	// layout changes do not get misreported as MVCC iterator regressions.
+	opts.IndexOuterLeavesInValueLog = false
+	opts.LeafPrefixCompression = false
+	opts.IndexColumnarLeaves = false
+	opts.IndexPackedValuePtr = false
+	opts.IndexInternalBaseDelta = false
+	return opts
+}
+
 func BenchmarkSnapshotIteratorSeekNext(b *testing.B) {
 	for _, keyCount := range []int{1 << 10, 1 << 14} {
 		b.Run(fmt.Sprintf("keys=%d", keyCount), func(b *testing.B) {
-			d, err := Open(Options{Dir: b.TempDir(), FlushThreshold: 1 << 30})
+			d, err := Open(snapshotIteratorBenchOptions(b.TempDir()))
 			if err != nil {
 				b.Fatal(err)
 			}

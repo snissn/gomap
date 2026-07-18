@@ -14,24 +14,21 @@ func TestPublicSurfaceConformance(t *testing.T) {
 }
 
 func openConformanceAdapter(dir string, class mvcctest.DurabilityClass) (mvcctest.Adapter, error) {
-	var durability treedb.DurabilityMode
+	var profile treedb.Profile
 	switch class {
 	case mvcctest.DurabilityDurable:
-		durability = treedb.DurabilityDurable
+		profile = treedb.ProfileCommandWALDurable
 	case mvcctest.DurabilityWALOnRelaxed:
-		durability = treedb.DurabilityWALOnRelaxed
+		profile = treedb.ProfileCommandWALRelaxed
 	case mvcctest.DurabilityWALOffRelaxed:
-		durability = treedb.DurabilityWALOffRelaxed
+		profile = treedb.ProfileNoWALFast
 	default:
 		return mvcctest.Adapter{}, fmt.Errorf("unsupported durability class %q", class)
 	}
-	db, err := treedb.Open(treedb.Options{
-		Dir:                          dir,
-		Durability:                   durability,
-		CommandWAL:                   durability != treedb.DurabilityWALOffRelaxed,
-		DisableSideStores:            true,
-		BackgroundCheckpointInterval: -1,
-	})
+	opts := treedb.OptionsFor(profile, dir)
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	db, err := treedb.Open(opts)
 	if err != nil {
 		return mvcctest.Adapter{}, err
 	}

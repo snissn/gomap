@@ -23,13 +23,21 @@ import (
 
 func openTestDB(t testing.TB, dir string, durability treedb.DurabilityMode) *treedb.DB {
 	t.Helper()
-	db, err := treedb.Open(treedb.Options{
-		Dir:                          dir,
-		Durability:                   durability,
-		CommandWAL:                   durability != treedb.DurabilityWALOffRelaxed,
-		DisableSideStores:            true,
-		BackgroundCheckpointInterval: -1,
-	})
+	var profile treedb.Profile
+	switch durability {
+	case treedb.DurabilityDurable:
+		profile = treedb.ProfileCommandWALDurable
+	case treedb.DurabilityWALOnRelaxed:
+		profile = treedb.ProfileCommandWALRelaxed
+	case treedb.DurabilityWALOffRelaxed:
+		profile = treedb.ProfileNoWALFast
+	default:
+		t.Fatalf("unsupported durability mode %d", durability)
+	}
+	opts := treedb.OptionsFor(profile, dir)
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -387,22 +395,16 @@ func TestCommitAtDurabilityModesAndReopen(t *testing.T) {
 			if err := store.CommitAt(22, nil, CommitDurable); err != nil {
 				t.Fatalf("empty durable CommitAt must be a no-op: %v", err)
 			}
-			if err := store.CommitAt(22, []Mutation{{Key: []byte("k"), Value: []byte("relaxed")}}, CommitDurable); !errors.Is(err, ErrDurabilityUnavailable) {
-				t.Fatalf("durable request error=%v want ErrDurabilityUnavailable", err)
+			if err := store.CommitAt(22, []Mutation{{Key: []byte("k"), Value: []byte("explicit-sync")}}, CommitDurable); err != nil {
+				t.Fatalf("durable request on relaxed ordinary-ACK profile: %v", err)
 			}
-			requireResult(t, store, []byte("k"), 22, Absent, 0, nil)
-			if err := store.CommitAt(22, []Mutation{{Key: []byte("k"), Value: []byte("relaxed")}}, CommitRelaxed); err != nil {
-				t.Fatalf("CommitAt relaxed: %v", err)
-			}
-			if err := db.Checkpoint(); err != nil {
-				t.Fatalf("Checkpoint: %v", err)
-			}
+			requireResult(t, store, []byte("k"), 22, Present, 22, []byte("explicit-sync"))
 			if err := db.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
 			db = openTestDB(t, dir, durability)
 			defer db.Close()
-			requireResult(t, New(db), []byte("k"), 22, Present, 22, []byte("relaxed"))
+			requireResult(t, New(db), []byte("k"), 22, Present, 22, []byte("explicit-sync"))
 		})
 	}
 }

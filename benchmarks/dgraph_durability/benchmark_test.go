@@ -7,6 +7,7 @@ import (
 	"math"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -116,7 +117,28 @@ func BenchmarkDgraphShapedConcurrentDurable(b *testing.B) {
 					concurrency, batchSize, valueSize := concurrency, batchSize, valueSize
 					name := fmt.Sprintf("durable/%s/concurrency=%d/batch=%d/value=%d", profile.name, concurrency, batchSize, valueSize)
 					b.Run(name, func(b *testing.B) {
-						benchmarkConcurrentDurable(b, profile, concurrency, batchSize, valueSize)
+						benchmarkConcurrentAcknowledgement(b, profile, concurrency, batchSize, valueSize)
+					})
+				}
+			}
+		}
+	}
+}
+
+// BenchmarkDgraphShapedConcurrentAcknowledgement reports matched ordinary-ACK
+// latency for relaxed profiles and explicit-boundary latency for durable
+// profiles. The profile class is part of every row so unlike contracts are not
+// used as hard regression denominators.
+func BenchmarkDgraphShapedConcurrentAcknowledgement(b *testing.B) {
+	for _, profile := range benchmarkProfiles {
+		profile := profile
+		for _, concurrency := range concurrentDurableConcurrencies {
+			for _, batchSize := range concurrentDurableBatchSizes {
+				for _, valueSize := range concurrentDurableValueSizes {
+					concurrency, batchSize, valueSize := concurrency, batchSize, valueSize
+					name := fmt.Sprintf("%s/%s/concurrency=%d/batch=%d/value=%d", profile.class, profile.name, concurrency, batchSize, valueSize)
+					b.Run(name, func(b *testing.B) {
+						benchmarkConcurrentAcknowledgement(b, profile, concurrency, batchSize, valueSize)
 					})
 				}
 			}
@@ -285,7 +307,7 @@ func runMixedOperations(tb testing.TB, store versionedStore, keys [][]byte, valu
 	return writes, reads
 }
 
-func benchmarkConcurrentDurable(b *testing.B, profile benchmarkProfile, concurrency, batchSize, valueSize int) {
+func benchmarkConcurrentAcknowledgement(b *testing.B, profile benchmarkProfile, concurrency, batchSize, valueSize int) {
 	store := profile.open(b, b.TempDir())
 	mutations := benchmarkMutations(batchSize, valueSize)
 	for i := 0; i < benchmarkWarmupCommits; i++ {
@@ -327,7 +349,7 @@ func benchmarkConcurrentDurable(b *testing.B, profile benchmarkProfile, concurre
 	wg.Wait()
 	b.StopTimer()
 	reportRates(b, batchSize)
-	reportLatencyPercentiles(b, latencies)
+	reportLatencyPercentiles(b, profile.class, latencies)
 	reportStoreCounters(b, before, store.stats(), b.N, 0)
 	b.ReportMetric(float64(concurrency), "workers")
 	if err := store.close(); err != nil {
@@ -346,7 +368,7 @@ func commitConcurrent(store versionedStore, timestamp uint64, mutations []mutati
 	return store.commitAt(timestamp, mutations)
 }
 
-func reportLatencyPercentiles(b *testing.B, latencies []time.Duration) {
+func reportLatencyPercentiles(b *testing.B, class string, latencies []time.Duration) {
 	if len(latencies) == 0 {
 		return
 	}
@@ -359,7 +381,13 @@ func reportLatencyPercentiles(b *testing.B, latencies []time.Duration) {
 		if index < 0 {
 			index = 0
 		}
-		b.ReportMetric(float64(latencies[index])/float64(time.Millisecond), percentile.name)
+		value := float64(latencies[index]) / float64(time.Millisecond)
+		b.ReportMetric(value, percentile.name)
+		boundaryName := strings.Replace(percentile.name, "_ack_", "_ordinary_ack_", 1)
+		if class == "durable" {
+			boundaryName = strings.Replace(percentile.name, "_ack_", "_explicit_boundary_", 1)
+		}
+		b.ReportMetric(value, boundaryName)
 	}
 }
 
@@ -520,8 +548,16 @@ type storeCounterMetric struct {
 var storeCounterMetrics = []storeCounterMetric{
 	{key: "treedb.command_wal.sync.count_total", name: "command_wal_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.command_wal.flush.count_total", name: "command_wal_flushes/write_commit", denominator: "writes"},
+	{key: "treedb.command_wal.file_sync.calls_total", name: "command_wal_file_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.command_wal.directory_sync.calls_total", name: "command_wal_directory_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.cache.value_log.sync.calls_total", name: "value_log_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.cache.value_log.file_sync.calls_total", name: "value_log_file_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.cache.value_log.directory_sync.calls_total", name: "value_log_directory_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.cache.checkpoint.runs", name: "checkpoints/write_commit", denominator: "writes"},
+	{key: "treedb.publish.ordered_root_delta_group.calls_total", name: "root_publications/write_commit", denominator: "writes"},
+	{key: "treedb.cache.write.wait_for_checkpoint.count_total", name: "checkpoint_caller_waits/write_commit", denominator: "writes"},
+	{key: "treedb.cache.flush_apply.coordinator.progress_waits_total", name: "publication_progress_waits/write_commit", denominator: "writes"},
+	{key: "treedb.cache.flush_apply.coordinator.stall_waits_total", name: "publication_stall_waits/write_commit", denominator: "writes"},
 	{key: "treedb.cache.iterator.snapshot_rotations_total", name: "iterator_snapshot_rotations/lookup", denominator: "lookups"},
 	{key: "treedb.cache.iterator.sources_total", name: "iterator_sources/lookup", denominator: "lookups"},
 	{key: "treedb.cache.iterator.calls_total", name: "iterator_calls/lookup", denominator: "lookups"},
@@ -547,11 +583,28 @@ func reportStoreCounters(b *testing.B, before, after map[string]string, writeCom
 			b.ReportMetric(float64(end-start)/float64(denominator), metric.name)
 		}
 	}
+	publicationCallsStart, callsStartOK := parseCounter(before, "treedb.publish.ordered_root_delta_group.calls_total")
+	publicationCallsEnd, callsEndOK := parseCounter(after, "treedb.publish.ordered_root_delta_group.calls_total")
+	publicationRootsStart, rootsStartOK := parseCounter(before, "treedb.publish.ordered_root_delta_group.roots_total")
+	publicationRootsEnd, rootsEndOK := parseCounter(after, "treedb.publish.ordered_root_delta_group.roots_total")
+	if callsStartOK && callsEndOK && publicationCallsEnd >= publicationCallsStart {
+		calls := publicationCallsEnd - publicationCallsStart
+		if elapsed := b.Elapsed(); elapsed > 0 {
+			b.ReportMetric(float64(calls)/elapsed.Seconds(), "root_publications/s")
+		}
+		if calls > 0 && rootsStartOK && rootsEndOK && publicationRootsEnd >= publicationRootsStart {
+			b.ReportMetric(float64(publicationRootsEnd-publicationRootsStart)/float64(calls), "roots/publication")
+		}
+	}
 	for _, metric := range []struct{ key, name string }{
 		{"treedb.cache.iterator.sources_max", "iterator_sources_max"},
 		{"treedb.cache.iterator.queue_len_max", "iterator_queue_len_max"},
 		{"treedb.cache.queue_len", "iterator_queue_len_end"},
 		{"treedb.cache.point_successor.sources_max", "point_successor_sources_max"},
+		{"treedb.command_wal.dependency_debt.pending_bytes", "dependency_debt_pending_bytes_end"},
+		{"treedb.command_wal.dependency_debt.max_age_ns", "dependency_debt_max_age_ns_end"},
+		{"treedb.command_wal.durable_wal_lsn", "durable_wal_lsn_end"},
+		{"treedb.applied_command_lsn", "durable_root_applied_lsn_end"},
 	} {
 		if value, ok := parseCounter(after, metric.key); ok {
 			b.ReportMetric(float64(value), metric.name)
@@ -647,7 +700,7 @@ func TestDgraphShapedProfileContracts(t *testing.T) {
 				if got := stats["treedb.write_path.mode"]; got != "command_wal_cached" {
 					t.Fatalf("TreeDB write path=%q want command_wal_cached", got)
 				}
-				wantDurability := "wal_on_relaxed_sync+no_read_checksum"
+				wantDurability := "wal_on_relaxed_sync"
 				if profile.class == "durable" {
 					wantDurability = "wal_on_sync"
 				}

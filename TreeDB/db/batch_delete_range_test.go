@@ -202,17 +202,17 @@ func TestBatchDeleteRangeValueLogPointerRefsAndGC(t *testing.T) {
 		t.Fatalf("Get(k3)=(%d bytes,%v), want keep", len(got), err)
 	}
 
-	// The prior durable slot still names the seed generation, so its dependency
-	// manifest must keep the deleted pointer segments pinned until normal slot
-	// alternation replaces that generation.
+	// The prior durable slot still names the seed generation, so recoverable-root
+	// projection must classify the deleted pointer segments as referenced until
+	// normal slot alternation replaces that generation.
 	pinned, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{DryRun: true})
 	if err != nil {
 		t.Fatalf("ValueLogGC dry run: %v", err)
 	}
-	if pinned.SegmentsPending < 2 {
-		t.Fatalf("ValueLogGC pending %d segments while older durable slot is recoverable, want at least 2: %+v", pinned.SegmentsPending, pinned)
+	if pinned.SegmentsReferenced < 2 || pinned.SegmentsEligible != 0 || pinned.SegmentsPending != 0 {
+		t.Fatalf("ValueLogGC stats while older durable slot is recoverable=%+v, want at least 2 referenced and no eligible/pending segments", pinned)
 	}
-	if err := d.Set([]byte("slot-advance"), []byte("inline")); err != nil {
+	if err := d.SetSync([]byte("slot-advance"), []byte("inline")); err != nil {
 		t.Fatalf("advance durable slot: %v", err)
 	}
 

@@ -19,8 +19,12 @@ import (
 // both durable slots and proves that reusing an A page cannot affect the newer
 // stable generation C. Package-local access identifies actual live and reused
 // page IDs; every database mutation and crash-image reopen uses exported
-// production methods.
+// production methods. The witness advances until the allocator actually
+// selects an A page instead of assuming a fixed generation-count horizon.
 func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
+	if expected := os.Getenv("TREEDB_POWERLOSS_PROFILE"); expected != "" && expected != "no_wal_fast" {
+		t.Fatalf("TREEDB_POWERLOSS_PROFILE=%q does not match exercised profile no_wal_fast", expected)
+	}
 	dir := t.TempDir()
 	opts := Options{
 		Dir:                    dir,
@@ -105,32 +109,64 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 
 	cutErr := errors.New("power-loss-oracle: stop before actual reuse index sync")
 	var snapshot *powerlossoracle.Model
-	var indexSync durabilitycut.Event
+	var reusedPage uint64
+	var indexPath string
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
 		if event.Point == durabilitycut.BeforeIndexDataSync {
-			indexSync = event
-			snapshot = model.Clone()
-			return cutErr
+			candidate := model.Clone()
+			rel, err := filepath.Rel(dir, event.Path)
+			if err != nil {
+				return fmt.Errorf("relative index path: %w", err)
+			}
+			changed, err := candidate.ChangedRanges(rel)
+			if err != nil {
+				return fmt.Errorf("changed index ranges: %w", err)
+			}
+			for _, pageID := range oldPages {
+				start := int64(pageID) * int64(page.PageSize)
+				end := start + int64(page.PageSize)
+				for _, r := range changed {
+					if r.Offset < end && r.Offset+r.Length > start {
+						indexPath = rel
+						reusedPage = pageID
+						snapshot = candidate
+						return cutErr
+					}
+				}
+			}
 		}
 		return nil
 	})
-	err = writeGeneration('e', false)
+	// no_wal_fast ordinary writes may acknowledge below the admission bound
+	// without forcing stable publication. Use explicit-sync boundaries until a
+	// region-hinted allocation actually overwrites an A page. Every completed
+	// iteration becomes the stable old-root image for the next attempted cut.
+	const maxReuseWitnessGenerations = 16
+	for generation := 0; generation < maxReuseWitnessGenerations; generation++ {
+		priorStable := d.State()
+		err = writeGeneration(byte('e'+generation), true)
+		if errors.Is(err, cutErr) {
+			stableState = priorStable
+			break
+		}
+		if err != nil {
+			restore()
+			t.Fatalf("post-horizon reuse generation %d: %v", generation+1, err)
+		}
+		stableState = d.State()
+	}
 	restore()
 	if !errors.Is(err, cutErr) || snapshot == nil {
-		t.Fatalf("post-horizon reuse generation did not stop at BeforeIndexDataSync: err=%v", err)
+		t.Fatalf("no displaced-generation page was selected within %d explicit-sync generations: err=%v old_pages=%v before=%+v after=%+v", maxReuseWitnessGenerations, err, oldPages, beforeReuse, idx.allocator.Counters())
 	}
 	afterReuse := idx.allocator.Counters()
 	if afterReuse.ReuseAllocPages <= beforeReuse.ReuseAllocPages {
 		t.Fatalf("post-horizon generation reused no freelist pages: before=%+v after=%+v", beforeReuse, afterReuse)
 	}
 
-	indexPath, err := filepath.Rel(dir, indexSync.Path)
-	if err != nil {
-		t.Fatalf("relative index path: %v", err)
-	}
 	changed, err := snapshot.ChangedRanges(indexPath)
 	if err != nil {
 		t.Fatalf("changed index ranges: %v", err)
@@ -145,14 +181,7 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 		}
 		return false
 	}
-	var reusedPage uint64
-	for _, id := range oldPages {
-		if changedOldPage(id) {
-			reusedPage = id
-			break
-		}
-	}
-	if reusedPage == 0 {
+	if reusedPage == 0 || !changedOldPage(reusedPage) {
 		t.Fatalf("safe freelist reuse did not overwrite a displaced-generation page: root=%d old_pages=%v changed=%v index=%q before=%+v after=%+v", retiredState.RootPageID, oldPages, changed, indexPath, beforeReuse, afterReuse)
 	}
 
@@ -181,7 +210,11 @@ func TestPowerLossOracleCounterexampleRecoverablePageReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledgerData, err := os.ReadFile(filepath.Join("..", "testdata", "power_loss_counterexamples.json"))
+	ledgerPath := filepath.Join("..", "testdata", "power_loss_counterexamples.json")
+	if path := os.Getenv("TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"); path != "" {
+		ledgerPath = path
+	}
+	ledgerData, err := os.ReadFile(ledgerPath)
 	if err != nil {
 		t.Fatal(err)
 	}

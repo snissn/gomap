@@ -381,8 +381,10 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	rangeSplits := coordinatorScratch.acquireSpanRangeSplits(len(workerRanges))
 	defer coordinatorScratch.releaseSpanRangeSplits(rangeSplits)
 	var rangeOldPointerRefs []PointerRefCounts
+	var rangeOldEntriesRemoved []uint64
 	if opts.CollectOldPointerRefs {
 		rangeOldPointerRefs = make([]PointerRefCounts, len(workerRanges))
+		rangeOldEntriesRemoved = make([]uint64, len(workerRanges))
 	}
 	var firstErr error
 	var errOnce sync.Once
@@ -429,6 +431,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafPagePersister}
 		if rangeOldPointerRefs != nil {
 			workerApplyCfg.oldPointerRefs = &rangeOldPointerRefs[job]
+			workerApplyCfg.oldEntriesRemoved = &rangeOldEntriesRemoved[job]
 		}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
@@ -556,9 +559,11 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, firstErr
 	}
 	var oldPointerRefs PointerRefCounts
+	var oldEntriesRemoved uint64
 	if opts.CollectOldPointerRefs {
 		for i := range rangeOldPointerRefs {
 			oldPointerRefs.merge(&rangeOldPointerRefs[i])
+			oldEntriesRemoved += rangeOldEntriesRemoved[i]
 		}
 	}
 	rootReduceStart := time.Now()
@@ -576,6 +581,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		SpanNativeWorkers:       scheduledWorkers,
 		SpanNativeUsed:          true,
 		OldPointerRefs:          oldPointerRefs,
+		OldEntriesRemoved:       oldEntriesRemoved,
 		OldPointerRefsCollected: opts.CollectOldPointerRefs,
 	}, true, nil
 }

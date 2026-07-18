@@ -3946,6 +3946,12 @@ func TestVectorIndexSearcherSearchWithBufferResultEquivalenceAndZeroAllocs2124(t
 	if _, err := bufferedSearcher.SearchWithBuffer(opts, &buffer); err != nil {
 		t.Fatalf("warm SearchWithBuffer for allocation check: %v", err)
 	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	if !enterIsolatedVectorAllocationGate(t, "search-with-buffer") {
+		return
+	}
 	var sink int
 	allocs := testing.AllocsPerRun(1000, func() {
 		got, err := bufferedSearcher.SearchWithBuffer(opts, &buffer)

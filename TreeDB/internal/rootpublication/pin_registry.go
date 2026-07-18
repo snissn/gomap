@@ -632,6 +632,11 @@ func (lease *IdentityDeleteLease) CommitDeleted() {
 		state := registry.stateLocked(lease.identity)
 		state.deleting = false
 		state.retired = true
+		for link := range registry.stableLinks {
+			if link.child == lease.identity {
+				delete(registry.stableLinks, link)
+			}
+		}
 		registry.deleteIdleStateLocked(lease.identity, state)
 		delete(registry.namespaces, lease.namespace)
 		registry.mu.Unlock()

@@ -112,6 +112,14 @@ type ValueLogRewriteStats struct {
 	// SourceBytesReclaimed is the number of unreferenced source bytes deleted by
 	// a caller-managed reclaim path after rewrite.
 	SourceBytesReclaimed int64
+	// SourceSegmentsRetainedRecoverableRootStale reports retirement candidates
+	// retained because the recoverable-root basis changed during cleanup.
+	SourceSegmentsRetainedRecoverableRootStale int
+	SourceBytesRetainedRecoverableRootStale    int64
+	// LeafGenerationCleanupRetainedRecoverableRootStale reports that the
+	// post-rewrite leaf-generation cleanup retained its candidates because the
+	// recoverable-root basis changed after pointer swaps committed.
+	LeafGenerationCleanupRetainedRecoverableRootStale bool
 
 	TemplateRecordsAttempted int
 	TemplateRecordsKept      int
@@ -2142,12 +2150,13 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			_ = db.valueLogManager.Release(currentSet)
 		}
 	}
-	markZombieCandidate := func(id uint32, existedBefore bool) error {
+	retirementCandidates := make([]uint32, 0, len(oldValueIDs)+len(newValueIDs))
+	addRetirementCandidate := func(id uint32, existedBefore bool) {
 		if _, ok := referencedAfter[id]; ok {
-			return nil
+			return
 		}
 		if _, ok := protectedIDs[id]; ok {
-			return nil
+			return
 		}
 		// When active-segment skipping is enabled, avoid marking currently
 		// active pre-existing segments zombie. Concurrent writers may still be
@@ -2155,28 +2164,52 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// index.
 		if existedBefore && allowActiveSkip {
 			if _, ok := activeIDs[id]; ok {
-				return nil
+				return
 			}
 		}
-		if err := db.valueLogManager.MarkZombie(id); err != nil {
-			return err
-		}
-		return nil
+		retirementCandidates = append(retirementCandidates, id)
 	}
 	for id := range oldValueIDs {
-		if err := markZombieCandidate(id, true); err != nil {
-			return stats, err
-		}
+		addRetirementCandidate(id, true)
 	}
 	for _, id := range newValueIDs {
 		if _, existed := oldValueIDs[id]; existed {
 			continue
 		}
-		if err := markZombieCandidate(id, false); err != nil {
-			return stats, err
-		}
+		addRetirementCandidate(id, false)
 	}
-	if err := db.publishValueLogSetNoRefresh(); err != nil {
+	if len(retirementCandidates) > 0 {
+		// Source retirement is delegated to the same recoverable-root capability
+		// used by standalone GC. The rewrite's visible-root scan is only an
+		// optimization; GC rechecks every selectable durable/pending root and
+		// revalidates immediately before zombie mutation.
+		if _, err := db.valueLogGC(context.WithoutCancel(ctx), ValueLogGCOptions{
+			ProtectedPaths:                   opts.ProtectedPaths,
+			ObservedSourceFileIDs:            retirementCandidates,
+			ObservedSourceAssumeUnreferenced: true,
+			ObservedSourceReclaimActive:      true,
+		}, false); err != nil {
+			if !errors.Is(err, ErrRecoverableRootSetStale) {
+				return stats, err
+			}
+			stats.SourceSegmentsRetainedRecoverableRootStale = len(retirementCandidates)
+			currentSet := db.valueLogManager.CurrentSetNoRefresh()
+			for _, id := range retirementCandidates {
+				if currentSet != nil {
+					stats.SourceBytesRetainedRecoverableRootStale += fileSize(currentSet.Files[id])
+				}
+			}
+			if currentSet != nil {
+				_ = db.valueLogManager.Release(currentSet)
+			}
+			// Pointer swaps are already committed. Publish the non-destructive
+			// manager topology and leave every stale candidate intact for a later
+			// maintenance pass.
+			if err := db.publishValueLogSetNoRefresh(); err != nil {
+				return stats, err
+			}
+		}
+	} else if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err
 	}
 	postSet := db.valueLogManager.CurrentSetNoRefresh()
@@ -2187,10 +2220,11 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 	if db.indexOuterLeavesInValueLog && stats.RecordsCopied > 0 {
-		if _, err := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{
+		_, cleanupErr := db.leafGenerationGC(context.WithoutCancel(ctx), LeafGenerationGCOptions{
 			ProtectedRootIDs:       db.valueLogRewriteLeafGenerationProtectedRootIDs(opts),
 			ProtectedSystemRootIDs: db.valueLogRewriteLeafGenerationProtectedSystemRootIDs(opts),
-		}, false); err != nil {
+		}, false)
+		if err := finishValueLogRewriteLeafGenerationCleanup(&stats, cleanupErr); err != nil {
 			return stats, err
 		}
 	}
@@ -2209,6 +2243,19 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, canceledErr
 	}
 	return stats, nil
+}
+
+func finishValueLogRewriteLeafGenerationCleanup(stats *ValueLogRewriteStats, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ErrRecoverableRootSetStale) {
+		return err
+	}
+	if stats != nil {
+		stats.LeafGenerationCleanupRetainedRecoverableRootStale = true
+	}
+	return nil
 }
 
 func (db *DB) valueLogRewriteLeafGenerationProtectedRootIDs(opts ValueLogRewriteOnlineOptions) []uint64 {
@@ -2443,16 +2490,15 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: system root: missing index")
 	}
-	state := db.state.Load()
-	if state == nil {
-		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
-	}
-
 	db.mu.RLock()
+	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: system root: missing backend state")
+	}
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2471,6 +2517,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRoot(swaps []rewriteSwap, sync bool) 
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
 		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -2509,16 +2556,15 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	if idx == nil {
 		return fmt.Errorf("vlog-rewrite: collection root: missing index")
 	}
-	state := db.state.Load()
-	if state == nil {
-		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
-	}
-
 	db.mu.RLock()
+	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if state == nil {
+		return fmt.Errorf("vlog-rewrite: collection root: missing backend state")
+	}
 	if systemRoot == 0 {
 		return nil
 	}
@@ -2566,6 +2612,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			userRoot, systemRoot, retired, sync, metrics, touched,
 			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+			baseSeq,
 			func() {
 				db.writeMu.Unlock()
 				writeLocked = false
@@ -2600,6 +2647,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRoot(target *collectionRewriteRoo
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
 		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
@@ -2925,6 +2973,7 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 				db.vacuum.RecordEntries(entries)
 			},
 		},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

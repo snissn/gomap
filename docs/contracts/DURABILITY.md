@@ -1,96 +1,112 @@
-# Durability
+# Durability Contracts
 
-## TL;DR
-
-- TreeDB provides explicit durability calls (`SetSync`, `DeleteSync`,
-  `Batch.WriteSync`) for current command-WAL profiles.
-- In the durable command-WAL profile, `*Sync` means command-WAL/value-log sync;
-  it does not require a full backend `Checkpoint()` per write.
-- `Checkpoint()` and `Close()` are backend publication/drain boundaries, not the
-  normal per-transaction durability barrier for command-WAL writes.
-- HashDB provides explicit durability calls (`PutSync`, `DeleteSync`) backed by the slab value log and crash recovery; non-sync writes may be lost on power loss.
-
-## Who Is This For?
-
-- Anyone who needs to understand what survives a crash / power loss.
-- Anyone building a replication/consensus layer where “committed” must be durable.
+Durability answers: after an operation returns success, what must survive sudden
+power loss? Atomicity and process-crash recovery are weaker claims unless the
+required file and directory sync frontiers are stable.
 
 ## TreeDB
 
-TreeDB exposes a single cached-mode engine with selectable durability semantics
-via public profiles and `Options.Durability`. Public server and adapter code
-should use `command_wal_durable` or `command_wal_relaxed`; `bench` is an
-explicit no-WAL benchmark ceiling.
+TreeDB uses immutable resolved profiles. Public servers and adapters choose one
+of three production profiles; `bench_unsafe` is an explicit benchmark/test-only
+surface with no durability promise.
 
-### Command-WAL durable (`ProfileCommandWALDurable`, `Durability = DurabilityDurable`)
+| Profile | Ordinary acknowledgement | Explicit `*Sync` | `Checkpoint` / clean `Close` | Read integrity |
+| --- | --- | --- | --- | --- |
+| `command_wal_durable` | durable dependency-closed command-WAL prefix | durable dependency-closed command-WAL prefix | sealed durable root | verify |
+| `command_wal_relaxed` | relaxed | durable dependency-closed command-WAL prefix | sealed durable root | verify |
+| `no_wal_fast` | relaxed | sealed durable root covering the call | sealed durable root | verify |
+| `bench_unsafe` | no promise | no promise | no production promise | benchmark-selected |
 
-Cached mode writes command frames to the command WAL and writes large values to
-the persistent value log, then eventually flushes to the backend.
+`command_wal_durable` ordinary acknowledgements survive power loss through the
+stable typed command frame and every required value-log, outer-leaf, or
+auxiliary dependency. Backend-root publication may happen later.
 
-- `Set`, `Delete`, `DeleteRange`, `Batch.Write`: append recoverable
-  command-WAL input, but do not establish a power-loss fsync boundary.
-- `SetSync`, `DeleteSync`: append the point command-WAL frame and sync the
-  command-WAL/value-log boundary; durable.
-- `Batch.WriteSync`: appends the entire batch as a typed `RawKVBatch` command
-  frame and syncs the command-WAL/value-log boundary; **atomic and durable**.
-  On recovery, either the entire batch is applied or none of it is.
-- None of these `*Sync` calls need a backend `Checkpoint()` or `treedb.commit_seq`
-  advance per write. The backend root is published later by flush/checkpoint.
-- The exact inline, pointer-backed, `Write`-then-`WriteSync`, and empty-barrier
-  ordering is normative in
-  `TreeDB/docs/spec/command-wal-durable-write-contract.md`. In particular,
-  external value-log bytes are synced before the command frame, and cached
-  publication occurs only after the command-WAL sync succeeds.
+`command_wal_relaxed` ordinary acknowledgements may lose a complete recent
+suffix. A successful explicit `*Sync`, including an empty batch sync, persists
+the dependency-complete command-WAL prefix captured by the call.
 
-Crash recovery:
-- On open, command-WAL segments in `Dir/maindb/wal/` are replayed through the
-  normal command executor, covered by the backend/applied-LSN state, then
-  cleaned only after coverage is proven.
+`no_wal_fast` ordinary acknowledgements may lead sealed-root publication. Its
+explicit `*Sync` operations wait for a sealed complete root covering the call;
+the persistent value log remains enabled and all referenced assets must be
+stable before the root is selectable.
 
-### Command-WAL relaxed (`ProfileCommandWALRelaxed`, `Durability = DurabilityWALOnRelaxed`)
+`Flush` and `FlushAll` are visibility/drain operations. They are not file-sync,
+directory-sync, durable command-WAL, or sealed-root boundaries.
 
-Command-WAL frames remain the local recovery source, but `*Sync` operations do
-not `fsync`. This is crash-consistent for process-failure style recovery, but
-not guaranteed durable on power loss.
+### Raw key/value API
 
-- `Set` / `Batch.Write`: not guaranteed durable on power loss.
-- `SetSync` / `Batch.WriteSync`: crash-consistent only (no `fsync`).
+- `Set`, `Delete`, `DeleteRange`, and `Batch.Write` use the selected ordinary
+  acknowledgement class.
+- `SetSync`, `DeleteSync`, and `Batch.WriteSync` use the selected production
+  sync frontier.
+- `Batch.Write` and `Batch.WriteSync` are atomic typed `RawKVBatch` commands.
+  Recovery applies the entire command or none of it.
+- A command-WAL `*Sync` does not require a full backend `Checkpoint()` per
+  write. A no-WAL production `*Sync` does require a sealed backend root.
 
-### Benchmark-only no WAL (`ProfileBench`, `Durability = DurabilityWALOffRelaxed`)
+### Collections and auxiliary assets
 
-Benchmark-only no-WAL mode disables command-WAL/redo recovery while keeping the
-persistent value log enabled. This improves write throughput but sacrifices
-durability for the most recent writes since the last checkpoint/close boundary.
+Supported collection/catalog mutations and their dictionary/template,
+typed-column, vector, text, value-log, and outer-leaf dependencies use the same
+resolved profile. A durable acknowledgement is not allowed until the exact
+transitive dependency closure for its command/root is stable. Unsupported
+command kinds or incomplete dependency evidence fail closed.
 
-- `Set` / `Batch.Write`: not guaranteed durable (no redo log).
-- `SetSync` / `Batch.WriteSync`: crash-consistent only (no redo log + no `fsync`).
-- Use `Checkpoint()` to establish a durable boundary.
+### Checkpoint and close
 
-### Legacy compatibility replay
+`Checkpoint()` and clean `Close()` capture the current frontier, drain pending
+work, publish a complete root/dependency manifest, sync required files and
+namespace mutations, and return only after the sealed root is recoverable.
 
-Old cached redo-journal segments are not the current public durability path.
+### Recovery
+
+Command-WAL recovery validates V2 frames and external-resource fences, selects a
+contiguous durable prefix, discards only a permitted relaxed suffix, replays
+commands above `AppliedLSN`, and cleans segments only after durable-root coverage
+is proven. Read-only open reports recovery required instead of mutating state.
+
 Current command-WAL directories fail closed on replayable legacy redo by
-default. Compatibility tests or forensic recovery flows must opt in explicitly
-with `AllowLegacyCachedRedoJournalReplay`.
+default. Compatibility tests and forensic recovery must explicitly select
+`AllowLegacyCachedRedoJournalReplay`.
 
-### Operational notes
+For journal-free `no_wal_fast`, recovery selects the newest complete sealed
+root, or the older complete sealed root when the newest candidate is incomplete.
+It never assembles a root from mixed generations.
 
-- Always `Close()` iterators and DB handles to release pinned resources and directory locks.
-- Multiple processes must not open the same directory concurrently (exclusive lock).
+### Profile selection and pre-alpha formats
+
+The default resolved profile is `command_wal_durable`. Production parsers accept
+only the exact canonical strings `command_wal_durable`,
+`command_wal_relaxed`, and `no_wal_fast`. The `bench_unsafe` token requires the
+benchmark parser and `OptionsForBenchmark`/`ApplyBenchmarkProfile` boundary.
+
+TreeDB is pre-alpha. If an old directory's required format features conflict
+with the selected canonical profile or current binary, open fails closed and the
+directory should be rebuilt; no complex migration scaffold is required yet.
 
 ## HashDB
 
-HashDB is designed as a high-performance mmap-backed hashmap engine with a slab value log.
+HashDB is a high-performance mmap-backed hashmap engine with slab value-log
+storage.
 
 Durability contract:
-- `Put` / `Delete` are not guaranteed durable (no fsync); writes go through the OS page cache and may be lost on power loss.
-- `PutSync` / `DeleteSync` fsync the slab value log (and the DB directory on slab segment rotation where supported) so the operation survives a crash/power loss.
-- `ApplyBatch`: atomic in-process, but not guaranteed durable (no fsync).
-- `ApplyBatchSync`: atomic and durable; on recovery, either the entire batch is applied or none of it is.
-- The mmap index (`hashctl-*`, `hashkeys-*`) is treated as a derived cache; on open after an unclean shutdown HashDB rebuilds the index by scanning the slab log and truncates torn tail records.
 
-Notes:
-- HashDB’s sharded `Open/OpenWithShards` entrypoint uses a write-back cache. By default there is no cache WAL, so pending cache writes are volatile until flushed. `PutSync`/`DeleteSync` flush the cache and then perform a durable backend write.
-- Optional: a per-shard cache WAL can be enabled via `hashdb.OpenWithOptions` / `hashdb.OpenWithShardsAndOptions` (`HashDBOptions.CacheWAL`). Depending on the fsync policy, non-`*Sync` cache writes may be recoverable after a crash.
-- For the sharded `*hashdb.HashDB` entrypoint, `ApplyBatchSync` is atomic per shard, but not atomic across shards.
-- If you need fully integrated journal-based durability with stronger corruption detection, use TreeDB `*Sync` operations today.
+- `Put` / `Delete` are not guaranteed durable; writes may be lost on power loss.
+- `PutSync` / `DeleteSync` sync the slab value log, and the DB directory on slab
+  segment rotation where supported.
+- `ApplyBatch` is atomic in-process but not guaranteed durable.
+- `ApplyBatchSync` is atomic and durable; recovery applies the entire batch or
+  none of it.
+- The mmap index is a derived cache. After an unclean shutdown HashDB rebuilds
+  it by scanning the slab log and truncates torn tail records.
+
+Operational notes:
+
+- Sharded `Open`/`OpenWithShards` uses a write-back cache. Without optional
+  cache WAL, pending writes are volatile until flushed; sync methods flush the
+  cache and then perform the durable backend write.
+- Optional per-shard cache WAL is configured through `HashDBOptions.CacheWAL`.
+- `ApplyBatchSync` on sharded `*hashdb.HashDB` is atomic per shard, not across
+  shards.
+- Use TreeDB canonical production profiles when integrated command-WAL recovery,
+  persistent value-log pointers, and stronger integrity checks are required.

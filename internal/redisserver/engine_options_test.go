@@ -38,7 +38,6 @@ func TestOpenEngine_TreeDB_RejectsDeprecatedProfiles(t *testing.T) {
 		"durable",
 		"legacy_wal_durable",
 		"legacy_wal_relaxed_fast",
-		"no_wal_fast",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := OpenEngine(Config{
@@ -53,5 +52,29 @@ func TestOpenEngine_TreeDB_RejectsDeprecatedProfiles(t *testing.T) {
 				t.Fatalf("error=%v, want allowed profile guidance", err)
 			}
 		})
+	}
+}
+
+func TestOpenEngine_TreeDB_AcceptsCanonicalNoWALFastProfile(t *testing.T) {
+	db, err := OpenEngine(Config{
+		Dir:           t.TempDir(),
+		Engine:        "treedb",
+		TreeDBProfile: string(treedb.ProfileNoWALFast),
+	})
+	if err != nil {
+		t.Fatalf("OpenEngine: %v", err)
+	}
+	defer db.Close()
+
+	statser, ok := db.(interface{ Stats() map[string]string })
+	if !ok {
+		t.Fatalf("TreeDB adapter does not expose Stats")
+	}
+	stats := statser.Stats()
+	if got := stats["treedb.profile.resolved"]; got != string(treedb.ProfileNoWALFast) {
+		t.Fatalf("profile.resolved=%q, want %q", got, treedb.ProfileNoWALFast)
+	}
+	if got := stats["treedb.command_wal.enabled"]; got != "false" {
+		t.Fatalf("command_wal.enabled=%q, want false", got)
 	}
 }

@@ -101,10 +101,11 @@ func runLookupValueLogRefAtKeyHook() {
 }
 
 type valueLogRefDelta struct {
-	inline    [16]valueLogRefDeltaEntry
-	inlineN   int
-	changes   map[uint32]int64
-	positives map[uint32]int64
+	inline                      [16]valueLogRefDeltaEntry
+	inlineN                     int
+	changes                     map[uint32]int64
+	positives                   map[uint32]int64
+	requiresCandidateProjection bool
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -145,6 +146,7 @@ func (d *valueLogRefDelta) resetForReuse() {
 		clear(d.inline[:d.inlineN])
 		d.inlineN = 0
 	}
+	d.requiresCandidateProjection = false
 	if d.changes != nil {
 		// Keep small/typical maps warm for reuse; drop unusually large maps.
 		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
@@ -168,6 +170,16 @@ func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 	}
 	if delta > 0 {
 		d.addPositive(fileID, delta)
+	}
+	d.addChange(fileID, delta)
+}
+
+// addChange merges only the net reference-count change. Callers that combine
+// already-accounted deltas use it together with addPositive so transient
+// positive references retain their exact pending-append release accounting.
+func (d *valueLogRefDelta) addChange(fileID uint32, delta int64) {
+	if d == nil || delta == 0 {
+		return
 	}
 	if d.changes == nil {
 		for i := 0; i < d.inlineN; i++ {
@@ -643,6 +655,40 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return result.valueLogRefCounts, commitSeq, nil
 }
 
+func (db *DB) referencedValueLogSegmentsForRecoverableRootSet(ctx context.Context, roots *RecoverableRootSet) (map[uint32]struct{}, error) {
+	if roots == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	captured := roots.Roots()
+	if len(captured) == 0 {
+		return nil, ErrRecoverableRootSetStale
+	}
+	snap := roots.AcquireSnapshotForRoot(captured[0])
+	if snap == nil {
+		return nil, ErrRecoverableRootSetStale
+	}
+	protectedRootIDs := make([]uint64, 0, len(captured))
+	protectedSystemRootIDs := make([]uint64, 0, len(captured))
+	for _, root := range captured {
+		protectedRootIDs = append(protectedRootIDs, root.UserRootPageID)
+		protectedSystemRootIDs = append(protectedSystemRootIDs, root.SystemRootPageID)
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
+		Collectors:               maintenanceReachabilityValueLogRefCounts,
+		ProtectedRootIDs:         protectedRootIDs,
+		ProtectedSystemRootIDs:   protectedSystemRootIDs,
+		ProjectProtectedValueLog: true,
+	})
+	closeErr := snap.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return result.valueLogReferencedSegments, nil
+}
+
 func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iterator.UnsafeIterator {
 	opts := tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}
 	if snap != nil && root.kind == maintenanceRootUser && root.rootID == snap.treeRoot {
@@ -652,15 +698,26 @@ func scanValueLogRefCountRootIterator(snap *Snapshot, root maintenanceRoot) iter
 }
 
 func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
-	return db != nil && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq) && !db.indexOuterLeavesInValueLog
+	if db == nil {
+		return false
+	}
+	// Outer-leaf publication consumes this apply-local delta independently of
+	// the persisted GC tracker. It proves the common additive/unchanged
+	// transition without rescanning the candidate tree; subtractive transitions
+	// still fall back to exact projection.
+	if db.indexOuterLeavesInValueLog {
+		return true
+	}
+	return db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(baseSeq)
 }
 
-func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
+func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
 	if !db.shouldCollectValueLogRefDelta(baseSeq) {
 		return nil, nil
 	}
 	delta := newValueLogRefDelta()
 	if oldPointerRefsCollected {
+		delta.requiresCandidateProjection = db.indexOuterLeavesInValueLog && oldEntriesRemoved > 0
 		var countErr error
 		oldPointerRefs.ForEach(func(fileID uint32, count uint64) bool {
 			if !page.IsValueLogFileID(fileID) {
@@ -727,10 +784,13 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 }
 
 func (db *DB) newNoopValueLogRefDeltaIfTrackable(baseSeq uint64) *valueLogRefDelta {
-	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+	if db == nil {
 		return nil
 	}
 	if db.indexOuterLeavesInValueLog {
+		return newValueLogRefDelta()
+	}
+	if db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil
 	}
 	return newValueLogRefDelta()

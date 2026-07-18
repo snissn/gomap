@@ -427,7 +427,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "checkpoint", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(true)
 	}); err != nil {
 		return stats, err
 	}
@@ -510,7 +510,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-value-log-rewrite", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -523,7 +523,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		return stats, err
 	}
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-value-log-gc", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -571,7 +571,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			return stats, err
 		}
 		if err := db.runCompactStoragePhase(&stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-			return db.Checkpoint()
+			return db.checkpoint(maintenanceLocked)
 		}); err != nil {
 			return stats, err
 		}
@@ -590,17 +590,20 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 	compactLeafPackPlanState.invalidate()
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-leaf-generation-gc", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
 
 	indexVacuumSkipped := false
+	indexVacuumSkipReason := ""
 	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
 		indexVacuumSkipped = false
+		indexVacuumSkipReason = ""
 		err := db.vacuumIndexOnline(ctx, !maintenanceLocked)
 		if errors.Is(err, ErrVacuumUnsupported) {
 			indexVacuumSkipped = true
+			indexVacuumSkipReason = err.Error()
 			return nil
 		}
 		return err
@@ -610,10 +613,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if indexVacuumSkipped {
 		if len(stats.Phases) > 0 {
 			stats.Phases[len(stats.Phases)-1].Skipped = true
-			stats.Phases[len(stats.Phases)-1].SkipReason = ErrVacuumUnsupported.Error()
+			stats.Phases[len(stats.Phases)-1].SkipReason = indexVacuumSkipReason
 		}
 	} else if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
-		return db.Checkpoint()
+		return db.checkpoint(maintenanceLocked)
 	}); err != nil {
 		return stats, err
 	}
@@ -777,7 +780,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.Checkpoint()
+				return db.checkpoint(!lockMaintenance)
 			}); err != nil {
 				return err
 			}
@@ -803,7 +806,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.Checkpoint()
+				return db.checkpoint(!lockMaintenance)
 			}); err != nil {
 				return err
 			}
@@ -832,7 +835,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 					return err
 				}
 				if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-					return db.Checkpoint()
+					return db.checkpoint(!lockMaintenance)
 				}); err != nil {
 					return err
 				}
@@ -853,7 +856,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
-				return db.Checkpoint()
+				return db.checkpoint(!lockMaintenance)
 			}); err != nil {
 				return err
 			}
@@ -1424,6 +1427,13 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 	}
 	err = filepath.WalkDir(path, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// Identity-based deletion quarantines a segment before removing it.
+			// A released quarantine directory can therefore disappear after
+			// WalkDir enumerates it but before WalkDir reads its children. That
+			// completed deletion should simply be absent from this usage snapshot.
+			if compactStorageConcurrentChildDeletion(usage.Path, path, walkErr) {
+				return nil
+			}
 			return walkErr
 		}
 		if entry.IsDir() {
@@ -1431,6 +1441,9 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(usage.Path, path, err) {
+				return nil
+			}
 			return err
 		}
 		usage.Files++
@@ -1441,6 +1454,10 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 		return nil
 	})
 	return usage, err
+}
+
+func compactStorageConcurrentChildDeletion(root, path string, err error) bool {
+	return path != root && os.IsNotExist(err)
 }
 
 func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
@@ -1592,6 +1609,21 @@ func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []s
 }
 
 func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
+	recoverableRoots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	defer recoverableRoots.Release()
+	db.publishPrepareMu.Lock()
+	defer db.publishPrepareMu.Unlock()
+	if err := recoverableRoots.Revalidate(); err != nil {
+		return 0, err
+	}
+	// No root publication can advance while publishPrepareMu is held. Consume
+	// the capability so exact topology pins do not themselves prevent removal
+	// of a zero-byte file proven outside every recoverable root.
+	recoverableRoots.Release()
+
 	layout := resolveStorageLayout(db.dir)
 	entries, err := os.ReadDir(layout.valueVLogDir)
 	if err != nil {
@@ -1605,6 +1637,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	protected := compactStorageProtectedPathSet(protectedPaths)
 	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, currentIDs)
 	deleted := 0
+	deletionNamespaceDirty := false
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -1624,6 +1657,9 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(layout.valueVLogDir, path, err) {
+				continue
+			}
 			return deleted, err
 		}
 		if info.Size() != 0 {
@@ -1645,10 +1681,29 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 					if err := db.publishValueLogSetNoRefresh(); err != nil {
 						return deleted, err
 					}
-					if removed, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil {
-						return deleted, errors.Join(err, ErrRecoveryRequired)
-					} else if removed {
+					var removed bool
+					var removeErr error
+					if hook := db.testCompactStorageRemoveValueLogSegmentHook; hook != nil {
+						removed, removeErr = hook(fileID)
+					} else {
+						removed, removeErr = db.valueLogManager.RemoveSegmentIfUnpinned(fileID)
+					}
+					if removed {
 						deleted++
+						deletionNamespaceDirty = true
+					}
+					if removeErr != nil {
+						var syncErr error
+						if deletionNamespaceDirty {
+							syncErr = db.syncDeletionNamespaceDirectoryOrPoison(
+								layout.valueVLogDir,
+								durabilitycut.ResourceValueLog,
+								"compact storage: sync value-log deletion namespace",
+							)
+						}
+						return deleted, errors.Join(removeErr, ErrRecoveryRequired, syncErr)
+					}
+					if removed {
 						continue
 					}
 					if _, err := os.Stat(path); err != nil {
@@ -1673,10 +1728,22 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 			continue
 		}
 		deleted++
+		deletionNamespaceDirty = true
 	}
-	if deleted > 0 && db.valueLogManager != nil {
-		if err := db.valueLogManager.Refresh(); err != nil {
+	if deletionNamespaceDirty {
+		if err := db.syncDeletionNamespaceDirectoryOrPoison(
+			layout.valueVLogDir,
+			durabilitycut.ResourceValueLog,
+			"compact storage: sync value-log deletion namespace",
+		); err != nil {
 			return deleted, err
+		}
+	}
+	if deleted > 0 {
+		if db.valueLogManager != nil {
+			if err := db.valueLogManager.Refresh(); err != nil {
+				return deleted, err
+			}
 		}
 	}
 	return deleted, nil
@@ -1732,6 +1799,9 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protected
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if compactStorageConcurrentChildDeletion(dir, path, err) {
+				continue
+			}
 			return 0, err
 		}
 		if info.Size() == 0 {

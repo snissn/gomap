@@ -1037,6 +1037,109 @@ func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.
 	}
 }
 
+func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+	dir := db.dir
+
+	ptr := appendPointersInNewSegment(t, dir, 0, 1, 521_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("collection-online-stale-leaf-gc|"), 24)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value log set: %v", err)
+	}
+	_, rootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		BaseRoot:      0,
+		Iter:          mustFrozenSystemPointerMemtable(t, "doc/p", ptr).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 {
+			return nil, fmt.Errorf("rootIDs=%d want 1", len(rootIDs))
+		}
+		return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish collection leaf-ref root: %v", err)
+	}
+	oldRoot := rootIDs[0]
+	oldLeafPtrs := requireLeafLogRootChildren(t, db, oldRoot)
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+
+	scanEntered := make(chan struct{})
+	releaseScan := make(chan struct{})
+	var paused atomic.Bool
+	unregister := registerLeafGenerationLiveScanHook(func() {
+		if paused.CompareAndSwap(false, true) {
+			close(scanEntered)
+			<-releaseScan
+		}
+	})
+	defer unregister()
+
+	type rewriteResult struct {
+		stats ValueLogRewriteStats
+		err   error
+	}
+	done := make(chan rewriteResult, 1)
+	go func() {
+		stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+			SourceFileIDs: []uint32{ptr.FileID},
+			BatchSize:     1,
+		})
+		done <- rewriteResult{stats: stats, err: err}
+	}()
+	select {
+	case <-scanEntered:
+	case <-time.After(5 * time.Second):
+		close(releaseScan)
+		t.Fatal("online rewrite did not enter trailing leaf-generation scan")
+	}
+	if err := db.Checkpoint(); err != nil {
+		close(releaseScan)
+		t.Fatalf("checkpoint while trailing leaf-generation scan paused: %v", err)
+	}
+	close(releaseScan)
+
+	var result rewriteResult
+	select {
+	case result = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("online rewrite did not finish after releasing leaf-generation scan")
+	}
+	if result.err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", result.err)
+	}
+	if !result.stats.LeafGenerationCleanupRetainedRecoverableRootStale {
+		t.Fatalf("retained stale leaf-generation cleanup=false, stats=%+v", result.stats)
+	}
+	if result.stats.RecordsCopied != 1 {
+		t.Fatalf("records copied=%d want 1, stats=%+v", result.stats.RecordsCopied, result.stats)
+	}
+	for _, ptr := range oldLeafPtrs {
+		path := leafLogSegmentPath(t, dir, ptr.FileID)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stale trailing cleanup removed recoverable leaf segment %s: %v", path, err)
+		}
+	}
+	want := bytes.Repeat([]byte("collection-online-stale-leaf-gc|"), 24)
+	if got := readCollectionRootValue(t, db, maintenanceTestCollectionRootKey, []byte("doc/p")); !bytes.Equal(got, want) {
+		t.Fatalf("collection value mismatch after retained stale leaf-generation cleanup")
+	}
+}
+
+func TestFinishValueLogRewriteLeafGenerationCleanup_ReturnsNonStaleError(t *testing.T) {
+	want := errors.New("leaf-generation cleanup failed")
+	stats := ValueLogRewriteStats{}
+	got := finishValueLogRewriteLeafGenerationCleanup(&stats, want)
+	if !errors.Is(got, want) {
+		t.Fatalf("cleanup error=%v want %v", got, want)
+	}
+	if stats.LeafGenerationCleanupRetainedRecoverableRootStale {
+		t.Fatalf("non-stale cleanup marked as retained debt: %+v", stats)
+	}
+}
+
 func TestValueLogRewriteOnline_CollectionRootCommitUsesCurrentStoragePolicy(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	dir := db.dir
@@ -2122,11 +2225,12 @@ func TestValueLogRewriteOnline_ObservedSourceGCReclaimsActiveUnreferencedSource(
 	if err != nil {
 		t.Fatalf("ValueLogGC without active reclaim: %v", err)
 	}
-	if activeStats.ObservedSourceSegmentsActive != 1 || activeStats.ObservedSourceSegmentsDeleted != 0 {
-		t.Fatalf("observed active source should remain without reclaim option: %+v", activeStats)
+	if activeStats.ObservedSourceSegmentsDeleted != 0 ||
+		activeStats.ObservedSourceSegmentsReferenced+activeStats.ObservedSourceSegmentsActive != 1 {
+		t.Fatalf("observed source should remain while active or recoverable: %+v", activeStats)
 	}
 	if _, err := os.Stat(sourcePath); err != nil {
-		t.Fatalf("active source should remain without reclaim option, stat=%v", err)
+		t.Fatalf("active or recoverable source should remain without reclaim option, stat=%v", err)
 	}
 
 	advancePastRetainedDurableSlotForTest(t, db)
@@ -4652,8 +4756,31 @@ func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	if state == nil || state.ValueLogSet == nil {
 		t.Fatalf("db state missing ValueLogSet after rewrite")
 	}
+	if _, ok := state.ValueLogSet.Files[oldID]; !ok {
+		t.Fatalf("old segment %d missing while an older durable root can still select it", oldID)
+	}
+
+	advancePastRetainedDurableSlotForTest(t, db)
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{oldID},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	}); err != nil {
+		t.Fatalf("ValueLogGC after durable-slot advance: %v", err)
+	}
+	state = db.State()
+	if state == nil || state.ValueLogSet == nil {
+		t.Fatalf("db state missing ValueLogSet after source retirement")
+	}
 	if _, ok := state.ValueLogSet.Files[oldID]; ok {
-		t.Fatalf("old segment %d still visible in current state after rewrite", oldID)
+		t.Fatalf("old segment %d still visible after every recoverable root released it", oldID)
+	}
+	gotSnap, err = snap.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("snapshot get k2 after source retirement: %v", err)
+	}
+	if !bytes.Equal(gotSnap, bytes.Repeat([]byte{11}, 512)) {
+		t.Fatalf("snapshot value mismatch after source retirement")
 	}
 }
 

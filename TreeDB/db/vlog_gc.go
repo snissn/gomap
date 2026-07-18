@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -15,6 +16,12 @@ import (
 // before reachability is re-evaluated; keeping a small recent window prevents
 // deleting freshly rotated segments that may still back in-memory pointers.
 const valueLogKeepRecentSegmentsPerLane = 2
+
+// ErrValueLogZombieDeferred reports that MarkValueLogZombie retained the
+// requested segment because it is still reachable or otherwise protected.
+// Callers should keep their cleanup record and retry after recovery roots or
+// other lifecycle pins advance.
+var ErrValueLogZombieDeferred = errors.New("treedb: value-log zombie marking deferred")
 
 // valueLogGCPostRefreshCurrentSetNoRefresh is a narrow test seam for the
 // second no-refresh read after the fallback Refresh call.
@@ -73,6 +80,10 @@ type ValueLogGCOptions struct {
 	// otherwise-active segment. Callers must first prove the source is
 	// unreferenced and fence cached writers past the source.
 	ObservedSourceReclaimActive bool
+	// observedSourceMissingIsError preserves MarkValueLogZombie's historical
+	// missing-manager signal without changing rewrite cleanup's documented
+	// best-effort treatment of already-retired observed IDs.
+	observedSourceMissingIsError bool
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -147,6 +158,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			return stats, err
 		}
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if lockMaintenance {
 		if hook := db.testStorageMaintenanceBeforeLockHook; hook != nil {
 			hook("value-log-gc")
@@ -164,16 +178,25 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 		}
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	vm := db.valueLogManager
 	if vm == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
 	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
+	missingObservedSourceError := func() error {
+		if !observedOnly || !opts.observedSourceMissingIsError {
+			return nil
+		}
+		for _, id := range opts.ObservedSourceFileIDs {
+			if id != 0 {
+				return fmt.Errorf("%w: file_id=%d", valuelog.ErrFileNotFound, id)
+			}
+		}
+		return nil
+	}
 	var referenced map[uint32]struct{}
 	var scannedSeq uint64
+	var recoverableRoots *RecoverableRootSet
 	if !observedOnly {
 		// A full scan is O(N), so it must never run while publishPrepareMu is
 		// exclusively held. Safety invariant: GC never zombifies a segment from a
@@ -195,6 +218,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 
 			db.publishPrepareMu.Lock()
 			if db.currentCommitSeq() == scannedSeq {
+				db.publishPrepareMu.Unlock()
 				break
 			}
 			db.publishPrepareMu.Unlock()
@@ -202,11 +226,36 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				return stats, nil
 			}
 		}
-	} else if !opts.DryRun {
-		db.publishPrepareMu.Lock()
 	}
-	if !opts.DryRun {
-		defer db.publishPrepareMu.Unlock()
+	{
+		var err error
+		if opts.DryRun {
+			recoverableRoots, err = db.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx)
+		} else {
+			recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+		}
+		if err != nil {
+			return stats, err
+		}
+		defer recoverableRoots.Release()
+		recoverableReferenced, err := db.referencedValueLogSegmentsForRecoverableRootSet(ctx, recoverableRoots)
+		if err != nil {
+			return stats, err
+		}
+		if referenced == nil {
+			referenced = make(map[uint32]struct{}, len(recoverableReferenced))
+		}
+		for fileID := range recoverableReferenced {
+			referenced[fileID] = struct{}{}
+		}
+
+		if !opts.DryRun {
+			db.publishPrepareMu.Lock()
+			defer db.publishPrepareMu.Unlock()
+			if !observedOnly && db.currentCommitSeq() != scannedSeq {
+				return stats, ErrRecoverableRootSetStale
+			}
+		}
 	}
 
 	// Commit-sequence equality fences published roots, not prepared output. The
@@ -239,6 +288,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if set != nil {
 			_ = vm.Release(set)
 		}
+		if err := missingObservedSourceError(); err != nil {
+			return stats, err
+		}
 		if !opts.DryRun && !db.readOnly {
 			db.persistValueLogRefTrackerBestEffort()
 		}
@@ -249,11 +301,19 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if set != nil {
 			_ = vm.Release(set)
 		}
+		if err := missingObservedSourceError(); err != nil {
+			return stats, err
+		}
 		if !opts.DryRun && !db.readOnly {
 			db.persistValueLogRefTrackerBestEffort()
 		}
 		return stats, nil
 	}
+	defer func() {
+		if set != nil {
+			_ = vm.Release(set)
+		}
+	}()
 	valueSet := &valuelog.Set{Files: files}
 	keptIDs := currentValueLogIDs(valueSet)
 	protectedAll := mergeUniqueNonEmptyPaths(opts.ProtectedPaths, opts.ProtectedInUsePaths, opts.ProtectedRetainedPaths)
@@ -317,6 +377,13 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 			f, ok := files[id]
 			if !ok {
+				if opts.observedSourceMissingIsError {
+					// MarkValueLogZombie historically delegated directly to the
+					// manager, whose missing-ID result is part of the caching backend
+					// contract: callers use ErrFileNotFound to remove an orphaned
+					// retained path that the manager no longer tracks.
+					return stats, fmt.Errorf("%w: file_id=%d", valuelog.ErrFileNotFound, id)
+				}
 				continue
 			}
 			size := fileSize(f)
@@ -324,6 +391,14 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			stats.ObservedSourceBytes += size
 			stats.SegmentsTotal++
 			stats.BytesTotal += size
+
+			if _, ok := referenced[id]; ok {
+				stats.SegmentsReferenced++
+				stats.BytesReferenced += size
+				stats.ObservedSourceSegmentsReferenced++
+				stats.ObservedSourceBytesReferenced += size
+				continue
+			}
 
 			if _, ok := pendingAppendIDs[id]; ok {
 				stats.SegmentsProtected++
@@ -392,9 +467,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				stats.ObservedSourceSegmentsPending++
 				stats.ObservedSourceBytesPending += size
 				continue
-			}
-			if err := vm.MarkZombie(id); err != nil {
-				return stats, err
 			}
 			candidates[id] = candidate{path: f.Path, size: size, observed: true}
 		}
@@ -495,9 +567,6 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 				}
 				continue
 			}
-			if err := vm.MarkZombie(id); err != nil {
-				return stats, err
-			}
 			candidates[id] = candidate{path: f.Path, size: size, observed: observed}
 		}
 	}
@@ -505,16 +574,48 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if opts.DryRun {
 		if set != nil {
 			_ = vm.Release(set)
+			set = nil
 		}
 		return stats, nil
+	}
+	if len(candidates) > 0 {
+		// Consume the exact recovery authority only after classification is
+		// complete. publishPrepareMu remains held, so no new visible root can make
+		// one of these segments reachable between the final validation and zombie
+		// mutation. Segments selected by an older recoverable root were excluded
+		// during classification; eligible rewritten sources leave the current
+		// ValueLogSet here, while snapshot/resource pins retain their exact physical
+		// identities until every remaining reader releases them.
+		if hook := db.testValueLogGCBeforeRevalidateHook; hook != nil {
+			hook()
+		}
+		if err := recoverableRoots.Revalidate(); err != nil {
+			return stats, err
+		}
+		for id := range candidates {
+			if err := vm.MarkZombie(id); err != nil {
+				return stats, err
+			}
+		}
+		if err := db.publishValueLogSetNoRefresh(); err != nil {
+			return stats, err
+		}
+		// The new current topology no longer selects these files. Persistent
+		// durable-root resource tokens and snapshot ValueLogSets now own any
+		// required physical retention, so the capability's cloned pins can drop
+		// before releasing this operation's local manager set.
+		recoverableRoots.Release()
 	}
 
 	if set != nil {
 		_ = vm.Release(set)
+		set = nil
 	}
 
-	if err := db.publishValueLogSetNoRefresh(); err != nil {
-		return stats, err
+	if len(candidates) == 0 {
+		if err := db.publishValueLogSetNoRefresh(); err != nil {
+			return stats, err
+		}
 	}
 
 	for _, info := range candidates {

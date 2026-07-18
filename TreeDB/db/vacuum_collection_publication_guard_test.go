@@ -68,7 +68,7 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			publicationGuardPackageFuncID("openReadOnly"),
 			publicationGuardPackageFuncID("openReadOnlyNoLock"),
 			publicationGuardPackageFuncID("openWithLock"),
-			publicationGuardDBMethodID("vacuumIndexOnline"),
+			publicationGuardDBMethodID("vacuumIndexOnlineLegacyV1"),
 		},
 		"snapshotViewRO.Store": {
 			publicationGuardDBMethodID("clearSnapshotView"),
@@ -82,7 +82,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
 			publicationGuardDBMethodID("publishLeafGenerationState"),
 			publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
-			publicationGuardDBMethodID("vacuumIndexOnline"),
+			publicationGuardDBMethodID("vacuumIndexOnlineLegacyV1"),
+			publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
 		},
 		"state.CompareAndSwap": {publicationGuardDBMethodID("ensureCommandWALRecoverySnapshotView")},
 		"state.Swap":           {publicationGuardPackageFuncID("openWithLock")},
@@ -152,7 +153,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 		publicationGuardDBMethodID("publishCompactStorageValueLogSet"),
 		publicationGuardDBMethodID("publishLeafGenerationState"),
 		publicationGuardDBMethodID("publishValueLogSetNoRefresh"),
-		publicationGuardDBMethodID("vacuumIndexOnline"),
+		publicationGuardDBMethodID("vacuumIndexOnlineLegacyV1"),
+		publicationGuardMethodID("rootPublicationVisibleInstallV1", "activate"),
 	}
 	sort.Strings(wantPublishCallers)
 	var gotPublishCallers []string
@@ -1248,6 +1250,10 @@ func publicationGuardPackageFuncID(name string) string {
 
 func publicationGuardDBMethodID(name string) string {
 	return publicationGuardPackagePath + ".(*DB)." + name
+}
+
+func publicationGuardMethodID(receiver, name string) string {
+	return publicationGuardPackagePath + ".(*" + receiver + ")." + name
 }
 
 func publicationGuardQualifier(pkg *types.Package) string {

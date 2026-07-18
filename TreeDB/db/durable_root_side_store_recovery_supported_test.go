@@ -71,6 +71,9 @@ func TestDurableRootPublicLayoutDictionaryDependencyReopenAndNewestSlotFallback(
 	if len(roots) != 1 || roots[0] == 0 {
 		t.Fatalf("published roots=%v", roots)
 	}
+	if err := main.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint sibling dictionary dependency: %v", err)
+	}
 	latestCommit := main.State().CommitSeq
 	fallbackSlot := uint64(1) - main.durableRoot.slot
 	fallbackCommit := main.durableRoot.slotCommit[fallbackSlot]

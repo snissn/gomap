@@ -2559,6 +2559,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		writeValuePool, writeValuePoolErr = makeWriteValuePool(cfg.SeedUsed, cfg.ValuePattern, cfg.ValueSize, cfg.ValuePoolSize)
 		return writeValuePool, writeValuePoolErr
 	}
+	var (
+		batchWriteSteadyCPUProfileStart func() error
+		batchWriteSteadyCPUProfileStop  func()
+	)
 
 	prefixScanBase := 0
 	expectedFullScanCount := -1
@@ -2770,6 +2774,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			valPos = 0
 		}
 
+		var stopSteadyCPUProfile func()
+		if steady && batchWriteSteadyCPUProfileStart != nil {
+			if err := batchWriteSteadyCPUProfileStart(); err != nil {
+				return 0, fmt.Errorf("%s cpu profile: %w", testLabel, err)
+			}
+			stopSteadyCPUProfile = batchWriteSteadyCPUProfileStop
+			defer func() {
+				if stopSteadyCPUProfile != nil {
+					stopSteadyCPUProfile()
+				}
+			}()
+		}
 		start := time.Now()
 		pc := newPeriodicCheckpoint(cfg)
 		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
@@ -2867,7 +2883,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 		}
-		return float64(total) / time.Since(start).Seconds(), nil
+		elapsed := time.Since(start)
+		if stopSteadyCPUProfile != nil {
+			stopSteadyCPUProfile()
+			stopSteadyCPUProfile = nil
+		}
+		return float64(total) / elapsed.Seconds(), nil
 	}
 	recordBatchDeleteRangeReport := func(testName string, db kvstore.DB, report batchDeleteRangeReport) {
 		if db == nil {
@@ -3147,7 +3168,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok || td == nil || td.DB == nil {
 				return math.NaN(), nil
 			}
-			if err := td.DB.CompactIndex(); err != nil {
+			var err error
+			switch td.DB.ResolvedProfile() {
+			case treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed:
+				err = td.DB.VacuumIndexOnline(context.Background())
+			default:
+				err = td.DB.CompactIndex()
+			}
+			if err != nil {
 				return 0, fmt.Errorf("vacuum_index: %w", err)
 			}
 			return math.NaN(), nil
@@ -4786,19 +4814,64 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			rng := rand.New(rand.NewSource(seed))
 
 			// Run
-			// CPU profile if enabled (only for single key count)
-			var cpuFile *os.File
+			// CPU profile if enabled (only for single key count).
+			// batch_write_steady starts and stops the profile inside runBatchWrite
+			// so fixture/key setup and optional dictionary warmup cannot dilute the
+			// CPU service ratio for its timed steady-state span.
+			var (
+				cpuFile           *os.File
+				cpuProfilePath    string
+				cpuProfileStarted bool
+				cpuProfileStopped bool
+			)
+			startCPUProfile := func() error {
+				if cpuFile == nil || cpuProfileStarted {
+					return nil
+				}
+				if err := profileHooks.startCPUProfile(cpuFile); err != nil {
+					return err
+				}
+				cpuProfileStarted = true
+				return nil
+			}
+			stopCPUProfile := func() {
+				if !cpuProfileStarted || cpuProfileStopped {
+					return
+				}
+				profileHooks.stopCPUProfile()
+				cpuProfileStopped = true
+			}
+			finishCPUProfile := func() {
+				stopCPUProfile()
+				if cpuFile == nil {
+					return
+				}
+				_ = cpuFile.Close()
+				if !cpuProfileStarted {
+					_ = os.Remove(cpuProfilePath)
+				}
+				cpuFile = nil
+			}
+			batchWriteSteadyCPUProfileStart = nil
+			batchWriteSteadyCPUProfileStop = nil
 			if shouldCPUProfile(cfg, testName) {
-				path := strings.TrimSpace(cfg.CPUProfile) + "_" + testName + "_" + inst.Name + ".pprof"
-				f, err := os.Create(path)
+				cpuProfilePath = strings.TrimSpace(cfg.CPUProfile) + "_" + testName + "_" + inst.Name + ".pprof"
+				f, err := os.Create(cpuProfilePath)
 				if err != nil {
-					return BenchRun{}, fmt.Errorf("cpuprofile %s: %w", path, err)
+					return BenchRun{}, fmt.Errorf("cpuprofile %s: %w", cpuProfilePath, err)
 				}
 				cpuFile = f
-				if err := profileHooks.startCPUProfile(cpuFile); err != nil {
-					_ = cpuFile.Close()
-					_ = os.Remove(path)
-					return BenchRun{}, fmt.Errorf("cpuprofile start %s: %w", path, err)
+				if testName == "batch_write_steady" {
+					batchWriteSteadyCPUProfileStart = func() error {
+						if err := startCPUProfile(); err != nil {
+							return fmt.Errorf("cpuprofile start %s: %w", cpuProfilePath, err)
+						}
+						return nil
+					}
+					batchWriteSteadyCPUProfileStop = stopCPUProfile
+				} else if err := startCPUProfile(); err != nil {
+					finishCPUProfile()
+					return BenchRun{}, fmt.Errorf("cpuprofile start %s: %w", cpuProfilePath, err)
 				}
 			}
 
@@ -4806,10 +4879,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if shouldAllocsProfile(cfg, testName) {
 				allocBasePath, err = profileHooks.writeAllocsSnapshotTemp("unified_bench_allocs_base")
 				if err != nil {
-					if cpuFile != nil {
-						profileHooks.stopCPUProfile()
-						_ = cpuFile.Close()
-					}
+					batchWriteSteadyCPUProfileStart = nil
+					batchWriteSteadyCPUProfileStop = nil
+					finishCPUProfile()
 					return BenchRun{}, fmt.Errorf("allocsprofile baseline %s/%s: %w", testName, inst.Name, err)
 				}
 			}
@@ -4817,10 +4889,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if blockProfilePath != "" {
 				blockBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_block_base", "block")
 				if err != nil {
-					if cpuFile != nil {
-						profileHooks.stopCPUProfile()
-						_ = cpuFile.Close()
-					}
+					batchWriteSteadyCPUProfileStart = nil
+					batchWriteSteadyCPUProfileStop = nil
+					finishCPUProfile()
 					_ = os.Remove(allocBasePath)
 					return BenchRun{}, fmt.Errorf("blockprofile baseline %s/%s: %w", testName, inst.Name, err)
 				}
@@ -4829,10 +4900,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if mutexProfilePath != "" {
 				mutexBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_mutex_base", "mutex")
 				if err != nil {
-					if cpuFile != nil {
-						profileHooks.stopCPUProfile()
-						_ = cpuFile.Close()
-					}
+					batchWriteSteadyCPUProfileStart = nil
+					batchWriteSteadyCPUProfileStop = nil
+					finishCPUProfile()
 					_ = os.Remove(allocBasePath)
 					_ = os.Remove(blockBasePath)
 					return BenchRun{}, fmt.Errorf("mutexprofile baseline %s/%s: %w", testName, inst.Name, err)
@@ -4840,11 +4910,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 
 			opsPerSec, runErr := fn(inst.Wrapper, rng)
-
-			if cpuFile != nil {
-				profileHooks.stopCPUProfile()
-				_ = cpuFile.Close()
-			}
+			batchWriteSteadyCPUProfileStart = nil
+			batchWriteSteadyCPUProfileStop = nil
+			finishCPUProfile()
 
 			blockAfterPath := ""
 			mutexAfterPath := ""
@@ -7364,7 +7432,7 @@ func runChurnVacuumSuite(baseCfg BenchConfig) (string, error) {
 	// Churn + settled scans, then VACUUM and scan again on the same dataset.
 	cfg := baseCfg
 	cfg.Progress = false
-	cfg.DBsArg = "treedb,leveldb"
+	cfg.DBsArg = "treedb_bench_unsafe,leveldb"
 	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,vacuum_index,full_scan2,prefix_scan2"
 	cfg.SettleBeforeScans = true
 

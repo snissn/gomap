@@ -123,6 +123,9 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if beforeView.mutationParts == 0 || len(oldRefs) == 0 {
 		t.Fatalf("before compaction manifest mutation_parts=%d refs=%d want mutation-bearing refs", beforeView.mutationParts, len(oldRefs))
 	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle pre-compaction publication before pin baseline: %v", err)
+	}
 	registry := d.StableResourceIdentityPinRegistry()
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
@@ -137,8 +140,13 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if got := col.Meta().Options.ColumnStore.PhysicalMutationParts; got != 0 {
 		t.Fatalf("PhysicalMutationParts=%d want reset after compaction", got)
 	}
-	if got := registry.ActivePins(); got != baselinePins {
-		t.Fatalf("stable asset pins after compaction publish=%d want baseline %d", got, baselinePins)
+	// Return guarantees the activated visible closure; the independently
+	// recoverable durable closure may already be installed by the asynchronous
+	// publisher. Require one of those two exact ownership states.
+	visiblePins := baselinePins + uint64(stats.AssetsPublished)
+	visibleAndDurablePins := baselinePins + 2*uint64(stats.AssetsPublished)
+	if got := registry.ActivePins(); got != visiblePins && got != visibleAndDurablePins {
+		t.Fatalf("stable asset pins after compaction publish=%d want visible %d or visible+durable %d", got, visiblePins, visibleAndDurablePins)
 	}
 	if got := registry.ActiveIdentities(); got != baselineIdentities {
 		t.Fatalf("stable asset identities after compaction publish=%d want baseline %d", got, baselineIdentities)

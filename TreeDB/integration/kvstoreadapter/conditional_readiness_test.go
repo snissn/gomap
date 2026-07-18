@@ -32,7 +32,7 @@ func TestAdapterReadinessUsesNativeRevisionsAndConditionalConflicts(t *testing.T
 		ParentDir:      t.TempDir(),
 		Name:           "application",
 		AdapterName:    "TreeDB Conditional Proof",
-		DefaultProfile: treedb.ProfileBench,
+		DefaultProfile: treedb.ProfileNoWALFast,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
