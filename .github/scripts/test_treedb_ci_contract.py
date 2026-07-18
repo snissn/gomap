@@ -35,6 +35,18 @@ class TreeDBCIContractTests(unittest.TestCase):
             r"(?ms)^  push:\s*\n    branches:\s*\n      - main\s*$",
         )
 
+    def test_only_superseded_pull_request_runs_share_a_concurrency_group(self) -> None:
+        concurrency = block(self.source, "concurrency:\n", "\npermissions:")
+        self.assertIn(
+            "${{ github.event.pull_request.number || github.run_id }}",
+            concurrency,
+        )
+        self.assertIn(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            concurrency,
+        )
+        self.assertNotIn("github.ref", concurrency)
+
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (
             ("test", "race"),
@@ -67,7 +79,9 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn('if [[ "$EVENT_NAME" != "pull_request" ]]', mvcc)
         self.assertIn('git diff --name-only "$BASE_SHA...$HEAD_SHA"', mvcc)
         self.assertNotIn('/commits/${HEAD_SHA}/pulls', mvcc)
+        self.assertNotIn('/commits/${head_sha}/pulls', mvcc)
         self.assertNotIn('/pulls/${PR_NUMBER}/files', mvcc)
+        self.assertNotIn('/pulls/${pr_number}/files', mvcc)
 
     def test_mvcc_observation_only_label_does_not_change_attribution(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")
