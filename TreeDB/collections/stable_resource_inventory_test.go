@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/authorityinventory"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -416,6 +417,9 @@ func testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *test
 	}
 	key := []byte("published-to-other-segment")
 	document := []byte(`{"time_us":3,"kind":"like","did":"did:other"}`)
+	// This hook runs after GC captured and pinned its RecoverableRootSet but
+	// before the stable deleter's final revalidation. Advance the publication
+	// basis deterministically so the stale capability must fail closed.
 	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
 		if _, err := colB.Insert(key, document); err != nil {
 			t.Fatal(err)
@@ -428,6 +432,9 @@ func testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *test
 	})
 	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
 		t.Fatalf("commit-advance GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) {
+		t.Fatalf("commit-advance GC error=%v want ErrRecoverableRootSetStale", err)
 	}
 	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
 		t.Fatalf("commit-advance GC stats=%+v want eligible untouched", stats)
