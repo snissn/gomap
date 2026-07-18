@@ -49,12 +49,12 @@ def workflow_job(workflow: str, job_name: str) -> str:
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
-    def test_core_shards_use_equal_bounded_four_way_partition(self) -> None:
+    def test_core_shards_use_equal_bounded_five_way_partition(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
-        # Three deterministic shards passed exact-head proof but the next
-        # exact-main run still exhausted this bounded cap with healthy tests
-        # incomplete. Four shards restore tail headroom without raising it.
+        # Four deterministic shards passed exact-head proof but a later
+        # exact-PR run still exhausted this bounded cap with healthy tests
+        # incomplete. Five shards restore tail headroom without raising it.
         self.assertEqual(
             len(
                 re.findall(
@@ -63,13 +63,13 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
                     re.MULTILINE,
                 )
             ),
-            4,
+            5,
         )
-        for shard in range(4):
+        for shard in range(5):
             job_name = f"windows-core-{shard + 1}"
             with self.subTest(job_name=job_name):
                 self.assertEqual(matrix_timeout(workflow, job_name), 30)
-                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 4))
+                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 5))
         self.assertIn("timeout-minutes: ${{ matrix.timeout }}", workflow)
 
     def test_core_selection_has_no_two_way_pin_complement_special_case(self) -> None:
