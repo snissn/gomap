@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import math
+import os
 import re
 import subprocess
 import tempfile
@@ -63,16 +64,49 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         wrong_last_auto_leaf_mode: bool = False,
         wrong_last_off_leaf_mode: bool = False,
         hidden_auto_sidecar_last: bool = False,
-        min_throughput_frac: float = 0.95,
+        include_cpu_profiles: bool = True,
+        cpu_efficiency_ratios: list[float] | None = None,
+        omit_last_auto_cpu_profile: bool = False,
+        missing_last_auto_cpu_profile: bool = False,
+        ambiguous_last_auto_cpu_profile: bool = False,
+        too_short_last_auto_cpu_profile: bool = False,
+        min_cpu_efficiency_frac: float = 0.95,
     ) -> subprocess.CompletedProcess[str]:
         if size_ratios is None:
             size_ratios = [0.996] * len(throughput_ratios)
         self.assertEqual(len(throughput_ratios), len(size_ratios))
+        if cpu_efficiency_ratios is None:
+            cpu_efficiency_ratios = throughput_ratios
+        self.assertEqual(len(throughput_ratios), len(cpu_efficiency_ratios))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             args = [str(self.checker_bin)]
-            for index, (throughput_ratio, size_ratio) in enumerate(
-                zip(throughput_ratios, size_ratios, strict=True), start=1
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            fake_go = fake_bin / "go"
+            fake_go.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$#\" -ne 5 ] || [ \"$1\" != tool ] || "
+                "[ \"$2\" != pprof ]; then\n"
+                "  echo 'unexpected fake go invocation' >&2\n"
+                "  exit 97\n"
+                "fi\n"
+                "if [ ! -r \"$5\" ]; then\n"
+                "  echo \"profile not readable: $5\" >&2\n"
+                "  exit 98\n"
+                "fi\n"
+                "cat \"$5\"\n",
+                encoding="utf-8",
+            )
+            fake_go.chmod(0o755)
+            for index, (throughput_ratio, size_ratio, cpu_efficiency_ratio) in enumerate(
+                zip(
+                    throughput_ratios,
+                    size_ratios,
+                    cpu_efficiency_ratios,
+                    strict=True,
+                ),
+                start=1,
             ):
                 off_log = Path(temp_dir) / f"off-{index}.txt"
                 auto_log = Path(temp_dir) / f"auto-{index}.txt"
@@ -141,17 +175,77 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                 args.extend(["-off-log", str(off_log)])
                 if not (omit_last_auto and index == len(throughput_ratios)):
                     args.extend(["-auto-log", str(auto_log)])
+                if include_cpu_profiles:
+                    off_cpu_profile = Path(temp_dir) / f"off-{index}.pprof"
+                    auto_cpu_profile = Path(temp_dir) / f"auto-{index}.pprof"
+                    off_cpu_seconds = 1.0
+                    auto_cpu_seconds = off_cpu_seconds / cpu_efficiency_ratio
+                    off_cpu_profile.write_text(
+                        "Duration: 2.000s, Total samples = "
+                        f"{off_cpu_seconds:.6f}s (50.00%)\n",
+                        encoding="utf-8",
+                    )
+                    if not (
+                        missing_last_auto_cpu_profile
+                        and index == len(throughput_ratios)
+                    ):
+                        auto_profile_text = (
+                            "Duration: 2.000s, Total samples = "
+                            f"{auto_cpu_seconds:.6f}s (50.00%)\n"
+                        )
+                        if (
+                            ambiguous_last_auto_cpu_profile
+                            and index == len(throughput_ratios)
+                        ):
+                            auto_profile_text += auto_profile_text
+                        if (
+                            too_short_last_auto_cpu_profile
+                            and index == len(throughput_ratios)
+                        ):
+                            auto_profile_text = (
+                                "Duration: 0.200s, Total samples = "
+                                "0.100000s (50.00%)\n"
+                            )
+                        auto_cpu_profile.write_text(
+                            auto_profile_text,
+                            encoding="utf-8",
+                        )
+                    args.extend(
+                        ["-off-cpu-profile", str(off_cpu_profile)]
+                    )
+                    if not (
+                        omit_last_auto_cpu_profile
+                        and index == len(throughput_ratios)
+                    ):
+                        args.extend(
+                            ["-auto-cpu-profile", str(auto_cpu_profile)]
+                        )
             args.extend(
                 [
                     "-min-samples",
                     str(len(throughput_ratios)),
-                    "-min-throughput-frac",
-                    str(min_throughput_frac),
                     "-max-size-frac",
                     "1.02",
                 ]
             )
-            return subprocess.run(args, capture_output=True, text=True, check=False)
+            if include_cpu_profiles:
+                args.extend(
+                    [
+                        "-min-cpu-efficiency-frac",
+                        str(min_cpu_efficiency_frac),
+                        "-min-cpu-seconds",
+                        "0.25",
+                    ]
+                )
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+            return subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
 
     def test_one_lucky_sample_cannot_override_mostly_failing_pairs(self) -> None:
         ratios = [0.94, 0.93, 0.92, 0.91, 0.90, 0.94, 0.93, 0.92, 0.91, 1.18]
@@ -159,14 +253,17 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         expected = math.prod(ratios) ** (1 / len(ratios))
-        self.assertIn(f"throughput_geomean={expected:.4f}", result.stdout)
-        self.assertIn("FAIL aggregate throughput gate", result.stderr)
+        self.assertIn(f"cpu_efficiency_geomean={expected:.4f}", result.stdout)
+        self.assertIn("FAIL aggregate CPU-efficiency gate", result.stderr)
 
     def test_complete_paired_settled_aggregate_above_boundary_passes(self) -> None:
         result = self.run_checker([0.96, 0.98, 0.99, 1.01])
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("PASS incompressible auto-vs-off aggregate gate", result.stdout)
+        self.assertIn(
+            "PASS incompressible auto-vs-off aggregate CPU-efficiency gate",
+            result.stdout,
+        )
 
     def test_aggregate_equal_to_boundary_fails(self) -> None:
         result = self.run_checker([0.95, 0.95])
@@ -178,7 +275,9 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         ratios = [0.9534, 0.9571, 0.9408, 0.9497, 0.9393, 0.9546]
 
         default_result = self.run_checker(ratios)
-        epyc_7763_result = self.run_checker(ratios, min_throughput_frac=0.94)
+        epyc_7763_result = self.run_checker(
+            ratios, min_cpu_efficiency_frac=0.94
+        )
 
         self.assertEqual(
             default_result.returncode,
@@ -190,11 +289,11 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
             0,
             epyc_7763_result.stdout + epyc_7763_result.stderr,
         )
-        self.assertIn("throughput_geomean=0.9491", epyc_7763_result.stdout)
+        self.assertIn("cpu_efficiency_geomean=0.9491", epyc_7763_result.stdout)
 
     def test_epyc_7763_aggregate_equal_to_adjusted_boundary_fails(self) -> None:
         result = self.run_checker(
-            [0.94, 0.94], min_throughput_frac=0.94
+            [0.94, 0.94], min_cpu_efficiency_frac=0.94
         )
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -268,6 +367,86 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("off leaf write mode is \"block\", want \"off\"", result.stderr)
 
+    def test_wall_collapse_can_pass_only_with_complete_cpu_efficiency_evidence(self) -> None:
+        result = self.run_checker(
+            [0.48, 0.70],
+            include_cpu_profiles=True,
+            cpu_efficiency_ratios=[0.96, 0.98],
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("wall_throughput_geomean=0.5797", result.stdout)
+        self.assertIn("cpu_efficiency_geomean=0.9699", result.stdout)
+
+    def test_wall_pass_cannot_hide_failing_cpu_efficiency(self) -> None:
+        result = self.run_checker(
+            [1.40, 1.30],
+            include_cpu_profiles=True,
+            cpu_efficiency_ratios=[0.90, 0.92],
+        )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAIL aggregate CPU-efficiency gate", result.stderr)
+
+    def test_cpu_efficiency_equal_to_boundary_fails(self) -> None:
+        result = self.run_checker(
+            [1.20, 1.20],
+            include_cpu_profiles=True,
+            cpu_efficiency_ratios=[0.95, 0.95],
+        )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("<= 0.9500", result.stderr)
+
+    def test_missing_cpu_profile_fails_closed(self) -> None:
+        result = self.run_checker(
+            [1.20, 1.20],
+            include_cpu_profiles=True,
+            missing_last_auto_cpu_profile=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("parse auto CPU profile sample 2", result.stderr)
+
+    def test_ambiguous_cpu_profile_fails_closed(self) -> None:
+        result = self.run_checker(
+            [1.20, 1.20],
+            include_cpu_profiles=True,
+            ambiguous_last_auto_cpu_profile=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("ambiguous Total samples metrics", result.stderr)
+
+    def test_too_short_cpu_profile_fails_closed(self) -> None:
+        result = self.run_checker(
+            [1.20, 1.20],
+            include_cpu_profiles=True,
+            too_short_last_auto_cpu_profile=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("CPU profile too short", result.stderr)
+
+    def test_cpu_profile_pair_count_mismatch_fails_closed(self) -> None:
+        result = self.run_checker(
+            [1.20, 1.20],
+            include_cpu_profiles=True,
+            omit_last_auto_cpu_profile=True,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("CPU profile pair count mismatch", result.stderr)
+
+    def test_missing_all_cpu_profiles_fails_closed(self) -> None:
+        result = self.run_checker(
+            [1.20, 1.20],
+            include_cpu_profiles=False,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("CPU profile/log sample count mismatch", result.stderr)
+
 
 class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
     def test_perf_job_runs_aggregate_checker_self_tests(self) -> None:
@@ -287,7 +466,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("max_attempts", script)
         self.assertNotIn("exit 0", script)
         self.assertIn(
-            'if ((sample % 2 == 1)); then echo "sample ${sample} order=off-auto" run_vlog_row treedb_vlog_off "${off_log}" run_vlog_row treedb_vlog_auto "${auto_log}" else echo "sample ${sample} order=auto-off" run_vlog_row treedb_vlog_auto "${auto_log}" run_vlog_row treedb_vlog_off "${off_log}"',
+            'if ((sample % 2 == 1)); then echo "sample ${sample} order=off-auto" run_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}" run_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}" else echo "sample ${sample} order=auto-off" run_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}" run_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"',
             script,
         )
 
@@ -301,14 +480,15 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertIn('-min-samples "${sample_count}"', script)
         self.assertIn("-test batch_write_steady", script)
         self.assertNotIn("-test batch_write ", script)
-        self.assertIn('min_throughput_frac="0.95"', script)
+        self.assertIn('min_cpu_efficiency_frac="0.95"', script)
         self.assertIn(
-            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_throughput_frac="0.94" fi',
+            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_cpu_efficiency_frac="0.94" fi',
             script,
         )
         self.assertIn(
-            '-min-throughput-frac "${min_throughput_frac}"', script
+            '-min-cpu-efficiency-frac "${min_cpu_efficiency_frac}"', script
         )
+        self.assertIn("-min-cpu-seconds 0.25", script)
         self.assertIn("-max-size-frac 1.02", script)
         self.assertIn(
             "EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x",
@@ -321,7 +501,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
             'echo "incompressible gate cpu_model=${cpu_model}"', script
         )
         self.assertIn(
-            'echo "incompressible gate min_throughput_frac=${min_throughput_frac}"',
+            'echo "incompressible gate min_cpu_efficiency_frac=${min_cpu_efficiency_frac}"',
             script,
         )
         self.assertIn('2>&1 | tee -a "${summary_log}"', script)
@@ -330,6 +510,21 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertIn("vlog_auto_incompressible_summary.txt", script)
         self.assertIn("vlog_auto_incompressible_off_sample*.txt", script)
         self.assertIn("vlog_auto_incompressible_auto_sample*.txt", script)
+
+    def test_workflow_profiles_every_exact_settled_row_and_uploads_evidence(self) -> None:
+        script = normalized(perf_job_script())
+
+        self.assertIn('-cpuprofile "${cpu_profile_prefix}"', script)
+        self.assertIn("-cpuprofile-tests batch_write_steady", script)
+        self.assertIn(
+            'checker_args+=( -off-cpu-profile "${off_cpu_profiles[$sample]}" -auto-cpu-profile "${auto_cpu_profiles[$sample]}" )',
+            script,
+        )
+        self.assertIn(
+            '-min-cpu-efficiency-frac "${min_cpu_efficiency_frac}"',
+            script,
+        )
+        self.assertIn("vlog_auto_incompressible_*_sample*.pprof", script)
 
 
 if __name__ == "__main__":
