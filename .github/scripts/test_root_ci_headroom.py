@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "root-tests.yml"
+SHARD_AWK = "BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }"
 
 
 def matrix_entries(source: str) -> dict[str, dict[str, str]]:
@@ -43,9 +44,58 @@ def command_lines(*args: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def modulo_shards(items: list[str], count: int) -> list[list[str]]:
-    return [[item for index, item in enumerate(items) if index % count == shard]
-            for shard in range(count)]
+def workflow_steps(source: str) -> list[dict[str, str]]:
+    lines = source.splitlines()
+    steps: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        name_match = re.fullmatch(r"      - name: (.+)", line)
+        if name_match is not None:
+            current = {"name": name_match.group(1)}
+            steps.append(current)
+            index += 1
+            continue
+        field_match = re.fullmatch(r"        (if|run): (.+)", line)
+        if current is not None and field_match is not None:
+            field, value = field_match.groups()
+            if field == "run" and value == "|":
+                block: list[str] = []
+                index += 1
+                while index < len(lines):
+                    block_line = lines[index]
+                    if block_line.startswith("          "):
+                        block.append(block_line[10:])
+                        index += 1
+                        continue
+                    if not block_line:
+                        block.append("")
+                        index += 1
+                        continue
+                    break
+                current[field] = "\n".join(block)
+                continue
+            current[field] = value
+        index += 1
+    return steps
+
+
+def awk_shards(items: list[str], count: int) -> list[list[str]]:
+    input_text = "".join(f"{item}\n" for item in items)
+    shards: list[list[str]] = []
+    for shard in range(count):
+        result = subprocess.run(
+            ["awk", "-v", f"idx={shard}", "-v", f"n={count}", SHARD_AWK],
+            check=True,
+            capture_output=True,
+            input=input_text,
+            text=True,
+        )
+        shards.append(
+            [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        )
+    return shards
 
 
 class RootCIHeadroomContractTests(unittest.TestCase):
@@ -53,8 +103,18 @@ class RootCIHeadroomContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = WORKFLOW.read_text(encoding="utf-8")
         cls.entries = matrix_entries(cls.source)
+        cls.steps = workflow_steps(cls.source)
 
     def test_existing_ubuntu_matrix_is_unchanged(self) -> None:
+        self.assertEqual(
+            set(self.entries),
+            {
+                "ubuntu-latest-1",
+                "ubuntu-latest-2",
+                "macos-latest-1",
+                "macos-latest-2",
+            },
+        )
         self.assertEqual(
             self.entries["ubuntu-latest-1"],
             {
@@ -120,17 +180,39 @@ class RootCIHeadroomContractTests(unittest.TestCase):
         self.assertEqual(self.source.count("if ((c % n) == idx) print"), 2)
 
     def test_contract_runs_on_one_existing_ubuntu_shard(self) -> None:
-        self.assertIn("name: Root CI headroom contract", self.source)
-        self.assertIn(
-            "if: ${{ matrix.name == 'ubuntu-latest-1' }}",
-            self.source,
-        )
-        self.assertIn(
-            "python3 .github/scripts/test_root_ci_headroom.py",
-            self.source,
+        contract_steps = [
+            step
+            for step in self.steps
+            if step["name"] == "Root CI headroom contract"
+        ]
+        self.assertEqual(
+            contract_steps,
+            [
+                {
+                    "name": "Root CI headroom contract",
+                    "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+                    "run": "python3 .github/scripts/test_root_ci_headroom.py",
+                }
+            ],
         )
 
     def test_current_package_and_db_test_domains_partition_exactly_once(self) -> None:
+        test_steps = [step for step in self.steps if step["name"] == "Test"]
+        self.assertEqual(len(test_steps), 1)
+        test_command = test_steps[0]["run"]
+        package_pipeline = (
+            "go list ./... | grep -v "
+            "'^github.com/snissn/gomap/TreeDB/db$' | "
+            'awk -v idx="$shard_index" -v n="$shard_count" '
+            f"'{SHARD_AWK}' > \"$package_file\""
+        )
+        db_pipeline = (
+            "go test ./TreeDB/db -list 'Test.*' | grep '^Test' | "
+            'awk -v idx="$shard_index" -v n="$shard_count" '
+            f"'{SHARD_AWK}' > \"$db_test_file\""
+        )
+        self.assertEqual(test_command.count(package_pipeline), 1)
+        self.assertEqual(test_command.count(db_pipeline), 1)
         packages = [
             package
             for package in command_lines("go", "list", "./...")
@@ -147,7 +229,7 @@ class RootCIHeadroomContractTests(unittest.TestCase):
             with self.subTest(domain=label):
                 self.assertTrue(domain)
                 self.assertEqual(len(domain), len(set(domain)))
-                shards = modulo_shards(domain, 2)
+                shards = awk_shards(domain, 2)
                 self.assertFalse(set(shards[0]) & set(shards[1]))
                 self.assertEqual(set(shards[0]) | set(shards[1]), set(domain))
                 self.assertEqual(sum(map(len, shards)), len(domain))
