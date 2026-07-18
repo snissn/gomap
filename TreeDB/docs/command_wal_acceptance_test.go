@@ -170,8 +170,11 @@ func TestPR9AcceptancePerformanceGateIsStrictParityPlus(t *testing.T) {
 	workflow := collapseWhitespace(readRepoText(t, ".github/workflows/treedb-tests.yml"))
 	assertContainsAll(t, workflow, "current perf smoke workflow",
 		"sample_count=6",
-		"run_vlog_row treedb_vlog_off",
-		"run_vlog_row treedb_vlog_auto",
+		"record_vlog_row treedb_vlog_off",
+		"record_vlog_row treedb_vlog_auto",
+		`benchmark_failures+=("${db}:${output}")`,
+		`incompressible gate benchmark_failures=${#benchmark_failures[@]}`,
+		`if ((${#benchmark_failures[@]} > 0)); then exit 1`,
 		"-test batch_write_steady",
 		`-cpuprofile "${cpu_profile_prefix}"`,
 		"-cpuprofile-tests batch_write_steady",
