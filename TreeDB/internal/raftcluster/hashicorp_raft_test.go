@@ -749,7 +749,10 @@ func TestHashicorpRaftProviderLeaderCrashBeforeCommitDoesNotReportSuccessOrMutat
 	var attempt submitAttempt
 	select {
 	case attempt = <-submitDone:
-	case <-time.After(5 * time.Second):
+	// The submit remains bounded by its five-second context. Give its result
+	// delivery enough slack that the test's own timeout cannot race that bound
+	// now that the partitioned leader intentionally retains its lease longer.
+	case <-time.After(8 * time.Second):
 		t.Fatalf("timed out waiting for partitioned pre-commit submit to fail; states=%s", cluster.admissionSummary())
 	}
 	if attempt.err == nil {
@@ -927,6 +930,8 @@ type hashicorpRaftTestNode struct {
 	barrierLogStore *barrierCountingLogStore
 }
 
+const hashicorpRaftTestCoordinationTimeout = 5 * time.Second
+
 func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
 	tb.Helper()
 	cluster := newHashicorpRaftCluster(tb, func(tb testing.TB, cfg Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
@@ -1002,7 +1007,7 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 	}
 	transports := make(map[NodeID]*hraft.InmemTransport, len(peers))
 	for _, peer := range peers {
-		_, transport := hraft.NewInmemTransport(hraft.ServerAddress(peer.Address))
+		_, transport := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(peer.Address), hashicorpRaftTestCoordinationTimeout)
 		transports[peer.ID] = transport
 	}
 	for _, from := range peers {
@@ -1059,6 +1064,24 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 		}
 		cluster.nodes[peer.ID] = node
 	}
+	// The larger follower timeout would otherwise add a randomized 5-10 second
+	// delay to every initial election. TimeoutNow starts the normal HashiCorp
+	// election path immediately; waitForLeader still proves live quorum and a
+	// stable term before returning a leader to the test.
+	electionTarget := peers[0]
+	electionSource := peers[1]
+	if err := transports[electionSource.ID].TimeoutNow(
+		hraft.ServerID(electionTarget.ID),
+		hraft.ServerAddress(electionTarget.Address),
+		&hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{
+			ProtocolVersion: hraft.ProtocolVersionMax,
+			ID:              []byte(electionSource.ID),
+			Addr:            []byte(electionSource.Address),
+		}},
+		&hraft.TimeoutNowResponse{},
+	); err != nil {
+		tb.Fatalf("start initial HashiCorp Raft test election: %v", err)
+	}
 	tb.Cleanup(func() {
 		for _, node := range cluster.nodes {
 			_ = node.closeLocal()
@@ -1099,9 +1122,21 @@ func openHashicorpRaftTestDBAndFSM(tb testing.TB, cfg Config) (*backenddb.DB, *r
 
 func hashicorpRaftFastTestConfig() *hraft.Config {
 	conf := hraft.DefaultConfig()
-	conf.HeartbeatTimeout = 500 * time.Millisecond
-	conf.ElectionTimeout = 500 * time.Millisecond
-	conf.LeaderLeaseTimeout = 250 * time.Millisecond
+	// Give these in-memory integration clusters enough coordination headroom to
+	// survive multi-second scheduling stalls on the contended Windows shard.
+	// HashiCorp Raft uses HeartbeatTimeout to start follower elections and
+	// LeaderLeaseTimeout to make a leader step down when it cannot contact a
+	// quorum, so retaining the defaults still allowed legitimate leadership
+	// churn immediately after the state-based readiness barrier.
+	conf.HeartbeatTimeout = hashicorpRaftTestCoordinationTimeout
+	conf.ElectionTimeout = hashicorpRaftTestCoordinationTimeout
+	conf.LeaderLeaseTimeout = hashicorpRaftTestCoordinationTimeout
+	// The readiness barrier below deliberately retains the default one-second
+	// observation window. These larger coordination timeouts protect a later
+	// scheduler stall without turning every readiness proof into a five-second
+	// wait. CommitTimeout, SnapshotInterval, SnapshotThreshold, and TrailingLogs
+	// retain the fast test behavior; the output and telemetry overrides only
+	// keep tests quiet.
 	conf.CommitTimeout = 10 * time.Millisecond
 	conf.SnapshotInterval = time.Hour
 	conf.SnapshotThreshold = ^uint64(0)
@@ -1112,33 +1147,167 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	return conf
 }
 
+func TestHashicorpRaftFastTestConfigAddsSchedulingHeadroom(t *testing.T) {
+	defaults := hraft.DefaultConfig()
+	got := hashicorpRaftFastTestConfig()
+	const minCoordinationTimeout = 5 * time.Second
+	if got.HeartbeatTimeout < minCoordinationTimeout {
+		t.Fatalf("HeartbeatTimeout=%s want at least CI scheduling headroom %s (HashiCorp default %s)", got.HeartbeatTimeout, minCoordinationTimeout, defaults.HeartbeatTimeout)
+	}
+	if got.ElectionTimeout < minCoordinationTimeout {
+		t.Fatalf("ElectionTimeout=%s want at least CI scheduling headroom %s (HashiCorp default %s)", got.ElectionTimeout, minCoordinationTimeout, defaults.ElectionTimeout)
+	}
+	if got.LeaderLeaseTimeout < minCoordinationTimeout {
+		t.Fatalf("LeaderLeaseTimeout=%s want at least CI scheduling headroom %s (HashiCorp default %s)", got.LeaderLeaseTimeout, minCoordinationTimeout, defaults.LeaderLeaseTimeout)
+	}
+	validated := *got
+	validated.LocalID = "test-node"
+	if err := hraft.ValidateConfig(&validated); err != nil {
+		t.Fatalf("ValidateConfig: %v", err)
+	}
+	wantSettlingWindow := hashicorpRaftLeaderSettlingWindow(defaults)
+	if gotSettlingWindow := hashicorpRaftTestLeaderSettlingWindow(); gotSettlingWindow != wantSettlingWindow {
+		t.Fatalf("readiness settling window=%s want HashiCorp default coordination window %s", gotSettlingWindow, wantSettlingWindow)
+	}
+}
+
+// waitForLeader requires continuous live-quorum observations of one leader and
+// term across HashiCorp Raft's default coordination window. A single Leader
+// admission observation, or two observations one poll apart, can be sampled
+// while the election/current-term no-op is still settling. The test cluster's
+// larger timeouts protect later scheduling stalls rather than extending this
+// readiness dwell. This is a test-harness barrier only; it deliberately does
+// not retry the operation under test.
 func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
 	tb.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		var leader *hashicorpRaftTestNode
-		for _, node := range c.nodes {
-			if node.provider == nil {
-				continue
-			}
-			status, err := node.provider.ClusterAdmissionStatus(context.Background())
-			if err != nil {
-				tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
-			}
-			if status.Leader {
-				if leader != nil {
-					tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
-				}
-				leader = node
-			}
+	// Opening three durable test nodes can consume most of the old 15-second
+	// budget on a contended Windows runner. Keep failure bounded, but leave
+	// enough time for an election before requiring the state-based quorum/term
+	// barrier below.
+	deadline := time.Now().Add(30 * time.Second)
+	readinessCtx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	// The live-quorum proof only needs to show that a term remained settled
+	// across HashiCorp's normal coordination window. The test cluster's larger
+	// timeouts are later scheduling headroom, not additional readiness evidence.
+	settlingWindow := hashicorpRaftTestLeaderSettlingWindow()
+	var previous leaderReadinessObservation
+	var lastErr error
+	for readinessCtx.Err() == nil {
+		leader := c.waitForSingleLeader(tb)
+		if leader == nil {
+			previous = leaderReadinessObservation{}
+			waitForLeaderReadinessPoll(readinessCtx)
+			continue
 		}
-		if leader != nil {
+		term, err := HashicorpRaftTestLeaderReady(readinessCtx, leader.provider)
+		if err != nil {
+			lastErr = err
+			previous = leaderReadinessObservation{}
+			waitForLeaderReadinessPoll(readinessCtx)
+			continue
+		}
+		current := leaderReadinessObservation{nodeID: leader.id, term: term, observedAt: time.Now(), valid: true}
+		if sameStableLeaderTerm(previous, current, settlingWindow) {
 			return leader
 		}
-		time.Sleep(20 * time.Millisecond)
+		if !sameLeaderTerm(previous, current) {
+			previous = current
+		}
+		waitForLeaderReadinessPoll(readinessCtx)
 	}
-	tb.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
+	stableFor := time.Duration(0)
+	if previous.valid {
+		stableFor = time.Since(previous.observedAt)
+	}
+	tb.Fatalf("timed out waiting for leader-ready stable term; last_readiness_err=%v last_stable_leader=%s last_stable_term=%d stable_for=%s required=%s states=%s", lastErr, previous.nodeID, previous.term, stableFor, settlingWindow, c.admissionSummary())
 	return nil
+}
+
+func waitForLeaderReadinessPoll(ctx context.Context) {
+	select {
+	case <-time.After(20 * time.Millisecond):
+	case <-ctx.Done():
+	}
+}
+
+type leaderReadinessObservation struct {
+	nodeID     NodeID
+	term       uint64
+	observedAt time.Time
+	valid      bool
+}
+
+func sameLeaderTerm(previous, current leaderReadinessObservation) bool {
+	return previous.valid && current.valid && previous.nodeID == current.nodeID && previous.nodeID != "" && previous.term == current.term && current.term != 0
+}
+
+func sameStableLeaderTerm(previous, current leaderReadinessObservation, settlingWindow time.Duration) bool {
+	return settlingWindow > 0 && sameLeaderTerm(previous, current) && current.observedAt.Sub(previous.observedAt) >= settlingWindow
+}
+
+func hashicorpRaftLeaderSettlingWindow(conf *hraft.Config) time.Duration {
+	if conf == nil {
+		return 0
+	}
+	window := conf.LeaderLeaseTimeout
+	if conf.HeartbeatTimeout > window {
+		window = conf.HeartbeatTimeout
+	}
+	if conf.ElectionTimeout > window {
+		window = conf.ElectionTimeout
+	}
+	return window
+}
+
+func hashicorpRaftTestLeaderSettlingWindow() time.Duration {
+	return hashicorpRaftLeaderSettlingWindow(hraft.DefaultConfig())
+}
+
+func (c *hashicorpRaftTestCluster) waitForSingleLeader(tb testing.TB) *hashicorpRaftTestNode {
+	tb.Helper()
+	var leader *hashicorpRaftTestNode
+	for _, node := range c.nodes {
+		if node.provider == nil {
+			continue
+		}
+		status, err := node.provider.ClusterAdmissionStatus(context.Background())
+		if err != nil {
+			tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+		}
+		if !status.Leader {
+			continue
+		}
+		if leader != nil {
+			tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
+		}
+		leader = node
+	}
+	return leader
+}
+
+func TestHashicorpRaftLeaderReadinessRequiresASettledTermWindow(t *testing.T) {
+	startedAt := time.Unix(1_000, 0)
+	settlingWindow := hashicorpRaftTestLeaderSettlingWindow()
+	ready := leaderReadinessObservation{nodeID: "node-a", term: 4, observedAt: startedAt, valid: true}
+	if sameStableLeaderTerm(leaderReadinessObservation{}, ready, settlingWindow) {
+		t.Fatal("a single leader/proof observation must not satisfy the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-a", term: 4, observedAt: startedAt.Add(20 * time.Millisecond), valid: true}, settlingWindow) {
+		t.Fatal("two observations inside the Raft timing window must not satisfy the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-a", term: 5, observedAt: startedAt.Add(settlingWindow), valid: true}, settlingWindow) {
+		t.Fatal("a term transition must reset the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-b", term: 4, observedAt: startedAt.Add(settlingWindow), valid: true}, settlingWindow) {
+		t.Fatal("a leader transition must reset the readiness barrier")
+	}
+	if sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-a", term: 4, observedAt: startedAt.Add(settlingWindow)}, settlingWindow) {
+		t.Fatal("an invalid observation must not satisfy the readiness barrier")
+	}
+	if !sameStableLeaderTerm(ready, leaderReadinessObservation{nodeID: "node-a", term: 4, observedAt: startedAt.Add(settlingWindow), valid: true}, settlingWindow) {
+		t.Fatal("a continuously verified leader term spanning the Raft timing window must satisfy the readiness barrier")
+	}
 }
 
 func (c *hashicorpRaftTestCluster) firstFollower(tb testing.TB, leaderID NodeID) *hashicorpRaftTestNode {

@@ -492,6 +492,9 @@ func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
 	}
 	cfg := *col.Meta().Options.ColumnStore
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	const cycles = 16
@@ -627,7 +630,6 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	if diag.RowsScanned != 2 || diag.AssetRefs != len(afterPhysicalRefs) {
 		t.Fatalf("diag=%+v want 2 rows and %d remapped physical refs", diag, len(afterPhysicalRefs))
 	}
-
 	gcStats, err := reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), stats.SupersededRefs...), candidate),
 	})
@@ -1018,6 +1020,9 @@ func TestColumnAssetRewriteRetainsCopiedOrphanOnStalePublishPreflightM15C(t *tes
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	replacement := []byte("rebound-rewrite-replacement")
 	var copiedPath, displacedPath string
@@ -1237,6 +1242,9 @@ func staleColumnAssetRewriteManifestRootM15C(d *backenddb.DB) error {
 
 func advanceColumnAssetDurableFallbackM15C(t *testing.T, d *backenddb.DB) {
 	t.Helper()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle current durable root before fallback advance: %v", err)
+	}
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
 		Op:    commitlog.RawKVOpSet,
 		Key:   []byte("column/rewrite/durable-fallback-advance"),
@@ -1258,6 +1266,9 @@ func advanceColumnAssetDurableFallbackM15C(t *testing.T, d *backenddb.DB) {
 		return emptySystemDelta.NewIterator(nil, nil), nil
 	}); err != nil {
 		t.Fatalf("publish fallback advance: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("wait durable fallback advance: %v", err)
 	}
 }
 

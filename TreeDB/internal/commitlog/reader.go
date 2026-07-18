@@ -11,6 +11,7 @@ import (
 
 type Reader struct {
 	f              *os.File
+	ownsFile       bool
 	maxSegmentSize int64
 	dec            *zstd.Decoder
 }
@@ -26,6 +27,21 @@ func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 	}
 	return &Reader{
 		f:              f,
+		ownsFile:       true,
+		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+	}, nil
+}
+
+// NewReaderFromFileWithOptions streams from an already-open exact file handle.
+// The caller retains ownership of file; Close releases only reader-owned
+// decoder state. This is used by destructive maintenance so classification and
+// later identity validation refer to the same physical segment.
+func NewReaderFromFileWithOptions(file *os.File, opts Options) (*Reader, error) {
+	if file == nil {
+		return nil, os.ErrInvalid
+	}
+	return &Reader{
+		f:              file,
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
 	}, nil
 }
@@ -257,5 +273,10 @@ func (r *Reader) Close() error {
 		r.dec.Close()
 		r.dec = nil
 	}
-	return r.f.Close()
+	if !r.ownsFile {
+		return nil
+	}
+	err := r.f.Close()
+	r.f = nil
+	return err
 }

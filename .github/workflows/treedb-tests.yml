@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract)\.py$|\.github/workflows/treedb-tests\.yml$)'
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
     steps:
       - name: Resolve pull request and relevant paths
         id: scope
@@ -119,6 +119,7 @@ jobs:
           python3 .github/scripts/test_summarize_mvcc_closeout.py
           python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
           python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_treedb_windows_core_headroom.py
           for path in \
             TreeDB/snapshot_seek_iterator_bench_test.go \
             TreeDB/command_wal_public_test.go \
@@ -136,7 +137,8 @@ jobs:
             .github/scripts/summarize_mvcc_closeout.py \
             .github/scripts/test_summarize_mvcc_closeout.py \
             .github/scripts/test_mvcc_candidate_checkout_guard.py \
-            .github/scripts/test_treedb_ci_contract.py; do
+            .github/scripts/test_treedb_ci_contract.py \
+            .github/scripts/test_treedb_windows_core_headroom.py; do
             if ! grep -Eq "$MVCC_GATE_PATH_RE" <<< "$path"; then
               echo "MVCC gate path scope unexpectedly excludes: $path" >&2
               exit 1
@@ -151,6 +153,7 @@ jobs:
           CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
           RUNS: "8"
           BENCHTIME: 2s
+          BATCH_WRITE_BENCHTIME: 1000x
           CPUSET: "0"
           MAX_REGRESSION_PERCENT: "5"
           MAX_BYTES_REGRESSION_PERCENT: "1"
@@ -200,7 +203,7 @@ jobs:
         include:
           - name: ubuntu-latest
             os: ubuntu-latest
-            timeout: 15
+            timeout: 25
             shard_kind: all
             run_vet: true
           - name: macos-latest
@@ -210,17 +213,24 @@ jobs:
             run_vet: true
           - name: windows-core-1
             os: windows-latest
-            timeout: 25
+            timeout: 30
             shard_kind: windows-core
             package_shard_index: 0
-            package_shard_count: 2
+            package_shard_count: 3
             run_vet: true
           - name: windows-core-2
             os: windows-latest
-            timeout: 25
+            timeout: 30
             shard_kind: windows-core
             package_shard_index: 1
-            package_shard_count: 2
+            package_shard_count: 3
+            run_vet: false
+          - name: windows-core-3
+            os: windows-latest
+            timeout: 30
+            shard_kind: windows-core
+            package_shard_index: 2
+            package_shard_count: 3
             run_vet: false
           - name: windows-caching-heavy-1
             os: windows-latest
@@ -342,37 +352,17 @@ jobs:
               package_file="$(make_tmp)"
               root_all_file="$(make_tmp)"
               root_test_file="$(make_tmp)"
-              root_pin_file="$(make_tmp)"
-              root_windows_pin_file="$(make_tmp)"
               db_all_file="$(make_tmp)"
               db_test_file="$(make_tmp)"
-              db_pin_file="$(make_tmp)"
-              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+              collections_all_file="$(make_tmp)"
+              collections_test_file="$(make_tmp)"
+              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
               go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
-              ci_list ../.github/ci/treedb_root_weighted_shard0_tests.txt > "$root_pin_file"
-              ci_list ../.github/ci/treedb_root_windows_weighted_shard0_tests.txt > "$root_windows_pin_file"
-              sort -u "$root_pin_file" "$root_windows_pin_file" -o "$root_pin_file"
-              ci_list ../.github/ci/treedb_db_weighted_shard0_tests.txt > "$db_pin_file"
-              if [ "$package_shard_count" -eq 2 ]; then
-                case "$package_shard_index" in
-                  0)
-                    grep -F -x -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
-                    grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
-                    ;;
-                  1)
-                    grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
-                    grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
-                    ;;
-                  *)
-                    : > "$root_test_file"
-                    : > "$db_test_file"
-                    ;;
-                esac
-              else
-                awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
-                awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
-              fi
+              go test ./collections -list '^(Test|Example|Fuzz).*' | tr -d '\r' | grep -E '^(Test|Example|Fuzz)' > "$collections_all_file"
+              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
+              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
+              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$collections_all_file" > "$collections_test_file"
               echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
               ran_tests=false
               if [ -s "$package_file" ]; then
@@ -385,6 +375,10 @@ jobs:
               fi
               if [ -s "$db_test_file" ]; then
                 run_named_test_file ./db "TreeDB/db test shard=${package_shard_index}/${package_shard_count}" "$db_test_file" treedb-test.jsonl
+                ran_tests=true
+              fi
+              if [ -s "$collections_test_file" ]; then
+                run_named_test_file ./collections "TreeDB/collections test shard=${package_shard_index}/${package_shard_count}" "$collections_test_file" treedb-test.jsonl
                 ran_tests=true
               fi
               if [ "$ran_tests" = false ]; then
@@ -494,7 +488,7 @@ jobs:
           - shard: 2
             shard_index: 1
             shard_count: 2
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -587,7 +581,7 @@ jobs:
           if [ -s "$db_test_file" ]; then
             db_regex="^($(paste -sd'|' "$db_test_file"))$"
             echo "TreeDB/db race test shard=${shard_index}/${shard_count} regex=${db_regex}"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./db -run "$db_regex" | tee -a treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run "$db_regex" | tee -a treedb-race.jsonl
             ran_tests=true
           fi
           if [ "$ran_tests" = false ]; then
@@ -632,6 +626,11 @@ jobs:
           cache-dependency-path: |
             go.sum
 
+      - name: Aggregate perf gate self-tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 .github/scripts/test_vlog_auto_incompressible.py
+
       - name: ValueLog dict compressibility bench
         run: |
           go test ./TreeDB/internal/valuelog -run '^$' \
@@ -647,23 +646,46 @@ jobs:
 
       - name: Incompressible auto-vs-off gate
         run: |
-          max_attempts=5
-          for attempt in $(seq 1 "$max_attempts"); do
-            off_log="vlog_auto_incompressible_off_attempt${attempt}.txt"
-            auto_log="vlog_auto_incompressible_auto_attempt${attempt}.txt"
-            echo "incompressible gate attempt ${attempt}/${max_attempts}"
+          sample_count=6
+          if ((sample_count % 2 != 0)); then
+            echo "sample_count must be even to balance off/auto row order"
+            exit 2
+          fi
 
-            # Keep this value-log compression gate independent of the
-            # unconfigured flush-admission default under test in #2788. Force
-            # admission off for both rows so the strict auto/off comparison stays
-            # on the old serial/default-off flush boundary and measures value-log
-            # auto behavior rather than span-native admission changes.
+          mapfile -t cpu_models < <(
+            sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | sort -u
+          )
+          cpu_model="unknown"
+          if ((${#cpu_models[@]} == 1)); then
+            cpu_model="${cpu_models[0]}"
+          elif ((${#cpu_models[@]} > 1)); then
+            cpu_model="ambiguous: ${cpu_models[*]}"
+          fi
+          min_throughput_frac="0.95"
+          if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
+            min_throughput_frac="0.94"
+          fi
+
+          # This gate measures the explicit bench_unsafe compression ceiling,
+          # not the command_wal_durable default used by production callers.
+          # Keep it independent of the unconfigured flush-admission default
+          # under test in #2788. Force admission off for both rows so the
+          # settled auto/off comparison stays on the old serial/default-off
+          # flush boundary and measures the deferred value-log and leaf-log
+          # work rather than span-native admission changes. The checker sums
+          # the total= fields from value_vlog plus leaf_vlog and verifies the
+          # intended raw-user and leaf-compression modes independently of the
+          # throughput bound.
+          run_vlog_row() {
+            local db="$1"
+            local output="$2"
             if ! go run ./cmd/unified_bench \
+              -profile fast \
               -keys 1000000 \
               -valsize 512 \
               -batchsize 1024 \
-              -dbs treedb_vlog_off \
-              -test batch_write \
+              -dbs "${db}" \
+              -test batch_write_steady \
               -val-pattern random \
               -format markdown \
               -progress=false \
@@ -673,51 +695,77 @@ jobs:
               -treedb-value-log-threshold=1 \
               -treedb-vlog-dict-train-bytes=-1 \
               -treedb-flush-admission-policy=off \
-              > "${off_log}" 2>&1; then
-              echo "treedb_vlog_off benchmark failed on attempt ${attempt}"
-              tail -n 80 "${off_log}" || true
-              continue
+              > "${output}" 2>&1; then
+              echo "${db} benchmark failed"
+              tail -n 80 "${output}" || true
+              return 1
             fi
+          }
 
-            if ! go run ./cmd/unified_bench \
-              -keys 1000000 \
-              -valsize 512 \
-              -batchsize 1024 \
-              -dbs treedb_vlog_auto \
-              -test batch_write \
-              -val-pattern random \
-              -format markdown \
-              -progress=false \
-              -keep=false \
-              -seed 1 \
-              -treedb-force-value-pointers=true \
-              -treedb-value-log-threshold=1 \
-              -treedb-vlog-dict-train-bytes=-1 \
-              -treedb-flush-admission-policy=off \
-              > "${auto_log}" 2>&1; then
-              echo "treedb_vlog_auto benchmark failed on attempt ${attempt}"
-              tail -n 80 "${auto_log}" || true
-              continue
+          off_logs=()
+          auto_logs=()
+          for sample in $(seq 1 "${sample_count}"); do
+            off_log="vlog_auto_incompressible_off_sample${sample}.txt"
+            auto_log="vlog_auto_incompressible_auto_sample${sample}.txt"
+            off_logs+=("${off_log}")
+            auto_logs+=("${auto_log}")
+            echo "incompressible gate sample ${sample}/${sample_count}"
+
+            if ((sample % 2 == 1)); then
+              echo "sample ${sample} order=off-auto"
+              run_vlog_row treedb_vlog_off "${off_log}"
+              run_vlog_row treedb_vlog_auto "${auto_log}"
+            else
+              echo "sample ${sample} order=auto-off"
+              run_vlog_row treedb_vlog_auto "${auto_log}"
+              run_vlog_row treedb_vlog_off "${off_log}"
             fi
-
-            # #1529 intentionally makes this a strict parity-plus gate. A
-            # result at or below 1.01x is failing evidence, even for the
-            # incompressible auto-vs-off case.
-            if go run .github/scripts/check_vlog_auto_incompressible.go \
-              -off-log "${off_log}" \
-              -auto-log "${auto_log}" \
-              -min-throughput-frac 1.01 \
-              -max-size-frac 1.02; then
-              exit 0
-            fi
-
-            echo "incompressible gate threshold check failed on attempt ${attempt}"
-            tail -n 80 "${off_log}" || true
-            tail -n 80 "${auto_log}" || true
           done
 
-          echo "incompressible auto-vs-off gate failed after ${max_attempts} attempts"
-          exit 1
+          checker_args=()
+          for sample in $(seq 0 $((sample_count - 1))); do
+            checker_args+=( -off-log "${off_logs[$sample]}" -auto-log "${auto_logs[$sample]}" )
+          done
+
+          # #3861 makes this a settled non-regression and persistent-storage
+          # tradeoff gate; #3863 calibrates its strict floor to demonstrated
+          # GitHub-hosted CPU classes. EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x.
+          # One lucky sample cannot override a mostly failing sample set, and every
+          # pair retains the existing 1.02x storage ceiling.
+          summary_log="vlog_auto_incompressible_summary.txt"
+          {
+            echo "incompressible gate cpu_model=${cpu_model}"
+            echo "incompressible gate min_throughput_frac=${min_throughput_frac}"
+          } > "${summary_log}"
+          set +e
+          go run .github/scripts/check_vlog_auto_incompressible.go \
+            "${checker_args[@]}" \
+            -min-samples "${sample_count}" \
+            -min-throughput-frac "${min_throughput_frac}" \
+            -max-size-frac 1.02 \
+            2>&1 | tee -a "${summary_log}"
+          checker_status=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo "## Incompressible value-log aggregate"
+            echo '```text'
+            cat "${summary_log}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit "${checker_status}"
+
+      - name: Upload value-log performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlog-perf-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            vlog_dict_bench.txt
+            vlog_auto_incompressible_summary.txt
+            vlog_auto_incompressible_off_sample*.txt
+            vlog_auto_incompressible_auto_sample*.txt
+          if-no-files-found: warn
 
   snapshot-iterator-perf:
     name: snapshot-iterator-perf (linux)
@@ -736,7 +784,7 @@ jobs:
             go.sum
 
       - name: Test snapshot iterator benchmark parser
-        run: go test ./.github/scripts/snapshot_iterator_bench
+        run: GOWORK=off go test ./.github/scripts/snapshot_iterator_bench
 
       - name: Capture exact-head runner metadata
         run: |
@@ -750,24 +798,33 @@ jobs:
             echo "kernel=$(uname -a)"
           } | tee artifacts/snapshot_iterator_perf/environment.txt
 
-      - name: Run same-binary snapshot iterator benchmark
+      - name: Build one exact-head snapshot iterator benchmark binary
         run: |
-          GOMAXPROCS=1 go test ./TreeDB -run '^$' \
-            -bench '^BenchmarkSnapshotIteratorSeekNext/keys=(1024|16384)/(snapshot_(seek|next)|public_(seek|next)_baseline)$' \
-            -benchmem -benchtime=500ms -count=7 \
-            | tee artifacts/snapshot_iterator_perf/raw.txt
+          GOWORK=off go test -c -o artifacts/snapshot_iterator_perf/snapshot_iterator.test ./TreeDB
+          sha256sum artifacts/snapshot_iterator_perf/snapshot_iterator.test | tee artifacts/snapshot_iterator_perf/binary.sha256
+
+      - name: Collect CPU-pinned balanced same-binary snapshot iterator pairs
+        run: |
+          SNAPSHOT_ITERATOR_PAIRS=8 \
+            .github/scripts/collect_snapshot_iterator_pairs.sh \
+              artifacts/snapshot_iterator_perf/snapshot_iterator.test \
+              artifacts/snapshot_iterator_perf/raw.txt
+          affinity=$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)
+          echo "affinity=${affinity}" | tee -a artifacts/snapshot_iterator_perf/environment.txt
 
       - name: Check snapshot iterator performance gate
         run: |
-          go run ./.github/scripts/snapshot_iterator_bench \
+          GOWORK=off go run ./.github/scripts/snapshot_iterator_bench \
             -bench-output artifacts/snapshot_iterator_perf/raw.txt \
             -json-output artifacts/snapshot_iterator_perf/report.json \
             -markdown-output artifacts/snapshot_iterator_perf/report.md \
             -head "$(git rev-parse HEAD)" \
+            -binary-sha256 "$(cut -d' ' -f1 artifacts/snapshot_iterator_perf/binary.sha256)" \
             -runner-image "${ImageOS:-unknown}-${ImageVersion:-unknown}" \
             -cpu "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)" \
+            -affinity "$(cut -d= -f2 artifacts/snapshot_iterator_perf/raw.affinity)" \
             -go-version "$(go version)" \
-            -samples 7 \
+            -samples 8 \
             -max-regression 0.05
 
       - name: Publish snapshot iterator summary

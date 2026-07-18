@@ -283,18 +283,43 @@ func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t 
 	}
 
 	reopen := openCommandWALDB(t, dir)
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("covered segment stat after one-root coverage=%v, want retained", err)
+	}
+	// Publish the same frontier into the other independently recoverable slot.
+	// Only then does ordinary cleanup have two-root deletion authority.
+	state = reopen.State()
+	if err := reopen.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, nil, true); err != nil {
+		t.Fatalf("publishCommandWALRoots second slot: %v", err)
+	}
 	if err := reopen.Close(); err != nil {
 		t.Fatalf("Close reopen: %v", err)
+	}
+	cleanupReopen := openCommandWALDB(t, dir)
+	stats := make(map[string]string)
+	writeCommandWALStats(stats, cleanupReopen)
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.proof.capture_epoch"); got == 0 {
+		t.Fatalf("cleanup proof capture epoch=%d, want journal-owned recovery cleanup (stats=%#v)", got, stats)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.proof.namespace_generation"); got == 0 {
+		t.Fatalf("cleanup proof namespace generation=%d, want journal-owned recovery cleanup (stats=%#v)", got, stats)
+	}
+	if err := cleanupReopen.Close(); err != nil {
+		t.Fatalf("Close cleanup reopen: %v", err)
 	}
 	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
 		t.Fatalf("covered segment stat error=%v, want removed on clean reopen", err)
 	}
-	// The active covered segment (seq=2, highest seq among covered segments)
-	// must be retained so that the next open can compute commandSegmentSeq
-	// correctly and does not collide with a surviving segment.
-	activeCoveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))
-	if _, err := os.Stat(activeCoveredPath); err != nil {
-		t.Fatalf("active covered segment stat error=%v, want retained on clean reopen", err)
+	// A later journal lifecycle may advance the active anchor beyond seq=2, but
+	// cleanup must always leave an exact active successor in the namespace.
+	var commandSegments int
+	for _, name := range commandWALSegmentNamesForTest(t, dir) {
+		if commitlog.IsCommandSegmentName(name) {
+			commandSegments++
+		}
+	}
+	if commandSegments == 0 {
+		t.Fatal("cleanup removed every command-WAL segment, want active successor retained")
 	}
 }
 
@@ -748,7 +773,7 @@ func TestCommandWALRejectsUnloggedCommit(t *testing.T) {
 	db := openCommandWALDB(t, dir)
 	defer db.Close()
 
-	if err := db.Commit(db.State().RootPageID + 1); !errors.Is(err, ErrCommandWALUnsupported) {
+	if err := db.ForceCommit(db.State().RootPageID + 1); !errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("Commit in command WAL mode error=%v, want ErrCommandWALUnsupported", err)
 	}
 	if err := db.CompactIndex(); !errors.Is(err, ErrCommandWALUnsupported) {
@@ -774,6 +799,67 @@ func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
 	}
 	if commandWALIntentPublishSync(nil, false) {
 		t.Fatal("nil intent unexpectedly requested sync publish")
+	}
+}
+
+func TestCommandWALIntentResolvedProfileControlsOrdinaryStagedAppendSync(t *testing.T) {
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	tests := []struct {
+		name       string
+		profile    DurabilityProfile
+		durability DurabilityMode
+		wantSyncs  uint64
+	}{
+		{name: "durable", profile: ProfileCommandWALDurable, durability: DurabilityDurable, wantSyncs: 1},
+		{name: "relaxed", profile: ProfileCommandWALRelaxed, durability: DurabilityWALOnRelaxed, wantSyncs: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := SaveFormatConfig(dir, FormatConfig{
+				RequiredFeatures:  []string{RequiredFeatureCommandWALV1},
+				DurabilityProfile: tc.profile,
+			}); err != nil {
+				t.Fatalf("SaveFormatConfig: %v", err)
+			}
+			database, err := Open(Options{
+				Dir:             dir,
+				CommandWAL:      true,
+				Durability:      tc.durability,
+				ResolvedProfile: tc.profile,
+				ValueLog: ValueLogOptions{
+					ReadIntegrity: IntegrityVerify,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer database.Close()
+
+			intent, err := database.NewCommandWALIntent(
+				commitlog.CommandKindRawKVBatch,
+				commitlog.CommandScopeRawKV,
+				commitlog.PayloadFormatRawKVBatchV1,
+				payload,
+			)
+			if err != nil {
+				t.Fatalf("NewCommandWALIntent: %v", err)
+			}
+			before := commandWALTestStatUint64(t, database.Stats(), "treedb.command_wal.sync.count_total")
+			if _, err := database.AppendStagedCommandWALIntent(intent, false); err != nil {
+				t.Fatalf("AppendStagedCommandWALIntent: %v", err)
+			}
+			after := commandWALTestStatUint64(t, database.Stats(), "treedb.command_wal.sync.count_total")
+			if got := after - before; got != tc.wantSyncs {
+				t.Fatalf("ordinary staged append command WAL syncs=%d want %d", got, tc.wantSyncs)
+			}
+			if err := database.PublishStagedCommandWALNoop(intent, false); err != nil {
+				t.Fatalf("PublishStagedCommandWALNoop: %v", err)
+			}
+		})
 	}
 }
 
@@ -1476,7 +1562,7 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	_ = b.Close()
 	db.testFailFinalizeCommit.Store(false)
 
-	if err := db.Commit(db.State().RootPageID); !errors.Is(err, ErrRecoveryRequired) {
+	if err := db.ForceCommit(db.State().RootPageID); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("Commit after poison error=%v, want ErrRecoveryRequired", err)
 	}
 	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); !errors.Is(err, ErrRecoveryRequired) {
@@ -1507,6 +1593,70 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	assertDBValue(t, reopen, "k", "v")
 	if got, err := reopen.Get([]byte("later")); err != nil || got != nil {
 		t.Fatalf("Get(later)=%q err=%v, want missing retry mutation", got, err)
+	}
+}
+
+func TestCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+
+	baseAppliedLSN := db.State().AppliedCommandLSN
+	db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	db.testFailWriteMeta.Store(true)
+	err := db.SetSync([]byte("accepted"), []byte("visible-before-durable"))
+	db.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted wait error=%v unexpectedly requires recovery", err)
+	}
+	if got := db.State().AppliedCommandLSN; got <= baseAppliedLSN {
+		t.Fatalf("visible AppliedCommandLSN after accepted wait error=%d, want greater than %d", got, baseAppliedLSN)
+	}
+	assertDBValue(t, db, "accepted", "visible-before-durable")
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after accepted wait error: %v", err)
+	}
+	if err := db.SetSync([]byte("later"), []byte("same-handle-progress")); err != nil {
+		t.Fatalf("SetSync after accepted wait error: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close after accepted wait retry: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "accepted", "visible-before-durable")
+	assertDBValue(t, reopen, "later", "same-handle-progress")
+}
+
+func TestCommandWALNoopAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "noop-covered", "external-apply")
+	db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+	db.testFailWriteMeta.Store(true)
+	err := db.PublishCommandWALNoop(intent, true)
+	db.testFailWriteMeta.Store(false)
+	if !errors.Is(err, errTestWriteMetaFailpoint) {
+		t.Fatalf("accepted no-op wait error=%v, want retryable meta failpoint", err)
+	}
+	if errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("accepted no-op wait error=%v unexpectedly requires recovery", err)
+	}
+	if got, want := db.State().AppliedCommandLSN, intent.AssignedLSN(); got == 0 || got != want {
+		t.Fatalf("visible AppliedCommandLSN after accepted no-op error=%d, want assigned %d", got, want)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after accepted no-op error: %v", err)
+	}
+	if err := db.SetSync([]byte("after-noop"), []byte("same-handle-progress")); err != nil {
+		t.Fatalf("SetSync after accepted no-op error: %v", err)
 	}
 }
 
@@ -1581,6 +1731,85 @@ func TestCommandWALRelaxedRIDReplaySyncsDependenciesBeforeRootPublication(t *tes
 	assertDBValue(t, reopen, "k", "large-value")
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCommandWALRelaxedReplayRetainsCleanupUntilLaterRecoveryBaseline(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrameWithDurability(t, dir, 1, 1, commitlog.CommandDurabilityRelaxed, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSet, Key: []byte("relaxed"), Value: []byte("value"),
+	}})
+	coveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+
+	replayOpen := openCommandWALDB(t, dir)
+	assertDBValue(t, replayOpen, "relaxed", "value")
+	if got := replayOpen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if got := replayOpen.commandWALDurableLSN.Load(); got != 0 {
+		t.Fatalf("durable WAL LSN=%d after relaxed replay, want classified frontier 0", got)
+	}
+	if _, err := replayOpen.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		t.Fatalf("cleanup proof after relaxed replay error=%v, want conservative unavailable authority", err)
+	}
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("relaxed replay cleanup removed WAL before authority existed: %v", err)
+	}
+	batch := replayOpen.NewBatch()
+	if err := batch.Set([]byte("same-session"), []byte("value-2")); err != nil {
+		_ = batch.Close()
+		t.Fatalf("Set same-session value: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		_ = batch.Close()
+		t.Fatalf("Write same-session relaxed frame: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("Close same-session batch: %v", err)
+	}
+	if got := replayOpen.CommandWALActiveBytes(); got == 0 {
+		t.Fatal("same-session relaxed write left no active WAL bytes, want checkpoint rotation coverage")
+	}
+	if err := replayOpen.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint relaxed replay handle: %v", err)
+	}
+	assertDBValue(t, replayOpen, "same-session", "value-2")
+	if got := replayOpen.commandWALDurableLSN.Load(); got != 0 {
+		t.Fatalf("durable WAL LSN after same-session checkpoint=%d, want classified frontier 0", got)
+	}
+	if _, err := replayOpen.captureDurableWALCleanupProofV1(); !errors.Is(err, errDurableWALCleanupProofUnavailable) {
+		t.Fatalf("cleanup proof after same-session checkpoint error=%v, want conservative unavailable authority", err)
+	}
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("same-session checkpoint removed recovered WAL without physical frontier authority: %v", err)
+	}
+	if err := replayOpen.Close(); err != nil {
+		t.Fatalf("Close relaxed replay handle: %v", err)
+	}
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("Close removed WAL while cleanup authority remained unavailable: %v", err)
+	}
+
+	converged := openCommandWALDB(t, dir)
+	assertDBValue(t, converged, "relaxed", "value")
+	assertDBValue(t, converged, "same-session", "value-2")
+	if got := converged.commandWALDurableLSN.Load(); got != 2 {
+		t.Fatalf("durable WAL LSN on later recovery baseline=%d, want 2", got)
+	}
+	state := converged.State()
+	if err := converged.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, nil, true); err != nil {
+		t.Fatalf("publish replay frontier into older recoverable slot: %v", err)
+	}
+	if err := converged.Close(); err != nil {
+		t.Fatalf("Close converged reopen: %v", err)
+	}
+	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
+		t.Fatalf("covered WAL stat after later recovery baseline=%v, want eventual cleanup", err)
 	}
 }
 

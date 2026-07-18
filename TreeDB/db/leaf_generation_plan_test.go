@@ -798,7 +798,7 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 		t.Fatalf("scan count after uncached gc helper=%d, want %d", got, want)
 	}
 
-	if err := db.Commit(rootBefore); err != nil {
+	if err := db.ForceCommit(rootBefore); err != nil {
 		t.Fatalf("Commit same root: %v", err)
 	}
 	stateSameRoot := db.State()

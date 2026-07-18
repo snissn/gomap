@@ -17,7 +17,9 @@ import (
 type ApplyOptions struct {
 	// CollectOldPointerRefs asks the apply engine to count pointer entries removed
 	// by overwrites, point deletes, and range deletes while it already owns the old
-	// leaf entry. Counts are attempt-local and returned only for successful apply.
+	// leaf entry. It also reports the total existing entries removed so callers can
+	// distinguish insert-only from destructive COW transitions. Counts are
+	// attempt-local and returned only for successful apply.
 	CollectOldPointerRefs bool
 
 	// PrepareReadOnly asks ApplyWithOptions to run the read-only preparation
@@ -81,6 +83,12 @@ type ApplyResult struct {
 	PendingRetiredPages []uint64
 	Metrics             adaptive.Metrics
 	OldPointerRefs      PointerRefCounts
+	// OldEntriesRemoved counts existing leaf entries consumed by overwrites,
+	// point deletes, and range deletes. It is valid when
+	// OldPointerRefsCollected is true and lets callers distinguish insert-only
+	// COW transitions from transitions that can make external leaf resources
+	// unreachable.
+	OldEntriesRemoved uint64
 	// OldPointerRefsCollected distinguishes a successful empty count from a path
 	// that did not collect apply-fed reference evidence.
 	OldPointerRefsCollected bool
@@ -947,8 +955,10 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 
 	applyCfg := applyRunConfig{}
 	var oldPointerRefs PointerRefCounts
+	var oldEntriesRemoved uint64
 	if opts.CollectOldPointerRefs {
 		applyCfg.oldPointerRefs = &oldPointerRefs
+		applyCfg.oldEntriesRemoved = &oldEntriesRemoved
 	}
 	if opts.ParallelApplyConcurrency > 1 && prepared.DeleteRanges == 0 {
 		workers := resolveParallelApplyWorkers(opts, prepared.LeafSpanSummary())
@@ -965,6 +975,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	result.Metrics = metrics
 	if err == nil && opts.CollectOldPointerRefs {
 		result.OldPointerRefs = oldPointerRefs
+		result.OldEntriesRemoved = oldEntriesRemoved
 		result.OldPointerRefsCollected = true
 	}
 	result.ReadOnlyPrepare = prepared

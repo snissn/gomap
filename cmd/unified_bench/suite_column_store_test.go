@@ -3596,6 +3596,15 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen collection: %v", err)
 	}
+	// Advance the alternate durable slot while the physical column assets are
+	// still reachable. Both recovery-selectable roots must depend on the assets
+	// before deleting them can prove that open rejects every candidate.
+	if err := db.SetSync([]byte("m14b-durable-slot-roll"), []byte("physical-assets-required")); err != nil {
+		t.Fatalf("advance second asset-dependent durable root: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint second asset-dependent durable root: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close before asset removal: %v", err)
 	}

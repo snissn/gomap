@@ -30,6 +30,9 @@ class BenchmarkPairingTests(unittest.TestCase):
             "BATCH_WRITE_BENCH_REGEX='^BenchmarkConditionalTxnBaselineBatchWrite$'",
             source,
         )
+        self.assertIn(
+            'BATCH_WRITE_BENCHTIME="${BATCH_WRITE_BENCHTIME:-1000x}"', source
+        )
         for package in ("DB", "CACHING", "TREEDB"):
             self.assertIn(
                 f'--baseline-{package.lower()}-binary "$BASELINE_{package}_BIN"',
@@ -44,7 +47,7 @@ class BenchmarkPairingTests(unittest.TestCase):
             source,
             [
                 'run_pair "$sample" get_versioned',
-                'run_pair "$sample" batch_write',
+                'run_pair "$sample" batch_write "$BASELINE_DB_BIN" "$CANDIDATE_DB_BIN" "$BATCH_WRITE_BENCH_REGEX" "$BATCH_WRITE_BENCHTIME"',
                 'run_pair "$sample" snapshot_seek',
                 'run_pair "$sample" repeated_iterator',
                 'run_pair "$sample" durable_sync',
@@ -61,6 +64,28 @@ class BenchmarkPairingTests(unittest.TestCase):
                 'run_sample candidate',
                 'else run_sample candidate',
                 'run_sample baseline',
+            ],
+        )
+
+    def test_raw_batch_write_excludes_async_publication(self) -> None:
+        source = normalized(
+            ROOT / "TreeDB" / "db" / "conditional_kv_contract_bench_test.go"
+        )
+        body = source.split(
+            "func BenchmarkConditionalTxnBaselineBatchWrite", 1
+        )[1].split("func BenchmarkConditionalTxnBaselineGet1BatchWrite", 1)[0]
+        self.assertIn("rootPublicationFixedDelay: 100 * time.Millisecond", body)
+        self.assertIn("const foregroundGroup = 8", body)
+        assert_in_order(
+            self,
+            body,
+            [
+                "before := coordinator.Stats() b.StartTimer()",
+                "batch.Write()",
+                "b.StopTimer() after := coordinator.Stats()",
+                "after.PublishCalls != before.PublishCalls",
+                "d.Checkpoint()",
+                "drained.PendingCommits != 0",
             ],
         )
 

@@ -1082,15 +1082,11 @@ func openTextV2PostingBlockDB2625(t *testing.T, dir string, forcePointers bool) 
 
 func openTextV2PostingBlockCompressedDB2625(t *testing.T, dir string) (*backenddb.DB, func() error) {
 	t.Helper()
-	opts := treedb.Options{
-		Dir:                        dir,
-		DisableBackgroundPrune:     true,
-		IndexOuterLeavesInValueLog: true,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: 1,
-			ForcePointers:    true,
-		},
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)
+	opts.DisableBackgroundPrune = true
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("open compressed db: %v", err)

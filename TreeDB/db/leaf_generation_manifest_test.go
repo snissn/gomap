@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
 	"time"
 
@@ -681,7 +680,7 @@ func TestOpen_IndexOuterLeavesInValueLog_CreatesLeafGenerationManifest(t *testin
 	}
 }
 
-func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T) {
+func TestCloseWaitsForWritersBeforeLeafGenerationManifestStoreTeardown(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -702,9 +701,9 @@ func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T
 	go func() { closeDone <- db.Close() }()
 	select {
 	case <-teardownStarted:
-	case <-time.After(5 * time.Second):
 		db.writeMu.RUnlock()
-		t.Fatal("Close did not begin internal teardown")
+		t.Fatal("Close began internal teardown before writers drained")
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	manifest := db.leafGenerationManifest.clone()
@@ -734,7 +733,7 @@ func TestCloseKeepsLeafGenerationManifestStoreOpenUntilWritersDrain(t *testing.T
 	}
 }
 
-func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.T) {
+func TestCloseReleasesWriteMuBeforeLeafGenerationManifestStoreTeardown(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -762,18 +761,9 @@ func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.
 	go func() { closeDone <- db.Close() }()
 	select {
 	case <-teardownStarted:
-	case <-time.After(5 * time.Second):
 		db.writeMu.RUnlock()
-		t.Fatal("Close did not begin internal teardown")
-	}
-	writerQueuedDeadline := time.Now().Add(5 * time.Second)
-	for db.writeMu.TryRLock() {
-		db.writeMu.RUnlock()
-		if time.Now().After(writerQueuedDeadline) {
-			db.writeMu.RUnlock()
-			t.Fatal("Close did not queue for writeMu")
-		}
-		runtime.Gosched()
+		t.Fatal("Close began internal teardown before writers drained")
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	writeMuAcquired := make(chan struct{})
@@ -786,11 +776,11 @@ func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.
 
 	select {
 	case <-writeMuAcquired:
+	case <-time.After(5 * time.Second):
 		store.mu.Unlock()
 		storeLocked = false
 		<-closeDone
-		t.Fatal("writeMu became available before manifest store teardown completed")
-	case <-time.After(100 * time.Millisecond):
+		t.Fatal("writeMu remained held while manifest store teardown was blocked")
 	}
 	store.mu.Unlock()
 	storeLocked = false
@@ -802,11 +792,6 @@ func TestCloseHoldsWriteMuThroughLeafGenerationManifestStoreTeardown(t *testing.
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not finish after manifest store teardown unblocked")
-	}
-	select {
-	case <-writeMuAcquired:
-	case <-time.After(5 * time.Second):
-		t.Fatal("writeMu remained unavailable after Close completed")
 	}
 }
 
@@ -827,7 +812,7 @@ func TestCommitRejectsClosingDBAfterWriteMuAcquisition(t *testing.T) {
 	db.writeMu.Lock()
 	db.closing.Store(true)
 	commitDone := make(chan error, 1)
-	go func() { commitDone <- db.Commit(rootID) }()
+	go func() { commitDone <- db.ForceCommit(rootID) }()
 	db.writeMu.Unlock()
 
 	select {

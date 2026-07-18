@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +20,9 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	}
 	if !backgroundIndexVacuumShouldReport(errors.New("vacuum I/O failure")) {
 		t.Fatal("ordinary vacuum failure classified as retry-only")
+	}
+	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumRecoverableRootSetRequired) {
+		t.Fatal("recoverable-root-set fence classified as permanent background error")
 	}
 }
 
@@ -329,6 +331,7 @@ func TestBackgroundIndexVacuumTriggerPredicatesIndependentDebt(t *testing.T) {
 }
 
 func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
+	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -363,6 +366,7 @@ func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
 }
 
 func TestBackgroundIndexVacuumCollectionRootDebtTriggersVacuum(t *testing.T) {
+	t.Skip("deferred to #3681: successful online vacuum requires RecoverableRootSet convergence")
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -436,10 +440,7 @@ func assertNoBackgroundVacuumFullFragmentationWalks(t *testing.T, counts map[bac
 	}
 }
 
-func TestBackgroundIndexVacuumRunsAndStops(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("online vacuum not supported on windows")
-	}
+func TestBackgroundIndexVacuumRemainsDisabledUntilRecoverableRootSetFenced(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
@@ -452,29 +453,12 @@ func TestBackgroundIndexVacuumRunsAndStops(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	for i := 0; i < 200; i++ {
-		key := []byte(fmt.Sprintf("k%08d", i))
-		val := []byte("v")
-		if err := d.Set(key, val); err != nil {
-			t.Fatalf("set: %v", err)
-		}
+	stats := d.Stats()
+	if got := stats["treedb.bg_vacuum.enabled"]; got != "false" {
+		t.Fatalf("background vacuum enabled=%q want false pending #3681", got)
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	var vacuums uint64
-	for time.Now().Before(deadline) {
-		stats := d.Stats()
-		vacuumsStr := stats["treedb.bg_vacuum.vacuums"]
-		if vacuumsStr != "" {
-			vacuums, _ = strconv.ParseUint(vacuumsStr, 10, 64)
-			if vacuums > 0 {
-				break
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if vacuums == 0 {
-		t.Fatalf("expected background vacuum to run")
+	if got := stats["treedb.bg_vacuum.vacuums"]; got != "0" {
+		t.Fatalf("background vacuum runs=%q want 0 pending #3681", got)
 	}
 
 	if err := d.Close(); err != nil {

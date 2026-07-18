@@ -9,7 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestProfileFast_MultiDomainSyncWritesAvoidsPageExplosionWithoutCheckpointVacuum(t *testing.T) {
+func TestProfileFast_MultiDomainWritesAvoidPageExplosionAtCheckpointBoundaries(t *testing.T) {
 	if testing.Short() {
 		t.Skip("stress-style page explosion regression")
 	}
@@ -49,8 +49,8 @@ func TestProfileFast_MultiDomainSyncWritesAvoidsPageExplosionWithoutCheckpointVa
 					t.Fatalf("set version=%d store=%d key=%d: %v", version, store, i, err)
 				}
 			}
-			if err := b.WriteSync(); err != nil {
-				t.Fatalf("writesync version=%d store=%d: %v", version, store, err)
+			if err := b.Write(); err != nil {
+				t.Fatalf("write version=%d store=%d: %v", version, store, err)
 			}
 			_ = b.Close()
 		}

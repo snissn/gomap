@@ -56,7 +56,7 @@ func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 }
 
 func collectionBenchProfileForEngine(raw string) (treedb.Profile, bool) {
-	return treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
+	return treedb.ParseBenchmarkProfile(raw, treedb.ProfileCommandWALRelaxed)
 }
 
 func TestCollectionBenchProfileForEngineDefaultsToCommandWALRelaxed(t *testing.T) {
@@ -74,9 +74,9 @@ func TestCollectionBenchProfileForEngineAcceptsPublicProfiles(t *testing.T) {
 		raw  string
 		want treedb.Profile
 	}{
-		{raw: "bench", want: treedb.ProfileBench},
+		{raw: "bench_unsafe", want: treedb.ProfileBenchUnsafe},
 		{raw: "command_wal_relaxed", want: treedb.ProfileCommandWALRelaxed},
-		{raw: "command-wal-durable", want: treedb.ProfileCommandWALDurable},
+		{raw: "command_wal_durable", want: treedb.ProfileCommandWALDurable},
 	} {
 		got, ok := collectionBenchProfileForEngine(tc.raw)
 		if !ok {
@@ -89,7 +89,7 @@ func TestCollectionBenchProfileForEngineAcceptsPublicProfiles(t *testing.T) {
 }
 
 func TestCollectionBenchProfileForEngineRejectsDeprecatedNames(t *testing.T) {
-	for _, raw := range []string{"production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"production_fast", "production_wal_on_fast", "backend_direct_fast", "backend_direct_wal_on_fast", "fast", "wal_on_fast", "walonfast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "command-wal-durable"} {
 		got, ok := collectionBenchProfileForEngine(raw)
 		if ok {
 			t.Fatalf("deprecated collection bench engine %q parsed as %q", raw, got)
@@ -778,7 +778,7 @@ func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error
 	b.Helper()
 
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
-	opts := treedb.OptionsFor(benchmarkTreeDBProfile(b), dir)
+	opts := treedb.OptionsForBenchmark(benchmarkTreeDBProfile(b), dir)
 	opts.IndexOuterLeavesInValueLog = dataOuter || indexOuter
 	opts.IndexInternalBaseDelta = !opts.IndexOuterLeavesInValueLog
 	if chunkSize := benchmarkInt64Env(b, "TREEDB_COLLECTION_CHUNK_SIZE", 0); chunkSize > 0 {

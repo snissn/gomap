@@ -89,7 +89,7 @@ func main() {
 }
 ```
 
-## Profiles (Command WAL / Bench)
+## Durability Profiles
 
 If you want a simple, documented “bundle” of options, start with a profile and
 then override a few workload-specific knobs:
@@ -102,19 +102,26 @@ db, err := treedb.Open(opts)
 
 The public profile surface is intentionally narrow:
 
-- `ProfileCommandWALDurable`: command-WAL collections and raw writes with durable sync/checksum settings. Use this as the default server profile.
-- `ProfileCommandWALRelaxed`: command-WAL collections and raw writes with relaxed sync/read-integrity settings for high-throughput ingest and benchmark comparisons.
-- `ProfileBench`: benchmark-only no-WAL ceiling for measuring raw in-process storage overhead. Do not use it as a production profile.
+- `ProfileCommandWALDurable`: ordinary acknowledgements wait for a durable
+  dependency-closed command-WAL prefix. This is the default server profile.
+- `ProfileCommandWALRelaxed`: ordinary acknowledgements are relaxed; explicit
+  `*Sync` calls wait for a durable dependency-closed command-WAL prefix.
+- `ProfileNoWALFast`: production no-WAL profile; ordinary acknowledgements are
+  relaxed and explicit `*Sync` calls wait for a sealed durable root.
+- `ProfileBenchUnsafe`: benchmark/test-only ceiling with no durability promise.
+  Select it only with `OptionsForBenchmark` or `ApplyBenchmarkProfile`.
 
-Legacy/raw bundles such as `ProfileDurable`, `ProfileFast`, and
-`ProfileWALOnFast` remain temporarily available for compatibility and focused
-low-level tests, but they are not the current public guidance.
+All production profiles verify value-log checksums. `Flush` and `FlushAll`
+provide visibility/draining only; `Checkpoint` and clean `Close` publish a
+sealed durable root.
 
-Note: WAL-off is a benchmark/compatibility mode selected by `ProfileBench` or by
-explicitly setting `opts.Durability = treedb.DurabilityWALOffRelaxed` in
-low-level experiments.
-The value log remains enabled in cached mode, so large values can still go
-through `value_vlog/` even when the redo journal is off.
+Legacy Go aliases such as `ProfileDurable`, `ProfileFast`, and
+`ProfileWALOnFast` remain temporarily available with a deprecation diagnostic,
+but parsers reject their string spellings.
+
+The value log remains persistent storage in every profile, including
+`ProfileNoWALFast`; large values can still be pointer-backed through
+`value_vlog/` when command WAL is disabled.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
@@ -317,7 +324,7 @@ done
 ## Durability & Safety Notes
 
 - Safe defaults keep WAL, fsync, and read checksums enabled; relax safety knobs via `Options.Durability` and `Options.ValueLog.ReadIntegrity`.
-- In legacy relaxed durability modes, `SetSync`/`WriteSync` are crash-consistent only (no fsync) and may not survive power loss. When the command WAL is active, explicit sync APIs instead opt up to a durable V2 prefix even if ordinary writes use `DurabilityWALOnRelaxed`.
+- Explicit sync APIs do not downgrade in canonical production profiles. Command-WAL profiles wait for a durable V2 prefix, while `ProfileNoWALFast` waits for a sealed root covering the call. Ordinary relaxed writes may still be lost, and legacy WAL-on compatibility without command WAL retains its historical behavior.
 - Page checksums are verified once and cached until the page is rewritten; use `VerifyOnRead` for paranoid always-verify behavior. `Options.ValueLog.ReadIntegrity = IntegritySkipChecksums` disables value-log CRC checks entirely.
 - CRC checksums detect accidental corruption, not malicious tampering; use filesystem encryption/HMAC if your threat model includes adversarial disk access.
 - `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.

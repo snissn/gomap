@@ -559,14 +559,9 @@ func ensureFreshDemoDir(abs string) error {
 }
 
 func openDemoBackend(dir string) (*backenddb.DB, func() error, error) {
-	mainDir := filepath.Join(dir, "maindb")
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		return nil, nil, err
-	}
-	if err := backenddb.SaveFormatConfig(mainDir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
-		return nil, nil, err
-	}
-	return treedb.OpenBackendWithCachedLeafLog(treedb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.DisableBackgroundPrune = true
+	return treedb.OpenBackendWithCachedLeafLog(opts)
 }
 
 func collectionMetaForMode(mode string) *collections.CollectionMeta {

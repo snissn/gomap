@@ -118,6 +118,9 @@ type DB struct {
 	// Test hook used to advance protected-root providers at deterministic
 	// capture boundaries.
 	compactStorageAuditProtectedBasisHook func(stage string, attempt int)
+	// Test hook used to invalidate a value-log GC recoverable-root capability
+	// immediately before its destructive revalidation.
+	testValueLogGCBeforeRevalidateHook func()
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -138,6 +141,8 @@ type DB struct {
 	freelistRegionRadius int
 
 	readOnly                       bool
+	resolvedProfile                DurabilityProfile
+	deprecatedProfileAlias         DurabilityProfile
 	durability                     DurabilityMode
 	commandWAL                     bool
 	commandWALStatsScan            bool
@@ -169,11 +174,13 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu               sync.RWMutex
-	writeMu          sync.RWMutex
-	teardownMu       sync.RWMutex // Pins Close-sensitive resources outside writeMu.
-	commitMu         sync.Mutex
-	durablePublishMu sync.Mutex
+	mu                        sync.RWMutex
+	writeMu                   sync.RWMutex
+	teardownMu                sync.RWMutex // Pins Close-sensitive resources outside writeMu.
+	commitMu                  sync.Mutex
+	durablePublishMu          sync.Mutex
+	rootPublication           *rootPublicationRuntimeV1
+	rootPublicationFixedDelay time.Duration
 	// rootReuseMu seals acquisition of a visible root generation while durable
 	// publication converts retired COW pages into reusable pages. Existing
 	// readers remain concurrent; only new generation captures wait for the
@@ -214,6 +221,7 @@ type DB struct {
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook       func(int)
+	vacuumBeforeRecorderFenceHook func()
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	vacuumPreflushHook            func() error
 	meta                          page.MetaPageBody
@@ -540,12 +548,18 @@ type DB struct {
 	testAfterOptimisticApplyHook                   func()
 	testAfterOptimisticPublishPrepareHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
+	testCommandWALCleanupAfterScanHook             func()
+	testBeforeFinalizeCommitHook                   func()
+	testAfterFinalizeRootSerializationReleaseHook  func()
 	testDurableRootCandidatePreparedHook           func()
+	testRootPublicationDependencyBytes             atomic.Uint64
+	testScanCandidateExternalReferencesHook        func()
 	testCheckpointAfterPoisonPreflightHook         func()
 	testConditionalReadOnlyAfterClosePreflight     func()
 	testOrderedRootBatchAfterClosePreflightHook    func()
 	testStorageMaintenanceBeforeLockHook           func(string)
 	testStorageMaintenanceAfterLockHook            func(string) error
+	testCompactStorageRemoveValueLogSegmentHook    func(uint32) (bool, error)
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
 	commandWALReplayLSN                            atomic.Uint64
@@ -557,7 +571,12 @@ type DB struct {
 	// unrecoverable LSN gap.
 	commandWALFlushPoisoned atomic.Bool
 	commandWALDurableLSN    atomic.Uint64
-	commandWALDebt          CommandWALDependencyDebt
+	// commandWALSessionAppliedLSN is the durable-root applied frontier used to
+	// seed this journal owner's LSN sequence. When recovery classified a lower
+	// physical durable-WAL frontier, checkpoint must not bridge that pre-session
+	// gap merely by syncing an empty or newly-created successor segment.
+	commandWALSessionAppliedLSN uint64
+	commandWALDebt              CommandWALDependencyDebt
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
 	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
@@ -594,6 +613,31 @@ type DB struct {
 	commandWALCleanupScanNs          atomic.Uint64
 	commandWALCleanupScanBytes       atomic.Uint64
 	commandWALCleanupScanFrames      atomic.Uint64
+	commandWALCleanupProofs          atomic.Uint64
+	commandWALCleanupProofNs         atomic.Uint64
+	commandWALCleanupNs              atomic.Uint64
+	commandWALCleanupCovered         atomic.Uint64
+	commandWALCleanupCoveredBytes    atomic.Uint64
+	commandWALCleanupRetained        atomic.Uint64
+	commandWALCleanupRetainedBytes   atomic.Uint64
+	commandWALCleanupRetainedActive  atomic.Uint64
+	commandWALCleanupRetainedUncover atomic.Uint64
+	commandWALCleanupRetainedPinned  atomic.Uint64
+	commandWALCleanupRetainedError   atomic.Uint64
+	commandWALCleanupRetries         atomic.Uint64
+	commandWALCleanupNamespaceSyncs  atomic.Uint64
+	commandWALCleanupNamespaceErrors atomic.Uint64
+	commandWALCleanupProofFrontier   atomic.Uint64
+	commandWALCleanupProofDurableLSN atomic.Uint64
+	commandWALCleanupSelectedRoot    atomic.Uint64
+	commandWALCleanupOlderRoot       atomic.Uint64
+	commandWALCleanupCaptureEpoch    atomic.Uint64
+	commandWALCleanupNamespaceGen    atomic.Uint64
+	commandWALCleanupOldestPinnedLSN atomic.Uint64
+	commandWALCleanupNamespaceDirty  atomic.Bool
+	commandWALCleanupUnlinkedPending atomic.Uint64
+	commandWALCleanupBytesPending    atomic.Uint64
+	commandWALCleanupMu              sync.Mutex
 	commandWALCleanupRemoved         atomic.Uint64
 	commandWALCleanupBytes           atomic.Uint64
 	commandWALClosedBytes            atomic.Int64
@@ -702,6 +746,47 @@ func wrapFinalizeCommitError(err error, cleanupCreatedSegmentsSafe bool) error {
 		err:                        err,
 		cleanupCreatedSegmentsSafe: cleanupCreatedSegmentsSafe,
 	}
+}
+
+type acceptedFinalizeCommitError struct {
+	err error
+}
+
+func (e *acceptedFinalizeCommitError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *acceptedFinalizeCommitError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *acceptedFinalizeCommitError) CommitPublicationAccepted() bool {
+	return e != nil
+}
+
+func wrapAcceptedFinalizeCommitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &acceptedFinalizeCommitError{err: err}
+}
+
+// CommitPublicationAccepted reports whether err was returned after root
+// publication ownership transferred and the candidate became visible. Such an
+// error may still describe an unsatisfied admission or durability obligation;
+// callers must not replay the logical mutation as though publication never
+// happened.
+func CommitPublicationAccepted(err error) bool {
+	var accepted interface {
+		CommitPublicationAccepted() bool
+	}
+	return errors.As(err, &accepted) && accepted.CommitPublicationAccepted()
 }
 
 func finalizeCommitErrorAllowsCreatedSegmentCleanup(err error) bool {
@@ -1018,6 +1103,17 @@ type ValueLogOptions struct {
 
 type Options struct {
 	Dir string
+	// ResolvedProfile is the canonical public durability contract selected by
+	// the TreeDB profile resolver. Public constructors populate it before any
+	// backend or cached-layer routing decision is made.
+	ResolvedProfile DurabilityProfile
+	// DeprecatedProfileAlias records a legacy Go alias that resolved to
+	// ResolvedProfile. It is diagnostic-only and never controls behavior.
+	DeprecatedProfileAlias DurabilityProfile
+	// UnsafeBenchmarkProfile proves that bench_unsafe entered through an explicit
+	// benchmark/test constructor boundary. Ordinary production opens reject the
+	// profile when this marker is false.
+	UnsafeBenchmarkProfile bool
 	// IgnoreFormatConfig disables best-effort persisted format.json loading in
 	// TreeDB open paths that auto-apply index-format knobs from disk (e.g.
 	// treedb.Open, treedb.OpenBackend) and in offline maintenance helpers
@@ -1104,6 +1200,10 @@ type Options struct {
 	//
 	// The default (zero) is DurabilityDurable.
 	Durability DurabilityMode
+	// rootPublicationFixedDelay is a package-local benchmark control. Zero uses
+	// the adaptive production policy; non-zero values run the same coordinator
+	// and publisher path with a fixed timer delay.
+	rootPublicationFixedDelay time.Duration
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
 	// behavior). When false (default), a bounded background pruner frees pages
 	// asynchronously to reduce commit latency under churn.
@@ -1257,18 +1357,18 @@ type Options struct {
 	// Unsupported runs fall back to recursive apply.
 	FlushApplySpanNative bool
 
-	// FlushBackendMaxEntries caps how many operations are buffered into a single
-	// backend batch before committing it and continuing with a fresh batch.
+	// FlushBackendMaxEntries caps how many operations are buffered into one
+	// backend apply chunk before continuing with a fresh batch.
 	//
-	// This increases backend commit cadence during very large flushes, which can
-	// reduce index.db high-watermark growth under small KeepRecent windows by
-	// making retired pages eligible for reuse sooner.
+	// TreeDB stages all chunks from one logical flush in a private root-build
+	// transaction. Only the final complete root is publication-eligible; no
+	// intermediate chunk is independently visible or recoverable.
 	//
 	// 0 uses the internal default. Negative disables chunking (single backend
-	// commit per flush).
+	// apply per flush).
 	FlushBackendMaxEntries int
-	// FlushBackendMaxBatches caps how many intermediate backend commits a single
-	// flush may emit (0=default, <0=disable cap).
+	// FlushBackendMaxBatches caps how many backend apply chunks a single flush may
+	// emit (0=default, <0=disable cap).
 	FlushBackendMaxBatches int
 
 	// FlushSpanRunTargetPlanning enables diagnostic read-only target-leaf planning
@@ -1743,6 +1843,9 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
+	if err := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); err != nil {
+		return nil, err
+	}
 	if opts.IgnoreFormatConfig {
 		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
 		if err != nil {
@@ -1863,6 +1966,9 @@ func validateOptions(opts Options) error {
 	}
 	if !opts.FlushAdmissionPolicy.Valid() {
 		return fmt.Errorf("treedb: invalid flush admission policy %d", opts.FlushAdmissionPolicy)
+	}
+	if err := validateResolvedDurabilityProfile(opts); err != nil {
+		return err
 	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
@@ -2080,6 +2186,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
+		resolvedProfile:                opts.ResolvedProfile,
+		deprecatedProfileAlias:         opts.DeprecatedProfileAlias,
+		rootPublicationFixedDelay:      opts.rootPublicationFixedDelay,
 		commandWAL:                     opts.CommandWAL,
 		commandWALStatsScan:            opts.CommandWALStatsScan,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
@@ -2096,6 +2205,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
+		return db.syncDeletionNamespaceDirectoryOrPoison(
+			dir,
+			resource,
+			"treedb: sync deferred value-log deletion namespace",
+		)
+	})
 	db.initializeLeafGenerationManifestStore(layout.leafVLogDir, valueLogIdentityPins)
 	db.ghostManager.start()
 	db.idx.Store(gen)
@@ -2161,9 +2277,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
-		// Re-list segments after replay: replayCommandWALIntoBackend may call
-		// cleanupCommandWALSegmentsCoveredByAppliedLSN, which deletes covered
-		// non-active segments. Open the default writer on lane 0. When lane 0's
+		// Re-list segments after replay because V2 recovery may repair or remove
+		// an incomplete suffix. Open the default writer on lane 0 before ordinary
+		// cleanup so every destructive proof includes the owned journal namespace
+		// generation and active identity. When lane 0's
 		// active segment has a terminal tail, reopen that segment so
 		// OpenCommandJournal can truncate the tail. Otherwise, append to a fresh
 		// lane-0 segment to avoid extending a covered segment.
@@ -2204,8 +2321,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
-		db.commandWALDurableLSN.Store(db.meta.AppliedCommandLSN)
+		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
+		// replayCommandWALIntoBackend records the physically classified durable
+		// frontier. A recovered durable root may advance AppliedCommandLSN beyond
+		// that WAL frontier, but opening a writer does not sync the recovered WAL
+		// lineage and therefore must not mint cleanup authority from root state.
 		db.refreshCommandWALClosedBytes()
+		if !db.readOnly {
+			if err := db.CleanupCommandWALCoveredSegments(true); err != nil &&
+				!errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				_ = db.Close()
+				return nil, err
+			}
+		}
 		db.cacheCommandWALRequiredFeatureStats()
 	} else {
 		// If a directory requires command replay but this open is not command-WAL
@@ -2224,7 +2352,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, legacyCachedRedoJournalReplayDisabledError(legacySegments, opts.WALMaxSegmentBytes)
 		}
-		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal {
+		// The explicit compatibility escape hatch also classifies incomplete-only
+		// legacy segments. They contain no replayable batch, but the authorized
+		// forensic recovery pass must still remove the torn suffix so it is not
+		// rediscovered on every reopen.
+		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal || opts.AllowLegacyCachedRedoJournalReplay {
 			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
 				_ = db.Close()
 				return nil, err
@@ -2294,6 +2426,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 	}
+	// Recovery, replay, the visible snapshot, reachability tracking, and any
+	// command-WAL appender must all name the same root before asynchronous root
+	// publication can admit its first builder.
+	if err := db.initializeRootPublicationRuntimeV1(gen); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,
@@ -2306,8 +2445,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// Best-effort: persist the format knobs used for this DB directory so
 	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
 	// the intended on-disk layout without requiring callers to re-specify flags.
-	if err := saveOpenFormatConfig(opts); err != nil && opts.NotifyError != nil {
-		opts.NotifyError(err)
+	if err := saveOpenFormatConfig(opts); err != nil {
+		if opts.ResolvedProfile != "" {
+			_ = db.Close()
+			return nil, fmt.Errorf("treedb: persist durability profile manifest: %w", err)
+		}
+		if opts.NotifyError != nil {
+			opts.NotifyError(err)
+		}
 	}
 
 	return db, nil
@@ -2634,33 +2779,79 @@ func (db *DB) closeAfterHooksOnce() error {
 func (db *DB) closeAfterHooks() error {
 	var errs []error
 
-	// Lock order after user callbacks is maintenanceMu, internal teardown hooks,
-	// writeMu, teardownMu, then mu. Internal registration never waits on
-	// maintenanceMu, and callbacks run before this chain with no DB lock held.
+	// User callbacks have flushed their higher-level buffers. First pass through
+	// maintenanceMu so an already-admitted maintenance operation can finish
+	// before closing becomes visible. Release it immediately after closing the
+	// admission gate: stable root publication must never run while it is held.
 	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
 	db.closing.Store(true)
-	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
-		errs = append(errs, err)
-	}
-	// Wait for active apply attempts before closing the reusable flush/apply
-	// worker pool and tearing down index resources.
+	db.maintenanceMu.Unlock()
+	// Wait for every already-admitted writer to finish constructing and handing
+	// off its immutable root candidate.
 	db.writeMu.Lock()
-	leafPageLog := db.leafPageLog
-	leafGenerationManifestStore := db.leafGenerationManifestStore
 	if db.flushApplyWorkerPool != nil {
 		db.flushApplyWorkerPool.Close()
 		db.flushApplyWorkerPool = nil
 	}
 	db.clearFlushApplyReadOnlyPrepareBuffers()
-	// Commit post-work persists the leaf-generation manifest while its writer
-	// still holds writeMu. Keep the retained manifest handles usable until every
-	// in-flight writer has drained. Close them before releasing writeMu so a
-	// caller queued behind Close cannot enter the drain-to-teardown handoff.
+	db.writeMu.Unlock()
+
+	// A root producer releases writeMu after transferring its immutable build to
+	// the durable publisher, but it keeps teardownMu for reading until enqueue,
+	// admission, and ordered post-work have completed. Cross the teardown gate
+	// before stopping the coordinator so Close cannot strand such an admitted
+	// producer between build handoff and enqueue. Release the gate before taking
+	// maintenanceMu below: a closing dry-run maintenance caller may already hold
+	// maintenanceMu while waiting to observe the teardown barrier.
+	db.teardownMu.Lock()
+	var (
+		rootRuntime *rootPublicationRuntimeV1
+		rootHandoff *rootpublication.RecoveryResourceHandoff
+	)
+	if rootRuntime = db.rootPublication; rootRuntime != nil && rootRuntime.coordinator != nil {
+		if err := rootRuntime.coordinator.Drain(context.Background()); err != nil {
+			errs = append(errs, fmt.Errorf("drain root publication: %w", publicRootPublicationErrorV1(err)))
+		}
+		if err := rootRuntime.coordinator.Stop(context.Background()); err != nil {
+			errs = append(errs, fmt.Errorf("stop root publication: %w", publicRootPublicationErrorV1(err)))
+		}
+		var err error
+		rootHandoff, err = rootRuntime.coordinator.TakeRecoveryHandoff()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("take root publication recovery handoff: %w", publicRootPublicationErrorV1(err)))
+		}
+		db.rootPublication = nil
+	}
+	db.teardownMu.Unlock()
+	// Writers and durable-root publication are now drained, while the command
+	// journal and its exact active namespace identity are still owned by this
+	// handle. Unavailable proof is the expected conservative result when relaxed
+	// roots run ahead of the dependency-closed WAL frontier; retain those files
+	// and let a later checkpoint/reopen converge. A pre-existing post-append or
+	// publication poison is likewise not cleanup authority: retain the complete
+	// WAL unchanged for the next owner. Healthy handles surface actual cleanup
+	// failures, but teardown continues so cleanup errors never strand resources.
+	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
+		if err := db.cleanupCommandWALCoveredSegmentsV1(); err != nil &&
+			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
+			!errors.Is(err, errDurableWALCleanupProofStale) &&
+			!errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+			errs = append(errs, fmt.Errorf("cleanup command WAL during close: %w", err))
+		}
+	}
+
+	// No stable root I/O can begin beyond this point. Maintenance and teardown
+	// may now close producer resources and the index without racing Publisher.
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
+		errs = append(errs, err)
+	}
+	leafPageLog := db.leafPageLog
+	leafGenerationManifestStore := db.leafGenerationManifestStore
 	if leafGenerationManifestStore != nil {
 		leafGenerationManifestStore.Close()
 	}
-	db.writeMu.Unlock()
 	// Operations using teardownMu may briefly take writeMu while preparing or
 	// revalidating work. Never wait for them while holding writeMu.
 	db.teardownMu.Lock()
@@ -2718,6 +2909,15 @@ func (db *DB) closeAfterHooks() error {
 		if err := commandJournal.Close(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	// Pending candidate handles and allocator transactions stay pinned through
+	// resource and index shutdown. Only now may the live-runtime clones and the
+	// coordinator's exact recovery handoff be released.
+	if rootRuntime != nil {
+		rootRuntime.release()
+	}
+	if rootHandoff != nil {
+		rootHandoff.Release()
 	}
 	// Namespace sync proofs are valid only for this DB lifetime. Stable
 	// publication closures retain exact handles independently and remain usable
@@ -2910,6 +3110,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 }
 
 type finalizeCommitPost struct {
+	accepted                          bool
 	oldState                          *DBState
 	metrics                           adaptive.Metrics
 	vlogRefDelta                      *valueLogRefDelta
@@ -2932,13 +3133,9 @@ type finalizeCommitPost struct {
 	drainLeafGenerationPending        bool
 }
 
-// finalizeCommitLocked performs the durability-critical publish path.
-// Callers that already hold commit serialization may run post work after
-// releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) (finalizeCommitPost, error) {
-	return db.finalizeCommitLockedWithOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{})
-}
-
+// finalizeCommitLockedWithOptions performs the durability-critical publish
+// path. Every caller must bind its constructed roots to the exact visible
+// commit sequence from which they were derived.
 func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
@@ -2955,15 +3152,47 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if err := db.commandWALPoisonedError(); err != nil {
 		return post, err
 	}
+	if !opts.hasExpectedBaseCommitSeq {
+		return post, errors.New("missing expected base commit sequence")
+	}
+	rootRuntime := db.rootPublication
+	builder := opts.rootPublicationBuilder
+	if rootRuntime != nil && builder == nil {
+		var err error
+		builder, err = rootRuntime.coordinator.AcquireBuilder(context.Background())
+		if err != nil {
+			return post, prePublishErr(fmt.Errorf("acquire root-publication builder: %w", publicRootPublicationErrorV1(err)))
+		}
+	}
+	if builder != nil {
+		defer builder.Release()
+	}
 	// Serialize before reading the visible meta projection. A preceding
 	// publication may already have synced its durable meta while it is still
 	// installing the matching in-memory state; preparing nextMeta before this
 	// gate would then reuse the just-published commit sequence.
-	if !opts.durablePublishLocked {
+	durablePublishLocked := true
+	releaseDurablePublishAction := opts.durablePublishRelease
+	if opts.durablePublishLocked {
+		if releaseDurablePublishAction == nil {
+			// Preserve legacy test/caller safety while making the transferred-lock
+			// contract explicit for every production prelocked path.
+			releaseDurablePublishAction = func() { db.durablePublishMu.Unlock() }
+		}
+	} else {
 		db.durablePublishMu.Lock()
-		defer db.durablePublishMu.Unlock()
-		opts.durablePublishLocked = true
+		releaseDurablePublishAction = func() {
+			db.durablePublishMu.Unlock()
+		}
 	}
+	releaseDurablePublish := func() {
+		if !durablePublishLocked {
+			return
+		}
+		durablePublishLocked = false
+		releaseDurablePublishAction()
+	}
+	defer releaseDurablePublish()
 	// A publication that owned the durable gate while this caller waited may
 	// have crossed an outcome-ambiguous cut and poisoned the open handle. The
 	// admission check above cannot authorize work after that predecessor, and
@@ -3073,6 +3302,14 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 				}
 			}
 		}
+	}
+	if rootRuntime != nil {
+		return db.finalizeQueuedRootPublicationV1(
+			rootRuntime, builder, idx, nextMeta, oldUserRootID, newRootID,
+			retired, sync, post, vlogRefDelta, leafManifest,
+			leafManifestRawFileIDs, opts, inlinePublishPrepareGuard,
+			releaseDurablePublish,
+		)
 	}
 
 	// 3. Materialize the COW inventory, sync the exact index identity, write the
@@ -3192,6 +3429,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	opts.conditionalMutation.record(db, nextMeta.CommitSeq)
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
 		if post.oldState != nil {
@@ -3349,19 +3587,31 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	}
 }
 
-// finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
-	if err != nil {
-		return err
+// finalizeAcceptedCommitPostWorkOnError completes the non-serialized work for
+// a candidate whose ownership and visible-state activation already crossed the
+// point of no return, even though a later admission or durability wait failed.
+//
+// The value-log ref delta remains producer-owned on every error return. Clear
+// it from this post-work copy so the producer's existing error cleanup releases
+// it exactly once; all other accepted-publication work belongs to the DB and
+// must not be deferred to a later durability retry.
+func (db *DB) finalizeAcceptedCommitPostWorkOnError(post finalizeCommitPost) finalizeCommitPost {
+	if !post.accepted {
+		return post
 	}
+	post.vlogRefDelta = nil
 	db.finalizeCommitPostWork(post)
-	return nil
+	commitSeq := post.commitSeq
+	return finalizeCommitPost{accepted: true, commitSeq: commitSeq}
 }
 
 // finalizeCommitReleasingRootSerialization transfers a completed root build to
 // the durable publisher. The caller must hold every lock named by release. The
-// helper acquires publication serialization in root-lock order, releases those
+// expected base sequence must be the visible commit observed before root
+// construction began; sampling it in this helper would let a predecessor
+// activate after construction but before finalization and bless a stale root.
+//
+// The helper acquires publication serialization in root-lock order, releases those
 // locks before legacy dependency preparation, and keeps the durable publisher
 // locked through candidate preparation, exact I/O, and visible-state install.
 func (db *DB) finalizeCommitReleasingRootSerialization(
@@ -3376,24 +3626,49 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 	leafManifest *leafGenerationManifest,
 	leafManifestRawFileIDs []uint32,
 	opts finalizeCommitOptions,
+	expectedBaseCommitSeq uint64,
 	release func(),
 	onError func(error),
 ) (finalizeCommitPost, error) {
 	if release == nil {
 		return finalizeCommitPost{}, errors.New("missing root-serialization release")
 	}
+	if hook := db.testBeforeFinalizeCommitHook; hook != nil {
+		hook()
+	}
 	if opts.durableIndex == nil {
 		opts.durableIndex = db.idx.Load()
 	}
-	if !opts.hasExpectedBaseCommitSeq {
-		db.mu.RLock()
-		opts.expectedBaseCommitSeq = db.meta.CommitSeq
-		db.mu.RUnlock()
-		opts.hasExpectedBaseCommitSeq = true
+	opts.expectedBaseCommitSeq = expectedBaseCommitSeq
+	opts.hasExpectedBaseCommitSeq = true
+	rootRuntime := db.rootPublication
+	var builder *rootpublication.BuilderToken
+	if rootRuntime != nil {
+		var err error
+		builder, err = rootRuntime.coordinator.AcquireBuilder(context.Background())
+		if err != nil {
+			err = publicRootPublicationErrorV1(err)
+			if onError != nil {
+				onError(err)
+			}
+			return finalizeCommitPost{}, fmt.Errorf("acquire root-publication builder: %w", err)
+		}
+		defer builder.Release()
+	}
+	durablePublishLocked := false
+	releaseDurablePublish := func() {
+		if durablePublishLocked {
+			db.durablePublishMu.Unlock()
+			durablePublishLocked = false
+		}
 	}
 	db.durablePublishMu.Lock()
-	defer db.durablePublishMu.Unlock()
+	durablePublishLocked = true
+	defer releaseDurablePublish()
 	release()
+	if hook := db.testAfterFinalizeRootSerializationReleaseHook; hook != nil {
+		hook()
+	}
 
 	guard, err := db.prepareFinalizeCommitDurability(sync)
 	if err != nil {
@@ -3406,23 +3681,35 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 
 	opts.skipPrePublishFlush = true
 	opts.durablePublishLocked = true
+	opts.durablePublishRelease = releaseDurablePublish
+	opts.rootPublicationBuilder = builder
 	opts.releaseRootSerialization = func() {}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments,
 		forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, opts,
 	)
-	if err != nil && onError != nil {
+	if err != nil && !post.accepted && onError != nil {
 		onError(err)
 	}
 	return post, err
 }
 
-// Commit persists the new root (Sync=true by default).
-// Note: This is usually called internally by Batch.Write or externally if manual root management.
-// If manual, retired pages are unknown? `Commit` signature assumes manual root.
-// If external user calls Commit, they might not know retired pages.
-// We'll accept nil for retired if manual.
-func (db *DB) Commit(newRootID uint64) error {
+// CommitAtState synchronously persists a manually constructed user root only
+// when the visible commit sequence and roots still match the caller's basis.
+// Callers must capture basis before constructing newRootID.
+func (db *DB) CommitAtState(newRootID uint64, basis StateToken) error {
+	return db.commitManualRoot(newRootID, basis, true)
+}
+
+// ForceCommit synchronously force-sets a manually constructed user root. It
+// intentionally does not detect publications that occurred while newRootID was
+// constructed. Prefer CommitAtState unless last-writer-wins replacement is the
+// explicit operation.
+func (db *DB) ForceCommit(newRootID uint64) error {
+	return db.commitManualRoot(newRootID, StateToken{}, false)
+}
+
+func (db *DB) commitManualRoot(newRootID uint64, basis StateToken, conditional bool) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -3431,8 +3718,26 @@ func (db *DB) Commit(newRootID uint64) error {
 	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return err
 	}
-	// Public Commit assumes the caller has built a new tree.
-	// We need to serialize with other writers.
+	for {
+		post, err := db.commitManualRootAttempt(newRootID, basis, conditional)
+		if err == nil {
+			db.finalizeCommitPostWork(post)
+			return nil
+		}
+		if !errors.Is(err, errDurableRootCandidateStale) {
+			return err
+		}
+		if conditional {
+			return fmt.Errorf(
+				"%w: manual root basis advanced during publication from commit=%d",
+				ErrConcurrentModification,
+				basis.CommitSeq,
+			)
+		}
+	}
+}
+
+func (db *DB) commitManualRootAttempt(newRootID uint64, basis StateToken, conditional bool) (finalizeCommitPost, error) {
 	db.writeMu.Lock()
 	writeLocked := true
 	defer func() {
@@ -3441,41 +3746,49 @@ func (db *DB) Commit(newRootID uint64) error {
 		}
 	}()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
-		return err
+		return finalizeCommitPost{}, err
 	}
 
-	// Since we are committing a root provided by caller, we assume they based it on current state?
-	// If caller is external, they might have read old state.
-	// But Commit(newRoot) implies "Force Set Root".
-	// We just commit it.
-
-	// Need sysRootID.
 	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
 	sysRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
+	if conditional && (baseSeq != basis.CommitSeq || userRoot != basis.RootPageID || sysRoot != basis.SystemRootPageID) {
+		return finalizeCommitPost{}, fmt.Errorf(
+			"%w: manual root basis commit=%d/%d user_root=%d/%d system_root=%d/%d",
+			ErrConcurrentModification,
+			basis.CommitSeq, baseSeq,
+			basis.RootPageID, userRoot,
+			basis.SystemRootPageID, sysRoot,
+		)
+	}
 
-	post, err := db.finalizeCommitReleasingRootSerialization(
+	return db.finalizeCommitReleasingRootSerialization(
 		newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
 		finalizeCommitOptions{closeTeardownPinned: true},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false
 		},
 		nil,
 	)
-	if err != nil {
-		return err
-	}
-	db.finalizeCommitPostWork(post)
-	return nil
 }
 
 // Checkpoint forces a durable boundary for previously-published backend state.
 //
-// Unlike Commit, this does not publish a new root or advance CommitSeq. It is
-// intended for callers that already made writes visible with relaxed durability
-// and now need those writes durable on disk.
+// Unlike CommitAtState or ForceCommit, this does not publish a new root or
+// advance CommitSeq. It is intended for callers that already made writes
+// visible with relaxed durability and now need those writes durable on disk.
 func (db *DB) Checkpoint() error {
+	return db.checkpoint(false)
+}
+
+// checkpoint runs with maintenanceAlreadyHeld only for an enclosing backend
+// maintenance operation such as CompactStorage. Command-WAL cleanup must not
+// recursively acquire maintenanceMu in that case.
+func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
 	}
@@ -3489,19 +3802,67 @@ func (db *DB) Checkpoint() error {
 		db.testCheckpointAfterPoisonPreflightHook()
 	}
 
+	// Command publishers take raw-publish before writeMu. Checkpoint must use
+	// the same order so its command-WAL frontier cannot deadlock a writer that
+	// has appended a frame and is waiting to publish the matching root.
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer func() { unlockCommandWALPublish() }()
+
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 	if err := db.checkWriteAdmissionLocked(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
+		db.writeMu.Unlock()
 		return err
 	}
 
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {
+		db.writeMu.Unlock()
 		return errors.New("missing index")
 	}
+	if runtime := db.rootPublication; runtime != nil && runtime.coordinator != nil {
+		db.mu.RLock()
+		visibleCommitSeq := db.meta.CommitSeq
+		db.mu.RUnlock()
+		db.writeMu.Unlock()
+		// Let post-cut writers enter while the coordinator makes the captured
+		// root prefix durable. Reacquire raw-publish afterwards and close the
+		// exact then-current WAL prefix; a durable WAL frontier may safely run
+		// ahead of the cleanup frontier selected from recovery-safe roots.
+		unlockCommandWALPublish()
+		unlockCommandWALPublish = func() {}
+		// Checkpoint is a root durability boundary in every profile. Waiting is
+		// deliberately outside write/commit/root-build locks; Publisher owns the
+		// dependency -> index -> alternate-meta ordering for this exact prefix.
+		if err := runtime.coordinator.WaitThrough(context.Background(), visibleCommitSeq); err != nil {
+			return publicRootPublicationErrorV1(err)
+		}
+		unlockCommandWALPublish = db.lockCommandWALRawPublish()
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+		if err != nil {
+			return err
+		}
+		if rotatedCommandWAL || commandWALPrefixAdvanced {
+			// Cleanup captures and revalidates its own exact journal namespace
+			// snapshot. Release raw-publish before maintenance admission so a
+			// concurrent maintenance checkpoint cannot invert those locks.
+			unlockCommandWALPublish()
+			unlockCommandWALPublish = func() {}
+			if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	writeLocked := true
+	defer func() {
+		if writeLocked {
+			db.writeMu.Unlock()
+		}
+	}()
 	debugTiming := commitTimingEnabled()
 	var (
 		start      time.Time
@@ -3522,12 +3883,9 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 	}
-	rotatedCommandWAL := false
-	if db.commandWAL && db.commandJournal != nil && db.CommandWALActiveBytes() > 0 {
-		if err := db.RotateCommandWALActiveSegment(true); err != nil {
-			return err
-		}
-		rotatedCommandWAL = true
+	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+	if err != nil {
+		return err
 	}
 	if debugTiming {
 		t1 := time.Now()
@@ -3544,12 +3902,66 @@ func (db *DB) Checkpoint() error {
 	} else if err := idx.pager.Sync(); err != nil {
 		return err
 	}
-	if rotatedCommandWAL {
-		if err := db.CleanupCommandWALCoveredSegments(true); err != nil {
+	if rotatedCommandWAL || commandWALPrefixAdvanced {
+		// The cleanup proof independently rejects new appends and namespace
+		// changes. Drop write/raw-publish before maintenance admission to keep
+		// the global maintenance -> raw-publish -> write order acyclic.
+		db.writeMu.Unlock()
+		writeLocked = false
+		unlockCommandWALPublish()
+		unlockCommandWALPublish = func() {}
+		if err := db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// closeCommandWALCheckpointPrefix establishes the dependency-closed physical
+// WAL frontier used by cleanup proofs. The caller must hold raw-publish so the
+// latest assigned LSN, dependency debt, active segment sync, and frontier
+// publication describe one append-serialization cut.
+func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err error) {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return false, false, nil
+	}
+	nextLSN := db.CommandWALNextLSN()
+	if nextLSN <= 1 {
+		return false, false, nil
+	}
+	frontier := nextLSN - 1
+	durableWALLSN := db.commandWALDurableLSN.Load()
+	// A relaxed frame can be recovered into a durable root while remaining
+	// above the physically classified durable-WAL frontier. The writer then
+	// starts at AppliedCommandLSN+1, often with an empty successor. Syncing that
+	// successor proves nothing about the older recovered segment, so only a
+	// session whose classified frontier already covers its initial applied LSN
+	// may promote the prefix through this checkpoint path. A later reopen can
+	// establish that recovery baseline; an explicit durable append/barrier may
+	// independently advance commandWALDurableLSN through its own contract.
+	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+	if advanced {
+		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
+			return false, false, err
+		}
+	}
+	if db.CommandWALActiveBytes() > 0 {
+		if err := db.RotateCommandWALActiveSegment(true); err != nil {
+			return false, false, err
+		}
+		rotated = true
+	} else if advanced {
+		// Automatic rotations retain exact stable handles in dependency debt.
+		// Sync the current (possibly empty) active target as the final journal
+		// boundary after those older exact handles have crossed their barriers.
+		if err := db.FlushCommandWAL(true); err != nil {
+			return false, false, err
+		}
+	}
+	if advanced {
+		db.closeCommandWALDurablePrefixThrough(frontier)
+	}
+	return rotated, advanced, nil
 }
 
 // Prune reclaims pages from the graveyard.
@@ -3991,7 +4403,32 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 	if db == nil || db.valueLogManager == nil {
 		return fmt.Errorf("value log manager unavailable")
 	}
-	return db.valueLogManager.MarkZombie(id)
+	stats, err := db.valueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{id},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+		observedSourceMissingIsError:     true,
+	}, true)
+	if err != nil {
+		if errors.Is(err, ErrRecoverableRootSetStale) {
+			return errors.Join(
+				fmt.Errorf("%w: file_id=%d", ErrValueLogZombieDeferred, id),
+				err,
+			)
+		}
+		return err
+	}
+	if stats.ObservedSourceSegmentsEligible != 1 {
+		return fmt.Errorf(
+			"%w: file_id=%d referenced=%d active=%d protected=%d",
+			ErrValueLogZombieDeferred,
+			id,
+			stats.ObservedSourceSegmentsReferenced,
+			stats.ObservedSourceSegmentsActive,
+			stats.ObservedSourceSegmentsProtected,
+		)
+	}
+	return nil
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
@@ -4026,6 +4463,7 @@ func (db *DB) CompactIndex() error {
 	reader := newValueReader(state.ValueLogSet)
 	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
 	// Collect pages in the old tree so they can be retired after the swap.
@@ -4063,6 +4501,7 @@ func (db *DB) CompactIndex() error {
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil, nil, nil,
 		finalizeCommitOptions{closeTeardownPinned: true},
+		baseSeq,
 		func() {
 			db.writeMu.Unlock()
 			writeLocked = false

@@ -74,3 +74,38 @@ func TestValueLogRefDelta_AddCancelsToZero(t *testing.T) {
 		t.Fatalf("expected promoted key cancellation to remove entry: %v", snap)
 	}
 }
+
+func TestValueLogRefDelta_MergePreservesPositiveAppendAccounting(t *testing.T) {
+	added := newValueLogRefDelta()
+	added.add(7, 3)
+	removed := newValueLogRefDelta()
+	removed.add(7, -3)
+	merged := newValueLogRefDelta()
+	for _, delta := range []*valueLogRefDelta{added, removed} {
+		if err := delta.forEachChange(func(fileID uint32, change int64) error {
+			merged.addChange(fileID, change)
+			return nil
+		}); err != nil {
+			t.Fatalf("forEachChange: %v", err)
+		}
+		if err := delta.forEachPositive(func(fileID uint32, count int64) error {
+			merged.addPositive(fileID, count)
+			return nil
+		}); err != nil {
+			t.Fatalf("forEachPositive: %v", err)
+		}
+	}
+	if changes := valueLogRefDeltaSnapshot(t, merged); len(changes) != 0 {
+		t.Fatalf("merged net changes=%v want none", changes)
+	}
+	positives := make(map[uint32]int64)
+	if err := merged.forEachPositive(func(fileID uint32, count int64) error {
+		positives[fileID] = count
+		return nil
+	}); err != nil {
+		t.Fatalf("merged forEachPositive: %v", err)
+	}
+	if len(positives) != 1 || positives[7] != 3 {
+		t.Fatalf("merged positives=%v want map[7:3]", positives)
+	}
+}

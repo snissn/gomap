@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -301,6 +302,73 @@ func TestPagerTruncate(t *testing.T) {
 		t.Errorf("Expected file size %d, got %d", expectedSize, info.Size())
 	}
 
+}
+
+func TestPagerTruncateSerializesConcurrentGrowth(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index_truncate_concurrent.db")
+	chunkSize := int64(page.PageSize * 4)
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		chunkSize = gran
+	}
+
+	p, err := Open(path, chunkSize)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(2); err != nil {
+		t.Fatalf("initial Alloc: %v", err)
+	}
+
+	observed := make(chan uint64, 1)
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	var snapshots atomic.Int32
+	previousHook := testHookTruncateAfterPageCount
+	testHookTruncateAfterPageCount = func(current uint64) {
+		if snapshots.Add(1) != 1 {
+			return
+		}
+		observed <- current
+		<-release
+	}
+	t.Cleanup(func() { testHookTruncateAfterPageCount = previousHook })
+
+	truncateErr := make(chan error, 1)
+	go func() { truncateErr <- p.Truncate(5) }()
+	select {
+	case current := <-observed:
+		if current != 2 {
+			t.Fatalf("truncate observed pages=%d want 2", current)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("truncate did not reach page-count snapshot")
+	}
+
+	// Both calls observed 2 pages. The old implementation serialized only the
+	// later allocations, so their stale +3 and +4 deltas produced 9 pages.
+	if err := p.Truncate(6); err != nil {
+		t.Fatalf("concurrent Truncate: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-truncateErr:
+		if err != nil {
+			t.Fatalf("Truncate: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("truncate did not finish")
+	}
+	if got := p.PageCount(); got != 6 {
+		t.Fatalf("page count=%d want later target 6", got)
+	}
 }
 
 func TestPagerAsyncPreGrow_DefaultChunkEnabled(t *testing.T) {

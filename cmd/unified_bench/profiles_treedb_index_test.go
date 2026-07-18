@@ -722,8 +722,63 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbRelaxedSync {
 		t.Fatalf("expected wal_on_fast profile to enable relaxed sync")
 	}
-	if !*treedbDisableReadChecksum {
-		t.Fatalf("expected wal_on_fast profile to disable read checksum")
+	if *treedbDisableReadChecksum {
+		t.Fatalf("expected wal_on_fast profile to preserve verified read integrity")
+	}
+}
+
+func TestBuildTreeDBOptions_ResolvedDurabilityProfileMatrix(t *testing.T) {
+	tests := []struct {
+		name            string
+		disableWAL      bool
+		relaxedSync     bool
+		disableChecksum bool
+		wantProfile     treedb.Profile
+		wantBenchmark   bool
+	}{
+		{name: "durable", wantProfile: treedb.ProfileCommandWALDurable},
+		{name: "relaxed", relaxedSync: true, wantProfile: treedb.ProfileCommandWALRelaxed},
+		{name: "no_wal", disableWAL: true, wantProfile: treedb.ProfileNoWALFast},
+		{name: "bench_unsafe", disableWAL: true, relaxedSync: true, disableChecksum: true, wantProfile: treedb.ProfileBenchUnsafe, wantBenchmark: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := saveTreeDBFlagState()
+			defer restoreTreeDBFlagState(saved)
+			resetTreeDBIndexFlagsForTest()
+			*treedbAllowUnsafe = tc.disableWAL || tc.relaxedSync || tc.disableChecksum
+			*treedbDisableWAL = tc.disableWAL
+			*treedbRelaxedSync = tc.relaxedSync
+			*treedbDisableReadChecksum = tc.disableChecksum
+
+			opts, rep, err := buildTreeDBOptions("")
+			if err != nil {
+				t.Fatalf("buildTreeDBOptions: %v", err)
+			}
+			if got := treedb.Profile(opts.ResolvedProfile); got != tc.wantProfile {
+				t.Fatalf("ResolvedProfile=%q want %q", got, tc.wantProfile)
+			}
+			if opts.UnsafeBenchmarkProfile != tc.wantBenchmark {
+				t.Fatalf("UnsafeBenchmarkProfile=%t want %t", opts.UnsafeBenchmarkProfile, tc.wantBenchmark)
+			}
+			if got := rep.formatText(""); !strings.Contains(got, "profile_resolved="+string(tc.wantProfile)) {
+				t.Fatalf("resolved report missing profile: %q", got)
+			}
+		})
+	}
+}
+
+func TestBuildTreeDBOptions_RejectsChecksumSkippingWALHybrid(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbAllowUnsafe = true
+	*treedbRelaxedSync = true
+	*treedbDisableReadChecksum = true
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil || !strings.Contains(err.Error(), "bench_unsafe") {
+		t.Fatalf("buildTreeDBOptions error=%v want bench_unsafe admission error", err)
 	}
 }
 

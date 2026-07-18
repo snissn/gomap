@@ -10,6 +10,9 @@ import (
 // This is intended for maintenance tooling (e.g. treemap vlog-gc) that must
 // avoid cached-layer side effects but still needs value-log decode plumbing.
 func OpenBackend(opts Options) (*db.DB, func() error, error) {
+	if err := resolveOpenProfileOptions(&opts); err != nil {
+		return nil, nil, err
+	}
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, nil, err

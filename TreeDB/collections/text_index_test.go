@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -43,6 +44,155 @@ func TestTextAnalyzerSimpleFixtures(t *testing.T) {
 				t.Fatalf("terms=%q want %q", terms, tc.terms)
 			}
 		})
+	}
+}
+
+func TestRetriableTextIndexMutationErrorClassifiesOnlyExpectedConflicts(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "general concurrent mutation", err: ErrConcurrentMutation, want: true},
+		{name: "ordered root conflict", err: errors.New("concurrent modification detected during ordered root group publish"), want: true},
+		{name: "schema conflict", err: fmt.Errorf(`%w detected for "volatile"`, errConcurrentSchemaModification), want: true},
+		{name: "wrapped schema conflict", err: fmt.Errorf("outer: %w", fmt.Errorf(`%w detected for "volatile"`, errConcurrentSchemaModification)), want: true},
+		{name: "accepted root conflict", err: acceptedTextIndexCommitErrorForTest{error: errors.New("durable-root candidate base changed: injected")}, want: false},
+		{name: "plain schema text", err: errors.New(`collections: concurrent schema modification detected for "volatile"`), want: false},
+		{name: "root conflict", err: errors.New(`collections: concurrent root modification detected for "volatile/primary"`), want: false},
+		{name: "unrelated", err: errors.New("boom"), want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetriableTextIndexMutationError(tc.err); got != tc.want {
+				t.Fatalf("isRetriableTextIndexMutationError(%v)=%t want %t", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type acceptedTextIndexCommitErrorForTest struct {
+	error
+}
+
+func (acceptedTextIndexCommitErrorForTest) CommitPublicationAccepted() bool {
+	return true
+}
+
+func (e acceptedTextIndexCommitErrorForTest) Unwrap() error {
+	return e.error
+}
+
+func TestTextIndexAcceptedPublicationReconcilesWithoutLogicalReplay(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	def := TextIndexDefinition{
+		Name:    "volatile",
+		Version: TextIndexVersionV2,
+		Fields:  []TextIndexField{{Field: "body"}},
+	}
+	acceptedCause := errors.New("accepted root conflict")
+	acceptedErr := acceptedTextIndexCommitErrorForTest{error: fmt.Errorf("durable-root candidate base changed: %w", acceptedCause)}
+
+	createCalls := 0
+	created, _, err := col.createTextIndexWithRetry(def, func(got TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
+		createCalls++
+		meta, stats, createErr := col.createTextIndexOnce(got)
+		if createErr != nil {
+			return meta, stats, createErr
+		}
+		return meta, stats, acceptedErr
+	})
+	if err != nil {
+		t.Fatalf("reconcile accepted create: %v", err)
+	}
+	if createCalls != 1 {
+		t.Fatalf("create attempts=%d want 1 logical publication", createCalls)
+	}
+	gotDef, ok := findTextIndex(created.TextIndexes, def.Name)
+	if !ok || gotDef.Version != TextIndexVersionV2 {
+		t.Fatalf("created text index=%+v found=%t", gotDef, ok)
+	}
+	if _, _, err := col.CreateTextIndex(def); err == nil || !strings.Contains(err.Error(), "duplicate index") {
+		t.Fatalf("ordinary duplicate create err=%v want duplicate index", err)
+	}
+	mismatched := created.copy()
+	for i := range mismatched.TextIndexes {
+		if mismatched.TextIndexes[i].Name == def.Name {
+			mismatched.TextIndexes[i].StorePositions = true
+		}
+	}
+	if _, _, err := col.reconcileAcceptedTextIndexCreate(def.Name, mismatched, TextIndexBackfillStats{}, acceptedErr); !errors.Is(err, acceptedCause) || !strings.Contains(err.Error(), "did not reconcile exact index") {
+		t.Fatalf("mismatched accepted create err=%v want original conflict plus exact-state diagnostic", err)
+	}
+	if _, err := col.reconcileAcceptedTextIndexDrop(def.Name, acceptedErr); !errors.Is(err, acceptedCause) || !strings.Contains(err.Error(), "left index") {
+		t.Fatalf("mismatched accepted drop err=%v want original conflict plus presence diagnostic", err)
+	}
+
+	dropCalls := 0
+	dropped, err := col.dropTextIndexWithRetry(def.Name, func(name string) (*CollectionMeta, error) {
+		dropCalls++
+		meta, dropErr := col.dropTextIndexOnce(name)
+		if dropErr != nil {
+			return meta, dropErr
+		}
+		return meta, acceptedErr
+	})
+	if err != nil {
+		t.Fatalf("reconcile accepted drop: %v", err)
+	}
+	if dropCalls != 1 {
+		t.Fatalf("drop attempts=%d want 1 logical publication", dropCalls)
+	}
+	if _, ok := findTextIndex(dropped.TextIndexes, def.Name); ok {
+		t.Fatalf("dropped metadata still contains %q", def.Name)
+	}
+	if _, err := col.DropTextIndex(def.Name); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("ordinary missing drop err=%v want ErrIndexNotFound", err)
+	}
+
+	terminalCause := errors.New("injected storage failure")
+	terminalErr := acceptedTextIndexCommitErrorForTest{error: terminalCause}
+	terminalCalls := 0
+	if _, _, err := col.createTextIndexWithRetry(def, func(TextIndexDefinition) (*CollectionMeta, TextIndexBackfillStats, error) {
+		terminalCalls++
+		return nil, TextIndexBackfillStats{}, terminalErr
+	}); !errors.Is(err, terminalCause) {
+		t.Fatalf("non-conflict accepted create err=%v want original storage failure", err)
+	}
+	if terminalCalls != 1 {
+		t.Fatalf("non-conflict accepted create attempts=%d want no logical replay", terminalCalls)
+	}
+	if _, ok := findTextIndex(col.meta.TextIndexes, def.Name); ok {
+		t.Fatalf("non-conflict accepted error unexpectedly recreated %q", def.Name)
+	}
+}
+
+func TestCollectionMutationRetryDoesNotReplayAcceptedPublication(t *testing.T) {
+	cause := errors.New("accepted root conflict")
+	wantErr := acceptedTextIndexCommitErrorForTest{error: fmt.Errorf("durable-root candidate base changed: %w", cause)}
+	attempts := 0
+	_, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		return nil, wantErr
+	})
+	if !errors.Is(err, cause) {
+		t.Fatalf("retryInsertBatchMutation err=%v want accepted conflict", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("retryInsertBatchMutation attempts=%d want no logical replay", attempts)
 	}
 }
 

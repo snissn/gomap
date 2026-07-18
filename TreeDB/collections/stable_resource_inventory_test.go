@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/authorityinventory"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -27,6 +28,12 @@ func testStableColumnConstructionPinBlocksCrossManagerGC(t *testing.T) {
 	if _, err := col.Insert([]byte("seed"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
 		t.Fatal(err)
 	}
+	// Stabilize the seed publication before taking the registry baseline. The
+	// construction-pin assertion is about the candidate append below, not pins
+	// transferred asynchronously while the seed root becomes durable.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	candidatePayload := []byte("construction-authority-candidate")
 	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 117, candidatePayload)
 
@@ -37,6 +44,9 @@ func testStableColumnConstructionPinBlocksCrossManagerGC(t *testing.T) {
 	}
 	cfg := *otherCol.Meta().Options.ColumnStore
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	opened := make(chan struct{})
 	resume := make(chan struct{})
@@ -407,6 +417,9 @@ func testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *test
 	}
 	key := []byte("published-to-other-segment")
 	document := []byte(`{"time_us":3,"kind":"like","did":"did:other"}`)
+	// This hook runs after GC captured and pinned its RecoverableRootSet but
+	// before the stable deleter's final revalidation. Advance the publication
+	// basis deterministically so the stale capability must fail closed.
 	restoreHook := setColumnAssetStableDeleteAfterPlanTestHook(func() {
 		if _, err := colB.Insert(key, document); err != nil {
 			t.Fatal(err)
@@ -419,6 +432,9 @@ func testColumnAssetGCRejectsCommitAdvanceWithUnchangedCandidateFrontier(t *test
 	})
 	if !errors.Is(err, ErrColumnAssetGCPlanStale) {
 		t.Fatalf("commit-advance GC error=%v want ErrColumnAssetGCPlanStale", err)
+	}
+	if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) {
+		t.Fatalf("commit-advance GC error=%v want ErrRecoverableRootSetStale", err)
 	}
 	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
 		t.Fatalf("commit-advance GC stats=%+v want eligible untouched", stats)

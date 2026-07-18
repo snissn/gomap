@@ -95,7 +95,7 @@ flock /tmp/gomap_diag_bench.lock -c \
    BENCH_REGEX='^BenchmarkCollectionShapeInsertBatch$/^indexes_1$' \
    TREEDB_COLLECTION_PATH_LABEL=native-fastpath \
    TREEDB_COLLECTION_DOCUMENT_FORMAT=template-v1 \
-   TREEDB_COLLECTION_BENCH_ENGINE=bench \
+   TREEDB_COLLECTION_BENCH_ENGINE=bench_unsafe \
    TREEDB_COLLECTION_BENCH_BATCH_SIZE=64 \
    TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=true \
    TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=false \

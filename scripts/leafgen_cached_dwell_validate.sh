@@ -6,7 +6,7 @@ SRC=${1:?usage: leafgen_cached_dwell_validate.sh <application.db> [output-dir]}
 OUT=${2:-/tmp/leafgen_cached_dwell_validate_$(date +%Y%m%d%H%M%S)}
 DST="$OUT/application.db"
 TREEMAP=(go run ./TreeDB/cmd/treemap)
-PROFILE=${TREEDB_PROFILE:-bench}
+PROFILE=${TREEDB_PROFILE:-bench_unsafe}
 DWELL_SECONDS=${LEAFGEN_DWELL_SECONDS:-180}
 SAMPLE_INTERVAL_SECONDS=${LEAFGEN_SAMPLE_INTERVAL_SECONDS:-15}
 PACK_ENABLED=${TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE:-1}
@@ -141,7 +141,7 @@ type sample struct {
 func main() {
     var (
         dbDir         = flag.String("db", "", "application.db directory")
-        profile       = flag.String("profile", string(treedb.ProfileBench), "TreeDB profile")
+        profile       = flag.String("profile", string(treedb.ProfileBenchUnsafe), "TreeDB profile")
         dwellSeconds  = flag.Int("dwell-seconds", 180, "how long to keep the DB open")
         sampleSeconds = flag.Int("sample-interval-seconds", 15, "sample interval")
         emitFullStats = flag.Bool("full-stats", false, "embed the full Stats map into each sample")
@@ -157,11 +157,11 @@ func main() {
         fatalf("invalid -sample-interval-seconds %d", *sampleSeconds)
     }
 
-    profileValue, ok := treedb.ParsePublicProfile(*profile, treedb.ProfileBench)
+    profileValue, ok := treedb.ParseBenchmarkProfile(*profile, treedb.ProfileBenchUnsafe)
     if !ok {
-        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.ProfileFlagHelp)
+        fatalf("unsupported -profile %q; allowed: %s", *profile, treedb.BenchmarkProfileFlagHelp)
     }
-    opts := treedb.OptionsFor(profileValue, *dbDir)
+    opts := treedb.OptionsForBenchmark(profileValue, *dbDir)
     if opts.ValueLog.Generational.Policy == treedb.ValueLogGenerationDefault {
         opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
     }

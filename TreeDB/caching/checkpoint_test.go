@@ -479,6 +479,7 @@ func TestCachingDB_ExclusiveWriteWithFlushMuHeldReleasesFlushMuWhileWaiting(t *t
 	case <-time.After(2 * time.Second):
 		t.Fatalf("exclusive writer did not release flushMu while waiting for maintenance")
 	}
+	awaitCheckpointWriterWaiters(t, db, 1)
 	select {
 	case <-acquiredWrite:
 		t.Fatalf("exclusive writer acquired while maintenance is active")

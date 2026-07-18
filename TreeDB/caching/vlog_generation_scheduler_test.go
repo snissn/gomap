@@ -158,6 +158,23 @@ func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
 	db.clearVlogGenerationRewriteStageConfirmation()
 }
 
+func holdVlogGenerationDeferredMaintenanceRunnerForTest(t *testing.T, db *DB) {
+	t.Helper()
+	if db == nil {
+		return
+	}
+	if db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatalf("deferred maintenance unexpectedly pending before test ownership barrier")
+	}
+	if !db.vlogGenerationDeferredMaintenanceRunning.CompareAndSwap(false, true) {
+		t.Fatalf("deferred maintenance runner unexpectedly active before test ownership barrier")
+	}
+	t.Cleanup(func() {
+		db.vlogGenerationDeferredMaintenancePending.Store(false)
+		db.vlogGenerationDeferredMaintenanceRunning.Store(false)
+	})
+}
+
 func disableVlogGenerationLoop(t *testing.T) {
 	t.Helper()
 	t.Setenv(envDisableVlogGenerationLoop, "1")
@@ -2744,6 +2761,17 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	}
 	db, cleanup := openLeafPackMaintenanceTestDB(t, recorder)
 	defer cleanup()
+	// The setup checkpoint may have scheduled retained-prune work. Settle that
+	// request before this test schedules and inspects its own quiet waiter.
+	forceRetainedPruneIdle(db)
+	db.waitForRetainedValueLogPrune()
+	db.retainedPruneMu.Lock()
+	inheritedWaiting := db.retainedPruneDone != nil
+	inheritedRunning := db.retainedPruneRunningDone != nil
+	db.retainedPruneMu.Unlock()
+	if inheritedWaiting || inheritedRunning {
+		t.Fatalf("inherited retained prune after setup settlement: waiting=%t running=%t", inheritedWaiting, inheritedRunning)
+	}
 
 	retainedPath := filepath.Join(t.TempDir(), "value_vlog", "value-l0-000321.log")
 	seedRetainedPrunePressure(db, retainedPath, 2<<30)
@@ -2754,19 +2782,12 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	db.scheduleRetainedValueLogPrune()
 
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		db.retainedPruneMu.Lock()
-		waiting := db.retainedPruneDone != nil
-		running := db.retainedPruneRunningDone != nil
-		db.retainedPruneMu.Unlock()
-		if waiting && !running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("retained prune did not enter scheduled quiet-wait state in time")
-		}
-		time.Sleep(10 * time.Millisecond)
+	db.retainedPruneMu.Lock()
+	waiting := db.retainedPruneDone != nil
+	running := db.retainedPruneRunningDone != nil
+	db.retainedPruneMu.Unlock()
+	if !waiting || running {
+		t.Fatalf("owned retained prune after scheduling: waiting=%t running=%t, want waiting only", waiting, running)
 	}
 
 	start := time.Now()
@@ -4710,12 +4731,15 @@ func TestVlogGenerationRewriteQueue_PrefersGreaterStaleImprovementAmongExpiredRe
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
 
-	opts, calls := recorder.recordedRewrite()
-	if calls != 1 {
-		t.Fatalf("rewrite calls=%d want=1", calls)
+	// A useful first rewrite may immediately schedule the remaining debt.
+	// Assert the first selection instead of racing that intentional follow-up.
+	rewrites := recorder.recordedRewrites()
+	if len(rewrites) == 0 {
+		t.Fatal("rewrite calls=0 want>=1")
 	}
+	opts := rewrites[0]
 	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+		t.Fatalf("first rewrite SourceFileIDs=%v want=%v", got, want)
 	}
 }
 
@@ -7337,6 +7361,7 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueStageConfirm(t *t
 
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	t.Cleanup(func() { db.vlogGenerationCheckpointKickPending.Store(false) })
+	holdVlogGenerationDeferredMaintenanceRunnerForTest(t, db)
 
 	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
@@ -7354,6 +7379,9 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueStageConfirm(t *t
 	}
 	if !db.vlogGenerationCheckpointKickPending.Load() {
 		t.Fatalf("checkpoint-pending retry should remain queued while due stage confirmation is pending")
+	}
+	if !db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatalf("due stage confirmation should remain queued behind the test-owned deferred runner")
 	}
 }
 
@@ -7396,6 +7424,7 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueAgeBlockedRetry(t
 
 	db.vlogGenerationCheckpointKickPending.Store(true)
 	t.Cleanup(func() { db.vlogGenerationCheckpointKickPending.Store(false) })
+	holdVlogGenerationDeferredMaintenanceRunnerForTest(t, db)
 
 	_, planCallsBefore := recorder.recordedPlan()
 	_, rewriteCallsBefore := recorder.recordedRewrite()
@@ -7424,6 +7453,9 @@ func TestVlogGenerationMaintenance_CheckpointPendingYieldsToDueAgeBlockedRetry(t
 	}
 	if !db.vlogGenerationCheckpointKickPending.Load() {
 		t.Fatalf("checkpoint-pending retry should remain queued while due age-blocked retry is pending")
+	}
+	if !db.vlogGenerationDeferredMaintenancePending.Load() {
+		t.Fatalf("due age-blocked retry should remain queued behind the test-owned deferred runner")
 	}
 }
 

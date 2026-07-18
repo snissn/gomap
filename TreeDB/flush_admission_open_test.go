@@ -9,14 +9,13 @@ func TestOpenFlushAdmissionStatsPreserveConfiguredConcurrency(t *testing.T) {
 	prev := runtime.GOMAXPROCS(8)
 	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 
-	db, err := Open(Options{
-		Dir:                           t.TempDir(),
-		DisableSideStores:             true,
-		FlushAdmissionPolicy:          FlushAdmissionPolicyAuto,
-		FlushApplyConcurrency:         16,
-		BackgroundCheckpointInterval:  -1,
-		BackgroundIndexVacuumInterval: -1,
-	})
+	opts := OptionsFor(ProfileNoWALFast, t.TempDir())
+	opts.DisableSideStores = true
+	opts.FlushAdmissionPolicy = FlushAdmissionPolicyAuto
+	opts.FlushApplyConcurrency = 16
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -53,12 +52,11 @@ func TestOpenReadOnlyFlushAdmissionStatsPreserveConfiguredConcurrency(t *testing
 	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 
 	dir := t.TempDir()
-	writable, err := Open(Options{
-		Dir:                           dir,
-		DisableSideStores:             true,
-		BackgroundCheckpointInterval:  -1,
-		BackgroundIndexVacuumInterval: -1,
-	})
+	writableOpts := OptionsFor(ProfileNoWALFast, dir)
+	writableOpts.DisableSideStores = true
+	writableOpts.BackgroundCheckpointInterval = -1
+	writableOpts.BackgroundIndexVacuumInterval = -1
+	writable, err := Open(writableOpts)
 	if err != nil {
 		t.Fatalf("Open writable: %v", err)
 	}
@@ -66,15 +64,14 @@ func TestOpenReadOnlyFlushAdmissionStatsPreserveConfiguredConcurrency(t *testing
 		t.Fatalf("close writable: %v", err)
 	}
 
-	db, err := Open(Options{
-		Dir:                           dir,
-		DisableSideStores:             true,
-		ReadOnly:                      true,
-		FlushAdmissionPolicy:          FlushAdmissionPolicyAuto,
-		FlushApplyConcurrency:         16,
-		BackgroundCheckpointInterval:  -1,
-		BackgroundIndexVacuumInterval: -1,
-	})
+	readOnlyOpts := OptionsFor(ProfileNoWALFast, dir)
+	readOnlyOpts.DisableSideStores = true
+	readOnlyOpts.ReadOnly = true
+	readOnlyOpts.FlushAdmissionPolicy = FlushAdmissionPolicyAuto
+	readOnlyOpts.FlushApplyConcurrency = 16
+	readOnlyOpts.BackgroundCheckpointInterval = -1
+	readOnlyOpts.BackgroundIndexVacuumInterval = -1
+	db, err := Open(readOnlyOpts)
 	if err != nil {
 		t.Fatalf("Open read-only: %v", err)
 	}

@@ -40,15 +40,16 @@ func TestParsePositiveIntsRejectsDuplicates(t *testing.T) {
 	}
 }
 
-func TestParseProfileAcceptsOnlyPublicProfiles(t *testing.T) {
+func TestParseProfileAcceptsOnlyBenchmarkProfiles(t *testing.T) {
 	tests := []struct {
 		raw  string
 		want treedb.Profile
 	}{
-		{raw: "", want: treedb.ProfileBench},
-		{raw: "command-wal-durable", want: treedb.ProfileCommandWALDurable},
+		{raw: "", want: treedb.ProfileBenchUnsafe},
+		{raw: "command_wal_durable", want: treedb.ProfileCommandWALDurable},
 		{raw: "command_wal_relaxed", want: treedb.ProfileCommandWALRelaxed},
-		{raw: "bench", want: treedb.ProfileBench},
+		{raw: "no_wal_fast", want: treedb.ProfileNoWALFast},
+		{raw: "bench_unsafe", want: treedb.ProfileBenchUnsafe},
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
@@ -61,13 +62,13 @@ func TestParseProfileAcceptsOnlyPublicProfiles(t *testing.T) {
 			}
 		})
 	}
-	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "no_wal_fast"} {
+	for _, raw := range []string{"fast", "wal_on_fast", "durable", "legacy_wal_durable", "legacy_wal_relaxed_fast", "bench", "command-wal-durable"} {
 		t.Run("reject_"+raw, func(t *testing.T) {
 			_, err := parseProfile(raw)
 			if err == nil {
 				t.Fatal("parseProfile succeeded, want error")
 			}
-			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+			if !strings.Contains(err.Error(), treedb.BenchmarkProfileFlagHelp) {
 				t.Fatalf("error=%v, want profile help", err)
 			}
 		})
@@ -87,7 +88,7 @@ func TestRunSmallNativeCollectionMatrix(t *testing.T) {
 		ReadStates:            []readState{readStateBuffered},
 		ReaderSweep:           []int{1, 2},
 		OutputFormat:          "json",
-		TreeDBProfile:         treedb.ProfileBench,
+		TreeDBProfile:         treedb.ProfileBenchUnsafe,
 		DataRootStorage:       collections.RootStorageDefault,
 		IndexStateRootStorage: collections.RootStorageDefault,
 		IndexRootStorage:      collections.RootStorageDefault,
@@ -134,7 +135,7 @@ func TestRunAndWriteEmitsPartialErrors(t *testing.T) {
 		ReadStates:            []readState{readStateBuffered},
 		ReaderSweep:           []int{1},
 		OutputFormat:          "text",
-		TreeDBProfile:         treedb.ProfileBench,
+		TreeDBProfile:         treedb.ProfileBenchUnsafe,
 		DataRootStorage:       collections.RootStorageDefault,
 		IndexStateRootStorage: collections.RootStorageDefault,
 		IndexRootStorage:      collections.RootStorageDefault,
@@ -165,7 +166,7 @@ func TestIndexesZeroSkipsSecondaryNativePhases(t *testing.T) {
 		ReadStates:            []readState{readStateBuffered},
 		ReaderSweep:           []int{1},
 		OutputFormat:          "json",
-		TreeDBProfile:         treedb.ProfileBench,
+		TreeDBProfile:         treedb.ProfileBenchUnsafe,
 		DataRootStorage:       collections.RootStorageDefault,
 		IndexStateRootStorage: collections.RootStorageDefault,
 		IndexRootStorage:      collections.RootStorageDefault,

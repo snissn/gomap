@@ -226,6 +226,72 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
+	tests := []struct {
+		name    string
+		publish func(*testing.T, *DB, *CommandWALIntent, *uint64) error
+	}{
+		{
+			name: "iterator-group",
+			publish: func(t *testing.T, db *DB, intent *CommandWALIntent, seenLSN *uint64) error {
+				_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					intent,
+					func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						*seenLSN = ctx.AppliedCommandLSN
+						return mustFrozenSystemMemtable(t, "system/accepted-iterator", strconv.FormatUint(ctx.AppliedCommandLSN, 10)).NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "batch-group",
+			publish: func(t *testing.T, db *DB, intent *CommandWALIntent, seenLSN *uint64) error {
+				_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+					nil,
+					intent,
+					func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						*seenLSN = ctx.AppliedCommandLSN
+						return mustFrozenSystemMemtable(t, "system/accepted-batch", strconv.FormatUint(ctx.AppliedCommandLSN, 10)).NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			defer db.Close()
+
+			intent := mustRawKVCommandWALIntent(t, db, "ordered/"+test.name, "covered")
+			db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+			db.testFailWriteMeta.Store(true)
+			var seenLSN uint64
+			err := test.publish(t, db, intent, &seenLSN)
+			db.testFailWriteMeta.Store(false)
+			if !errors.Is(err, errTestWriteMetaFailpoint) {
+				t.Fatalf("accepted ordered-root wait error=%v, want retryable meta failpoint", err)
+			}
+			if errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("accepted ordered-root wait error=%v unexpectedly requires recovery", err)
+			}
+			if got := db.State().AppliedCommandLSN; seenLSN == 0 || got != seenLSN {
+				t.Fatalf("visible AppliedCommandLSN after accepted error=%d, want builder LSN %d", got, seenLSN)
+			}
+			if err := db.CheckCommandWALPublishReady(); err != nil {
+				t.Fatalf("CheckCommandWALPublishReady after accepted ordered-root error: %v", err)
+			}
+			if err := db.SetSync([]byte("after-"+test.name), []byte("same-handle-progress")); err != nil {
+				t.Fatalf("SetSync after accepted ordered-root error: %v", err)
+			}
+		})
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextUsesCommandWALRouteForSystemDelta(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -404,6 +470,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
 	systemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 	barrierErr := errors.New("raw publish barrier ran")
 	var barrierCalled atomic.Bool
@@ -422,6 +489,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 		nil,
 		nil,
 		nil,
+		baseSeq,
 		coverage,
 		orderedRootCommandWALPublishOptions{},
 		func() {},
@@ -448,6 +516,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 		nil,
 		nil,
 		nil,
+		baseSeq,
 		coverage,
 		orderedRootCommandWALPublishOptions{},
 		func() {},
@@ -1851,6 +1920,99 @@ func TestPublishOrderedRootDeltaGroups_CloseUnconsumedIteratorsOnPolicyError(t *
 				t.Fatalf("second iterator closes=%d want 1", second.closes)
 			}
 		})
+	}
+}
+
+func TestOrderedRootDeltaRejectsBaseActivatedAfterRootBuild(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	firstReleased := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	database.testAfterFinalizeRootSerializationReleaseHook = func() {
+		close(firstReleased)
+		<-releaseFirst
+	}
+	publishDelta := func(key, value string) error {
+		_, _, err := database.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+			delta := mustFrozenSystemMemtable(t, key, value)
+			return delta.NewIterator(nil, nil), nil
+		})
+		return err
+	}
+
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- publishDelta("sys/first", "first") }()
+	select {
+	case <-firstReleased:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first publication did not release root serialization")
+	}
+	database.testAfterFinalizeRootSerializationReleaseHook = nil
+
+	secondAtFinalize := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	database.testBeforeFinalizeCommitHook = func() {
+		close(secondAtFinalize)
+		<-releaseSecond
+	}
+	secondErr := make(chan error, 1)
+	go func() { secondErr <- publishDelta("sys/second", "second") }()
+	select {
+	case <-secondAtFinalize:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second publication did not finish its stale root build")
+	}
+
+	close(releaseFirst)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first publication: %v", err)
+	}
+	close(releaseSecond)
+	err = <-secondErr
+	database.testBeforeFinalizeCommitHook = nil
+	if !errors.Is(err, errDurableRootCandidateStale) {
+		t.Fatalf("second publication err=%v want stale candidate rejection", err)
+	}
+	if CommitPublicationAccepted(err) {
+		t.Fatalf("second publication stale rejection was marked accepted: %v", err)
+	}
+
+	snap := database.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot after stale rejection is nil")
+	}
+	state, ok := snap.StateToken()
+	if !ok {
+		_ = snap.Close()
+		t.Fatal("snapshot state unavailable")
+	}
+	entry, err := snap.GetEntryAtRoot(state.SystemRootPageID, []byte("sys/first"))
+	_ = snap.Close()
+	if err != nil || string(entry.Value) != "first" {
+		t.Fatalf("first value after stale rejection=%q err=%v want first", string(entry.Value), err)
+	}
+
+	if err := publishDelta("sys/second", "second"); err != nil {
+		t.Fatalf("retry second publication: %v", err)
+	}
+	snap = database.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("snapshot after retry is nil")
+	}
+	defer func() { _ = snap.Close() }()
+	state, ok = snap.StateToken()
+	if !ok {
+		t.Fatal("snapshot state after retry unavailable")
+	}
+	for key, want := range map[string]string{"sys/first": "first", "sys/second": "second"} {
+		entry, err := snap.GetEntryAtRoot(state.SystemRootPageID, []byte(key))
+		if err != nil || string(entry.Value) != want {
+			t.Fatalf("%s after retry=%q err=%v want %q", key, string(entry.Value), err, want)
+		}
 	}
 }
 

@@ -546,7 +546,7 @@ func run(parent context.Context, args []string) error {
 
 func parseConfig(args []string) (config, error) {
 	cfg := config{
-		TreeDBProfile:               treedb.ProfileBench,
+		TreeDBProfile:               treedb.ProfileBenchUnsafe,
 		TreeDBDocumentFormat:        collections.DocumentFormatTemplateV1,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
@@ -617,7 +617,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; direct/raw/native-wire modes are TreeDB-only")
 	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
-	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: "+treedb.ProfileFlagHelp)
+	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: "+treedb.BenchmarkProfileFlagHelp)
 	fs.BoolVar(&cfg.TreeDBCommandWAL, "treedb-command-wal", false, "enable TreeDB command-WAL mode for -target treedb")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -880,7 +880,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBProfile = profile
-	if cfg.Target == "treedb" && treedb.OptionsFor(cfg.TreeDBProfile, "").CommandWAL {
+	if cfg.Target == "treedb" && treedb.OptionsForBenchmark(cfg.TreeDBProfile, "").CommandWAL {
 		cfg.TreeDBCommandWAL = true
 	}
 	if err := validateTreeDBCommandWALProfile(cfg.TreeDBCommandWAL, cfg.TreeDBProfile); err != nil {
@@ -964,9 +964,9 @@ func validateProductionRouteProofShape(cfg config) error {
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, error) {
-	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
+	profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileBenchUnsafe)
 	if !ok {
-		return "", fmt.Errorf("unsupported -treedb-profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+		return "", fmt.Errorf("unsupported -treedb-profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 	}
 	return profile, nil
 }
@@ -975,7 +975,7 @@ func validateTreeDBCommandWALProfile(commandWAL bool, profile treedb.Profile) er
 	if !commandWAL {
 		return nil
 	}
-	opts := treedb.OptionsFor(profile, "")
+	opts := treedb.OptionsForBenchmark(profile, "")
 	if opts.Durability == backenddb.DurabilityWALOffRelaxed {
 		return fmt.Errorf("treedb-command-wal requires a WAL-on treedb-profile; got %q (use %q or %q)", profile, treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable)
 	}
@@ -1291,7 +1291,7 @@ func treeDBBenchmarkOptions(cfg config, dir string) (treedb.Options, error) {
 	if err := validateTreeDBCommandWALProfile(cfg.TreeDBCommandWAL, cfg.TreeDBProfile); err != nil {
 		return treedb.Options{}, err
 	}
-	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts := treedb.OptionsForBenchmark(cfg.TreeDBProfile, dir)
 	opts.CommandWAL = opts.CommandWAL || cfg.TreeDBCommandWAL
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
@@ -6481,7 +6481,7 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 	if target.treedbDir == "" {
 		return nil, nil
 	}
-	opts := treedb.OptionsFor(cfg.TreeDBProfile, target.treedbDir)
+	opts := treedb.OptionsForBenchmark(cfg.TreeDBProfile, target.treedbDir)
 	opts.ReadOnly = true
 	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {

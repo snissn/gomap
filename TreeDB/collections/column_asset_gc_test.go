@@ -27,6 +27,61 @@ func requireStandaloneColumnProductionAuthorityTest(tb testing.TB) {
 	}
 }
 
+func TestRecoverableColumnAssetReplayRefsPreservePairedVisibleBasis(t *testing.T) {
+	candidate := ColumnAssetRef{Generation: 8, FileID: 7}
+	bases := []recoverableColumnAssetReplayBasis{
+		{
+			appliedCommandLSN:  30,
+			manifestGeneration: 5,
+			collection:         "newer-lsn",
+			config:             ColumnStoreConfig{AssetManager: &ColumnAssetManagerConfig{Namespace: "newer-lsn"}},
+		},
+		{
+			appliedCommandLSN:  20,
+			manifestGeneration: 9,
+			collection:         "older-lsn-higher-generation",
+			config:             ColumnStoreConfig{AssetManager: &ColumnAssetManagerConfig{Namespace: "paired-basis"}},
+		},
+	}
+	refs, err := recoverableColumnAssetReplayRefs(
+		[]ColumnAssetRef{candidate},
+		bases,
+		func(uint64) bool { return true },
+		func(ref ColumnAssetRef, basis recoverableColumnAssetReplayBasis) (bool, error) {
+			if ref != candidate {
+				t.Fatalf("classifier ref=%+v want %+v", ref, candidate)
+			}
+			if basis.appliedCommandLSN != 20 || basis.manifestGeneration != 9 ||
+				basis.collection != "older-lsn-higher-generation" || basis.config.AssetManager == nil ||
+				basis.config.AssetManager.Namespace != "paired-basis" {
+				t.Fatalf("classifier received mixed replay basis: %+v", basis)
+			}
+			return true, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0] != candidate {
+		t.Fatalf("replay refs=%+v want paired-basis candidate %+v", refs, candidate)
+	}
+}
+
+func TestRecoverableColumnAssetReplayCandidateFailsClosedOnUnreadableAsset(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "missing-replay-candidate",
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     1,
+	}
+	replayable, err := recoverableColumnAssetReplayCandidate(t.TempDir(), ref, "events", ColumnStoreConfig{}, 1)
+	if err == nil {
+		t.Fatalf("unreadable replay candidate returned replayable=%t without error", replayable)
+	}
+}
+
 func TestColumnAssetGCDryRunReportsReclaimableButDoesNotDeleteM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -511,6 +566,10 @@ func TestColumnAssetGCRetainsStablePublicationPinThenDeletesM15B(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		_ = file.Close()
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	token, err := stableColumnAssetResourceTokenWithRegistry(file, candidate, nil, registry)
@@ -835,6 +894,14 @@ func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *te
 		t.Fatalf("Close pinned snapshot: %v", err)
 	}
 	pinnedClosed = true
+	// Closing the explicit snapshot releases its history pin, but the rewrite's
+	// visible root may still be crossing the asynchronous publication boundary.
+	// Settle that root before capturing destructive-maintenance authority so the
+	// test isolates fallback-slot retention instead of racing coordinator epoch
+	// advancement during RecoverableRootSet revalidation.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle rewrite publication after snapshot drain: %v", err)
+	}
 
 	drainedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: candidates,

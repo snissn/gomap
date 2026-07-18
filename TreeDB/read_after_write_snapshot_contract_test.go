@@ -178,22 +178,33 @@ func TestProfileFast_ReadSnapshotsSeeQueuedWritesBeforeCheckpoint_AccessMatrix(t
 
 func TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix(t *testing.T) {
 	const (
-		keys    = 140_000
-		workers = 8
+		relaxedKeys = 140_000
+		durableKeys = 4_096
+		workers     = 8
 	)
 
-	profiles := []Profile{ProfileFast, ProfileWALOnFast, ProfileDurable}
-	for _, profile := range profiles {
-		profile := profile
-		t.Run(string(profile), func(t *testing.T) {
-			db := openQueuedSnapshotContractDB(t, profile, keys)
+	profiles := []struct {
+		profile Profile
+		keys    int
+	}{
+		{profile: ProfileNoWALFast, keys: relaxedKeys},
+		{profile: ProfileCommandWALRelaxed, keys: relaxedKeys},
+		// Snapshot visibility only needs a non-empty queued set. Keep the durable
+		// row large enough to exercise that contract without turning this
+		// correctness test into 140,000 fsync-backed acknowledgements.
+		{profile: ProfileCommandWALDurable, keys: durableKeys},
+	}
+	for _, tc := range profiles {
+		tc := tc
+		t.Run(string(tc.profile), func(t *testing.T) {
+			db := openQueuedSnapshotContractDB(t, tc.profile, tc.keys)
 			runQueuedSnapshotContractWorkers(t, workers, func(worker int, stop *atomic.Bool) error {
 				snap := db.AcquireSnapshot()
 				if snap == nil {
 					return fmt.Errorf("AcquireSnapshot returned nil")
 				}
 				defer func() { _ = snap.Close() }()
-				return assertQueuedSnapshotContractGetAppend(t, snap, keys, keys, 1+int64(worker), stop)
+				return assertQueuedSnapshotContractGetAppend(t, snap, tc.keys, tc.keys, 1+int64(worker), stop)
 			})
 		})
 	}

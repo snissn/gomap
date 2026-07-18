@@ -6959,6 +6959,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 					_ = db.valueLogReader.EvictSegment(id)
 				}
 				if err := marker.MarkValueLogZombie(id); err != nil {
+					if errors.Is(err, backenddb.ErrValueLogZombieDeferred) {
+						continue
+					}
 					if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLogExpected(path, expectedIdentity) {
 						removed = true
 						out.RemovedSegments++
@@ -7102,6 +7105,9 @@ func (db *DB) pruneRetainedValueLogsWithObservedContextOptions(ctx context.Conte
 				_ = db.valueLogReader.EvictSegment(id)
 			}
 			if err := marker.MarkValueLogZombie(id); err != nil {
+				if errors.Is(err, backenddb.ErrValueLogZombieDeferred) {
+					continue
+				}
 				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLogExpected(path, expectedIdentity) {
 					removed = true
 					out.RemovedSegments++
@@ -8089,6 +8095,17 @@ type backendStorageDirProvider interface {
 	Dir() string
 }
 
+type backendPublicationReadinessChecker interface {
+	CheckCommandWALPublishReady() error
+}
+
+func backendPublicationReady(backend BackendDB) error {
+	if checker, ok := backend.(backendPublicationReadinessChecker); ok {
+		return checker.CheckCommandWALPublishReady()
+	}
+	return nil
+}
+
 // ValueLogIdentityPinRegistry lets nested wrappers share the same physical
 // deletion gate as the backend and cache value-log managers.
 func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
@@ -8256,18 +8273,18 @@ type Options struct {
 	// symmetry and keeps the path default-off.
 	FlushApplySpanNative bool
 
-	// FlushBackendMaxEntries caps how many operations are buffered into a single
-	// backend batch before committing it and continuing with a fresh batch.
+	// FlushBackendMaxEntries caps how many operations are buffered into one
+	// backend apply chunk before continuing with a fresh batch.
 	//
-	// This increases backend commit cadence during very large flushes, which can
-	// reduce index.db high-watermark growth under small KeepRecent windows by
-	// making retired pages eligible for reuse sooner.
+	// TreeDB stages all chunks from one logical flush in a private root-build
+	// transaction. Only the final complete root is publication-eligible; no
+	// intermediate chunk is independently visible or recoverable.
 	//
 	// 0 uses the internal default. Negative disables chunking (single backend
-	// commit per flush).
+	// apply per flush).
 	FlushBackendMaxEntries int
-	// FlushBackendMaxBatches caps how many intermediate backend commits a single
-	// flush may emit. This bounds zipper/apply overhead when FlushBackendMaxEntries
+	// FlushBackendMaxBatches caps how many backend apply chunks a single flush may
+	// emit. This bounds zipper/apply overhead when FlushBackendMaxEntries
 	// is very small relative to the flush size.
 	//
 	// 0 uses the internal default. Negative disables the cap.
@@ -9825,7 +9842,7 @@ func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 		maxBatches = 16
 	}
 	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
-	// of intermediate commits in that path even if the steady-state micro-batch
+	// of intermediate apply chunks in that path even if the steady-state micro-batch
 	// policy is aggressive.
 	if sync && maxBatches > 8 {
 		maxBatches = 8
@@ -9835,8 +9852,7 @@ func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 		maxInt := int(^uint(0) >> 1)
 		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
 			// Increase the chunk size so we emit at most maxBatches intermediate
-			// commits. This preserves the high-watermark benefits of micro-batching
-			// while bounding zipper/apply overhead.
+			// applies while bounding zipper/apply overhead.
 			capEntries = (totalOps + maxBatches - 1) / maxBatches
 			if capEntries < 1 {
 				capEntries = 1
@@ -9856,15 +9872,15 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 		maxBatches = 16
 	}
 	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
-	// of intermediate commits in that path even if the steady-state micro-batch
+	// of intermediate apply chunks in that path even if the steady-state micro-batch
 	// policy is aggressive.
 	if sync && maxBatches > 8 {
 		maxBatches = 8
 	}
-	// Delete-heavy flushes are expensive to apply in many intermediate commits.
-	// Each commit re-writes leaf pages (copying surviving values), so repeated
-	// commits amplify work dramatically when deletes touch a large fraction of the
-	// keyspace. Favor fewer commits in that case.
+	// Delete-heavy flushes are expensive to apply in many intermediate chunks.
+	// Each apply re-writes leaf pages (copying surviving values), so repeated
+	// applies amplify work dramatically when deletes touch a large fraction of the
+	// keyspace. Favor fewer chunks in that case.
 	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
 		// Deterministic "delete-heavy" trigger: deletes are at least 25% of ops.
 		if deleteOps*4 >= totalOps && maxBatches > 4 {
@@ -9876,8 +9892,7 @@ func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync boo
 		maxInt := int(^uint(0) >> 1)
 		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
 			// Increase the chunk size so we emit at most maxBatches intermediate
-			// commits. This preserves the high-watermark benefits of micro-batching
-			// while bounding zipper/apply overhead.
+			// applies while bounding zipper/apply overhead.
 			capEntries = (totalOps + maxBatches - 1) / maxBatches
 			if capEntries < 1 {
 				capEntries = 1
@@ -12080,10 +12095,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
 	}
 	if opts.FlushBackendMaxEntries == 0 {
-		// In relaxed durability modes, additional commit boundaries are cheap and
-		// can reduce index.db high-watermark growth under small KeepRecent windows
-		// by making retired pages eligible for reuse sooner. Default to a smaller
-		// chunk size in that case.
+		// Retain the smaller per-apply chunk used by relaxed profiles to bound
+		// one-shot apply work. TreeDB still publishes the complete logical flush as
+		// one root regardless of this physical chunk size.
 		if opts.DisableWAL || opts.ExternalCommandWAL || opts.RelaxedSync {
 			opts.FlushBackendMaxEntries = 2 * flushBackendBatchInitEntries
 		} else {
@@ -12091,7 +12105,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	} else if opts.FlushBackendMaxEntries < 0 {
 		// Negative disables chunking; use a very large cap so the hot path
-		// never triggers intermediate commits.
+		// never triggers intermediate applies.
 		opts.FlushBackendMaxEntries = int(^uint(0) >> 1)
 		// Disable the max-batch cap when chunking is explicitly disabled.
 		// This preserves the documented "<0 disables chunking" behavior without
@@ -12101,10 +12115,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	if opts.FlushBackendMaxBatches == 0 {
-		// In relaxed durability modes, additional commit boundaries are much
-		// cheaper and can substantially reduce index.db high-watermark growth
-		// under small KeepRecent windows by making retired pages eligible for
-		// reuse sooner. Use a slightly higher default budget in that case.
+		// Retain the larger physical chunk-count budget used by relaxed profiles.
+		// These chunks stage under one private build and do not create additional
+		// visible or recoverable commit boundaries.
 		if opts.DisableWAL || opts.ExternalCommandWAL || opts.RelaxedSync {
 			opts.FlushBackendMaxBatches = 32
 		} else {
@@ -23201,6 +23214,18 @@ func (db *DB) beginDirectWrite() error {
 			return backenddb.ErrClosed
 		}
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			// A writer may have passed its public-wrapper preflight before waiting
+			// behind a checkpoint that subsequently poisoned root publication.
+			// Recheck at the actual cached admission boundary while writeMu keeps
+			// the checkpoint cutover from moving underneath this decision.
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.RUnlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
@@ -23233,6 +23258,14 @@ func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 			return backenddb.ErrClosed
 		}
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.RUnlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
@@ -23250,7 +23283,7 @@ func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 	}
 }
 
-func (db *DB) beginExclusiveWrite() {
+func (db *DB) beginExclusiveWrite() error {
 	for {
 		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
@@ -23259,12 +23292,20 @@ func (db *DB) beginExclusiveWrite() {
 		}
 		db.writeMu.Lock()
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.Unlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			db.observePostFrontierWriteAdmission()
-			return
+			return nil
 		}
 		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
@@ -23274,7 +23315,7 @@ func (db *DB) beginExclusiveWrite() {
 	}
 }
 
-func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
+func (db *DB) beginExclusiveWriteWithFlushMuHeld() error {
 	for {
 		preWaitReason := db.writeAdmissionWaitReason()
 		var start time.Time
@@ -23283,12 +23324,20 @@ func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
 		}
 		db.writeMu.Lock()
 		if db.writeAdmissionWaitReason() == writeWaitReasonNone {
+			if err := backendPublicationReady(db.backend); err != nil {
+				db.writeMu.Unlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return err
+			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
 				db.observeWriteWaitForCheckpoint(time.Since(start))
 			}
 			db.observePostFrontierWriteAdmission()
-			return
+			return nil
 		}
 		if preWaitReason == writeWaitReasonNone {
 			start = time.Now()
@@ -24105,6 +24154,12 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		releaseWriteMu()
 		endWriteCutover()
+		backendBoundaryStart := time.Now()
+		err := backendSyncBoundary(db.backend)
+		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
+		if err != nil {
+			return err
+		}
 		db.checkpointNoopSkips.Add(1)
 		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
 			return err
@@ -24129,14 +24184,20 @@ func (db *DB) Checkpoint() error {
 				hook()
 			}
 			if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
-				commandWALAppliedLSN, commandWALRanges, err := publishHook(!db.relaxedSync)
+				commandWALAppliedLSN, commandWALRanges, err := publishHook(true)
 				if err != nil {
 					return err
 				}
 				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+				backendBoundaryStart := time.Now()
+				err = backendSyncBoundary(db.backend)
+				recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
+				if err != nil {
+					return err
+				}
+				if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 					return err
 				}
 			}
@@ -24220,7 +24281,7 @@ func (db *DB) Checkpoint() error {
 	if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
 		commandWALPublishStart := time.Now()
-		commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+		commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 		recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 		if err != nil {
 			return err
@@ -24308,7 +24369,7 @@ func (db *DB) Checkpoint() error {
 		if publishHook := db.loadCommandWALCheckpointPublishHook(); publishHook != nil {
 			var err error
 			commandWALPublishStart := time.Now()
-			commandWALAppliedLSN, commandWALRanges, err = publishHook(!db.relaxedSync)
+			commandWALAppliedLSN, commandWALRanges, err = publishHook(true)
 			recordCheckpointStageSince(&db.checkpointStageCommandWALPublish, commandWALPublishStart)
 			if err != nil {
 				return err
@@ -24316,10 +24377,9 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 
-	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
+	segments, _ := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
 		filtered := segments[:0]
-		nonEmptyBytes = 0
 		for _, seg := range segments {
 			if seg.valueLog != db.walUsesValueLog() {
 				continue
@@ -24328,42 +24388,27 @@ func (db *DB) Checkpoint() error {
 				continue
 			}
 			filtered = append(filtered, seg)
-			if seg.size > 0 {
-				nonEmptyBytes += seg.size
-			}
 		}
 		segments = filtered
 	}
-	// New logic: perform sync write only if not relaxedSync
 	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
-	var commitErr error
-	if nonEmptyBytes > 0 || needsCommandWALPublish {
-		backendBoundaryStart := time.Now()
-		if needsCommandWALPublish {
-			// This backend batch is also the checkpoint durability boundary for any
-			// non-command WAL segments observed above, so command-LSN publication and
-			// ordinary cached checkpoint proof are not mutually exclusive.
-			_, commitErr = db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges)
-		} else if db.relaxedSync {
-			backendBatch := db.backend.NewBatch()
-			// If relaxed sync, just write the batch without forcing sync
-			commitErr = backendBatch.Write()
-			cerr := backendBatch.Close()
-			if commitErr == nil {
-				commitErr = cerr
-			}
-		} else {
-			// Otherwise, force a backend durability boundary without publishing
-			// an artificial same-root commit.
-			commitErr = backendSyncBoundary(db.backend)
-		}
-		recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
-		if commitErr != nil {
-			return commitErr
+	if needsCommandWALPublish {
+		if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+			return err
 		}
 	}
+	// Checkpoint is the root-durability boundary in every profile. Backend batch
+	// WriteSync only proves the command-WAL prefix when command WAL is enabled,
+	// and relaxed publication may only enqueue a root candidate, so explicitly
+	// wait through the backend checkpoint before trimming the command WAL.
+	backendBoundaryStart := time.Now()
+	commitErr := backendSyncBoundary(db.backend)
+	recordCheckpointStageSince(&db.checkpointStageBackendBoundary, backendBoundaryStart)
+	if commitErr != nil {
+		return commitErr
+	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := db.cleanupCommandWALCheckpoint(!db.relaxedSync); err != nil {
+		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
 			return err
 		}
 	}
@@ -24412,7 +24457,7 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
 	}
-	if removed && !db.relaxedSync {
+	if removed {
 		db.syncDirBestEffort(db.dir, durabilitycut.ResourceCommandWAL)
 	}
 	db.observeCheckpointWALCleanupCoverage(cleanupConsidered, cleanupRemoved, cleanupSkippedCurrent, cleanupSkippedPreRotate, cleanupSkippedRetained)
@@ -24446,12 +24491,7 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 		_ = backendBatch.Close()
 		return false, err
 	}
-	var err error
-	if db.relaxedSync {
-		err = backendBatch.Write()
-	} else {
-		err = backendBatch.WriteSync()
-	}
+	err := backendBatch.WriteSync()
 	cerr := backendBatch.Close()
 	if err == nil {
 		err = cerr
@@ -24575,10 +24615,9 @@ func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
 	if len(units) != queueLen || totalLen <= 0 {
 		return false
 	}
-	// Chunked checkpoint flushes attach command-LSN publication to the final
-	// backend batch. Intermediate chunks publish roots without advancing
-	// AppliedCommandLSN, so crash recovery either replays the command frames or
-	// observes the final root/applied-LSN tuple together.
+	// Chunked checkpoint flushes stage every backend batch in one root-build
+	// transaction and attach command-LSN publication to the final batch. Only
+	// that complete root/applied-LSN tuple can become visible or recoverable.
 	return true
 }
 
@@ -25247,21 +25286,10 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 		// - relaxed: flush-to-kernel (no fsync)
 		return nil
 	}
-	if db.relaxedSync {
-		if db.indexOuterLeavesInValueLog {
-			// ProfileFast-style workloads rely on WriteSync for immediate
-			// read-after-write visibility, not per-batch backend publication.
-			// Forcing a backend flush boundary on every sync write with WAL off and
-			// outer leaves in the value log turns live catch-up into thousands of
-			// tiny backend commits, which explodes page count and sparse internal
-			// nodes. Keep these writes visible in memory and let checkpoint/rotation
-			// establish the backend boundary.
-			return nil
-		}
-		// Journal disabled: enforce a backend flush boundary without fsync.
-		return db.flushAllMemtablesForSync(false)
-	}
-	// Journal disabled: enforce a durable backend boundary.
+	// Explicit sync always opts a WAL-off write into a recovery-selectable root,
+	// even when ordinary writes use the relaxed/no-WAL-fast profile. Visibility
+	// alone is the contract of Flush; SetSync, DeleteSync, batch WriteSync, and
+	// their collection equivalents must survive process loss.
 	return db.Checkpoint()
 }
 
@@ -25706,7 +25734,9 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 	db.waitForRangeSpanCheckpointDrain()
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.beginExclusiveWriteWithFlushMuHeld()
+	if err := db.beginExclusiveWriteWithFlushMuHeld(); err != nil {
+		return err
+	}
 	defer db.writeMu.Unlock()
 
 	db.mu.Lock()
@@ -25782,7 +25812,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
 	// post-journal apply divergence on partial batch failure.
 	if !db.disableJournal {
-		db.beginExclusiveWrite()
+		if err := db.beginExclusiveWrite(); err != nil {
+			return err
+		}
 		defer db.writeMu.Unlock()
 
 		it, err := db.Iterator(start, end)
@@ -26074,7 +26106,9 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		// rotating the memtable (which can allocate large arenas).
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
-		db.beginExclusiveWriteWithFlushMuHeld()
+		if err := db.beginExclusiveWriteWithFlushMuHeld(); err != nil {
+			return err
+		}
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
@@ -27858,7 +27892,7 @@ const (
 	// ranges.
 	flushRangeSpanCombineMaxUnits = 1024
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
-	// backend batch before committing it and continuing with a fresh batch.
+	// backend apply chunk before continuing with a fresh batch.
 	//
 	// This avoids large one-shot allocations (and their GC / page-fault overhead)
 	// when flushing very large immutable memtables (e.g. when value-log pointers
@@ -35647,7 +35681,9 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// a concurrent cached write can slip between the scan and the materialized
 	// point-delete batch, producing a non-serializable mix of range-deleted old
 	// keys and surviving newly inserted keys.
-	b.db.beginExclusiveWrite()
+	if err := b.db.beginExclusiveWrite(); err != nil {
+		return err
+	}
 	writeMuHeld := true
 	unlockWriteMu := func() {
 		if writeMuHeld {
@@ -35747,7 +35783,9 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 	b.db.waitForRangeSpanCheckpointDrain()
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
-	b.db.beginExclusiveWriteWithFlushMuHeld()
+	if err := b.db.beginExclusiveWriteWithFlushMuHeld(); err != nil {
+		return err
+	}
 	defer b.db.writeMu.Unlock()
 
 	b.db.mu.Lock()

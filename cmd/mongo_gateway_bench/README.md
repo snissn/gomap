@@ -239,7 +239,7 @@ ceiling because the default cell creates secondary indexes. Use
 `command_wal_relaxed` for command-WAL coverage once collection catalog index
 commands are supported for this workload:
 
-- `-treedb-profile bench`
+- `-treedb-profile bench_unsafe`
 - `-treedb-document-format template-v1`
 - `-treedb-data-root-storage compressed`
 - `-treedb-index-state-root-storage compressed`

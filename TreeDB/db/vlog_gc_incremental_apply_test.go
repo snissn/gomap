@@ -89,7 +89,7 @@ func TestBuildValueLogRefDeltaFallsBackWhenApplyEvidenceMissing(t *testing.T) {
 	var lookups atomic.Uint64
 	restore := registerLookupValueLogRefAtKeyHook(func() { lookups.Add(1) })
 	defer restore()
-	delta, err := d.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, nil, nil, false)
+	delta, err := d.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, nil, nil, 0, false)
 	if err != nil {
 		t.Fatalf("buildValueLogRefDelta: %v", err)
 	}

@@ -24,7 +24,7 @@ var profiles map[string]Profile
 func init() {
 	applyFast := func(isSet map[string]bool) {
 		// TreeDB
-		applyTreeDBProfileIfUnset(treedb.ProfileFast, isSet)
+		applyTreeDBProfileIfUnset(treedb.ProfileBenchUnsafe, isSet)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 
 		// Badger
@@ -48,8 +48,9 @@ func init() {
 	}
 
 	applyWALOnFast := func(isSet map[string]bool) {
-		// TreeDB: keep WAL enabled, but relax durability and read integrity.
-		applyTreeDBProfileIfUnset(treedb.ProfileWALOnFast, isSet)
+		// TreeDB: keep WAL enabled and relax ordinary ACK durability. Read
+		// integrity remains verified under the canonical production contract.
+		applyTreeDBProfileIfUnset(treedb.ProfileCommandWALRelaxed, isSet)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 
 		// Other DBs: match "fast" behavior (nosync).
@@ -64,11 +65,11 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Cross-DB no-sync throughput preset. For TreeDB this intentionally uses the legacy no-WAL compatibility bundle with relaxed read integrity and Celestia-aligned auto/snappy/balanced value-log compression. UNSAFE for production data.",
+			Description: "Cross-DB no-sync throughput preset. For TreeDB this selects the explicit bench_unsafe boundary with no WAL, relaxed read integrity, and Celestia-aligned auto/snappy/balanced value-log compression. UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"wal_on_fast": {
-			Description: "Cross-DB relaxed-WAL preset. For TreeDB this intentionally uses the legacy WAL-on compatibility bundle with relaxed sync/read integrity and Celestia-aligned auto/snappy/balanced value-log compression.",
+			Description: "Cross-DB relaxed-WAL preset. For TreeDB this selects command_wal_relaxed with verified read integrity and Celestia-aligned auto/snappy/balanced value-log compression.",
 			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast
@@ -113,7 +114,16 @@ func init() {
 }
 
 func applyTreeDBProfileIfUnset(profile treedb.Profile, isSet map[string]bool) {
-	opts := treedb.OptionsFor(profile, "")
+	resolved, ok := treedb.NormalizeProfile(profile)
+	if !ok {
+		panic(fmt.Sprintf("unified-bench: unsupported TreeDB profile %q", profile))
+	}
+	var opts treedb.Options
+	if resolved == treedb.ProfileBenchUnsafe {
+		opts = treedb.OptionsForBenchmark(profile, "")
+	} else {
+		opts = treedb.OptionsFor(profile, "")
+	}
 
 	switch opts.Durability {
 	case treedb.DurabilityWALOffRelaxed:

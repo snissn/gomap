@@ -14,6 +14,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func (tdb *DB) commandWALOrdinaryWriteRequiresSync() bool {
+	return tdb != nil && tdb.commandWALCached && tdb.resolvedProfile == ProfileCommandWALDurable
+}
+
 func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []byte, revision EntryRevision, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached {
 		return nil
@@ -302,7 +306,7 @@ func (tdb *DB) cleanupPublicCommandWALCheckpoint(sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return nil
 	}
-	return tdb.backend.CleanupCommandWALCoveredSegments(sync)
+	return tdb.backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(sync)
 }
 
 func (tdb *DB) syncPublicCommandWAL() error {
@@ -831,24 +835,25 @@ func (b *commandWALPublicBatch) shouldBypassPayloadAppendRetainedCap(retainedCap
 }
 
 func (b *commandWALPublicBatch) Write() error {
-	return b.write(false)
+	commandSync := b != nil && b.db != nil && b.db.commandWALOrdinaryWriteRequiresSync()
+	return b.write(false, commandSync)
 }
 
 func (b *commandWALPublicBatch) WriteSync() error {
-	return b.write(true)
+	return b.write(true, true)
 }
 
-func (b *commandWALPublicBatch) write(sync bool) (err error) {
+func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error) {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
 	start := time.Now()
 	if b.db != nil {
 		defer func() {
-			b.db.observePublicBatchWrite(sync, start, err)
+			b.db.observePublicBatchWrite(explicitSync, start, err)
 		}()
 	}
-	phaseEnabled := sync && b.db != nil && b.db.publicBatchWriteSyncPhaseEnabled
+	phaseEnabled := explicitSync && b.db != nil && b.db.publicBatchWriteSyncPhaseEnabled
 	var phaseSample publicBatchWriteSyncPhaseSample
 	if phaseEnabled {
 		defer func() {
@@ -873,9 +878,9 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 			}
 			leaseAttached = b.attachStableViewValueLease()
 			var commandTiming db.CommandWALRequestTiming
-			cachedTiming, measuredErr := writer.WriteAfterCommandWALAppendMeasured(sync, func() error {
+			cachedTiming, measuredErr := writer.WriteAfterCommandWALAppendMeasured(commandSync, func() error {
 				var appendErr error
-				commandTiming, appendErr = b.appendCommandWALMeasured(sync)
+				commandTiming, appendErr = b.appendCommandWALMeasured(commandSync)
 				return appendErr
 			})
 			phaseSample.checkpointGate = cachedTiming.CheckpointGate
@@ -910,8 +915,8 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 				return fmt.Errorf("treedb: command wal batch requires cached command append hook")
 			}
 			leaseAttached = b.attachStableViewValueLease()
-			writeErr = writer.WriteAfterCommandWALAppend(sync, func() error {
-				return b.appendCommandWAL(sync)
+			writeErr = writer.WriteAfterCommandWALAppend(commandSync, func() error {
+				return b.appendCommandWAL(commandSync)
 			})
 		}
 		if writeErr != nil {
@@ -934,7 +939,7 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 		b.dirty = false
 		return nil
 	}
-	if sync {
+	if explicitSync {
 		if phaseEnabled {
 			commandStart := time.Now()
 			syncErr := b.db.syncPublicCommandWAL()

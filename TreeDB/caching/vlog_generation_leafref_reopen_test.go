@@ -36,10 +36,22 @@ func ageValueLogFilesForTest(t *testing.T, dir string, age time.Duration) {
 	}
 	old := time.Now().Add(-age)
 	for _, path := range paths {
-		if err := os.Chtimes(path, old, old); err != nil {
+		if err := os.Chtimes(path, old, old); err != nil && !os.IsNotExist(err) {
 			t.Fatalf("chtimes %s: %v", path, err)
 		}
 	}
+}
+
+func TestAgeValueLogFilesForTestToleratesDisappearedMatch(t *testing.T) {
+	leafDir := filepath.Join(t.TempDir(), "leaf_vlog")
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf vlog: %v", err)
+	}
+	path := filepath.Join(leafDir, "value-l255-000001.log")
+	if err := os.Symlink(filepath.Join(leafDir, "already-removed.log"), path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	ageValueLogFilesForTest(t, filepath.Dir(leafDir), time.Hour)
 }
 
 func valueLogPathForFileID(root string, fileID uint32) string {

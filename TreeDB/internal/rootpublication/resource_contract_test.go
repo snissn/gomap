@@ -2136,6 +2136,83 @@ func TestCoordinatorResourcePinHighWaterSurvivesRiseAndRelease(t *testing.T) {
 	}
 }
 
+func TestCoordinatorResourceActivePinsTrackPublishedPrefix(t *testing.T) {
+	started := make(chan uint64, 2)
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	coordinator, err := New(Options{Publisher: PublisherFunc(func(_ context.Context, candidate *PreparedRootCandidate) PublishResult {
+		seq := candidate.Frontier().CommitSeq()
+		started <- seq
+		if seq == 1 {
+			<-releaseFirst
+		} else {
+			<-releaseSecond
+		}
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeCandidate := func(seq uint64) *PreparedRootCandidate {
+		t.Helper()
+		token := stableTokenFixture(t, t.TempDir(), fmt.Sprintf("prefix-%d.vlog", seq), seq, 4, ReachabilityValueLogPointer, fmt.Sprint(seq))
+		builder := NewStableResourceSetBuilder(ReachabilityValueLogPointer)
+		if err := builder.Add(token); err != nil {
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := NewPreparedRootCandidate(CandidateSpec{Frontier: NewFrontier(seq, seq, seq, seq, seq), ResourceSet: set})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return candidate
+	}
+
+	if err := coordinator.Enqueue(context.Background(), makeCandidate(1)); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- coordinator.WaitThrough(context.Background(), 1) }()
+	if seq := <-started; seq != 1 {
+		t.Fatalf("first published sequence=%d want 1", seq)
+	}
+	if err := coordinator.Enqueue(context.Background(), makeCandidate(2)); err != nil {
+		t.Fatal(err)
+	}
+	stats := coordinator.Stats().Resources
+	if len(stats) != 1 || stats[0].ActivePins != 2 || stats[0].PinHighWater != 2 {
+		t.Fatalf("in-flight prefix resource stats=%+v", stats)
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	stats = coordinator.Stats().Resources
+	if len(stats) != 1 || stats[0].ActivePins != 1 || stats[0].PinHighWater != 2 {
+		t.Fatalf("remaining suffix resource stats=%+v", stats)
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- coordinator.WaitThrough(context.Background(), 2) }()
+	if seq := <-started; seq != 2 {
+		t.Fatalf("second published sequence=%d want 2", seq)
+	}
+	close(releaseSecond)
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	stats = coordinator.Stats().Resources
+	if len(stats) != 1 || stats[0].ActivePins != 0 || stats[0].PinHighWater != 2 {
+		t.Fatalf("released resource stats=%+v", stats)
+	}
+	if err := coordinator.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCoordinatorPinMetricsCountDuplicateDescriptorsForCoalescedIdentity(t *testing.T) {
 	releasePublish := make(chan struct{})
 	coordinator, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {

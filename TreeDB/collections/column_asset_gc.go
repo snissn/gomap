@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"sync"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
@@ -420,6 +422,14 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	if len(eligible) == 0 {
 		return stats, nil
 	}
+	recoverableRoots, err := c.db.CaptureRecoverableRootSet(ctx)
+	if err != nil {
+		return stats, err
+	}
+	defer recoverableRoots.Release()
+	if err := c.pinRecoverableColumnAssetSegments(ctx, recoverableRoots, opts.CandidateRefs); err != nil {
+		return stats, err
+	}
 	if hook := columnAssetStableDeleteAfterPlanHook(); hook != nil {
 		hook()
 	}
@@ -434,6 +444,9 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			return stats, deleter.finish(err)
 		}
 		deleted, err := deleter.delete(planned, func() error {
+			if err := recoverableRoots.Revalidate(); err != nil {
+				return errors.Join(ErrColumnAssetGCPlanStale, err)
+			}
 			currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 			if currentCommitSeq != plan.PlanCommitSeq || currentSystemRoot != plan.SystemRoot {
 				return fmt.Errorf("%w: committed root changed for collection=%q planned_commit_seq=%d current_commit_seq=%d planned_system_root=%d current_system_root=%d",
@@ -467,6 +480,205 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		return stats, err
 	}
 	return stats, nil
+}
+
+type recoverableColumnAssetReplayBasis struct {
+	appliedCommandLSN  uint64
+	manifestGeneration uint64
+	collection         string
+	config             ColumnStoreConfig
+}
+
+type recoverableColumnAssetReplayClassifier func(ColumnAssetRef, recoverableColumnAssetReplayBasis) (bool, error)
+
+func recoverableColumnAssetReplayRefs(
+	candidateRefs []ColumnAssetRef,
+	bases []recoverableColumnAssetReplayBasis,
+	requiresReplayBefore func(uint64) bool,
+	classify recoverableColumnAssetReplayClassifier,
+) ([]ColumnAssetRef, error) {
+	if len(candidateRefs) == 0 || len(bases) == 0 || requiresReplayBefore == nil || classify == nil {
+		return nil, nil
+	}
+	replayRefs := make([]ColumnAssetRef, 0, len(candidateRefs))
+	for _, ref := range candidateRefs {
+		if ref.Generation == 0 {
+			continue
+		}
+		for _, basis := range bases {
+			if basis.appliedCommandLSN == 0 || basis.manifestGeneration == 0 ||
+				ref.Generation > basis.manifestGeneration || !requiresReplayBefore(basis.appliedCommandLSN) {
+				continue
+			}
+			replayable, err := classify(ref, basis)
+			if err != nil {
+				return nil, err
+			}
+			if replayable {
+				replayRefs = append(replayRefs, ref)
+				break
+			}
+		}
+	}
+	return replayRefs, nil
+}
+
+func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, roots *backenddb.RecoverableRootSet, candidateRefs []ColumnAssetRef) error {
+	if c == nil || c.db == nil || roots == nil {
+		return backenddb.ErrRecoverableRootSetStale
+	}
+	seenPaths := make(map[string]struct{})
+	visibleReplayBases := make([]recoverableColumnAssetReplayBasis, 0, 2)
+	pinRefs := func(refs []ColumnAssetRef) error {
+		for _, ref := range refs {
+			path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
+			if err != nil {
+				return err
+			}
+			path = filepath.Clean(path)
+			if _, ok := seenPaths[path]; ok {
+				continue
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return fmt.Errorf("collections: open recoverable column asset %q: %w", path, err)
+			}
+			pinErr := roots.PinStableFile(file)
+			closeErr := file.Close()
+			if pinErr != nil {
+				return fmt.Errorf("collections: pin recoverable column asset %q: %w", path, pinErr)
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			seenPaths[path] = struct{}{}
+		}
+		return nil
+	}
+	for _, root := range roots.Roots() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		snapshot := roots.AcquireSnapshotForRoot(root)
+		if snapshot == nil {
+			return backenddb.ErrRecoverableRootSetStale
+		}
+		catalog, err := c.catalogForSnapshot(snapshot)
+		if err != nil {
+			_ = snapshot.Close()
+			if errors.Is(err, errCollectionNotFound) {
+				continue
+			}
+			return fmt.Errorf("collections: capture recoverable column catalog at commit_seq=%d: %w", root.CommitSeq, err)
+		}
+		if catalog == nil {
+			_ = snapshot.Close()
+			continue
+		}
+		cfgPtr := catalog.meta.Options.ColumnStore
+		if cfgPtr == nil || !cfgPtr.Enabled {
+			_ = snapshot.Close()
+			continue
+		}
+		cfg := *cfgPtr
+		if cfg.ActiveManifest == nil {
+			if cfg.RecoveryAuthoritativeManifest != nil {
+				_ = snapshot.Close()
+				return fmt.Errorf("collections: recoverable column catalog at commit_seq=%d has recovery manifest without active manifest", root.CommitSeq)
+			}
+			_ = snapshot.Close()
+			continue
+		}
+		rootName := catalog.columnManifestRootName
+		if rootName == "" && cfg.ManifestRoot != nil {
+			rootName = cfg.ManifestRoot.Name
+		}
+		if rootName == "" {
+			rootName = collectionColumnManifestRootName(catalog.meta.Name)
+		}
+		view, viewErr := c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(
+			snapshot,
+			catalog,
+			catalog.meta.Name,
+			catalog.rootID(rootName),
+			cfg,
+			true,
+			columnManifestScanAllSidecars(),
+		)
+		closeErr := snapshot.Close()
+		if viewErr != nil {
+			return fmt.Errorf("collections: capture recoverable column assets at commit_seq=%d: %w", root.CommitSeq, viewErr)
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if root.Visible {
+			if identity := view.FullConfig.RecoveryAuthoritativeManifest; identity != nil &&
+				identity.Generation != 0 && view.FullConfig.RecoveryAuthoritativeAppliedCommandLSN != 0 {
+				visibleReplayBases = append(visibleReplayBases, recoverableColumnAssetReplayBasis{
+					appliedCommandLSN:  view.FullConfig.RecoveryAuthoritativeAppliedCommandLSN,
+					manifestGeneration: identity.Generation,
+					collection:         catalog.meta.Name,
+					config:             view.FullConfig,
+				})
+			}
+		}
+		if err := pinRefs(columnPhysicalScanSnapshotViewAssetRefs(view)); err != nil {
+			return err
+		}
+	}
+	// A durable fallback behind any visible command-WAL frontier can replay
+	// authoritative generations that the corresponding visible manifest has
+	// since superseded. Preserve each root's LSN, generation, collection, and
+	// configuration as one basis so candidate parsing never mixes authorities.
+	replayRefs, err := recoverableColumnAssetReplayRefs(
+		candidateRefs,
+		visibleReplayBases,
+		roots.RequiresReplayBefore,
+		func(ref ColumnAssetRef, basis recoverableColumnAssetReplayBasis) (bool, error) {
+			return recoverableColumnAssetReplayCandidate(
+				c.db.ColumnAssetRootDir(), ref, basis.collection, basis.config, basis.appliedCommandLSN,
+			)
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if err := pinRefs(replayRefs); err != nil {
+		return err
+	}
+	return roots.Revalidate()
+}
+
+func recoverableColumnAssetReplayCandidate(rootDir string, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, visibleRecoveryLSN uint64) (bool, error) {
+	if visibleRecoveryLSN == 0 {
+		return false, nil
+	}
+	raw, err := readColumnPhysicalAssetFromManager(rootDir, ref)
+	if err != nil {
+		// An unreadable candidate is ambiguous until exact namespace/identity
+		// validation immediately before deletion. Fail closed so a transient I/O
+		// error cannot silently drop a required replay input.
+		return false, fmt.Errorf("collections: read recoverable column asset kind=%q namespace=%q file_id=%d: %w", ref.Kind, ref.Namespace, ref.FileID, err)
+	}
+	switch ref.Kind {
+	case ColumnAssetKindTCS1PartImage:
+		header, _, _, err := parseColumnPhysicalAssetScanHeader(raw, ref, collection, &cfg, "")
+		if err != nil {
+			return false, nil
+		}
+		return header.AppliedCommandLSN != 0 && header.AppliedCommandLSN <= visibleRecoveryLSN, nil
+	case ColumnAssetKindTCS1TypedColumnPart:
+		image, err := typedcolumn.ParseColumnPartImage(raw)
+		if err != nil {
+			return false, nil
+		}
+		return image.PartID == ref.PartID, nil
+	default:
+		// Aggregate metadata, dictionary/int64 sidecars, HNSW packs, and
+		// query-ready assets are rebuildable derived accelerators.
+		return false, nil
+	}
 }
 
 func columnAssetGCExistingSegmentCount(plan ColumnAssetReachabilityPlan) int {

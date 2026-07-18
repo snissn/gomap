@@ -320,7 +320,7 @@ func runCompactLevelDB(args []string) {
 func runCompactTreeDB(args []string) {
 	fs := flag.NewFlagSet("compact-treedb", flag.ExitOnError)
 	destParent := fs.String("dest-parent", "", "destination parent directory")
-	profileRaw := fs.String("profile", "command_wal_relaxed", "command_wal_relaxed, command_wal_durable, bench, or a legacy compatibility profile")
+	profileRaw := fs.String("profile", "command_wal_relaxed", treedb.ProfileFlagHelp)
 	if err := fs.Parse(args); err != nil {
 		fatalErr(err)
 	}

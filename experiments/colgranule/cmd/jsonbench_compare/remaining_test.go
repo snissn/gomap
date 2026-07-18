@@ -436,12 +436,15 @@ func validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *t
 	if result.RewriteRecordsCopied == 0 {
 		t.Fatalf("remaining measurement copied no value-log records: %+v", result)
 	}
-	if result.RewriteReclaimFiles == 0 || result.RewriteReclaimBytes == 0 {
-		t.Fatalf("remaining measurement did not reclaim rewritten sources through cached fence path: %+v", result)
+	if result.RewriteSourceBytes == 0 {
+		t.Fatalf("remaining measurement observed no value-log source bytes: %+v", result)
 	}
-	// Rewrite reclamation is reported from the files actually deleted. An exact
-	// ingest segment may remain reachable from the independently recoverable
-	// older durable-root slot until a later publication supersedes that slot.
+	if (result.RewriteReclaimFiles == 0) != (result.RewriteReclaimBytes == 0) {
+		t.Fatalf("remaining measurement reported inconsistent rewrite reclamation: %+v", result)
+	}
+	// Rewrite reclamation is reported only for files physically deleted during
+	// this pass. An ingest segment may remain reachable from the independently
+	// recoverable older durable-root slot until later publications supersede it.
 	validateStoredRemainingCollectionReconstructsJSONBenchRows(t, source, ds, imagePart, dbDir, collections.DocumentFormatTemplateV1)
 }
 
@@ -472,7 +475,7 @@ func buildJSONBenchImagePartForReconstructionTest(t *testing.T, source string, l
 
 func validateStoredRemainingCollectionReconstructsJSONBenchRows(t *testing.T, source string, ds *colgranule.JSONBenchDataset, imagePart *colgranule.ColumnPart, dbDir string, format collections.DocumentFormat) {
 	t.Helper()
-	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts := treedb.OptionsForBenchmark(treedb.ProfileBenchUnsafe, dbDir)
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)

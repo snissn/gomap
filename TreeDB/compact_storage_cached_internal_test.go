@@ -180,23 +180,20 @@ func TestCompactStorageDefaultPathReclaimsDeadTopSegment(t *testing.T) {
 		t.Fatalf("CompactStorage: %v", err)
 	}
 
-	// The older independently recoverable durable-root slot still reaches the
-	// first segment when this plan is captured. The first maintenance pass must
-	// retain it; publications performed by that pass advance the older slot so a
-	// fresh plan can reclaim it.
-	if _, err := os.Stat(segment1); err != nil {
-		t.Fatalf("first compact did not retain older-root segment %s: %v (stats=%+v)", segment1, err, firstStats)
-	}
-	// A compact pass is allowed to perform no root publication when every
-	// maintenance candidate is pinned by the older recoverable slot. Advance the
-	// alternating durable-root horizon explicitly so this test does not depend
-	// on a platform-specific vacuum or namespace-maintenance side effect.
-	if err := db.SetSync([]byte("compact-storage/horizon"), []byte("advance")); err != nil {
-		t.Fatalf("advance recoverable-root horizon: %v", err)
-	}
-	secondStats, err := db.CompactStorage(context.Background(), CompactStorageOptions{})
-	if err != nil {
-		t.Fatalf("second CompactStorage: %v", err)
+	secondStats := firstStats
+	if _, statErr := os.Stat(segment1); statErr == nil {
+		// A compact pass may perform no root publication while the older slot
+		// still pins the segment. Advance the alternating horizon explicitly and
+		// retry from a fresh maintenance plan.
+		if err := db.SetSync([]byte("compact-storage/horizon"), []byte("advance")); err != nil {
+			t.Fatalf("advance recoverable-root horizon: %v", err)
+		}
+		secondStats, err = db.CompactStorage(context.Background(), CompactStorageOptions{})
+		if err != nil {
+			t.Fatalf("second CompactStorage: %v", err)
+		}
+	} else if !os.IsNotExist(statErr) {
+		t.Fatalf("stat segment after first compact %s: %v (stats=%+v)", segment1, statErr, firstStats)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -547,8 +544,26 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 	if rewrite.ValueRecordsCopied == 0 {
 		t.Fatalf("rewrite copied no value records: %+v", rewrite)
 	}
+	// The rewrite publishes replacement pointers, but the immediately previous
+	// durable slot may still retain the source segments. Reopen before publishing
+	// an inline-only successor so the cached writer also starts from the rewritten
+	// leaf-log generation. Both durable slots have then crossed the rewrite before
+	// CompactStorage is required to report zero physical GC debt.
 	if err := db.Close(); err != nil {
 		t.Fatalf("close after rewrite: %v", err)
+	}
+	slotAdvancer, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open durable-slot advancer: %v", err)
+	}
+	if err := slotAdvancer.Set([]byte("raw/rewrite-gc-slot-advance"), []byte("advance")); err != nil {
+		t.Fatalf("publish durable-slot successor: %v", err)
+	}
+	if err := slotAdvancer.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint durable-slot successor: %v", err)
+	}
+	if err := slotAdvancer.Close(); err != nil {
+		t.Fatalf("close durable-slot advancer: %v", err)
 	}
 
 	compactor, err := Open(opts)

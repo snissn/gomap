@@ -106,6 +106,7 @@ var (
 	errCollectionNil                           = errors.New("collections: collection is nil")
 	errCollectionDBNil                         = errors.New("collections: db is nil")
 	errCollectionNotFound                      = ErrCollectionNotFound
+	errConcurrentSchemaModification            = errors.New("collections: concurrent schema modification")
 	errCollectionRootOverlaysRequireCompaction = errors.New("collections: collection root overlays require compaction before writes")
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
@@ -4043,9 +4044,10 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	return ids[0], nil
 }
 
-// Flush publishes buffered collection-local writes to the backend roots. Single
-// no-index inserts use this boundary to match TreeDB's cached write path while
-// still giving callers an explicit durability/visibility point.
+// Flush publishes buffered collection-local writes for visibility and drains
+// collection-local work. It does not promise a durable WAL or root boundary;
+// callers that need durability must use the selected profile's explicit sync,
+// Checkpoint, or clean Close contract.
 func (c *Collection) Flush() error {
 	if c == nil {
 		return errCollectionNil
@@ -9911,6 +9913,12 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 }
 
 func isRetriableCollectionMutationError(err error) bool {
+	// Once publication ownership transferred, running a logical mutation again
+	// can apply it twice. Callers with operation-specific reconciliation must
+	// handle this status before consulting ordinary pre-publication retry classes.
+	if backenddb.CommitPublicationAccepted(err) {
+		return false
+	}
 	return errors.Is(err, ErrConcurrentMutation) ||
 		isRetriableOrderedRootPublishConflict(err) ||
 		isRetriableCollectionCatalogReadEOF(err)
@@ -19429,7 +19437,7 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 		return nil, errCollectionNotFound
 	}
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
-		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+		return nil, fmt.Errorf("%w detected for %q", errConcurrentSchemaModification, baseMeta.Name)
 	}
 	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
 	if baseRootID, ok := baseRootIDs[primaryRootName]; ok {
@@ -19469,7 +19477,7 @@ func (c *Collection) buildSchemaOnlySystemDeltaIterator(baseMeta CollectionMeta,
 		return nil, errCollectionNotFound
 	}
 	if !sameCollectionMeta(catalog.meta, baseMeta) {
-		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", baseMeta.Name)
+		return nil, fmt.Errorf("%w detected for %q", errConcurrentSchemaModification, baseMeta.Name)
 	}
 	updates := map[string][]byte{
 		systemCollectionMetaKey(baseMeta.Name): encodedMeta,

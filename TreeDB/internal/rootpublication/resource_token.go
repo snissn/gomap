@@ -1233,7 +1233,7 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 	persistenceIdentity := identity
 	persistenceIdentity.Generation = 0
 	if stableNamespaceCreationPersistsThroughChild() && spec.Operation == NamespaceCreate && spec.LinkedResource != nil {
-		persistence, err = duplicateStableFile(spec.LinkedResource)
+		persistence, err = duplicateStableSyncFile(spec.LinkedResource)
 		if err != nil {
 			_ = pinned.Close()
 			return nil, fmt.Errorf("duplicate namespace creation resource: %w", err)

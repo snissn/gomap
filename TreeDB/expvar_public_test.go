@@ -10,19 +10,17 @@ import (
 func TestPublicExpvarIncludesPublicStatsHookCounters(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		commandWAL     bool
+		profile        Profile
 		wantCommandWAL bool
 	}{
-		{name: "default", commandWAL: false},
-		{name: "command_wal", commandWAL: true, wantCommandWAL: true},
+		{name: "no_wal_fast", profile: ProfileNoWALFast},
+		{name: "command_wal", profile: ProfileCommandWALDurable, wantCommandWAL: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			db, err := Open(Options{
-				Dir:                           t.TempDir(),
-				CommandWAL:                    tc.commandWAL,
-				BackgroundCheckpointInterval:  -1,
-				BackgroundIndexVacuumInterval: -1,
-			})
+			opts := OptionsFor(tc.profile, t.TempDir())
+			opts.BackgroundCheckpointInterval = -1
+			opts.BackgroundIndexVacuumInterval = -1
+			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}

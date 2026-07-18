@@ -23,6 +23,9 @@ func TestColumnAssetRewriteUsesCreateOnlyStablePathOnWindows(t *testing.T) {
 	}
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	registry := d.StableResourceIdentityPinRegistry()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("settle initial publication before pin baseline: %v", err)
+	}
 	baselinePins := registry.ActivePins()
 	baselineIdentities := registry.ActiveIdentities()
 	before := columnAssetSegmentNamesM15C(t, d, col)

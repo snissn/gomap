@@ -176,6 +176,117 @@ func TestNewRejectsRecoverableFrontierNewerThanDurable(t *testing.T) {
 	}
 }
 
+func TestReachabilityEpochInvalidatesOnEnqueueAndDurablePublish(t *testing.T) {
+	calls := make(chan *PreparedRootCandidate, 1)
+	release := make(chan struct{})
+	c, err := New(Options{Publisher: PublisherFunc(func(ctx context.Context, candidate *PreparedRootCandidate) PublishResult {
+		calls <- candidate
+		select {
+		case <-release:
+			return PublishResult{Outcome: PublishSucceeded}
+		case <-ctx.Done():
+			return PublishResult{Outcome: PublishRetryableFailure, Err: ctx.Err()}
+		}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+
+	initial, err := c.CaptureReachability()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initial.Release()
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RevalidateReachability(initial.Epoch); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("initial snapshot after enqueue=%v", err)
+	}
+
+	pending, err := c.CaptureReachability()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pending.Release()
+	if pending.Visible.CommitSeq() != 1 || pending.Durable.CommitSeq() != 0 || len(pending.Pending) != 1 || pending.Pending[0].CommitSeq() != 1 {
+		t.Fatalf("pending snapshot=%+v", pending)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- c.WaitThrough(context.Background(), 1) }()
+	waitForCall(t, calls)
+	close(release)
+	if err := <-waitDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RevalidateReachability(pending.Epoch); !errors.Is(err, ErrInvalidCandidate) {
+		t.Fatalf("pending snapshot after durable publication=%v", err)
+	}
+
+	durable, err := c.CaptureReachability()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer durable.Release()
+	if durable.Visible.CommitSeq() != 1 || durable.Durable.CommitSeq() != 1 || len(durable.Pending) != 0 {
+		t.Fatalf("durable snapshot=%+v", durable)
+	}
+	if err := c.RevalidateReachability(durable.Epoch); err != nil {
+		t.Fatalf("unchanged durable snapshot=%v", err)
+	}
+}
+
+func TestReachabilityEpochSurvivesRetryableFailure(t *testing.T) {
+	want := errors.New("pre-meta retry")
+	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishRetryableFailure, Err: want}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := c.CaptureReachability()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Release()
+	if err := c.WaitThrough(context.Background(), 1); !errors.Is(err, want) {
+		t.Fatalf("wait=%v", err)
+	}
+	if err := c.RevalidateReachability(snapshot.Epoch); err != nil {
+		t.Fatalf("retryable failure changed reachability=%v", err)
+	}
+}
+
+func TestReachabilityRevalidationFailsClosedAfterAmbiguousPublish(t *testing.T) {
+	want := errors.New("meta sync ambiguous")
+	c, err := New(Options{Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishAmbiguous, Err: want}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.Enqueue(context.Background(), candidate(t, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := c.CaptureReachability()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Release()
+	if err := c.WaitThrough(context.Background(), 1); !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, want) {
+		t.Fatalf("wait=%v", err)
+	}
+	if err := c.RevalidateReachability(snapshot.Epoch); !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, want) {
+		t.Fatalf("ambiguous revalidation=%v", err)
+	}
+}
+
 func TestVisibleFrontierDoesNotSatisfyDurabilityWaiter(t *testing.T) {
 	calls := make(chan *PreparedRootCandidate, 1)
 	release := make(chan struct{})

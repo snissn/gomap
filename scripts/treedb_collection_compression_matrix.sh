@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCS="${DOCS:-100000}"
 BATCH="${BATCH:-16000}"
 RUN_DIR="${RUN_DIR:-/tmp/treedb_collection_compression_$(date +%Y%m%d_%H%M%S)}"
-PROFILE="${PROFILE:-bench}"
+PROFILE="${PROFILE:-bench_unsafe}"
 COLLECTION_INDEXES="${COLLECTION_INDEXES:-0 1 2}"
 COMPACT_MODE="${COMPACT_MODE:-full}"
 
@@ -40,7 +40,7 @@ func main() {
 	docs := flag.Int("docs", 100000, "documents to write")
 	batchSize := flag.Int("batch-size", 16000, "documents per batch")
 	reset := flag.Bool("reset", false, "remove directory before loading")
-	profile := flag.String("profile", "bench", "TreeDB profile: command_wal_durable, command_wal_relaxed, or bench")
+	profile := flag.String("profile", "bench_unsafe", "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
 	flag.Parse()
 
 	if *dir == "" {
@@ -58,7 +58,7 @@ func main() {
 		}
 	}
 
-	opts := treedb.OptionsFor(parseProfile(*profile), *dir)
+	opts := treedb.OptionsForBenchmark(parseProfile(*profile), *dir)
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	opts.KeepRecent = 1
@@ -126,9 +126,9 @@ func main() {
 }
 
 func parseProfile(raw string) treedb.Profile {
-	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileBench)
+	profile, ok := treedb.ParseBenchmarkProfile(raw, treedb.ProfileBenchUnsafe)
 	if !ok {
-		fatalf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+		fatalf("unsupported -profile %q; allowed: %s", raw, treedb.BenchmarkProfileFlagHelp)
 	}
 	return profile
 }

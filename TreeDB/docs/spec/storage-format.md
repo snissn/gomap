@@ -12,6 +12,18 @@ cleaning, compacting, or rewriting the directory. Typed-column image,
 descriptor, manifest, and schema evolution follows the fail-closed policy in
 `typed-column-schema-evolution.md`.
 
+The canonical production profiles are `command_wal_durable`,
+`command_wal_relaxed`, and `no_wal_fast`; `bench_unsafe` is benchmark/test only.
+The resolved profile is immutable at open. Main DB `format.json` version 4
+persists exactly one canonical `durability_profile`. Public reopen, native
+backend open, and offline maintenance must select the same profile. Version 4
+without a profile, an unknown profile, an older unbound main-DB manifest, or a
+selected/persisted mismatch returns the pre-alpha rebuild-required error rather
+than attempting a mixed-profile or mixed-version mode. The gate is not disabled
+by `IgnoreFormatConfig`. Internal side-store and low-level test manifests may
+remain unbound version 2/3 files; they cannot open a version-4 main DB without an
+explicit matching profile.
+
 ## 1. Top-Level Storage Objects
 
 A TreeDB deployment uses:
@@ -401,6 +413,11 @@ root-record digest: the root record stores the projection digest, its digest
 then binds the record, and the meta stores that record digest without a hash
 cycle.
 
+`CommitSeq` is the latest visible commit covered by this root. `DurableSeq` is
+the contiguous durable-publication generation within the current lineage. A
+grouped publication may therefore advance `CommitSeq` by several commits while
+advancing `DurableSeq` by exactly one.
+
 ### 3.2 Durable-root record V1
 
 A durable-root record is one checksummed `0x0a` page. Bytes `16:384` are:
@@ -436,7 +453,7 @@ with both the common page checksum and record-digest fields cleared. The common
 page checksum is then computed normally. The optional parent tuple identifies
 the previous independently recoverable generation. Recovery reads at most that
 one parent record, verifies its exact page/commit/digest binding and contiguous
-commit sequence, and rejects a child whose applied command-WAL LSN regresses
+durable-publication sequence, and rejects a child whose applied command-WAL LSN regresses
 below the parent's frontier. The live publisher separately proves contiguous
 command-WAL coverage before encoding the child. Recovery never follows the
 parent recursively, so this lineage check does not authorize an unbounded

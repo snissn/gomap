@@ -437,11 +437,8 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 }
 
 func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes(t *testing.T) {
-	opts := treedb.Options{
-		Dir:                        t.TempDir(),
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.IndexOuterLeavesInValueLog = true
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -590,11 +587,8 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if testing.Short() {
 		t.Skip("loads enough documents to exercise collection leaf generation pack/GC")
 	}
-	opts := treedb.Options{
-		Dir:                        t.TempDir(),
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
-	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.IndexOuterLeavesInValueLog = true
 	opts.ValueLog.Generational.LeafSegmentTargetBytes = 16 << 10
 
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -626,9 +620,8 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 
 	var encoder TemplateV1Encoder
 	const (
-		documents                              = 4_000
-		batchSize                              = 500
-		minExpectedCollectionLiveBytesForSmoke = 512
+		documents = 4_000
+		batchSize = 500
 	)
 	for start := 0; start < documents; start += batchSize {
 		ids, docs := collectionMaintenanceTemplateBatch(t, &encoder, start, batchSize)
@@ -657,10 +650,21 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	if got := packStats.LeafPagesCopied; got <= 0 {
 		t.Fatalf("LeafPagesCopied=%d, want collection leaves copied (stats=%+v)", got, packStats)
 	}
-	if got := packStats.SourceBytesLive; got <= minExpectedCollectionLiveBytesForSmoke {
+	// SourceBytesLive counts the stored representation, which can be very small
+	// for compressed collection leaves. Require a real positive source rather
+	// than an encoding-dependent byte floor; copied pages plus the read/GC/reopen
+	// assertions below prove the maintenance path operated on collection data.
+	if got := packStats.SourceBytesLive; got <= 0 {
 		t.Fatalf("SourceBytesLive=%d, want real collection live bytes copied (stats=%+v)", got, packStats)
 	}
 	requireCollectionMaintenanceTemplateReads(t, col)
+	// The pre-pack durable slot remains independently recovery-selectable until
+	// a later root publication overwrites it. Checkpoint alone does not advance
+	// CommitSeq, so recommit the packed root without publishing a new cached
+	// leaf-log dependency before asserting physical reclamation.
+	if err := d.ForceCommit(d.State().RootPageID); err != nil {
+		t.Fatalf("commit packed durable-slot successor: %v", err)
+	}
 
 	gcCtx, gcCancel := collectionMaintenanceTestContext(t)
 	gcStats, err := d.LeafGenerationGC(gcCtx, backenddb.LeafGenerationGCOptions{})
@@ -967,8 +971,8 @@ func TestCollectionFastJSONMaintenanceVacuumUsesValueLogLeaves(t *testing.T) {
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint after value-log GC: %v", err)
 	}
-	if err := d.VacuumIndexOnline(ctx); err != nil {
-		t.Fatalf("vacuum index online: %v", err)
+	if err := d.VacuumIndexOnline(ctx); !errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) {
+		t.Fatalf("vacuum index online err=%v want recoverable-root-set fence", err)
 	}
 
 	got, err := col.Get([]byte("did:example:019999"))

@@ -22,6 +22,36 @@ type backendFlushSpanRunChunkPlanner interface {
 	PlanFlushSpanRunChunks(backenddb.FlushSpanRunPlanRequest, int) (backenddb.FlushSpanRunChunkPlan, error)
 }
 
+type backendRootPublicationBuildGrouper interface {
+	BeginRootPublicationBuildGroup() (*backenddb.RootPublicationBuildGroup, error)
+}
+
+type backendBatchRootPublicationBuildGroupSetter interface {
+	SetRootPublicationBuildGroup(*backenddb.RootPublicationBuildGroup, bool) error
+}
+
+func (db *DB) beginBackendRootPublicationBuildGroup(chunked bool) (*backenddb.RootPublicationBuildGroup, error) {
+	if db == nil || !chunked {
+		return nil, nil
+	}
+	backend, ok := db.backend.(backendRootPublicationBuildGrouper)
+	if !ok {
+		return nil, nil
+	}
+	return backend.BeginRootPublicationBuildGroup()
+}
+
+func attachBackendRootPublicationBuildGroup(backendBatch batch.Interface, group *backenddb.RootPublicationBuildGroup, final bool) error {
+	if group == nil {
+		return nil
+	}
+	setter, ok := backendBatch.(backendBatchRootPublicationBuildGroupSetter)
+	if !ok {
+		return errors.New("cachingdb: backend batch cannot attach root publication build group")
+	}
+	return setter.SetRootPublicationBuildGroup(group, final)
+}
+
 type canonicalFlushRun struct {
 	pointOps []batch.Entry
 
@@ -922,7 +952,7 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, last bool, mode flushCollectionMode) error {
+func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, publicationGroup *backenddb.RootPublicationBuildGroup, last bool, mode flushCollectionMode) error {
 	if db == nil || len(ops) == 0 {
 		return nil
 	}
@@ -943,6 +973,10 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 			return attachErr
 		}
 		commandPublishAttached = attached
+	}
+	if err := attachBackendRootPublicationBuildGroup(backendBatch, publicationGroup, last); err != nil {
+		_ = backendBatch.Close()
+		return err
 	}
 	db.backendWriteBatchesTotal.Add(1)
 	db.observeFlushSpanRunBackendChunks(1)
@@ -968,14 +1002,28 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []backenddb.FlushSpanRunBackendChunk, syncFlush bool, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) (int, error) {
+func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []backenddb.FlushSpanRunBackendChunk, syncFlush bool, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) (emitted int, retErr error) {
 	if db == nil || run == nil || len(run.pointOps) == 0 {
 		return 0, nil
 	}
 	if len(chunks) == 0 {
 		chunks = buildEntryCountFlushSpanRunChunks(run.pointOps, len(run.pointOps))
 	}
-	emitted := 0
+	nonEmptyChunks := 0
+	for i := range chunks {
+		if chunks[i].PointOpEnd > chunks[i].PointOpStart {
+			nonEmptyChunks++
+		}
+	}
+	publicationGroup, err := db.beginBackendRootPublicationBuildGroup(nonEmptyChunks > 1)
+	if err != nil {
+		return 0, err
+	}
+	if publicationGroup != nil {
+		defer func() {
+			retErr = errors.Join(retErr, publicationGroup.Close())
+		}()
+	}
 	for i := range chunks {
 		chunk := chunks[i]
 		if chunk.PointOpEnd <= chunk.PointOpStart {
@@ -991,7 +1039,7 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 				break
 			}
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, last, mode); err != nil {
+		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, publicationGroup, last, mode); err != nil {
 			return emitted, err
 		}
 		emitted++
@@ -1029,6 +1077,18 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 	}
 	if chunkEntriesCap <= 0 {
 		chunkEntriesCap = 1
+	}
+	publicationGroup, err := db.beginBackendRootPublicationBuildGroup(sourcePointOps > chunkEntriesCap)
+	if err != nil {
+		db.reportError(err)
+		return false
+	}
+	if publicationGroup != nil {
+		defer func() {
+			if closeErr := publicationGroup.Close(); closeErr != nil {
+				db.reportError(fmt.Errorf("cachingdb: abort root publication build group: %w", closeErr))
+			}
+		}()
 	}
 	var emptySplitSummary backenddb.FlushSpanRunChunkSplitSummary
 	db.observeFlushSpanRunTargetLeafSpanSummary(0, 0, 0, 0, emptySplitSummary)
@@ -1074,7 +1134,7 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode)
+		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, publicationGroup, last, mode)
 		if err != nil {
 			return err
 		}
@@ -1175,6 +1235,18 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 	if chunkEntriesCap <= 0 {
 		chunkEntriesCap = 1
 	}
+	publicationGroup, err := db.beginBackendRootPublicationBuildGroup(build.sourcePointOps > chunkEntriesCap)
+	if err != nil {
+		db.reportError(err)
+		return false
+	}
+	if publicationGroup != nil {
+		defer func() {
+			if closeErr := publicationGroup.Close(); closeErr != nil {
+				db.reportError(fmt.Errorf("cachingdb: abort root publication build group: %w", closeErr))
+			}
+		}()
+	}
 
 	var emptySplitSummary backenddb.FlushSpanRunChunkSplitSummary
 	db.observeFlushSpanRunTargetLeafSpanSummary(0, 0, 0, 0, emptySplitSummary)
@@ -1220,7 +1292,7 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode)
+		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, publicationGroup, last, mode)
 		if err != nil {
 			return err
 		}
