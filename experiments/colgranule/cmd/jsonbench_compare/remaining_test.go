@@ -293,6 +293,53 @@ func TestRemainingTemplateV1MeasurementStorageReconstructsLocalJSONBenchIfReques
 	validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t, source, limit, colgranule.DefaultRowsPerGranule)
 }
 
+func TestRemainingRewriteEvidenceAllowsDurableRootDeferredReclaim(t *testing.T) {
+	// Exact counters from the macOS failure in run 29445375387. The rewrite
+	// completed, but its source segments remained reachable from the older
+	// independently recoverable durable-root slot.
+	result := remainingTreeDBResult{
+		RewriteRecordsCopied: 18,
+		RewriteValueBytes:    1843,
+		RewriteSourceBytes:   1600,
+		RewriteReclaimFiles:  0,
+		RewriteReclaimBytes:  0,
+	}
+	if err := validateRemainingRewriteEvidence(result); err != nil {
+		t.Fatalf("durable-root deferred reclaim rejected: %v", err)
+	}
+}
+
+func TestRemainingRewriteEvidenceRejectsInvalidCounters(t *testing.T) {
+	valid := remainingTreeDBResult{
+		RewriteRecordsCopied: 1,
+		RewriteValueBytes:    128,
+		RewriteSourceBytes:   256,
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*remainingTreeDBResult)
+	}{
+		{name: "no records copied", mutate: func(r *remainingTreeDBResult) { r.RewriteRecordsCopied = 0 }},
+		{name: "no value bytes copied", mutate: func(r *remainingTreeDBResult) { r.RewriteValueBytes = 0 }},
+		{name: "no source bytes selected", mutate: func(r *remainingTreeDBResult) { r.RewriteSourceBytes = 0 }},
+		{name: "negative reclaim files", mutate: func(r *remainingTreeDBResult) { r.RewriteReclaimFiles = -1 }},
+		{name: "negative reclaim bytes", mutate: func(r *remainingTreeDBResult) { r.RewriteReclaimBytes = -1 }},
+		{name: "inconsistent reclaim", mutate: func(r *remainingTreeDBResult) { r.RewriteReclaimFiles = 1 }},
+		{name: "over reclaim", mutate: func(r *remainingTreeDBResult) {
+			r.RewriteReclaimFiles = 1
+			r.RewriteReclaimBytes = 257
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := valid
+			tc.mutate(&result)
+			if err := validateRemainingRewriteEvidence(result); err == nil {
+				t.Fatalf("invalid rewrite counters accepted: %+v", result)
+			}
+		})
+	}
+}
+
 func validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
 	t.Helper()
 	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
@@ -433,19 +480,35 @@ func validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *t
 	if result.Rows != ds.Rows {
 		t.Fatalf("measured rows=%d want %d", result.Rows, ds.Rows)
 	}
-	if result.RewriteRecordsCopied == 0 {
-		t.Fatalf("remaining measurement copied no value-log records: %+v", result)
-	}
-	if result.RewriteSourceBytes == 0 {
-		t.Fatalf("remaining measurement observed no value-log source bytes: %+v", result)
-	}
-	if (result.RewriteReclaimFiles == 0) != (result.RewriteReclaimBytes == 0) {
-		t.Fatalf("remaining measurement reported inconsistent rewrite reclamation: %+v", result)
+	if err := validateRemainingRewriteEvidence(result); err != nil {
+		t.Fatalf("remaining measurement value-log rewrite evidence: %v: %+v", err, result)
 	}
 	// Rewrite reclamation is reported only for files physically deleted during
 	// this pass. An ingest segment may remain reachable from the independently
 	// recoverable older durable-root slot until later publications supersede it.
 	validateStoredRemainingCollectionReconstructsJSONBenchRows(t, source, ds, imagePart, dbDir, collections.DocumentFormatTemplateV1)
+}
+
+func validateRemainingRewriteEvidence(result remainingTreeDBResult) error {
+	if result.RewriteRecordsCopied <= 0 {
+		return fmt.Errorf("copied no value-log records")
+	}
+	if result.RewriteValueBytes <= 0 {
+		return fmt.Errorf("copied no value-log bytes")
+	}
+	if result.RewriteSourceBytes <= 0 {
+		return fmt.Errorf("selected no value-log source bytes")
+	}
+	if result.RewriteReclaimFiles < 0 || result.RewriteReclaimBytes < 0 {
+		return fmt.Errorf("reported negative reclaim counters: files=%d bytes=%d", result.RewriteReclaimFiles, result.RewriteReclaimBytes)
+	}
+	if (result.RewriteReclaimFiles == 0) != (result.RewriteReclaimBytes == 0) {
+		return fmt.Errorf("reported inconsistent reclaim counters: files=%d bytes=%d", result.RewriteReclaimFiles, result.RewriteReclaimBytes)
+	}
+	if result.RewriteReclaimBytes > result.RewriteSourceBytes {
+		return fmt.Errorf("reclaimed %d bytes from %d selected source bytes", result.RewriteReclaimBytes, result.RewriteSourceBytes)
+	}
+	return nil
 }
 
 func buildJSONBenchImagePartForReconstructionTest(t *testing.T, source string, limit int, rowsPerGranule int) (*colgranule.JSONBenchDataset, *colgranule.ColumnPart) {
