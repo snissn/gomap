@@ -466,7 +466,25 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("max_attempts", script)
         self.assertNotIn("exit 0", script)
         self.assertIn(
-            'if ((sample % 2 == 1)); then echo "sample ${sample} order=off-auto" run_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}" run_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}" else echo "sample ${sample} order=auto-off" run_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}" run_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"',
+            'if ((sample % 2 == 1)); then echo "sample ${sample} order=off-auto" record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}" record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}" else echo "sample ${sample} order=auto-off" record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}" record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"',
+            script,
+        )
+
+    def test_workflow_finishes_evidence_after_any_benchmark_row_failure(self) -> None:
+        script = normalized(perf_job_script())
+
+        self.assertIn("benchmark_failures=()", script)
+        self.assertIn(
+            'record_vlog_row() { local db="$1" local output="$2" local cpu_profile_prefix="$3" if ! run_vlog_row "${db}" "${output}" "${cpu_profile_prefix}"; then benchmark_failures+=("${db}:${output}") fi }',
+            script,
+        )
+        self.assertIn(
+            'echo "incompressible gate benchmark_failures=${#benchmark_failures[@]}"',
+            script,
+        )
+        self.assertIn('2>&1 | tee -a "${summary_log}"', script)
+        self.assertIn(
+            'if ((${#benchmark_failures[@]} > 0)); then exit 1 fi exit "${checker_status}"',
             script,
         )
 

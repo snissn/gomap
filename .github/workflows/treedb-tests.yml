@@ -709,6 +709,15 @@ jobs:
           auto_logs=()
           off_cpu_profiles=()
           auto_cpu_profiles=()
+          benchmark_failures=()
+          record_vlog_row() {
+            local db="$1"
+            local output="$2"
+            local cpu_profile_prefix="$3"
+            if ! run_vlog_row "${db}" "${output}" "${cpu_profile_prefix}"; then
+              benchmark_failures+=("${db}:${output}")
+            fi
+          }
           for sample in $(seq 1 "${sample_count}"); do
             off_log="vlog_auto_incompressible_off_sample${sample}.txt"
             auto_log="vlog_auto_incompressible_auto_sample${sample}.txt"
@@ -724,12 +733,12 @@ jobs:
 
             if ((sample % 2 == 1)); then
               echo "sample ${sample} order=off-auto"
-              run_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
-              run_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
             else
               echo "sample ${sample} order=auto-off"
-              run_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
-              run_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_auto "${auto_log}" "${auto_cpu_profile_prefix}"
+              record_vlog_row treedb_vlog_off "${off_log}" "${off_cpu_profile_prefix}"
             fi
           done
 
@@ -750,6 +759,10 @@ jobs:
           {
             echo "incompressible gate cpu_model=${cpu_model}"
             echo "incompressible gate min_cpu_efficiency_frac=${min_cpu_efficiency_frac}"
+            echo "incompressible gate benchmark_failures=${#benchmark_failures[@]}"
+            if ((${#benchmark_failures[@]} > 0)); then
+              printf 'incompressible gate benchmark_failure=%s\n' "${benchmark_failures[@]}"
+            fi
           } > "${summary_log}"
           set +e
           go run .github/scripts/check_vlog_auto_incompressible.go \
@@ -768,6 +781,9 @@ jobs:
             cat "${summary_log}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+          if ((${#benchmark_failures[@]} > 0)); then
+            exit 1
+          fi
           exit "${checker_status}"
 
       - name: Upload value-log performance evidence
