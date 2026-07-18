@@ -20,9 +20,12 @@ func TestSyncDurabilityBoundaryDoesNotCheckpoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d, err := Open(Options{
-				Dir:        t.TempDir(),
-				Durability: tt.durability,
-				CommandWAL: tt.commandWAL,
+				Dir:                              t.TempDir(),
+				Durability:                       tt.durability,
+				CommandWAL:                       tt.commandWAL,
+				BackgroundCheckpointInterval:     -1,
+				BackgroundCheckpointIdleDuration: -1,
+				MaxWALBytes:                      -1,
 			})
 			if err != nil {
 				t.Fatalf("open: %v", err)
