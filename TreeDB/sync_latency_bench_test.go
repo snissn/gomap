@@ -7,30 +7,26 @@ import (
 
 func TestSyncDurabilityBoundaryDoesNotCheckpoint(t *testing.T) {
 	tests := []struct {
-		name       string
-		durability DurabilityMode
-		commandWAL bool
+		name    string
+		profile Profile
 	}{
-		{name: "wal_on_sync", durability: DurabilityDurable},
-		{name: "wal_on_sync_command_wal", durability: DurabilityDurable, commandWAL: true},
-		{name: "wal_on_relaxed_sync", durability: DurabilityWALOnRelaxed},
-		{name: "wal_on_relaxed_sync_command_wal", durability: DurabilityWALOnRelaxed, commandWAL: true},
+		{name: "command_wal_durable", profile: ProfileCommandWALDurable},
+		{name: "command_wal_relaxed", profile: ProfileCommandWALRelaxed},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d, err := Open(Options{
-				Dir:                              t.TempDir(),
-				Durability:                       tt.durability,
-				CommandWAL:                       tt.commandWAL,
-				BackgroundCheckpointInterval:     -1,
-				BackgroundCheckpointIdleDuration: -1,
-				MaxWALBytes:                      -1,
-			})
+			d, err := Open(syncBoundaryIsolatedOptions(tt.profile, t.TempDir()))
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
 			defer func() { _ = d.Close() }()
+			if got := d.ResolvedProfile(); got != tt.profile {
+				t.Fatalf("resolved profile=%q, want %q", got, tt.profile)
+			}
+			if got := d.Stats()["treedb.cache.vlog_generation.scheduler_state"]; got != "disabled" {
+				t.Fatalf("value-log generation scheduler state=%q, want disabled", got)
+			}
 
 			val := make([]byte, 128)
 			var key [8]byte
@@ -49,50 +45,54 @@ func TestSyncDurabilityBoundaryDoesNotCheckpoint(t *testing.T) {
 	}
 }
 
+func syncBoundaryIsolatedOptions(profile Profile, dir string) Options {
+	opts := OptionsFor(profile, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	return opts
+}
+
 func BenchmarkSyncLatencyCached(b *testing.B) {
 	tests := []struct {
 		name                     string
-		durability               DurabilityMode
-		commandWAL               bool
+		profile                  Profile
 		batchSize                int
 		byteHint                 bool
 		nonZeroValue             bool
 		valueSize                int
 		valueLogPointerThreshold int
 	}{
-		{name: "SetSync/wal_on_sync", durability: DurabilityDurable},
-		{name: "SetSync/wal_on_sync_command_wal", durability: DurabilityDurable, commandWAL: true},
-		{name: "SetSync/wal_on_relaxed_sync", durability: DurabilityWALOnRelaxed},
-		{name: "SetSync/wal_on_relaxed_sync_command_wal", durability: DurabilityWALOnRelaxed, commandWAL: true},
-		{name: "BatchWriteSync/wal_on_sync/32/entry_hint", durability: DurabilityDurable, batchSize: 32},
-		{name: "BatchWriteSync/wal_on_sync_command_wal/32/entry_hint", durability: DurabilityDurable, commandWAL: true, batchSize: 32},
-		{name: "BatchWriteSync/wal_on_relaxed_sync/32/entry_hint", durability: DurabilityWALOnRelaxed, batchSize: 32},
-		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/entry_hint", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32},
-		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/entry_hint_nonzero_value", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, nonZeroValue: true},
+		{name: "SetSync/command_wal_durable", profile: ProfileCommandWALDurable},
+		{name: "SetSync/command_wal_relaxed", profile: ProfileCommandWALRelaxed},
+		{name: "BatchWriteSync/command_wal_durable/32/entry_hint", profile: ProfileCommandWALDurable, batchSize: 32},
+		{name: "BatchWriteSync/command_wal_relaxed/32/entry_hint", profile: ProfileCommandWALRelaxed, batchSize: 32},
+		{name: "BatchWriteSync/command_wal_relaxed/32/entry_hint_nonzero_value", profile: ProfileCommandWALRelaxed, batchSize: 32, nonZeroValue: true},
 		// Force 128B values onto the value-log path so allocation profiles expose
 		// append-buffer behavior without changing the rest of the low-fanout batch
 		// shape.
-		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/entry_hint_pointer_threshold_1", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, valueLogPointerThreshold: 1},
-		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/byte_hint", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, byteHint: true},
-		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/byte_hint_nonzero_value", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, byteHint: true, nonZeroValue: true},
-		{name: "BatchWriteSync/wal_on_sync_command_wal/128/entry_hint", durability: DurabilityDurable, commandWAL: true, batchSize: 128},
-		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/128/entry_hint", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 128},
+		{name: "BatchWriteSync/command_wal_relaxed/32/entry_hint_pointer_threshold_1", profile: ProfileCommandWALRelaxed, batchSize: 32, valueLogPointerThreshold: 1},
+		{name: "BatchWriteSync/command_wal_relaxed/32/byte_hint", profile: ProfileCommandWALRelaxed, batchSize: 32, byteHint: true},
+		{name: "BatchWriteSync/command_wal_relaxed/32/byte_hint_nonzero_value", profile: ProfileCommandWALRelaxed, batchSize: 32, byteHint: true, nonZeroValue: true},
+		{name: "BatchWriteSync/command_wal_durable/128/entry_hint", profile: ProfileCommandWALDurable, batchSize: 128},
+		{name: "BatchWriteSync/command_wal_relaxed/128/entry_hint", profile: ProfileCommandWALRelaxed, batchSize: 128},
 	}
 
 	for _, tt := range tests {
 		b.Run(tt.name, func(b *testing.B) {
-			d, err := Open(Options{
-				Dir:        b.TempDir(),
-				Durability: tt.durability,
-				CommandWAL: tt.commandWAL,
-				ValueLog: ValueLogOptions{
-					PointerThreshold: tt.valueLogPointerThreshold,
-				},
-			})
+			opts := syncBoundaryIsolatedOptions(tt.profile, b.TempDir())
+			opts.ValueLog.PointerThreshold = tt.valueLogPointerThreshold
+			d, err := Open(opts)
 			if err != nil {
 				b.Fatalf("open: %v", err)
 			}
 			defer func() { _ = d.Close() }()
+			if got := d.ResolvedProfile(); got != tt.profile {
+				b.Fatalf("resolved profile=%q, want %q", got, tt.profile)
+			}
 
 			valueSize := tt.valueSize
 			if valueSize <= 0 {
