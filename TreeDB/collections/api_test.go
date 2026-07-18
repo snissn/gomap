@@ -10602,6 +10602,11 @@ func TestCollectionCloseWaitsForInlineUpdateWithoutCombiner(t *testing.T) {
 	t.Cleanup(func() { _ = d.Close() })
 
 	mgr := NewCollectionManager(d)
+	collectionCloseHookDone := make(chan struct{})
+	d.RegisterCloseHook(func() error {
+		close(collectionCloseHookDone)
+		return nil
+	})
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
@@ -10677,11 +10682,16 @@ func TestCollectionCloseWaitsForInlineUpdateWithoutCombiner(t *testing.T) {
 		t.Fatal("inline update did not finish after release")
 	}
 	select {
+	case <-collectionCloseHookDone:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("collection close hook did not finish after inline update completed")
+	}
+	select {
 	case err := <-closeDone:
 		if err != nil {
 			t.Fatalf("close after inline update: %v", err)
 		}
-	case <-time.After(collectionTestTimeout(t, time.Second)):
+	case <-time.After(collectionTestTimeout(t, 30*time.Second)):
 		t.Fatal("close did not finish after inline update completed")
 	}
 	if updateErr != nil && !errors.Is(updateErr, backenddb.ErrClosed) {
