@@ -188,9 +188,12 @@ type CommandWALPublishTiming struct {
 	PostFinalize              time.Duration
 }
 
-// SetPublishTiming requests request-scoped ordered-root publication timings
-// for this intent. Passing nil disables collection of the optional timings and
-// the previous target is returned so nested diagnostic callers can restore it.
+// SetPublishTiming requests request-scoped timings from the preflight
+// context-root-builder publication path used by collection column publishes.
+// Other command-WAL publication helpers do not populate this diagnostic target;
+// callers outside that path must not interpret an all-zero value as measured
+// work. Passing nil disables collection, and the previous target is returned
+// so nested diagnostic callers can restore it.
 func (intent *CommandWALIntent) SetPublishTiming(timing *CommandWALPublishTiming) (previous *CommandWALPublishTiming) {
 	if intent == nil {
 		return nil

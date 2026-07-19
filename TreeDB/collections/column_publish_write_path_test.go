@@ -845,11 +845,11 @@ func TestColumnStoreInsertWithCommandWALIntentPreservesCallerPublishTimingM10B(t
 	if _, err := col.InsertBatchWithCommandWALIntent(ids, docs, false, intent); err != nil {
 		t.Fatalf("InsertBatchWithCommandWALIntent: %v", err)
 	}
-	if callerTiming.RootApply <= 0 {
-		t.Fatalf("caller publish timing root apply=%s, want > 0", callerTiming.RootApply)
-	}
-	if callerTiming.SystemApply <= 0 {
-		t.Fatalf("caller publish timing system apply=%s, want > 0", callerTiming.SystemApply)
+	// Individual sub-millisecond phases can measure as zero on Windows'
+	// coarser monotonic clock. The combined apply timing still proves the
+	// caller-owned timing sink was preserved through publication.
+	if callerTiming.RootApply+callerTiming.SystemApply <= 0 {
+		t.Fatalf("caller publish apply timing root=%s system=%s, want combined > 0", callerTiming.RootApply, callerTiming.SystemApply)
 	}
 }
 

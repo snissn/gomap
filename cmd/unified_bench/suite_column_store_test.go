@@ -59,6 +59,45 @@ func TestRenderColumnStoreInsertStatsMarkdownIncludesLaterColumnPublishSubphaseM
 	}
 }
 
+func TestColumnStoreInsertStatsReportingIncludesOrderedRootFinalizeSubphases3903(t *testing.T) {
+	var aggregate collections.CollectionInsertStats
+	columnStoreAddCollectionInsertStats(&aggregate, collections.CollectionInsertStats{
+		Documents:                              2,
+		ColumnPublishWriteLockWait:             time.Millisecond,
+		ColumnPublishPreflight:                 2 * time.Millisecond,
+		ColumnPublishCommandWALAppend:          3 * time.Millisecond,
+		ColumnPublishOrderedRootApply:          4 * time.Millisecond,
+		ColumnPublishSystemRootApply:           5 * time.Millisecond,
+		ColumnPublishFinalize:                  6 * time.Millisecond,
+		ColumnPublishFinalizePrepareDurability: 7 * time.Millisecond,
+		ColumnPublishFinalizeCandidateBuild:    8 * time.Millisecond,
+		ColumnPublishFinalizeEnqueueActivation: 9 * time.Millisecond,
+		ColumnPublishFinalizeAdmissionWait:     10 * time.Millisecond,
+		ColumnPublishFinalizeDurabilityWait:    11 * time.Millisecond,
+		ColumnPublishPostFinalize:              12 * time.Millisecond,
+	})
+	metric := columnStoreInsertPhaseMetricFromStats(aggregate, 1)
+	if metric.ColumnPublishOrderedRootApplyDurationMS != 4 || metric.ColumnPublishFinalizeDurabilityWaitDurationMS != 11 || !columnStoreInsertStatsHasColumnPublishSubphase(metric) {
+		t.Fatalf("ordered-root/finalize metrics=%+v", metric)
+	}
+	data, err := json.Marshal(metric)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"column_publish_ordered_root_apply_duration_ms", "column_publish_finalize_durability_wait_duration_ms", "column_publish_post_finalize_duration_ms"} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("JSON missing %q: %s", want, data)
+		}
+	}
+	var sb strings.Builder
+	renderColumnStoreInsertStatsMarkdown(&sb, metric)
+	for _, want := range []string{"ordered_root_apply", "finalize_prepare_durability", "finalize_candidate_build", "finalize_enqueue_activation", "finalize_admission_wait", "finalize_durability_wait", "post_finalize"} {
+		if !strings.Contains(sb.String(), want) {
+			t.Fatalf("markdown missing %q:\n%s", want, sb.String())
+		}
+	}
+}
+
 func TestColumnStoreInsertStatsReportingIncludesAppendSegmentSplitsM3151(t *testing.T) {
 	var stats collections.CollectionInsertStats
 	columnStoreAddCollectionInsertStats(&stats, collections.CollectionInsertStats{
