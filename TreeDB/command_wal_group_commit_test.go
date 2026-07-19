@@ -27,6 +27,10 @@ func TestPublicCommandWALGroupCommitPublicationStateStaysCompact(t *testing.T) {
 	if publicCommandWALFastRelaxedTicket == 0 {
 		t.Fatal("fast relaxed publication sentinel must not alias an empty publication")
 	}
+	if publicCommandWALFastRelaxedAppendedTicket == 0 ||
+		publicCommandWALFastRelaxedAppendedTicket == publicCommandWALFastRelaxedTicket {
+		t.Fatal("fast relaxed appended sentinel must be distinct and non-zero")
+	}
 }
 
 func TestPublicCommandWALGroupCommitSharesOneSyncAcrossConcurrentWaiters(t *testing.T) {
@@ -150,20 +154,21 @@ func TestPublicCommandWALGroupCommitSoloDurablePanicReleasesGates(t *testing.T) 
 	}
 	defer func() { _ = db.Close() }()
 
-	db.commandWALGroupCommit.durableIntents.Store(1)
-	defer db.commandWALGroupCommit.durableIntents.Store(0)
 	recovered := func() (recovered any) {
 		defer func() {
 			recovered = recover()
 		}()
-		_, attempted, _ := db.trySoloDurablePublicCommandWAL(nil, func(bool) (uint64, error) {
+		_, _ = db.appendAndRegisterPublicCommandWAL(1, nil, true, nil, nil, nil, func(bool) (uint64, error) {
 			panic("injected append panic")
 		})
-		t.Fatalf("solo durable panic path returned with attempted=%v", attempted)
+		t.Fatal("solo durable panic path returned")
 		return nil
 	}()
 	if recovered == nil {
 		t.Fatal("solo durable append panic was not observed")
+	}
+	if got := db.commandWALGroupCommit.durableIntents.Load(); got != 0 {
+		t.Fatalf("durable intents after recovered panic=%d, want 0", got)
 	}
 
 	if !db.commandWALPublicOperationGate.TryLock() {
@@ -175,6 +180,26 @@ func TestPublicCommandWALGroupCommitSoloDurablePanicReleasesGates(t *testing.T) 
 	}
 	db.commandWALPublicPublishMu.Unlock()
 	db.commandWALPublicOperationGate.Unlock()
+}
+
+func TestPublicCommandWALGroupCommitFastRelaxedPreAppendErrorDoesNotPoison(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
+	opts.WALMaxSegmentBytes = 256
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	err = db.Set([]byte("oversized"), bytes.Repeat([]byte("v"), 1024))
+	if !errors.Is(err, commitlog.ErrRecordTooLarge) {
+		t.Fatalf("oversized relaxed Set error=%v, want %v", err, commitlog.ErrRecordTooLarge)
+	}
+	if err := db.Set([]byte("valid"), []byte("value")); err != nil {
+		t.Fatalf("valid relaxed Set after pre-append error: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("valid"), []byte("value"))
 }
 
 func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublication(t *testing.T) {

@@ -67,6 +67,7 @@ type publicCommandWALPublication struct {
 }
 
 const publicCommandWALFastRelaxedTicket = ^uint64(0)
+const publicCommandWALFastRelaxedAppendedTicket = publicCommandWALFastRelaxedTicket - 1
 
 func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	if tdb == nil || !tdb.commandWALCached {
@@ -96,6 +97,7 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 		publication.ticket = publicCommandWALFastRelaxedTicket
 		lsn, err := appendFrame(false)
 		if lsn != 0 {
+			publication.ticket = publicCommandWALFastRelaxedAppendedTicket
 			start := time.Now()
 			tdb.recordPublicCommandWALPendingLSN(lsn)
 			if pendingBookkeeping != nil {
@@ -104,13 +106,22 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 		}
 		return publication, err
 	}
+	durableIntentPending := false
+	releaseDurableIntent := func() {
+		if durableIntentPending {
+			durableIntentPending = false
+			tdb.commandWALGroupCommit.durableIntents.Add(-1)
+		}
+	}
 	if durable {
 		tdb.commandWALGroupCommit.durableIntents.Add(1)
+		durableIntentPending = true
+		defer releaseDurableIntent()
 		if direct, attempted, err := tdb.trySoloDurablePublicCommandWAL(
 			pendingBookkeeping,
 			appendFrame,
 		); attempted {
-			tdb.commandWALGroupCommit.durableIntents.Add(-1)
+			releaseDurableIntent()
 			return direct, err
 		}
 	}
@@ -135,7 +146,7 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 	tdb.commandWALPublicPublishMu.Unlock()
 	tdb.commandWALPublicOperationGate.RUnlock()
 	if durable {
-		tdb.commandWALGroupCommit.durableIntents.Add(-1)
+		releaseDurableIntent()
 	}
 	if err != nil || ticket == 0 {
 		return publication, err
@@ -212,7 +223,7 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 			group.mu.Lock()
 			if group.terminalErr != nil {
 				err = group.terminalErr
-			} else if group.nextTicket == publicCommandWALFastRelaxedTicket-1 {
+			} else if group.nextTicket == publicCommandWALFastRelaxedAppendedTicket-1 {
 				err = fmt.Errorf("treedb: command wal publication ticket space exhausted")
 				group.terminalErr = err
 			} else {
@@ -299,7 +310,7 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	if group.terminalErr != nil {
 		return 0, false, group.terminalErr
 	}
-	if group.nextTicket == publicCommandWALFastRelaxedTicket-1 {
+	if group.nextTicket == publicCommandWALFastRelaxedAppendedTicket-1 {
 		group.terminalErr = fmt.Errorf("treedb: command wal publication ticket space exhausted")
 		return 0, false, group.terminalErr
 	}
@@ -446,7 +457,11 @@ func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandW
 	if tdb == nil {
 		return
 	}
-	if publication.ticket == publicCommandWALFastRelaxedTicket {
+	switch publication.ticket {
+	case publicCommandWALFastRelaxedTicket:
+		tdb.commandWALPublicOperationGate.RUnlock()
+		return
+	case publicCommandWALFastRelaxedAppendedTicket:
 		if publishErr != nil {
 			if tdb.backend != nil {
 				tdb.backend.MarkCommandWALRecoveryRequired()
