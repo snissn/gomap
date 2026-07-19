@@ -265,6 +265,20 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 	}
 }
 
+func TestCompactStorageM0DocsUsePortablePrimaryCommand(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "docs", "performance", "compact-storage-m0.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := string(raw)
+	if !strings.Contains(docs, "It creates the run directory under `${TMPDIR:-/tmp}`") {
+		t.Fatal("profile documentation does not describe the portable run-directory default")
+	}
+	if strings.Contains(docs, "RUN_DIR=/mnt/fast4tb/compact_storage_m0_") {
+		t.Fatal("profile documentation retains a host-specific primary command")
+	}
+}
+
 func TestWaitForCompactStorageM0ForegroundAttemptPrioritizesObservedBoundary(t *testing.T) {
 	attempted := make(chan struct{})
 	done := make(chan compactStorageM0WriteResult, 1)

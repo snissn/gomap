@@ -7,15 +7,16 @@ leaf-pack work, exact checkpoint frontiers, stable calls, index-vacuum
 disposition, maintenance allocations, and matched foreground/idle write
 latencies.
 
-Run the complete pinned collection protocol on the local NVMe filesystem:
+Run the complete pinned collection protocol:
 
 ```sh
-RUN_DIR=/mnt/fast4tb/compact_storage_m0_$(date +%Y%m%d_%H%M%S) \
-  scripts/compact_storage_m0_profile.sh
+scripts/compact_storage_m0_profile.sh
 ```
 
 The script defaults to 12 samples, CPUs `2-3`, `GOMAXPROCS=2`, and
-`GOMEMLIMIT=8GiB`. It writes environment and source metadata, raw benchmark and
+`GOMEMLIMIT=8GiB`. It creates the run directory under `${TMPDIR:-/tmp}`; set
+`TMPDIR` to a local NVMe mount when available. It writes environment and source
+metadata, raw benchmark and
 `benchstat` output, one JSON artifact per fixture/sample, instrumentation
 overhead evidence, CPU/allocation/block/mutex profiles, a runtime trace, and a
 stable-syscall `strace` summary. Diagnostic profiles disable the test recorder
