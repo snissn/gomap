@@ -735,7 +735,9 @@ Value:
 The value is exactly 36 bytes. Insert and replace publications co-publish the
 primary root, typed manifest, and locator root so one snapshot cannot observe a
 primary value with a locator from another generation. Delete publications write
-an ordered-root tombstone for the document ID. Unknown magic, the wrong value
+an ordered-root tombstone for the document ID. Column asset compaction
+atomically republishes the manifest and all live locators because it rewrites
+their physical generation and row coordinates. Unknown magic, the wrong value
 length, an overflowing row index, or invalid physical coordinates fail closed.
 
 Raw side-root block value:

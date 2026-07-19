@@ -507,7 +507,7 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		if err != nil {
 			return response, fmt.Errorf("collections: primary row locator lookup for id %q: %w", string(id), err)
 		}
-		if !found || len(value) == 0 {
+		if !found {
 			response.Stats.RowLocatorMisses++
 			continue
 		}

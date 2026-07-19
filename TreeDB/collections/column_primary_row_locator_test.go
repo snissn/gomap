@@ -19,6 +19,9 @@ func TestColumnPrimaryRowLocatorRoundTripAndCorruptionP3890(t *testing.T) {
 	if _, err := decodeColumnPrimaryRowLocator(ref.DocumentID, encoded); err == nil || !strings.Contains(err.Error(), "invalid primary row locator") {
 		t.Fatalf("corrupt locator err=%v want fail-closed invalid locator", err)
 	}
+	if _, err := decodeColumnPrimaryRowLocator(ref.DocumentID, nil); err == nil || !strings.Contains(err.Error(), "invalid primary row locator") {
+		t.Fatalf("empty live locator err=%v want fail-closed invalid locator", err)
+	}
 }
 
 func TestColumnPrimaryRowLocatorDeleteUsesTombstoneP3890(t *testing.T) {

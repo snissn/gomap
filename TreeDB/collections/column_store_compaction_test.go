@@ -140,6 +140,7 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	if got := col.Meta().Options.ColumnStore.PhysicalMutationParts; got != 0 {
 		t.Fatalf("PhysicalMutationParts=%d want reset after compaction", got)
 	}
+	assertColumnStoreCompactionDocumentsReconstruct1953(t, col, live)
 	// Return guarantees the activated visible closure; the independently
 	// recoverable durable closure may already be installed by the asynchronous
 	// publisher. Require one of those two exact ownership states.
@@ -187,6 +188,7 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	assertColumnStoreCompactionRefsReclaimable1953(t, col, oldRefs)
 
 	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
+	assertColumnStoreCompactionDocumentsReconstruct1953(t, col, live)
 	reopened, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q2 after compaction reopen): %v", err)
@@ -196,6 +198,26 @@ func TestColumnStoreCompactQ2SortedLatestVisibleReopen1953(t *testing.T) {
 	}
 	if reopened.Diagnostics.MutationParts != 0 || reopened.Diagnostics.VisibilityRows != 0 || reopened.Diagnostics.DocumentMaterializations != 0 || reopened.Diagnostics.RowMaterializations != 0 {
 		t.Fatalf("q2 after compaction reopen diagnostics=%+v want insert-only typed-column path", reopened.Diagnostics)
+	}
+}
+
+func assertColumnStoreCompactionDocumentsReconstruct1953(tb testing.TB, col *Collection, want []columnPhysicalJSONBenchParityEventP0) {
+	tb.Helper()
+	records, truncated, err := col.ScanDocuments(len(want) + 1)
+	if err != nil {
+		tb.Fatalf("ScanDocuments after compaction: %v", err)
+	}
+	if truncated || len(records) != len(want) {
+		tb.Fatalf("ScanDocuments after compaction truncated=%t rows=%d want %d", truncated, len(records), len(want))
+	}
+	wantIDs := make(map[string]struct{}, len(want))
+	for i := range want {
+		wantIDs[want[i].ID] = struct{}{}
+	}
+	for i := range records {
+		if _, ok := wantIDs[string(records[i].ID)]; !ok {
+			tb.Fatalf("ScanDocuments after compaction returned unexpected id %q", records[i].ID)
+		}
 	}
 }
 
