@@ -525,6 +525,108 @@ func TestPublicCommandWALGroupCommitMeasuresRelaxedWaitBehindDurablePrefix(t *te
 	}
 }
 
+func TestPublicCommandWALGroupCommitTicketedRelaxedParticipantTriggersBoundsAndAccounting(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		maxCommits  int
+		maxBytes    int
+		relaxedSize int
+		triggerKey  string
+	}{
+		{
+			name:        "participant_limit",
+			maxCommits:  2,
+			maxBytes:    1 << 30,
+			relaxedSize: 16,
+			triggerKey:  "treedb.command_wal.group_commit.trigger.commit_limit_total",
+		},
+		{
+			name:        "byte_limit",
+			maxCommits:  64,
+			maxBytes:    128,
+			relaxedSize: 512,
+			triggerKey:  "treedb.command_wal.group_commit.trigger.byte_limit_total",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open relaxed command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			db.commandWALGroupCommit.delay = time.Hour
+			db.commandWALGroupCommit.maxCommits = tc.maxCommits
+			db.commandWALGroupCommit.maxBytes = tc.maxBytes
+			durableRegistered := make(chan struct{})
+			var groupSize atomic.Int32
+			db.commandWALGroupCommit.testAfterRegister = func(ticket uint64, durable bool) {
+				if ticket == 1 && durable {
+					close(durableRegistered)
+				}
+			}
+			db.commandWALGroupCommit.testBeforeSync = func(size int) {
+				groupSize.Store(int32(size))
+			}
+			before := db.Stats()
+
+			write := func(key string, value []byte, durable bool) error {
+				b := db.NewBatch()
+				defer b.Close()
+				if err := b.Set([]byte(key), value); err != nil {
+					return err
+				}
+				if durable {
+					return b.WriteSync()
+				}
+				return b.Write()
+			}
+			durableDone := make(chan error, 1)
+			go func() {
+				durableDone <- write("bounded/durable", []byte("value"), true)
+			}()
+			select {
+			case <-durableRegistered:
+			case <-time.After(time.Second):
+				t.Fatal("durable leader did not register")
+			}
+			relaxedDone := make(chan error, 1)
+			go func() {
+				relaxedDone <- write("bounded/relaxed", bytes.Repeat([]byte("r"), tc.relaxedSize), false)
+			}()
+
+			for name, done := range map[string]<-chan error{
+				"durable": durableDone,
+				"relaxed": relaxedDone,
+			} {
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatalf("%s write: %v", name, err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatalf("%s write did not wake from %s", name, tc.name)
+				}
+			}
+
+			after := db.Stats()
+			requirePublicStatDelta(t, before, after, tc.triggerKey, 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.participants_total", 2)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.followers_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.fallbacks_total", 0)
+			if got := groupSize.Load(); got != 2 {
+				t.Fatalf("covered group size=%d, want durable plus ticketed relaxed participant", got)
+			}
+			if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.group_size_max"); got != 2 {
+				t.Fatalf("group size max=%d, want 2", got)
+			}
+		})
+	}
+}
+
 func TestPublicCommandWALGroupCommitPendingCollectionBarrierMakesProgress(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	db, err := Open(opts)
@@ -777,7 +879,11 @@ func TestPublicCommandWALGroupCommitCoversRotationAndExternalValueDependencies(t
 	after := db.Stats()
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_total", 2)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 1)
+	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.dependency_entries_max"); got != 2 {
+		t.Fatalf("dependency entries max=%d, want two covered external-resource frames", got)
+	}
 	if got := after["treedb.command_wal.dependency_debt.entries"]; got != "0" {
 		t.Fatalf("dependency debt entries after shared group=%q, want 0", got)
 	}
@@ -808,6 +914,7 @@ func TestPublicCommandWALGroupCommitFastRelaxedPublicationsOverlapWithoutCoordin
 		t.Fatalf("Open relaxed command WAL: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	before := db.Stats()
 
 	type observedMutation struct {
 		key      string
@@ -902,6 +1009,29 @@ func TestPublicCommandWALGroupCommitFastRelaxedPublicationsOverlapWithoutCoordin
 	if got := statMapUint64(t, stats, "treedb.command_wal.group_commit.groups_total"); got != 0 {
 		t.Fatalf("group commits=%d, want 0 for fast relaxed publications", got)
 	}
+	requirePublicStatDelta(t, before, stats, "treedb.command_wal.group_commit.fallbacks_total", 2)
+	requirePublicStatDelta(t, before, stats, "treedb.command_wal.group_commit.fallback.reason.relaxed_idle_total", 2)
+}
+
+func TestPublicCommandWALGroupCommitAttributesRelaxedIntentRaceWithoutGroup(t *testing.T) {
+	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	db.commandWALGroupCommit.durableIntents.Add(1)
+	err = db.Set([]byte("relaxed-race"), []byte("value"))
+	db.commandWALGroupCommit.durableIntents.Add(-1)
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.fallbacks_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.fallback.reason.relaxed_race_no_group_total", 1)
 }
 
 func TestPublicCommandWALGroupCommitDurableBarrierWaitsForRelaxedPublicationLease(t *testing.T) {

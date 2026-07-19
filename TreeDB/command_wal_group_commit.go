@@ -40,6 +40,8 @@ type publicCommandWALGroupCommit struct {
 
 	groups          atomic.Uint64
 	commits         atomic.Uint64
+	participants    atomic.Uint64
+	dependencies    atomic.Uint64
 	leaders         atomic.Uint64
 	followers       atomic.Uint64
 	syncs           atomic.Uint64
@@ -50,8 +52,12 @@ type publicCommandWALGroupCommit struct {
 	triggerBytes    atomic.Uint64
 	triggerExplicit atomic.Uint64
 	groupSizeMax    atomic.Uint64
+	dependencyMax   atomic.Uint64
 	waitNsTotal     atomic.Uint64
 	waitNsMax       atomic.Uint64
+
+	fallbackRelaxedIdle        atomic.Uint64
+	fallbackRelaxedRaceNoGroup atomic.Uint64
 }
 
 type publicCommandWALPublication struct {
@@ -84,6 +90,7 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 		return publication, ErrClosed
 	}
 	if !durable && tdb.beginFastRelaxedPublicCommandWALPublication() {
+		tdb.commandWALGroupCommit.fallbackRelaxedIdle.Add(1)
 		publication.fastRelaxed = true
 		lsn, err := appendFrame()
 		if lsn != 0 {
@@ -178,22 +185,21 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	}
 	group.nextTicket++
 	ticket = group.nextTicket
-	if !durable {
-		if group.pendingCount == 0 {
-			group.completedTicket = ticket
-			group.cond.Broadcast()
-		}
+	if !durable && !group.leaderActive && group.pendingCount == 0 {
+		group.fallbackRelaxedRaceNoGroup.Add(1)
+		group.completedTicket = ticket
+		group.cond.Broadcast()
 		return ticket, false, nil
 	}
 	group.initLeaderResourcesLocked()
 	group.pendingCount++
-	if !force {
+	if durable && !force {
 		group.pendingCommits++
-	} else {
+	} else if force {
 		group.pendingForceTickets = append(group.pendingForceTickets, ticket)
 	}
 	group.pendingBytes += bytes
-	leader = !group.leaderActive
+	leader = durable && !group.leaderActive
 	if leader {
 		group.leaderActive = true
 		group.leaders.Add(1)
@@ -204,7 +210,7 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	case force:
 		group.forced.Add(1)
 		group.triggerLocked(&group.triggerExplicit)
-	case group.pendingCommits >= group.maxCommits:
+	case group.pendingCount >= group.maxCommits:
 		group.triggerLocked(&group.triggerCommits)
 	case group.pendingBytes >= group.maxBytes:
 		group.triggerLocked(&group.triggerBytes)
@@ -415,6 +421,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	batchCommits := group.pendingCommits
 	batchLastTicket := group.nextTicket
 	batchForceTickets := append([]uint64(nil), group.pendingForceTickets...)
+	batchDependencies := tdb.backend.CommandWALDependencyDebtEntryCount()
 	group.pendingCount = 0
 	group.pendingCommits = 0
 	group.pendingBytes = 0
@@ -448,7 +455,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 			tdb.backend.MarkCommandWALRecoveryRequired()
 		}
 	}
-	group.observeCompletedBatch(batchCount, batchCommits)
+	group.observeCompletedBatch(batchCount, batchCommits, batchDependencies)
 
 	group.mu.Lock()
 	if retryableForceOnlyErr {
@@ -474,13 +481,16 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	tdb.commandWALPublicOperationGate.Unlock()
 }
 
-func (group *publicCommandWALGroupCommit) observeCompletedBatch(batchCount, batchCommits int) {
+func (group *publicCommandWALGroupCommit) observeCompletedBatch(batchCount, batchCommits int, batchDependencies uint64) {
 	if batchCount == 0 {
 		return
 	}
 	group.groups.Add(1)
 	group.commits.Add(uint64(batchCommits))
+	group.participants.Add(uint64(batchCount))
+	group.dependencies.Add(batchDependencies)
 	publicCommandWALGroupAtomicMax(&group.groupSizeMax, uint64(batchCount))
+	publicCommandWALGroupAtomicMax(&group.dependencyMax, batchDependencies)
 }
 
 func publicCommandWALGroupAtomicMax(dst *atomic.Uint64, value uint64) {
@@ -496,18 +506,26 @@ func (tdb *DB) publicCommandWALGroupStatsInto(stats map[string]string) {
 		return
 	}
 	group := &tdb.commandWALGroupCommit
+	fallbackRelaxedIdle := group.fallbackRelaxedIdle.Load()
+	fallbackRelaxedRaceNoGroup := group.fallbackRelaxedRaceNoGroup.Load()
 	stats["treedb.command_wal.group_commit.groups_total"] = fmt.Sprintf("%d", group.groups.Load())
 	stats["treedb.command_wal.group_commit.commits_total"] = fmt.Sprintf("%d", group.commits.Load())
+	stats["treedb.command_wal.group_commit.participants_total"] = fmt.Sprintf("%d", group.participants.Load())
+	stats["treedb.command_wal.group_commit.dependency_entries_total"] = fmt.Sprintf("%d", group.dependencies.Load())
 	stats["treedb.command_wal.group_commit.leaders_total"] = fmt.Sprintf("%d", group.leaders.Load())
 	stats["treedb.command_wal.group_commit.followers_total"] = fmt.Sprintf("%d", group.followers.Load())
 	stats["treedb.command_wal.group_commit.syncs_total"] = fmt.Sprintf("%d", group.syncs.Load())
 	stats["treedb.command_wal.group_commit.errors_total"] = fmt.Sprintf("%d", group.errors.Load())
 	stats["treedb.command_wal.group_commit.forced_total"] = fmt.Sprintf("%d", group.forced.Load())
 	stats["treedb.command_wal.group_commit.group_size_max"] = fmt.Sprintf("%d", group.groupSizeMax.Load())
+	stats["treedb.command_wal.group_commit.dependency_entries_max"] = fmt.Sprintf("%d", group.dependencyMax.Load())
 	stats["treedb.command_wal.group_commit.wait_ns_total"] = fmt.Sprintf("%d", group.waitNsTotal.Load())
 	stats["treedb.command_wal.group_commit.wait_ns_max"] = fmt.Sprintf("%d", group.waitNsMax.Load())
 	stats["treedb.command_wal.group_commit.trigger.timeout_total"] = fmt.Sprintf("%d", group.triggerTimeout.Load())
 	stats["treedb.command_wal.group_commit.trigger.commit_limit_total"] = fmt.Sprintf("%d", group.triggerCommits.Load())
 	stats["treedb.command_wal.group_commit.trigger.byte_limit_total"] = fmt.Sprintf("%d", group.triggerBytes.Load())
 	stats["treedb.command_wal.group_commit.trigger.explicit_sync_total"] = fmt.Sprintf("%d", group.triggerExplicit.Load())
+	stats["treedb.command_wal.group_commit.fallbacks_total"] = fmt.Sprintf("%d", fallbackRelaxedIdle+fallbackRelaxedRaceNoGroup)
+	stats["treedb.command_wal.group_commit.fallback.reason.relaxed_idle_total"] = fmt.Sprintf("%d", fallbackRelaxedIdle)
+	stats["treedb.command_wal.group_commit.fallback.reason.relaxed_race_no_group_total"] = fmt.Sprintf("%d", fallbackRelaxedRaceNoGroup)
 }

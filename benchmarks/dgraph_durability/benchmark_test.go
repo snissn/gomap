@@ -553,6 +553,7 @@ var storeCounterMetrics = []storeCounterMetric{
 	{key: "treedb.command_wal.group_commit.groups_total", name: "command_wal_group_commits/write_commit", denominator: "writes"},
 	{key: "treedb.command_wal.group_commit.commits_total", name: "command_wal_group_acks/write_commit", denominator: "writes"},
 	{key: "treedb.command_wal.group_commit.syncs_total", name: "command_wal_group_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.command_wal.group_commit.fallbacks_total", name: "command_wal_group_fallbacks/write_commit", denominator: "writes"},
 	{key: "treedb.cache.value_log.sync.calls_total", name: "value_log_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.cache.value_log.file_sync.calls_total", name: "value_log_file_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.cache.value_log.directory_sync.calls_total", name: "value_log_directory_syncs/write_commit", denominator: "writes"},
@@ -603,6 +604,17 @@ func reportStoreCounters(b *testing.B, before, after map[string]string, writeCom
 	}
 	if groupSizeMax, ok := parseCounter(after, "treedb.command_wal.group_commit.group_size_max"); ok {
 		b.ReportMetric(float64(groupSizeMax), "command_wal_group_size_max")
+	}
+	groupDependenciesStart, dependenciesStartOK := parseCounter(before, "treedb.command_wal.group_commit.dependency_entries_total")
+	groupDependenciesEnd, dependenciesEndOK := parseCounter(after, "treedb.command_wal.group_commit.dependency_entries_total")
+	groupCountStart, groupsStartOK := parseCounter(before, "treedb.command_wal.group_commit.groups_total")
+	groupCountEnd, groupsEndOK := parseCounter(after, "treedb.command_wal.group_commit.groups_total")
+	if dependenciesStartOK && dependenciesEndOK && groupsStartOK && groupsEndOK &&
+		groupDependenciesEnd >= groupDependenciesStart && groupCountEnd > groupCountStart {
+		b.ReportMetric(
+			float64(groupDependenciesEnd-groupDependenciesStart)/float64(groupCountEnd-groupCountStart),
+			"command_wal_group_dependencies/group",
+		)
 	}
 	publicationCallsStart, callsStartOK := parseCounter(before, "treedb.publish.ordered_root_delta_group.calls_total")
 	publicationCallsEnd, callsEndOK := parseCounter(after, "treedb.publish.ordered_root_delta_group.calls_total")
