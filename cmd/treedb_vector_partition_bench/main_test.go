@@ -27,7 +27,21 @@ func artifactBasenameForFixture(t *testing.T, dataset string, result runResult) 
 		t.Fatal(err)
 	}
 	result.Dataset = fixture
+	if len(result.Stages) == 0 {
+		result.Stages = stageResultsForSet("all")
+	}
 	return artifactBasename(result)
+}
+
+func stageResultsForSet(raw string) []stageResult {
+	selected := stageSet(raw)
+	stages := make([]stageResult, 0, len(selected))
+	for _, name := range knownStages {
+		if selected[name] {
+			stages = append(stages, stageResult{Name: name})
+		}
+	}
+	return stages
 }
 
 func runWithHermeticProvenance(t *testing.T, args []string, stdout io.Writer) error {
@@ -670,6 +684,7 @@ func TestCloseOverlapValuesHaveCollisionFreeArtifacts(t *testing.T) {
 		Probes:     1,
 		Overlap:    a,
 		TopK:       10,
+		Stages:     stageResultsForSet("all"),
 	}
 	adjacentOverlap := base
 	adjacentOverlap.Overlap = b
@@ -743,6 +758,60 @@ func TestArtifactBasenamePreventsDatasetAndPartitionOverwrite(t *testing.T) {
 	}
 }
 
+func TestArtifactBasenamePreventsStageSetOverwrite(t *testing.T) {
+	if got, want := artifactStageSetChecksum([]stageResult{{Name: "partition_oracle"}, {Name: "exact_global_top_k"}}), artifactStageSetChecksum([]stageResult{{Name: "exact_global_top_k"}, {Name: "partition_oracle"}}); got != want {
+		t.Fatalf("stage-set checksum depends on input order: got=%s want=%s", got, want)
+	}
+	dataset := writeFixtureForTest(t, 8, 2, 4)
+	out := t.TempDir()
+	stageSets := []string{"exact_global_top_k", "partition_oracle"}
+	for _, stages := range stageSets {
+		if err := runWithHermeticProvenance(t, []string{
+			"-dataset", dataset,
+			"-partitions", "4",
+			"-probes", "1",
+			"-overlap", "0",
+			"-top-k", "2",
+			"-stages", stages,
+			"-format", "json",
+			"-out", out,
+		}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("stage-set identity artifacts=%d want 4 without overwrite", len(entries))
+	}
+	first := artifactBasenameForFixture(t, dataset, runResult{
+		Seed:       1,
+		Partitions: 4,
+		Probes:     1,
+		TopK:       2,
+		Stages:     stageResultsForSet(stageSets[0]),
+	})
+	second := artifactBasenameForFixture(t, dataset, runResult{
+		Seed:       1,
+		Partitions: 4,
+		Probes:     1,
+		TopK:       2,
+		Stages:     stageResultsForSet(stageSets[1]),
+	})
+	if first == second {
+		t.Fatalf("stage-set identities collide: %q", first)
+	}
+	for _, base := range []string{first, second} {
+		for _, ext := range []string{".json", ".md"} {
+			if _, err := os.Stat(filepath.Join(out, base+ext)); err != nil {
+				t.Fatalf("missing stage-set artifact %s%s: %v", base, ext, err)
+			}
+		}
+	}
+}
+
 func TestRunWithExplicitProvenanceOutsideGitCheckout(t *testing.T) {
 	dataset := writeFixtureForTest(t, 9, 3, 4)
 	out := t.TempDir()
@@ -759,7 +828,7 @@ func TestRunWithExplicitProvenanceOutsideGitCheckout(t *testing.T) {
 	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(out, artifactBasenameForFixture(t, dataset, runResult{Seed: 1, Partitions: 3, Probes: 3, TopK: 9})+".json"))
+	raw, err := os.ReadFile(filepath.Join(out, artifactBasenameForFixture(t, dataset, runResult{Seed: 1, Partitions: 3, Probes: 3, TopK: 9, Stages: stageResultsForSet("exact_global_top_k")})+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}

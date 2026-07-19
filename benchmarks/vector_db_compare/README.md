@@ -120,7 +120,10 @@ Configuration:
   rows and defaults to `16`. The exporter writes query vectors for all
   `QUERIES`, but exhaustive `exact_truth.jsonl` covers only the leading
   `VALIDATE_QUERIES` queries. The manifest records that prefix count as
-  `exact_truth_queries`; keep it between `1` and `QUERIES`.
+  `exact_truth_queries`; keep it between `0` and `QUERIES`. Zero disables
+  exported exact-truth rows while retaining all query vectors, matching
+  disabled recall validation. Omitting the exporter's `-truth-queries` flag
+  directly still preserves its standalone default of truth for all queries.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`: HNSW parameters.
 - `MIN_RECALL`: recall gate for full-vector rows such as TreeDB exact/default,

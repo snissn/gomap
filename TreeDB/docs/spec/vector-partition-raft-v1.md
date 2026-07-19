@@ -90,8 +90,10 @@ single root fixture from `cmd/treedb_vector_partition_bench`. The manifest read
 itself has a 64 KiB bound. `-seed` MUST equal the manifest generation seed;
 the result repeats that bound seed and its fixed-width bit pattern is part of
 the artifact basename. The basename also binds the full fixture checksum,
-partition count, probes, exact overlap bits, and top-k, so evidence from
-different datasets or partition configurations cannot overwrite another row.
+partition count, probes, exact overlap bits, top-k, and a full SHA-256 over the
+canonical selected-stage set, so evidence from different datasets, partition
+configurations, or independently selected stage sets cannot overwrite another
+row.
 Combined vector/query counts, dimensions, partition count, and result metrics
 are validated before allocating large work buffers or building TreeDB evidence.
 The JSON schema version is strict; unknown versions, non-finite metrics, and
@@ -163,10 +165,12 @@ real multi-group matched-recall evidence.
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
 vector/query checksums, dimensions, metric, query set, and an exhaustive
 distance-then-ID top-k truth stream for a declared leading query prefix.
-`-truth-queries` defaults to all exported queries for standalone compatibility,
-normalizes to `1..queries`, and is recorded as `exact_truth_queries`. The fixed
-200,000,000 comparison gate applies to `docs * truth_queries`, not every
-exported benchmark query. The exporter materializes document vectors once in a
+`-truth-queries` defaults to all exported queries when omitted for standalone
+compatibility, accepts `0..queries`, and is recorded as
+`exact_truth_queries`. Explicit zero emits an empty truth stream while
+retaining all exported query vectors. The fixed 200,000,000 comparison gate
+applies to `docs * truth_queries`, not every exported benchmark query. The
+exporter materializes document vectors once in a
 contiguous `float32` corpus, precomputes their squared norms, and reuses those
 bytes for vector/JSON output, query selection, and exact truth. Truth selection
 retains only bounded top-k candidates. Its modeled truth peak cap includes the

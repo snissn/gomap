@@ -1442,7 +1442,23 @@ func writeArtifacts(out string, r runResult) error {
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
 }
 func artifactBasename(r runResult) string {
-	return fmt.Sprintf("simulation_f%s_s%016x_n%d_p%d_o%016x_k%d", r.Dataset.Checksum, uint64(r.Seed), r.Partitions, r.Probes, math.Float64bits(r.Overlap), r.TopK)
+	return fmt.Sprintf("simulation_f%s_s%016x_n%d_p%d_o%016x_t%s_k%d", r.Dataset.Checksum, uint64(r.Seed), r.Partitions, r.Probes, math.Float64bits(r.Overlap), artifactStageSetChecksum(r.Stages), r.TopK)
+}
+
+func artifactStageSetChecksum(stages []stageResult) string {
+	names := make([]string, 0, len(stages))
+	for _, stage := range stages {
+		names = append(names, stage.Name)
+	}
+	sort.Strings(names)
+	h := sha256.New()
+	var length [8]byte
+	for _, name := range names {
+		binary.LittleEndian.PutUint64(length[:], uint64(len(name)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write([]byte(name))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 func fixtureChecksum(vectors, queries, dims int, seed int64) string {
 	m := fixtureManifest{Vectors: vectors, Queries: queries, Dimensions: dims, Seed: seed}

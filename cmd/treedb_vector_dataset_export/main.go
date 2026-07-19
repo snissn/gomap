@@ -34,13 +34,14 @@ const (
 )
 
 type config struct {
-	out          string
-	docs         int
-	dimensions   int
-	queries      int
-	truthQueries int
-	topK         int
-	jsonOut      bool
+	out           string
+	docs          int
+	dimensions    int
+	queries       int
+	truthQueries  int
+	truthExplicit bool
+	topK          int
+	jsonOut       bool
 }
 
 type manifest struct {
@@ -179,12 +180,17 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to export")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of query vectors to export")
-	fs.IntVar(&cfg.truthQueries, "truth-queries", cfg.truthQueries, "Number of leading queries with exhaustive exact truth (default: all queries)")
+	fs.IntVar(&cfg.truthQueries, "truth-queries", cfg.truthQueries, "Number of leading queries with exhaustive exact truth; 0 disables truth (default when omitted: all queries)")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "Nearest-neighbor result count intended for consumers")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON summary")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "truth-queries" {
+			cfg.truthExplicit = true
+		}
+	})
 	if cfg.out == "" {
 		return config{}, errors.New("-out is required")
 	}
@@ -306,17 +312,23 @@ func exportDatasetWithDocumentGenerator(cfg config, generate func(int, int) []fl
 }
 
 func normalizeTruthQueries(cfg config) (config, error) {
-	if cfg.truthQueries == 0 {
+	if cfg.truthQueries == 0 && !cfg.truthExplicit {
 		cfg.truthQueries = cfg.queries
 	}
-	if cfg.truthQueries < 1 || cfg.truthQueries > cfg.queries {
-		return config{}, errors.New("-truth-queries must be between 1 and -queries")
+	if cfg.truthQueries < 0 || cfg.truthQueries > cfg.queries {
+		return config{}, errors.New("-truth-queries must be between 0 and -queries")
 	}
 	return cfg, nil
 }
 
 func checkTruthComparisonCap(docs, truthQueries int) error {
-	if docs < 1 || truthQueries < 1 || int64(docs) > maxTruthComparisons/int64(truthQueries) {
+	if docs < 1 || truthQueries < 0 {
+		return errors.New("exact truth comparison cap exceeded before allocation; reduce -truth-queries or -docs")
+	}
+	if truthQueries == 0 {
+		return nil
+	}
+	if int64(docs) > maxTruthComparisons/int64(truthQueries) {
 		return errors.New("exact truth comparison cap exceeded before allocation; reduce -truth-queries or -docs")
 	}
 	return nil

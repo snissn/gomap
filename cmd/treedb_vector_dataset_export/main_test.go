@@ -106,6 +106,40 @@ func TestExportExactTruthUsesDeclaredLeadingQueryCount(t *testing.T) {
 	}
 }
 
+func TestExportExplicitZeroTruthWritesDeclaredEmptyCoverage(t *testing.T) {
+	const queries = 5
+	dir := filepath.Join(t.TempDir(), "no-truth")
+	res, err := exportDataset(config{
+		out:           dir,
+		docs:          8,
+		dimensions:    4,
+		queries:       queries,
+		truthQueries:  0,
+		truthExplicit: true,
+		topK:          3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Manifest.Queries != queries || res.Manifest.ExactTruthQueries != 0 {
+		t.Fatalf("manifest query coverage=%+v", res.Manifest)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "exact_truth.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 0 {
+		t.Fatalf("disabled exact truth emitted %d bytes", len(raw))
+	}
+	info, err := os.Stat(filepath.Join(dir, "queries.f32"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(queries * 4 * 4); info.Size() != want {
+		t.Fatalf("query vector bytes=%d want all-query corpus bytes=%d", info.Size(), want)
+	}
+}
+
 func TestExportExactTruthIncludesTopK(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "truth")
 	if _, err := exportDataset(config{out: dir, docs: 8, dimensions: 4, queries: 2, topK: 3}); err != nil {
@@ -330,6 +364,20 @@ func TestLargeComparisonShapeUsesBoundedTruthPrefixBeforeAllocation(t *testing.T
 	if cfg.truthQueries != 64 || cfg.queries != 50000 {
 		t.Fatalf("normalized query coverage=%+v", cfg)
 	}
+	disabled, err := parseConfig([]string{
+		"-out", filepath.Join(t.TempDir(), "disabled"),
+		"-docs", "100000",
+		"-queries", "50000",
+		"-truth-queries", "0",
+		"-dims", "64",
+		"-top-k", "10",
+	})
+	if err != nil {
+		t.Fatalf("disabled-truth comparison shape rejected: %v", err)
+	}
+	if disabled.truthQueries != 0 || !disabled.truthExplicit {
+		t.Fatalf("disabled truth coverage=%+v", disabled)
+	}
 	if _, err := parseConfig([]string{
 		"-out", filepath.Join(t.TempDir(), "unbounded"),
 		"-docs", "100000",
@@ -349,6 +397,13 @@ func TestTruthQueryBoundsNormalizeBeforeComparisonCap(t *testing.T) {
 	}
 	if cfg.truthQueries != cfg.queries {
 		t.Fatalf("default truth_queries=%d want all queries=%d", cfg.truthQueries, cfg.queries)
+	}
+	explicitZero, err := parseConfig(append(append([]string{}, base...), "-truth-queries", "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicitZero.truthQueries != 0 || !explicitZero.truthExplicit {
+		t.Fatalf("explicit zero did not disable truth: %+v", explicitZero)
 	}
 	for _, value := range []string{"-1", "5"} {
 		args := append(append([]string{}, base...), "-truth-queries", value)
