@@ -12,12 +12,22 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	dbpkg "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
+
+func TestPublicCommandWALGroupCommitPublicationStateStaysCompact(t *testing.T) {
+	if got := unsafe.Sizeof(publicCommandWALPublication{}); got != 8 {
+		t.Fatalf("publication state size=%d, want 8 bytes", got)
+	}
+	if publicCommandWALFastRelaxedTicket == 0 {
+		t.Fatal("fast relaxed publication sentinel must not alias an empty publication")
+	}
+}
 
 func TestPublicCommandWALGroupCommitSharesOneSyncAcrossConcurrentWaiters(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())

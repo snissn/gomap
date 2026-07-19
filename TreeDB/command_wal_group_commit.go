@@ -63,10 +63,10 @@ type publicCommandWALGroupCommit struct {
 }
 
 type publicCommandWALPublication struct {
-	ticket      uint64
-	fastRelaxed bool
-	groupWait   bool
+	ticket uint64
 }
+
+const publicCommandWALFastRelaxedTicket = ^uint64(0)
 
 func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	if tdb == nil || !tdb.commandWALCached {
@@ -87,13 +87,13 @@ func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	return err
 }
 
-func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, appendFrame func(sync bool) (uint64, error)) (publicCommandWALPublication, error) {
+func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, groupWaitObserved *bool, appendFrame func(sync bool) (uint64, error)) (publicCommandWALPublication, error) {
 	var publication publicCommandWALPublication
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
 	}
 	if !durable && tdb.beginFastRelaxedPublicCommandWALPublication() {
-		publication.fastRelaxed = true
+		publication.ticket = publicCommandWALFastRelaxedTicket
 		lsn, err := appendFrame(false)
 		if lsn != 0 {
 			start := time.Now()
@@ -141,7 +141,9 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 		return publication, err
 	}
 	publication.ticket = ticket
-	publication.groupWait = true
+	if groupWaitObserved != nil {
+		*groupWaitObserved = true
+	}
 	if hook := tdb.commandWALGroupCommit.testAfterRegister; hook != nil {
 		hook(ticket, durable)
 	}
@@ -202,6 +204,9 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 		group.mu.Lock()
 		if group.terminalErr != nil {
 			err = group.terminalErr
+		} else if group.nextTicket == publicCommandWALFastRelaxedTicket-1 {
+			err = fmt.Errorf("treedb: command wal publication ticket space exhausted")
+			group.terminalErr = err
 		} else {
 			group.nextTicket++
 			ticket = group.nextTicket
@@ -282,6 +287,10 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	defer group.mu.Unlock()
 	group.initLocked()
 	if group.terminalErr != nil {
+		return 0, false, group.terminalErr
+	}
+	if group.nextTicket == publicCommandWALFastRelaxedTicket-1 {
+		group.terminalErr = fmt.Errorf("treedb: command wal publication ticket space exhausted")
 		return 0, false, group.terminalErr
 	}
 	group.nextTicket++
@@ -427,7 +436,7 @@ func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandW
 	if tdb == nil {
 		return
 	}
-	if publication.fastRelaxed {
+	if publication.ticket == publicCommandWALFastRelaxedTicket {
 		if publishErr != nil {
 			if tdb.backend != nil {
 				tdb.backend.MarkCommandWALRecoveryRequired()
