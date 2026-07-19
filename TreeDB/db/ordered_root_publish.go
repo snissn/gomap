@@ -1105,9 +1105,31 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, b
 		return false
 	}
 	baseByKey := make(map[string][]uint64, len(baseEntries))
+	baseReachable := make(map[uint64]struct{})
 	for i := range baseEntries {
 		baseByKey[string(baseEntries[i].key)] = baseEntries[i].sourceRootIDs
+		for _, rootID := range baseEntries[i].sourceRootIDs {
+			baseReachable[rootID] = struct{}{}
+		}
 	}
+	newReachable := make(map[uint64]struct{})
+	for i := range newEntries {
+		for _, rootID := range newEntries[i].sourceRootIDs {
+			newReachable[rootID] = struct{}{}
+		}
+	}
+	type rootTransition struct {
+		base uint64
+		next uint64
+	}
+	publishedTransitions := make(map[rootTransition]int, len(baseRoots))
+	for i := range baseRoots {
+		if baseRoots[i] != newRoots[i] {
+			publishedTransitions[rootTransition{base: baseRoots[i], next: newRoots[i]}]++
+		}
+	}
+	baseToNew := make(map[uint64]uint64)
+	newToBase := make(map[uint64]uint64)
 	changed := false
 	for i := range newEntries {
 		baseRootIDs, ok := baseByKey[string(newEntries[i].key)]
@@ -1119,16 +1141,28 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, b
 			if baseRootID == newRootID {
 				continue
 			}
-			covered := false
-			for publishIdx := range baseRoots {
-				if baseRoots[publishIdx] == baseRootID && newRoots[publishIdx] == newRootID {
-					covered = true
-					break
-				}
-			}
-			if !covered {
+			// The merged per-root ref deltas describe replacement of one
+			// reachable root by one new reachable root. Reject alias splits,
+			// joins, and partial retargets where either side remains reachable;
+			// those set-level changes are not represented by a bijective delta.
+			if _, remainsReachable := newReachable[baseRootID]; remainsReachable {
 				return false
 			}
+			if _, alreadyReachable := baseReachable[newRootID]; alreadyReachable {
+				return false
+			}
+			transition := rootTransition{base: baseRootID, next: newRootID}
+			if publishedTransitions[transition] != 1 {
+				return false
+			}
+			if mapped, ok := baseToNew[baseRootID]; ok && mapped != newRootID {
+				return false
+			}
+			if mapped, ok := newToBase[newRootID]; ok && mapped != baseRootID {
+				return false
+			}
+			baseToNew[baseRootID] = newRootID
+			newToBase[newRootID] = baseRootID
 			changed = true
 		}
 		delete(baseByKey, string(newEntries[i].key))

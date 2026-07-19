@@ -530,6 +530,52 @@ func TestOrderedRootCollectionDescriptorTransitionsCoveredResolvesPointerBackedD
 	}
 }
 
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsAliasFanOut(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	baseSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"alias-a", encodeMaintenanceRootID(101),
+		collectionRootDescriptorPrefix+"alias-b", encodeMaintenanceRootID(101),
+	)
+	baseSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base system root: %v", err)
+	}
+	newSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"alias-a", encodeMaintenanceRootID(201),
+		collectionRootDescriptorPrefix+"alias-b", encodeMaintenanceRootID(202),
+	)
+	newSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseSystemRoot,
+		newSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new system root: %v", err)
+	}
+
+	if db.orderedRootCollectionDescriptorTransitionsCovered(
+		db.idx.Load(),
+		baseSystemRoot,
+		newSystemRoot,
+		[]uint64{101, 101},
+		[]uint64{201, 202},
+	) {
+		t.Fatal("alias fan-out descriptor transition unexpectedly covered")
+	}
+}
+
 func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	tests := []struct {
 		name    string
