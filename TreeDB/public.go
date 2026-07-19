@@ -67,6 +67,13 @@ const (
 
 var errVacuumUnsupported = db.ErrVacuumUnsupported
 
+// ErrNamespacePersistenceUnsupported reports that the active platform or
+// filesystem cannot persist a directory creation required by a successful
+// writable Open.
+var ErrNamespacePersistenceUnsupported = db.ErrNamespacePersistenceUnsupported
+
+var ensureOpenStorageLayoutDirs = db.EnsureStorageLayoutDirs
+
 const (
 	defaultChunkSize     = 256 * 1024
 	defaultDictChunkSize = 64 * 1024
@@ -822,18 +829,18 @@ func openResolved(opts Options) (*DB, error) {
 			}
 		}
 	} else {
-		if err := os.MkdirAll(maindbDir, 0755); err != nil {
-			return nil, err
+		dirs := []string{rootDir}
+		if maindbDir != rootDir {
+			dirs = append(dirs, maindbDir)
 		}
 		if !opts.DisableSideStores {
-			if err := os.MkdirAll(dictdbDir, 0755); err != nil {
-				return nil, err
-			}
+			dirs = append(dirs, dictdbDir)
 			if opts.ValueLog.TemplateMode != template.TemplateOff {
-				if err := os.MkdirAll(templatedbDir, 0755); err != nil {
-					return nil, err
-				}
+				dirs = append(dirs, templatedbDir)
 			}
+		}
+		if err := ensureOpenStorageLayoutDirs(0o755, dirs...); err != nil {
+			return nil, fmt.Errorf("treedb: ensure public storage layout: %w", err)
 		}
 	}
 
