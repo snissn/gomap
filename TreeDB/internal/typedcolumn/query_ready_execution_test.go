@@ -174,8 +174,11 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 				if gotFused := got.Stats.FusedPredicateReductionExecutions == 1; gotFused != wantFused {
 					t.Fatalf("%s fused predicate/reduction=%v want %v stats=%+v", prepared.name, gotFused, wantFused, got.Stats)
 				}
-				if wantFused && got.Stats.FusedPredicateReductionNanos <= 0 {
-					t.Fatalf("%s fused predicate/reduction nanos=%d want positive stats=%+v", prepared.name, got.Stats.FusedPredicateReductionNanos, got.Stats)
+				// Sub-millisecond fixtures can legitimately measure as zero on
+				// Windows' coarser monotonic clock. Route and work counters are
+				// the deterministic proof that fused execution ran.
+				if wantFused && (got.Stats.FusedPredicateReductionWorkers != 1 || got.Stats.DecodedBlocks == 0) {
+					t.Fatalf("%s fused predicate/reduction work counters missing stats=%+v", prepared.name, got.Stats)
 				}
 			}
 		})
