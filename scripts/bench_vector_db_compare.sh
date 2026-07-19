@@ -312,6 +312,7 @@ GOWORK=off go run ./cmd/treedb_vector_dataset_export \
 	-docs "$DOCS" \
 	-dims "$DIMS" \
 	-queries "$QUERIES" \
+	-truth-queries "$VALIDATE_QUERIES" \
 	-top-k "$TOP_K" \
 	-json >"$RUN_DIR/dataset_export.json"
 

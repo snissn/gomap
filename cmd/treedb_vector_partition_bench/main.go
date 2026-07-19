@@ -412,15 +412,13 @@ func parseFloats(raw string) ([]float64, error) {
 }
 func provenance() (string, string, error) {
 	base, head := os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
-	if base == "" || head == "" {
-		if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
-			eventBase, eventHead, isPullRequest, err := pullRequestSHAsFromEvent(eventPath)
-			if err != nil {
-				return "", "", fmt.Errorf("GitHub event provenance: %w", err)
-			}
-			if isPullRequest {
-				base, head = eventBase, eventHead
-			}
+	if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
+		eventBase, eventHead, isPullRequest, err := pullRequestSHAsFromEvent(eventPath)
+		if err != nil {
+			return "", "", fmt.Errorf("GitHub event provenance: %w", err)
+		}
+		if isPullRequest {
+			base, head = eventBase, eventHead
 		}
 	}
 	if head == "" {
@@ -1396,6 +1394,12 @@ func validateResult(r runResult) error {
 	if !validSHA(r.BaseSHA) || !validSHA(r.HeadSHA) {
 		return errors.New("result provenance must contain exact 40-hex base/head SHAs")
 	}
+	if len(r.Dataset.Checksum) != 64 {
+		return errors.New("result dataset must contain an exact SHA-256 checksum")
+	}
+	if _, err := hex.DecodeString(r.Dataset.Checksum); err != nil {
+		return errors.New("result dataset checksum must be hexadecimal")
+	}
 	if r.Seed != r.Dataset.Seed {
 		return errors.New("result seed does not match fixture generation seed")
 	}
@@ -1438,7 +1442,7 @@ func writeArtifacts(out string, r runResult) error {
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
 }
 func artifactBasename(r runResult) string {
-	return fmt.Sprintf("simulation_s%016x_p%d_o%016x_k%d", uint64(r.Seed), r.Probes, math.Float64bits(r.Overlap), r.TopK)
+	return fmt.Sprintf("simulation_f%s_s%016x_n%d_p%d_o%016x_k%d", r.Dataset.Checksum, uint64(r.Seed), r.Partitions, r.Probes, math.Float64bits(r.Overlap), r.TopK)
 }
 func fixtureChecksum(vectors, queries, dims int, seed int64) string {
 	m := fixtureManifest{Vectors: vectors, Queries: queries, Dimensions: dims, Seed: seed}

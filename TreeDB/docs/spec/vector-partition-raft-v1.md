@@ -89,11 +89,13 @@ clusters, and boundary shape. Tests resolve the
 single root fixture from `cmd/treedb_vector_partition_bench`. The manifest read
 itself has a 64 KiB bound. `-seed` MUST equal the manifest generation seed;
 the result repeats that bound seed and its fixed-width bit pattern is part of
-the artifact basename. Combined vector/query counts, dimensions, partition
-count, and result metrics are validated before allocating large work buffers
-or building TreeDB evidence. The JSON schema version is strict; unknown
-versions, non-finite metrics, and provenance other than exact 40-hex SHAs are
-rejected by the executable contract.
+the artifact basename. The basename also binds the full fixture checksum,
+partition count, probes, exact overlap bits, and top-k, so evidence from
+different datasets or partition configurations cannot overwrite another row.
+Combined vector/query counts, dimensions, partition count, and result metrics
+are validated before allocating large work buffers or building TreeDB evidence.
+The JSON schema version is strict; unknown versions, non-finite metrics, and
+provenance other than exact 40-hex SHAs are rejected by the executable contract.
 
 `-max-fixture-bytes` caps a conservative model of simultaneous live,
 benchmark-owned material rather than only raw vector elements. The preflight
@@ -124,8 +126,10 @@ percentiles, recall@1/10/100, allocations, resident/mapped bytes. Artifact
 provenance is the real `HEAD` and `merge-base HEAD origin/main`, a bounded
 `pull_request.base.sha` and `pull_request.head.sha` pair from
 `GITHUB_EVENT_PATH` in shallow PR CI, or explicit `GITHUB_SHA`/`BASE_SHA`
-overrides. A PR event head replaces GitHub's synthetic merge `GITHUB_SHA`;
-empty or malformed provenance is rejected.
+overrides when no pull-request event is present. A bounded pull-request event
+pair overrides both environment values, ensuring GitHub's synthetic merge
+`GITHUB_SHA` is never recorded as the candidate head; empty or malformed
+provenance is rejected.
 
 ## Parent invariant matrix
 
@@ -158,15 +162,18 @@ real multi-group matched-recall evidence.
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
 vector/query checksums, dimensions, metric, query set, and an exhaustive
-distance-then-ID top-k truth stream. The exporter materializes document vectors
-once in a contiguous `float32` corpus, precomputes their squared norms, and
-reuses those bytes for vector/JSON output, query selection, and exact truth.
-Truth selection retains only bounded top-k candidates. Its modeled truth peak
-cap includes the document corpus, norm array, generator/query scratch, top-k
-candidates/results, conservative encoded truth-row growth, and a 1 MiB
-per-row encoding allowance; combined output vector bytes remain separately
-capped. Exact truth is deliberately comparison capped; a feasible declared 1M
-export uses one bounded query shard:
+distance-then-ID top-k truth stream for a declared leading query prefix.
+`-truth-queries` defaults to all exported queries for standalone compatibility,
+normalizes to `1..queries`, and is recorded as `exact_truth_queries`. The fixed
+200,000,000 comparison gate applies to `docs * truth_queries`, not every
+exported benchmark query. The exporter materializes document vectors once in a
+contiguous `float32` corpus, precomputes their squared norms, and reuses those
+bytes for vector/JSON output, query selection, and exact truth. Truth selection
+retains only bounded top-k candidates. Its modeled truth peak cap includes the
+document corpus, norm array, generator/query scratch, top-k candidates/results,
+conservative encoded truth-row growth, and a 1 MiB per-row encoding allowance;
+combined output vector bytes remain separately capped. A feasible declared 1M
+export uses one bounded truth query:
 `GOWORK=off go run ./cmd/treedb_vector_dataset_export -out "$OUT" -docs 1000000 -queries 1 -dims 64 -top-k 10`.
 It is a corpus export contract, not a claim that M0 has run a 1M-vector
 exhaustive top-k benchmark.

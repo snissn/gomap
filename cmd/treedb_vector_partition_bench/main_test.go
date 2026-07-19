@@ -20,11 +20,21 @@ func fixturePath(t *testing.T) string {
 	return filepath.Join("..", "..", "testdata", "vector_partition_10k")
 }
 
+func artifactBasenameForFixture(t *testing.T, dataset string, result runResult) string {
+	t.Helper()
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Dataset = fixture
+	return artifactBasename(result)
+}
+
 func runWithHermeticProvenance(t *testing.T, args []string, stdout io.Writer) error {
 	t.Helper()
 	t.Setenv("BASE_SHA", strings.Repeat("a", 40))
 	t.Setenv("GITHUB_SHA", strings.Repeat("b", 40))
-	t.Setenv("GITHUB_EVENT_PATH", filepath.Join(t.TempDir(), "must-not-be-read.json"))
+	t.Setenv("GITHUB_EVENT_PATH", "")
 	return run(args, stdout)
 }
 
@@ -350,7 +360,7 @@ func TestModeledPeakMemoryBudgetEnforcedBeforeGeneration(t *testing.T) {
 	}, io.Discard); err != nil {
 		t.Fatalf("exact modeled peak cap rejected: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(acceptedOut, artifactBasename(runResult{Seed: 1, Probes: 4, TopK: 4})+".json"))
+	raw, err := os.ReadFile(filepath.Join(acceptedOut, artifactBasenameForFixture(t, dataset, runResult{Seed: 1, Partitions: 4, Probes: 4, TopK: 4})+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,6 +556,7 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 		head := strings.Repeat("b", 40)
 		t.Setenv("BASE_SHA", base)
 		t.Setenv("GITHUB_SHA", head)
+		t.Setenv("GITHUB_EVENT_PATH", "")
 		gotBase, gotHead, err := provenance()
 		if err != nil {
 			t.Fatal(err)
@@ -562,7 +573,7 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 		if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("BASE_SHA", "")
+		t.Setenv("BASE_SHA", strings.Repeat("a", 40))
 		t.Setenv("GITHUB_SHA", strings.Repeat("d", 40))
 		t.Setenv("GITHUB_EVENT_PATH", path)
 		gotBase, gotHead, err := provenance()
@@ -606,11 +617,30 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 		t.Run("invalid_"+tc.name, func(t *testing.T) {
 			t.Setenv("BASE_SHA", tc.base)
 			t.Setenv("GITHUB_SHA", tc.head)
+			t.Setenv("GITHUB_EVENT_PATH", "")
 			if _, _, err := provenance(); err == nil {
 				t.Fatal("accepted invalid SHA provenance")
 			}
 		})
 	}
+	t.Run("non_pull_request_event_preserves_explicit_pair", func(t *testing.T) {
+		base := strings.Repeat("a", 40)
+		head := strings.Repeat("b", 40)
+		path := filepath.Join(t.TempDir(), "event.json")
+		if err := os.WriteFile(path, []byte(`{"event":"workflow_dispatch"}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BASE_SHA", base)
+		t.Setenv("GITHUB_SHA", head)
+		t.Setenv("GITHUB_EVENT_PATH", path)
+		gotBase, gotHead, err := provenance()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotBase != base || gotHead != head {
+			t.Fatalf("non-PR event changed explicit provenance base=%q head=%q", gotBase, gotHead)
+		}
+	})
 }
 
 func TestGitHubEventPayloadIsBoundedAndSingleValue(t *testing.T) {
@@ -633,10 +663,22 @@ func TestGitHubEventPayloadIsBoundedAndSingleValue(t *testing.T) {
 func TestCloseOverlapValuesHaveCollisionFreeArtifacts(t *testing.T) {
 	a := 0.2
 	b := math.Nextafter(a, 1)
-	if artifactBasename(runResult{Probes: 1, Overlap: a, TopK: 10}) == artifactBasename(runResult{Probes: 1, Overlap: b, TopK: 10}) {
+	base := runResult{
+		Dataset:    fixtureManifest{Checksum: strings.Repeat("1", 64)},
+		Seed:       1,
+		Partitions: 4,
+		Probes:     1,
+		Overlap:    a,
+		TopK:       10,
+	}
+	adjacentOverlap := base
+	adjacentOverlap.Overlap = b
+	if artifactBasename(base) == artifactBasename(adjacentOverlap) {
 		t.Fatal("adjacent float64 overlap values collide")
 	}
-	if artifactBasename(runResult{Seed: 1, Probes: 1, Overlap: a, TopK: 10}) == artifactBasename(runResult{Seed: 2, Probes: 1, Overlap: a, TopK: 10}) {
+	differentSeed := base
+	differentSeed.Seed = 2
+	if artifactBasename(base) == artifactBasename(differentSeed) {
 		t.Fatal("different fixture seeds collide")
 	}
 	out := t.TempDir()
@@ -661,6 +703,46 @@ func TestCloseOverlapValuesHaveCollisionFreeArtifacts(t *testing.T) {
 	}
 }
 
+func TestArtifactBasenamePreventsDatasetAndPartitionOverwrite(t *testing.T) {
+	firstDataset := writeFixtureForTest(t, 8, 2, 4)
+	secondDataset := writeFixtureForTest(t, 9, 2, 4)
+	out := t.TempDir()
+	for _, testRun := range []struct {
+		dataset    string
+		partitions int
+	}{
+		{dataset: firstDataset, partitions: 4},
+		{dataset: secondDataset, partitions: 4},
+		{dataset: firstDataset, partitions: 8},
+	} {
+		if err := runWithHermeticProvenance(t, []string{
+			"-dataset", testRun.dataset,
+			"-partitions", strconv.Itoa(testRun.partitions),
+			"-probes", "1",
+			"-overlap", "0",
+			"-top-k", "2",
+			"-stages", "exact_global_top_k",
+			"-format", "json",
+			"-out", out,
+		}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 6 {
+		t.Fatalf("dataset/partition identity artifacts=%d want 6 without overwrite", len(entries))
+	}
+	first4 := artifactBasenameForFixture(t, firstDataset, runResult{Seed: 1, Partitions: 4, Probes: 1, TopK: 2})
+	second4 := artifactBasenameForFixture(t, secondDataset, runResult{Seed: 1, Partitions: 4, Probes: 1, TopK: 2})
+	first8 := artifactBasenameForFixture(t, firstDataset, runResult{Seed: 1, Partitions: 8, Probes: 1, TopK: 2})
+	if first4 == second4 || first4 == first8 || second4 == first8 {
+		t.Fatalf("artifact identities collide first4=%q second4=%q first8=%q", first4, second4, first8)
+	}
+}
+
 func TestRunWithExplicitProvenanceOutsideGitCheckout(t *testing.T) {
 	dataset := writeFixtureForTest(t, 9, 3, 4)
 	out := t.TempDir()
@@ -677,7 +759,7 @@ func TestRunWithExplicitProvenanceOutsideGitCheckout(t *testing.T) {
 	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Seed: 1, Probes: 3, TopK: 9})+".json"))
+	raw, err := os.ReadFile(filepath.Join(out, artifactBasenameForFixture(t, dataset, runResult{Seed: 1, Partitions: 3, Probes: 3, TopK: 9})+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +785,7 @@ func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 	if len(entries) != 12 {
 		t.Fatalf("artifacts=%d want 12", len(entries))
 	}
-	raw, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Seed: 1, Probes: 4, Overlap: .2, TopK: 10})+".json"))
+	raw, err := os.ReadFile(filepath.Join(out, artifactBasenameForFixture(t, fixturePath(t), runResult{Seed: 1, Partitions: 4, Probes: 4, Overlap: .2, TopK: 10})+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +810,7 @@ func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 			t.Fatalf("artifact omits explicit zero HNSW evidence field %s", field)
 		}
 	}
-	md, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Seed: 1, Probes: 4, Overlap: .2, TopK: 10})+".md"))
+	md, err := os.ReadFile(filepath.Join(out, artifactBasenameForFixture(t, fixturePath(t), runResult{Seed: 1, Partitions: 4, Probes: 4, Overlap: .2, TopK: 10})+".md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,7 +872,7 @@ func TestValidateResultRequiresExactSHASeedAndMemoryEvidence(t *testing.T) {
 		ResultKind:        "simulation_only",
 		BaseSHA:           strings.Repeat("a", 40),
 		HeadSHA:           strings.Repeat("b", 40),
-		Dataset:           fixtureManifest{Seed: 1},
+		Dataset:           fixtureManifest{Seed: 1, Checksum: strings.Repeat("c", 64)},
 		Seed:              1,
 		MemoryBudgetBytes: 1024,
 		ModeledPeakBytes:  512,
@@ -804,6 +886,7 @@ func TestValidateResultRequiresExactSHASeedAndMemoryEvidence(t *testing.T) {
 	for _, mutate := range []func(*runResult){
 		func(result *runResult) { result.BaseSHA = "abcdef0" },
 		func(result *runResult) { result.HeadSHA = strings.Repeat("g", 40) },
+		func(result *runResult) { result.Dataset.Checksum = "not-a-checksum" },
 		func(result *runResult) { result.Seed++ },
 		func(result *runResult) { result.ModeledPeakBytes = result.MemoryBudgetBytes + 1 },
 	} {

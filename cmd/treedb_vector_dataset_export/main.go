@@ -34,12 +34,13 @@ const (
 )
 
 type config struct {
-	out        string
-	docs       int
-	dimensions int
-	queries    int
-	topK       int
-	jsonOut    bool
+	out          string
+	docs         int
+	dimensions   int
+	queries      int
+	truthQueries int
+	topK         int
+	jsonOut      bool
 }
 
 type manifest struct {
@@ -61,6 +62,7 @@ type manifest struct {
 	FloatFormat         string                  `json:"float_format"`
 	ExactTruthFile      string                  `json:"exact_truth_file"`
 	ExactTruthKind      string                  `json:"exact_truth_kind"`
+	ExactTruthQueries   int                     `json:"exact_truth_queries"`
 	Files               map[string]fileManifest `json:"files"`
 }
 
@@ -158,7 +160,7 @@ func run(args []string, stdout io.Writer) error {
 		return enc.Encode(result)
 	}
 	fmt.Fprintf(stdout, "TreeDB vector dataset exported\n")
-	fmt.Fprintf(stdout, "dir=%s docs=%d dims=%d queries=%d top_k=%d\n", result.Dir, cfg.docs, cfg.dimensions, cfg.queries, cfg.topK)
+	fmt.Fprintf(stdout, "dir=%s docs=%d dims=%d queries=%d truth_queries=%d top_k=%d\n", result.Dir, cfg.docs, cfg.dimensions, cfg.queries, result.Manifest.ExactTruthQueries, cfg.topK)
 	for name, file := range result.Manifest.Files {
 		fmt.Fprintf(stdout, "file=%s bytes=%d sha256=%s\n", name, file.Bytes, file.SHA256)
 	}
@@ -177,6 +179,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to export")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of query vectors to export")
+	fs.IntVar(&cfg.truthQueries, "truth-queries", cfg.truthQueries, "Number of leading queries with exhaustive exact truth (default: all queries)")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "Nearest-neighbor result count intended for consumers")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON summary")
 	if err := fs.Parse(args); err != nil {
@@ -193,6 +196,10 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.queries <= 0 {
 		return config{}, errors.New("-queries must be positive")
+	}
+	cfg, err := normalizeTruthQueries(cfg)
+	if err != nil {
+		return config{}, err
 	}
 	if cfg.topK <= 0 {
 		return config{}, errors.New("-top-k must be positive")
@@ -215,8 +222,8 @@ func parseConfig(args []string) (config, error) {
 	if _, err := checkedTruthPeakBytes(cfg.docs, cfg.dimensions, cfg.topK); err != nil {
 		return config{}, err
 	}
-	if int64(cfg.docs) > maxTruthComparisons/int64(cfg.queries) {
-		return config{}, errors.New("exact truth comparison cap exceeded before allocation; reduce -queries or export in bounded shards")
+	if err := checkTruthComparisonCap(cfg.docs, cfg.truthQueries); err != nil {
+		return config{}, err
 	}
 	return cfg, nil
 }
@@ -226,6 +233,14 @@ func exportDataset(cfg config) (exportResult, error) {
 }
 
 func exportDatasetWithDocumentGenerator(cfg config, generate func(int, int) []float32) (exportResult, error) {
+	var err error
+	cfg, err = normalizeTruthQueries(cfg)
+	if err != nil {
+		return exportResult{}, err
+	}
+	if err := checkTruthComparisonCap(cfg.docs, cfg.truthQueries); err != nil {
+		return exportResult{}, err
+	}
 	if _, err := checkedTruthPeakBytes(cfg.docs, cfg.dimensions, cfg.topK); err != nil {
 		return exportResult{}, err
 	}
@@ -281,12 +296,30 @@ func exportDatasetWithDocumentGenerator(cfg config, generate func(int, int) []fl
 		FloatFormat:         "float32_le_row_major",
 		ExactTruthFile:      "exact_truth.jsonl",
 		ExactTruthKind:      "exhaustive_cosine_distance_ascending_then_id_top_k_v1",
+		ExactTruthQueries:   cfg.truthQueries,
 		Files:               files,
 	}
 	if err := writeManifest(filepath.Join(out, "manifest.json"), m); err != nil {
 		return exportResult{}, err
 	}
 	return exportResult{Dir: out, Manifest: m}, nil
+}
+
+func normalizeTruthQueries(cfg config) (config, error) {
+	if cfg.truthQueries == 0 {
+		cfg.truthQueries = cfg.queries
+	}
+	if cfg.truthQueries < 1 || cfg.truthQueries > cfg.queries {
+		return config{}, errors.New("-truth-queries must be between 1 and -queries")
+	}
+	return cfg, nil
+}
+
+func checkTruthComparisonCap(docs, truthQueries int) error {
+	if docs < 1 || truthQueries < 1 || int64(docs) > maxTruthComparisons/int64(truthQueries) {
+		return errors.New("exact truth comparison cap exceeded before allocation; reduce -truth-queries or -docs")
+	}
+	return nil
 }
 
 func checkedVectorBytes(count, dims int) (int64, error) {
@@ -420,7 +453,7 @@ func writeVectorFile(path string, count, dims int, vector func(int) []float32, f
 func writeExactTruthJSONL(path string, cfg config, documents documentCorpus, files map[string]fileManifest) error {
 	return writeJSONL(path, files, "exact_truth.jsonl", func(enc *json.Encoder) error {
 		stride := queryDocStride(cfg.docs)
-		for i := 0; i < cfg.queries; i++ {
+		for i := 0; i < cfg.truthQueries; i++ {
 			query := documents.row(queryDocIndex(i, cfg.docs, stride))
 			neighbors := exactTruthForCorpus(query, documents, cfg.topK)
 			if err := enc.Encode(exactTruthJSONL{QueryID: fmt.Sprintf("query-%06d", i), Neighbors: neighbors, Kind: "exhaustive_cosine_distance_ascending_then_id_top_k_v1"}); err != nil {

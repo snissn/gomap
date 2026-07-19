@@ -25,7 +25,7 @@ func TestExportDatasetSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exportDataset: %v", err)
 	}
-	if res.Manifest.Docs != 8 || res.Manifest.Dimensions != 4 || res.Manifest.Queries != 3 {
+	if res.Manifest.Docs != 8 || res.Manifest.Dimensions != 4 || res.Manifest.Queries != 3 || res.Manifest.ExactTruthQueries != 3 {
 		t.Fatalf("unexpected manifest: %+v", res.Manifest)
 	}
 	for _, name := range []string{"manifest.json", "documents.f32", "queries.f32", "documents.jsonl", "queries.jsonl", "exact_truth.jsonl"} {
@@ -62,8 +62,47 @@ func TestExportDatasetSmoke(t *testing.T) {
 	if _, ok := parsed.Files["manifest.json"]; ok {
 		t.Fatalf("manifest should not include self-referential manifest.json stats: %+v", parsed.Files["manifest.json"])
 	}
-	if parsed.ExactTruthFile != "exact_truth.jsonl" || parsed.ExactTruthKind != "exhaustive_cosine_distance_ascending_then_id_top_k_v1" {
+	if parsed.ExactTruthFile != "exact_truth.jsonl" || parsed.ExactTruthKind != "exhaustive_cosine_distance_ascending_then_id_top_k_v1" || parsed.ExactTruthQueries != 3 {
 		t.Fatalf("missing declared exact truth: %+v", parsed)
+	}
+}
+
+func TestExportExactTruthUsesDeclaredLeadingQueryCount(t *testing.T) {
+	const (
+		queries      = 5
+		truthQueries = 2
+	)
+	dir := filepath.Join(t.TempDir(), "truth-prefix")
+	res, err := exportDataset(config{out: dir, docs: 8, dimensions: 4, queries: queries, truthQueries: truthQueries, topK: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Manifest.Queries != queries || res.Manifest.ExactTruthQueries != truthQueries {
+		t.Fatalf("manifest query coverage=%+v", res.Manifest)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "exact_truth.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != truthQueries {
+		t.Fatalf("truth rows=%d want declared prefix=%d", len(lines), truthQueries)
+	}
+	for i, line := range lines {
+		var row exactTruthJSONL
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.QueryID != fmt.Sprintf("query-%06d", i) {
+			t.Fatalf("truth row %d query_id=%q", i, row.QueryID)
+		}
+	}
+	info, err := os.Stat(filepath.Join(dir, "queries.f32"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(queries * 4 * 4); info.Size() != want {
+		t.Fatalf("query vector bytes=%d want all-query corpus bytes=%d", info.Size(), want)
 	}
 }
 
@@ -273,6 +312,49 @@ func TestMillionDocumentSingleQueryTruthPeakIsFeasible(t *testing.T) {
 		"-top-k", "10",
 	}); err != nil {
 		t.Fatalf("1M-document single-query config rejected: %v", err)
+	}
+}
+
+func TestLargeComparisonShapeUsesBoundedTruthPrefixBeforeAllocation(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-out", filepath.Join(t.TempDir(), "large"),
+		"-docs", "100000",
+		"-queries", "50000",
+		"-truth-queries", "64",
+		"-dims", "64",
+		"-top-k", "10",
+	})
+	if err != nil {
+		t.Fatalf("bounded-truth comparison shape rejected: %v", err)
+	}
+	if cfg.truthQueries != 64 || cfg.queries != 50000 {
+		t.Fatalf("normalized query coverage=%+v", cfg)
+	}
+	if _, err := parseConfig([]string{
+		"-out", filepath.Join(t.TempDir(), "unbounded"),
+		"-docs", "100000",
+		"-queries", "50000",
+		"-dims", "64",
+		"-top-k", "10",
+	}); err == nil || !strings.Contains(err.Error(), "truth comparison cap") {
+		t.Fatalf("unbounded all-query truth error=%v", err)
+	}
+}
+
+func TestTruthQueryBoundsNormalizeBeforeComparisonCap(t *testing.T) {
+	base := []string{"-out", t.TempDir(), "-docs", "20", "-queries", "4", "-dims", "4", "-top-k", "2"}
+	cfg, err := parseConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.truthQueries != cfg.queries {
+		t.Fatalf("default truth_queries=%d want all queries=%d", cfg.truthQueries, cfg.queries)
+	}
+	for _, value := range []string{"-1", "5"} {
+		args := append(append([]string{}, base...), "-truth-queries", value)
+		if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "-truth-queries") {
+			t.Fatalf("accepted truth query count %s: %v", value, err)
+		}
 	}
 }
 

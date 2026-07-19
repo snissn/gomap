@@ -117,7 +117,10 @@ Configuration:
 - `BACKENDS`: comma-separated backend list. Defaults to `treedb,vectorlite`.
 - `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `VALIDATE_DOCS`,
   `TOP_K`: dataset and validation sizes. `VALIDATE_DOCS` applies only to TreeDB
-  rows and defaults to `16`.
+  rows and defaults to `16`. The exporter writes query vectors for all
+  `QUERIES`, but exhaustive `exact_truth.jsonl` covers only the leading
+  `VALIDATE_QUERIES` queries. The manifest records that prefix count as
+  `exact_truth_queries`; keep it between `1` and `QUERIES`.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`: HNSW parameters.
 - `MIN_RECALL`: recall gate for full-vector rows such as TreeDB exact/default,
@@ -210,7 +213,10 @@ JSONL and query vectors from the exported binary query file; the Python
 benchmarks consume the exported binary vector files directly. With
 `TREEDB_VALIDATION_EXACT_SOURCE=dataset`, TreeDB recall validation computes the
 exact baseline from `documents.f32`/`queries.f32` and compares result IDs only;
-it does not materialize TreeDB documents for the exact baseline.
+it does not materialize TreeDB documents for the exact baseline. Consumers do
+not require an exact-truth row for every benchmark query: they validate the
+declared leading prefix or recompute their selected exact baseline from the
+vector files.
 
 Record the generated `README.md`, backend JSON results, and `comparison.md` with
 any published result. The script records the git commit and run shape; reruns
@@ -224,6 +230,7 @@ RUN_DIR=/tmp/vector_db_compare_100k \
 BACKENDS=treedb,vectorlite,pgvector \
 DOCS=100000 \
 QUERIES=50000 \
+VALIDATE_QUERIES=64 \
 SEARCH_CONCURRENCY=2,4,8,16,32,64,128 \
 scripts/bench_vector_db_compare.sh
 ```
