@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -254,7 +255,11 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 		return refs[i].Ref.PartID < refs[j].Ref.PartID
 	})
 	stats := QueryReadyColumnPreparationStats{SourceParts: len(refs)}
-	parts := make([]typedcolumn.QueryReadyBasePartInput, 0, len(refs))
+	planner, err := typedcolumn.NewQueryReadyBaseStreamingPlanner(key.Identity, len(refs))
+	if err != nil {
+		return nil, err
+	}
+	primaryBases := make([]int64, len(refs))
 	for index, source := range refs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -266,12 +271,11 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 		if ref.Generation == 0 || ref.Generation > identity.ManifestGeneration || source.Rows < 0 {
 			return nil, fmt.Errorf("collections: invalid query-ready source[%d] generation=%d rows=%d", index, ref.Generation, source.Rows)
 		}
-		if ref.Length <= 0 || stats.SourceBytes > preparationBudget-ref.Length {
-			required := stats.SourceBytes
-			if ref.Length > 0 && required <= int64(^uint64(0)>>1)-ref.Length {
-				required += ref.Length
-			}
-			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: required, MaxBytes: preparationBudget}
+		if ref.Length <= 0 {
+			return nil, fmt.Errorf("collections: invalid query-ready source[%d] length=%d", index, ref.Length)
+		}
+		if ref.Length > preparationBudget {
+			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: ref.Length, MaxBytes: preparationBudget}
 		}
 		readStarted := time.Now()
 		raw, err := readColumnPhysicalAssetFromManager(view.ColumnAssetRootDir, ref)
@@ -288,23 +292,75 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 		if image.PartID != ref.PartID || image.Rows != source.Rows {
 			return nil, fmt.Errorf("collections: query-ready source[%d] image identity part_id=%d rows=%d want part_id=%d rows=%d", index, image.PartID, image.Rows, ref.PartID, source.Rows)
 		}
+		executionUpper, err := typedcolumn.EstimateQueryReadyExecutionImageUpperBound(image)
+		if err != nil {
+			return nil, fmt.Errorf("collections: estimate query-ready source[%d] execution: %w", index, err)
+		}
+		if executionUpper < 0 || executionUpper > math.MaxInt64/2 || int64(len(raw)) > math.MaxInt64-executionUpper*2 {
+			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: math.MaxInt64, MaxBytes: preparationBudget}
+		}
+		livePassOne := int64(len(raw)) + executionUpper*2
+		metadataBytes := int64(64 << 10)
+		index64 := int64(index)
+		if index64 > (math.MaxInt64-metadataBytes)/(1024+64)-1 {
+			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: math.MaxInt64, MaxBytes: preparationBudget}
+		}
+		metadataBytes += (index64 + 1) * (1024 + 64)
+		if livePassOne > math.MaxInt64-metadataBytes {
+			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: math.MaxInt64, MaxBytes: preparationBudget}
+		}
+		livePassOne += metadataBytes
+		if livePassOne > preparationBudget {
+			return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: livePassOne, MaxBytes: preparationBudget}
+		}
+		primaryBases[index] = stats.SourceRows
 		stats.SourceRows += int64(image.Rows)
 		stats.SourceBytes += int64(len(raw))
-		parts = append(parts, typedcolumn.QueryReadyBasePartInput{
+		if err := planner.Add(typedcolumn.QueryReadyBasePartInput{
 			SourceGeneration: ref.Generation,
 			Image:            image,
 			PrimaryIDMode:    typedcolumn.QueryReadyPrimaryIDDensePartLocal,
 			PrimaryIDBase:    stats.SourceRows - int64(image.Rows),
-		})
+		}); err != nil {
+			return nil, fmt.Errorf("collections: plan query-ready source[%d]: %w", index, err)
+		}
 	}
-	request := queryReadyBuildRequest{Kind: queryReadyBuildBase, Identity: key.Identity, Parts: parts}
-	buildWorkingBytes, err := estimateQueryReadyBuildWorkingBytes(request)
+	plan, err := planner.Finish()
 	if err != nil {
 		return nil, err
 	}
-	if buildWorkingBytes > preparationBudget-stats.SourceBytes {
-		return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: stats.SourceBytes + buildWorkingBytes, MaxBytes: preparationBudget}
+	buildWorkingBytes, err := plan.EstimatedPeakBytes()
+	if err != nil {
+		return nil, err
 	}
+	if buildWorkingBytes > preparationBudget {
+		return nil, &QueryReadyColumnPreparationBoundError{RequiredBytes: buildWorkingBytes, MaxBytes: preparationBudget}
+	}
+	request := queryReadyBuildRequest{Kind: queryReadyBuildBase, Identity: key.Identity, StreamingBasePlan: plan, StreamingBaseLoad: func(index int) (typedcolumn.QueryReadyBasePartInput, error) {
+		if err := ctx.Err(); err != nil {
+			return typedcolumn.QueryReadyBasePartInput{}, err
+		}
+		if index < 0 || index >= len(refs) {
+			return typedcolumn.QueryReadyBasePartInput{}, fmt.Errorf("collections: query-ready emit source index=%d outside %d refs", index, len(refs))
+		}
+		source := refs[index]
+		readStarted := time.Now()
+		raw, err := readColumnPhysicalAssetFromManager(view.ColumnAssetRootDir, source.Ref)
+		stats.SourceReadTime += time.Since(readStarted)
+		if err != nil {
+			return typedcolumn.QueryReadyBasePartInput{}, fmt.Errorf("collections: reread query-ready source[%d]: %w", index, err)
+		}
+		decodeStarted := time.Now()
+		image, err := typedcolumn.ParseColumnPartImage(raw)
+		stats.SourceDecodeTime += time.Since(decodeStarted)
+		if err != nil {
+			return typedcolumn.QueryReadyBasePartInput{}, fmt.Errorf("collections: redecode query-ready source[%d]: %w", index, err)
+		}
+		if image.PartID != source.Ref.PartID || image.Rows != source.Rows {
+			return typedcolumn.QueryReadyBasePartInput{}, fmt.Errorf("collections: query-ready reread source[%d] image identity part_id=%d rows=%d want part_id=%d rows=%d", index, image.PartID, image.Rows, source.Ref.PartID, source.Rows)
+		}
+		return typedcolumn.QueryReadyBasePartInput{SourceGeneration: source.Ref.Generation, Image: image, PrimaryIDMode: typedcolumn.QueryReadyPrimaryIDDensePartLocal, PrimaryIDBase: primaryBases[index]}, nil
+	}}
 	prepared, err := coordinator.prepare(ctx, request)
 	if err != nil {
 		return nil, err
@@ -335,7 +391,7 @@ func (c *Collection) PrepareQueryReadyColumnGeneration(ctx context.Context, opti
 	stats.BytesCopied, stats.BytesHashed, stats.BytesChecksummed = build.BytesCopied, build.BytesHashed, build.BytesChecksummed
 	stats.ExecutionBytes, stats.ExecutionColumns = build.ExecutionBytes, build.ExecutionColumns
 	stats.AssetsProduced, stats.PartsProduced = build.AssetsProduced, build.PartsProduced
-	stats.ReservedInFlightBytes, stats.EstimatedPeakInFlightBytes, stats.EncodedBufferPeakBytes = build.ReservedInFlightBytes, stats.SourceBytes+build.EstimatedPeakInFlightBytes, build.EncodedBufferPeakBytes
+	stats.ReservedInFlightBytes, stats.EstimatedPeakInFlightBytes, stats.EncodedBufferPeakBytes = build.ReservedInFlightBytes, build.EstimatedPeakInFlightBytes, build.EncodedBufferPeakBytes
 	stats.WorkerLimit, stats.QueueCapacity, stats.QueueWaitTime = build.WorkerLimit, build.QueueCapacity, build.QueueWaitTime
 	stats.BuildTime, stats.AssetPreparationTime = build.BaseBuildTime, build.AssetPreparationTime
 	stats.ManagerRegistrationTime, stats.PublicationHandoffTime = build.ManagerRegistrationTime, build.HandoffTime
