@@ -1555,6 +1555,12 @@ func copyPublicCommandWALCrashImage(source, destination string) error {
 		if !entry.Type().IsRegular() {
 			return nil
 		}
+		// Process-local lock files are not persistent database state and cannot
+		// be read while held on Windows. Crash-image oracles exclude them for
+		// the same reason.
+		if entry.Name() == "LOCK" || entry.Name() == "command-wal-journal-owner.lock" {
+			return nil
+		}
 		input, err := os.Open(path)
 		if err != nil {
 			return err
