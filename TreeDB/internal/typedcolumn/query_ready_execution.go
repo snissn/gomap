@@ -720,9 +720,15 @@ func (r *QueryReadyOperator) Run() (QueryReadyOperatorResult, error) {
 		}
 		fusedStarted := time.Now()
 		if matched, handled, err := r.reduceFusedDecodedGroupedInt64(partIndex, part, rows, &stats); handled {
+			fusedElapsed := time.Since(fusedStarted).Nanoseconds()
 			stats.FusedPredicateReductionExecutions = 1
 			stats.FusedPredicateReductionWorkers = 1
-			stats.FusedPredicateReductionNanos += time.Since(fusedStarted).Nanoseconds()
+			stats.FusedPredicateReductionNanos += fusedElapsed
+			if part.role == PartRoleBase {
+				stats.BaseScanNanos += fusedElapsed
+			} else {
+				stats.DeltaMergeNanos += fusedElapsed
+			}
 			stats.RowsMatched += matched
 			if err != nil {
 				return QueryReadyOperatorResult{Stats: stats}, err

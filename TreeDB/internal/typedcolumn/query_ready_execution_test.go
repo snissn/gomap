@@ -180,6 +180,10 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 				if wantFused && (got.Stats.FusedPredicateReductionWorkers != 1 || got.Stats.DecodedBlocks == 0) {
 					t.Fatalf("%s fused predicate/reduction work counters missing stats=%+v", prepared.name, got.Stats)
 				}
+				if wantFused && got.Stats.FusedPredicateReductionNanos > 0 &&
+					got.Stats.BaseScanNanos+got.Stats.DeltaMergeNanos < got.Stats.FusedPredicateReductionNanos {
+					t.Fatalf("%s public scan timing omits decoded fused interval stats=%+v", prepared.name, got.Stats)
+				}
 			}
 		})
 	}
