@@ -39,6 +39,8 @@ type queryReadyBuildRequest struct {
 	Deltas            []*typedcolumn.QueryReadyDeltaGeneration
 	ThroughGeneration uint64
 	Bound             typedcolumn.QueryReadyDeltaBoundPolicy
+	StreamingBasePlan *typedcolumn.QueryReadyBaseStreamingPlan
+	StreamingBaseLoad func(int) (typedcolumn.QueryReadyBasePartInput, error)
 }
 
 type queryReadyBuildLimits struct {
@@ -277,7 +279,13 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 	var partID uint64
 	switch request.Kind {
 	case queryReadyBuildBase:
-		built, err := typedcolumn.BuildQueryReadyBaseGeneration(request.Identity, request.Parts)
+		var built typedcolumn.QueryReadyBaseBuildResult
+		var err error
+		if request.StreamingBasePlan != nil {
+			built, err = request.StreamingBasePlan.Emit(request.StreamingBaseLoad)
+		} else {
+			built, err = typedcolumn.BuildQueryReadyBaseGeneration(request.Identity, request.Parts)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -374,6 +382,9 @@ func (c *queryReadyBuildCoordinator) prepare(ctx context.Context, request queryR
 }
 
 func estimateQueryReadyBuildWorkingBytes(request queryReadyBuildRequest) (int64, error) {
+	if request.Kind == queryReadyBuildBase && request.StreamingBasePlan != nil {
+		return request.StreamingBasePlan.EstimatedPeakBytes()
+	}
 	// These estimates intentionally cover allocations created after admission,
 	// not the immutable input images already owned by the caller. In addition to
 	// the encoded output they reserve space for validation/build plans, stable

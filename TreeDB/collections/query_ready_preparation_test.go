@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"testing"
@@ -319,6 +320,161 @@ func TestPrepareQueryReadyColumnGenerationRejectsCombinedSourceBuildBound(t *tes
 	if after := len(collection.columnAssetLifecycleRegistrySnapshot()); after != before {
 		t.Fatalf("bound rejection registered prepared assets: before=%d after=%d", before, after)
 	}
+}
+
+func TestPrepareQueryReadyColumnGenerationAdmitsBoundedMultiPartPeak(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
+	events := columnPhysicalJSONBenchParityEventsP0()
+	batches := make([][]columnPhysicalJSONBenchParityEventP0, 4)
+	for batchIndex := range batches {
+		batches[batchIndex] = make([]columnPhysicalJSONBenchParityEventP0, len(events))
+		for eventIndex, event := range events {
+			event.ID = fmt.Sprintf("p%d-%s", batchIndex, event.ID)
+			batches[batchIndex][eventIndex] = event
+		}
+	}
+	_, collection, closeFn, refs := openColumnPhysicalJSONBenchTypedColumnPartBatches1947(t, batches)
+	defer closeFn()
+	if len(refs) != len(batches) {
+		t.Fatalf("typed source refs=%d want %d", len(refs), len(batches))
+	}
+	legacyParts := make([]typedcolumn.QueryReadyBasePartInput, 0, len(refs))
+	var sourceBytes, primaryBase int64
+	for index, ref := range refs {
+		raw, err := readColumnPhysicalAssetFromManager(collection.db.ColumnAssetRootDir(), ref)
+		if err != nil {
+			t.Fatalf("read source[%d]: %v", index, err)
+		}
+		image, err := typedcolumn.ParseColumnPartImage(raw)
+		if err != nil {
+			t.Fatalf("parse source[%d]: %v", index, err)
+		}
+		legacyParts = append(legacyParts, typedcolumn.QueryReadyBasePartInput{SourceGeneration: ref.Generation, Image: image, PrimaryIDMode: typedcolumn.QueryReadyPrimaryIDDensePartLocal, PrimaryIDBase: primaryBase})
+		primaryBase += int64(image.Rows)
+		sourceBytes += int64(len(raw))
+	}
+	legacyBuild, err := estimateQueryReadyBuildWorkingBytes(queryReadyBuildRequest{Kind: queryReadyBuildBase, Identity: typedcolumn.QueryReadyBaseIdentity{Generation: refs[len(refs)-1].Generation}, Parts: legacyParts})
+	if err != nil {
+		t.Fatalf("estimate legacy build: %v", err)
+	}
+	legacyPeak := sourceBytes + legacyBuild
+
+	baseline, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{MaxWorkers: 1, MaxInFlightBytes: 64 << 20})
+	if err != nil {
+		t.Fatalf("baseline preparation: %v", err)
+	}
+	baselineStats := baseline.Stats()
+	if err := baseline.Close(); err != nil {
+		t.Fatalf("close baseline preparation: %v", err)
+	}
+	if sourceBytes <= 1 || legacyPeak <= sourceBytes/2 {
+		t.Fatalf("legacy source=%d peak=%d cannot form multi-part lifetime bound", sourceBytes, legacyPeak)
+	}
+	bound := legacyPeak - sourceBytes/2
+	prepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{MaxWorkers: 1, MaxInFlightBytes: bound})
+	if err != nil {
+		t.Fatalf("bounded multi-part preparation should admit below legacy combined peak=%d at bound=%d (candidate estimate=%d): %v", legacyPeak, bound, baselineStats.EstimatedPeakInFlightBytes, err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if stats := prepared.Stats(); stats.EstimatedPeakInFlightBytes > bound {
+		t.Fatalf("prepared stats=%+v exceed admission bound=%d", stats, bound)
+	}
+}
+
+// TestPrepareQueryReadyColumnGenerationOneMillionRowsSmoke keeps the
+// production-shaped 1M fixture opt-in: it is a release gate, not a unit-test
+// tax. Run with TREEDB_QUERY_READY_1M_SMOKE=true.
+func TestPrepareQueryReadyColumnGenerationOneMillionRowsSmoke(t *testing.T) {
+	if os.Getenv("TREEDB_QUERY_READY_1M_SMOKE") != "true" {
+		t.Skip("set TREEDB_QUERY_READY_1M_SMOKE=true to run the 1M query-ready preparation smoke")
+	}
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartBatches1947(t, queryReadyOneMillionTypedColumnBatches(t))
+	defer closeFn()
+	prepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), QueryReadyColumnPreparationOptions{
+		MaxWorkers: 1, MaxInFlightBytes: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("prepare 1M query-ready generation: %v", err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if stats := prepared.Stats(); stats.SourceRows != queryReadyOneMillionRows || stats.SourceParts != queryReadyOneMillionRows/queryReadyOneMillionBatchRows || stats.OutputBytes <= 0 || stats.EstimatedPeakInFlightBytes <= 0 {
+		t.Fatalf("1M preparation stats=%+v", stats)
+	}
+	runner, err := collection.PrepareQueryReadyColumnPhysicalQuery(prepared.Files(), ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("prepare 1M query-ready q1: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatalf("run 1M query-ready q1: %v", err)
+	}
+	if len(result.Groups) != 4 || result.Diagnostics.RowsScanned != queryReadyOneMillionRows || result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceQueryReadyBaseDelta {
+		t.Fatalf("1M query-ready q1 result=%+v", result)
+	}
+}
+
+func BenchmarkPrepareQueryReadyColumnGeneration1M(b *testing.B) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		b.Skip("query-ready generation file open requires read-only mmap support")
+	}
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartBatches1947(b, queryReadyOneMillionTypedColumnBatches(b))
+	b.Cleanup(closeFn)
+	options := QueryReadyColumnPreparationOptions{MaxWorkers: 1, MaxInFlightBytes: 1 << 30}
+	preview, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), options)
+	if err != nil {
+		b.Fatalf("preview 1M query-ready preparation: %v", err)
+	}
+	stats := preview.Stats()
+	if err := preview.Close(); err != nil {
+		b.Fatalf("close preview 1M query-ready preparation: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := collection.PrepareQueryReadyColumnGeneration(context.Background(), options)
+		if err != nil {
+			b.Fatalf("prepare 1M query-ready generation: %v", err)
+		}
+		if err := prepared.Close(); err != nil {
+			b.Fatalf("close 1M query-ready generation: %v", err)
+		}
+	}
+	b.ReportMetric(float64(stats.SourceRows), "source_rows/op")
+	b.ReportMetric(float64(stats.SourceBytes), "source_bytes/op")
+	b.ReportMetric(float64(stats.OutputBytes), "output_bytes/op")
+	b.ReportMetric(float64(stats.EstimatedPeakInFlightBytes), "estimated_peak_bytes/op")
+}
+
+const (
+	queryReadyOneMillionRows      = 1_000_000
+	queryReadyOneMillionBatchRows = 100_000
+)
+
+func queryReadyOneMillionTypedColumnBatches(tb testing.TB) [][]columnPhysicalJSONBenchParityEventP0 {
+	tb.Helper()
+	batches := make([][]columnPhysicalJSONBenchParityEventP0, 0, queryReadyOneMillionRows/queryReadyOneMillionBatchRows)
+	for start := 0; start < queryReadyOneMillionRows; start += queryReadyOneMillionBatchRows {
+		batch := make([]columnPhysicalJSONBenchParityEventP0, queryReadyOneMillionBatchRows)
+		for offset := range batch {
+			i := start + offset
+			batch[offset] = columnPhysicalJSONBenchParityEventP0{
+				ID:         fmt.Sprintf("qr%07d", i),
+				TimeUS:     1_700_000_000_000_000 + int64(i),
+				Kind:       fmt.Sprintf("kind_%02d", i%4),
+				Operation:  "create",
+				Collection: fmt.Sprintf("collection_%02d", i%4),
+				Did:        fmt.Sprintf("did_%02d", i%12),
+			}
+		}
+		batches = append(batches, batch)
+	}
+	return batches
 }
 
 func TestPrepareQueryReadyColumnGenerationRejectsMutationAndTombstoneState(t *testing.T) {

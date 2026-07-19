@@ -1,6 +1,7 @@
 package typedcolumn
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"hash/crc32"
@@ -59,6 +60,60 @@ func TestQueryReadyBaseGenerationReopenParity(t *testing.T) {
 	}
 	assertTransplantInt64s(t, "value", scan.Columns["value"], []int64{100, 200, 300, 400, 500, 600})
 	assertTransplantInt64s(t, "kind_code", scan.Columns["kind_code"], []int64{0, 0, 1, 1, 1, 2})
+}
+
+func TestQueryReadyBaseStreamingPlanRejectsChangedSecondPassSource(t *testing.T) {
+	identity := queryReadyBaseTestIdentity(42)
+	image := mustTransplantImage(t, mustTransplantPart(t, 702, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
+	planner, err := NewQueryReadyBaseStreamingPlanner(identity, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := QueryReadyBasePartInput{SourceGeneration: 17, Image: image}
+	if err := planner.Add(input); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := input
+	changed.Image.Bytes = slices.Clone(input.Image.Bytes)
+	changed.Image.Bytes[len(changed.Image.Bytes)-1] ^= 1
+	if _, err := plan.Emit(func(int) (QueryReadyBasePartInput, error) { return changed, nil }); err == nil {
+		t.Fatal("second-pass changed source unexpectedly emitted")
+	}
+}
+
+func TestQueryReadyBaseStreamingPlanMatchesLegacyBuildWithShuffledInputs(t *testing.T) {
+	identity := queryReadyBaseTestIdentity(43)
+	left := mustTransplantImage(t, mustTransplantPart(t, 703, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
+	right := mustTransplantImage(t, mustTransplantPart(t, 704, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
+	inputs := []QueryReadyBasePartInput{{SourceGeneration: 18, Image: right}, {SourceGeneration: 17, Image: left}}
+	legacy, err := BuildQueryReadyBaseGeneration(identity, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := NewQueryReadyBaseStreamingPlanner(identity, len(inputs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range inputs {
+		if err := planner.Add(input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := planner.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := plan.Emit(func(ordinal int) (QueryReadyBasePartInput, error) { return inputs[ordinal], nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(streamed.Bytes, legacy.Bytes) {
+		t.Fatal("streaming QRBG bytes differ from legacy build")
+	}
 }
 
 func TestQueryReadyBaseGenerationRejectsCorruptionAndTruncation(t *testing.T) {
