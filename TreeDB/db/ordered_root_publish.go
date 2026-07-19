@@ -1082,7 +1082,7 @@ func orderedRootDeltaMayChangeCollectionRootDescriptors(delta *batch.Batch) bool
 	return false
 }
 
-func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, baseSystemRoot, newSystemRoot uint64, baseRoots, newRoots []uint64) bool {
+func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, userRoot, baseSystemRoot, newSystemRoot uint64, baseRoots, newRoots []uint64) bool {
 	if db == nil || idx == nil || idx.pager == nil || baseSystemRoot == 0 || newSystemRoot == 0 || len(baseRoots) != len(newRoots) {
 		return false
 	}
@@ -1117,6 +1117,14 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, b
 		for _, rootID := range newEntries[i].sourceRootIDs {
 			newReachable[rootID] = struct{}{}
 		}
+	}
+	if userRoot != 0 {
+		// The primary user root is unchanged by these grouped collection
+		// publications and participates in both maintenance closures. A
+		// descriptor transition that aliases it cannot be represented by the
+		// per-root replacement delta alone, so retain the exact projection.
+		baseReachable[userRoot] = struct{}{}
+		newReachable[userRoot] = struct{}{}
 	}
 	type rootTransition struct {
 		base uint64
@@ -2874,7 +2882,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 			for idx := range allOrdered {
 				baseRoots[idx] = allOrdered[idx].BaseRoot
 			}
-			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, baseSystemRoot, rootID, baseRoots, rootIDs) {
+			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 				systemRefDelta.requiresCandidateProjection = false
 			} else {
 				exactValueLogRefDelta = false
@@ -3891,7 +3899,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			for idx := range allOrdered {
 				baseRoots[idx] = allOrdered[idx].BaseRoot
 			}
-			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, baseSystemRoot, rootID, baseRoots, rootIDs) {
+			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 				systemRefDelta.requiresCandidateProjection = false
 			} else {
 				exactValueLogRefDelta = false
