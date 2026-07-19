@@ -1020,7 +1020,7 @@ func positiveValueLogRefDeltaFileIDs(delta *valueLogRefDelta, dst []uint32) []ui
 	return dst
 }
 
-func mergeOrderedRootValueLogRefDelta(dst **valueLogRefDelta, src *valueLogRefDelta) {
+func mergeValueLogRefDeltaInto(dst **valueLogRefDelta, src *valueLogRefDelta) {
 	if src == nil {
 		return
 	}
@@ -2730,7 +2730,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		if refDelta == nil {
 			exactValueLogRefDelta = false
 		} else {
-			mergeOrderedRootValueLogRefDelta(&vlogRefDelta, refDelta)
+			mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
 			releaseValueLogRefDelta(refDelta)
 		}
 		touchedValueLogSegments = append(touchedValueLogSegments, rootTouched...)
@@ -2778,7 +2778,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		if systemRefDelta.requiresCandidateProjection {
 			exactValueLogRefDelta = false
 		}
-		mergeOrderedRootValueLogRefDelta(&vlogRefDelta, systemRefDelta)
+		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
 		releaseValueLogRefDelta(systemRefDelta)
 	}
 	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
@@ -3719,7 +3719,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			exactValueLogRefDelta = false
 			continue
 		}
-		mergeOrderedRootValueLogRefDelta(&vlogRefDelta, refDelta)
+		mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
 		releaseValueLogRefDelta(refDelta)
 	}
 	phaseStart := time.Now()
@@ -3787,7 +3787,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		if systemRefDelta.requiresCandidateProjection {
 			exactValueLogRefDelta = false
 		}
-		mergeOrderedRootValueLogRefDelta(&vlogRefDelta, systemRefDelta)
+		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
 		releaseValueLogRefDelta(systemRefDelta)
 	}
 	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)

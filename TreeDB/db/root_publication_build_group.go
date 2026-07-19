@@ -175,23 +175,7 @@ func (group *RootPublicationBuildGroup) pinBatchValueLogSegmentsLocked(delta *ba
 }
 
 func (group *RootPublicationBuildGroup) mergeValueLogRefDeltaLocked(delta *valueLogRefDelta) {
-	if delta == nil {
-		return
-	}
-	if group.vlogRefDelta == nil {
-		group.vlogRefDelta = newValueLogRefDelta()
-	}
-	group.vlogRefDelta.requiresCandidateProjection = group.vlogRefDelta.requiresCandidateProjection || delta.requiresCandidateProjection
-	group.vlogRefDelta.allowEmptyDependencyReuse = group.vlogRefDelta.allowEmptyDependencyReuse || delta.allowEmptyDependencyReuse
-	group.vlogRefDelta.outerLeafDependencyReuse = group.vlogRefDelta.outerLeafDependencyReuse || delta.outerLeafDependencyReuse
-	_ = delta.forEachChange(func(fileID uint32, change int64) error {
-		group.vlogRefDelta.addChange(fileID, change)
-		return nil
-	})
-	_ = delta.forEachPositive(func(fileID uint32, count int64) error {
-		group.vlogRefDelta.addPositive(fileID, count)
-		return nil
-	})
+	mergeValueLogRefDeltaInto(&group.vlogRefDelta, delta)
 }
 
 func (group *RootPublicationBuildGroup) recordVacuumMutationLocked(entries []batchpkg.Entry, ranges []batchpkg.DeleteRange) {
