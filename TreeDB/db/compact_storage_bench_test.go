@@ -227,8 +227,12 @@ func BenchmarkCompactStorageRewritePolicyMostlyLiveApply(b *testing.B) {
 }
 
 func openCompactStorageRewritePolicyBenchmarkFixture(tb testing.TB, liveRecords, staleRecords, valueSize int) *DB {
+	return openCompactStorageRewritePolicyBenchmarkFixtureWithThreshold(tb, liveRecords, staleRecords, valueSize, 1)
+}
+
+func openCompactStorageRewritePolicyBenchmarkFixtureWithThreshold(tb testing.TB, liveRecords, staleRecords, valueSize, pointerThreshold int) *DB {
 	tb.Helper()
-	db, err := Open(Options{Dir: tb.TempDir()})
+	db, err := Open(Options{Dir: tb.TempDir(), ValueLog: ValueLogOptions{PointerThreshold: pointerThreshold}})
 	if err != nil {
 		tb.Fatalf("open: %v", err)
 	}
