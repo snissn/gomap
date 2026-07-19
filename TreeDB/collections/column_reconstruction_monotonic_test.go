@@ -432,25 +432,70 @@ func TestScanDocumentsFuncMonotonicReconstructionTypedSortKeyFallsBackP3887(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := col.InsertBatch([][]byte{[]byte("e0000"), []byte("e0001")}, [][]byte{[]byte(`{"time_us":2}`), []byte(`{"time_us":1}`)}); err != nil {
+	const rows = columnReconstructionMonotonicBatchSize*2 + 3
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("e%04d", i))
+		// The typed sort key deliberately orders physical parts differently from
+		// primary ID order, which keeps this shape on the generic fallback.
+		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"payload":"row-%04d"}`, rows-i, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col, err = NewCollectionManager(d).OpenCollection("events")
+	if err != nil {
 		t.Fatal(err)
 	}
 	var got []DocumentRecord
-	truncated, err := col.ScanDocumentsFunc(2, func(record DocumentRecord) (bool, error) {
+	truncated, err := col.ScanDocumentsFunc(rows, func(record DocumentRecord) (bool, error) {
 		got = append(got, record)
 		return true, nil
 	})
-	if err != nil || truncated || len(got) != 2 {
-		t.Fatalf("scan err=%v truncated=%t rows=%d", err, truncated, len(got))
+	if err != nil || truncated || len(got) != rows {
+		t.Fatalf("scan err=%v truncated=%t rows=%d want %d", err, truncated, len(got), rows)
 	}
-	if string(got[0].ID) != "e0000" || string(got[1].ID) != "e0001" {
-		t.Fatalf("IDs=%q,%q want e0000,e0001", got[0].ID, got[1].ID)
+	for i, record := range got {
+		if want := string(ids[i]); string(record.ID) != want {
+			t.Fatalf("id[%d]=%q want %q", i, record.ID, want)
+		}
+		assertJSONEqualM13C(t, record.Document, docs[i])
 	}
-	assertJSONMapEqual1875(t, got[0].Document, map[string]any{"time_us": float64(2)})
-	assertJSONMapEqual1875(t, got[1].Document, map[string]any{"time_us": float64(1)})
 	stats := col.LastDocumentScanStats()
-	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 {
-		t.Fatalf("scan stats=%+v want generic fallback for typed sort-key rows", stats)
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 3 || stats.MaxRecordWindow != columnReconstructionMonotonicBatchSize || stats.MaxVisibleRowWindow != columnReconstructionMonotonicBatchSize || stats.ReconstructedRows != rows || stats.PhysicalRows == 0 || stats.PhysicalDecodedBlocks == 0 {
+		t.Fatalf("scan stats=%+v want bounded generic fallback for typed sort-key rows", stats)
+	}
+	limitedCalls := 0
+	truncated, err = col.ScanDocumentsFunc(rows-1, func(DocumentRecord) (bool, error) {
+		limitedCalls++
+		return true, nil
+	})
+	if err != nil || !truncated || limitedCalls != rows-1 {
+		t.Fatalf("limited scan err=%v truncated=%t calls=%d want nil/true/%d", err, truncated, limitedCalls, rows-1)
+	}
+	if stats := col.LastDocumentScanStats(); stats.PhysicalPasses != 3 || stats.MaxRecordWindow != columnReconstructionMonotonicBatchSize || stats.MaxVisibleRowWindow != columnReconstructionMonotonicBatchSize {
+		t.Fatalf("limited scan stats=%+v want three bounded generic windows", stats)
+	}
+	stoppedCalls := 0
+	truncated, err = col.ScanDocumentsFunc(rows, func(DocumentRecord) (bool, error) {
+		stoppedCalls++
+		return stoppedCalls < 2, nil
+	})
+	if err != nil || truncated || stoppedCalls != 2 {
+		t.Fatalf("stopped scan err=%v truncated=%t calls=%d want nil/false/2", err, truncated, stoppedCalls)
+	}
+	wantErr := errors.New("typed sort-key callback error")
+	_, err = col.ScanDocumentsFunc(rows, func(DocumentRecord) (bool, error) { return false, wantErr })
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("callback err=%v want %v", err, wantErr)
 	}
 }
 
