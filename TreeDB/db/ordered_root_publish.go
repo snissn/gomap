@@ -1154,10 +1154,12 @@ func (db *DB) publishOrderedRootDeltaIteratorWithValueLogRefs(baseRoot uint64, i
 				return 0, nil, metrics, touchedValueLogSegments, nil, err
 			}
 			if vlogRefDelta != nil {
-				// This command-WAL ordered-root path carries exact external-pointer
-				// removals in the delta. Inline overwrites may retain the predecessor
-				// outer-leaf segment until rotation, avoiding a full candidate scan
-				// without weakening value-log pointer reachability.
+				// This ordered multi-root path retains the predecessor raw-leaf
+				// dependency set while admitting producer-reported current
+				// segments. Logical ValuePtr removals remain represented by the
+				// exact apply delta below. Ordinary DB-root publication does not
+				// take this exception and continues to project destructively for
+				// leaf-generation GC.
 				vlogRefDelta.requiresCandidateProjection = false
 				vlogRefDelta.allowEmptyDependencyReuse = true
 				vlogRefDelta.outerLeafDependencyReuse = opts.outerLeavesInValueLog

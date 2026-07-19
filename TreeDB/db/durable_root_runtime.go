@@ -502,16 +502,20 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // complete bounded projection for the next candidate. Their handles are still
 // recaptured so an append to an existing segment advances the stable frontier.
 // Logical value-pointer additions are supplied by the apply delta. Raw
-// outer-leaf identities remain safe for apply-fed writes because predecessor
-// membership is retained while new current segments and positive logical
-// pointers are added. That dependency superset can span destructive writes and
-// segment rotation; reclamation is deferred to exact maintenance instead of
-// putting a candidate scan on foreground publication. A replacement generation
-// manifest does not invalidate this proof: the caller replaces that
-// authoritative namespace token independently while this plan recaptures only
-// the raw/value-log handles.
+// outer-leaf identities remain safe as a predecessor dependency superset while
+// producer-reported current segments are admitted. Ordinary DB-root
+// destructive transitions keep requiresCandidateProjection set and therefore
+// fall back to the exact scanner for leaf-generation GC. The ordered multi-root
+// path may retain raw predecessor membership across segment rotation, while
+// negative logical ValuePtr transitions still fall back to exact projection.
+// A replacement generation manifest does not invalidate this proof: the caller
+// replaces that authoritative namespace token independently while this plan
+// recaptures only the raw/value-log handles.
 func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
 	if db == nil || delta == nil || (!db.indexOuterLeavesInValueLog && !delta.outerLeafDependencyReuse) {
+		return nil, false, nil
+	}
+	if delta.requiresCandidateProjection {
 		return nil, false, nil
 	}
 	known := make(map[uint32]struct{})
@@ -552,11 +556,10 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			continue
 		}
 		if _, ok := known[segment.FileID]; !ok {
-			if delta.outerLeafDependencyReuse || (len(known) == 0 && delta.allowEmptyDependencyReuse) {
+			if len(known) == 0 && delta.allowEmptyDependencyReuse {
 				// The empty predecessor has no value-log or raw-leaf
-				// dependency to retire. Apply-fed ordered publication may also
-				// retain the predecessor set across a segment rotation; exact
-				// maintenance can prune that safe dependency superset later.
+				// dependency to retire, so the producer's first segment can be
+				// admitted without a candidate scan.
 				references[segment.FileID] = struct{}{}
 				known[segment.FileID] = struct{}{}
 				continue
@@ -568,12 +571,6 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 	}
 	if err := delta.forEachChange(func(fileID uint32, change int64) error {
 		if change < 0 {
-			if delta.outerLeafDependencyReuse {
-				// Apply-fed ordered publication deliberately keeps predecessor
-				// membership on subtractive transitions. This avoids a foreground
-				// candidate scan while preserving a safe dependency superset.
-				return nil
-			}
 			// Membership alone cannot prove whether a subtractive count reached
 			// zero. Use the exact scanner rather than retaining or deleting on a
 			// guess.

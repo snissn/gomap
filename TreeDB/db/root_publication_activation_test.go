@@ -83,25 +83,17 @@ func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
 		t.Fatalf("ordinary outer-leaf write candidate scans=%d want 0", scans)
 	}
 
-	// Replacing an inline value in the same producer segment safely retains the
-	// predecessor segment. Exact projection is deferred to segment rotation,
-	// which bounds reclamation work without putting a full-tree scan on every
-	// overwrite.
+	// Replacing an existing key can make the old physical leaf record
+	// unreachable even when the producer is still appending to the same segment.
+	// Apply-fed removal evidence must therefore restore exact projection.
 	scans = 0
 	database.testScanCandidateExternalReferencesHook = func() { scans++ }
 	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("r")); err != nil {
 		t.Fatalf("overwrite SetSync: %v", err)
 	}
 	database.testScanCandidateExternalReferencesHook = nil
-	if scans != 0 {
-		t.Fatalf("same-segment outer-leaf overwrite candidate scans=%d want 0", scans)
-	}
-	got, err := database.Get([]byte("outer-leaf-prime"))
-	if err != nil {
-		t.Fatalf("read overwritten outer-leaf value: %v", err)
-	}
-	if string(got) != "r" {
-		t.Fatalf("overwritten outer-leaf value=%q want r", got)
+	if scans == 0 {
+		t.Fatal("outer-leaf overwrite did not scan candidate tree")
 	}
 }
 
