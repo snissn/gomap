@@ -222,7 +222,10 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	var publishTiming backenddb.CommandWALPublishTiming
 	previousTiming := input.commandWALIntent.SetPublishTiming(&publishTiming)
-	defer input.commandWALIntent.SetPublishTiming(previousTiming)
+	defer func() {
+		previousTiming.Add(publishTiming)
+		input.commandWALIntent.SetPublishTiming(previousTiming)
+	}()
 	commitStart := time.Now()
 	if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
@@ -345,7 +348,10 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var rootIDs []uint64
 	var publishTiming backenddb.CommandWALPublishTiming
 	previousTiming := input.commandWALIntent.SetPublishTiming(&publishTiming)
-	defer input.commandWALIntent.SetPublishTiming(previousTiming)
+	defer func() {
+		previousTiming.Add(publishTiming)
+		input.commandWALIntent.SetPublishTiming(previousTiming)
+	}()
 	commitStart := time.Now()
 	if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)

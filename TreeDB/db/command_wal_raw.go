@@ -195,6 +195,24 @@ func (intent *CommandWALIntent) SetPublishTiming(timing *CommandWALPublishTiming
 	return previous
 }
 
+// Add accumulates another publication's exclusive timings. It is useful when
+// a higher-level executor temporarily installs its own timing target while
+// preserving an opt-in caller target on the same intent.
+func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
+	if timing == nil {
+		return
+	}
+	timing.WriteLockWait += other.WriteLockWait
+	timing.Preflight += other.Preflight
+	timing.Append += other.Append
+	timing.ContextBuild += other.ContextBuild
+	timing.RootApply += other.RootApply
+	timing.SystemBuild += other.SystemBuild
+	timing.SystemApply += other.SystemApply
+	timing.Finalize += other.Finalize
+	timing.PostFinalize += other.PostFinalize
+}
+
 var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")
 
 // AssignedLSN returns the command LSN already assigned to this intent. Replay

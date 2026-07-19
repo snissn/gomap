@@ -824,6 +824,35 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	assertDBAppliedCommandLSNM10B(t, reopen, lsn)
 }
 
+func TestColumnStoreInsertWithCommandWALIntentPreservesCallerPublishTimingM10B(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+	ids := [][]byte{[]byte("timed-e1")}
+	docs := [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}
+	intent, err := col.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{ID: ids[0], Document: docs[0]}}, nil)
+	if err != nil {
+		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+	}
+	if _, err := d.AppendCommandWALIntent(intent, true); err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	var callerTiming backenddb.CommandWALPublishTiming
+	intent.SetPublishTiming(&callerTiming)
+	if _, err := col.InsertBatchWithCommandWALIntent(ids, docs, false, intent); err != nil {
+		t.Fatalf("InsertBatchWithCommandWALIntent: %v", err)
+	}
+	if callerTiming.RootApply <= 0 {
+		t.Fatalf("caller publish timing root apply=%s, want > 0", callerTiming.RootApply)
+	}
+	if callerTiming.SystemApply <= 0 {
+		t.Fatalf("caller publish timing system apply=%s, want > 0", callerTiming.SystemApply)
+	}
+}
+
 func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
