@@ -684,6 +684,45 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsDisabledByDefault(t *testing.T)
 	}
 }
 
+func TestPublicCommandWALBatchWriteSyncPhaseStatsAttributesSoloDurableSync(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	opts.PublicBatchWriteSyncPhaseStats = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("solo-sync"), []byte("value")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	stats := db.Stats()
+	prefix := "treedb.public.batch.write_sync.phase."
+	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 1 {
+		t.Fatalf("phase command sync calls=%d, want 1 for solo durable sync (stats=%#v)", got, stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"command_sync.ns_total"); got == 0 {
+		t.Fatalf("phase command sync ns=0, want measured solo durable sync (stats=%#v)", stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"command_flush.calls_total"); got != 0 {
+		t.Fatalf("phase command flush calls=%d, want 0 because solo durable flush includes sync (stats=%#v)", got, stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"command_group_commit_wait.calls_total"); got != 0 {
+		t.Fatalf("phase command group wait calls=%d, want 0 for solo durable bypass (stats=%#v)", got, stats)
+	}
+	requirePublicBatchWriteSyncPhasePartitions(t, stats)
+}
+
 func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	opts.PublicBatchWriteSyncPhaseStats = true

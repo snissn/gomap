@@ -266,8 +266,9 @@ func (db *DB) CommandWALEnabled() bool {
 // CommandWALRequestTiming reports request-scoped command-journal phases for an
 // opt-in diagnostic caller. All durations are exclusive. Append, Flush, and
 // GroupCommitWait are non-overlapping. Sync reports whether the request joined
-// a durable public group; the shared physical sync is not attributed to one
-// request's Flush phase.
+// a durable public group. FlushSync reports whether this request's Flush
+// duration includes a physical durable sync; a shared group sync is not
+// attributed to an individual request.
 type CommandWALRequestTiming struct {
 	PublicPayloadEntryScanPreparation          time.Duration
 	PublishLockBarrierWait                     time.Duration
@@ -286,6 +287,7 @@ type CommandWALRequestTiming struct {
 	GroupCommitWaitObserved                    bool
 	PostAppendPendingLSNBookkeepingObserved    bool
 	Sync                                       bool
+	FlushSync                                  bool
 }
 
 // FlushCommandWAL flushes the command WAL writer. When sync is true, it fsyncs
@@ -2201,6 +2203,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if requestTiming != nil {
 		requestTiming.FlushObserved = true
 		requestTiming.Sync = actualSync
+		requestTiming.FlushSync = actualSync
 		flushStart = time.Now()
 	}
 	flushErr := db.flushCommandWALForPath(sync, true, appendPath)

@@ -1022,8 +1022,13 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 			phaseSample.commandExternalRefOrderingObserved = commandTiming.ExternalRefOrderingObserved
 			phaseSample.commandAppend = commandTiming.Append
 			phaseSample.commandAppendObserved = commandTiming.AppendObserved
-			phaseSample.commandFlush = commandTiming.Flush
-			phaseSample.commandFlushObserved = commandTiming.FlushObserved
+			if commandTiming.FlushSync {
+				phaseSample.commandSync = commandTiming.Flush
+				phaseSample.commandSyncObserved = commandTiming.FlushObserved
+			} else {
+				phaseSample.commandFlush = commandTiming.Flush
+				phaseSample.commandFlushObserved = commandTiming.FlushObserved
+			}
 			phaseSample.commandGroupCommitWait = commandTiming.GroupCommitWait
 			phaseSample.commandGroupCommitWaitObserved = commandTiming.GroupCommitWaitObserved
 			phaseSample.commandPostAppendPendingLSNBookkeeping = commandTiming.PostAppendPendingLSNBookkeeping
