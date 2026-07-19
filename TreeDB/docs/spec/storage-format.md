@@ -57,11 +57,14 @@ and `column_assets` directories. Missing components are created in parent-first
 order. On platforms with parent-directory sync, the distinct parents of newly
 created names are synchronized deepest-first, including the parent of a newly
 created outer root. Windows uses its narrower exact-child creation persistence
-primitive for each new component. Fully existing layouts add no creation sync;
-partial layouts synchronize only the parents of names created by that open.
-Any namespace sync failure aborts open, and an unavailable primitive returns
-the typed `ErrNamespacePersistenceUnsupported` result rather than certifying
-the layout.
+primitive for each new component. Fully existing initialized layouts add no
+creation sync; partial initialized layouts synchronize only the parents of
+names created by that open. Until a backend `index.db` exists as initialization
+proof, retry conservatively synchronizes every relevant existing layout edge
+as well, so directories left by a failed namespace barrier cannot make the
+next open succeed without repairing it. Any namespace sync failure aborts open,
+and an unavailable primitive returns the typed
+`ErrNamespacePersistenceUnsupported` result rather than certifying the layout.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
 `collection_wal_v1`) is deprecated before becoming the active committed format.

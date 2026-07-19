@@ -172,6 +172,7 @@ func TestEnsureStorageLayoutDirsSyncsOnlyMissingNamespaceEdges(t *testing.T) {
 	}
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "db")
+	child := filepath.Join(dir, "child")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatalf("Mkdir(root): %v", err)
 	}
@@ -186,19 +187,129 @@ func TestEnsureStorageLayoutDirsSyncsOnlyMissingNamespaceEdges(t *testing.T) {
 		syncStorageLayoutDir = previous
 	})
 
-	if err := ensureStorageLayoutDirs(dir); err != nil {
-		t.Fatalf("ensureStorageLayoutDirs(partial): %v", err)
+	if err := EnsureStorageLayoutDirs(0o700, dir, child); err != nil {
+		t.Fatalf("EnsureStorageLayoutDirs(partial): %v", err)
 	}
 	if want := []string{dir}; !reflect.DeepEqual(synced, want) {
 		t.Fatalf("partial-layout namespace syncs=%v, want %v", synced, want)
 	}
 
 	synced = nil
-	if err := ensureStorageLayoutDirs(dir); err != nil {
-		t.Fatalf("ensureStorageLayoutDirs(existing): %v", err)
+	if err := EnsureStorageLayoutDirs(0o700, dir, child); err != nil {
+		t.Fatalf("EnsureStorageLayoutDirs(existing): %v", err)
 	}
 	if len(synced) != 0 {
 		t.Fatalf("fully existing layout unexpectedly synchronized namespace parents: %v", synced)
+	}
+}
+
+func TestCreateMissingStorageLayoutDirsSyncsPlannedMissingConcurrentCreate(t *testing.T) {
+	parent := t.TempDir()
+	path := filepath.Join(parent, "raced")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("Mkdir(concurrent winner): %v", err)
+	}
+
+	created, err := createMissingStorageLayoutDirs([]string{path}, 0o700)
+	if err != nil {
+		t.Fatalf("createMissingStorageLayoutDirs: %v", err)
+	}
+	if want := []string{path}; !reflect.DeepEqual(created, want) {
+		t.Fatalf("created namespace edges=%v, want planned-missing EEXIST edge %v", created, want)
+	}
+}
+
+func TestEnsureStorageLayoutDirsRetriesUnprovenNamespaceAfterSyncFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows persists directory creation through the exact child handle")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "db")
+	wantErr := errors.New("injected outer-parent sync failure")
+	previous := syncStorageLayoutDir
+	var first []string
+	syncStorageLayoutDir = func(path string) error {
+		first = append(first, path)
+		if path == parent {
+			return wantErr
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		syncStorageLayoutDir = previous
+	})
+
+	if err := ensureStorageLayoutDirs(dir); !errors.Is(err, wantErr) {
+		t.Fatalf("first ensureStorageLayoutDirs error=%v, want %v", err, wantErr)
+	}
+	if want := []string{dir, parent}; !reflect.DeepEqual(first, want) {
+		t.Fatalf("first namespace syncs=%v, want %v", first, want)
+	}
+
+	var retried []string
+	syncStorageLayoutDir = func(path string) error {
+		retried = append(retried, path)
+		return nil
+	}
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("retry ensureStorageLayoutDirs: %v", err)
+	}
+	if want := []string{dir, parent}; !reflect.DeepEqual(retried, want) {
+		t.Fatalf("retry namespace syncs=%v, want repair of unproven edges %v", retried, want)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "index.db"), []byte("initialized"), 0o600); err != nil {
+		t.Fatalf("WriteFile(index proof): %v", err)
+	}
+	retried = nil
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("proven ensureStorageLayoutDirs: %v", err)
+	}
+	if len(retried) != 0 {
+		t.Fatalf("initialized steady-state layout unexpectedly synchronized namespaces: %v", retried)
+	}
+}
+
+func TestEnsureStorageLayoutDirsForOpenRetriesFreshCompositeOuterParentFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows persists directory creation through the exact child handle")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "db")
+	mainDir := filepath.Join(root, "maindb")
+	dictDir := filepath.Join(root, "dictdb")
+	proof := filepath.Join(mainDir, "index.db")
+	wantErr := errors.New("injected public outer-parent sync failure")
+	previous := syncStorageLayoutDir
+	var first []string
+	syncStorageLayoutDir = func(path string) error {
+		first = append(first, path)
+		if path == parent {
+			return wantErr
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		syncStorageLayoutDir = previous
+	})
+
+	if err := EnsureStorageLayoutDirsForOpen(0o755, proof, root, mainDir, dictDir); !errors.Is(err, wantErr) {
+		t.Fatalf("first public layout ensure error=%v, want %v", err, wantErr)
+	}
+	if want := []string{root, parent}; !reflect.DeepEqual(first, want) {
+		t.Fatalf("first public namespace syncs=%v, want %v", first, want)
+	}
+
+	var retried []string
+	syncStorageLayoutDir = func(path string) error {
+		retried = append(retried, path)
+		return nil
+	}
+	if err := EnsureStorageLayoutDirsForOpen(0o755, proof, root, mainDir, dictDir); err != nil {
+		t.Fatalf("retry public layout ensure: %v", err)
+	}
+	if want := []string{root, parent}; !reflect.DeepEqual(retried, want) {
+		t.Fatalf("retry public namespace syncs=%v, want proof-absent repair %v", retried, want)
 	}
 }
 
@@ -221,7 +332,7 @@ func TestEnsureStorageLayoutDirsFreshCompositeSyncCount(t *testing.T) {
 		syncStorageLayoutDir = previous
 	})
 
-	if err := EnsureStorageLayoutDirs(0o755, root, mainDir, dictDir, templateDir); err != nil {
+	if err := EnsureStorageLayoutDirsForOpen(0o755, filepath.Join(mainDir, "index.db"), root, mainDir, dictDir, templateDir); err != nil {
 		t.Fatalf("ensure public layout: %v", err)
 	}
 	for _, backendDir := range []string{mainDir, dictDir, templateDir} {
@@ -229,13 +340,18 @@ func TestEnsureStorageLayoutDirsFreshCompositeSyncCount(t *testing.T) {
 			t.Fatalf("ensure backend layout %q: %v", backendDir, err)
 		}
 	}
-	want := []string{root, parent, mainDir, dictDir, templateDir}
+	want := []string{root, parent, mainDir, root, dictDir, root, templateDir, root}
 	if !reflect.DeepEqual(synced, want) {
 		t.Fatalf("fresh composite namespace syncs=%v, want %v", synced, want)
 	}
 
+	for _, backendDir := range []string{mainDir, dictDir, templateDir} {
+		if err := os.WriteFile(filepath.Join(backendDir, "index.db"), []byte("initialized"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q initialization proof): %v", backendDir, err)
+		}
+	}
 	synced = nil
-	if err := EnsureStorageLayoutDirs(0o755, root, mainDir, dictDir, templateDir); err != nil {
+	if err := EnsureStorageLayoutDirsForOpen(0o755, filepath.Join(mainDir, "index.db"), root, mainDir, dictDir, templateDir); err != nil {
 		t.Fatalf("ensure existing public layout: %v", err)
 	}
 	for _, backendDir := range []string{mainDir, dictDir, templateDir} {

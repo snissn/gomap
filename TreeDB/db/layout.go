@@ -62,8 +62,9 @@ func ColumnAssetRootDirPath(dir string) string {
 
 func ensureStorageLayoutDirs(dir string) error {
 	layout := resolveStorageLayout(dir)
-	return EnsureStorageLayoutDirs(
+	return EnsureStorageLayoutDirsForOpen(
 		0o700,
+		filepath.Join(dir, "index.db"),
 		layout.rootDir,
 		layout.walDir,
 		layout.valueVLogDir,
@@ -72,14 +73,31 @@ func ensureStorageLayoutDirs(dir string) error {
 	)
 }
 
+// EnsureStorageLayoutDirsForOpen creates and persists a storage layout before
+// writable open. Until proofPath exists, all requested directory edges are
+// conservatively synchronized even when a prior failed attempt left the
+// directories present. Once initialization has created proofPath, an entirely
+// existing layout performs no creation syncs.
+func EnsureStorageLayoutDirsForOpen(mode fs.FileMode, proofPath string, paths ...string) error {
+	proven, err := storageLayoutInitializationProven(proofPath)
+	if err != nil {
+		return err
+	}
+	return ensureStorageLayoutDirSet(mode, !proven, paths...)
+}
+
 // EnsureStorageLayoutDirs creates the requested directory paths in dependency
 // order and persists exactly the namespace parents of directories created by
 // this call. Parents are synchronized deepest-first so a newly created DB root
 // is durable in its own parent only after its child layout is durable.
 //
-// This is exported for the public TreeDB wrapper, which owns the composite
-// maindb/dictdb/templatedb layout above the backend package.
+// Callers performing writable open should use EnsureStorageLayoutDirsForOpen
+// so a failed attempt cannot turn present-but-unproven directories into proof.
 func EnsureStorageLayoutDirs(mode fs.FileMode, paths ...string) error {
+	return ensureStorageLayoutDirSet(mode, false, paths...)
+}
+
+func ensureStorageLayoutDirSet(mode fs.FileMode, repairUnproven bool, paths ...string) error {
 	missingByPath := make([][]string, len(paths))
 	needsCreation := false
 	for i, path := range paths {
@@ -90,14 +108,14 @@ func EnsureStorageLayoutDirs(mode fs.FileMode, paths ...string) error {
 		missingByPath[i] = missing
 		needsCreation = needsCreation || len(missing) != 0
 	}
-	if !needsCreation {
+	if !needsCreation && !repairUnproven {
 		return nil
 	}
-	if !rootpublication.StableNamespaceCreationSupported() {
+	if (needsCreation || repairUnproven) && !rootpublication.StableNamespaceCreationSupported() {
 		return fmt.Errorf("%w: storage layout directory creation is unavailable on %s", ErrNamespacePersistenceUnsupported, runtime.GOOS)
 	}
 	if !rootpublication.StableRelativeNamespaceSupported() {
-		return ensureStorageLayoutDirsCreateThroughChild(mode, paths)
+		return ensureStorageLayoutDirsCreateThroughChild(mode, repairUnproven, paths)
 	}
 	parentsToSync := make(map[string]struct{}, len(paths)+1)
 	for _, missing := range missingByPath {
@@ -108,6 +126,14 @@ func EnsureStorageLayoutDirs(mode fs.FileMode, paths ...string) error {
 		for _, created := range createdPaths {
 			parent := filepath.Dir(created)
 			if parent != "" && parent != created {
+				parentsToSync[parent] = struct{}{}
+			}
+		}
+	}
+	if repairUnproven {
+		for _, path := range paths {
+			parent := filepath.Dir(filepath.Clean(path))
+			if parent != "" && parent != filepath.Clean(path) {
 				parentsToSync[parent] = struct{}{}
 			}
 		}
@@ -135,13 +161,45 @@ func EnsureStorageLayoutDirs(mode fs.FileMode, paths ...string) error {
 	return nil
 }
 
-func ensureStorageLayoutDirsCreateThroughChild(mode fs.FileMode, paths []string) error {
+func storageLayoutInitializationProven(proofPath string) (bool, error) {
+	if proofPath == "" {
+		return false, fmt.Errorf("treedb: empty storage layout initialization proof path")
+	}
+	info, err := os.Stat(proofPath)
+	if err == nil {
+		return !info.IsDir(), nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func ensureStorageLayoutDirsCreateThroughChild(mode fs.FileMode, repairUnproven bool, paths []string) error {
 	for _, path := range paths {
 		missing, err := missingStorageLayoutDirs(path)
 		if err != nil {
 			return err
 		}
 		if len(missing) == 0 {
+			if !repairUnproven {
+				continue
+			}
+			parent, err := rootpublication.OpenStableParent(filepath.Dir(filepath.Clean(path)))
+			if err != nil {
+				return err
+			}
+			child, childErr := rootpublication.EnsureStableChildDirectory(parent, filepath.Base(filepath.Clean(path)), mode, nil)
+			closeErr := parent.Close()
+			if childErr != nil {
+				return childErr
+			}
+			if childCloseErr := child.Close(); childCloseErr != nil {
+				return childCloseErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
 			continue
 		}
 		parentPath := filepath.Dir(missing[len(missing)-1])
@@ -183,6 +241,7 @@ func createMissingStorageLayoutDirs(missing []string, mode fs.FileMode) ([]strin
 			if !info.IsDir() {
 				return nil, fmt.Errorf("treedb: storage layout path %q is not a directory", current)
 			}
+			created = append(created, current)
 			continue
 		}
 		created = append(created, current)

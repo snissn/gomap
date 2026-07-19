@@ -72,7 +72,7 @@ var errVacuumUnsupported = db.ErrVacuumUnsupported
 // writable Open.
 var ErrNamespacePersistenceUnsupported = db.ErrNamespacePersistenceUnsupported
 
-var ensureOpenStorageLayoutDirs = db.EnsureStorageLayoutDirs
+var ensureOpenStorageLayoutDirs = db.EnsureStorageLayoutDirsForOpen
 
 const (
 	defaultChunkSize     = 256 * 1024
@@ -839,7 +839,7 @@ func openResolved(opts Options) (*DB, error) {
 				dirs = append(dirs, templatedbDir)
 			}
 		}
-		if err := ensureOpenStorageLayoutDirs(0o755, dirs...); err != nil {
+		if err := ensureOpenStorageLayoutDirs(0o755, filepath.Join(maindbDir, "index.db"), dirs...); err != nil {
 			return nil, fmt.Errorf("treedb: ensure public storage layout: %w", err)
 		}
 	}

@@ -11,12 +11,14 @@ import (
 func TestOpenFreshCompositeEnsuresPublicLayoutDependencies(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "db")
 	var gotMode fs.FileMode
+	var gotProof string
 	var gotPaths []string
 	previous := ensureOpenStorageLayoutDirs
-	ensureOpenStorageLayoutDirs = func(mode fs.FileMode, paths ...string) error {
+	ensureOpenStorageLayoutDirs = func(mode fs.FileMode, proof string, paths ...string) error {
 		gotMode = mode
+		gotProof = proof
 		gotPaths = append([]string(nil), paths...)
-		return previous(mode, paths...)
+		return previous(mode, proof, paths...)
 	}
 	t.Cleanup(func() {
 		ensureOpenStorageLayoutDirs = previous
@@ -35,8 +37,9 @@ func TestOpenFreshCompositeEnsuresPublicLayoutDependencies(t *testing.T) {
 		filepath.Join(root, "maindb"),
 		filepath.Join(root, "dictdb"),
 	}
-	if gotMode != 0o755 || !reflect.DeepEqual(gotPaths, want) {
-		t.Fatalf("public layout mode=%#o paths=%v, want mode=%#o paths=%v", gotMode, gotPaths, fs.FileMode(0o755), want)
+	wantProof := filepath.Join(root, "maindb", "index.db")
+	if gotMode != 0o755 || gotProof != wantProof || !reflect.DeepEqual(gotPaths, want) {
+		t.Fatalf("public layout mode=%#o proof=%q paths=%v, want mode=%#o proof=%q paths=%v", gotMode, gotProof, gotPaths, fs.FileMode(0o755), wantProof, want)
 	}
 }
 
@@ -44,9 +47,9 @@ func TestOpenFreshFlatEnsuresOuterRootDependency(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "db")
 	var gotPaths []string
 	previous := ensureOpenStorageLayoutDirs
-	ensureOpenStorageLayoutDirs = func(mode fs.FileMode, paths ...string) error {
+	ensureOpenStorageLayoutDirs = func(mode fs.FileMode, proof string, paths ...string) error {
 		gotPaths = append([]string(nil), paths...)
-		return previous(mode, paths...)
+		return previous(mode, proof, paths...)
 	}
 	t.Cleanup(func() {
 		ensureOpenStorageLayoutDirs = previous
@@ -70,7 +73,7 @@ func TestOpenPropagatesPublicLayoutNamespaceFailures(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "db")
 			wantErr := errors.New("injected " + name + " sync failure")
 			previous := ensureOpenStorageLayoutDirs
-			ensureOpenStorageLayoutDirs = func(fs.FileMode, ...string) error {
+			ensureOpenStorageLayoutDirs = func(fs.FileMode, string, ...string) error {
 				return wantErr
 			}
 			t.Cleanup(func() {
@@ -87,7 +90,7 @@ func TestOpenPropagatesPublicLayoutNamespaceFailures(t *testing.T) {
 func TestOpenPreservesTypedUnsupportedNamespaceStatus(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "db")
 	previous := ensureOpenStorageLayoutDirs
-	ensureOpenStorageLayoutDirs = func(fs.FileMode, ...string) error {
+	ensureOpenStorageLayoutDirs = func(fs.FileMode, string, ...string) error {
 		return ErrNamespacePersistenceUnsupported
 	}
 	t.Cleanup(func() {
