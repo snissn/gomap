@@ -47,7 +47,8 @@ func smallFixtureForTest(vectors, queries, dims int) (fixtureManifest, [][]float
 	m := fixtureManifest{
 		SchemaVersion: schemaVersion,
 		Fixture:       "small",
-		Generator:     "treedb_vector_partition_fixture_v1",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
 		Vectors:       vectors,
 		Queries:       queries,
 		Dimensions:    dims,
@@ -57,6 +58,26 @@ func smallFixtureForTest(vectors, queries, dims int) (fixtureManifest, [][]float
 	}
 	v, q := deterministicFixture(m)
 	return m, v, q
+}
+
+func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
+	a := 1 + math.Ldexp(1, -27)
+	b := 1 - math.Ldexp(1, -27)
+	if got, want := math.FMA(a, b, -1), -math.Ldexp(1, -54); got != want {
+		t.Fatalf("%s result=%x want %x", fixtureArithmetic, math.Float64bits(got), math.Float64bits(want))
+	}
+	if fixtureGenerator != "treedb_vector_partition_fixture_v2" || fixtureArithmetic != "ieee754_binary64_explicit_fma_v1" {
+		t.Fatalf("unexpected fixture contract generator=%q arithmetic=%q", fixtureGenerator, fixtureArithmetic)
+	}
+	m, vectors, queries := smallFixtureForTest(10, 2, 4)
+	m.Checksum = fixtureChecksumFromData(vectors, queries)
+	if err := validateFixture(m); err != nil {
+		t.Fatalf("explicit arithmetic fixture rejected: %v", err)
+	}
+	m.Arithmetic = "implicit_multiply_add"
+	if err := validateFixture(m); err == nil {
+		t.Fatal("fixture with unspecified contraction behavior accepted")
+	}
 }
 
 func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
@@ -234,7 +255,7 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 			t.Fatalf("accepted malformed config %#v", raw)
 		}
 	}
-	bad := fixtureManifest{SchemaVersion: 1, Fixture: "bad", Generator: "treedb_vector_partition_fixture_v1", Vectors: maxVectors + 1, Queries: 1, Dimensions: 1, Metric: "cosine", Checksum: strings.Repeat("0", 64)}
+	bad := fixtureManifest{SchemaVersion: 1, Fixture: "bad", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: maxVectors + 1, Queries: 1, Dimensions: 1, Metric: "cosine", Checksum: strings.Repeat("0", 64)}
 	if err := validateFixture(bad); err == nil {
 		t.Fatal("accepted capped fixture")
 	}
@@ -383,7 +404,8 @@ func TestPathologicalBenchmarkWorkRejectsBeforeGenerationOrEvidence(t *testing.T
 	fixture := fixtureManifest{
 		SchemaVersion: schemaVersion,
 		Fixture:       "pathological-work",
-		Generator:     "treedb_vector_partition_fixture_v1",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
 		Vectors:       500_000,
 		Queries:       500_000,
 		Dimensions:    1,

@@ -38,6 +38,8 @@ const (
 	maxGitHubEventBytes       int64 = 2 << 20
 	partitionHNSWIndex              = "embedding_graph"
 	partitionHNSWDegree             = 16
+	fixtureGenerator                = "treedb_vector_partition_fixture_v2"
+	fixtureArithmetic               = "ieee754_binary64_explicit_fma_v1"
 	documentIDStorageBytes          = 16
 	hnswJSONFloatBytes              = 24
 	hnswJSONFixedBytes              = 64
@@ -73,6 +75,7 @@ type fixtureManifest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Fixture       string `json:"fixture"`
 	Generator     string `json:"generator"`
+	Arithmetic    string `json:"arithmetic"`
 	Vectors       int    `json:"vectors"`
 	Queries       int    `json:"queries"`
 	Dimensions    int    `json:"dimensions"`
@@ -530,7 +533,7 @@ func validateFixture(m fixtureManifest) error {
 	return validateFixtureWithCaps(m, maxVectors, maxFixtureBytes)
 }
 func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != "treedb_vector_partition_fixture_v1" || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Queries > capVectors || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Queries > capVectors || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
 	if int64(m.Vectors)+int64(m.Queries) > int64(capVectors) {
@@ -853,7 +856,7 @@ func contiguousFloat64Matrix(rows, dimensions int) [][]float64 {
 func normalize(v []float64) []float64 {
 	var n float64
 	for _, x := range v {
-		n += x * x
+		n = math.FMA(x, x, n)
 	}
 	n = math.Sqrt(n)
 	for i := range v {
@@ -883,7 +886,7 @@ func boundedVectorTopK(v [][]float64, q []float64, k int, include func(int) bool
 		}
 		var dot float64
 		for d := range row {
-			dot += row[d] * q[d]
+			dot = math.FMA(row[d], q[d], dot)
 		}
 		candidate := scoredNeighbor{Index: i, Distance: 1 - dot}
 		if len(candidates) < k {
@@ -942,7 +945,7 @@ func representativePartitions(v [][]float64, q []float64, partitions, probes int
 	for p, sum := range sums {
 		var dot float64
 		for d := range sum {
-			dot += q[d] * (sum[d] / float64(counts[p]))
+			dot = math.FMA(q[d], sum[d]/float64(counts[p]), dot)
 		}
 		scores[p] = neighbor{ID: fmt.Sprintf("p-%06d", p), Distance: 1 - dot}
 	}

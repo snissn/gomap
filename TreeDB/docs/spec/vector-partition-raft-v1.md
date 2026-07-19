@@ -75,9 +75,14 @@ partitioning, sequential coordinator, and absent network/Raft path remain
 non-production simulation. With every partition probed, the partition oracle
 MUST equal global exact top-k under ordered distance and stable-ID comparison.
 
-The checked-in fixture manifest at `testdata/vector_partition_10k/` is generated
-deterministically and has a stable checksum over canonical generated vector,
-query, and exact-truth bytes. Exact-truth checksum binding covers top-10 for
+The checked-in fixture manifest at `testdata/vector_partition_10k/` uses
+generator `treedb_vector_partition_fixture_v2` and arithmetic contract
+`ieee754_binary64_explicit_fma_v1`. Normalization, exact-oracle dot products,
+and representative-routing dot products use explicit `math.FMA` accumulation
+so compiler- or architecture-dependent multiply-add contraction cannot alter
+the generated fixture or truth. Its stable checksum binds the exact IEEE-754
+binary64 bits of every generated vector and query, then the ordered exact-truth
+IDs and distance bits. Exact-truth checksum binding covers top-10 for
 fixtures with at least ten vectors and every available neighbor for smaller
 fixtures. The generated corpus includes an explicit duplicate/tie case,
 clusters, and boundary shape. Tests resolve the
