@@ -541,6 +541,7 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			}
 		}
 	}
+	predecessorDependencyEmpty := len(known) == 0
 	// Producer-reported positive identities include newly created/current raw
 	// outer-leaf segments. Admit them before comparing the current segment set
 	// with the predecessor closure; otherwise the first publication after a
@@ -553,6 +554,19 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 		return nil
 	}); err != nil {
 		return nil, false, err
+	}
+	if predecessorDependencyEmpty && delta.allowEmptyDependencyReuse {
+		created, err := leafPageLogCreatedSegments(db.leafPageLog)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, segment := range created {
+			if segment.FileID == 0 {
+				continue
+			}
+			known[segment.FileID] = struct{}{}
+			references[segment.FileID] = struct{}{}
+		}
 	}
 	current, err := leafPageLogCurrentSegments(db.leafPageLog)
 	if err != nil {
@@ -569,10 +583,10 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			continue
 		}
 		if _, ok := known[segment.FileID]; !ok {
-			if len(known) == 0 && delta.allowEmptyDependencyReuse {
+			if predecessorDependencyEmpty && delta.allowEmptyDependencyReuse {
 				// The empty predecessor has no value-log or raw-leaf
-				// dependency to retire, so the producer's first segment can be
-				// admitted without a candidate scan.
+				// dependency to retire, so every producer-reported created and
+				// current segment can be admitted without a candidate scan.
 				references[segment.FileID] = struct{}{}
 				known[segment.FileID] = struct{}{}
 				continue

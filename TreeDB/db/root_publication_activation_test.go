@@ -270,6 +270,32 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 			t.Fatalf("rotated outer-leaf references=%v, want current file %d", references, leafLog.fileID)
 		}
 	}
+
+	const (
+		createdFileID = uint32(9101)
+		currentFileID = uint32(9102)
+	)
+	database.SetLeafPageLog(&createdThenCurrentLeafPageLog{
+		createdSegments: []rewriteCreatedSegment{{path: "/created-leaf.log", fileID: createdFileID}},
+		currentPath:     "/current-leaf.log",
+		currentFileID:   currentFileID,
+	})
+	emptyBase := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(emptyBase)
+	emptyBase.outerLeafDependencyReuse = true
+	emptyBase.allowEmptyDependencyReuse = true
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(nil, nil, emptyBase); err != nil {
+		t.Fatalf("plan empty-base created/current transition: %v", err)
+	} else if !reuse {
+		t.Fatal("empty-base created/current transition did not reuse producer dependencies")
+	} else {
+		if _, ok := references[createdFileID]; !ok {
+			t.Fatalf("empty-base references=%v, want created file %d", references, createdFileID)
+		}
+		if _, ok := references[currentFileID]; !ok {
+			t.Fatalf("empty-base references=%v, want current file %d", references, currentFileID)
+		}
+	}
 }
 
 func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
