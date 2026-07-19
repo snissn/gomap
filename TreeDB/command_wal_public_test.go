@@ -3393,6 +3393,17 @@ type commandWALPayloadSoftCapBatch struct {
 	deleteViewCalls int
 }
 
+func (b *commandWALPayloadSoftCapBatch) AssignExternalCommandWALPointRevisions() page.EntryRevision {
+	revision := page.EntryRevision(1)
+	for i := range b.entries {
+		entry := &b.entries[i]
+		if entry.Type != batch.OpDeleteRange && entry.Revision == page.LegacyEntryRevision {
+			entry.Revision = revision
+		}
+	}
+	return revision
+}
+
 func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand func() error) error {
 	if err := appendCommand(); err != nil {
 		return err
@@ -3402,19 +3413,19 @@ func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand f
 	return nil
 }
 
-func (b *commandWALHookBatch) WriteAfterCommandWALAppendWithPreparedRevision(_ bool, appendCommand func(func() page.EntryRevision) error) error {
+func (b *commandWALHookBatch) AssignExternalCommandWALPointRevisions() page.EntryRevision {
 	revision := page.EntryRevision(1)
-	assignRevision := func() page.EntryRevision {
-		for i := range b.entries {
-			entry := &b.entries[i]
-			if entry.Type != batch.OpDeleteRange && entry.Revision == page.LegacyEntryRevision {
-				entry.Revision = revision
-			}
+	for i := range b.entries {
+		entry := &b.entries[i]
+		if entry.Type != batch.OpDeleteRange && entry.Revision == page.LegacyEntryRevision {
+			entry.Revision = revision
 		}
-		return revision
 	}
-	assignRevision()
-	if err := appendCommand(assignRevision); err != nil {
+	return revision
+}
+
+func (b *commandWALHookBatch) WriteAfterCommandWALAppendWithPreparedRevision(_ bool, appendCommand func() error) error {
+	if err := appendCommand(); err != nil {
 		return err
 	}
 	b.writeAfterCalls++

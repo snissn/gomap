@@ -502,6 +502,10 @@ type commandWALPublicRevisionEntries interface {
 	OrderedEntries() []batch.Entry
 }
 
+type commandWALPublicRevisionAssigner interface {
+	AssignExternalCommandWALPointRevisions() page.EntryRevision
+}
+
 type commandWALPublicInnerSetViewValidated interface {
 	SetViewValidated(key, value []byte) error
 }
@@ -994,16 +998,16 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 		var writeErr error
 		if phaseEnabled {
 			writer, ok := b.inner.(interface {
-				WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func(func() page.EntryRevision) error) (caching.CommandWALBatchWriteTiming, error)
+				WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func() error) (caching.CommandWALBatchWriteTiming, error)
 			})
 			if !ok {
 				return fmt.Errorf("treedb: command wal batch requires measured cached command append hook")
 			}
 			leaseAttached = b.attachStableViewValueLease()
 			var commandTiming db.CommandWALRequestTiming
-			cachedTiming, measuredErr := writer.WriteAfterCommandWALAppendWithPreparedRevisionMeasured(commandSync, func(assignRevision func() page.EntryRevision) error {
+			cachedTiming, measuredErr := writer.WriteAfterCommandWALAppendWithPreparedRevisionMeasured(commandSync, func() error {
 				var appendErr error
-				commandTiming, appendErr = b.appendCommandWALMeasured(commandSync, assignRevision)
+				commandTiming, appendErr = b.appendCommandWALMeasured(commandSync)
 				return appendErr
 			})
 			phaseSample.checkpointGate = cachedTiming.CheckpointGate
@@ -1029,14 +1033,14 @@ func (b *commandWALPublicBatch) write(explicitSync, commandSync bool) (err error
 			writeErr = measuredErr
 		} else {
 			writer, ok := b.inner.(interface {
-				WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func(func() page.EntryRevision) error) error
+				WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func() error) error
 			})
 			if !ok {
 				return fmt.Errorf("treedb: command wal batch requires cached command append hook")
 			}
 			leaseAttached = b.attachStableViewValueLease()
-			writeErr = writer.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, func(assignRevision func() page.EntryRevision) error {
-				return b.appendCommandWAL(commandSync, assignRevision)
+			writeErr = writer.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, func() error {
+				return b.appendCommandWAL(commandSync)
 			})
 		}
 		publication := b.groupPublication
@@ -1324,45 +1328,47 @@ func (b *commandWALPublicBatch) stampPayloadEntryRevisionsFromEntries(entries []
 	})
 }
 
-func (b *commandWALPublicBatch) appendCommandWAL(sync bool, revisionAllocators ...func() page.EntryRevision) error {
+func (b *commandWALPublicBatch) assignCommandWALPointRevisions() error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	var assignRevision func() page.EntryRevision
-	if len(revisionAllocators) != 0 {
-		assignRevision = revisionAllocators[0]
+	assigner, ok := b.inner.(commandWALPublicRevisionAssigner)
+	if !ok {
+		return fmt.Errorf("treedb: command wal batch requires cached revision assignment")
+	}
+	assigner.AssignExternalCommandWALPointRevisions()
+	return nil
+}
+
+func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
 	}
 	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		return b.db.appendPublicRawKVCommandPayloadPrepared(func() ([]byte, error) {
-			if assignRevision != nil {
-				assignRevision()
+			if err := b.assignCommandWALPointRevisions(); err != nil {
+				return nil, err
 			}
 			return b.commandWALPayload()
 		}, sync, &b.groupPublication)
 	}
 	return b.db.appendPublicRawKVCommandEntryScanPrepared(func() error {
-		if assignRevision != nil {
-			assignRevision()
-		}
-		return nil
+		return b.assignCommandWALPointRevisions()
 	}, b.inner.Replay, b.opCount, sync, &b.groupPublication)
 }
 
-func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool, revisionAllocators ...func() page.EntryRevision) (db.CommandWALRequestTiming, error) {
+func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool) (db.CommandWALRequestTiming, error) {
 	var timing db.CommandWALRequestTiming
 	if b == nil || b.inner == nil || b.db == nil {
 		return timing, ErrClosed
-	}
-	var assignRevision func() page.EntryRevision
-	if len(revisionAllocators) != 0 {
-		assignRevision = revisionAllocators[0]
 	}
 	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		var preparation time.Duration
 		timing, err := b.db.appendPublicRawKVCommandPayloadPreparedMeasured(func() ([]byte, error) {
 			preparationStart := time.Now()
-			if assignRevision != nil {
-				assignRevision()
+			if prepareErr := b.assignCommandWALPointRevisions(); prepareErr != nil {
+				preparation += time.Since(preparationStart)
+				return nil, prepareErr
 			}
 			payload, prepareErr := b.commandWALPayload()
 			preparation += time.Since(preparationStart)
@@ -1375,11 +1381,9 @@ func (b *commandWALPublicBatch) appendCommandWALMeasured(sync bool, revisionAllo
 	var preparation time.Duration
 	timing, err := b.db.appendPublicRawKVCommandEntryScanPreparedMeasured(func() error {
 		preparationStart := time.Now()
-		if assignRevision != nil {
-			assignRevision()
-		}
+		prepareErr := b.assignCommandWALPointRevisions()
 		preparation += time.Since(preparationStart)
-		return nil
+		return prepareErr
 	}, b.inner.Replay, b.opCount, sync, &b.groupPublication)
 	timing.PublicPayloadEntryScanPreparation += preparation
 	timing.PublicPreparationObserved = true

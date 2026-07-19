@@ -35598,9 +35598,9 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 
 // WriteAfterCommandWALAppendWithPreparedRevision is the ordered-revision
 // variant used by the public command-WAL adapter. Legacy point revisions remain
-// unassigned through preflight; appendCommand must invoke assignRevision while
-// holding the command-WAL append serialization boundary.
-func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+// unassigned through preflight; appendCommand must arrange their assignment
+// while holding the command-WAL append serialization boundary.
+func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func() error) error {
 	if b == nil || b.db == nil {
 		return backenddb.ErrClosed
 	}
@@ -35621,9 +35621,7 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, append
 	prevAppend := b.commandWALAppend
 	prevPreparedRevision := b.commandWALPreparedRevision
 	b.commandWALPreparedRevision = true
-	b.commandWALAppend = func() error {
-		return appendCommand(b.AssignExternalCommandWALPointRevisions)
-	}
+	b.commandWALAppend = appendCommand
 	defer func() {
 		b.commandWALAppend = prevAppend
 		b.commandWALPreparedRevision = prevPreparedRevision
@@ -35693,7 +35691,7 @@ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func
 // WriteAfterCommandWALAppendWithPreparedRevisionMeasured preserves the prepared
 // revision ordering while exposing the same phase diagnostics as the ordinary
 // measured command-WAL batch path.
-func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func(assignRevision func() page.EntryRevision) error) (timing CommandWALBatchWriteTiming, err error) {
+func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
 	if b == nil || b.db == nil {
 		return timing, backenddb.ErrClosed
 	}
@@ -35721,7 +35719,7 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool
 		callbackStart := time.Now()
 		timing.PreflightMaterialization = callbackStart.Sub(phaseStart)
 		callbackInvoked = true
-		appendErr := appendCommand(b.AssignExternalCommandWALPointRevisions)
+		appendErr := appendCommand()
 		postCallbackStart = time.Now()
 		timing.CommandCallback = postCallbackStart.Sub(callbackStart)
 		return appendErr
