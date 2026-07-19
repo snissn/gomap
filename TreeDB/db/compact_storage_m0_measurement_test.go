@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const compactStorageMeasurementSchemaVersion = 2
+
 type compactStorageMeasurementFixture struct {
 	Name                      string `json:"name"`
 	Seed                      uint64 `json:"seed"`
@@ -176,7 +178,7 @@ func newCompactStorageMeasurementWithPlan(
 	recorder compactStorageMeasurementRecorder,
 ) compactStorageMeasurement {
 	m := compactStorageMeasurement{
-		SchemaVersion:      1,
+		SchemaVersion:      compactStorageMeasurementSchemaVersion,
 		ArtifactName:       artifactName,
 		Fixture:            fixture,
 		TotalWallTimeNanos: totalWallTimeNanos,

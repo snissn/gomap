@@ -205,7 +205,7 @@ func TestWriteCompactStorageM0ArtifactPersistsCanonicalJSON(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchemaVersion != 1 || decoded.ArtifactName != measurement.ArtifactName {
+	if decoded.SchemaVersion != compactStorageMeasurementSchemaVersion || decoded.ArtifactName != measurement.ArtifactName {
 		t.Fatalf("artifact=%+v", decoded)
 	}
 }
@@ -333,6 +333,8 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 		"mktemp -d \"$TMP_ROOT/compact_storage_m0_XXXXXX\"",
 		"allowed=$(awk '/^Cpus_allowed_list:",
 		"CPU_SET=${CPU_SET:-$(default_cpu_set)}",
+		"ARTIFACT_SCHEMA_VERSION=2",
+		".schema_version == $want",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("profile script missing %q", want)

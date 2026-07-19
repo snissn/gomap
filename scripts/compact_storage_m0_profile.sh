@@ -6,6 +6,7 @@ TMP_ROOT=${TMPDIR:-/tmp}
 mkdir -p "$TMP_ROOT"
 RUN_DIR=${RUN_DIR:-$(mktemp -d "$TMP_ROOT/compact_storage_m0_XXXXXX")}
 COUNT=${COUNT:-12}
+ARTIFACT_SCHEMA_VERSION=2
 
 default_cpu_set() {
   local allowed range start end cpu
@@ -72,6 +73,7 @@ run_go_test() {
   printf 'cpu=%s\n' "$(lscpu | awk -F: '/Model name/{sub(/^[ \t]+/, "", $2); print $2; exit}')"
   printf 'memory=%s\n' "$(free -h | awk '/^Mem:/{print $2 " total, " $7 " available"}')"
   printf 'count=%s\n' "$COUNT"
+  printf 'artifact_schema_version=%s\n' "$ARTIFACT_SCHEMA_VERSION"
   printf 'canonical_command=go test ./TreeDB/db -run ^$ -bench %s -benchtime=1x -count=1 -benchmem\n' "$BENCH"
 } >"$RUN_DIR/environment.txt"
 
@@ -172,6 +174,13 @@ TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS=1 \
   -o "$RUN_DIR/syscalls/strace_raw.txt" \
   go test ./TreeDB/db -run '^$' -bench "$STRESS" -benchtime=1x -count=1 -benchmem \
   >"$RUN_DIR/syscalls/raw.txt" 2>"$RUN_DIR/syscalls/stderr.txt"
+
+while IFS= read -r -d '' artifact; do
+  if ! jq -e --argjson want "$ARTIFACT_SCHEMA_VERSION" '.schema_version == $want' "$artifact" >/dev/null; then
+    printf 'artifact schema mismatch: %s (want %s)\n' "$artifact" "$ARTIFACT_SCHEMA_VERSION" >&2
+    exit 1
+  fi
+done < <(find "$RUN_DIR" -name 'sample-*.json' -print0)
 
 awk '
   /TREEDB_M0_BEGIN/ { capture=1; next }
