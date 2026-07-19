@@ -68,7 +68,8 @@ Every local response MUST report
 `exact_hnsw_search_pack_v1`, an active pack, and zero pack fallbacks. The
 harness fails instead of accepting another route. Repeated overlap rows reuse
 a cache whose key contains the query, top-k, and sorted partition-ID set.
-Artifacts distinguish logical, executed, and cached searches.
+Artifacts distinguish logical, executed, and cached searches, and serialize
+all HNSW evidence counters even when their value is explicitly zero.
 This is real TreeDB local-HNSW loss attribution, but its temporary modulo
 partitioning, sequential coordinator, and absent network/Raft path remain
 non-production simulation. With every partition probed, the partition oracle
@@ -81,10 +82,25 @@ fixtures with at least ten vectors and every available neighbor for smaller
 fixtures. The generated corpus includes an explicit duplicate/tie case,
 clusters, and boundary shape. Tests resolve the
 single root fixture from `cmd/treedb_vector_partition_bench`. The manifest read
-itself has a 64 KiB bound. Combined vector/query counts and bytes, dimensions,
-partition count, and result metrics are validated before allocating large work
-buffers or building TreeDB evidence. The JSON schema version is strict; unknown
-versions and non-finite metrics are rejected by the executable contract.
+itself has a 64 KiB bound. `-seed` MUST equal the manifest generation seed;
+the result repeats that bound seed and its fixed-width bit pattern is part of
+the artifact basename. Combined vector/query counts, dimensions, partition
+count, and result metrics are validated before allocating large work buffers
+or building TreeDB evidence. The JSON schema version is strict; unknown
+versions, non-finite metrics, and provenance other than exact 40-hex SHAs are
+rejected by the executable contract.
+
+`-max-fixture-bytes` caps a conservative model of simultaneous live,
+benchmark-owned material rather than only raw vector elements. The preflight
+model includes contiguous generated `float64` vector/query matrices and row
+headers, bounded exact and selected top-k candidates, representative routing,
+whole-partition HNSW JSON serialization plus decoded JSON/vector batch material,
+HNSW query merge storage, and the persistent cross-overlap HNSW result cache.
+It applies 25 percent allocation slack. It explicitly excludes TreeDB engine
+and index internals, Go runtime/GC metadata, and CLI/artifact encoding. The
+artifact records the requested cap, modeled peak, and this scope. Checksum
+validation consumes the already generated matrices and does not regenerate a
+second full fixture.
 
 The schema reserves every descendant evidence family even when M0 emits
 `measurement_status=simulation_not_measured` and explicit finite zero values:
@@ -92,8 +108,10 @@ build wall/CPU/RSS/temp/final bytes; balance/cut/overlap; representatives and
 router latency; fanout/RPC/bytes/shard/merge/failure counters; and QPS,
 percentiles, recall@1/10/100, allocations, resident/mapped bytes. Artifact
 provenance is the real `HEAD` and `merge-base HEAD origin/main`, a bounded
-`pull_request.base.sha` from `GITHUB_EVENT_PATH` in shallow PR CI, or explicit
-`GITHUB_SHA`/`BASE_SHA` overrides; empty/local provenance is rejected.
+`pull_request.base.sha` and `pull_request.head.sha` pair from
+`GITHUB_EVENT_PATH` in shallow PR CI, or explicit `GITHUB_SHA`/`BASE_SHA`
+overrides. A PR event head replaces GitHub's synthetic merge `GITHUB_SHA`;
+empty or malformed provenance is rejected.
 
 ## Parent invariant matrix
 

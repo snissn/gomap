@@ -321,21 +321,42 @@ func writeExactTruthJSONL(path string, cfg config, files map[string]fileManifest
 }
 
 func exactTruthForQuery(query []float32, docs, dims, topK int) []truthNeighbor {
+	return exactTruthForVectors(query, docs, topK, func(document int) []float32 {
+		return embedding(document, dims)
+	})
+}
+
+func exactTruthForVectors(query []float32, docs, topK int, vector func(int) []float32) []truthNeighbor {
 	neighbors := make([]truthNeighbor, docs)
 	for document := 0; document < docs; document++ {
-		var dot float64
-		for dimension, value := range embedding(document, dims) {
-			dot += float64(value) * float64(query[dimension])
-		}
 		neighbors[document] = truthNeighbor{
 			DocumentID: documentID(document),
-			Distance:   1 - dot,
+			Distance:   cosineDistance(query, vector(document)),
 		}
 	}
 	sort.Slice(neighbors, func(i, j int) bool {
 		return truthNeighborLess(neighbors[i], neighbors[j])
 	})
 	return neighbors[:topK]
+}
+
+func cosineDistance(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return math.NaN()
+	}
+	var dot, normA, normB float64
+	for i, av := range a {
+		bv := b[i]
+		dot += float64(av) * float64(bv)
+		normA += float64(av) * float64(av)
+		normB += float64(bv) * float64(bv)
+	}
+	if normA == 0 || normB == 0 {
+		return 1
+	}
+	similarity := dot / math.Sqrt(normA*normB)
+	similarity = max(-1, min(1, similarity))
+	return 1 - similarity
 }
 
 func truthNeighborLess(a, b truthNeighbor) bool {

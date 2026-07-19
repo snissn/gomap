@@ -112,13 +112,16 @@ func TestExportExactTruthMatchesIndependentSmallCorpusRecomputation(t *testing.T
 		}
 		want := make([]truthNeighbor, docs)
 		for documentIndex, document := range documentVectors {
-			var dot float64
+			var dot, documentNorm, queryNorm float64
 			for d, value := range document {
-				dot += float64(value) * float64(queryVectors[queryIndex][d])
+				queryValue := queryVectors[queryIndex][d]
+				dot += float64(value) * float64(queryValue)
+				documentNorm += float64(value) * float64(value)
+				queryNorm += float64(queryValue) * float64(queryValue)
 			}
 			want[documentIndex] = truthNeighbor{
 				DocumentID: fmt.Sprintf("doc-%06d", documentIndex),
-				Distance:   1 - dot,
+				Distance:   1 - dot/math.Sqrt(documentNorm*queryNorm),
 			}
 		}
 		sort.Slice(want, func(i, j int) bool {
@@ -136,6 +139,36 @@ func TestExportExactTruthMatchesIndependentSmallCorpusRecomputation(t *testing.T
 				t.Fatalf("query %d rank %d got=%+v want=%+v", queryIndex, rank, got.Neighbors[rank], want[rank])
 			}
 		}
+	}
+}
+
+func TestExactCosineTruthNormalizesNonUnitVectorsAndOrdersTies(t *testing.T) {
+	query := []float32{3, 4}
+	documents := [][]float32{
+		{6, 8},
+		{1, 1},
+		{-4, 3},
+		{1.5, 2},
+		{0, 5},
+	}
+	got := exactTruthForVectors(query, len(documents), len(documents), func(i int) []float32 {
+		return documents[i]
+	})
+	wantIDs := []string{"doc-000000", "doc-000003", "doc-000001", "doc-000004", "doc-000002"}
+	for i, wantID := range wantIDs {
+		if got[i].DocumentID != wantID {
+			t.Fatalf("rank %d id=%q want %q; truth=%+v", i, got[i].DocumentID, wantID, got)
+		}
+	}
+	if math.Abs(got[0].Distance) > 1e-15 || math.Abs(got[1].Distance) > 1e-15 {
+		t.Fatalf("same-direction non-unit vectors must have distance ~0: %+v", got[:2])
+	}
+	wantDiagonal := 1 - 7/(5*math.Sqrt(2))
+	if math.Abs(got[2].Distance-wantDiagonal) > 1e-15 {
+		t.Fatalf("diagonal distance=%g want %g", got[2].Distance, wantDiagonal)
+	}
+	if math.Abs(got[3].Distance-0.2) > 1e-15 || math.Abs(got[4].Distance-1) > 1e-15 {
+		t.Fatalf("nontrivial cosine ranking distances=%+v", got)
 	}
 }
 

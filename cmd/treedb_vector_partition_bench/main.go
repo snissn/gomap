@@ -4,6 +4,7 @@
 package main
 
 import (
+	"container/heap"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -20,21 +21,30 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
-	schemaVersion             = 1
-	maxVectors                = 1_000_000
-	maxDimensions             = 4_096
-	maxPartitions             = 16_384
-	maxFixtureBytes     int64 = 4 << 30
-	maxManifestBytes    int64 = 64 << 10
-	maxGitHubEventBytes int64 = 2 << 20
-	partitionHNSWIndex        = "embedding_graph"
-	partitionHNSWDegree       = 16
+	schemaVersion                   = 1
+	maxVectors                      = 1_000_000
+	maxDimensions                   = 4_096
+	maxPartitions                   = 16_384
+	maxFixtureBytes           int64 = 4 << 30
+	maxManifestBytes          int64 = 64 << 10
+	maxGitHubEventBytes       int64 = 2 << 20
+	partitionHNSWIndex              = "embedding_graph"
+	partitionHNSWDegree             = 16
+	documentIDStorageBytes          = 16
+	hnswJSONFloatBytes              = 24
+	hnswJSONFixedBytes              = 64
+	hnswDecodedDimensionBytes       = 32
+	memoryMapEntryBytes             = 64
+	memorySlackNumerator            = 5
+	memorySlackDenominator          = 4
+	memoryBudgetScope               = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
 )
 
 type config struct {
@@ -54,6 +64,7 @@ type config struct {
 	baseSHA      string
 	headSHA      string
 	hnsw         *treeDBPartitionHNSW
+	memory       benchmarkMemoryPlan
 }
 
 type fixtureManifest struct {
@@ -83,12 +94,34 @@ type stageResult struct {
 	Available                 bool    `json:"available"`
 	UnavailableReason         string  `json:"unavailable_reason,omitempty"`
 	RouteKind                 string  `json:"route_kind,omitempty"`
-	Searches                  uint64  `json:"searches,omitempty"`
-	ExecutedSearches          uint64  `json:"executed_searches,omitempty"`
-	CachedSearches            uint64  `json:"cached_searches,omitempty"`
-	SearchRouteHNSWSearchPack uint64  `json:"search_route_hnsw_search_pack,omitempty"`
-	HNSWSearchPackActive      uint64  `json:"hnsw_search_pack_active,omitempty"`
-	HNSWSearchPackFallbacks   uint64  `json:"hnsw_search_pack_fallbacks,omitempty"`
+	Searches                  uint64  `json:"searches"`
+	ExecutedSearches          uint64  `json:"executed_searches"`
+	CachedSearches            uint64  `json:"cached_searches"`
+	SearchRouteHNSWSearchPack uint64  `json:"search_route_hnsw_search_pack"`
+	HNSWSearchPackActive      uint64  `json:"hnsw_search_pack_active"`
+	HNSWSearchPackFallbacks   uint64  `json:"hnsw_search_pack_fallbacks"`
+}
+
+type scoredNeighbor struct {
+	Index    int
+	Distance float64
+}
+
+type scoredNeighborMaxHeap []scoredNeighbor
+
+func (h scoredNeighborMaxHeap) Len() int { return len(h) }
+func (h scoredNeighborMaxHeap) Less(i, j int) bool {
+	return scoredNeighborLess(h[j], h[i])
+}
+func (h scoredNeighborMaxHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *scoredNeighborMaxHeap) Push(x any) {
+	*h = append(*h, x.(scoredNeighbor))
+}
+func (h *scoredNeighborMaxHeap) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
 }
 
 type hnswSearchEvidence struct {
@@ -118,6 +151,14 @@ type treeDBPartitionHNSW struct {
 	rowCounts        []int
 	cache            map[hnswCacheKey]hnswSearchOutcome
 	physicalSearches uint64
+}
+
+type benchmarkMemoryPlan struct {
+	FixtureResidentBytes int64
+	SimulationWorkBytes  int64
+	HNSWInsertWorkBytes  int64
+	HNSWCacheBytes       int64
+	ModeledPeakBytes     int64
 }
 
 // metricsV1 reserves every M0 evidence field. Simulation leaves production-only
@@ -179,6 +220,9 @@ type runResult struct {
 	TopK               int             `json:"top_k"`
 	RecallTarget       float64         `json:"recall_target"`
 	Seed               int64           `json:"seed"`
+	MemoryBudgetBytes  int64           `json:"memory_budget_bytes"`
+	ModeledPeakBytes   int64           `json:"modeled_peak_bytes"`
+	MemoryBudgetScope  string          `json:"memory_budget_scope"`
 	Warmup             int             `json:"warmup"`
 	Samples            int             `json:"samples"`
 	TimedBoundary      string          `json:"timed_boundary"`
@@ -215,8 +259,18 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if cfg.partitions > fixture.Vectors {
 		return errors.New("partitions cannot exceed fixture vectors")
 	}
+	if cfg.seed != fixture.Seed {
+		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
+	}
+	cfg.memory, err = planBenchmarkMemory(cfg, fixture)
+	if err != nil {
+		return err
+	}
+	if cfg.memory.ModeledPeakBytes > cfg.maxBytes {
+		return fmt.Errorf("modeled peak benchmark-owned memory %d exceeds -max-fixture-bytes %d", cfg.memory.ModeledPeakBytes, cfg.maxBytes)
+	}
 	vectors, queries := deterministicFixture(fixture)
-	if fixtureChecksum(fixture.Vectors, fixture.Queries, fixture.Dimensions, fixture.Seed) != fixture.Checksum {
+	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
 	if cfg.stages["treedb_partition_local_hnsw"] {
@@ -262,12 +316,12 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&overlap, "overlap", "0", "comma-separated derived overlap budgets")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "top-k")
 	fs.Float64Var(&cfg.recallTarget, "recall-target", cfg.recallTarget, "recall target")
-	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "simulation seed")
+	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
-	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum vector or query bytes before allocation")
+	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -350,6 +404,17 @@ func parseFloats(raw string) ([]float64, error) {
 }
 func provenance() (string, string, error) {
 	base, head := os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
+	if base == "" || head == "" {
+		if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
+			eventBase, eventHead, isPullRequest, err := pullRequestSHAsFromEvent(eventPath)
+			if err != nil {
+				return "", "", fmt.Errorf("GitHub event provenance: %w", err)
+			}
+			if isPullRequest {
+				base, head = eventBase, eventHead
+			}
+		}
+	}
 	if head == "" {
 		out, err := exec.Command("git", "rev-parse", "HEAD").Output()
 		if err != nil {
@@ -358,62 +423,64 @@ func provenance() (string, string, error) {
 		head = strings.TrimSpace(string(out))
 	}
 	if base == "" {
-		if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
-			eventBase, err := pullRequestBaseSHAFromEvent(eventPath)
-			if err != nil {
-				return "", "", fmt.Errorf("GitHub event base SHA: %w", err)
-			}
-			base = eventBase
-		}
-	}
-	if base == "" {
 		out, err := exec.Command("git", "merge-base", "HEAD", "origin/main").Output()
 		if err != nil {
 			return "", "", errors.New("git merge-base unavailable: set BASE_SHA")
 		}
 		base = strings.TrimSpace(string(out))
 	}
-	if _, err := hex.DecodeString(base); err != nil || len(base) != 40 {
+	if !validSHA(base) {
 		return "", "", errors.New("invalid BASE_SHA")
 	}
-	if _, err := hex.DecodeString(head); err != nil || len(head) != 40 {
+	if !validSHA(head) {
 		return "", "", errors.New("invalid GITHUB_SHA")
 	}
 	return base, head, nil
 }
 
-func pullRequestBaseSHAFromEvent(path string) (string, error) {
+func validSHA(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func pullRequestSHAsFromEvent(path string) (string, string, bool, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
 	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, maxGitHubEventBytes+1))
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
 	if int64(len(raw)) > maxGitHubEventBytes {
-		return "", fmt.Errorf("event payload exceeds %d-byte cap", maxGitHubEventBytes)
+		return "", "", false, fmt.Errorf("event payload exceeds %d-byte cap", maxGitHubEventBytes)
 	}
 	var event struct {
 		PullRequest *struct {
 			Base struct {
 				SHA string `json:"sha"`
 			} `json:"base"`
+			Head struct {
+				SHA string `json:"sha"`
+			} `json:"head"`
 		} `json:"pull_request"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	if err := decoder.Decode(&event); err != nil {
-		return "", err
+		return "", "", false, err
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return "", errors.New("GitHub event has trailing JSON")
+		return "", "", false, errors.New("GitHub event has trailing JSON")
 	}
 	if event.PullRequest == nil {
-		return "", nil
+		return "", "", false, nil
 	}
-	return strings.TrimSpace(event.PullRequest.Base.SHA), nil
+	return strings.TrimSpace(event.PullRequest.Base.SHA), strings.TrimSpace(event.PullRequest.Head.SHA), true, nil
 }
 
 func loadFixture(dir string) (fixtureManifest, error) {
@@ -465,33 +532,254 @@ func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) 
 		return errors.New("combined fixture vector/query count exceeds pre-allocation cap")
 	}
 	if int64(m.Vectors)+int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
-		return errors.New("fixture byte product exceeds pre-allocation cap")
+		return errors.New("fixture float64 data alone exceeds pre-allocation memory cap")
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
 }
 
+func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, error) {
+	if cfg.topK < 1 || cfg.topK > m.Vectors || cfg.partitions < 1 || cfg.partitions > m.Vectors || len(cfg.probes) == 0 {
+		return benchmarkMemoryPlan{}, errors.New("cannot plan memory for invalid top-k, partitions, or probes")
+	}
+	rows, err := memoryAdd(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	fixtureValues, err := memoryMul(rows, int64(m.Dimensions), 8)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	fixtureRows, err := memoryMul(rows, int64(unsafe.Sizeof([]float64{})))
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	fixtureResident, err := memoryAdd(fixtureValues, fixtureRows)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+
+	k := int64(cfg.topK)
+	scoredBytes, err := memoryMul(k, int64(unsafe.Sizeof(scoredNeighbor{})))
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	resultBytes, err := memoryMul(k, int64(unsafe.Sizeof(neighbor{}))+documentIDStorageBytes)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	// One truth result remains live while a second bounded top-k or recall
+	// operation executes. This is deliberately conservative for single-stage runs.
+	simulationWork, err := memoryAdd(scoredBytes, resultBytes, resultBytes, 2*k*memoryMapEntryBytes)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+
+	maxProbes := 0
+	uniqueProbes := make(map[int]struct{}, len(cfg.probes))
+	for _, probes := range cfg.probes {
+		if probes > maxProbes {
+			maxProbes = probes
+		}
+		uniqueProbes[probes] = struct{}{}
+	}
+	needsSelectedTopK := cfg.stages["partition_oracle"] ||
+		cfg.stages["exact_representative_routing"] ||
+		cfg.stages["approximate_representative_routing"] ||
+		cfg.stages["exact_partition_local"] ||
+		cfg.stages["end_to_end_distributed_simulation"]
+	if needsSelectedTopK {
+		simulationWork, err = memoryAdd(simulationWork, int64(cfg.partitions), int64(maxProbes)*8)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+	}
+	needsRepresentatives := cfg.stages["exact_representative_routing"] ||
+		cfg.stages["approximate_representative_routing"] ||
+		cfg.stages["exact_partition_local"] ||
+		cfg.stages["treedb_partition_local_hnsw"] ||
+		cfg.stages["end_to_end_distributed_simulation"]
+	if needsRepresentatives {
+		representativeValues, mulErr := memoryMul(int64(cfg.partitions), int64(m.Dimensions), 8)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		representativeRows, mulErr := memoryMul(int64(cfg.partitions), int64(unsafe.Sizeof([]float64{})))
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		representativeScores, mulErr := memoryMul(int64(cfg.partitions), int64(unsafe.Sizeof(neighbor{}))+documentIDStorageBytes+8)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		simulationWork, err = memoryAdd(simulationWork, representativeValues, representativeRows, representativeScores, int64(maxProbes)*8)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+	}
+
+	plan := benchmarkMemoryPlan{
+		FixtureResidentBytes: fixtureResident,
+		SimulationWorkBytes:  simulationWork,
+	}
+	hnswBaseBytes := int64(0)
+	if cfg.stages["treedb_partition_local_hnsw"] {
+		hnswBaseBytes, err = memoryAdd(
+			int64(cfg.partitions)*int64(unsafe.Sizeof((*collections.Collection)(nil))),
+			int64(cfg.partitions)*8,
+			int64(unsafe.Sizeof(treeDBPartitionHNSW{})),
+		)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+		maxPartitionRows := int64((m.Vectors + cfg.partitions - 1) / cfg.partitions)
+		jsonRowBytes, mulErr := memoryMul(int64(m.Dimensions), hnswJSONFloatBytes+1)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		jsonRowBytes, err = memoryAdd(jsonRowBytes, hnswJSONFixedBytes)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+		perInsertRow, err := memoryAdd(
+			2*int64(unsafe.Sizeof([]byte{})),
+			documentIDStorageBytes,
+			2*jsonRowBytes,
+			int64(m.Dimensions)*hnswDecodedDimensionBytes,
+			int64(unsafe.Sizeof([]float32{})),
+			memoryMapEntryBytes,
+		)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+		plan.HNSWInsertWorkBytes, err = memoryMul(maxPartitionRows, perInsertRow)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+		plan.HNSWInsertWorkBytes, err = memoryAdd(plan.HNSWInsertWorkBytes, int64(m.Dimensions)*4)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+
+		perQueryCache := int64(0)
+		for probes := range uniqueProbes {
+			cachedCandidates, mulErr := memoryMul(k, int64(probes), int64(unsafe.Sizeof(neighbor{}))+documentIDStorageBytes)
+			if mulErr != nil {
+				return benchmarkMemoryPlan{}, mulErr
+			}
+			entryBytes, addErr := memoryAdd(
+				int64(unsafe.Sizeof(hnswCacheKey{})),
+				int64(unsafe.Sizeof(hnswSearchOutcome{})),
+				memoryMapEntryBytes,
+				int64(probes)*6,
+				cachedCandidates,
+			)
+			if addErr != nil {
+				return benchmarkMemoryPlan{}, addErr
+			}
+			perQueryCache, err = memoryAdd(perQueryCache, entryBytes)
+			if err != nil {
+				return benchmarkMemoryPlan{}, err
+			}
+		}
+		plan.HNSWCacheBytes, err = memoryMul(int64(m.Queries), perQueryCache)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+		searchMergeBytes, mulErr := memoryMul(k, int64(maxProbes), int64(unsafe.Sizeof(neighbor{}))+documentIDStorageBytes+memoryMapEntryBytes)
+		if mulErr != nil {
+			return benchmarkMemoryPlan{}, mulErr
+		}
+		plan.SimulationWorkBytes, err = memoryAdd(plan.SimulationWorkBytes, int64(m.Dimensions)*4, searchMergeBytes, int64(maxProbes)*8)
+		if err != nil {
+			return benchmarkMemoryPlan{}, err
+		}
+	}
+
+	checksumPhase, err := memoryAdd(plan.FixtureResidentBytes, scoredBytes, resultBytes)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	hnswBuildPhase, err := memoryAdd(plan.FixtureResidentBytes, hnswBaseBytes, plan.HNSWInsertWorkBytes)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	simulationPhase, err := memoryAdd(plan.FixtureResidentBytes, hnswBaseBytes, plan.HNSWCacheBytes, plan.SimulationWorkBytes)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	peak := max(checksumPhase, max(hnswBuildPhase, simulationPhase))
+	plan.ModeledPeakBytes, err = memoryScaleCeil(peak, memorySlackNumerator, memorySlackDenominator)
+	if err != nil {
+		return benchmarkMemoryPlan{}, err
+	}
+	return plan, nil
+}
+
+func memoryAdd(values ...int64) (int64, error) {
+	var total int64
+	for _, value := range values {
+		if value < 0 || total > math.MaxInt64-value {
+			return 0, errors.New("benchmark memory accounting overflow")
+		}
+		total += value
+	}
+	return total, nil
+}
+
+func memoryMul(values ...int64) (int64, error) {
+	product := int64(1)
+	for _, value := range values {
+		if value < 0 || value != 0 && product > math.MaxInt64/value {
+			return 0, errors.New("benchmark memory accounting overflow")
+		}
+		product *= value
+	}
+	return product, nil
+}
+
+func memoryScaleCeil(value, numerator, denominator int64) (int64, error) {
+	scaled, err := memoryMul(value, numerator)
+	if err != nil {
+		return 0, err
+	}
+	scaled, err = memoryAdd(scaled, denominator-1)
+	if err != nil {
+		return 0, err
+	}
+	return scaled / denominator, nil
+}
+
 // deterministicFixture has intentionally visible cluster/boundary pairs and a
 // duplicate pair, so tie ordering remains part of the executable M0 contract.
 func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
-	v := make([][]float64, m.Vectors)
+	v := contiguousFloat64Matrix(m.Vectors, m.Dimensions)
 	for i := range v {
-		row := make([]float64, m.Dimensions)
+		row := v[i]
 		cluster := (i / 97) % 4
 		row[cluster%m.Dimensions] = 1
 		for d := 4; d < m.Dimensions; d++ {
 			row[d] = float64(((i+1)*(d+3)+int(m.Seed))%31) / 310
 		}
-		v[i] = normalize(row)
+		normalize(row)
 	}
 	if len(v) > 1 {
-		v[1] = append([]float64(nil), v[0]...)
+		copy(v[1], v[0])
 	}
-	q := make([][]float64, m.Queries)
+	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
 	for i := range q {
-		q[i] = append([]float64(nil), v[(i*7919+17)%len(v)]...)
+		copy(q[i], v[(i*7919+17)%len(v)])
 	}
 	return v, q
+}
+
+func contiguousFloat64Matrix(rows, dimensions int) [][]float64 {
+	matrix := make([][]float64, rows)
+	values := make([]float64, rows*dimensions)
+	for row := range matrix {
+		matrix[row] = values[row*dimensions : (row+1)*dimensions]
+	}
+	return matrix
 }
 func normalize(v []float64) []float64 {
 	var n float64
@@ -505,55 +793,60 @@ func normalize(v []float64) []float64 {
 	return v
 }
 func exactTopK(v [][]float64, q []float64, k int) []neighbor {
-	out := make([]neighbor, len(v))
-	for i, row := range v {
-		var dot float64
-		for d := range row {
-			dot += row[d] * q[d]
-		}
-		out[i] = neighbor{ID: fmt.Sprintf("doc-%06d", i), Distance: 1 - dot}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Distance == out[j].Distance {
-			return out[i].ID < out[j].ID
-		}
-		return out[i].Distance < out[j].Distance
-	})
-	return out[:k]
+	return boundedVectorTopK(v, q, k, func(int) bool { return true })
 }
-func partitionTopK(v [][]float64, q []float64, k, partitions, probes int) []neighbor {
-	selected := make([]int, probes)
-	for i := range selected {
-		selected[i] = i
-	}
-	return selectedPartitionTopK(v, q, k, partitions, selected)
-}
+
 func selectedPartitionTopK(v [][]float64, q []float64, k, partitions int, selected []int) []neighbor {
-	want := map[int]bool{}
-	for _, p := range selected {
-		want[p] = true
+	wanted := make([]bool, partitions)
+	for _, partition := range selected {
+		wanted[partition] = true
 	}
-	all := make([]neighbor, 0, len(v)*len(selected)/partitions+1)
+	return boundedVectorTopK(v, q, k, func(index int) bool {
+		return wanted[index%partitions]
+	})
+}
+
+func boundedVectorTopK(v [][]float64, q []float64, k int, include func(int) bool) []neighbor {
+	candidates := make(scoredNeighborMaxHeap, 0, min(k, len(v)))
 	for i, row := range v {
-		if !want[i%partitions] {
+		if !include(i) {
 			continue
 		}
 		var dot float64
 		for d := range row {
 			dot += row[d] * q[d]
 		}
-		all = append(all, neighbor{fmt.Sprintf("doc-%06d", i), 1 - dot})
-	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].Distance == all[j].Distance {
-			return all[i].ID < all[j].ID
+		candidate := scoredNeighbor{Index: i, Distance: 1 - dot}
+		if len(candidates) < k {
+			heap.Push(&candidates, candidate)
+		} else if scoredNeighborLess(candidate, candidates[0]) {
+			candidates[0] = candidate
+			heap.Fix(&candidates, 0)
 		}
-		return all[i].Distance < all[j].Distance
-	})
-	if len(all) < k {
-		return all
 	}
-	return all[:k]
+	sort.Slice(candidates, func(i, j int) bool {
+		return scoredNeighborLess(candidates[i], candidates[j])
+	})
+	out := make([]neighbor, len(candidates))
+	for i, candidate := range candidates {
+		out[i] = neighbor{ID: fmt.Sprintf("doc-%06d", candidate.Index), Distance: candidate.Distance}
+	}
+	return out
+}
+
+func scoredNeighborLess(a, b scoredNeighbor) bool {
+	if a.Distance == b.Distance {
+		return a.Index < b.Index
+	}
+	return a.Distance < b.Distance
+}
+
+func partitionTopK(v [][]float64, q []float64, k, partitions, probes int) []neighbor {
+	selected := make([]int, probes)
+	for i := range selected {
+		selected[i] = i
+	}
+	return selectedPartitionTopK(v, q, k, partitions, selected)
 }
 func orderedEqual(a, b []neighbor) bool {
 	if len(a) != len(b) {
@@ -567,13 +860,10 @@ func orderedEqual(a, b []neighbor) bool {
 	return true
 }
 func representativePartitions(v [][]float64, q []float64, partitions, probes int, approx bool) []int {
-	sums := make([][]float64, partitions)
+	sums := contiguousFloat64Matrix(partitions, len(q))
 	counts := make([]int, partitions)
 	for i, row := range v {
 		p := i % partitions
-		if sums[p] == nil {
-			sums[p] = make([]float64, len(q))
-		}
 		for d := range row {
 			sums[p][d] += row[d]
 		}
@@ -962,7 +1252,31 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		}
 	}
 	metrics := metricsV1{MeasurementStatus: "simulation_not_measured", Balance: 1, MaxPartitionSize: (len(v) + cfg.partitions - 1) / cfg.partitions, ReplicationFactor: 1, UnassignedOverlapBudget: overlap, RoutedPartitionRecall: totals["end_to_end_distributed_simulation"] / n, SelectedPartitions: probes}
-	r := runResult{SchemaVersion: schemaVersion, ResultKind: "simulation_only", ProductionEvidence: false, Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, GoVersion: runtime.Version(), Hardware: runtime.GOARCH + "/" + runtime.GOOS, Dataset: m, Partitions: cfg.partitions, Overlap: overlap, Probes: probes, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Seed: cfg.seed, Warmup: 0, Samples: len(q), TimedBoundary: "untimed M0 attribution: in-memory oracles plus temporary local TreeDB column_graph build/search; excludes network, RPC, coordinator, and Raft", Stages: selected, Metrics: metrics}
+	r := runResult{
+		SchemaVersion:      schemaVersion,
+		ResultKind:         "simulation_only",
+		ProductionEvidence: false,
+		Command:            cfg.command,
+		BaseSHA:            cfg.baseSHA,
+		HeadSHA:            cfg.headSHA,
+		GoVersion:          runtime.Version(),
+		Hardware:           runtime.GOARCH + "/" + runtime.GOOS,
+		Dataset:            m,
+		Partitions:         cfg.partitions,
+		Overlap:            overlap,
+		Probes:             probes,
+		TopK:               cfg.topK,
+		RecallTarget:       cfg.recallTarget,
+		Seed:               cfg.seed,
+		MemoryBudgetBytes:  cfg.maxBytes,
+		ModeledPeakBytes:   cfg.memory.ModeledPeakBytes,
+		MemoryBudgetScope:  memoryBudgetScope,
+		Warmup:             0,
+		Samples:            len(q),
+		TimedBoundary:      "untimed M0 attribution: in-memory oracles plus temporary local TreeDB column_graph build/search; excludes network, RPC, coordinator, and Raft",
+		Stages:             selected,
+		Metrics:            metrics,
+	}
 	if cfg.stages["partition_oracle"] && probes == cfg.partitions && !exactParity {
 		return r, errors.New("all-partition oracle parity failure")
 	}
@@ -1007,8 +1321,14 @@ func validateResult(r runResult) error {
 			}
 		}
 	}
-	if len(r.BaseSHA) < 7 || len(r.HeadSHA) < 7 {
-		return errors.New("missing git provenance")
+	if !validSHA(r.BaseSHA) || !validSHA(r.HeadSHA) {
+		return errors.New("result provenance must contain exact 40-hex base/head SHAs")
+	}
+	if r.Seed != r.Dataset.Seed {
+		return errors.New("result seed does not match fixture generation seed")
+	}
+	if r.MemoryBudgetBytes < 1 || r.ModeledPeakBytes < 1 || r.ModeledPeakBytes > r.MemoryBudgetBytes || r.MemoryBudgetScope != memoryBudgetScope {
+		return errors.New("invalid benchmark-owned memory budget evidence")
 	}
 	if r.Metrics.MeasurementStatus != "simulation_not_measured" {
 		return errors.New("unknown metric measurement status")
@@ -1042,15 +1362,19 @@ func writeArtifacts(out string, r runResult) error {
 			hnswSummary = fmt.Sprintf("recall@%d: %.4f; route=%s; logical_searches=%d; executed=%d; cached=%d; fallbacks=%d", r.TopK, s.RecallAtK, s.RouteKind, s.Searches, s.ExecutedSearches, s.CachedSearches, s.HNSWSearchPackFallbacks)
 		}
 	}
-	md := fmt.Sprintf("# TreeDB vector partition M0 simulation\n\n**Simulation only; not production Raft evidence.**\n\n- fixture: `%s` (%s)\n- probes: %d/%d\n- overlap budget: %.6g\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- timed boundary: %s\n", r.Dataset.Fixture, r.Dataset.Checksum, r.Probes, r.Partitions, r.Overlap, hnswSummary, stageSummary, r.TimedBoundary)
+	md := fmt.Sprintf("# TreeDB vector partition M0 simulation\n\n**Simulation only; not production Raft evidence.**\n\n- fixture: `%s` (%s)\n- seed: %d\n- modeled benchmark-owned peak: %d/%d bytes\n- memory budget scope: %s\n- probes: %d/%d\n- overlap budget: %.6g\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- timed boundary: %s\n", r.Dataset.Fixture, r.Dataset.Checksum, r.Seed, r.ModeledPeakBytes, r.MemoryBudgetBytes, r.MemoryBudgetScope, r.Probes, r.Partitions, r.Overlap, hnswSummary, stageSummary, r.TimedBoundary)
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
 }
 func artifactBasename(r runResult) string {
-	return fmt.Sprintf("simulation_p%d_o%016x_k%d", r.Probes, math.Float64bits(r.Overlap), r.TopK)
+	return fmt.Sprintf("simulation_s%016x_p%d_o%016x_k%d", uint64(r.Seed), r.Probes, math.Float64bits(r.Overlap), r.TopK)
 }
 func fixtureChecksum(vectors, queries, dims int, seed int64) string {
 	m := fixtureManifest{Vectors: vectors, Queries: queries, Dimensions: dims, Seed: seed}
 	v, q := deterministicFixture(m)
+	return fixtureChecksumFromData(v, q)
+}
+
+func fixtureChecksumFromData(v, q [][]float64) string {
 	h := sha256.New()
 	var b [8]byte
 	for _, set := range [][][]float64{v, q} {
