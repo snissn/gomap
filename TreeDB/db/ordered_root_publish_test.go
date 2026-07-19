@@ -269,6 +269,72 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextPreservesExactValueLog
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextProjectsCollectionDescriptorReachability(t *testing.T) {
+	tests := []struct {
+		name    string
+		publish func(*testing.T, *DB) error
+	}{
+		{
+			name: "iterator-group",
+			publish: func(t *testing.T, db *DB) error {
+				rootDelta := mustFrozenSystemMemtable(t, "doc/a", "value-a")
+				_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+					[]OrderedRootDeltaPublishInput{{BaseRoot: 0, Iter: rootDelta.NewIterator(nil, nil)}},
+					mustRawKVCommandWALIntent(t, db, "cmd/descriptor-iterator", "1"),
+					func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenRawMemtable(t,
+							collectionRootDescriptorPrefix+"command-wal-iterator",
+							encodeMaintenanceRootID(rootIDs[0]),
+						).NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "batch-group",
+			publish: func(t *testing.T, db *DB) error {
+				rootIter := mustFrozenSystemMemtable(t, "doc/a", "value-a").NewIterator(nil, nil)
+				rootDelta, err := OrderedRootDeltaBatchFromIterator(rootIter)
+				_ = rootIter.Close()
+				if err != nil {
+					return err
+				}
+				defer func() { _ = rootDelta.Close() }()
+				_, _, err = db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+					[]OrderedRootDeltaBatchPublishInput{{BaseRoot: 0, Delta: rootDelta}},
+					mustRawKVCommandWALIntent(t, db, "cmd/descriptor-batch", "1"),
+					func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenRawMemtable(t,
+							collectionRootDescriptorPrefix+"command-wal-batch",
+							encodeMaintenanceRootID(rootIDs[0]),
+						).NewIterator(nil, nil), nil
+					},
+				)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			defer db.Close()
+
+			var scans atomic.Int64
+			db.testScanCandidateExternalReferencesHook = func() { scans.Add(1) }
+			if err := test.publish(t, db); err != nil {
+				t.Fatalf("publish: %v", err)
+			}
+			db.testScanCandidateExternalReferencesHook = nil
+			if got := scans.Load(); got != 1 {
+				t.Fatalf("candidate dependency scans=%d want 1 for collection descriptor reachability", got)
+			}
+		})
+	}
+}
+
 func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	tests := []struct {
 		name    string
