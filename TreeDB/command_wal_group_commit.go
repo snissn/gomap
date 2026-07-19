@@ -58,11 +58,13 @@ type publicCommandWALGroupCommit struct {
 	waitNsTotal          atomic.Uint64
 	waitNsMax            atomic.Uint64
 	bypassRelaxedNoGroup atomic.Uint64
+	bypassSoloDurable    atomic.Uint64
 }
 
 type publicCommandWALPublication struct {
 	ticket      uint64
 	fastRelaxed bool
+	groupWait   bool
 }
 
 func (tdb *DB) forcePublicCommandWALGroupCommit() error {
@@ -80,18 +82,18 @@ func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	if err != nil {
 		return err
 	}
-	_, err = tdb.commandWALGroupCommit.awaitRegistered(tdb, ticket, leader, true)
+	_, err = tdb.commandWALGroupCommit.awaitRegistered(tdb, ticket, leader, true, true)
 	return err
 }
 
-func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, appendFrame func() (uint64, error)) (publicCommandWALPublication, error) {
+func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, appendFrame func(sync bool) (uint64, error)) (publicCommandWALPublication, error) {
 	var publication publicCommandWALPublication
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
 	}
 	if !durable && tdb.beginFastRelaxedPublicCommandWALPublication() {
 		publication.fastRelaxed = true
-		lsn, err := appendFrame()
+		lsn, err := appendFrame(false)
 		if lsn != 0 {
 			start := time.Now()
 			tdb.recordPublicCommandWALPendingLSN(lsn)
@@ -103,10 +105,17 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 	}
 	if durable {
 		tdb.commandWALGroupCommit.durableIntents.Add(1)
+		if direct, attempted, err := tdb.trySoloDurablePublicCommandWAL(
+			pendingBookkeeping,
+			appendFrame,
+		); attempted {
+			tdb.commandWALGroupCommit.durableIntents.Add(-1)
+			return direct, err
+		}
 	}
 	tdb.commandWALPublicOperationGate.RLock()
 	tdb.commandWALPublicPublishMu.Lock()
-	lsn, err := appendFrame()
+	lsn, err := appendFrame(false)
 	if lsn != 0 {
 		start := time.Now()
 		tdb.recordPublicCommandWALPendingLSN(lsn)
@@ -131,16 +140,103 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 		return publication, err
 	}
 	publication.ticket = ticket
+	publication.groupWait = true
 	if hook := tdb.commandWALGroupCommit.testAfterRegister; hook != nil {
 		hook(ticket, durable)
 	}
 	waitStart := time.Now()
-	ticket, err = tdb.commandWALGroupCommit.awaitRegistered(tdb, ticket, leader, false)
+	ticket, err = tdb.commandWALGroupCommit.awaitRegistered(tdb, ticket, leader, false, true)
 	if groupCommitWait != nil {
 		*groupCommitWait += time.Since(waitStart)
 	}
 	publication.ticket = ticket
 	return publication, err
+}
+
+func (tdb *DB) trySoloDurablePublicCommandWAL(
+	pendingBookkeeping *time.Duration,
+	appendFrame func(sync bool) (uint64, error),
+) (publicCommandWALPublication, bool, error) {
+	var publication publicCommandWALPublication
+	group := &tdb.commandWALGroupCommit
+	if group.durableIntents.Load() != 1 {
+		return publication, false, nil
+	}
+	group.mu.Lock()
+	preflightEligible := group.soloDurableSyncEligibleLocked()
+	group.mu.Unlock()
+	if !preflightEligible {
+		return publication, false, nil
+	}
+
+	// A solo durable write takes the same exclusive operation gate as a group
+	// barrier. That drains prior relaxed publication leases before syncing the
+	// mutation frame directly, avoiding both the collection timer and a second
+	// durable-prefix frame without weakening prefix or publication ordering.
+	tdb.commandWALPublicOperationGate.Lock()
+	tdb.commandWALPublicPublishMu.Lock()
+	group.mu.Lock()
+	eligible := group.soloDurableSyncEligibleLocked()
+	if eligible {
+		group.initPublicationLocked()
+	}
+	group.mu.Unlock()
+	if !eligible {
+		tdb.commandWALPublicPublishMu.Unlock()
+		tdb.commandWALPublicOperationGate.Unlock()
+		return publication, false, nil
+	}
+
+	lsn, err := appendFrame(true)
+	if lsn != 0 {
+		start := time.Now()
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+		if pendingBookkeeping != nil {
+			*pendingBookkeeping += time.Since(start)
+		}
+	}
+	var ticket uint64
+	if err == nil && lsn != 0 {
+		group.mu.Lock()
+		if group.terminalErr != nil {
+			err = group.terminalErr
+		} else {
+			group.nextTicket++
+			ticket = group.nextTicket
+			group.completedTicket = ticket
+			group.bypassSoloDurable.Add(1)
+			group.cond.Broadcast()
+		}
+		group.mu.Unlock()
+	}
+	tdb.commandWALPublicPublishMu.Unlock()
+	tdb.commandWALPublicOperationGate.Unlock()
+	if err != nil || ticket == 0 {
+		return publication, true, err
+	}
+
+	publication.ticket = ticket
+	ticket, err = group.awaitRegistered(tdb, ticket, false, false, false)
+	publication.ticket = ticket
+	return publication, true, err
+}
+
+func (group *publicCommandWALGroupCommit) soloDurableSyncEligibleLocked() bool {
+	if group == nil || group.terminalErr != nil || group.durableIntents.Load() != 1 ||
+		group.leaderActive || group.pendingCount != 0 {
+		return false
+	}
+	if (group.delay != 0 && group.delay != defaultPublicCommandWALGroupDelay) ||
+		(group.maxCommits != 0 && group.maxCommits != defaultPublicCommandWALGroupMaxCommits) ||
+		(group.maxBytes != 0 && group.maxBytes != defaultPublicCommandWALGroupMaxBytes) ||
+		group.testBeforeSync != nil || group.testAfterRegister != nil ||
+		group.testAfterWait != nil || group.testBeforeLeaderWait != nil {
+		return false
+	}
+	if group.cond.L == nil {
+		return group.nextTicket == 0 && group.completedTicket == 0 && group.publishTicket == 0
+	}
+	return group.completedTicket == group.nextTicket && group.publishTicket == group.nextTicket+1
 }
 
 func (tdb *DB) beginFastRelaxedPublicCommandWALPublication() bool {
@@ -217,7 +313,7 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	return ticket, leader, nil
 }
 
-func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64, leader, force bool) (uint64, error) {
+func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64, leader, force, observeWait bool) (uint64, error) {
 	if group == nil || tdb == nil || tdb.backend == nil || ticket == 0 {
 		return 0, ErrClosed
 	}
@@ -245,9 +341,11 @@ func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64
 	if hook != nil {
 		hook(ticket)
 	}
-	waitNs := uint64(time.Since(enqueued).Nanoseconds())
-	group.waitNsTotal.Add(waitNs)
-	publicCommandWALGroupAtomicMax(&group.waitNsMax, waitNs)
+	if observeWait {
+		waitNs := uint64(time.Since(enqueued).Nanoseconds())
+		group.waitNsTotal.Add(waitNs)
+		publicCommandWALGroupAtomicMax(&group.waitNsMax, waitNs)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -255,10 +353,7 @@ func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64
 }
 
 func (group *publicCommandWALGroupCommit) initLocked() {
-	if group.cond.L == nil {
-		group.cond.L = &group.mu
-		group.publishTicket = 1
-	}
+	group.initPublicationLocked()
 	if group.delay <= 0 {
 		group.delay = defaultPublicCommandWALGroupDelay
 	}
@@ -267,6 +362,13 @@ func (group *publicCommandWALGroupCommit) initLocked() {
 	}
 	if group.maxBytes <= 0 {
 		group.maxBytes = defaultPublicCommandWALGroupMaxBytes
+	}
+}
+
+func (group *publicCommandWALGroupCommit) initPublicationLocked() {
+	if group.cond.L == nil {
+		group.cond.L = &group.mu
+		group.publishTicket = 1
 	}
 }
 
@@ -540,6 +642,7 @@ func (tdb *DB) publicCommandWALGroupStatsInto(stats map[string]string) {
 	stats["treedb.command_wal.group_commit.trigger.explicit_sync_total"] = fmt.Sprintf("%d", group.triggerExplicit.Load())
 	stats["treedb.command_wal.group_commit.fallbacks_total"] = "0"
 	stats["treedb.command_wal.group_commit.fallback.reason.coordinator_unavailable_total"] = "0"
-	stats["treedb.command_wal.group_commit.bypasses_total"] = fmt.Sprintf("%d", group.bypassRelaxedNoGroup.Load())
+	stats["treedb.command_wal.group_commit.bypasses_total"] = fmt.Sprintf("%d", group.bypassRelaxedNoGroup.Load()+group.bypassSoloDurable.Load())
 	stats["treedb.command_wal.group_commit.bypass.reason.relaxed_race_no_group_total"] = fmt.Sprintf("%d", group.bypassRelaxedNoGroup.Load())
+	stats["treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total"] = fmt.Sprintf("%d", group.bypassSoloDurable.Load())
 }

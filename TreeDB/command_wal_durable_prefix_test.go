@@ -57,6 +57,9 @@ func TestPublicCommandWALRelaxedExplicitSyncPersistsGroupedDurablePrefix(t *test
 		t.Fatalf("Open relaxed command WAL: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	// This test certifies the grouped durable-prefix representation rather than
+	// the production solo-sync optimization.
+	db.commandWALGroupCommit.testBeforeSync = func(int) {}
 
 	if err := db.SetSync([]byte("durable"), []byte("value")); err != nil {
 		t.Fatalf("SetSync: %v", err)
@@ -283,8 +286,8 @@ func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 		t.Fatalf("SetSync: %v", err)
 	}
 	stats = db.Stats()
-	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "3" {
-		t.Fatalf("durable_wal_lsn=%q, want grouped barrier LSN 3", got)
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
+		t.Fatalf("durable_wal_lsn=%q, want directly synced mutation LSN 2", got)
 	}
 	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
 		t.Fatalf("pending debt entries=%q, want 0 after SetSync", got)
@@ -358,7 +361,7 @@ func TestPublicCommandWALRelaxedPointerDebtEmitsExactDependencySyncCuts(t *testi
 			beforeSync = i
 		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.AfterDependencyFileSync && containsPath(event, relaxedValuePath):
 			afterSync = i
-		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 3:
+		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 2:
 			durableAppend = i
 		}
 	}

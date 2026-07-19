@@ -114,14 +114,11 @@ func TestProductionProfileLifecycleFrontiersMatchFrozenContract(t *testing.T) {
 				if afterOrdinary.appliedCommand != before.appliedCommand {
 					t.Fatalf("ordinary Set applied command frontier: before=%+v after=%+v", before, afterOrdinary)
 				}
+				// A serial durable writer syncs its mutation frame directly. A
+				// relaxed writer appends the same single mutation without a sync.
 				wantNext := before.nextWAL + 1
-				if tc.profile == ProfileCommandWALDurable {
-					// The durable profile closes every acknowledged mutation with
-					// an explicit durable-prefix barrier frame.
-					wantNext++
-				}
 				if afterOrdinary.nextWAL != wantNext {
-					t.Fatalf("ordinary Set next WAL=%d, want mutation-plus-profile-barrier frontier %d", afterOrdinary.nextWAL, wantNext)
+					t.Fatalf("ordinary Set next WAL=%d, want single-mutation frontier %d", afterOrdinary.nextWAL, wantNext)
 				}
 				wantDurable := before.durableWAL
 				if tc.profile == ProfileCommandWALDurable {
@@ -158,8 +155,8 @@ func TestProductionProfileLifecycleFrontiersMatchFrozenContract(t *testing.T) {
 			afterSetSync := readProfileLifecycleFrontiers(t, db, tc.commandWAL)
 			if tc.commandWAL {
 				requireProfileLifecycleRootUnchanged(t, afterEmptySync, afterSetSync)
-				if afterSetSync.nextWAL != afterEmptySync.nextWAL+2 || afterSetSync.durableWAL != afterSetSync.nextWAL-1 {
-					t.Fatalf("SetSync did not append one mutation plus its durable-prefix barrier: before=%+v after=%+v", afterEmptySync, afterSetSync)
+				if afterSetSync.nextWAL != afterEmptySync.nextWAL+1 || afterSetSync.durableWAL != afterSetSync.nextWAL-1 {
+					t.Fatalf("SetSync did not append and directly sync one mutation: before=%+v after=%+v", afterEmptySync, afterSetSync)
 				}
 			} else {
 				requireProfileLifecycleDurableRoot(t, afterEmptySync, afterSetSync)

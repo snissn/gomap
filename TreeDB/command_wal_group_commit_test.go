@@ -97,6 +97,67 @@ func TestPublicCommandWALGroupCommitSharesOneSyncAcrossConcurrentWaiters(t *test
 	}
 }
 
+func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing.T) {
+	dir := t.TempDir()
+	opts := commandWALDurabilityProofOptions(dir)
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	if err := db.SetSync([]byte("solo"), []byte("durable")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.file_sync.calls_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 1)
+
+	frames := scanPublicCommandWALV2(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("solo durable frames=%+v, want one directly synced mutation", frames)
+	}
+	if frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier {
+		t.Fatalf("solo durable frame=%+v, want mutation rather than collection barrier", frames[0])
+	}
+}
+
+func TestPublicCommandWALGroupCommitSoloDurableSyncFailurePoisonsLaterAppends(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	cutErr := errors.New("injected solo durable sync failure")
+	var cutOnce sync.Once
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyFileSync {
+			var err error
+			cutOnce.Do(func() { err = cutErr })
+			return err
+		}
+		return nil
+	})
+	err = db.SetSync([]byte("solo-failure"), []byte("value"))
+	restore()
+	if !errors.Is(err, cutErr) {
+		t.Fatalf("SetSync error=%v, want %v", err, cutErr)
+	}
+	if err := db.SetSync([]byte("after-poison"), []byte("value")); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("SetSync after solo sync failure error=%v, want ErrRecoveryRequired", err)
+	}
+	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total"); got != 0 {
+		t.Fatalf("solo durable bypasses=%d, want 0 after failed sync", got)
+	}
+}
+
 func TestPublicCommandWALGroupCommitDoesNotReuseStaleThresholdWake(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	db, err := Open(opts)
