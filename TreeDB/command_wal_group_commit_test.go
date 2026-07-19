@@ -957,13 +957,21 @@ func TestPublicCommandWALGroupCommitCloseDoesNotTearDownArmedLeader(t *testing.T
 	case <-time.After(3 * time.Second):
 		t.Fatal("armed leader remained stranded after Close entered")
 	}
+	closeTimeout := 3 * time.Second
+	if runtime.GOOS == "windows" {
+		// Windows CI can spend several seconds in the post-coordinator cached
+		// close after the armed leader has already made progress. The
+		// correctness assertion above owns the coordinator deadline; this
+		// deadline only bounds the platform's remaining close work.
+		closeTimeout = 10 * time.Second
+	}
 	select {
 	case err := <-closeDone:
 		if err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 		closed = true
-	case <-time.After(3 * time.Second):
+	case <-time.After(closeTimeout):
 		t.Fatal("Close did not finish after armed leader progressed")
 	}
 
