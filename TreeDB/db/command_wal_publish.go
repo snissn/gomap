@@ -98,6 +98,10 @@ type finalizeCommitOptions struct {
 	// valueLogPublicationMu lease. Candidate dependency capture must reuse that
 	// lease instead of recursively acquiring its read side.
 	valueLogPublicationLocked bool
+	// publishTiming is optional request-scoped diagnostics owned by the
+	// higher-level command-WAL publisher. It subdivides queued root
+	// finalization without affecting publication ordering or durability.
+	publishTiming *CommandWALPublishTiming
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {

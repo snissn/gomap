@@ -164,7 +164,66 @@ func (db *DB) commandWALJournalUnavailableError() error {
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
 // higher-level deterministic command executors such as collections.
 type CommandWALIntent struct {
-	inner commandWALBatchIntent
+	inner         commandWALBatchIntent
+	publishTiming *CommandWALPublishTiming
+}
+
+// CommandWALPublishTiming captures exclusive phases of one command-WAL
+// ordered-root publication. It is opt-in because callers normally need only
+// the aggregate DB telemetry. An intent is single-use while it is published.
+type CommandWALPublishTiming struct {
+	WriteLockWait             time.Duration
+	Preflight                 time.Duration
+	Append                    time.Duration
+	ContextBuild              time.Duration
+	RootApply                 time.Duration
+	SystemBuild               time.Duration
+	SystemApply               time.Duration
+	Finalize                  time.Duration
+	FinalizePrepareDurability time.Duration
+	FinalizeCandidateBuild    time.Duration
+	FinalizeEnqueueActivation time.Duration
+	FinalizeAdmissionWait     time.Duration
+	FinalizeDurabilityWait    time.Duration
+	PostFinalize              time.Duration
+}
+
+// SetPublishTiming requests request-scoped timings from the preflight
+// context-root-builder publication path used by collection column publishes.
+// Other command-WAL publication helpers do not populate this diagnostic target;
+// callers outside that path must not interpret an all-zero value as measured
+// work. Passing nil disables collection, and the previous target is returned
+// so nested diagnostic callers can restore it.
+func (intent *CommandWALIntent) SetPublishTiming(timing *CommandWALPublishTiming) (previous *CommandWALPublishTiming) {
+	if intent == nil {
+		return nil
+	}
+	previous = intent.publishTiming
+	intent.publishTiming = timing
+	return previous
+}
+
+// Add accumulates another publication's exclusive timings. It is useful when
+// a higher-level executor temporarily installs its own timing target while
+// preserving an opt-in caller target on the same intent.
+func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
+	if timing == nil {
+		return
+	}
+	timing.WriteLockWait += other.WriteLockWait
+	timing.Preflight += other.Preflight
+	timing.Append += other.Append
+	timing.ContextBuild += other.ContextBuild
+	timing.RootApply += other.RootApply
+	timing.SystemBuild += other.SystemBuild
+	timing.SystemApply += other.SystemApply
+	timing.Finalize += other.Finalize
+	timing.FinalizePrepareDurability += other.FinalizePrepareDurability
+	timing.FinalizeCandidateBuild += other.FinalizeCandidateBuild
+	timing.FinalizeEnqueueActivation += other.FinalizeEnqueueActivation
+	timing.FinalizeAdmissionWait += other.FinalizeAdmissionWait
+	timing.FinalizeDurabilityWait += other.FinalizeDurabilityWait
+	timing.PostFinalize += other.PostFinalize
 }
 
 var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")

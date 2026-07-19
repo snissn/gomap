@@ -3670,7 +3670,11 @@ func (db *DB) finalizeCommitReleasingRootSerialization(
 		hook()
 	}
 
+	prepareStart := time.Now()
 	guard, err := db.prepareFinalizeCommitDurability(sync)
+	if opts.publishTiming != nil {
+		opts.publishTiming.FinalizePrepareDurability += time.Since(prepareStart)
+	}
 	if err != nil {
 		if onError != nil {
 			onError(err)
