@@ -168,6 +168,15 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if appendErr != nil {
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
+	locatorRootName := collectionColumnRowLocatorRootName(input.meta.Name)
+	locatorBaseRoot := uint64(0)
+	if input.catalog != nil {
+		locatorBaseRoot = input.catalog.rootID(locatorRootName)
+	}
+	rootNames, baseRootIDs, appendErr = appendColumnManifestRootPublishBase(rootNames, baseRootIDs, locatorRootName, locatorBaseRoot)
+	if appendErr != nil {
+		return 0, nil, CollectionMeta{}, nil, appendErr
+	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
 	defer func() { plan.releaseStableResources() }()
@@ -202,7 +211,17 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			_ = columnDelta.Iter.Close()
 			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
 		}
-		return []backenddb.OrderedRootDeltaPublishInput{columnDelta}, nil
+		locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, input.meta, locatorRootName)
+		if err != nil {
+			_ = columnDelta.Iter.Close()
+			return nil, err
+		}
+		locatorDelta, err := buildColumnPrimaryRowLocatorDelta(plan, input.documents, locatorBaseRoot, locatorPolicy)
+		if err != nil {
+			_ = columnDelta.Iter.Close()
+			return nil, err
+		}
+		return []backenddb.OrderedRootDeltaPublishInput{columnDelta, locatorDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		stageStart := time.Now()
@@ -283,6 +302,15 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if appendErr != nil {
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
+	locatorRootName := collectionColumnRowLocatorRootName(input.meta.Name)
+	locatorBaseRoot := uint64(0)
+	if input.catalog != nil {
+		locatorBaseRoot = input.catalog.rootID(locatorRootName)
+	}
+	rootNames, baseRootIDs, appendErr = appendColumnManifestRootPublishBase(rootNames, baseRootIDs, locatorRootName, locatorBaseRoot)
+	if appendErr != nil {
+		return 0, nil, CollectionMeta{}, nil, appendErr
+	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
 	defer func() { plan.releaseStableResources() }()
@@ -326,7 +354,28 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			}
 			return nil, fmt.Errorf("collections: register column publish durable resources: %w", err)
 		}
-		return []backenddb.OrderedRootDeltaBatchPublishInput{columnDelta}, nil
+		locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, input.meta, locatorRootName)
+		if err != nil {
+			if cleanupColumnDelta != nil {
+				cleanupColumnDelta()
+				cleanupColumnDelta = nil
+			}
+			return nil, err
+		}
+		locatorDelta, locatorCleanup, err := buildColumnPrimaryRowLocatorDeltaBatch(plan, input.documents, locatorBaseRoot, locatorPolicy)
+		if err != nil {
+			if cleanupColumnDelta != nil {
+				cleanupColumnDelta()
+				cleanupColumnDelta = nil
+			}
+			return nil, err
+		}
+		columnCleanup := cleanupColumnDelta
+		cleanupColumnDelta = func() {
+			columnCleanup()
+			locatorCleanup()
+		}
+		return []backenddb.OrderedRootDeltaBatchPublishInput{columnDelta, locatorDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		stageStart := time.Now()

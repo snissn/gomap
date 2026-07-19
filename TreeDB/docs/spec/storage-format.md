@@ -718,6 +718,28 @@ not necessarily the decoded raw block. Blocks contain at most 4096 retained
 documents; single-row insert/update batches still produce one side-root block
 and one primary locator per retained document.
 
+Column-store publications also atomically maintain a mutation-safe physical row
+locator root:
+
+```text
+Root name: <collection>/column/row-locator
+Key:       exact primary document ID bytes
+Value:
+  bytes[4]   Magic = "CRL1"
+  u64 BE     typed asset generation
+  u64 BE     typed asset part ID
+  u64 BE     zero-based row index
+  u64 BE     applied command LSN
+```
+
+The value is exactly 36 bytes. Insert and replace publications co-publish the
+primary root, typed manifest, and locator root so one snapshot cannot observe a
+primary value with a locator from another generation. Delete publications write
+an ordered-root tombstone for the document ID. Column asset compaction
+atomically republishes the manifest and all live locators because it rewrites
+their physical generation and row coordinates. Unknown magic, the wrong value
+length, an overflowing row index, or invalid physical coordinates fail closed.
+
 Raw side-root block value:
 
 ```text

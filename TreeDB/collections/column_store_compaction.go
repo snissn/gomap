@@ -216,20 +216,57 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	}
 	rootNames := []string{state.rootName}
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
+	var locatorBaseRoot uint64
+	var locatorPolicy backenddb.OrderedRootStoragePolicy
+	var locatorIter iterator.UnsafeIterator
+	if len(rows) > 0 {
+		locatorRootName := collectionColumnRowLocatorRootName(state.meta.Name)
+		locatorBaseRoot = state.catalog.rootID(locatorRootName)
+		locatorPolicy, err = collectionRootStoragePolicyForDB(c.db, state.meta, locatorRootName)
+		if err != nil {
+			_ = deltaIter.Close()
+			return stats, cleanupPrepared(err)
+		}
+		locatorDocuments := make([]columnWriteDocument, len(rows))
+		for i := range rows {
+			locatorDocuments[i].ID = rows[i].ID
+		}
+		locatorTable, err := buildColumnPrimaryRowLocatorTable(ColumnPublishPlan{
+			Operation:             ColumnPublishOperationInsert,
+			AppliedCommandLSN:     state.cfg.RecoveryAuthoritativeAppliedCommandLSN,
+			UpdatedActiveManifest: manifest.Identity,
+			Rows:                  len(rows),
+		}, locatorDocuments)
+		if err != nil {
+			_ = deltaIter.Close()
+			return stats, cleanupPrepared(err)
+		}
+		locatorIter = locatorTable.NewIterator(nil, nil)
+		rootNames = append(rootNames, locatorRootName)
+		baseRootIDs[locatorRootName] = locatorBaseRoot
+	}
 	preflight := c.columnStoreCompactionRootDescriptorPreflight(state, rootNames, baseRootIDs)
 	// The maintenance publisher owns and releases the producer closure once it
 	// is attached to the candidate durable slot.
 	durableResources := prepared.stableResources
 	prepared.stableResources = nil
+	orderedInputs := []backenddb.StorageMaintenanceRootDeltaPublishInput{{
+		BaseRoot:                    state.baseRoot,
+		Iter:                        deltaIter,
+		StoragePolicy:               policy,
+		DurableResources:            durableResources,
+		DurableResourceRequirements: durableRequirements,
+	}}
+	if locatorIter != nil {
+		orderedInputs = append(orderedInputs, backenddb.StorageMaintenanceRootDeltaPublishInput{
+			BaseRoot:      locatorBaseRoot,
+			Iter:          locatorIter,
+			StoragePolicy: locatorPolicy,
+		})
+	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
-		[]backenddb.StorageMaintenanceRootDeltaPublishInput{{
-			BaseRoot:                    state.baseRoot,
-			Iter:                        deltaIter,
-			StoragePolicy:               policy,
-			DurableResources:            durableResources,
-			DurableResourceRequirements: durableRequirements,
-		}},
+		orderedInputs,
 		preflight,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildColumnAssetRewriteSystemDeltaIteratorForMeta(state.meta, updatedMeta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs, rootIDs)
@@ -241,8 +278,13 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		}
 		return stats, err
 	}
-	if len(rootIDs) != 1 || rootIDs[0] == 0 {
-		return stats, unexpectedOrderedRootCountError(state.meta.Name, 1, len(rootIDs))
+	if len(rootIDs) != len(rootNames) {
+		return stats, unexpectedOrderedRootCountError(state.meta.Name, len(rootNames), len(rootIDs))
+	}
+	for _, rootID := range rootIDs {
+		if rootID == 0 {
+			return stats, unexpectedOrderedRootCountError(state.meta.Name, len(rootNames), len(rootIDs))
+		}
 	}
 	stats.AssetsPublished = len(prepared.Assets)
 	stats.AggregateMetadataPublished = columnStoreCompactionAggregateMetadataAssets(prepared.Assets)
