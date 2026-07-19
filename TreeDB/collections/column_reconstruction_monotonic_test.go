@@ -264,7 +264,7 @@ func TestScanDocumentsFuncMonotonicReconstructionUpdateFallsBackP3887(t *testing
 	if err != nil {
 		t.Fatalf("ScanDocumentsFunc: %v", err)
 	}
-	if stats := col.LastDocumentScanStats(); stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 {
+	if stats := col.LastDocumentScanStats(); stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 0 || stats.LocatorLookupBatches != 1 || stats.LocatorLookups != 1 || stats.PointRowFetches != 1 {
 		t.Fatalf("scan stats=%+v want generic fallback", stats)
 	}
 	if want := `"did":"did:new"`; !bytes.Contains(got, []byte(want)) {
@@ -449,8 +449,74 @@ func TestScanDocumentsFuncMonotonicReconstructionTypedSortKeyFallsBackP3887(t *t
 	assertJSONMapEqual1875(t, got[0].Document, map[string]any{"time_us": float64(2)})
 	assertJSONMapEqual1875(t, got[1].Document, map[string]any{"time_us": float64(1)})
 	stats := col.LastDocumentScanStats()
-	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 || stats.LocatorLookupBatches != 1 || stats.LocatorLookups != 2 || stats.PointRowFetches != 2 || stats.PhysicalRows != 0 {
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 0 || stats.LocatorLookupBatches != 1 || stats.LocatorLookups != 2 || stats.PointRowFetches != 2 || stats.PhysicalRows != 0 {
 		t.Fatalf("scan stats=%+v want generic fallback for typed sort-key rows", stats)
+	}
+}
+
+func TestScanDocumentsFuncGenericLocatorReconstructionBoundsMultiAssetBatchesP3890(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{{
+			Name:      "time_us",
+			Path:      "time_us",
+			ValueType: ColumnStoreValueInt64,
+			Owner:     TypedStorageOwnerColumnPart,
+		}},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		rows      = 513
+		batchRows = 171
+	)
+	for start := 0; start < rows; start += batchRows {
+		end := start + batchRows
+		ids := make([][]byte, 0, end-start)
+		docs := make([][]byte, 0, end-start)
+		for i := start; i < end; i++ {
+			ids = append(ids, []byte(fmt.Sprintf("e%04d", i)))
+			docs = append(docs, []byte(fmt.Sprintf(`{"time_us":%d,"marker":%d}`, rows-i, i)))
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			t.Fatalf("InsertBatch start=%d: %v", start, err)
+		}
+	}
+
+	seen := 0
+	truncated, err := col.ScanDocumentsFunc(rows, func(record DocumentRecord) (bool, error) {
+		wantID := fmt.Sprintf("e%04d", seen)
+		if string(record.ID) != wantID {
+			return false, fmt.Errorf("row %d id=%q want %q", seen, record.ID, wantID)
+		}
+		seen++
+		return true, nil
+	})
+	if err != nil || truncated || seen != rows {
+		t.Fatalf("scan err=%v truncated=%t rows=%d want %d", err, truncated, seen, rows)
+	}
+	stats := col.LastDocumentScanStats()
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 0 ||
+		stats.LocatorLookupBatches != 3 || stats.LocatorLookups != rows ||
+		stats.PointRowFetches != rows || stats.MaxRecordWindow != 256 {
+		t.Fatalf("scan stats=%+v want three bounded locator windows across immutable assets", stats)
 	}
 }
 
@@ -493,7 +559,7 @@ func TestScanDocumentsFuncMonotonicReconstructionUnsupportedSelectedTypedFallsBa
 	assertJSONMapEqual1875(t, got[0].Document, map[string]any{"maybe_kind": "present", "tags": []any{float64(1), float64(2)}, "retained": "first"})
 	assertJSONMapEqual1875(t, got[1].Document, map[string]any{"tags": []any{float64(3)}, "retained": "second"})
 	stats := col.LastDocumentScanStats()
-	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 {
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 0 || stats.LocatorLookupBatches != 1 || stats.LocatorLookups != 2 || stats.PointRowFetches != 2 {
 		t.Fatalf("scan stats=%+v want generic fallback before selected-row typed decoding", stats)
 	}
 }

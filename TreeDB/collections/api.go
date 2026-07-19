@@ -21008,8 +21008,6 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	if capacity > 256 {
 		capacity = 256
 	}
-	view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
-	defer func() { _ = view.Close() }()
 	seen := 0
 	for it.Valid() {
 		ids := make([][]byte, 0, capacity)
@@ -21026,14 +21024,18 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 			break
 		}
 		if stats != nil {
-			stats.PhysicalPasses++
 			stats.LocatorLookupBatches++
 			if uint64(len(ids)) > stats.MaxRecordWindow {
 				stats.MaxRecordWindow = uint64(len(ids))
 			}
 		}
+		// Point-row and typed reconstruction caches are owned by the read view.
+		// Scope the view to this bounded ID window so scans spanning many
+		// immutable assets cannot retain one cache entry per asset.
+		view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
 		refs, err := view.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
 		if err != nil {
+			_ = view.Close()
 			return false, err
 		}
 		if stats != nil {
@@ -21042,12 +21044,17 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		rowRefs := make([]DocumentRowRef, len(refs.Results))
 		for i, result := range refs.Results {
 			if !result.Found {
+				_ = view.Close()
 				return false, fmt.Errorf("collections: column reconstruction missing primary row locator for id %q", string(ids[i]))
 			}
 			rowRefs[i] = result.RowRef
 		}
-		fetched, err := view.FetchDocumentsByRowRef(rowRefs, DocumentFetchOptions{})
+		fetched, err := view.fetchDocumentsByResolvedRowRef(rowRefs, DocumentFetchOptions{})
 		if err != nil {
+			_ = view.Close()
+			return false, err
+		}
+		if err := view.Close(); err != nil {
 			return false, err
 		}
 		if stats != nil {
