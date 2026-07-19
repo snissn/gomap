@@ -22,6 +22,15 @@ stable-syscall `strace` summary. Diagnostic profiles disable the test recorder
 so allocation attribution describes the production maintenance path; pprof
 phase labels remain available.
 
+The allocation profile is a subtraction of `allocs` snapshots taken immediately
+before and after the measured operation. Each snapshot first advances two GC
+cycles so Go's allocation profile has no delayed setup samples. This excludes
+fixture construction;
+the script preserves both snapshots plus `allocs_top.txt` and
+`allocs_objects_top.txt`. The reports focus on TreeDB maintenance stacks,
+exclude the snapshot writer itself, and calculate percentages relative to the
+remaining operation profile.
+
 Durable barrier latency on local NVMe can be bimodal. Keep every sample, report
 the spread, and compare candidate work in counterbalanced baseline/candidate
 blocks. The overhead collection alternates pair order for this reason. Start

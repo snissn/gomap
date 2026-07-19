@@ -93,8 +93,9 @@ TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=102 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
 TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
-  run_go_test -run '^$' -bench "$STRESS" -benchtime=3x -count=1 \
-  -memprofile "$RUN_DIR/profiles/allocs.pprof" -memprofilerate=1 >"$RUN_DIR/profiles/allocs_raw.txt"
+TREEDB_COMPACT_STORAGE_M0_ALLOCS_PROFILE_DIR="$RUN_DIR/profiles" \
+  run_go_test -run '^$' -bench "$STRESS" -benchtime=1x -count=1 \
+  -memprofilerate=1 >"$RUN_DIR/profiles/allocs_raw.txt"
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=103 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
 TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
@@ -114,8 +115,19 @@ TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
 go tool pprof -top -tagfocus='compact-storage-m0=one-generation-per-pass' \
   "$RUN_DIR/profiles/cpu.pprof" >"$RUN_DIR/profiles/cpu_top.txt"
 go tool pprof -top -alloc_space \
-  -ignore='writeLeafGenerationBenchKeyRange|openCompactStorageLeafPackBenchmarkFixture' \
-  "$RUN_DIR/profiles/allocs.pprof" >"$RUN_DIR/profiles/allocs_top.txt"
+  -relative_percentages \
+  -base "$RUN_DIR/profiles/allocs_one-generation-per-pass_before.pprof" \
+  -focus='TreeDB/(db|freelist|pager|zipper|internal/(rootpublication|valuelog))' \
+  -ignore='writeCompactStorageM0AllocsProfile' \
+  "$RUN_DIR/profiles/allocs_one-generation-per-pass_after.pprof" \
+  >"$RUN_DIR/profiles/allocs_top.txt"
+go tool pprof -top -alloc_objects \
+  -relative_percentages \
+  -base "$RUN_DIR/profiles/allocs_one-generation-per-pass_before.pprof" \
+  -focus='TreeDB/(db|freelist|pager|zipper|internal/(rootpublication|valuelog))' \
+  -ignore='writeCompactStorageM0AllocsProfile' \
+  "$RUN_DIR/profiles/allocs_one-generation-per-pass_after.pprof" \
+  >"$RUN_DIR/profiles/allocs_objects_top.txt"
 
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=106 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/syscalls" \

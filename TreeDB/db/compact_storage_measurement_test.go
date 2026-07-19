@@ -116,6 +116,18 @@ func TestCompactStorageM0ArtifactNameParser(t *testing.T) {
 	}
 }
 
+func TestCompactStorageM0AllocsProfilePathsAreStable(t *testing.T) {
+	root := t.TempDir()
+	before := compactStorageM0AllocsProfilePath(root, "one-generation-per-pass", "before")
+	after := compactStorageM0AllocsProfilePath(root, "one-generation-per-pass", "after")
+	if before != filepath.Join(root, "allocs_one-generation-per-pass_before.pprof") {
+		t.Fatalf("before path=%q", before)
+	}
+	if after != filepath.Join(root, "allocs_one-generation-per-pass_after.pprof") {
+		t.Fatalf("after path=%q", after)
+	}
+}
+
 func TestWriteCompactStorageM0ArtifactPersistsCanonicalJSON(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR", root)

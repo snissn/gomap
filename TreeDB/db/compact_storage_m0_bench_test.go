@@ -128,6 +128,10 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 	var allocationBytes, allocationObjects uint64
 	var foreground, idle compactStorageMeasurementLatency
 	var lastFixture compactStorageMeasurementFixture
+	allocsProfileDir := os.Getenv("TREEDB_COMPACT_STORAGE_M0_ALLOCS_PROFILE_DIR")
+	if allocsProfileDir != "" && b.N != 1 {
+		b.Fatalf("allocation profile snapshots require -benchtime=1x, got b.N=%d", b.N)
+	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -190,6 +194,12 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 				foregroundConsumed = true
 			}
 		}
+		if allocsProfileDir != "" {
+			if err := writeCompactStorageM0AllocsProfile(allocsProfileDir, spec.metadata.Name, "before"); err != nil {
+				_ = db.Close()
+				b.Fatalf("write before allocation profile: %v", err)
+			}
+		}
 		var beforeMem, afterMem runtime.MemStats
 		runtime.ReadMemStats(&beforeMem)
 		if os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1" {
@@ -221,6 +231,12 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 			}
 		}
 		b.StopTimer()
+		if allocsProfileDir != "" {
+			if err := writeCompactStorageM0AllocsProfile(allocsProfileDir, spec.metadata.Name, "after"); err != nil {
+				_ = db.Close()
+				b.Fatalf("write after allocation profile: %v", err)
+			}
+		}
 		restore()
 		db.compactStorageBeforePhase = nil
 		db.compactStorageAfterPhase = nil
@@ -356,6 +372,31 @@ func compactStorageM0ArtifactName(fixture string, iteration int) string {
 		}
 	}
 	return filepath.Join("compact-storage-m0", fixture, "sample-"+strconv.Itoa(sample)+".json")
+}
+
+func compactStorageM0AllocsProfilePath(root, fixture, boundary string) string {
+	return filepath.Join(root, "allocs_"+fixture+"_"+boundary+".pprof")
+}
+
+func writeCompactStorageM0AllocsProfile(root, fixture, boundary string) error {
+	// runtime.MemProfile can lag by two GC cycles. Flush that lag so profile
+	// subtraction assigns fixture setup to the before snapshot.
+	runtime.GC()
+	runtime.GC()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	path := compactStorageM0AllocsProfilePath(root, fixture, boundary)
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	writeErr := pprof.Lookup("allocs").WriteTo(file, 0)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func writeCompactStorageM0Artifact(measurement compactStorageMeasurement) error {
