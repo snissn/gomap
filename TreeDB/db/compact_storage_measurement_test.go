@@ -294,6 +294,9 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 	if strings.Contains(script, "CPU_SET=${CPU_SET:-2-3}") {
 		t.Fatal("profile script retains a host-specific default CPU set")
 	}
+	if got := strings.Count(script, "((.stable_calls // []) | map(.count) | add // 0)"); got != 2 {
+		t.Fatalf("profile script null-safe stable-call aggregations=%d want=2", got)
+	}
 }
 
 func TestCompactStorageM0DocsUsePortablePrimaryCommand(t *testing.T) {

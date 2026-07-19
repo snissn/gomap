@@ -204,8 +204,8 @@ awk '
 printf 'checkpoint_total %s\n' "$(wc -l <"$RUN_DIR/syscalls/checkpoint_stable_calls.txt")" \
   >>"$RUN_DIR/syscalls/strace_summary.txt"
 jq '{
-  recorder_stable_calls: ([.stable_calls[].count] | add // 0),
-  checkpoint_stable_calls: ([.checkpoints[].stable_calls] | add // 0)
+  recorder_stable_calls: ((.stable_calls // []) | map(.count) | add // 0),
+  checkpoint_stable_calls: ((.checkpoints // []) | map(.stable_calls) | add // 0)
 }' "$RUN_DIR/syscalls/compact-storage-m0/one-generation-per-pass/sample-106.json" \
   >"$RUN_DIR/syscalls/recorder_summary.json"
 
@@ -217,8 +217,8 @@ find "$RUN_DIR/canonical/compact-storage-m0" -name 'sample-*.json' -print0 |
       sample: .artifact_name,
       total_wall_ns: .total_wall_time_nanos,
       apply_wall_ns: .apply_wall_time_nanos,
-      stable_calls: ([.stable_calls[].count] | add // 0),
-      checkpoint_stable_calls: ([.checkpoints[].stable_calls] | add // 0),
+      stable_calls: ((.stable_calls // []) | map(.count) | add // 0),
+      checkpoint_stable_calls: ((.checkpoints // []) | map(.stable_calls) | add // 0),
       alloc_bytes: .allocation.total_alloc_bytes,
       alloc_objects: .allocation.allocation_objects,
       foreground_p95_ns: .foreground_writes.p95_nanos,
