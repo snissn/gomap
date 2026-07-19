@@ -166,6 +166,9 @@ func parseConfig(args []string) (config, error) {
 	if _, err := checkedVectorBytes(cfg.queries, cfg.dimensions); err != nil {
 		return config{}, err
 	}
+	if _, err := checkedCombinedVectorBytes(cfg.docs, cfg.queries, cfg.dimensions); err != nil {
+		return config{}, err
+	}
 	if int64(cfg.docs) > maxTruthComparisons/int64(cfg.queries) {
 		return config{}, errors.New("exact truth comparison cap exceeded before allocation; reduce -queries or export in bounded shards")
 	}
@@ -236,6 +239,17 @@ func checkedVectorBytes(count, dims int) (int64, error) {
 	return int64(count) * int64(dims) * 4, nil
 }
 
+func checkedCombinedVectorBytes(docs, queries, dims int) (int64, error) {
+	if docs < 1 || queries < 1 || dims < 1 {
+		return 0, errors.New("combined vector byte product requires positive counts and dimensions")
+	}
+	combined := int64(docs) + int64(queries)
+	if combined > maxDatasetBytes/4/int64(dims) {
+		return 0, errors.New("combined document/query vector byte product exceeds cap before allocation")
+	}
+	return combined * int64(dims) * 4, nil
+}
+
 func manifestCreatedAt() (string, error) {
 	return "1970-01-01T00:00:00Z", nil
 }
@@ -297,34 +311,38 @@ func writeExactTruthJSONL(path string, cfg config, files map[string]fileManifest
 		stride := queryDocStride(cfg.docs)
 		for i := 0; i < cfg.queries; i++ {
 			query := embedding(queryDocIndex(i, cfg.docs, stride), cfg.dimensions)
-			type scored struct {
-				id    int
-				score float64
-			}
-			rows := make([]scored, cfg.docs)
-			for j := 0; j < cfg.docs; j++ {
-				var score float64
-				for d, x := range embedding(j, cfg.dimensions) {
-					score += float64(x) * float64(query[d])
-				}
-				rows[j] = scored{j, 1 - score}
-			}
-			sort.Slice(rows, func(a, b int) bool {
-				if rows[a].score == rows[b].score {
-					return rows[a].id < rows[b].id
-				}
-				return rows[a].score < rows[b].score
-			})
-			neighbors := make([]truthNeighbor, cfg.topK)
-			for j := range neighbors {
-				neighbors[j] = truthNeighbor{documentID(rows[j].id), rows[j].score}
-			}
+			neighbors := exactTruthForQuery(query, cfg.docs, cfg.dimensions, cfg.topK)
 			if err := enc.Encode(exactTruthJSONL{QueryID: fmt.Sprintf("query-%06d", i), Neighbors: neighbors, Kind: "exhaustive_cosine_distance_ascending_then_id_top_k_v1"}); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func exactTruthForQuery(query []float32, docs, dims, topK int) []truthNeighbor {
+	neighbors := make([]truthNeighbor, docs)
+	for document := 0; document < docs; document++ {
+		var dot float64
+		for dimension, value := range embedding(document, dims) {
+			dot += float64(value) * float64(query[dimension])
+		}
+		neighbors[document] = truthNeighbor{
+			DocumentID: documentID(document),
+			Distance:   1 - dot,
+		}
+	}
+	sort.Slice(neighbors, func(i, j int) bool {
+		return truthNeighborLess(neighbors[i], neighbors[j])
+	})
+	return neighbors[:topK]
+}
+
+func truthNeighborLess(a, b truthNeighbor) bool {
+	if a.Distance == b.Distance {
+		return a.DocumentID < b.DocumentID
+	}
+	return a.Distance < b.Distance
 }
 
 func writeDocumentsJSONL(path string, cfg config, files map[string]fileManifest) error {

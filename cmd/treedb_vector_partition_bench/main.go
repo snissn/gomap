@@ -1,6 +1,6 @@
-// treedb_vector_partition_bench is the M0 deterministic oracle and simulation
-// harness. It deliberately does not open TreeDB or Raft: later milestones own
-// production assets and routed reads.
+// treedb_vector_partition_bench is the M0 deterministic oracle and sequential
+// simulation harness. Its partition-local HNSW attribution stage uses real
+// temporary TreeDB column_graph indexes; it does not implement routed Raft.
 package main
 
 import (
@@ -20,14 +20,21 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
-	schemaVersion         = 1
-	maxVectors            = 1_000_000
-	maxDimensions         = 4_096
-	maxPartitions         = 16_384
-	maxFixtureBytes int64 = 4 << 30
+	schemaVersion             = 1
+	maxVectors                = 1_000_000
+	maxDimensions             = 4_096
+	maxPartitions             = 16_384
+	maxFixtureBytes     int64 = 4 << 30
+	maxManifestBytes    int64 = 64 << 10
+	maxGitHubEventBytes int64 = 2 << 20
+	partitionHNSWIndex        = "embedding_graph"
+	partitionHNSWDegree       = 16
 )
 
 type config struct {
@@ -46,6 +53,7 @@ type config struct {
 	maxBytes     int64
 	baseSHA      string
 	headSHA      string
+	hnsw         *treeDBPartitionHNSW
 }
 
 type fixtureManifest struct {
@@ -65,15 +73,51 @@ type neighbor struct {
 	Distance float64 `json:"distance"`
 }
 type stageResult struct {
-	Name              string  `json:"name"`
-	Method            string  `json:"method"`
-	Enabled           bool    `json:"enabled"`
-	Lossy             bool    `json:"lossy"`
-	RecallAtK         float64 `json:"recall_at_k"`
-	Queries           int     `json:"queries"`
-	Probes            int     `json:"probes"`
-	Available         bool    `json:"available"`
-	UnavailableReason string  `json:"unavailable_reason,omitempty"`
+	Name                      string  `json:"name"`
+	Method                    string  `json:"method"`
+	Enabled                   bool    `json:"enabled"`
+	Lossy                     bool    `json:"lossy"`
+	RecallAtK                 float64 `json:"recall_at_k"`
+	Queries                   int     `json:"queries"`
+	Probes                    int     `json:"probes"`
+	Available                 bool    `json:"available"`
+	UnavailableReason         string  `json:"unavailable_reason,omitempty"`
+	RouteKind                 string  `json:"route_kind,omitempty"`
+	Searches                  uint64  `json:"searches,omitempty"`
+	ExecutedSearches          uint64  `json:"executed_searches,omitempty"`
+	CachedSearches            uint64  `json:"cached_searches,omitempty"`
+	SearchRouteHNSWSearchPack uint64  `json:"search_route_hnsw_search_pack,omitempty"`
+	HNSWSearchPackActive      uint64  `json:"hnsw_search_pack_active,omitempty"`
+	HNSWSearchPackFallbacks   uint64  `json:"hnsw_search_pack_fallbacks,omitempty"`
+}
+
+type hnswSearchEvidence struct {
+	Searches                  uint64
+	ExecutedSearches          uint64
+	CachedSearches            uint64
+	SearchRouteHNSWSearchPack uint64
+	HNSWSearchPackActive      uint64
+	HNSWSearchPackFallbacks   uint64
+}
+
+type hnswSearchOutcome struct {
+	Neighbors []neighbor
+	Evidence  hnswSearchEvidence
+}
+
+type hnswCacheKey struct {
+	Query              int
+	SelectedPartitions string
+	TopK               int
+}
+
+type treeDBPartitionHNSW struct {
+	dir              string
+	db               *backenddb.DB
+	partitions       []*collections.Collection
+	rowCounts        []int
+	cache            map[hnswCacheKey]hnswSearchOutcome
+	physicalSearches uint64
 }
 
 // metricsV1 reserves every M0 evidence field. Simulation leaves production-only
@@ -149,7 +193,7 @@ func main() {
 	}
 }
 
-func run(args []string, stdout io.Writer) error {
+func run(args []string, stdout io.Writer) (runErr error) {
 	cfg, err := parseConfig(args)
 	if err != nil {
 		return err
@@ -168,9 +212,21 @@ func run(args []string, stdout io.Writer) error {
 	if cfg.topK > fixture.Vectors {
 		return errors.New("top-k cannot exceed fixture vectors")
 	}
+	if cfg.partitions > fixture.Vectors {
+		return errors.New("partitions cannot exceed fixture vectors")
+	}
 	vectors, queries := deterministicFixture(fixture)
 	if fixtureChecksum(fixture.Vectors, fixture.Queries, fixture.Dimensions, fixture.Seed) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
+	}
+	if cfg.stages["treedb_partition_local_hnsw"] {
+		cfg.hnsw, err = newTreeDBPartitionHNSW(vectors, cfg.partitions)
+		if err != nil {
+			return fmt.Errorf("build TreeDB partition-local HNSW stage: %w", err)
+		}
+		defer func() {
+			runErr = errors.Join(runErr, cfg.hnsw.Close())
+		}()
 	}
 	for _, overlap := range cfg.overlaps {
 		for _, probes := range cfg.probes {
@@ -210,7 +266,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
-	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum fixture vectors/queries before allocation")
+	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum vector or query bytes before allocation")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -302,6 +358,15 @@ func provenance() (string, string, error) {
 		head = strings.TrimSpace(string(out))
 	}
 	if base == "" {
+		if eventPath := os.Getenv("GITHUB_EVENT_PATH"); eventPath != "" {
+			eventBase, err := pullRequestBaseSHAFromEvent(eventPath)
+			if err != nil {
+				return "", "", fmt.Errorf("GitHub event base SHA: %w", err)
+			}
+			base = eventBase
+		}
+	}
+	if base == "" {
 		out, err := exec.Command("git", "merge-base", "HEAD", "origin/main").Output()
 		if err != nil {
 			return "", "", errors.New("git merge-base unavailable: set BASE_SHA")
@@ -317,19 +382,61 @@ func provenance() (string, string, error) {
 	return base, head, nil
 }
 
+func pullRequestBaseSHAFromEvent(path string) (string, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, maxGitHubEventBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(raw)) > maxGitHubEventBytes {
+		return "", fmt.Errorf("event payload exceeds %d-byte cap", maxGitHubEventBytes)
+	}
+	var event struct {
+		PullRequest *struct {
+			Base struct {
+				SHA string `json:"sha"`
+			} `json:"base"`
+		} `json:"pull_request"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	if err := decoder.Decode(&event); err != nil {
+		return "", err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return "", errors.New("GitHub event has trailing JSON")
+	}
+	if event.PullRequest == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(event.PullRequest.Base.SHA), nil
+}
+
 func loadFixture(dir string) (fixtureManifest, error) {
-	b, e := os.ReadFile(filepath.Join(dir, "fixture_manifest.json"))
-	if e != nil {
-		return fixtureManifest{}, e
+	f, err := os.Open(filepath.Join(dir, "fixture_manifest.json"))
+	if err != nil {
+		return fixtureManifest{}, err
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxManifestBytes+1))
+	if err != nil {
+		return fixtureManifest{}, err
+	}
+	if int64(len(b)) > maxManifestBytes {
+		return fixtureManifest{}, fmt.Errorf("fixture manifest exceeds %d-byte cap", maxManifestBytes)
 	}
 	var m fixtureManifest
 	d := json.NewDecoder(strings.NewReader(string(b)))
 	d.DisallowUnknownFields()
-	if e = d.Decode(&m); e != nil {
-		return m, e
+	if err = d.Decode(&m); err != nil {
+		return m, err
 	}
 	var extra any
-	if e = d.Decode(&extra); e != io.EOF {
+	if err = d.Decode(&extra); err != io.EOF {
 		return m, errors.New("fixture manifest has trailing JSON")
 	}
 	return m, nil
@@ -354,7 +461,10 @@ func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) 
 	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != "treedb_vector_partition_fixture_v1" || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Queries > capVectors || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
-	if int64(m.Vectors) > capBytes/(int64(m.Dimensions)*8) || int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) || int64(m.Vectors)+int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
+	if int64(m.Vectors)+int64(m.Queries) > int64(capVectors) {
+		return errors.New("combined fixture vector/query count exceeds pre-allocation cap")
+	}
+	if int64(m.Vectors)+int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
 		return errors.New("fixture byte product exceeds pre-allocation cap")
 	}
 	_, e := hex.DecodeString(m.Checksum)
@@ -494,6 +604,274 @@ func representativePartitions(v [][]float64, q []float64, partitions, probes int
 	return out
 }
 func parsePartitionID(id string) int { n, _ := strconv.Atoi(strings.TrimPrefix(id, "p-")); return n }
+
+func newTreeDBPartitionHNSW(vectors [][]float64, partitions int) (_ *treeDBPartitionHNSW, err error) {
+	if len(vectors) == 0 || partitions < 1 || partitions > len(vectors) {
+		return nil, errors.New("invalid vector/partition count for TreeDB HNSW stage")
+	}
+	dims := len(vectors[0])
+	if dims < 1 {
+		return nil, errors.New("TreeDB HNSW stage requires positive dimensions")
+	}
+	dir, err := os.MkdirTemp("", "treedb-vector-partition-hnsw-*")
+	if err != nil {
+		return nil, err
+	}
+	h := &treeDBPartitionHNSW{
+		dir:        dir,
+		partitions: make([]*collections.Collection, partitions),
+		rowCounts:  make([]int, partitions),
+		cache:      make(map[hnswCacheKey]hnswSearchOutcome),
+	}
+	defer func() {
+		if err != nil {
+			_ = h.Close()
+		}
+	}()
+	if err = backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{
+		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+	}); err != nil {
+		return nil, err
+	}
+	h.db, err = backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		return nil, err
+	}
+	manager := collections.NewCollectionManager(h.db)
+	for partition := 0; partition < partitions; partition++ {
+		name := partitionCollectionName(partition)
+		if _, err = manager.CreateCollection(partitionCollectionMeta(name, dims)); err != nil {
+			return nil, fmt.Errorf("create partition %d collection: %w", partition, err)
+		}
+		col, openErr := manager.OpenCollection(name)
+		if openErr != nil {
+			return nil, fmt.Errorf("open partition %d collection: %w", partition, openErr)
+		}
+		if err = insertPartitionRows(col, vectors, partition, partitions); err != nil {
+			return nil, fmt.Errorf("insert partition %d rows: %w", partition, err)
+		}
+		if err = col.Flush(); err != nil {
+			return nil, fmt.Errorf("flush partition %d rows: %w", partition, err)
+		}
+		status, rebuildErr := col.RebuildVectorIndex(partitionHNSWIndex)
+		if rebuildErr != nil {
+			return nil, fmt.Errorf("rebuild partition %d HNSW: %w", partition, rebuildErr)
+		}
+		if !status.Loaded {
+			return nil, fmt.Errorf("rebuild partition %d HNSW status=%+v, want loaded", partition, status)
+		}
+		h.rowCounts[partition] = moduloPartitionSize(len(vectors), partitions, partition)
+	}
+	if err = h.db.Checkpoint(); err != nil {
+		return nil, fmt.Errorf("checkpoint partition-local HNSW DB: %w", err)
+	}
+	for partition := 0; partition < partitions; partition++ {
+		col, openErr := manager.OpenCollection(partitionCollectionName(partition))
+		if openErr != nil {
+			return nil, fmt.Errorf("reopen partition %d collection: %w", partition, openErr)
+		}
+		h.partitions[partition] = col
+	}
+	return h, nil
+}
+
+func partitionCollectionName(partition int) string {
+	return fmt.Sprintf("partition_%06d", partition)
+}
+
+func partitionCollectionMeta(name string, dims int) *collections.CollectionMeta {
+	return &collections.CollectionMeta{
+		Name: name,
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatJSON,
+			ColumnStore: &collections.ColumnStoreConfig{
+				Enabled:         true,
+				RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
+				Columns: []collections.ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: collections.ColumnStoreValueInt64},
+					{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dims},
+				},
+				SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
+			},
+		},
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:           partitionHNSWIndex,
+			Field:          "embedding",
+			Metric:         collections.VectorMetricCosine,
+			Dimensions:     dims,
+			M:              partitionHNSWDegree,
+			EfConstruction: 128,
+			EfSearch:       128,
+			Encoding:       collections.VectorIndexEncodingFloat32,
+			Strategy:       collections.VectorIndexStrategyColumnGraph,
+		}},
+	}
+}
+
+func insertPartitionRows(col *collections.Collection, vectors [][]float64, partition, partitions int) error {
+	rowCount := moduloPartitionSize(len(vectors), partitions, partition)
+	ids := make([][]byte, 0, rowCount)
+	documents := make([][]byte, 0, rowCount)
+	for i := partition; i < len(vectors); i += partitions {
+		vector := make([]float32, len(vectors[i]))
+		for d, value := range vectors[i] {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("vector %d dimension %d is non-finite", i, d)
+			}
+			vector[d] = float32(value)
+		}
+		id := fmt.Sprintf("doc-%06d", i)
+		raw, err := json.Marshal(struct {
+			TimeUS    int64     `json:"time_us"`
+			Embedding []float32 `json:"embedding"`
+		}{
+			TimeUS:    int64(i + 1),
+			Embedding: vector,
+		})
+		if err != nil {
+			return err
+		}
+		ids = append(ids, []byte(id))
+		documents = append(documents, raw)
+	}
+	if len(ids) != rowCount {
+		return fmt.Errorf("partition %d rows=%d want %d", partition, len(ids), rowCount)
+	}
+	_, err := col.InsertBatch(ids, documents)
+	return err
+}
+
+func moduloPartitionSize(vectors, partitions, partition int) int {
+	if partition >= vectors {
+		return 0
+	}
+	return 1 + (vectors-1-partition)/partitions
+}
+
+func (h *treeDBPartitionHNSW) search(queryIndex int, query []float64, selected []int, topK int) (hnswSearchOutcome, error) {
+	if h == nil || h.db == nil {
+		return hnswSearchOutcome{}, errors.New("TreeDB partition-local HNSW stage is not initialized")
+	}
+	key := hnswCacheKey{Query: queryIndex, SelectedPartitions: canonicalPartitionSet(selected), TopK: topK}
+	if cached, ok := h.cache[key]; ok {
+		cached.Evidence.ExecutedSearches = 0
+		cached.Evidence.CachedSearches = cached.Evidence.Searches
+		return cached, nil
+	}
+	query32 := make([]float32, len(query))
+	for i, value := range query {
+		query32[i] = float32(value)
+	}
+	merged := make([]neighbor, 0, topK*len(selected))
+	var evidence hnswSearchEvidence
+	for _, partition := range selected {
+		if partition < 0 || partition >= len(h.partitions) || h.partitions[partition] == nil || h.rowCounts[partition] == 0 {
+			return hnswSearchOutcome{}, fmt.Errorf("selected HNSW partition %d is unavailable", partition)
+		}
+		response, err := h.partitions[partition].SearchVectorIndex(collections.VectorIndexSearchOptions{
+			IndexName: partitionHNSWIndex,
+			Query:     query32,
+			TopK:      min(topK, h.rowCounts[partition]),
+			EfSearch:  h.rowCounts[partition],
+		})
+		if err != nil {
+			return hnswSearchOutcome{}, fmt.Errorf("search HNSW partition %d: %w", partition, err)
+		}
+		h.physicalSearches++
+		diagnostics := response.Diagnostics()
+		if response.Stats.SearchRouteHNSWSearchPack != 1 ||
+			response.Stats.HNSWSearchPackActive != 1 ||
+			response.Stats.HNSWSearchPackFallbacks != 0 ||
+			diagnostics.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 ||
+			!diagnostics.ExactHNSWSearchPackNoDocRoute {
+			return hnswSearchOutcome{}, fmt.Errorf("partition %d did not use exact HNSW search-pack route: diagnostics=%+v stats_route=%d active=%d fallbacks=%d",
+				partition,
+				diagnostics,
+				response.Stats.SearchRouteHNSWSearchPack,
+				response.Stats.HNSWSearchPackActive,
+				response.Stats.HNSWSearchPackFallbacks,
+			)
+		}
+		evidence.Searches++
+		evidence.ExecutedSearches++
+		evidence.SearchRouteHNSWSearchPack += response.Stats.SearchRouteHNSWSearchPack
+		evidence.HNSWSearchPackActive += response.Stats.HNSWSearchPackActive
+		evidence.HNSWSearchPackFallbacks += response.Stats.HNSWSearchPackFallbacks
+		for _, result := range response.Results {
+			distance := 1 - result.Score
+			if math.IsNaN(distance) || math.IsInf(distance, 0) {
+				return hnswSearchOutcome{}, fmt.Errorf("partition %d returned non-finite score for %q", partition, result.ID)
+			}
+			merged = append(merged, neighbor{ID: string(result.ID), Distance: distance})
+		}
+	}
+	sortNeighbors(merged)
+	merged = dedupeSortedNeighbors(merged)
+	if len(merged) > topK {
+		merged = merged[:topK]
+	}
+	outcome := hnswSearchOutcome{Neighbors: merged, Evidence: evidence}
+	h.cache[key] = outcome
+	return outcome, nil
+}
+
+func canonicalPartitionSet(selected []int) string {
+	partitions := append([]int(nil), selected...)
+	sort.Ints(partitions)
+	var b strings.Builder
+	for i, partition := range partitions {
+		if i != 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.Itoa(partition))
+	}
+	return b.String()
+}
+
+func (h *treeDBPartitionHNSW) Close() error {
+	if h == nil {
+		return nil
+	}
+	var errs []error
+	clear(h.partitions)
+	h.partitions = nil
+	if h.db != nil {
+		if err := h.db.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close partition-local HNSW DB: %w", err))
+		}
+		h.db = nil
+	}
+	if h.dir != "" {
+		if err := os.RemoveAll(h.dir); err != nil {
+			errs = append(errs, fmt.Errorf("remove partition-local HNSW DB: %w", err))
+		}
+		h.dir = ""
+	}
+	return errors.Join(errs...)
+}
+
+func sortNeighbors(in []neighbor) {
+	sort.Slice(in, func(i, j int) bool {
+		if in[i].Distance == in[j].Distance {
+			return in[i].ID < in[j].ID
+		}
+		return in[i].Distance < in[j].Distance
+	})
+}
+
+func dedupeSortedNeighbors(in []neighbor) []neighbor {
+	seen := make(map[string]struct{}, len(in))
+	out := in[:0]
+	for _, n := range in {
+		if _, ok := seen[n.ID]; ok {
+			continue
+		}
+		seen[n.ID] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
 func recall(want, got []neighbor) float64 {
 	found := map[string]bool{}
 	for _, x := range got {
@@ -514,8 +892,9 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	if overlap != 0 { /* M0 reports budget only; M3 owns membership copies. */
 	}
 	totals := map[string]float64{}
+	var hnswEvidence hnswSearchEvidence
 	exactParity := true
-	for _, query := range q {
+	for queryIndex, query := range q {
 		truth := exactTopK(v, query, cfg.topK)
 		if cfg.stages["exact_global_top_k"] {
 			totals["exact_global_top_k"] += 1
@@ -540,6 +919,23 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 			got := selectedPartitionTopK(v, query, cfg.topK, cfg.partitions, parts)
 			totals["exact_partition_local"] += recall(truth, got)
 		}
+		if cfg.stages["treedb_partition_local_hnsw"] {
+			if cfg.hnsw == nil {
+				return runResult{}, errors.New("TreeDB partition-local HNSW stage selected without initialized TreeDB indexes")
+			}
+			parts := representativePartitions(v, query, cfg.partitions, probes, false)
+			outcome, err := cfg.hnsw.search(queryIndex, query, parts, cfg.topK)
+			if err != nil {
+				return runResult{}, err
+			}
+			totals["treedb_partition_local_hnsw"] += recall(truth, outcome.Neighbors)
+			hnswEvidence.Searches += outcome.Evidence.Searches
+			hnswEvidence.ExecutedSearches += outcome.Evidence.ExecutedSearches
+			hnswEvidence.CachedSearches += outcome.Evidence.CachedSearches
+			hnswEvidence.SearchRouteHNSWSearchPack += outcome.Evidence.SearchRouteHNSWSearchPack
+			hnswEvidence.HNSWSearchPackActive += outcome.Evidence.HNSWSearchPackActive
+			hnswEvidence.HNSWSearchPackFallbacks += outcome.Evidence.HNSWSearchPackFallbacks
+		}
 		if cfg.stages["end_to_end_distributed_simulation"] {
 			parts := representativePartitions(v, query, cfg.partitions, probes, true)
 			got := selectedPartitionTopK(v, query, cfg.topK, cfg.partitions, parts)
@@ -550,7 +946,15 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	stage := func(name, method string, lossy bool, value float64, p int) stageResult {
 		return stageResult{Name: name, Method: method, Enabled: cfg.stages[name], Lossy: lossy, RecallAtK: value, Queries: len(q), Probes: p, Available: true}
 	}
-	allStages := []stageResult{stage("exact_global_top_k", "global_exhaustive", false, totals["exact_global_top_k"]/n, cfg.partitions), stage("partition_oracle", "round_robin_partition_exhaustive", probes < cfg.partitions, totals["partition_oracle"]/n, probes), stage("exact_representative_routing", "centroid_representative_routing", probes < cfg.partitions, totals["exact_representative_routing"]/n, probes), stage("approximate_representative_routing", "deterministic_last_representative_perturbation", probes < cfg.partitions, totals["approximate_representative_routing"]/n, probes), stage("exact_partition_local", "centroid_selected_partition_exhaustive", probes < cfg.partitions, totals["exact_partition_local"]/n, probes), {Name: "treedb_partition_local_hnsw", Method: "unavailable_without_public_M0_HNSW_pack_api", Enabled: cfg.stages["treedb_partition_local_hnsw"], Available: false, UnavailableReason: "M0 has no public TreeDB partition-local HNSW pack API; refusing exact placeholder"}, stage("end_to_end_distributed_simulation", "approximate_router_then_local_exhaustive_dedupe", probes < cfg.partitions, totals["end_to_end_distributed_simulation"]/n, probes)}
+	hnswStage := stage("treedb_partition_local_hnsw", "treedb_column_graph_exact_hnsw_search_pack_v1", true, totals["treedb_partition_local_hnsw"]/n, probes)
+	hnswStage.RouteKind = string(collections.VectorIndexSearchRouteExactHNSWSearchPackV1)
+	hnswStage.Searches = hnswEvidence.Searches
+	hnswStage.ExecutedSearches = hnswEvidence.ExecutedSearches
+	hnswStage.CachedSearches = hnswEvidence.CachedSearches
+	hnswStage.SearchRouteHNSWSearchPack = hnswEvidence.SearchRouteHNSWSearchPack
+	hnswStage.HNSWSearchPackActive = hnswEvidence.HNSWSearchPackActive
+	hnswStage.HNSWSearchPackFallbacks = hnswEvidence.HNSWSearchPackFallbacks
+	allStages := []stageResult{stage("exact_global_top_k", "global_exhaustive", false, totals["exact_global_top_k"]/n, cfg.partitions), stage("partition_oracle", "round_robin_partition_exhaustive", probes < cfg.partitions, totals["partition_oracle"]/n, probes), stage("exact_representative_routing", "centroid_representative_routing", probes < cfg.partitions, totals["exact_representative_routing"]/n, probes), stage("approximate_representative_routing", "deterministic_last_representative_perturbation", probes < cfg.partitions, totals["approximate_representative_routing"]/n, probes), stage("exact_partition_local", "centroid_selected_partition_exhaustive", probes < cfg.partitions, totals["exact_partition_local"]/n, probes), hnswStage, stage("end_to_end_distributed_simulation", "approximate_router_then_local_exhaustive_dedupe", probes < cfg.partitions, totals["end_to_end_distributed_simulation"]/n, probes)}
 	selected := make([]stageResult, 0, len(allStages))
 	for _, s := range allStages {
 		if s.Enabled {
@@ -558,7 +962,7 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 		}
 	}
 	metrics := metricsV1{MeasurementStatus: "simulation_not_measured", Balance: 1, MaxPartitionSize: (len(v) + cfg.partitions - 1) / cfg.partitions, ReplicationFactor: 1, UnassignedOverlapBudget: overlap, RoutedPartitionRecall: totals["end_to_end_distributed_simulation"] / n, SelectedPartitions: probes}
-	r := runResult{SchemaVersion: schemaVersion, ResultKind: "simulation_only", ProductionEvidence: false, Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, GoVersion: runtime.Version(), Hardware: runtime.GOARCH + "/" + runtime.GOOS, Dataset: m, Partitions: cfg.partitions, Overlap: overlap, Probes: probes, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Seed: cfg.seed, Warmup: 0, Samples: len(q), TimedBoundary: "exact in-memory distance and deterministic merge; excludes disk, TreeDB, RPC, and Raft", Stages: selected, Metrics: metrics}
+	r := runResult{SchemaVersion: schemaVersion, ResultKind: "simulation_only", ProductionEvidence: false, Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, GoVersion: runtime.Version(), Hardware: runtime.GOARCH + "/" + runtime.GOOS, Dataset: m, Partitions: cfg.partitions, Overlap: overlap, Probes: probes, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Seed: cfg.seed, Warmup: 0, Samples: len(q), TimedBoundary: "untimed M0 attribution: in-memory oracles plus temporary local TreeDB column_graph build/search; excludes network, RPC, coordinator, and Raft", Stages: selected, Metrics: metrics}
 	if cfg.stages["partition_oracle"] && probes == cfg.partitions && !exactParity {
 		return r, errors.New("all-partition oracle parity failure")
 	}
@@ -592,6 +996,16 @@ func validateResult(r runResult) error {
 		if math.IsNaN(s.RecallAtK) || math.IsInf(s.RecallAtK, 0) || s.RecallAtK < 0 || s.RecallAtK > 1 {
 			return errors.New("non-finite metric")
 		}
+		if s.Name == "treedb_partition_local_hnsw" {
+			if s.RouteKind != string(collections.VectorIndexSearchRouteExactHNSWSearchPackV1) ||
+				s.Searches == 0 ||
+				s.ExecutedSearches+s.CachedSearches != s.Searches ||
+				s.SearchRouteHNSWSearchPack != s.Searches ||
+				s.HNSWSearchPackActive != s.Searches ||
+				s.HNSWSearchPackFallbacks != 0 {
+				return fmt.Errorf("TreeDB HNSW stage lacks exact search-pack route evidence: %+v", s)
+			}
+		}
 	}
 	if len(r.BaseSHA) < 7 || len(r.HeadSHA) < 7 {
 		return errors.New("missing git provenance")
@@ -619,12 +1033,16 @@ func writeArtifacts(out string, r runResult) error {
 		return e
 	}
 	stageSummary := "unavailable"
+	hnswSummary := "not selected"
 	for _, s := range r.Stages {
 		if s.Name == "end_to_end_distributed_simulation" && s.Available {
 			stageSummary = fmt.Sprintf("recall@%d: %.4f", r.TopK, s.RecallAtK)
 		}
+		if s.Name == "treedb_partition_local_hnsw" && s.Available {
+			hnswSummary = fmt.Sprintf("recall@%d: %.4f; route=%s; logical_searches=%d; executed=%d; cached=%d; fallbacks=%d", r.TopK, s.RecallAtK, s.RouteKind, s.Searches, s.ExecutedSearches, s.CachedSearches, s.HNSWSearchPackFallbacks)
+		}
 	}
-	md := fmt.Sprintf("# TreeDB vector partition M0 simulation\n\n**Simulation only; not production Raft evidence.**\n\n- fixture: `%s` (%s)\n- probes: %d/%d\n- overlap budget: %.6g\n- end-to-end simulation: %s\n- timed boundary: %s\n", r.Dataset.Fixture, r.Dataset.Checksum, r.Probes, r.Partitions, r.Overlap, stageSummary, r.TimedBoundary)
+	md := fmt.Sprintf("# TreeDB vector partition M0 simulation\n\n**Simulation only; not production Raft evidence.**\n\n- fixture: `%s` (%s)\n- probes: %d/%d\n- overlap budget: %.6g\n- TreeDB partition-local HNSW: %s\n- end-to-end simulation: %s\n- timed boundary: %s\n", r.Dataset.Fixture, r.Dataset.Checksum, r.Probes, r.Partitions, r.Overlap, hnswSummary, stageSummary, r.TimedBoundary)
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
 }
 func artifactBasename(r runResult) string {

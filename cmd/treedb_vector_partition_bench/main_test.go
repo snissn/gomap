@@ -6,14 +6,34 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func fixturePath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join("..", "..", "testdata", "vector_partition_10k")
+}
+
+func smallFixtureForTest(vectors, queries, dims int) (fixtureManifest, [][]float64, [][]float64) {
+	m := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "small",
+		Generator:     "treedb_vector_partition_fixture_v1",
+		Vectors:       vectors,
+		Queries:       queries,
+		Dimensions:    dims,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	v, q := deterministicFixture(m)
+	return m, v, q
 }
 
 func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
@@ -43,7 +63,7 @@ func TestTruthOracleTieOrderingAndAllPartitionParity(t *testing.T) {
 	if got[0].ID != "doc-000000" || got[1].ID != "doc-000001" {
 		t.Fatalf("ties not ordered by stable ID: %#v", got[:2])
 	}
-	cfg := config{partitions: 4, topK: 10, recallTarget: .9, seed: 1}
+	cfg := config{partitions: 4, topK: 10, recallTarget: .9, seed: 1, stages: stageSet("exact_global_top_k,partition_oracle")}
 	r, err := simulate(cfg, m, vectors, queries, 4, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -54,29 +74,37 @@ func TestTruthOracleTieOrderingAndAllPartitionParity(t *testing.T) {
 	if r.Stages[0].RecallAtK != r.Stages[1].RecallAtK {
 		t.Fatal("oracle parity differs")
 	}
+	for i, query := range queries {
+		want := exactTopK(vectors, query, cfg.topK)
+		got := partitionTopK(vectors, query, cfg.topK, cfg.partitions, cfg.partitions)
+		if !orderedEqual(want, got) {
+			t.Fatalf("query %d all-partition ordered ID+distance mismatch:\nwant=%+v\ngot=%+v", i, want, got)
+		}
+	}
 }
 
 func TestEveryLossStageIndependentlyLabeled(t *testing.T) {
-	m, _ := loadFixture(fixturePath(t))
-	vectors, queries := deterministicFixture(m)
-	r, err := simulate(config{partitions: 4, topK: 10, recallTarget: .9, seed: 1}, m, vectors, queries, 1, .2)
+	m, vectors, queries := smallFixtureForTest(32, 4, 8)
+	hnsw, err := newTreeDBPartitionHNSW(vectors, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"exact_global_top_k", "partition_oracle", "exact_representative_routing", "approximate_representative_routing", "exact_partition_local", "treedb_partition_local_hnsw", "end_to_end_distributed_simulation"}
-	if len(r.Stages) != len(want) {
-		t.Fatalf("stages=%#v", r.Stages)
-	}
-	for i, name := range want {
-		if r.Stages[i].Name != name {
-			t.Fatalf("stage[%d]=%q want %q", i, r.Stages[i].Name, name)
+	defer func() { _ = hnsw.Close() }()
+	for _, name := range knownStages {
+		cfg := config{partitions: 4, topK: 4, recallTarget: .9, seed: 1, stages: stageSet(name)}
+		if name == "treedb_partition_local_hnsw" {
+			cfg.hnsw = hnsw
 		}
-	}
-	if !r.Stages[1].Lossy || !r.Stages[6].Lossy {
-		t.Fatal("loss stages not independently labeled")
-	}
-	if r.ResultKind != "simulation_only" || r.ProductionEvidence {
-		t.Fatalf("simulation label=%+v", r)
+		r, err := simulate(cfg, m, vectors, queries, 1, .2)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(r.Stages) != 1 || r.Stages[0].Name != name || !r.Stages[0].Enabled || !r.Stages[0].Available {
+			t.Fatalf("%s independently reported stages=%+v", name, r.Stages)
+		}
+		if r.ResultKind != "simulation_only" || r.ProductionEvidence {
+			t.Fatalf("%s simulation label=%+v", name, r)
+		}
 	}
 }
 
@@ -89,6 +117,81 @@ func TestSingleEnabledStageIsTheOnlyReportedStage(t *testing.T) {
 	}
 	if len(r.Stages) != 1 || r.Stages[0].Name != "partition_oracle" {
 		t.Fatalf("stages=%+v", r.Stages)
+	}
+}
+
+func TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth(t *testing.T) {
+	m, vectors, queries := smallFixtureForTest(48, 6, 8)
+	hnsw, err := newTreeDBPartitionHNSW(vectors, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hnsw.Close() }()
+
+	allPartitions := []int{0, 1, 2, 3}
+	for queryIndex, query := range queries {
+		got, err := hnsw.search(queryIndex, query, allPartitions, 6)
+		if err != nil {
+			t.Fatalf("query %d: %v", queryIndex, err)
+		}
+		want := exactTopK(vectors, query, 6)
+		if len(got.Neighbors) != len(want) {
+			t.Fatalf("query %d neighbors=%d want %d", queryIndex, len(got.Neighbors), len(want))
+		}
+		for i := range want {
+			if got.Neighbors[i].ID != want[i].ID || math.Abs(got.Neighbors[i].Distance-want[i].Distance) > 1e-5 {
+				t.Fatalf("query %d rank %d HNSW=%+v exact=%+v", queryIndex, i, got.Neighbors[i], want[i])
+			}
+		}
+		if got.Evidence.SearchRouteHNSWSearchPack != 4 || got.Evidence.HNSWSearchPackActive != 4 || got.Evidence.HNSWSearchPackFallbacks != 0 {
+			t.Fatalf("query %d route evidence=%+v", queryIndex, got.Evidence)
+		}
+	}
+
+	cfg := config{
+		partitions:   4,
+		topK:         6,
+		recallTarget: .9,
+		seed:         1,
+		stages:       stageSet("treedb_partition_local_hnsw"),
+		hnsw:         hnsw,
+	}
+	first, err := simulate(cfg, m, vectors, queries, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physicalAfterFirst := hnsw.physicalSearches
+	second, err := simulate(cfg, m, vectors, queries, 2, .2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hnsw.physicalSearches != physicalAfterFirst {
+		t.Fatalf("overlap-only row repeated HNSW work: before=%d after=%d", physicalAfterFirst, hnsw.physicalSearches)
+	}
+	if first.Stages[0].ExecutedSearches == 0 || first.Stages[0].CachedSearches != 0 {
+		t.Fatalf("first HNSW row evidence=%+v", first.Stages[0])
+	}
+	if second.Stages[0].ExecutedSearches != 0 || second.Stages[0].CachedSearches != second.Stages[0].Searches {
+		t.Fatalf("cached HNSW row evidence=%+v", second.Stages[0])
+	}
+
+	beforeDifferentSet := hnsw.physicalSearches
+	if _, err := hnsw.search(0, queries[0], []int{0}, 6); err != nil {
+		t.Fatal(err)
+	}
+	afterFirstSet := hnsw.physicalSearches
+	if _, err := hnsw.search(0, queries[0], []int{1}, 6); err != nil {
+		t.Fatal(err)
+	}
+	if afterFirstSet <= beforeDifferentSet || hnsw.physicalSearches <= afterFirstSet {
+		t.Fatal("same-sized selected partition sets aliased in HNSW cache")
+	}
+	dir := hnsw.dir
+	if err := hnsw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("temporary HNSW DB was not removed: stat error=%v", err)
 	}
 }
 
@@ -129,6 +232,12 @@ func TestConfigurableFixtureCapsRejectBeforeAllocation(t *testing.T) {
 	if _, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-max-fixture-bytes", "7"}); err == nil {
 		t.Fatal("accepted unsafe byte cap")
 	}
+	m.Vectors = 6
+	m.Queries = 5
+	m.Dimensions = 1
+	if err := validateFixtureWithCaps(m, 10, 1024); err == nil || !strings.Contains(err.Error(), "combined") {
+		t.Fatalf("combined vector/query count cap error=%v", err)
+	}
 }
 
 func TestManifestRejectsTrailingJSON(t *testing.T) {
@@ -142,6 +251,172 @@ func TestManifestRejectsTrailingJSON(t *testing.T) {
 	}
 	if _, err := loadFixture(d); err == nil {
 		t.Fatal("accepted trailing JSON")
+	}
+}
+
+func TestManifestReadCapRejectsOversizedFile(t *testing.T) {
+	d := t.TempDir()
+	raw := bytes.Repeat([]byte(" "), int(maxManifestBytes)+1)
+	if err := os.WriteFile(filepath.Join(d, "fixture_manifest.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFixture(d); err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("oversized manifest error=%v", err)
+	}
+}
+
+func TestFixtureChecksumMismatchFailsBeforeEvidence(t *testing.T) {
+	d := t.TempDir()
+	raw, err := os.ReadFile(filepath.Join(fixturePath(t), "fixture_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m fixtureManifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.Checksum = strings.Repeat("0", 64)
+	raw, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "fixture_manifest.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	err = run([]string{"-dataset", d, "-out", out, "-partitions", "4", "-probes", "1", "-stages", "treedb_partition_local_hnsw"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("checksum mismatch error=%v", err)
+	}
+	entries, readErr := os.ReadDir(out)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("checksum mismatch emitted evidence: %+v", entries)
+	}
+}
+
+func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
+	t.Run("automatic", func(t *testing.T) {
+		t.Setenv("BASE_SHA", "")
+		t.Setenv("GITHUB_SHA", "")
+		t.Setenv("GITHUB_EVENT_PATH", "")
+		base, head, err := provenance()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantHead, err := exec.Command("git", "rev-parse", "HEAD").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if head != strings.TrimSpace(string(wantHead)) || len(base) != 40 {
+			t.Fatalf("automatic provenance base=%q head=%q want_head=%q", base, head, strings.TrimSpace(string(wantHead)))
+		}
+	})
+	t.Run("environment", func(t *testing.T) {
+		base := strings.Repeat("a", 40)
+		head := strings.Repeat("b", 40)
+		t.Setenv("BASE_SHA", base)
+		t.Setenv("GITHUB_SHA", head)
+		gotBase, gotHead, err := provenance()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotBase != base || gotHead != head {
+			t.Fatalf("environment provenance base=%q head=%q", gotBase, gotHead)
+		}
+	})
+	t.Run("pull_request_event", func(t *testing.T) {
+		base := strings.Repeat("c", 40)
+		path := filepath.Join(t.TempDir(), "event.json")
+		raw := `{"pull_request":{"base":{"sha":"` + base + `"}},"ignored_by_typed_projection":true}`
+		if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BASE_SHA", "")
+		t.Setenv("GITHUB_SHA", strings.Repeat("d", 40))
+		t.Setenv("GITHUB_EVENT_PATH", path)
+		gotBase, _, err := provenance()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotBase != base {
+			t.Fatalf("event base=%q want %q", gotBase, base)
+		}
+	})
+	t.Run("event_invalid_sha", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "event.json")
+		if err := os.WriteFile(path, []byte(`{"pull_request":{"base":{"sha":"invalid"}}}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BASE_SHA", "")
+		t.Setenv("GITHUB_SHA", strings.Repeat("d", 40))
+		t.Setenv("GITHUB_EVENT_PATH", path)
+		if _, _, err := provenance(); err == nil {
+			t.Fatal("accepted invalid event base SHA")
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		base string
+		head string
+	}{
+		{name: "base", base: "not-a-sha", head: strings.Repeat("b", 40)},
+		{name: "head", base: strings.Repeat("a", 40), head: strings.Repeat("g", 40)},
+	} {
+		t.Run("invalid_"+tc.name, func(t *testing.T) {
+			t.Setenv("BASE_SHA", tc.base)
+			t.Setenv("GITHUB_SHA", tc.head)
+			if _, _, err := provenance(); err == nil {
+				t.Fatal("accepted invalid SHA provenance")
+			}
+		})
+	}
+}
+
+func TestGitHubEventPayloadIsBoundedAndSingleValue(t *testing.T) {
+	oversized := filepath.Join(t.TempDir(), "oversized.json")
+	if err := os.WriteFile(oversized, bytes.Repeat([]byte(" "), int(maxGitHubEventBytes)+1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullRequestBaseSHAFromEvent(oversized); err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("oversized event error=%v", err)
+	}
+	trailing := filepath.Join(t.TempDir(), "trailing.json")
+	if err := os.WriteFile(trailing, []byte(`{} {}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullRequestBaseSHAFromEvent(trailing); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("trailing event error=%v", err)
+	}
+}
+
+func TestCloseOverlapValuesHaveCollisionFreeArtifacts(t *testing.T) {
+	a := 0.2
+	b := math.Nextafter(a, 1)
+	if artifactBasename(runResult{Probes: 1, Overlap: a, TopK: 10}) == artifactBasename(runResult{Probes: 1, Overlap: b, TopK: 10}) {
+		t.Fatal("adjacent float64 overlap values collide")
+	}
+	out := t.TempDir()
+	if err := run([]string{
+		"-dataset", fixturePath(t),
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0.2," + strconv.FormatFloat(b, 'g', -1, 64),
+		"-top-k", "10",
+		"-stages", "exact_global_top_k",
+		"-format", "json",
+		"-out", out,
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("close overlap artifacts=%d want 4", len(entries))
 	}
 }
 
@@ -169,12 +444,24 @@ func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 	if result.Command[0] != "treedb_vector_partition_bench" || result.Metrics.MeasurementStatus != "simulation_not_measured" || result.Metrics.SelectedPartitions != 4 {
 		t.Fatalf("artifact metadata=%+v", result)
 	}
+	var hnsw stageResult
+	for _, stage := range result.Stages {
+		if stage.Name == "treedb_partition_local_hnsw" {
+			hnsw = stage
+		}
+	}
+	if !hnsw.Available || hnsw.RouteKind != string(collections.VectorIndexSearchRouteExactHNSWSearchPackV1) || hnsw.SearchRouteHNSWSearchPack == 0 || hnsw.HNSWSearchPackFallbacks != 0 {
+		t.Fatalf("HNSW stage evidence=%+v", hnsw)
+	}
 	md, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Probes: 4, Overlap: .2, TopK: 10})+".md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(md), "Simulation only; not production Raft evidence.") {
 		t.Fatal("missing simulation disclaimer")
+	}
+	if !strings.Contains(string(md), "exact_hnsw_search_pack_v1") || !strings.Contains(string(md), "cached=") {
+		t.Fatal("missing separately attributed HNSW route/cache evidence")
 	}
 }
 

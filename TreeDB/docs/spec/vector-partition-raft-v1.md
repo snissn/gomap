@@ -46,33 +46,52 @@ consistency, or shard failure is an explicit error with no incomplete result.
 
 ## M0 oracle and evidence boundary
 
-`cmd/treedb_vector_partition_bench` is a sequential, in-memory **simulation**.
-It emits `result_kind=simulation_only` and `production_evidence=false`; its
-Markdown artifacts repeat that it is not production Raft evidence. It records
-the exact global top-k, partition oracle, representative/local-HNSW attribution
-stages, and end-to-end simulation separately. The TreeDB partition-local HNSW
-stage is explicitly unavailable in M0 because this harness has not yet created
-generation-bound partition-local packs; it MUST NOT be interpreted as an exact
-placeholder or production evidence. With every partition
-probed, the partition oracle MUST equal global exact top-k under distance then
-stable-ID ordering.
+`cmd/treedb_vector_partition_bench` is a sequential **simulation**. It emits
+`result_kind=simulation_only` and `production_evidence=false`; its Markdown
+artifacts repeat that it is not production Raft evidence. It records exact
+global top-k, partition oracle, representative routing, exact partition-local
+search, real TreeDB partition-local HNSW, and end-to-end simulation separately.
+
+The HNSW stage deterministically derives one collection per logical modulo
+partition in a temporary TreeDB. The harness uses the public lifecycle:
+`SaveFormatConfig` with `RequiredFeatureCommandWALV1`, `db.Open`,
+`NewCollectionManager`, JSON `float32_vector` typed-column ownership,
+`VectorIndexStrategyColumnGraph`, `InsertBatch`, `Flush`,
+`RebuildVectorIndex`, and response-owned `SearchVectorIndex` results. It builds
+these derived collections and indexes once per harness run only when that stage
+is selected. For each query it uses exact representative routing to choose
+logical partitions, searches their prepared local indexes, then merges by
+cosine distance followed by stable document ID.
+
+Every local response MUST report
+`SearchRouteHNSWSearchPack=1`, route
+`exact_hnsw_search_pack_v1`, an active pack, and zero pack fallbacks. The
+harness fails instead of accepting another route. Repeated overlap rows reuse
+a cache whose key contains the query, top-k, and sorted partition-ID set.
+Artifacts distinguish logical, executed, and cached searches.
+This is real TreeDB local-HNSW loss attribution, but its temporary modulo
+partitioning, sequential coordinator, and absent network/Raft path remain
+non-production simulation. With every partition probed, the partition oracle
+MUST equal global exact top-k under ordered distance and stable-ID comparison.
 
 The checked-in fixture manifest at `testdata/vector_partition_10k/` is generated
 deterministically and has a stable checksum over canonical generated vector,
 query, and exact-truth bytes,
 explicit duplicate/tie case, clusters, and boundary shape. Tests resolve the
-single root fixture from `cmd/treedb_vector_partition_bench`. Counts,
-dimensions, partition count, and result metrics are validated before allocating
-large work buffers. The JSON schema version is strict; unknown versions and
-non-finite metrics are rejected by the executable contract.
+single root fixture from `cmd/treedb_vector_partition_bench`. The manifest read
+itself has a 64 KiB bound. Combined vector/query counts and bytes, dimensions,
+partition count, and result metrics are validated before allocating large work
+buffers or building TreeDB evidence. The JSON schema version is strict; unknown
+versions and non-finite metrics are rejected by the executable contract.
 
 The schema reserves every descendant evidence family even when M0 emits
 `measurement_status=simulation_not_measured` and explicit finite zero values:
 build wall/CPU/RSS/temp/final bytes; balance/cut/overlap; representatives and
 router latency; fanout/RPC/bytes/shard/merge/failure counters; and QPS,
 percentiles, recall@1/10/100, allocations, resident/mapped bytes. Artifact
-provenance is the real `HEAD` and `merge-base HEAD origin/main` (or explicit
-`GITHUB_SHA`/`BASE_SHA` overrides); empty/local provenance is rejected.
+provenance is the real `HEAD` and `merge-base HEAD origin/main`, a bounded
+`pull_request.base.sha` from `GITHUB_EVENT_PATH` in shallow PR CI, or explicit
+`GITHUB_SHA`/`BASE_SHA` overrides; empty/local provenance is rejected.
 
 ## Parent invariant matrix
 
@@ -84,6 +103,7 @@ provenance is the real `HEAD` and `merge-base HEAD origin/main` (or explicit
 | snapshot mutation fails closed | docs contract test | M7 |
 | IDs/scores only; no partial top-k | docs contract test | M5/M6 |
 | exact all-partition parity and stable ties | `TestTruthOracleTieOrderingAndAllPartitionParity` | M2--M6 |
+| real local HNSW and fail-closed route evidence | `TestTreeDBHNSWStageUsesExactSearchPackAndMatchesHighEFLocalTruth` | M3/M5 |
 | cap-before-allocation/malformed input | `TestMalformedCapAndFiniteInputsRejectBeforeSimulation` | M1--M8 |
 | simulation is not production Raft evidence | `TestCanonicalRunWritesJSONAndMarkdown` | M8 |
 
