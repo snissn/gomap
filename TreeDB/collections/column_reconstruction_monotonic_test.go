@@ -449,7 +449,7 @@ func TestScanDocumentsFuncMonotonicReconstructionTypedSortKeyFallsBackP3887(t *t
 	assertJSONMapEqual1875(t, got[0].Document, map[string]any{"time_us": float64(2)})
 	assertJSONMapEqual1875(t, got[1].Document, map[string]any{"time_us": float64(1)})
 	stats := col.LastDocumentScanStats()
-	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 {
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 || stats.LocatorLookupBatches != 1 || stats.LocatorLookups != 2 || stats.PointRowFetches != 2 || stats.PhysicalRows != 0 {
 		t.Fatalf("scan stats=%+v want generic fallback for typed sort-key rows", stats)
 	}
 }

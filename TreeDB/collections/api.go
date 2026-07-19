@@ -456,9 +456,14 @@ type CollectionDocumentScanStats struct {
 	PhysicalRows           uint64
 	PhysicalBytes          uint64
 	PhysicalDecodedBlocks  uint64
-	ReconstructedRows      uint64
-	MaxRecordWindow        uint64
-	MaxVisibleRowWindow    uint64
+	// LocatorLookupBatches and LocatorLookups are control-root point reads used
+	// by generic reconstruction. They are separate from whole-asset scan stats.
+	LocatorLookupBatches uint64
+	LocatorLookups       uint64
+	PointRowFetches      uint64
+	ReconstructedRows    uint64
+	MaxRecordWindow      uint64
+	MaxVisibleRowWindow  uint64
 	// MaxTypedGenerations is the peak number of resident typed generations.
 	MaxTypedGenerations uint64
 	// MaxTypedDecodedBytes is the peak owned decoded typed value state for one
@@ -20997,6 +21002,7 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		}
 		if stats != nil {
 			stats.PhysicalPasses++
+			stats.LocatorLookupBatches++
 			if uint64(len(ids)) > stats.MaxRecordWindow {
 				stats.MaxRecordWindow = uint64(len(ids))
 			}
@@ -21004,6 +21010,9 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		refs, err := view.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
 		if err != nil {
 			return false, err
+		}
+		if stats != nil {
+			stats.LocatorLookups += refs.Stats.RowLocatorLookups
 		}
 		rowRefs := make([]DocumentRowRef, len(refs.Results))
 		for i, result := range refs.Results {
@@ -21015,6 +21024,9 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		fetched, err := view.FetchDocumentsByRowRef(rowRefs, DocumentFetchOptions{})
 		if err != nil {
 			return false, err
+		}
+		if stats != nil {
+			stats.PointRowFetches += fetched.Stats.PointRowFetches
 		}
 		for _, result := range fetched.Results {
 			if !result.Found {
