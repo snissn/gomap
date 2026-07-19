@@ -20,6 +20,16 @@ var errColumnReconstructionMonotonicStop = errors.New("collections: stop monoton
 // scanColumnValuesRows so incompatible layouts retain the generic, full-part
 // reconstruction behavior.
 func columnStoreSupportsMonotonicSelectedTypedReconstruction(cfg ColumnStoreConfig) bool {
+	for _, key := range cfg.SortKey {
+		for _, column := range cfg.Columns {
+			if column.Name == key.Column && columnStoreColumnIsTypedColumnPart(column) {
+				// Typed-column parts are stored in their sort-key order, while
+				// visible RowIndex remains in primary/physical order. The certified
+				// path has no locator remapping, so retain generic reconstruction.
+				return false
+			}
+		}
+	}
 	for _, field := range columnStoreTypedColumnPartFields(cfg) {
 		if field.Nullable {
 			return false

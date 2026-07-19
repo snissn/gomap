@@ -410,6 +410,50 @@ func TestScanDocumentsFuncMonotonicReconstructionSelectiveTypedColumnP3887(t *te
 	}
 }
 
+func TestScanDocumentsFuncMonotonicReconstructionTypedSortKeyFallsBackP3887(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	cfg := &ColumnStoreConfig{Enabled: true,
+		Columns: []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart}},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e0000"), []byte("e0001")}, [][]byte{[]byte(`{"time_us":2}`), []byte(`{"time_us":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	var got []DocumentRecord
+	truncated, err := col.ScanDocumentsFunc(2, func(record DocumentRecord) (bool, error) {
+		got = append(got, record)
+		return true, nil
+	})
+	if err != nil || truncated || len(got) != 2 {
+		t.Fatalf("scan err=%v truncated=%t rows=%d", err, truncated, len(got))
+	}
+	if string(got[0].ID) != "e0000" || string(got[1].ID) != "e0001" {
+		t.Fatalf("IDs=%q,%q want e0000,e0001", got[0].ID, got[1].ID)
+	}
+	assertJSONMapEqual1875(t, got[0].Document, map[string]any{"time_us": float64(2)})
+	assertJSONMapEqual1875(t, got[1].Document, map[string]any{"time_us": float64(1)})
+	stats := col.LastDocumentScanStats()
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 {
+		t.Fatalf("scan stats=%+v want generic fallback for typed sort-key rows", stats)
+	}
+}
+
 func TestScanDocumentsFuncMonotonicReconstructionUnsupportedSelectedTypedFallsBackP3887(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
