@@ -136,7 +136,7 @@ func TestEnsureStorageLayoutDirsSyncsFreshNamespaceBottomUp(t *testing.T) {
 	if err := ensureStorageLayoutDirs(dir); err != nil {
 		t.Fatalf("ensureStorageLayoutDirs: %v", err)
 	}
-	if want := []string{dir, parent}; !reflect.DeepEqual(synced, want) {
+	if want := storageLayoutSyncOrderThroughRootForTest(dir); !reflect.DeepEqual(synced, want) {
 		t.Fatalf("namespace sync order=%v, want bottom-up %v", synced, want)
 	}
 }
@@ -161,7 +161,7 @@ func TestEnsureStorageLayoutDirsSyncsMissingAncestorChainBottomUp(t *testing.T) 
 	if err := ensureStorageLayoutDirs(dir); err != nil {
 		t.Fatalf("ensureStorageLayoutDirs: %v", err)
 	}
-	if want := []string{dir, outer, parent}; !reflect.DeepEqual(synced, want) {
+	if want := storageLayoutSyncOrderThroughRootForTest(dir); !reflect.DeepEqual(synced, want) {
 		t.Fatalf("namespace sync order=%v, want dependency-closed %v", synced, want)
 	}
 }
@@ -254,7 +254,7 @@ func TestEnsureStorageLayoutDirsRetriesUnprovenNamespaceAfterSyncFailure(t *test
 	if err := ensureStorageLayoutDirs(dir); err != nil {
 		t.Fatalf("retry ensureStorageLayoutDirs: %v", err)
 	}
-	if want := []string{dir, parent}; !reflect.DeepEqual(retried, want) {
+	if want := storageLayoutSyncOrderThroughRootForTest(dir); !reflect.DeepEqual(retried, want) {
 		t.Fatalf("retry namespace syncs=%v, want repair of unproven edges %v", retried, want)
 	}
 
@@ -308,8 +308,59 @@ func TestEnsureStorageLayoutDirsForOpenRetriesFreshCompositeOuterParentFailure(t
 	if err := EnsureStorageLayoutDirsForOpen(0o755, proof, root, mainDir, dictDir); err != nil {
 		t.Fatalf("retry public layout ensure: %v", err)
 	}
-	if want := []string{root, parent}; !reflect.DeepEqual(retried, want) {
+	if want := storageLayoutSyncOrderThroughRootForTest(root); !reflect.DeepEqual(retried, want) {
 		t.Fatalf("retry public namespace syncs=%v, want proof-absent repair %v", retried, want)
+	}
+}
+
+func TestEnsureStorageLayoutDirsForOpenRetriesFullMissingAncestorChain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows persists directory creation through exact child handles")
+	}
+	existing := t.TempDir()
+	outer := filepath.Join(existing, "newparent")
+	root := filepath.Join(outer, "db")
+	mainDir := filepath.Join(root, "maindb")
+	dictDir := filepath.Join(root, "dictdb")
+	proof := filepath.Join(mainDir, "index.db")
+	wantErr := errors.New("injected pre-existing-boundary sync failure")
+	previous := syncStorageLayoutDir
+	var first []string
+	syncStorageLayoutDir = func(path string) error {
+		first = append(first, path)
+		if path == existing {
+			return wantErr
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		syncStorageLayoutDir = previous
+	})
+
+	if err := EnsureStorageLayoutDirsForOpen(0o755, proof, root, mainDir, dictDir); !errors.Is(err, wantErr) {
+		t.Fatalf("first public layout ensure error=%v, want %v", err, wantErr)
+	}
+	if want := []string{root, outer, existing}; !reflect.DeepEqual(first, want) {
+		t.Fatalf("first public namespace syncs=%v, want dependency prefix %v", first, want)
+	}
+
+	var retried []string
+	syncStorageLayoutDir = func(path string) error {
+		retried = append(retried, path)
+		return nil
+	}
+	if err := EnsureStorageLayoutDirsForOpen(0o755, proof, root, mainDir, dictDir); err != nil {
+		t.Fatalf("retry public layout ensure: %v", err)
+	}
+	wantRetry := []string{root, outer, existing}
+	for current := filepath.Dir(existing); ; current = filepath.Dir(current) {
+		wantRetry = append(wantRetry, current)
+		if parent := filepath.Dir(current); parent == current {
+			break
+		}
+	}
+	if !reflect.DeepEqual(retried, wantRetry) {
+		t.Fatalf("retry public namespace syncs=%v, want full proof-absent ancestor repair %v", retried, wantRetry)
 	}
 }
 
@@ -340,7 +391,10 @@ func TestEnsureStorageLayoutDirsFreshCompositeSyncCount(t *testing.T) {
 			t.Fatalf("ensure backend layout %q: %v", backendDir, err)
 		}
 	}
-	want := []string{root, parent, mainDir, root, dictDir, root, templateDir, root}
+	var want []string
+	for _, path := range []string{root, mainDir, dictDir, templateDir} {
+		want = append(want, storageLayoutSyncOrderThroughRootForTest(path)...)
+	}
 	if !reflect.DeepEqual(synced, want) {
 		t.Fatalf("fresh composite namespace syncs=%v, want %v", synced, want)
 	}
@@ -361,6 +415,44 @@ func TestEnsureStorageLayoutDirsFreshCompositeSyncCount(t *testing.T) {
 	}
 	if len(synced) != 0 {
 		t.Fatalf("steady-state reopen added namespace syncs: %v", synced)
+	}
+}
+
+func TestStorageLayoutAncestorRepairSetsReachRoot(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "outer", "db")
+	wantParents := storageLayoutSyncOrderThroughRootForTest(filepath.Dir(base))
+	parents, err := storageLayoutAncestorParents(base)
+	if err != nil {
+		t.Fatalf("storageLayoutAncestorParents: %v", err)
+	}
+	if !reflect.DeepEqual(parents, wantParents) {
+		t.Fatalf("ancestor parents=%v, want deepest-first %v", parents, wantParents)
+	}
+
+	wantChildren := storageLayoutSyncOrderThroughRootForTest(base)
+	wantChildren = wantChildren[:len(wantChildren)-1]
+	children, err := storageLayoutAncestorChildren(base)
+	if err != nil {
+		t.Fatalf("storageLayoutAncestorChildren: %v", err)
+	}
+	if !reflect.DeepEqual(children, wantChildren) {
+		t.Fatalf("ancestor children=%v, want deepest-first edges %v", children, wantChildren)
+	}
+}
+
+func storageLayoutSyncOrderThroughRootForTest(path string) []string {
+	current, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		panic(err)
+	}
+	var paths []string
+	for {
+		paths = append(paths, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			return paths
+		}
+		current = parent
 	}
 }
 

@@ -74,7 +74,8 @@ func ensureStorageLayoutDirs(dir string) error {
 }
 
 // EnsureStorageLayoutDirsForOpen creates and persists a storage layout before
-// writable open. Until proofPath exists, all requested directory edges are
+// writable open. Until proofPath exists, every ancestor edge from the
+// requested directories through the filesystem or volume root is
 // conservatively synchronized even when a prior failed attempt left the
 // directories present. Once initialization has created proofPath, an entirely
 // existing layout performs no creation syncs.
@@ -132,8 +133,11 @@ func ensureStorageLayoutDirSet(mode fs.FileMode, repairUnproven bool, paths ...s
 	}
 	if repairUnproven {
 		for _, path := range paths {
-			parent := filepath.Dir(filepath.Clean(path))
-			if parent != "" && parent != filepath.Clean(path) {
+			parents, err := storageLayoutAncestorParents(path)
+			if err != nil {
+				return err
+			}
+			for _, parent := range parents {
 				parentsToSync[parent] = struct{}{}
 			}
 		}
@@ -182,24 +186,6 @@ func ensureStorageLayoutDirsCreateThroughChild(mode fs.FileMode, repairUnproven 
 			return err
 		}
 		if len(missing) == 0 {
-			if !repairUnproven {
-				continue
-			}
-			parent, err := rootpublication.OpenStableParent(filepath.Dir(filepath.Clean(path)))
-			if err != nil {
-				return err
-			}
-			child, childErr := rootpublication.EnsureStableChildDirectory(parent, filepath.Base(filepath.Clean(path)), mode, nil)
-			closeErr := parent.Close()
-			if childErr != nil {
-				return childErr
-			}
-			if childCloseErr := child.Close(); childCloseErr != nil {
-				return childCloseErr
-			}
-			if closeErr != nil {
-				return closeErr
-			}
 			continue
 		}
 		parentPath := filepath.Dir(missing[len(missing)-1])
@@ -223,7 +209,83 @@ func ensureStorageLayoutDirsCreateThroughChild(mode fs.FileMode, repairUnproven 
 			return err
 		}
 	}
+	if !repairUnproven {
+		return nil
+	}
+
+	childrenToSync := make(map[string]struct{}, len(paths)+1)
+	for _, path := range paths {
+		children, err := storageLayoutAncestorChildren(path)
+		if err != nil {
+			return err
+		}
+		for _, child := range children {
+			childrenToSync[child] = struct{}{}
+		}
+	}
+	children := make([]string, 0, len(childrenToSync))
+	for child := range childrenToSync {
+		children = append(children, child)
+	}
+	sort.Slice(children, func(i, j int) bool {
+		leftDepth := storageLayoutPathDepth(children[i])
+		rightDepth := storageLayoutPathDepth(children[j])
+		if leftDepth != rightDepth {
+			return leftDepth > rightDepth
+		}
+		return children[i] < children[j]
+	})
+	for _, childPath := range children {
+		parent, err := rootpublication.OpenStableParent(filepath.Dir(childPath))
+		if err != nil {
+			return err
+		}
+		child, childErr := rootpublication.EnsureStableChildDirectory(parent, filepath.Base(childPath), mode, nil)
+		parentCloseErr := parent.Close()
+		if childErr != nil {
+			return childErr
+		}
+		childCloseErr := child.Close()
+		if childCloseErr != nil {
+			return childCloseErr
+		}
+		if parentCloseErr != nil {
+			return parentCloseErr
+		}
+	}
 	return nil
+}
+
+func storageLayoutAncestorParents(path string) ([]string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	var parents []string
+	for current := absolute; ; {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return parents, nil
+		}
+		parents = append(parents, parent)
+		current = parent
+	}
+}
+
+func storageLayoutAncestorChildren(path string) ([]string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	var children []string
+	for current := absolute; ; {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return children, nil
+		}
+		children = append(children, current)
+		current = parent
+	}
 }
 
 func createMissingStorageLayoutDirs(missing []string, mode fs.FileMode) ([]string, error) {

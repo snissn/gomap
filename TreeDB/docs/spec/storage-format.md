@@ -60,11 +60,13 @@ created outer root. Windows uses its narrower exact-child creation persistence
 primitive for each new component. Fully existing initialized layouts add no
 creation sync; partial initialized layouts synchronize only the parents of
 names created by that open. Until a backend `index.db` exists as initialization
-proof, retry conservatively synchronizes every relevant existing layout edge
-as well, so directories left by a failed namespace barrier cannot make the
-next open succeed without repairing it. Any namespace sync failure aborts open,
-and an unavailable primitive returns the typed
-`ErrNamespacePersistenceUnsupported` result rather than certifying the layout.
+proof, writable open conservatively synchronizes every ancestor edge from the
+requested directories through the filesystem or volume root, deepest-first and
+deduplicated. This closes intermediate edges left by a failed attempt even
+though the proof alone cannot recover the original pre-existing boundary. Any
+namespace sync failure aborts open, and an unavailable primitive returns the
+typed `ErrNamespacePersistenceUnsupported` result rather than certifying the
+layout.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
 `collection_wal_v1`) is deprecated before becoming the active committed format.
