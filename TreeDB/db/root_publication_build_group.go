@@ -182,6 +182,8 @@ func (group *RootPublicationBuildGroup) mergeValueLogRefDeltaLocked(delta *value
 		group.vlogRefDelta = newValueLogRefDelta()
 	}
 	group.vlogRefDelta.requiresCandidateProjection = group.vlogRefDelta.requiresCandidateProjection || delta.requiresCandidateProjection
+	group.vlogRefDelta.allowEmptyDependencyReuse = group.vlogRefDelta.allowEmptyDependencyReuse || delta.allowEmptyDependencyReuse
+	group.vlogRefDelta.outerLeafDependencyReuse = group.vlogRefDelta.outerLeafDependencyReuse || delta.outerLeafDependencyReuse
 	_ = delta.forEachChange(func(fileID uint32, change int64) error {
 		group.vlogRefDelta.addChange(fileID, change)
 		return nil

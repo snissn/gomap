@@ -83,17 +83,60 @@ func TestOuterLeafSteadyStateWriteDoesNotScanCandidateTree(t *testing.T) {
 		t.Fatalf("ordinary outer-leaf write candidate scans=%d want 0", scans)
 	}
 
-	// Replacing an existing key can make the old physical leaf record
-	// unreachable even when the producer is still appending to the same segment.
-	// Apply-fed removal evidence must therefore restore exact projection.
+	// Replacing an inline value in the same producer segment safely retains the
+	// predecessor segment. Exact projection is deferred to segment rotation,
+	// which bounds reclamation work without putting a full-tree scan on every
+	// overwrite.
 	scans = 0
 	database.testScanCandidateExternalReferencesHook = func() { scans++ }
 	if err := database.SetSync([]byte("outer-leaf-prime"), []byte("r")); err != nil {
 		t.Fatalf("overwrite SetSync: %v", err)
 	}
 	database.testScanCandidateExternalReferencesHook = nil
-	if scans == 0 {
-		t.Fatal("outer-leaf overwrite did not scan candidate tree")
+	if scans != 0 {
+		t.Fatalf("same-segment outer-leaf overwrite candidate scans=%d want 0", scans)
+	}
+	got, err := database.Get([]byte("outer-leaf-prime"))
+	if err != nil {
+		t.Fatalf("read overwritten outer-leaf value: %v", err)
+	}
+	if string(got) != "r" {
+		t.Fatalf("overwritten outer-leaf value=%q want r", got)
+	}
+}
+
+func TestOuterLeafFirstPublicationFromEmptyDependencyBaseDoesNotScanCandidateTree(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	leafLog := &registeredLeafPageLog{db: database, dir: database.dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	database.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, database, leafLog)
+
+	scans := 0
+	database.testScanCandidateExternalReferencesHook = func() { scans++ }
+	if err := database.SetSync([]byte("outer-leaf-first"), []byte("value")); err != nil {
+		t.Fatalf("first SetSync: %v", err)
+	}
+	database.testScanCandidateExternalReferencesHook = nil
+	if scans != 0 {
+		t.Fatalf("first outer-leaf publication candidate scans=%d want 0", scans)
+	}
+	got, err := database.Get([]byte("outer-leaf-first"))
+	if err != nil {
+		t.Fatalf("read first outer-leaf value: %v", err)
+	}
+	if string(got) != "value" {
+		t.Fatalf("first outer-leaf value=%q want value", got)
 	}
 }
 
@@ -191,6 +234,19 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		reachability: rootpublication.ReachabilityOuterLeafGeneration, frontier: 4096,
 	})
 	defer plannerAdditional.Release()
+
+	netZeroFileID := leafLog.fileID + 1
+	netZero := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(netZero)
+	netZero.add(netZeroFileID, 1)
+	netZero.add(netZeroFileID, -1)
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, netZero); err != nil {
+		t.Fatalf("plan net-zero pointer replacement transition: %v", err)
+	} else if !reuse {
+		t.Fatal("net-zero pointer replacement did not reuse predecessor dependencies")
+	} else if _, ok := references[netZeroFileID]; !ok {
+		t.Fatalf("net-zero pointer replacement references=%v, want positive membership for file %d", references, netZeroFileID)
+	}
 
 	destructive := newValueLogRefDelta()
 	defer releaseValueLogRefDelta(destructive)

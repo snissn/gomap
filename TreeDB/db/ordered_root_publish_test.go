@@ -226,6 +226,49 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextPreservesExactValueLogProjection(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	makeDelta := func(key, value string) memtable.Table {
+		t.Helper()
+		delta := memtable.NewAppendOnlyWithEntryCapacity(1)
+		delta.Set([]byte(key), []byte(value))
+		delta.Freeze()
+		return delta
+	}
+	publish := func(baseRoot uint64, delta memtable.Table, commandKey string) uint64 {
+		t.Helper()
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+			[]OrderedRootDeltaPublishInput{{BaseRoot: baseRoot, Iter: delta.NewIterator(nil, nil)}},
+			mustRawKVCommandWALIntent(t, db, commandKey, "1"),
+			func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return mustFrozenSystemMemtable(t, "system/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("publish base root %d: %v", baseRoot, err)
+		}
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			t.Fatalf("rootIDs=%v, want one non-zero root", rootIDs)
+		}
+		return rootIDs[0]
+	}
+
+	var scans atomic.Int64
+	db.testScanCandidateExternalReferencesHook = func() { scans.Add(1) }
+	first := makeDelta("root/a", "value-a")
+	firstRoot := publish(0, first, "cmd/exact-ref-base")
+	second := makeDelta("root/b", "value-b")
+	_ = publish(firstRoot, second, "cmd/exact-ref-update")
+	db.testScanCandidateExternalReferencesHook = nil
+	if got := scans.Load(); got != 0 {
+		t.Fatalf("command-WAL grouped delta candidate dependency scans=%d want 0", got)
+	}
+}
+
 func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	tests := []struct {
 		name    string

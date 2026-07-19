@@ -174,6 +174,13 @@ func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublica
 }
 
 func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
+	// The persisted tracker projects logical ValuePtr counts, but it does not
+	// describe raw outer-leaf LogRecordRef dependencies of collection-local
+	// roots. Those transitions either use the bounded predecessor/current
+	// segment plan below or fall back to the exact candidate scanner.
+	if delta != nil && delta.outerLeafDependencyReuse {
+		return nil, false, nil
+	}
 	tracker := db.valueLogRefTracker
 	if tracker == nil {
 		return nil, false, nil
@@ -495,18 +502,16 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // complete bounded projection for the next candidate. Their handles are still
 // recaptured so an append to an existing segment advances the stable frontier.
 // Logical value-pointer additions are supplied by the apply delta. Raw
-// outer-leaf identities remain complete for insert-only writes until the
-// producer rotates to a new segment; rotation and every destructive/unknown
-// transition deliberately fall back to the exact candidate scanner so
-// maintenance can retire unreachable files without granting authority to
-// unrelated inventory. A replacement generation manifest does not invalidate
-// this proof: the caller replaces that authoritative namespace token
-// independently while this plan recaptures only the raw/value-log handles.
+// outer-leaf identities remain safe for apply-fed writes because predecessor
+// membership is retained while new current segments and positive logical
+// pointers are added. That dependency superset can span destructive writes and
+// segment rotation; reclamation is deferred to exact maintenance instead of
+// putting a candidate scan on foreground publication. A replacement generation
+// manifest does not invalidate this proof: the caller replaces that
+// authoritative namespace token independently while this plan recaptures only
+// the raw/value-log handles.
 func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
-	if db == nil || !db.indexOuterLeavesInValueLog || delta == nil {
-		return nil, false, nil
-	}
-	if delta.requiresCandidateProjection {
+	if db == nil || delta == nil || (!db.indexOuterLeavesInValueLog && !delta.outerLeafDependencyReuse) {
 		return nil, false, nil
 	}
 	known := make(map[uint32]struct{})
@@ -547,6 +552,15 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			continue
 		}
 		if _, ok := known[segment.FileID]; !ok {
+			if delta.outerLeafDependencyReuse || (len(known) == 0 && delta.allowEmptyDependencyReuse) {
+				// The empty predecessor has no value-log or raw-leaf
+				// dependency to retire. Apply-fed ordered publication may also
+				// retain the predecessor set across a segment rotation; exact
+				// maintenance can prune that safe dependency superset later.
+				references[segment.FileID] = struct{}{}
+				known[segment.FileID] = struct{}{}
+				continue
+			}
 			// The first publication into a new raw-leaf segment is the bounded
 			// point where the old segment set is re-projected exactly.
 			return nil, false, nil
@@ -554,6 +568,12 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 	}
 	if err := delta.forEachChange(func(fileID uint32, change int64) error {
 		if change < 0 {
+			if delta.outerLeafDependencyReuse {
+				// Apply-fed ordered publication deliberately keeps predecessor
+				// membership on subtractive transitions. This avoids a foreground
+				// candidate scan while preserving a safe dependency superset.
+				return nil
+			}
 			// Membership alone cannot prove whether a subtractive count reached
 			// zero. Use the exact scanner rather than retaining or deleting on a
 			// guess.
@@ -569,6 +589,14 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 		if errors.Is(err, errDurableRootDependencyProjectionRequired) {
 			return nil, false, nil
 		}
+		return nil, false, err
+	}
+	if err := delta.forEachPositive(func(fileID uint32, _ int64) error {
+		if _, ownedByAdditional := additionalReferences[fileID]; !ownedByAdditional {
+			references[fileID] = struct{}{}
+		}
+		return nil
+	}); err != nil {
 		return nil, false, err
 	}
 	for fileID := range additionalReferences {
@@ -638,7 +666,12 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	}
 	excludedInheritedKinds := []rootpublication.ResourceKind{
 		rootpublication.ResourceValueLog,
-		rootpublication.ResourceOuterLeafLog,
+	}
+	// A non-nil delta without outer-leaf evidence only changed pager-backed
+	// roots. Raw outer-leaf dependencies are therefore unchanged and must remain
+	// inherited; the logical value-pointer projection cannot rediscover them.
+	if delta == nil || delta.outerLeafDependencyReuse {
+		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafLog)
 	}
 	if hasReplacementManifest {
 		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafManifest)
