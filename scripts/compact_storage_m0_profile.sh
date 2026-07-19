@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-RUN_DIR=${RUN_DIR:-$(mktemp -d /mnt/fast4tb/compact_storage_m0_XXXXXX)}
-TMP_ROOT=${TMPDIR:-/mnt/fast4tb/tmp}
+TMP_ROOT=${TMPDIR:-/tmp}
+mkdir -p "$TMP_ROOT"
+RUN_DIR=${RUN_DIR:-$(mktemp -d "$TMP_ROOT/compact_storage_m0_XXXXXX")}
 COUNT=${COUNT:-12}
 CPU_SET=${CPU_SET:-2-3}
 GOMAXPROCS=${GOMAXPROCS:-2}
@@ -12,7 +13,6 @@ BENCH='^BenchmarkCompactStorageM0$'
 STRESS='^BenchmarkCompactStorageM0/one-generation-per-pass$'
 
 mkdir -p "$RUN_DIR"/{canonical,profiles,syscalls,overhead/on,overhead/off}
-mkdir -p "$TMP_ROOT"
 cd "$ROOT"
 
 run_go_test() {

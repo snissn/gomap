@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +223,45 @@ func TestCompactStorageM0ForegroundHandshakeUsesWriteFlushBoundary(t *testing.T)
 	case <-handshake.attempted:
 	default:
 		t.Fatal("foreground write boundary did not release maintenance")
+	}
+}
+
+func TestCompactStorageM0PhaseHooksRequired(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		recorder, foreground, marker bool
+		want                         bool
+	}{
+		{name: "production-off"},
+		{name: "recorder", recorder: true, want: true},
+		{name: "foreground", foreground: true, want: true},
+		{name: "strace-markers", marker: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := compactStorageM0PhaseHooksRequired(tc.recorder, tc.foreground, tc.marker); got != tc.want {
+				t.Fatalf("required=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "compact_storage_m0_profile.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+	for _, want := range []string{
+		"TMP_ROOT=${TMPDIR:-/tmp}",
+		"mkdir -p \"$TMP_ROOT\"",
+		"mktemp -d \"$TMP_ROOT/compact_storage_m0_XXXXXX\"",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("profile script missing %q", want)
+		}
+	}
+	if strings.Contains(script, "RUN_DIR=${RUN_DIR:-$(mktemp -d /mnt/fast4tb/") {
+		t.Fatal("profile script retains a host-specific default run directory")
 	}
 }
 

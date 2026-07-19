@@ -176,32 +176,35 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 		if recorder != nil || foregroundHandshake != nil {
 			restore = installCompactStorageM0Recorder(recorder, foregroundHandshake)
 		}
-		db.compactStorageBeforePhase = func(name string) {
-			if spec.foreground && name == "value-log-rewrite" {
-				foregroundHandshake.arm()
-				foregroundStartOnce.Do(func() { close(foregroundStart) })
-				foregroundResult, foregroundConsumed, foregroundAttemptedObserved =
-					waitForCompactStorageM0ForegroundAttempt(foregroundHandshake.attempted, foregroundDone)
+		markersEnabled := os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1"
+		if compactStorageM0PhaseHooksRequired(recorder != nil, spec.foreground, markersEnabled) {
+			db.compactStorageBeforePhase = func(name string) {
+				if spec.foreground && name == "value-log-rewrite" {
+					foregroundHandshake.arm()
+					foregroundStartOnce.Do(func() { close(foregroundStart) })
+					foregroundResult, foregroundConsumed, foregroundAttemptedObserved =
+						waitForCompactStorageM0ForegroundAttempt(foregroundHandshake.attempted, foregroundDone)
+				}
+				if markersEnabled {
+					fmt.Fprintf(os.Stderr, "TREEDB_M0_PHASE_BEGIN %s\n", name)
+				}
+				if recorder != nil {
+					recorder.beginPhase(name)
+				}
 			}
-			if os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1" {
-				fmt.Fprintf(os.Stderr, "TREEDB_M0_PHASE_BEGIN %s\n", name)
-			}
-			if recorder != nil {
-				recorder.beginPhase(name)
-			}
-		}
-		db.compactStorageAfterPhase = func(name string) {
-			if recorder != nil {
-				recorder.endPhase(name)
-			}
-			if os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1" {
-				fmt.Fprintf(os.Stderr, "TREEDB_M0_PHASE_END %s\n", name)
-			}
-			if spec.foreground && name == "value-log-rewrite" {
-				foregroundStartOnce.Do(func() { close(foregroundStart) })
-				foregroundResult, foregroundConsumed = finishCompactStorageM0ForegroundWrite(
-					foregroundDone, foregroundResult, foregroundConsumed,
-				)
+			db.compactStorageAfterPhase = func(name string) {
+				if recorder != nil {
+					recorder.endPhase(name)
+				}
+				if markersEnabled {
+					fmt.Fprintf(os.Stderr, "TREEDB_M0_PHASE_END %s\n", name)
+				}
+				if spec.foreground && name == "value-log-rewrite" {
+					foregroundStartOnce.Do(func() { close(foregroundStart) })
+					foregroundResult, foregroundConsumed = finishCompactStorageM0ForegroundWrite(
+						foregroundDone, foregroundResult, foregroundConsumed,
+					)
+				}
 			}
 		}
 		if allocsProfileDir != "" {
@@ -323,6 +326,10 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 type compactStorageM0WriteResult struct {
 	latencies []time.Duration
 	err       error
+}
+
+func compactStorageM0PhaseHooksRequired(recorder, foreground, markers bool) bool {
+	return recorder || foreground || markers
 }
 
 func waitForCompactStorageM0ForegroundAttempt(
