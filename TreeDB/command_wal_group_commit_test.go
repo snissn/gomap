@@ -142,6 +142,41 @@ func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing
 	}
 }
 
+func TestPublicCommandWALGroupCommitSoloDurablePanicReleasesGates(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.commandWALGroupCommit.durableIntents.Store(1)
+	defer db.commandWALGroupCommit.durableIntents.Store(0)
+	recovered := func() (recovered any) {
+		defer func() {
+			recovered = recover()
+		}()
+		_, attempted, _ := db.trySoloDurablePublicCommandWAL(nil, func(bool) (uint64, error) {
+			panic("injected append panic")
+		})
+		t.Fatalf("solo durable panic path returned with attempted=%v", attempted)
+		return nil
+	}()
+	if recovered == nil {
+		t.Fatal("solo durable append panic was not observed")
+	}
+
+	if !db.commandWALPublicOperationGate.TryLock() {
+		t.Fatal("solo durable append panic left the public operation gate locked")
+	}
+	if !db.commandWALPublicPublishMu.TryLock() {
+		db.commandWALPublicOperationGate.Unlock()
+		t.Fatal("solo durable append panic left the public publish gate locked")
+	}
+	db.commandWALPublicPublishMu.Unlock()
+	db.commandWALPublicOperationGate.Unlock()
+}
+
 func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublication(t *testing.T) {
 	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
 	db, err := Open(opts)

@@ -176,49 +176,59 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 	// barrier. That drains prior relaxed publication leases before syncing the
 	// mutation frame directly, avoiding both the collection timer and a second
 	// durable-prefix frame without weakening prefix or publication ordering.
-	tdb.commandWALPublicOperationGate.Lock()
-	tdb.commandWALPublicPublishMu.Lock()
-	group.mu.Lock()
-	eligible := group.soloDurableSyncEligibleLocked()
-	if eligible {
-		group.initPublicationLocked()
-	}
-	group.mu.Unlock()
-	if !eligible {
-		tdb.commandWALPublicPublishMu.Unlock()
-		tdb.commandWALPublicOperationGate.Unlock()
-		return publication, false, nil
-	}
+	var (
+		lsn               uint64
+		err               error
+		ticket            uint64
+		afterSoloRegister func(uint64)
+	)
+	attempted := true
+	func() {
+		tdb.commandWALPublicOperationGate.Lock()
+		defer tdb.commandWALPublicOperationGate.Unlock()
+		tdb.commandWALPublicPublishMu.Lock()
+		defer tdb.commandWALPublicPublishMu.Unlock()
 
-	lsn, err := appendFrame(true)
-	if lsn != 0 {
-		start := time.Now()
-		tdb.recordPublicCommandWALPendingLSN(lsn)
-		if pendingBookkeeping != nil {
-			*pendingBookkeeping += time.Since(start)
-		}
-	}
-	var ticket uint64
-	var afterSoloRegister func(uint64)
-	if err == nil && lsn != 0 {
 		group.mu.Lock()
-		if group.terminalErr != nil {
-			err = group.terminalErr
-		} else if group.nextTicket == publicCommandWALFastRelaxedTicket-1 {
-			err = fmt.Errorf("treedb: command wal publication ticket space exhausted")
-			group.terminalErr = err
-		} else {
-			group.nextTicket++
-			ticket = group.nextTicket
-			group.completedTicket = ticket
-			group.bypassSoloDurable.Add(1)
-			afterSoloRegister = group.testAfterSoloRegister
-			group.cond.Broadcast()
+		eligible := group.soloDurableSyncEligibleLocked()
+		if eligible {
+			group.initPublicationLocked()
 		}
 		group.mu.Unlock()
+		if !eligible {
+			attempted = false
+			return
+		}
+
+		lsn, err = appendFrame(true)
+		if lsn != 0 {
+			start := time.Now()
+			tdb.recordPublicCommandWALPendingLSN(lsn)
+			if pendingBookkeeping != nil {
+				*pendingBookkeeping += time.Since(start)
+			}
+		}
+		if err == nil && lsn != 0 {
+			group.mu.Lock()
+			if group.terminalErr != nil {
+				err = group.terminalErr
+			} else if group.nextTicket == publicCommandWALFastRelaxedTicket-1 {
+				err = fmt.Errorf("treedb: command wal publication ticket space exhausted")
+				group.terminalErr = err
+			} else {
+				group.nextTicket++
+				ticket = group.nextTicket
+				group.completedTicket = ticket
+				group.bypassSoloDurable.Add(1)
+				afterSoloRegister = group.testAfterSoloRegister
+				group.cond.Broadcast()
+			}
+			group.mu.Unlock()
+		}
+	}()
+	if !attempted {
+		return publication, false, nil
 	}
-	tdb.commandWALPublicPublishMu.Unlock()
-	tdb.commandWALPublicOperationGate.Unlock()
 	if err != nil || ticket == 0 {
 		return publication, true, err
 	}
