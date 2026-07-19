@@ -21,8 +21,10 @@ func BenchmarkScanDocumentsFuncMonotonicReconstructionP3887(b *testing.B) {
 			b.Fatalf("P3887_BENCH_ROWS=%q", raw)
 		}
 	}
-	// The fixture's DB directory is explicitly under /mnt/fast4tb for benchmark runs.
-	dir, err := os.MkdirTemp("/mnt/fast4tb", "gomap3887_bench_*")
+	// P3887_BENCH_DIR can select fast storage; an empty base uses the portable
+	// default temporary directory.
+	base := os.Getenv("P3887_BENCH_DIR")
+	dir, err := os.MkdirTemp(base, "gomap3887_bench_*")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -328,7 +330,7 @@ func TestScanDocumentsFuncMonotonicReconstructionBoundsWindowsP3887(t *testing.T
 			t.Fatalf("callback order id[%d]=%q want %q", i, id, events[i].ID)
 		}
 	}
-	if stats := col.LastDocumentScanStats(); !stats.CertifiedMonotonicPath || stats.GenericFallback || stats.PhysicalPasses != 2 || stats.PhysicalRows != uint64(rows*2) || stats.PhysicalDecodedBlocks != 2 || stats.PreflightProjectedColumns != 0 || stats.MaxRecordWindow != 256 || stats.MaxVisibleRowWindow != 256 || stats.ReconstructedRows != uint64(rows) {
+	if stats := col.LastDocumentScanStats(); !stats.CertifiedMonotonicPath || stats.GenericFallback || stats.PhysicalPasses != 2 || stats.PhysicalRows != uint64(rows*2) || stats.PhysicalDecodedBlocks != 2 || stats.PreflightProjectedColumns != 0 || stats.MaxRecordWindow != columnReconstructionMonotonicBatchSize || stats.MaxVisibleRowWindow != columnReconstructionMonotonicBatchSize || stats.ReconstructedRows != uint64(rows) {
 		t.Fatalf("scan stats=%+v want certified bounded reconstruction", stats)
 	}
 }
