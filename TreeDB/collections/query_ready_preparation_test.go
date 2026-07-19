@@ -323,6 +323,9 @@ func TestPrepareQueryReadyColumnGenerationRejectsCombinedSourceBuildBound(t *tes
 }
 
 func TestPrepareQueryReadyColumnGenerationAdmitsBoundedMultiPartPeak(t *testing.T) {
+	if !typedcolumn.QueryReadyGenerationFileOpenSupported() {
+		t.Skip("query-ready generation file open requires read-only mmap support")
+	}
 	events := columnPhysicalJSONBenchParityEventsP0()
 	batches := make([][]columnPhysicalJSONBenchParityEventP0, 4)
 	for batchIndex := range batches {
