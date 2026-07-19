@@ -18,12 +18,13 @@ import (
 )
 
 type compactStorageM0FixtureSpec struct {
-	metadata      compactStorageMeasurementFixture
-	open          func(*testing.B) *DB
-	options       CompactStorageOptions
-	minPackRuns   int
-	expectRewrite bool
-	foreground    bool
+	metadata        compactStorageMeasurementFixture
+	open            func(*testing.B) *DB
+	options         CompactStorageOptions
+	minPackRuns     int
+	expectRewrite   bool
+	expectVacuumRun bool
+	foreground      bool
 }
 
 var compactStorageM0FixtureSpecs = []compactStorageM0FixtureSpec{
@@ -378,11 +379,22 @@ func validateCompactStorageM0Work(spec compactStorageM0FixtureSpec, stats Compac
 			spec.metadata.Name, stats.ValueLogRewrite.SourceSegmentsRequested)
 	}
 	for _, phase := range stats.Phases {
-		if phase.Name == "index-vacuum" && !phase.Skipped {
-			return nil
+		if phase.Name != "index-vacuum" {
+			continue
 		}
+		vacuumRan := !phase.Skipped
+		if vacuumRan != spec.expectVacuumRun {
+			if spec.expectVacuumRun {
+				return fmt.Errorf("%s: expected index vacuum did not run: %s", spec.metadata.Name, phase.SkipReason)
+			}
+			return fmt.Errorf("%s: unexpected index vacuum run", spec.metadata.Name)
+		}
+		if phase.Skipped && phase.SkipReason == "" {
+			return fmt.Errorf("%s: skipped index vacuum has no disposition reason", spec.metadata.Name)
+		}
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%s: index-vacuum disposition phase missing", spec.metadata.Name)
 }
 
 func compactStorageM0ArtifactName(fixture string, iteration int) string {

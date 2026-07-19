@@ -12,6 +12,7 @@ BENCH='^BenchmarkCompactStorageM0$'
 STRESS='^BenchmarkCompactStorageM0/one-generation-per-pass$'
 
 mkdir -p "$RUN_DIR"/{canonical,profiles,syscalls,overhead/on,overhead/off}
+mkdir -p "$TMP_ROOT"
 cd "$ROOT"
 
 run_go_test() {

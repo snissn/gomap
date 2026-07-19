@@ -1,6 +1,9 @@
 package db
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 type compactStorageMeasurementFixture struct {
 	Name                      string `json:"name"`
@@ -252,11 +255,7 @@ func compactStorageMeasurementLatencyFor(values []time.Duration) compactStorageM
 }
 
 func sortDurations(values []time.Duration) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
-	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 }
 
 func durationPercentile(sorted []time.Duration, percentile int) time.Duration {

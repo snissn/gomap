@@ -236,8 +236,35 @@ func TestValidateCompactStorageM0WorkRequiresExactRewriteDisposition(t *testing.
 	if err := validateCompactStorageM0Work(expectRewrite, CompactStorageStats{}); err == nil {
 		t.Fatal("missing value-log rewrite was accepted")
 	}
+	unexpected.Phases = []CompactStoragePhaseStats{{
+		Name: "index-vacuum", Skipped: true, SkipReason: "production-index-vacuum-unavailable",
+	}}
 	if err := validateCompactStorageM0Work(expectRewrite, unexpected); err != nil {
 		t.Fatalf("expected value-log rewrite rejected: %v", err)
+	}
+}
+
+func TestValidateCompactStorageM0WorkRequiresExactVacuumDisposition(t *testing.T) {
+	spec := compactStorageM0FixtureSpec{
+		metadata: compactStorageMeasurementFixture{Name: "vacuum-skipped"},
+	}
+	skipped := CompactStorageStats{Phases: []CompactStoragePhaseStats{{
+		Name: "index-vacuum", Skipped: true, SkipReason: "production-index-vacuum-unavailable",
+	}}}
+	if err := validateCompactStorageM0Work(spec, skipped); err != nil {
+		t.Fatalf("declared skipped vacuum rejected: %v", err)
+	}
+	if err := validateCompactStorageM0Work(spec, CompactStorageStats{}); err == nil {
+		t.Fatal("missing index-vacuum disposition was accepted")
+	}
+	ran := CompactStorageStats{Phases: []CompactStoragePhaseStats{{Name: "index-vacuum"}}}
+	if err := validateCompactStorageM0Work(spec, ran); err == nil {
+		t.Fatal("unexpected index-vacuum run was accepted")
+	}
+
+	spec.expectVacuumRun = true
+	if err := validateCompactStorageM0Work(spec, ran); err != nil {
+		t.Fatalf("declared index-vacuum run rejected: %v", err)
 	}
 }
 
