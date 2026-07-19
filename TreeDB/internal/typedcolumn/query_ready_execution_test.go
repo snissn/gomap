@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -168,6 +169,13 @@ func TestQueryReadyBaseDeltaJSONBenchQ1ToQ5Parity(t *testing.T) {
 				}
 				if got.Stats.EncodedBaseDeltaExecutions != 1 || got.Stats.DocumentMaterializations != 0 || got.Stats.LegacyScanFallbacks != 0 || got.Stats.RowsVisible != 6 {
 					t.Fatalf("%s stats=%+v", prepared.name, got.Stats)
+				}
+				wantFused := tc.name == "q4" || tc.name == "q4b" || tc.name == "q5"
+				if gotFused := got.Stats.FusedPredicateReductionExecutions == 1; gotFused != wantFused {
+					t.Fatalf("%s fused predicate/reduction=%v want %v stats=%+v", prepared.name, gotFused, wantFused, got.Stats)
+				}
+				if wantFused && got.Stats.FusedPredicateReductionNanos <= 0 {
+					t.Fatalf("%s fused predicate/reduction nanos=%d want positive stats=%+v", prepared.name, got.Stats.FusedPredicateReductionNanos, got.Stats)
 				}
 			}
 		})
@@ -884,6 +892,45 @@ func TestQueryReadyExecutionImageRejectsNonCanonicalRangesAndPadding(t *testing.
 
 var queryReadyBenchmarkResult QueryReadyOperatorResult
 
+func TestQueryReadyEncodedFusedParallelGroupedInt64Parity(t *testing.T) {
+	serialReader := queryReadyJSONBenchBenchmarkReaderParts(t, 32_768, 0, 32_768)
+	parallelReader := queryReadyJSONBenchBenchmarkReaderParts(t, 32_768, 0, 4_096)
+	requests := []QueryReadyOperatorRequest{
+		{Kind: QueryReadyOperatorGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 10, Order: QueryReadyOrderInt64Asc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+		{Kind: QueryReadyOperatorGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 10, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+		{Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", TopK: 10, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+	}
+	for _, request := range requests {
+		serial, err := PrepareQueryReadyOperator(serialReader, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := serial.Run()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parallel, err := PrepareQueryReadyOperator(parallelReader, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for attempt := 0; attempt < 2; attempt++ {
+			got, err := parallel.Run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got.Groups, want.Groups) {
+				t.Fatalf("kind=%s attempt=%d groups=%+v want %+v", request.Kind, attempt, got.Groups, want.Groups)
+			}
+			wantFused := runtime.GOMAXPROCS(0) > 1
+			if (got.Stats.FusedPredicateReductionExecutions == 1) != wantFused || (wantFused && got.Stats.FusedPredicateReductionWorkers <= 1) ||
+				got.Stats.RowsScanned != want.Stats.RowsScanned || got.Stats.RowsMatched != want.Stats.RowsMatched ||
+				got.Stats.DecodedBytes != want.Stats.DecodedBytes || got.Stats.DocumentMaterializations != 0 || got.Stats.LegacyScanFallbacks != 0 || got.Stats.PrecomputedAnswers != 0 {
+				t.Fatalf("kind=%s attempt=%d stats=%+v want parity with %+v", request.Kind, attempt, got.Stats, want.Stats)
+			}
+		}
+	}
+}
+
 func BenchmarkQueryReadyEncodedJSONBenchOperators(b *testing.B) {
 	reader := queryReadyJSONBenchBenchmarkReader(b, 100_000, 20_000)
 	requests := map[string]QueryReadyOperatorRequest{
@@ -913,6 +960,43 @@ func BenchmarkQueryReadyEncodedJSONBenchOperators(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			b.ReportMetric(float64(warm.Stats.ScratchBytes), "scratch_B")
+		})
+	}
+}
+
+func BenchmarkQueryReadyEncodedFusedGroupedInt64(b *testing.B) {
+	if runtime.GOMAXPROCS(0) < 2 {
+		b.Skip("parallel fused benchmark requires at least two runnable workers")
+	}
+	reader := queryReadyJSONBenchBenchmarkReaderParts(b, 1_000_000, 0, 16_000)
+	requests := map[string]QueryReadyOperatorRequest{
+		"q4": {Kind: QueryReadyOperatorGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 10, Order: QueryReadyOrderInt64Asc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+		"q5": {Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", TopK: 10, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true, Predicates: queryReadyPostPredicates()},
+	}
+	for _, name := range []string{"q4", "q5"} {
+		b.Run(name, func(b *testing.B) {
+			runner, err := PrepareQueryReadyOperator(reader, requests[name])
+			if err != nil {
+				b.Fatal(err)
+			}
+			warm, err := runner.Run()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if warm.Stats.FusedPredicateReductionExecutions != 1 {
+				b.Fatalf("fused predicate/reduction executions=%d want 1", warm.Stats.FusedPredicateReductionExecutions)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(warm.Stats.RowsScanned))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				queryReadyBenchmarkResult, err = runner.Run()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(warm.Stats.DecodedBytes), "decoded_B/op")
 			b.ReportMetric(float64(warm.Stats.ScratchBytes), "scratch_B")
 		})
 	}
@@ -953,6 +1037,10 @@ func BenchmarkQueryReadyEncodedDeltaDepthCurve(b *testing.B) {
 }
 
 func queryReadyJSONBenchBenchmarkReader(b testing.TB, baseRows, deltaRows int) *QueryReadyBaseDeltaReader {
+	return queryReadyJSONBenchBenchmarkReaderParts(b, baseRows, deltaRows, baseRows)
+}
+
+func queryReadyJSONBenchBenchmarkReaderParts(b testing.TB, baseRows, deltaRows, basePartRows int) *QueryReadyBaseDeltaReader {
 	b.Helper()
 	buildRows := func(firstID int64, rows int) ([]int64, []string, []string, []string, []string, []int64) {
 		ids := make([]int64, rows)
@@ -978,14 +1066,35 @@ func queryReadyJSONBenchBenchmarkReader(b testing.TB, baseRows, deltaRows int) *
 		return ids, event, did, kind, operation, times
 	}
 	ids, event, did, kind, operation, times := buildRows(1, baseRows)
-	baseImage := queryReadyJSONBenchImageWithGranules(b, 9201, ids, event, did, kind, operation, times, 8_192)
-	baseBuilt, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), []QueryReadyBasePartInput{{SourceGeneration: 1, Image: baseImage}})
+	if basePartRows <= 0 {
+		b.Fatal("base part rows must be positive")
+	}
+	baseParts := make([]QueryReadyBasePartInput, 0, (baseRows+basePartRows-1)/basePartRows)
+	for first, partID := 0, uint64(9201); first < baseRows; first, partID = first+basePartRows, partID+1 {
+		limit := min(first+basePartRows, baseRows)
+		baseParts = append(baseParts, QueryReadyBasePartInput{
+			SourceGeneration: 1,
+			Image: queryReadyJSONBenchImageWithGranules(b, partID,
+				ids[first:limit], event[first:limit], did[first:limit], kind[first:limit], operation[first:limit], times[first:limit], 8_192),
+		})
+	}
+	baseBuilt, err := BuildQueryReadyBaseGeneration(queryReadyBaseTestIdentity(1), baseParts)
 	if err != nil {
 		b.Fatal(err)
 	}
 	base, err := OpenQueryReadyBaseGeneration(baseBuilt.Bytes, queryReadyBaseTestIdentity(1))
 	if err != nil {
 		b.Fatal(err)
+	}
+	if deltaRows == 0 {
+		reader, err := NewQueryReadyBaseDeltaReader(base, nil, QueryReadyBaseDeltaOptions{
+			SnapshotGeneration: 1,
+			Bound:              QueryReadyDeltaBoundPolicy{MaxVisibleGenerations: 1, MaxAccumulatedDeltaParts: 1, MaxRows: int64(baseRows), MaxBytes: 1 << 30},
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		return reader
 	}
 	updates := deltaRows / 2
 	ids, event, did, kind, operation, times = buildRows(1, updates)
