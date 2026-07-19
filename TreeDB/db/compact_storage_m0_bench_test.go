@@ -199,8 +199,9 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 			}
 			if spec.foreground && name == "value-log-rewrite" {
 				foregroundStartOnce.Do(func() { close(foregroundStart) })
-				foregroundResult = <-foregroundDone
-				foregroundConsumed = true
+				foregroundResult, foregroundConsumed = finishCompactStorageM0ForegroundWrite(
+					foregroundDone, foregroundResult, foregroundConsumed,
+				)
 			}
 		}
 		if allocsProfileDir != "" {
@@ -235,9 +236,9 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 		runtime.ReadMemStats(&afterMem)
 		if spec.foreground {
 			foregroundStartOnce.Do(func() { close(foregroundStart) })
-			if !foregroundConsumed {
-				foregroundResult = <-foregroundDone
-			}
+			foregroundResult, foregroundConsumed = finishCompactStorageM0ForegroundWrite(
+				foregroundDone, foregroundResult, foregroundConsumed,
+			)
 		}
 		b.StopTimer()
 		if allocsProfileDir != "" {
@@ -339,6 +340,17 @@ func waitForCompactStorageM0ForegroundAttempt(
 			return result, true, false
 		}
 	}
+}
+
+func finishCompactStorageM0ForegroundWrite(
+	done <-chan compactStorageM0WriteResult,
+	result compactStorageM0WriteResult,
+	consumed bool,
+) (compactStorageM0WriteResult, bool) {
+	if consumed {
+		return result, true
+	}
+	return <-done, true
 }
 
 func runCompactStorageM0Writes(db *DB, label string, count int) ([]time.Duration, error) {

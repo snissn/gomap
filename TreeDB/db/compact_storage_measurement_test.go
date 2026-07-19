@@ -250,6 +250,23 @@ func TestWaitForCompactStorageM0ForegroundAttemptPrioritizesObservedBoundary(t *
 	}
 }
 
+func TestFinishCompactStorageM0ForegroundWriteDoesNotReadTwice(t *testing.T) {
+	done := make(chan compactStorageM0WriteResult, 1)
+	want := compactStorageM0WriteResult{latencies: []time.Duration{time.Millisecond}}
+	done <- want
+
+	got, consumed := finishCompactStorageM0ForegroundWrite(done, compactStorageM0WriteResult{}, false)
+	if !consumed || len(got.latencies) != 1 {
+		t.Fatalf("first completion: consumed=%v result=%+v", consumed, got)
+	}
+
+	empty := make(chan compactStorageM0WriteResult)
+	got, consumed = finishCompactStorageM0ForegroundWrite(empty, got, consumed)
+	if !consumed || len(got.latencies) != 1 {
+		t.Fatalf("reused completion: consumed=%v result=%+v", consumed, got)
+	}
+}
+
 func TestValidateCompactStorageM0WorkRequiresExactRewriteDisposition(t *testing.T) {
 	noRewrite := compactStorageM0FixtureSpec{
 		metadata: compactStorageMeasurementFixture{Name: "no-rewrite"},
