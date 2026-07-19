@@ -156,8 +156,10 @@ func TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath(t *testing.T) {
 		"treedb.write_path.mode":              "command_wal_cached",
 		"treedb.command_wal.enabled":          "true",
 		"treedb.command_wal.required_feature": "true",
-		"treedb.command_wal.frames":           "1",
-		"treedb.command_wal.typed_segments":   "1",
+		// Durable cached writes append a relaxed mutation followed by the
+		// group-covering durable-prefix barrier.
+		"treedb.command_wal.frames":         "2",
+		"treedb.command_wal.typed_segments": "1",
 	} {
 		if got := stats[key]; got != want {
 			_ = db.Close()
@@ -174,9 +176,9 @@ func TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	stats = sp.Stats()
-	if got := stats["treedb.applied_command_lsn"]; got != "1" {
+	if got := stats["treedb.applied_command_lsn"]; got != "2" {
 		_ = db.Close()
-		t.Fatalf("applied_command_lsn=%q, want 1 after checkpoint (stats=%#v)", got, stats)
+		t.Fatalf("applied_command_lsn=%q, want mutation plus durable-prefix barrier after checkpoint (stats=%#v)", got, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
