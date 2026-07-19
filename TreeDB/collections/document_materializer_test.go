@@ -133,6 +133,46 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryFai
 	}
 }
 
+func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOverlayFailsClosedP3890(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1")},
+		[][]byte{[]byte(`{"row_id":1,"kind":"alpha","score":1.5}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	primaryRootName := collectionPrimaryRootName(view.catalog.meta.Name)
+	primaryRootID := view.catalog.rootID(primaryRootName)
+	if primaryRootID == 0 {
+		t.Fatal("test requires a populated primary root")
+	}
+	catalogWithPrimaryOverlay := *view.catalog
+	catalogWithPrimaryOverlay.roots = make(map[string]uint64, len(view.catalog.roots))
+	for name, rootID := range view.catalog.roots {
+		catalogWithPrimaryOverlay.roots[name] = rootID
+	}
+	delete(catalogWithPrimaryOverlay.roots, primaryRootName)
+	delete(catalogWithPrimaryOverlay.roots, collectionColumnRowLocatorRootName(view.catalog.meta.Name))
+	catalogWithPrimaryOverlay.rootOverlays = make(map[string][]uint64, len(view.catalog.rootOverlays)+1)
+	for name, rootIDs := range view.catalog.rootOverlays {
+		catalogWithPrimaryOverlay.rootOverlays[name] = append([]uint64(nil), rootIDs...)
+	}
+	catalogWithPrimaryOverlay.rootOverlays[primaryRootName] = []uint64{primaryRootID}
+	view.catalog = &catalogWithPrimaryOverlay
+
+	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "primary row locator root is absent") {
+		t.Fatalf("LookupDocumentRowRefsByID err=%v want overlay-primary absent-locator fail-closed error", err)
+	}
+}
+
 func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()

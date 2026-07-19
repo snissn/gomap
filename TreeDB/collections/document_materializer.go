@@ -500,7 +500,8 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 	}
 	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
 	if v.catalog.rootID(locatorRootName) == 0 {
-		if v.catalog.rootID(collectionPrimaryRootName(v.catalog.meta.Name)) == 0 {
+		primaryRootName := collectionPrimaryRootName(v.catalog.meta.Name)
+		if v.catalog.rootID(primaryRootName) == 0 && len(v.catalog.overlayRootIDs(primaryRootName)) == 0 {
 			response.Stats.RowLocatorLookups = uint64(len(ids))
 			response.Stats.RowLocatorMisses = uint64(len(ids))
 			return response, nil
