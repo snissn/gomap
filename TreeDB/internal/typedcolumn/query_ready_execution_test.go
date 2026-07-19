@@ -927,10 +927,39 @@ func TestQueryReadyEncodedFusedParallelGroupedInt64Parity(t *testing.T) {
 			wantFused := runtime.GOMAXPROCS(0) > 1
 			if (got.Stats.FusedPredicateReductionExecutions == 1) != wantFused || (wantFused && got.Stats.FusedPredicateReductionWorkers <= 1) ||
 				got.Stats.RowsScanned != want.Stats.RowsScanned || got.Stats.RowsMatched != want.Stats.RowsMatched ||
-				got.Stats.DecodedBytes != want.Stats.DecodedBytes || got.Stats.DocumentMaterializations != 0 || got.Stats.LegacyScanFallbacks != 0 || got.Stats.PrecomputedAnswers != 0 {
+				got.Stats.DecodedBytes != want.Stats.DecodedBytes ||
+				got.Stats.EncodedBaseDeltaExecutions != want.Stats.EncodedBaseDeltaExecutions ||
+				got.Stats.ScratchBytes <= 0 ||
+				got.Stats.DocumentMaterializations != 0 || got.Stats.LegacyScanFallbacks != 0 || got.Stats.PrecomputedAnswers != 0 {
 				t.Fatalf("kind=%s attempt=%d stats=%+v want parity with %+v", request.Kind, attempt, got.Stats, want.Stats)
 			}
 		}
+	}
+}
+
+func TestQueryReadyEncodedFusedParallelMixedBaseDeltaTiming(t *testing.T) {
+	reader := queryReadyJSONBenchBenchmarkReaderParts(t, 32_768, 1, 4_096)
+	operator, err := PrepareQueryReadyOperator(reader, QueryReadyOperatorRequest{
+		Kind: QueryReadyOperatorGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us",
+		TopK: 10, Order: QueryReadyOrderInt64Desc, SkipEmptyGroupKey: true,
+		Predicates: queryReadyPostPredicates(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := operator.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOMAXPROCS(0) <= 1 {
+		return
+	}
+	stats := result.Stats
+	if stats.FusedPredicateReductionExecutions != 1 || stats.BaseRowsScanned == 0 || stats.DeltaRowsScanned == 0 {
+		t.Fatalf("mixed fused route stats=%+v", stats)
+	}
+	if got := stats.BaseScanNanos + stats.DeltaMergeNanos; got != stats.FusedPredicateReductionNanos {
+		t.Fatalf("public scan timing=%d want fused interval %d", got, stats.FusedPredicateReductionNanos)
 	}
 }
 

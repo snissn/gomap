@@ -1015,6 +1015,11 @@ func (r *QueryReadyOperator) runDirectFusedParallel(stats QueryReadyExecutionSta
 		stats.BaseScanNanos = elapsed
 	} else if stats.BaseRowsScanned == 0 {
 		stats.DeltaMergeNanos = elapsed
+	} else {
+		// The fused worker pool scans base and append-only delta parts in one
+		// interval. Attribute that indivisible interval to the public scan
+		// total instead of dropping it when both roles are present.
+		stats.BaseScanNanos = elapsed
 	}
 	shapeStart := time.Now()
 	if err := r.shapeGroups(0, &stats); err != nil {
