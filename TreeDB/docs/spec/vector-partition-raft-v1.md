@@ -76,8 +76,10 @@ MUST equal global exact top-k under ordered distance and stable-ID comparison.
 
 The checked-in fixture manifest at `testdata/vector_partition_10k/` is generated
 deterministically and has a stable checksum over canonical generated vector,
-query, and exact-truth bytes,
-explicit duplicate/tie case, clusters, and boundary shape. Tests resolve the
+query, and exact-truth bytes. Exact-truth checksum binding covers top-10 for
+fixtures with at least ten vectors and every available neighbor for smaller
+fixtures. The generated corpus includes an explicit duplicate/tie case,
+clusters, and boundary shape. Tests resolve the
 single root fixture from `cmd/treedb_vector_partition_bench`. The manifest read
 itself has a 64 KiB bound. Combined vector/query counts and bytes, dimensions,
 partition count, and result metrics are validated before allocating large work

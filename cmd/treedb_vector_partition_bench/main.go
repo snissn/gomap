@@ -1062,8 +1062,13 @@ func fixtureChecksum(vectors, queries, dims int, seed int64) string {
 		}
 	}
 	// Bind the canonical exact-truth stream too, including stable-ID tie order.
+	// Small fixtures bind every available neighbor; canonical fixtures bind top-10.
+	truthK := 10
+	if len(v) < truthK {
+		truthK = len(v)
+	}
 	for _, query := range q {
-		for _, n := range exactTopK(v, query, 10) {
+		for _, n := range exactTopK(v, query, truthK) {
 			_, _ = h.Write([]byte(n.ID))
 			binary.LittleEndian.PutUint64(b[:], math.Float64bits(n.Distance))
 			_, _ = h.Write(b[:])

@@ -20,6 +20,29 @@ func fixturePath(t *testing.T) string {
 	return filepath.Join("..", "..", "testdata", "vector_partition_10k")
 }
 
+func runWithHermeticProvenance(t *testing.T, args []string, stdout io.Writer) error {
+	t.Helper()
+	t.Setenv("BASE_SHA", strings.Repeat("a", 40))
+	t.Setenv("GITHUB_SHA", strings.Repeat("b", 40))
+	t.Setenv("GITHUB_EVENT_PATH", filepath.Join(t.TempDir(), "must-not-be-read.json"))
+	return run(args, stdout)
+}
+
+func writeFixtureForTest(t *testing.T, vectors, queries, dims int) string {
+	t.Helper()
+	m, _, _ := smallFixtureForTest(vectors, queries, dims)
+	m.Checksum = fixtureChecksum(vectors, queries, dims, m.Seed)
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture_manifest.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func smallFixtureForTest(vectors, queries, dims int) (fixtureManifest, [][]float64, [][]float64) {
 	m := fixtureManifest{
 		SchemaVersion: schemaVersion,
@@ -51,6 +74,16 @@ func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
 	b, bq := deterministicFixture(m)
 	if len(a) != len(b) || len(aq) != len(bq) || a[0][0] != b[0][0] || aq[0][0] != bq[0][0] {
 		t.Fatal("fixture is not deterministic")
+	}
+}
+
+func TestFixtureChecksumSupportsFewerThanTenVectors(t *testing.T) {
+	for vectors := 1; vectors < 10; vectors++ {
+		first := fixtureChecksum(vectors, 3, 4, 1)
+		second := fixtureChecksum(vectors, 3, 4, 1)
+		if first != second || len(first) != 64 {
+			t.Fatalf("vectors=%d checksum first=%q second=%q", vectors, first, second)
+		}
 	}
 }
 
@@ -214,7 +247,7 @@ func TestMalformedCapAndFiniteInputsRejectBeforeSimulation(t *testing.T) {
 }
 
 func TestRunRejectsTopKAboveFixtureBeforeOracleAllocation(t *testing.T) {
-	err := run([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-top-k", "10001"}, io.Discard)
+	err := runWithHermeticProvenance(t, []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-top-k", "10001"}, io.Discard)
 	if err == nil {
 		t.Fatal("accepted top-k above fixture")
 	}
@@ -284,7 +317,7 @@ func TestFixtureChecksumMismatchFailsBeforeEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := t.TempDir()
-	err = run([]string{"-dataset", d, "-out", out, "-partitions", "4", "-probes", "1", "-stages", "treedb_partition_local_hnsw"}, io.Discard)
+	err = runWithHermeticProvenance(t, []string{"-dataset", d, "-out", out, "-partitions", "4", "-probes", "1", "-stages", "treedb_partition_local_hnsw"}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("checksum mismatch error=%v", err)
 	}
@@ -302,11 +335,14 @@ func TestProvenanceAutomaticEnvironmentAndInvalidSHA(t *testing.T) {
 		t.Setenv("BASE_SHA", "")
 		t.Setenv("GITHUB_SHA", "")
 		t.Setenv("GITHUB_EVENT_PATH", "")
-		base, head, err := provenance()
-		if err != nil {
-			t.Fatal(err)
-		}
 		wantHead, err := exec.Command("git", "rev-parse", "HEAD").Output()
+		if err != nil {
+			t.Skip("local git provenance unavailable")
+		}
+		if _, err := exec.Command("git", "merge-base", "HEAD", "origin/main").Output(); err != nil {
+			t.Skip("origin/main merge-base unavailable")
+		}
+		base, head, err := provenance()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -399,7 +435,7 @@ func TestCloseOverlapValuesHaveCollisionFreeArtifacts(t *testing.T) {
 		t.Fatal("adjacent float64 overlap values collide")
 	}
 	out := t.TempDir()
-	if err := run([]string{
+	if err := runWithHermeticProvenance(t, []string{
 		"-dataset", fixturePath(t),
 		"-partitions", "4",
 		"-probes", "1",
@@ -420,10 +456,39 @@ func TestCloseOverlapValuesHaveCollisionFreeArtifacts(t *testing.T) {
 	}
 }
 
+func TestRunWithExplicitProvenanceOutsideGitCheckout(t *testing.T) {
+	dataset := writeFixtureForTest(t, 9, 3, 4)
+	out := t.TempDir()
+	t.Chdir(t.TempDir())
+	if err := runWithHermeticProvenance(t, []string{
+		"-dataset", dataset,
+		"-partitions", "3",
+		"-probes", "3",
+		"-overlap", "0",
+		"-top-k", "9",
+		"-stages", "exact_global_top_k",
+		"-format", "json",
+		"-out", out,
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Probes: 3, TopK: 9})+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := decodeResult(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BaseSHA != strings.Repeat("a", 40) || result.HeadSHA != strings.Repeat("b", 40) {
+		t.Fatalf("explicit provenance not preserved: base=%q head=%q", result.BaseSHA, result.HeadSHA)
+	}
+}
+
 func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 	out := t.TempDir()
 	var stdout bytes.Buffer
-	if err := run([]string{"-dataset", fixturePath(t), "-partitions", "4", "-probes", "1,2,4", "-overlap", "0,0.20", "-top-k", "10", "-recall-target", "0.90", "-seed", "1", "-format", "json", "-out", out}, &stdout); err != nil {
+	if err := runWithHermeticProvenance(t, []string{"-dataset", fixturePath(t), "-partitions", "4", "-probes", "1,2,4", "-overlap", "0,0.20", "-top-k", "10", "-recall-target", "0.90", "-seed", "1", "-format", "json", "-out", out}, &stdout); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(out)
