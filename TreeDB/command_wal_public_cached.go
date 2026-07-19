@@ -431,18 +431,18 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
 
-func (tdb *DB) syncPublicCommandWALDirect() (uint64, error) {
+func (tdb *DB) syncPublicCommandWALDirect() (db.CommandWALBarrierResult, error) {
 	if tdb == nil || !tdb.commandWALCached {
-		return 0, nil
+		return db.CommandWALBarrierResult{}, nil
 	}
 	if tdb.backend == nil {
-		return 0, ErrClosed
+		return db.CommandWALBarrierResult{}, ErrClosed
 	}
-	lsn, err := tdb.backend.FlushCommandWALBarrierWithLSN(true)
-	if lsn != 0 {
-		tdb.recordPublicCommandWALPendingLSN(lsn)
+	result, err := tdb.backend.FlushCommandWALBarrierWithResult(true)
+	if result.LSN != 0 {
+		tdb.recordPublicCommandWALPendingLSN(result.LSN)
 	}
-	return lsn, err
+	return result, err
 }
 
 type commandWALPublicBatch struct {

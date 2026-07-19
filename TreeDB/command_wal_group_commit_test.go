@@ -879,9 +879,10 @@ func TestPublicCommandWALGroupCommitCoversRotationAndExternalValueDependencies(t
 	after := db.Stats()
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", 2)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_attempted_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_covered_total", 2)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 1)
-	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.dependency_entries_max"); got != 2 {
+	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.dependency_entries_covered_max"); got != 2 {
 		t.Fatalf("dependency entries max=%d, want two covered external-resource frames", got)
 	}
 	if got := after["treedb.command_wal.dependency_debt.entries"]; got != "0" {
@@ -904,6 +905,50 @@ func TestPublicCommandWALGroupCommitCoversRotationAndExternalValueDependencies(t
 	if !sawExternalSync || !sawRotationNamespaceSync || !sawBarrier {
 		t.Fatalf("shared group dependency proof external_sync=%t rotation_namespace_sync=%t barrier=%t events=%#v",
 			sawExternalSync, sawRotationNamespaceSync, sawBarrier, events)
+	}
+}
+
+func TestPublicCommandWALGroupCommitSamplesDependenciesAtRawBarrierCut(t *testing.T) {
+	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	noopPayload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("encode no-op payload: %v", err)
+	}
+	db.commandWALGroupCommit.delay = time.Hour
+	db.commandWALGroupCommit.maxCommits = 1
+	db.commandWALGroupCommit.maxBytes = 1 << 30
+	var injectedLSN atomic.Uint64
+	db.commandWALGroupCommit.testBeforeSync = func(int) {
+		lsn, appendErr := db.backend.AppendRawKVBatchPayloadCommandWALTrusted(noopPayload, false)
+		if appendErr != nil {
+			t.Errorf("append backend no-op between group snapshot and barrier: %v", appendErr)
+			return
+		}
+		injectedLSN.Store(lsn)
+	}
+
+	before := db.Stats()
+	if err := db.SetSync([]byte("barrier-cut"), []byte("value")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	if got := injectedLSN.Load(); got != 2 {
+		t.Fatalf("injected backend no-op LSN=%d, want 2 before barrier", got)
+	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.attempts_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_attempted_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_covered_total", 2)
+
+	frames := scanPublicCommandWALV2(t, opts.Dir)
+	if len(frames) != 3 || frames[2].Kind != commitlog.CommandKindDurablePrefixBarrier {
+		t.Fatalf("frames=%+v, want public mutation, injected backend no-op, and barrier", frames)
 	}
 }
 
@@ -1009,8 +1054,8 @@ func TestPublicCommandWALGroupCommitFastRelaxedPublicationsOverlapWithoutCoordin
 	if got := statMapUint64(t, stats, "treedb.command_wal.group_commit.groups_total"); got != 0 {
 		t.Fatalf("group commits=%d, want 0 for fast relaxed publications", got)
 	}
-	requirePublicStatDelta(t, before, stats, "treedb.command_wal.group_commit.fallbacks_total", 2)
-	requirePublicStatDelta(t, before, stats, "treedb.command_wal.group_commit.fallback.reason.relaxed_idle_total", 2)
+	requirePublicStatDelta(t, before, stats, "treedb.command_wal.group_commit.fallbacks_total", 0)
+	requirePublicStatDelta(t, before, stats, "treedb.command_wal.group_commit.bypasses_total", 0)
 }
 
 func TestPublicCommandWALGroupCommitAttributesRelaxedIntentRaceWithoutGroup(t *testing.T) {
@@ -1030,8 +1075,9 @@ func TestPublicCommandWALGroupCommitAttributesRelaxedIntentRaceWithoutGroup(t *t
 	}
 	after := db.Stats()
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.fallbacks_total", 1)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.fallback.reason.relaxed_race_no_group_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.fallbacks_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.relaxed_race_no_group_total", 1)
 }
 
 func TestPublicCommandWALGroupCommitDurableBarrierWaitsForRelaxedPublicationLease(t *testing.T) {
@@ -1218,6 +1264,7 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	db.commandWALGroupCommit.delay = time.Second
 	db.commandWALGroupCommit.maxCommits = 2
 	db.commandWALGroupCommit.maxBytes = 1 << 30
+	before := db.Stats()
 	cutErr := errors.New("injected grouped dependency sync failure")
 	var cutOnce sync.Once
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -1242,6 +1289,12 @@ func TestPublicCommandWALGroupCommitDependencyFailurePoisonsAllWaiters(t *testin
 	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.errors_total"); got != 1 {
 		t.Fatalf("group errors=%d, want 1", got)
 	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.attempts_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_attempted_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_covered_total", 0)
 }
 
 func TestPublicCommandWALGroupCommitAmbiguousBarrierFailurePoisonsAllWaiters(t *testing.T) {
@@ -1255,6 +1308,7 @@ func TestPublicCommandWALGroupCommitAmbiguousBarrierFailurePoisonsAllWaiters(t *
 	db.commandWALGroupCommit.delay = time.Second
 	db.commandWALGroupCommit.maxCommits = 2
 	db.commandWALGroupCommit.maxBytes = 1 << 30
+	before := db.Stats()
 	cutErr := errors.New("injected grouped post-barrier-append failure")
 	var cutMu sync.Mutex
 	appendCount := 0
@@ -1284,6 +1338,12 @@ func TestPublicCommandWALGroupCommitAmbiguousBarrierFailurePoisonsAllWaiters(t *
 	if got := publicStatUint64(t, db, "treedb.command_wal.group_commit.errors_total"); got != 1 {
 		t.Fatalf("group errors=%d, want 1", got)
 	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.attempts_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_attempted_total", 2)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.dependency_entries_covered_total", 0)
 }
 
 func runPublicCommandWALGroupWaiters(db *DB, waiters int) []error {

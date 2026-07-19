@@ -19,19 +19,19 @@ type CommandWALDependencyDebt struct {
 	entries []commandWALDependencyDebtEntry
 }
 
-// CommandWALDependencyDebtEntryCount returns the number of command frames in
-// the outstanding dependency ledger. Entries may carry external-resource or
-// namespace work, or may only preserve the ordered durable-prefix frontier. It
-// is intentionally cheaper than the full stats view so group-commit accounting
-// can sample the exact covered prefix while command-WAL publication is
-// serialized.
-func (db *DB) CommandWALDependencyDebtEntryCount() uint64 {
-	if db == nil {
+func (debt *CommandWALDependencyDebt) entryCountThrough(lsn uint64) uint64 {
+	if debt == nil || lsn == 0 {
 		return 0
 	}
-	db.commandWALDebt.mu.Lock()
-	count := uint64(len(db.commandWALDebt.entries))
-	db.commandWALDebt.mu.Unlock()
+	debt.mu.Lock()
+	var count uint64
+	for _, entry := range debt.entries {
+		if entry.firstLSN > lsn {
+			break
+		}
+		count++
+	}
+	debt.mu.Unlock()
 	return count
 }
 

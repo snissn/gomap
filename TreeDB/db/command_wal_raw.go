@@ -304,6 +304,14 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 	return err
 }
 
+// CommandWALBarrierResult reports the dependency-ledger work observed at the
+// same raw-publish serialization cut as a command-WAL barrier.
+type CommandWALBarrierResult struct {
+	LSN                        uint64
+	AttemptedDependencyEntries uint64
+	CoveredDependencyEntries   uint64
+}
+
 // FlushCommandWALBarrierWithLSN has the same durability semantics as
 // FlushCommandWALBarrier and also reports the LSN of a durable-prefix barrier
 // appended by this call. It returns zero when only a physical flush is needed.
@@ -311,9 +319,19 @@ func (db *DB) FlushCommandWALBarrier(sync bool) error {
 // even when the append is followed by an error because recovery may observe the
 // assigned command identity.
 func (db *DB) FlushCommandWALBarrierWithLSN(sync bool) (uint64, error) {
+	result, err := db.FlushCommandWALBarrierWithResult(sync)
+	return result.LSN, err
+}
+
+// FlushCommandWALBarrierWithResult has the same durability semantics as
+// FlushCommandWALBarrierWithLSN and additionally distinguishes dependency
+// entries attempted at the exact serialized prefix from entries successfully
+// covered by the completed barrier.
+func (db *DB) FlushCommandWALBarrierWithResult(sync bool) (CommandWALBarrierResult, error) {
+	var result CommandWALBarrierResult
 	unlock, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	defer unlock()
 	if sync && db != nil && db.commandWAL {
@@ -325,25 +343,30 @@ func (db *DB) FlushCommandWALBarrierWithLSN(sync bool) (uint64, error) {
 		// below, without manufacturing a new command identity.
 		nextLSN := db.CommandWALNextLSN()
 		if nextLSN > 1 && db.commandWALDurableLSN.Load() < nextLSN-1 {
-			return db.appendCommandWALDurablePrefixBarrier()
+			result.AttemptedDependencyEntries = db.commandWALDebt.entryCountThrough(nextLSN - 1)
+			result.LSN, err = db.appendCommandWALDurablePrefixBarrier()
+			if err == nil {
+				result.CoveredDependencyEntries = result.AttemptedDependencyEntries
+			}
+			return result, err
 		}
-		return 0, db.FlushCommandWAL(true)
+		return result, db.FlushCommandWAL(true)
 	}
 
 	if appender := db.currentValueLogAppender(); appender != nil {
 		if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
 			if err := flusher.FlushValueLogExternalRefs(nil, sync); err != nil {
-				return 0, err
+				return result, err
 			}
 		} else if sync {
 			if err := appender.Sync(); err != nil {
-				return 0, err
+				return result, err
 			}
 		} else if err := appender.Flush(); err != nil {
-			return 0, err
+			return result, err
 		}
 	}
-	return 0, db.FlushCommandWAL(sync)
+	return result, db.FlushCommandWAL(sync)
 }
 
 func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
