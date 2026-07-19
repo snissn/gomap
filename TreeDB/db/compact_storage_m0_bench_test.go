@@ -273,7 +273,9 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 		if recorder != nil {
 			measurementRecorder = recorder
 		}
-		measurement := newCompactStorageMeasurement(fixture, artifactName, elapsed.Nanoseconds(), stats, measurementRecorder)
+		measurement := newCompactStorageMeasurementWithPlan(
+			fixture, artifactName, elapsed.Nanoseconds(), plan.ValueLogRewritePlan, stats, measurementRecorder,
+		)
 		measurement.Allocation = compactStorageMeasurementAllocation{
 			TotalAllocBytes:   afterMem.TotalAlloc - beforeMem.TotalAlloc,
 			AllocationObjects: afterMem.Mallocs - beforeMem.Mallocs,

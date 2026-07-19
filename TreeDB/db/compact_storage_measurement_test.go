@@ -81,6 +81,56 @@ func TestNewCompactStorageMeasurementSeparatesTimedApplyAndWorkCounters(t *testi
 	}
 }
 
+func TestNewCompactStorageMeasurementPreservesPreApplyEvidence(t *testing.T) {
+	preApplyPlan := ValueLogRewritePlan{
+		SegmentsSelected:   1,
+		SelectedBytesTotal: 300,
+		SelectedBytesLive:  200,
+		SelectedBytesStale: 100,
+	}
+	finalStats := CompactStorageStats{
+		LeafGenerationPacks: []LeafGenerationPackRunOnceStats{{
+			Ran: true,
+			Pack: LeafGenerationPackStats{
+				ApplyStages: LeafGenerationPackApplyStageStats{
+					DirectorySyncTimeNanos:     31,
+					DirectorySyncWaitTimeNanos: 7,
+				},
+			},
+		}},
+		ValueLogRewrite: ValueLogRewriteStats{
+			SourceSegmentsRequested: 1,
+			SourceBytesRequested:    300,
+			RecordsCopied:           2,
+			ValueBytesCopied:        200,
+		},
+	}
+
+	m := newCompactStorageMeasurementWithPlan(
+		compactStorageM0Fixtures[0], "artifact", 123, preApplyPlan, finalStats, nil,
+	)
+	if m.LeafPack.DirectorySyncTimeNanos != 31 || m.LeafPack.DirectorySyncWaitNanos != 7 {
+		t.Fatalf("directory sync timing=%+v", m.LeafPack)
+	}
+	if m.ValueLog.PlanSegments != 1 || m.ValueLog.PlanBytesTotal != 300 ||
+		m.ValueLog.PlanBytesLive != 200 || m.ValueLog.PlanBytesStale != 100 {
+		t.Fatalf("pre-apply rewrite plan lost: %+v", m.ValueLog)
+	}
+	if m.ValueLog.SourceSegments != 1 || m.ValueLog.SourceBytes != 300 ||
+		m.ValueLog.RecordsCopied != 2 || m.ValueLog.ValueBytesCopied != 200 {
+		t.Fatalf("final rewrite counters lost: %+v", m.ValueLog)
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"directory_sync_time_nanos", "directory_sync_wait_nanos"} {
+		if !containsJSONKey(raw, key) {
+			t.Fatalf("missing timing key %q: %s", key, raw)
+		}
+	}
+}
+
 func TestCompactStorageMeasurementJSONSchemaIsDeterministic(t *testing.T) {
 	stats := CompactStorageStats{Phases: []CompactStoragePhaseStats{{Name: "leaf-generation-pack-1", WallTimeNanos: 7}}}
 	first, err := json.Marshal(newCompactStorageMeasurement(compactStorageM0Fixtures[0], "artifact", 9, stats, nil))
@@ -155,7 +205,7 @@ func TestWriteCompactStorageM0ArtifactPersistsCanonicalJSON(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchemaVersion != 1 || decoded.ArtifactName != measurement.ArtifactName {
+	if decoded.SchemaVersion != compactStorageMeasurementSchemaVersion || decoded.ArtifactName != measurement.ArtifactName {
 		t.Fatalf("artifact=%+v", decoded)
 	}
 }
@@ -283,6 +333,8 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 		"mktemp -d \"$TMP_ROOT/compact_storage_m0_XXXXXX\"",
 		"allowed=$(awk '/^Cpus_allowed_list:",
 		"CPU_SET=${CPU_SET:-$(default_cpu_set)}",
+		"ARTIFACT_SCHEMA_VERSION=2",
+		".schema_version == $want",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("profile script missing %q", want)

@@ -7,6 +7,13 @@ leaf-pack work, exact checkpoint frontiers, stable calls, index-vacuum
 disposition, maintenance allocations, and matched foreground/idle write
 latencies.
 
+Current artifacts use `schema_version: 2`. Version 2 records the complete,
+potentially overlapping directory-sync operation duration in
+`leaf_pack.directory_sync_time_nanos` and the non-overlapping publication-path
+charge in `leaf_pack.directory_sync_wait_nanos`. The capture script rejects
+mixed schema versions before aggregation; version 1 artifacts must be analyzed
+separately.
+
 Run the complete pinned collection protocol:
 
 ```sh

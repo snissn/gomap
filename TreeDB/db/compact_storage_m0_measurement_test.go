@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const compactStorageMeasurementSchemaVersion = 2
+
 type compactStorageMeasurementFixture struct {
 	Name                      string `json:"name"`
 	Seed                      uint64 `json:"seed"`
@@ -65,6 +67,7 @@ type compactStorageMeasurementLeafPack struct {
 	PageSyncTimeNanos        int64 `json:"page_sync_time_nanos"`
 	CopiedLeafSyncTimeNanos  int64 `json:"copied_leaf_sync_time_nanos"`
 	DirectorySyncTimeNanos   int64 `json:"directory_sync_time_nanos"`
+	DirectorySyncWaitNanos   int64 `json:"directory_sync_wait_nanos"`
 	FinalizeTimeNanos        int64 `json:"finalize_time_nanos"`
 	PublicationPostWorkNanos int64 `json:"publication_post_work_nanos"`
 	ReclaimedGenerations     int   `json:"reclaimed_generations"`
@@ -161,8 +164,21 @@ type compactStorageMeasurementRecorder interface {
 }
 
 func newCompactStorageMeasurement(fixture compactStorageMeasurementFixture, artifactName string, totalWallTimeNanos int64, stats CompactStorageStats, recorder compactStorageMeasurementRecorder) compactStorageMeasurement {
+	return newCompactStorageMeasurementWithPlan(
+		fixture, artifactName, totalWallTimeNanos, stats.ValueLogRewritePlan, stats, recorder,
+	)
+}
+
+func newCompactStorageMeasurementWithPlan(
+	fixture compactStorageMeasurementFixture,
+	artifactName string,
+	totalWallTimeNanos int64,
+	valueLogRewritePlan ValueLogRewritePlan,
+	stats CompactStorageStats,
+	recorder compactStorageMeasurementRecorder,
+) compactStorageMeasurement {
 	m := compactStorageMeasurement{
-		SchemaVersion:      1,
+		SchemaVersion:      compactStorageMeasurementSchemaVersion,
 		ArtifactName:       artifactName,
 		Fixture:            fixture,
 		TotalWallTimeNanos: totalWallTimeNanos,
@@ -207,7 +223,8 @@ func newCompactStorageMeasurement(fixture compactStorageMeasurementFixture, arti
 		m.LeafPack.RelocationPlanTimeNanos += run.Pack.ApplyStages.RelocationTimeNanos
 		m.LeafPack.PageSyncTimeNanos += run.Pack.ApplyStages.PageSyncTimeNanos
 		m.LeafPack.CopiedLeafSyncTimeNanos += run.Pack.ApplyStages.LeafSyncTimeNanos
-		m.LeafPack.DirectorySyncTimeNanos += run.Pack.ApplyStages.DirectorySyncWaitTimeNanos
+		m.LeafPack.DirectorySyncTimeNanos += run.Pack.ApplyStages.DirectorySyncTimeNanos
+		m.LeafPack.DirectorySyncWaitNanos += run.Pack.ApplyStages.DirectorySyncWaitTimeNanos
 		m.LeafPack.FinalizeTimeNanos += run.Pack.ApplyStages.FinalizeTimeNanos
 		m.LeafPack.PublicationPostWorkNanos += run.Pack.ApplyStages.PostWorkTimeNanos
 	}
@@ -216,10 +233,10 @@ func newCompactStorageMeasurement(fixture compactStorageMeasurementFixture, arti
 	m.LeafPack.RemainingGenerationDebt = stats.RemainingDebt.LeafPackGenerations
 	m.LeafPack.RemainingGenerationBytes = stats.RemainingDebt.LeafPackBytes
 	m.ValueLog = compactStorageMeasurementValueLog{
-		PlanSegments:          stats.ValueLogRewritePlan.SegmentsSelected,
-		PlanBytesTotal:        stats.ValueLogRewritePlan.SelectedBytesTotal,
-		PlanBytesLive:         stats.ValueLogRewritePlan.SelectedBytesLive,
-		PlanBytesStale:        stats.ValueLogRewritePlan.SelectedBytesStale,
+		PlanSegments:          valueLogRewritePlan.SegmentsSelected,
+		PlanBytesTotal:        valueLogRewritePlan.SelectedBytesTotal,
+		PlanBytesLive:         valueLogRewritePlan.SelectedBytesLive,
+		PlanBytesStale:        valueLogRewritePlan.SelectedBytesStale,
 		SourceSegments:        stats.ValueLogRewrite.SourceSegmentsRequested,
 		SourceBytes:           stats.ValueLogRewrite.SourceBytesRequested,
 		RecordsCopied:         stats.ValueLogRewrite.RecordsCopied,
