@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,38 +67,41 @@ type QueryReadyOperatorGroup struct {
 // Fallback/materialization counters are deliberately explicit zero-valued
 // guardrails for callers and benchmark reports.
 type QueryReadyExecutionStats struct {
-	EncodedBaseDeltaExecutions int
-	PreparedParts              int
-	BaseParts                  int
-	DeltaParts                 int
-	RowsCandidate              int
-	RowsVisible                int
-	RowsSuperseded             int
-	RowsDeleted                int
-	RowsScanned                int
-	BaseRowsScanned            int
-	DeltaRowsScanned           int
-	RowsMatched                int
-	GroupsConsidered           int
-	GroupsReturned             int
-	Predicates                 int
-	DictionaryDomains          int
-	CodeTranslations           int
-	DecodedBlocks              int
-	DecodedBytes               int64
-	ScratchBytes               int64
-	PreparationNanos           int64
-	BaseScanNanos              int64
-	DeltaMergeNanos            int64
-	PredicateNanos             int64
-	ReductionNanos             int64
-	GroupingNanos              int64
-	OrderingTopKNanos          int64
-	MaterializationNanos       int64
-	DocumentMaterializations   int
-	LegacyScanFallbacks        int
-	PrecomputedAnswers         int
-	Fallbacks                  int
+	EncodedBaseDeltaExecutions        int
+	PreparedParts                     int
+	BaseParts                         int
+	DeltaParts                        int
+	RowsCandidate                     int
+	RowsVisible                       int
+	RowsSuperseded                    int
+	RowsDeleted                       int
+	RowsScanned                       int
+	BaseRowsScanned                   int
+	DeltaRowsScanned                  int
+	RowsMatched                       int
+	GroupsConsidered                  int
+	GroupsReturned                    int
+	Predicates                        int
+	DictionaryDomains                 int
+	CodeTranslations                  int
+	DecodedBlocks                     int
+	DecodedBytes                      int64
+	ScratchBytes                      int64
+	PreparationNanos                  int64
+	BaseScanNanos                     int64
+	DeltaMergeNanos                   int64
+	PredicateNanos                    int64
+	ReductionNanos                    int64
+	FusedPredicateReductionExecutions int
+	FusedPredicateReductionWorkers    int
+	FusedPredicateReductionNanos      int64
+	GroupingNanos                     int64
+	OrderingTopKNanos                 int64
+	MaterializationNanos              int64
+	DocumentMaterializations          int
+	LegacyScanFallbacks               int
+	PrecomputedAnswers                int
+	Fallbacks                         int
 }
 
 type QueryReadyOperatorResult struct {
@@ -166,6 +172,12 @@ type QueryReadyOperator struct {
 	seen              []bool
 	matchedRows       []int
 	resultGroups      []QueryReadyOperatorGroup
+	fusedMin          []atomic.Int64
+	fusedMax          []atomic.Int64
+	fusedSeen         []atomic.Bool
+	fusedWorkerErrors []error
+	fusedWorkerRows   []int
+	fusedWorkerCodes  []int
 }
 
 const queryReadyMaxGroupDistinctCells = 64 << 20
@@ -333,6 +345,19 @@ func PrepareQueryReadyOperator(reader *QueryReadyBaseDeltaReader, request QueryR
 	}
 	if runner.usesBoundedTopKShape() && request.TopK < resultCapacity {
 		resultCapacity = request.TopK
+	}
+	if len(request.Predicates) == 3 && (request.Kind == QueryReadyOperatorGroupMinInt64 || request.Kind == QueryReadyOperatorGroupMaxInt64 || request.Kind == QueryReadyOperatorGroupInt64Span) {
+		workers := min(runtime.GOMAXPROCS(0), len(runner.parts), 8)
+		if workers > 1 {
+			runner.fusedMin = make([]atomic.Int64, groups)
+			runner.fusedSeen = make([]atomic.Bool, groups)
+			if request.Kind == QueryReadyOperatorGroupMaxInt64 || request.Kind == QueryReadyOperatorGroupInt64Span {
+				runner.fusedMax = make([]atomic.Int64, groups)
+			}
+			runner.fusedWorkerErrors = make([]error, workers)
+			runner.fusedWorkerRows = make([]int, workers)
+			runner.fusedWorkerCodes = make([]int, workers)
+		}
 	}
 	runner.resultGroups = make([]QueryReadyOperatorGroup, 0, resultCapacity)
 	runner.prepareNanos = time.Since(started).Nanoseconds()
@@ -693,6 +718,23 @@ func (r *QueryReadyOperator) Run() (QueryReadyOperatorResult, error) {
 			stats.DeltaRowsScanned += rows
 			stats.DeltaMergeNanos += time.Since(phaseStart).Nanoseconds()
 		}
+		fusedStarted := time.Now()
+		if matched, handled, err := r.reduceFusedDecodedGroupedInt64(partIndex, part, rows, &stats); handled {
+			fusedElapsed := time.Since(fusedStarted).Nanoseconds()
+			stats.FusedPredicateReductionExecutions = 1
+			stats.FusedPredicateReductionWorkers = 1
+			stats.FusedPredicateReductionNanos += fusedElapsed
+			if part.role == PartRoleBase {
+				stats.BaseScanNanos += fusedElapsed
+			} else {
+				stats.DeltaMergeNanos += fusedElapsed
+			}
+			stats.RowsMatched += matched
+			if err != nil {
+				return QueryReadyOperatorResult{Stats: stats}, err
+			}
+			continue
+		}
 		r.matchedRows = r.matchedRows[:0]
 		predicateStart := time.Now()
 		for row := 0; row < rows; row++ {
@@ -730,6 +772,33 @@ func (r *QueryReadyOperator) Run() (QueryReadyOperatorResult, error) {
 	return QueryReadyOperatorResult{Groups: r.resultGroups, Stats: stats}, nil
 }
 
+func (r *QueryReadyOperator) reduceFusedDecodedGroupedInt64(partIndex int, part *queryReadyExecutionPart, rows int, stats *QueryReadyExecutionStats) (int, bool, error) {
+	switch r.request.Kind {
+	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
+	default:
+		return 0, false, nil
+	}
+	if len(r.predicates) == 0 {
+		return 0, false, nil
+	}
+	matchedRows := 0
+	var unusedExpressionSum int64
+	for row := 0; row < rows; row++ {
+		matched, err := r.rowMatches(partIndex, part, row, stats)
+		if err != nil {
+			return matchedRows, true, err
+		}
+		if !matched {
+			continue
+		}
+		if err := r.reduceRow(partIndex, part, row, &unusedExpressionSum, stats); err != nil {
+			return matchedRows, true, err
+		}
+		matchedRows++
+	}
+	return matchedRows, true, nil
+}
+
 func (r *QueryReadyOperator) canRunDirect() bool {
 	if r == nil || len(r.parts) == 0 {
 		return false
@@ -750,6 +819,9 @@ func (r *QueryReadyOperator) canRunDirect() bool {
 }
 
 func (r *QueryReadyOperator) runDirect(stats QueryReadyExecutionStats) (QueryReadyOperatorResult, error) {
+	if result, handled := r.runDirectFusedParallel(stats); handled {
+		return result.result, result.err
+	}
 	var expressionSum int64
 	for partIndex := range r.parts {
 		part := &r.parts[partIndex]
@@ -801,6 +873,188 @@ func (r *QueryReadyOperator) runDirect(stats QueryReadyExecutionStats) (QueryRea
 	stats.GroupsReturned = len(r.resultGroups)
 	stats.ScratchBytes = r.scratchBytes()
 	return QueryReadyOperatorResult{Groups: r.resultGroups, Stats: stats}, nil
+}
+
+type queryReadyFusedParallelResult struct {
+	result QueryReadyOperatorResult
+	err    error
+}
+
+func (r *QueryReadyOperator) runDirectFusedParallel(stats QueryReadyExecutionStats) (queryReadyFusedParallelResult, bool) {
+	switch r.request.Kind {
+	case QueryReadyOperatorGroupMinInt64, QueryReadyOperatorGroupMaxInt64, QueryReadyOperatorGroupInt64Span:
+	default:
+		return queryReadyFusedParallelResult{}, false
+	}
+	workers := len(r.fusedWorkerRows)
+	if workers < 2 || len(r.fusedMin) != len(r.groupDomain.values) || len(r.fusedSeen) != len(r.groupDomain.values) {
+		return queryReadyFusedParallelResult{}, false
+	}
+	if (r.request.Kind == QueryReadyOperatorGroupMaxInt64 || r.request.Kind == QueryReadyOperatorGroupInt64Span) && len(r.fusedMax) != len(r.groupDomain.values) {
+		return queryReadyFusedParallelResult{}, false
+	}
+	for partIndex := range r.parts {
+		part := &r.parts[partIndex]
+		rows := part.part.Descriptor.RowCount
+		if len(part.predicates) != 3 || len(r.predicates) != 3 || partIndex >= len(r.groupDomain.byPart) {
+			return queryReadyFusedParallelResult{}, false
+		}
+		for predicateIndex := range part.predicates {
+			predicate := &part.predicates[predicateIndex]
+			if predicate.allowed8 == nil || len(predicate.column.values) < rows {
+				return queryReadyFusedParallelResult{}, false
+			}
+		}
+		groupColumn := part.direct[r.groupProjected]
+		valueColumn := part.direct[r.valueProjected]
+		if groupColumn.kind != QueryReadyExecutionColumnCode || valueColumn.kind != QueryReadyExecutionColumnInt64 ||
+			groupColumn.rows < rows || valueColumn.rows < rows {
+			return queryReadyFusedParallelResult{}, false
+		}
+	}
+
+	for group := range r.fusedSeen {
+		r.fusedSeen[group].Store(false)
+		r.fusedMin[group].Store(math.MaxInt64)
+		if len(r.fusedMax) != 0 {
+			r.fusedMax[group].Store(math.MinInt64)
+		}
+	}
+	clear(r.fusedWorkerErrors)
+	clear(r.fusedWorkerRows)
+	clear(r.fusedWorkerCodes)
+	started := time.Now()
+	var wait sync.WaitGroup
+	wait.Add(workers - 1)
+	runWorker := func(worker int) {
+		if worker != 0 {
+			defer wait.Done()
+		}
+		matched, translated := 0, 0
+		for partIndex := worker; partIndex < len(r.parts); partIndex += workers {
+			part := &r.parts[partIndex]
+			rows := part.part.Descriptor.RowCount
+			p0, p1, p2 := &part.predicates[0], &part.predicates[1], &part.predicates[2]
+			groupColumn := part.direct[r.groupProjected]
+			valueColumn := part.direct[r.valueProjected]
+			groupTranslation := r.groupDomain.byPart[partIndex]
+			for row := range p0.column.values[:rows] {
+				if !p0.matches8(row) || !p1.matches8(row) || !p2.matches8(row) {
+					continue
+				}
+				group := r.groupDomain.emptyGlobal
+				if !groupColumn.absentAtUnchecked(row) {
+					local := groupColumn.codeAtUnchecked(row)
+					if int(local) >= len(groupTranslation) || groupTranslation[local] < 0 {
+						r.fusedWorkerErrors[worker] = fmt.Errorf("typedcolumn: query-ready fused direct group code=%d outside domain", local)
+						return
+					}
+					group = groupTranslation[local]
+					translated++
+				} else if group < 0 {
+					r.fusedWorkerErrors[worker] = errors.New("typedcolumn: query-ready fused direct nullable group has no empty domain")
+					return
+				}
+				value := valueColumn.int64AtUnchecked(row)
+				r.fusedSeen[group].Store(true)
+				switch r.request.Kind {
+				case QueryReadyOperatorGroupMinInt64:
+					atomicMinInt64(&r.fusedMin[group], value)
+				case QueryReadyOperatorGroupMaxInt64:
+					atomicMaxInt64(&r.fusedMax[group], value)
+				case QueryReadyOperatorGroupInt64Span:
+					atomicMinInt64(&r.fusedMin[group], value)
+					atomicMaxInt64(&r.fusedMax[group], value)
+				}
+				matched++
+			}
+		}
+		r.fusedWorkerRows[worker], r.fusedWorkerCodes[worker] = matched, translated
+	}
+	for worker := 1; worker < workers; worker++ {
+		go runWorker(worker)
+	}
+	runWorker(0)
+	wait.Wait()
+	elapsed := time.Since(started).Nanoseconds()
+	for worker := range r.fusedWorkerErrors {
+		if err := r.fusedWorkerErrors[worker]; err != nil {
+			stats.FusedPredicateReductionExecutions = 1
+			stats.FusedPredicateReductionWorkers = workers
+			stats.FusedPredicateReductionNanos = elapsed
+			return queryReadyFusedParallelResult{result: QueryReadyOperatorResult{Stats: stats}, err: err}, true
+		}
+		stats.RowsMatched += r.fusedWorkerRows[worker]
+		stats.CodeTranslations += r.fusedWorkerCodes[worker]
+	}
+	for partIndex := range r.parts {
+		part := &r.parts[partIndex]
+		rows := part.part.Descriptor.RowCount
+		stats.RowsScanned += rows
+		if part.role == PartRoleBase {
+			stats.BaseRowsScanned += rows
+		} else {
+			stats.DeltaRowsScanned += rows
+		}
+		for _, column := range part.direct {
+			stats.DecodedBytes += int64(len(column.values) + len(column.absent))
+		}
+	}
+	for group := range r.fusedSeen {
+		if !r.fusedSeen[group].Load() {
+			continue
+		}
+		r.seen[group] = true
+		switch r.request.Kind {
+		case QueryReadyOperatorGroupMinInt64:
+			r.int64Values[group] = r.fusedMin[group].Load()
+		case QueryReadyOperatorGroupMaxInt64:
+			r.int64Values[group] = r.fusedMax[group].Load()
+		case QueryReadyOperatorGroupInt64Span:
+			r.int64Values[group], r.int64Max[group] = r.fusedMin[group].Load(), r.fusedMax[group].Load()
+		}
+	}
+	stats.FusedPredicateReductionExecutions = 1
+	stats.FusedPredicateReductionWorkers = workers
+	stats.FusedPredicateReductionNanos = elapsed
+	if stats.DeltaRowsScanned == 0 {
+		stats.BaseScanNanos = elapsed
+	} else if stats.BaseRowsScanned == 0 {
+		stats.DeltaMergeNanos = elapsed
+	} else {
+		// The fused worker pool scans base and append-only delta parts in one
+		// interval. Attribute that indivisible interval to the public scan
+		// total instead of dropping it when both roles are present.
+		stats.BaseScanNanos = elapsed
+	}
+	shapeStart := time.Now()
+	if err := r.shapeGroups(0, &stats); err != nil {
+		stats.GroupingNanos = time.Since(shapeStart).Nanoseconds()
+		return queryReadyFusedParallelResult{result: QueryReadyOperatorResult{Stats: stats}, err: err}, true
+	}
+	stats.GroupingNanos = time.Since(shapeStart).Nanoseconds()
+	orderStart := time.Now()
+	r.orderAndLimit()
+	stats.OrderingTopKNanos = time.Since(orderStart).Nanoseconds()
+	stats.GroupsReturned = len(r.resultGroups)
+	stats.ScratchBytes = r.scratchBytes()
+	return queryReadyFusedParallelResult{result: QueryReadyOperatorResult{Groups: r.resultGroups, Stats: stats}}, true
+}
+
+func atomicMinInt64(cell *atomic.Int64, value int64) {
+	for current := cell.Load(); value < current; current = cell.Load() {
+		if cell.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func atomicMaxInt64(cell *atomic.Int64, value int64) {
+	for current := cell.Load(); value > current; current = cell.Load() {
+		if cell.CompareAndSwap(current, value) {
+			return
+		}
+	}
 }
 
 func (r *QueryReadyOperator) selectDirectRows(partIndex int, part *queryReadyExecutionPart, rows int) error {
@@ -1293,6 +1547,8 @@ func (r *QueryReadyOperator) compareOrderedGroup(left, right QueryReadyOperatorG
 
 func (r *QueryReadyOperator) scratchBytes() int64 {
 	bytes := int64(cap(r.counts)+cap(r.hourCounts)+cap(r.matchedRows))*8 + int64(cap(r.seen)) + int64(cap(r.int64Values)+cap(r.int64Max)+cap(r.distinctBits))*8
+	bytes += int64(cap(r.fusedMin)+cap(r.fusedMax))*8 + int64(cap(r.fusedSeen))*4
+	bytes += int64(cap(r.fusedWorkerErrors))*16 + int64(cap(r.fusedWorkerRows)+cap(r.fusedWorkerCodes))*8
 	for _, domain := range r.domains {
 		for _, translation := range domain.byPart {
 			bytes += int64(cap(translation)) * 8
