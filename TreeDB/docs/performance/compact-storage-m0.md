@@ -14,11 +14,19 @@ RUN_DIR=/mnt/fast4tb/compact_storage_m0_$(date +%Y%m%d_%H%M%S) \
   scripts/compact_storage_m0_profile.sh
 ```
 
-The script defaults to six samples, CPUs `2-3`, `GOMAXPROCS=2`, and
+The script defaults to 12 samples, CPUs `2-3`, `GOMAXPROCS=2`, and
 `GOMEMLIMIT=8GiB`. It writes environment and source metadata, raw benchmark and
 `benchstat` output, one JSON artifact per fixture/sample, instrumentation
 overhead evidence, CPU/allocation/block/mutex profiles, a runtime trace, and a
-stable-syscall `strace` summary.
+stable-syscall `strace` summary. Diagnostic profiles disable the test recorder
+so allocation attribution describes the production maintenance path; pprof
+phase labels remain available.
+
+Durable barrier latency on local NVMe can be bimodal. Keep every sample, report
+the spread, and compare candidate work in counterbalanced baseline/candidate
+blocks. The overhead collection alternates pair order for this reason. Start
+with 12 blocks; if the confidence interval still crosses the issue's minimum
+effect, continue sampling before accepting or rejecting the candidate.
 
 The JSON recorder reports logical production barriers. A single logical
 directory or index barrier may issue multiple kernel `fsync` or `msync`

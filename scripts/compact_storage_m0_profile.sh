@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RUN_DIR=${RUN_DIR:-$(mktemp -d /mnt/fast4tb/compact_storage_m0_XXXXXX)}
 TMP_ROOT=${TMPDIR:-/mnt/fast4tb/tmp}
-COUNT=${COUNT:-6}
+COUNT=${COUNT:-12}
 CPU_SET=${CPU_SET:-2-3}
 GOMAXPROCS=${GOMAXPROCS:-2}
 GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
@@ -54,16 +54,32 @@ else
   printf 'benchstat not found\n' >"$RUN_DIR/canonical/benchstat.txt"
 fi
 
-for sample in $(seq 1 "$COUNT"); do
+run_overhead_sample() {
+  local mode=$1
+  local sample=$2
+  if [[ "$mode" == "off" ]]; then
+    TREEDB_COMPACT_STORAGE_M0_SAMPLE="$sample" \
+    TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/overhead/off" \
+    TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
+      run_go_test -run '^$' -bench "$STRESS" -benchtime=1x -count=1 -benchmem |
+      tee -a "$RUN_DIR/overhead/off/raw.txt"
+    return
+  fi
   TREEDB_COMPACT_STORAGE_M0_SAMPLE="$sample" \
   TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/overhead/on" \
     run_go_test -run '^$' -bench "$STRESS" -benchtime=1x -count=1 -benchmem |
     tee -a "$RUN_DIR/overhead/on/raw.txt"
-  TREEDB_COMPACT_STORAGE_M0_SAMPLE="$sample" \
-  TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/overhead/off" \
-  TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
-    run_go_test -run '^$' -bench "$STRESS" -benchtime=1x -count=1 -benchmem |
-    tee -a "$RUN_DIR/overhead/off/raw.txt"
+}
+
+for sample in $(seq 1 "$COUNT"); do
+  # Counterbalance pair order so the second write-heavy run cannot bias one mode.
+  if (( sample % 2 == 1 )); then
+    run_overhead_sample off "$sample"
+    run_overhead_sample on "$sample"
+  else
+    run_overhead_sample on "$sample"
+    run_overhead_sample off "$sample"
+  fi
 done
 if command -v benchstat >/dev/null 2>&1; then
   benchstat "$RUN_DIR/overhead/off/raw.txt" "$RUN_DIR/overhead/on/raw.txt" >"$RUN_DIR/overhead/benchstat.txt"
@@ -71,22 +87,27 @@ fi
 
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=101 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
+TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
   run_go_test -run '^$' -bench "$STRESS" -benchtime=3x -count=1 \
   -cpuprofile "$RUN_DIR/profiles/cpu.pprof" >"$RUN_DIR/profiles/cpu_raw.txt"
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=102 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
+TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
   run_go_test -run '^$' -bench "$STRESS" -benchtime=3x -count=1 \
   -memprofile "$RUN_DIR/profiles/allocs.pprof" -memprofilerate=1 >"$RUN_DIR/profiles/allocs_raw.txt"
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=103 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
+TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
   run_go_test -run '^$' -bench "$STRESS" -benchtime=3x -count=1 \
   -blockprofile "$RUN_DIR/profiles/block.pprof" >"$RUN_DIR/profiles/block_raw.txt"
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=104 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
+TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
   run_go_test -run '^$' -bench "$STRESS" -benchtime=3x -count=1 \
   -mutexprofile "$RUN_DIR/profiles/mutex.pprof" >"$RUN_DIR/profiles/mutex_raw.txt"
 TREEDB_COMPACT_STORAGE_M0_SAMPLE=105 \
 TREEDB_COMPACT_STORAGE_M0_ARTIFACT_DIR="$RUN_DIR/profiles" \
+TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION=off \
   run_go_test -run '^$' -bench "$STRESS" -benchtime=1x -count=1 \
   -trace "$RUN_DIR/profiles/trace.out" >"$RUN_DIR/profiles/trace_raw.txt"
 
