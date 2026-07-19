@@ -120,6 +120,15 @@ func TestNewCompactStorageMeasurementPreservesPreApplyEvidence(t *testing.T) {
 		m.ValueLog.RecordsCopied != 2 || m.ValueLog.ValueBytesCopied != 200 {
 		t.Fatalf("final rewrite counters lost: %+v", m.ValueLog)
 	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"directory_sync_time_nanos", "directory_sync_wait_nanos"} {
+		if !containsJSONKey(raw, key) {
+			t.Fatalf("missing timing key %q: %s", key, raw)
+		}
+	}
 }
 
 func TestCompactStorageMeasurementJSONSchemaIsDeterministic(t *testing.T) {
