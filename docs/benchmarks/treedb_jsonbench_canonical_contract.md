@@ -94,7 +94,8 @@ Required comparison identity:
 
 - full 40-character gomap and JSONBench commits;
 - ClickHouse version;
-- dataset path/identity, exact row count, and SHA-256;
+- dataset path/identity, requested row count, valid row count after explicit
+  skips, and SHA-256 of the valid canonical input;
 - stable host identity;
 - artifact root and five unique TreeDB result paths;
 - five unique ClickHouse result paths paired by array index with TreeDB;
@@ -103,7 +104,7 @@ Required comparison identity:
 - attempt count, statistic, targets, q4 regression guardrail, and target
   revision policy.
 
-For the current v1 contract, the frozen targets are median TreeDB/ClickHouse
+For the current v2 contract, the frozen targets are median TreeDB/ClickHouse
 ratios no greater than `1.5` for each q1-q5/qexpr lane and load. q4 additionally
 has a `1.05` same-host regression ratio guardrail. A target may change only with
 linked same-host evidence and an explicit tracker decision; a PR cannot revise
@@ -130,7 +131,7 @@ satisfy the five-run requirement. Every selected row in every report must
 consistently record:
 
 - the requested TreeDB profile;
-- the pinned dataset row count;
+- the pinned requested and valid dataset row counts;
 - query and metadata modes matching the sidecar;
 - an explicit document-scan fallback flag;
 - an explicit reconstruction status;
@@ -143,7 +144,8 @@ artifact with `timing_boundary: outside_measured_intervals`.
 
 The ClickHouse result is also mandatory and must live under the artifact root.
 For each of the five independent artifacts, the validator cross-checks its
-system, pinned version, requested/dataset/loaded row counts, six ordered
+system, pinned version, requested row count, valid dataset/loaded row counts,
+six ordered
 q1-q5/qexpr result arrays, exactly one positive timing per query, and its index
 pairing with the corresponding TreeDB artifact. The aggregate sample count is
 therefore five without reopening or resubmitting work inside one report. A
@@ -182,7 +184,7 @@ Resource rows use one of three source kinds:
 
 Every `query/<name>` scope mentioned by a resource row requires a direct
 `go_benchmem` row. A cumulative allocation profile can accompany that row but
-cannot substitute for it. The canonical v1 manifest specifically requires
+cannot substitute for it. The canonical v2 manifest specifically requires
 direct `go_benchmem` rows for q2, q3, and q5, plus `process_peak` rows for load
 or open.
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -822,6 +823,39 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 	assertColumnManifestStateM10B(t, reopened, 1, lsn, reopenMgr)
 	assertDBAppliedCommandLSNM10B(t, reopen, lsn)
+}
+
+func TestColumnStoreInsertWithCommandWALIntentPreservesCallerPublishTimingM10B(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+	ids := [][]byte{[]byte("timed-e1")}
+	docs := [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}
+	intent, err := col.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{ID: ids[0], Document: docs[0]}}, nil)
+	if err != nil {
+		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+	}
+	if _, err := d.AppendCommandWALIntent(intent, true); err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	var callerTiming backenddb.CommandWALPublishTiming
+	intent.SetPublishTiming(&callerTiming)
+	if _, err := col.InsertBatchWithCommandWALIntent(ids, docs, false, intent); err != nil {
+		t.Fatalf("InsertBatchWithCommandWALIntent: %v", err)
+	}
+	if restored := intent.SetPublishTiming(nil); restored != &callerTiming {
+		t.Fatalf("caller publish timing target was not restored: got %p, want %p", restored, &callerTiming)
+	}
+	// Individual sub-millisecond phases can measure as zero on Windows'
+	// coarser monotonic clock, including both apply phases. The target identity
+	// assertion above is the portable preservation check; require measured work
+	// as an additional signal where the clock is sufficiently fine-grained.
+	if runtime.GOOS != "windows" && callerTiming.RootApply+callerTiming.SystemApply <= 0 {
+		t.Fatalf("caller publish apply timing root=%s system=%s, want combined > 0", callerTiming.RootApply, callerTiming.SystemApply)
+	}
 }
 
 func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testing.T) {

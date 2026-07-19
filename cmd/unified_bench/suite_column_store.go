@@ -208,65 +208,77 @@ type columnStoreStageMetric struct {
 }
 
 type columnStoreInsertPhaseMetric struct {
-	Documents                                  int     `json:"documents"`
-	Batches                                    int     `json:"batches"`
-	Runs                                       int     `json:"runs"`
-	PrepareDocumentsDurationMS                 float64 `json:"prepare_documents_duration_ms,omitempty"`
-	PrepareDocumentsNsPerRow                   float64 `json:"prepare_documents_ns_per_row,omitempty"`
-	DuplicateDocumentPreflightDurationMS       float64 `json:"duplicate_document_preflight_duration_ms,omitempty"`
-	DuplicateDocumentPreflightNsPerRow         float64 `json:"duplicate_document_preflight_ns_per_row,omitempty"`
-	RetainedPayloadPrepareDurationMS           float64 `json:"retained_payload_prepare_duration_ms,omitempty"`
-	RetainedPayloadPrepareNsPerRow             float64 `json:"retained_payload_prepare_ns_per_row,omitempty"`
-	RetainedPayloadRows                        int     `json:"retained_payload_rows,omitempty"`
-	RetainedPayloadDeclaredRows                int     `json:"retained_payload_declared_rows,omitempty"`
-	RetainedPayloadSemanticStreamBlocks        int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
-	RetainedPayloadSemanticStreamWorkers       int     `json:"retained_payload_semantic_stream_worker_count,omitempty"`
-	RetainedPayloadSemanticStreamDeclaredMS    float64 `json:"retained_payload_semantic_stream_declared_row_prepare_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamBlockWallMS   float64 `json:"retained_payload_semantic_stream_block_prepare_wall_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamCollectMS     float64 `json:"retained_payload_semantic_stream_block_collect_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamEncoderMS     float64 `json:"retained_payload_semantic_stream_block_encoder_setup_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamRawEncodeMS   float64 `json:"retained_payload_semantic_stream_block_raw_encode_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamStoreEncodeMS float64 `json:"retained_payload_semantic_stream_block_stored_encode_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamFinalizeMS    float64 `json:"retained_payload_semantic_stream_block_finalize_duration_ms,omitempty"`
-	RetainedPayloadSemanticStreamTableBuildMS  float64 `json:"retained_payload_semantic_stream_table_build_duration_ms,omitempty"`
-	RetainedPayloadValueLogPointerizeMS        float64 `json:"retained_payload_value_log_pointerize_duration_ms,omitempty"`
-	RetainedPayloadValueLogPointerizeNsPerRow  float64 `json:"retained_payload_value_log_pointerize_ns_per_row,omitempty"`
-	RetainedPayloadValueLogValues              int     `json:"retained_payload_value_log_values,omitempty"`
-	RetainedPayloadValueLogBytes               int64   `json:"retained_payload_value_log_bytes,omitempty"`
-	RetainedStreamValueLogPointerizeMS         float64 `json:"retained_stream_value_log_pointerize_duration_ms,omitempty"`
-	RetainedStreamValueLogPointerizeNsPerRow   float64 `json:"retained_stream_value_log_pointerize_ns_per_row,omitempty"`
-	RetainedStreamValueLogValues               int     `json:"retained_stream_value_log_values,omitempty"`
-	RetainedStreamValueLogBytes                int64   `json:"retained_stream_value_log_bytes,omitempty"`
-	ColumnPublishBuildColumnDeltaDurationMS    float64 `json:"column_publish_build_column_delta_duration_ms,omitempty"`
-	ColumnPublishBuildColumnDeltaNsPerRow      float64 `json:"column_publish_build_column_delta_ns_per_row,omitempty"`
-	ColumnPublishBuildSystemDeltaDurationMS    float64 `json:"column_publish_build_system_delta_duration_ms,omitempty"`
-	ColumnPublishBuildSystemDeltaNsPerRow      float64 `json:"column_publish_build_system_delta_ns_per_row,omitempty"`
-	ColumnPublishCommitDurationMS              float64 `json:"column_publish_commit_duration_ms,omitempty"`
-	ColumnPublishCommitNsPerRow                float64 `json:"column_publish_commit_ns_per_row,omitempty"`
-	ColumnPublishDocumentExtractionDurationMS  float64 `json:"column_publish_document_extraction_duration_ms,omitempty"`
-	ColumnPublishDeclaredColumnDurationMS      float64 `json:"column_publish_declared_column_encoding_duration_ms,omitempty"`
-	ColumnPublishAssetPreparationDurationMS    float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
-	ColumnPublishRowAssetPrepareDurationMS     float64 `json:"column_publish_row_asset_prepare_duration_ms,omitempty"`
-	ColumnPublishTypedColumnPrepareDurationMS  float64 `json:"column_publish_typed_column_prepare_duration_ms,omitempty"`
-	ColumnPublishTypedColumnDictionaryBuildMS  float64 `json:"column_publish_typed_column_dictionary_build_duration_ms,omitempty"`
-	ColumnPublishTypedColumnRowMaterializeMS   float64 `json:"column_publish_typed_column_row_materialization_duration_ms,omitempty"`
-	ColumnPublishTypedColumnPartBuildMS        float64 `json:"column_publish_typed_column_part_build_duration_ms,omitempty"`
-	ColumnPublishTypedColumnImageBuildMS       float64 `json:"column_publish_typed_column_image_build_duration_ms,omitempty"`
-	ColumnPublishDictionaryPrepareDurationMS   float64 `json:"column_publish_dictionary_sidecar_prepare_duration_ms,omitempty"`
-	ColumnPublishInt64PrepareDurationMS        float64 `json:"column_publish_int64_sidecar_prepare_duration_ms,omitempty"`
-	ColumnPublishAggregateMetadataDurationMS   float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
-	ColumnPublishRowSidecarSharedBuildMS       float64 `json:"column_publish_row_sidecar_shared_build_duration_ms,omitempty"`
-	ColumnPublishAssetAppendDurationMS         float64 `json:"column_publish_asset_append_duration_ms,omitempty"`
-	ColumnPublishAssetAppendOpenDurationMS     float64 `json:"column_publish_asset_append_open_duration_ms,omitempty"`
-	ColumnPublishAssetAppendWriteDurationMS    float64 `json:"column_publish_asset_append_write_duration_ms,omitempty"`
-	ColumnPublishAssetAppendCloseDurationMS    float64 `json:"column_publish_asset_append_close_duration_ms,omitempty"`
-	ColumnPublishAssetAppendFileSyncMS         float64 `json:"column_publish_asset_append_file_sync_duration_ms"`
-	ColumnPublishAssetAppendFileCloseMS        float64 `json:"column_publish_asset_append_file_close_duration_ms"`
-	ColumnPublishAssetAppendDirSyncMS          float64 `json:"column_publish_asset_append_dir_sync_duration_ms"`
-	ColumnPublishAssetAppendCleanupMS          float64 `json:"column_publish_asset_append_cleanup_duration_ms"`
-	ColumnPublishAssetAppenderCloseCount       int     `json:"column_publish_asset_appender_close_count,omitempty"`
-	ColumnPublishAssetAppendFileSyncCount      int     `json:"column_publish_asset_append_file_sync_count,omitempty"`
-	ColumnPublishAssetSyncEpochCount           int     `json:"column_publish_asset_sync_epoch_count,omitempty"`
+	Documents                                        int     `json:"documents"`
+	Batches                                          int     `json:"batches"`
+	Runs                                             int     `json:"runs"`
+	PrepareDocumentsDurationMS                       float64 `json:"prepare_documents_duration_ms,omitempty"`
+	PrepareDocumentsNsPerRow                         float64 `json:"prepare_documents_ns_per_row,omitempty"`
+	DuplicateDocumentPreflightDurationMS             float64 `json:"duplicate_document_preflight_duration_ms,omitempty"`
+	DuplicateDocumentPreflightNsPerRow               float64 `json:"duplicate_document_preflight_ns_per_row,omitempty"`
+	RetainedPayloadPrepareDurationMS                 float64 `json:"retained_payload_prepare_duration_ms,omitempty"`
+	RetainedPayloadPrepareNsPerRow                   float64 `json:"retained_payload_prepare_ns_per_row,omitempty"`
+	RetainedPayloadRows                              int     `json:"retained_payload_rows,omitempty"`
+	RetainedPayloadDeclaredRows                      int     `json:"retained_payload_declared_rows,omitempty"`
+	RetainedPayloadSemanticStreamBlocks              int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
+	RetainedPayloadSemanticStreamWorkers             int     `json:"retained_payload_semantic_stream_worker_count,omitempty"`
+	RetainedPayloadSemanticStreamDeclaredMS          float64 `json:"retained_payload_semantic_stream_declared_row_prepare_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamBlockWallMS         float64 `json:"retained_payload_semantic_stream_block_prepare_wall_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamCollectMS           float64 `json:"retained_payload_semantic_stream_block_collect_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamEncoderMS           float64 `json:"retained_payload_semantic_stream_block_encoder_setup_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamRawEncodeMS         float64 `json:"retained_payload_semantic_stream_block_raw_encode_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamStoreEncodeMS       float64 `json:"retained_payload_semantic_stream_block_stored_encode_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamFinalizeMS          float64 `json:"retained_payload_semantic_stream_block_finalize_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamTableBuildMS        float64 `json:"retained_payload_semantic_stream_table_build_duration_ms,omitempty"`
+	RetainedPayloadValueLogPointerizeMS              float64 `json:"retained_payload_value_log_pointerize_duration_ms,omitempty"`
+	RetainedPayloadValueLogPointerizeNsPerRow        float64 `json:"retained_payload_value_log_pointerize_ns_per_row,omitempty"`
+	RetainedPayloadValueLogValues                    int     `json:"retained_payload_value_log_values,omitempty"`
+	RetainedPayloadValueLogBytes                     int64   `json:"retained_payload_value_log_bytes,omitempty"`
+	RetainedStreamValueLogPointerizeMS               float64 `json:"retained_stream_value_log_pointerize_duration_ms,omitempty"`
+	RetainedStreamValueLogPointerizeNsPerRow         float64 `json:"retained_stream_value_log_pointerize_ns_per_row,omitempty"`
+	RetainedStreamValueLogValues                     int     `json:"retained_stream_value_log_values,omitempty"`
+	RetainedStreamValueLogBytes                      int64   `json:"retained_stream_value_log_bytes,omitempty"`
+	ColumnPublishBuildColumnDeltaDurationMS          float64 `json:"column_publish_build_column_delta_duration_ms,omitempty"`
+	ColumnPublishBuildColumnDeltaNsPerRow            float64 `json:"column_publish_build_column_delta_ns_per_row,omitempty"`
+	ColumnPublishBuildSystemDeltaDurationMS          float64 `json:"column_publish_build_system_delta_duration_ms,omitempty"`
+	ColumnPublishBuildSystemDeltaNsPerRow            float64 `json:"column_publish_build_system_delta_ns_per_row,omitempty"`
+	ColumnPublishCommitDurationMS                    float64 `json:"column_publish_commit_duration_ms,omitempty"`
+	ColumnPublishCommitNsPerRow                      float64 `json:"column_publish_commit_ns_per_row,omitempty"`
+	ColumnPublishWriteLockWaitDurationMS             float64 `json:"column_publish_write_lock_wait_duration_ms,omitempty"`
+	ColumnPublishPreflightDurationMS                 float64 `json:"column_publish_preflight_duration_ms,omitempty"`
+	ColumnPublishCommandWALAppendDurationMS          float64 `json:"column_publish_command_wal_append_duration_ms,omitempty"`
+	ColumnPublishOrderedRootApplyDurationMS          float64 `json:"column_publish_ordered_root_apply_duration_ms,omitempty"`
+	ColumnPublishSystemRootApplyDurationMS           float64 `json:"column_publish_system_root_apply_duration_ms,omitempty"`
+	ColumnPublishFinalizeDurationMS                  float64 `json:"column_publish_finalize_duration_ms,omitempty"`
+	ColumnPublishFinalizePrepareDurabilityDurationMS float64 `json:"column_publish_finalize_prepare_durability_duration_ms,omitempty"`
+	ColumnPublishFinalizeCandidateBuildDurationMS    float64 `json:"column_publish_finalize_candidate_build_duration_ms,omitempty"`
+	ColumnPublishFinalizeEnqueueActivationDurationMS float64 `json:"column_publish_finalize_enqueue_activation_duration_ms,omitempty"`
+	ColumnPublishFinalizeAdmissionWaitDurationMS     float64 `json:"column_publish_finalize_admission_wait_duration_ms,omitempty"`
+	ColumnPublishFinalizeDurabilityWaitDurationMS    float64 `json:"column_publish_finalize_durability_wait_duration_ms,omitempty"`
+	ColumnPublishPostFinalizeDurationMS              float64 `json:"column_publish_post_finalize_duration_ms,omitempty"`
+	ColumnPublishDocumentExtractionDurationMS        float64 `json:"column_publish_document_extraction_duration_ms,omitempty"`
+	ColumnPublishDeclaredColumnDurationMS            float64 `json:"column_publish_declared_column_encoding_duration_ms,omitempty"`
+	ColumnPublishAssetPreparationDurationMS          float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
+	ColumnPublishRowAssetPrepareDurationMS           float64 `json:"column_publish_row_asset_prepare_duration_ms,omitempty"`
+	ColumnPublishTypedColumnPrepareDurationMS        float64 `json:"column_publish_typed_column_prepare_duration_ms,omitempty"`
+	ColumnPublishTypedColumnDictionaryBuildMS        float64 `json:"column_publish_typed_column_dictionary_build_duration_ms,omitempty"`
+	ColumnPublishTypedColumnRowMaterializeMS         float64 `json:"column_publish_typed_column_row_materialization_duration_ms,omitempty"`
+	ColumnPublishTypedColumnPartBuildMS              float64 `json:"column_publish_typed_column_part_build_duration_ms,omitempty"`
+	ColumnPublishTypedColumnImageBuildMS             float64 `json:"column_publish_typed_column_image_build_duration_ms,omitempty"`
+	ColumnPublishDictionaryPrepareDurationMS         float64 `json:"column_publish_dictionary_sidecar_prepare_duration_ms,omitempty"`
+	ColumnPublishInt64PrepareDurationMS              float64 `json:"column_publish_int64_sidecar_prepare_duration_ms,omitempty"`
+	ColumnPublishAggregateMetadataDurationMS         float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
+	ColumnPublishRowSidecarSharedBuildMS             float64 `json:"column_publish_row_sidecar_shared_build_duration_ms,omitempty"`
+	ColumnPublishAssetAppendDurationMS               float64 `json:"column_publish_asset_append_duration_ms,omitempty"`
+	ColumnPublishAssetAppendOpenDurationMS           float64 `json:"column_publish_asset_append_open_duration_ms,omitempty"`
+	ColumnPublishAssetAppendWriteDurationMS          float64 `json:"column_publish_asset_append_write_duration_ms,omitempty"`
+	ColumnPublishAssetAppendCloseDurationMS          float64 `json:"column_publish_asset_append_close_duration_ms,omitempty"`
+	ColumnPublishAssetAppendFileSyncMS               float64 `json:"column_publish_asset_append_file_sync_duration_ms"`
+	ColumnPublishAssetAppendFileCloseMS              float64 `json:"column_publish_asset_append_file_close_duration_ms"`
+	ColumnPublishAssetAppendDirSyncMS                float64 `json:"column_publish_asset_append_dir_sync_duration_ms"`
+	ColumnPublishAssetAppendCleanupMS                float64 `json:"column_publish_asset_append_cleanup_duration_ms"`
+	ColumnPublishAssetAppenderCloseCount             int     `json:"column_publish_asset_appender_close_count,omitempty"`
+	ColumnPublishAssetAppendFileSyncCount            int     `json:"column_publish_asset_append_file_sync_count,omitempty"`
+	ColumnPublishAssetSyncEpochCount                 int     `json:"column_publish_asset_sync_epoch_count,omitempty"`
 
 	ColumnPublishSharedSegmentAppenderCloseCount       int `json:"column_publish_shared_segment_appender_close_count,omitempty"`
 	ColumnPublishSharedSegmentAppendFileSyncCount      int `json:"column_publish_shared_segment_append_file_sync_count,omitempty"`
@@ -1637,6 +1649,18 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
 	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
 	dst.ColumnPublishCommit += src.ColumnPublishCommit
+	dst.ColumnPublishWriteLockWait += src.ColumnPublishWriteLockWait
+	dst.ColumnPublishPreflight += src.ColumnPublishPreflight
+	dst.ColumnPublishCommandWALAppend += src.ColumnPublishCommandWALAppend
+	dst.ColumnPublishOrderedRootApply += src.ColumnPublishOrderedRootApply
+	dst.ColumnPublishSystemRootApply += src.ColumnPublishSystemRootApply
+	dst.ColumnPublishFinalize += src.ColumnPublishFinalize
+	dst.ColumnPublishFinalizePrepareDurability += src.ColumnPublishFinalizePrepareDurability
+	dst.ColumnPublishFinalizeCandidateBuild += src.ColumnPublishFinalizeCandidateBuild
+	dst.ColumnPublishFinalizeEnqueueActivation += src.ColumnPublishFinalizeEnqueueActivation
+	dst.ColumnPublishFinalizeAdmissionWait += src.ColumnPublishFinalizeAdmissionWait
+	dst.ColumnPublishFinalizeDurabilityWait += src.ColumnPublishFinalizeDurabilityWait
+	dst.ColumnPublishPostFinalize += src.ColumnPublishPostFinalize
 	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
 	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
 	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
@@ -1742,6 +1766,18 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishBuildSystemDeltaNsPerRow:              nsPerRow(stats.ColumnPublishBuildSystemDelta, rows),
 		ColumnPublishCommitDurationMS:                      durationMS(stats.ColumnPublishCommit),
 		ColumnPublishCommitNsPerRow:                        nsPerRow(stats.ColumnPublishCommit, rows),
+		ColumnPublishWriteLockWaitDurationMS:               durationMS(stats.ColumnPublishWriteLockWait),
+		ColumnPublishPreflightDurationMS:                   durationMS(stats.ColumnPublishPreflight),
+		ColumnPublishCommandWALAppendDurationMS:            durationMS(stats.ColumnPublishCommandWALAppend),
+		ColumnPublishOrderedRootApplyDurationMS:            durationMS(stats.ColumnPublishOrderedRootApply),
+		ColumnPublishSystemRootApplyDurationMS:             durationMS(stats.ColumnPublishSystemRootApply),
+		ColumnPublishFinalizeDurationMS:                    durationMS(stats.ColumnPublishFinalize),
+		ColumnPublishFinalizePrepareDurabilityDurationMS:   durationMS(stats.ColumnPublishFinalizePrepareDurability),
+		ColumnPublishFinalizeCandidateBuildDurationMS:      durationMS(stats.ColumnPublishFinalizeCandidateBuild),
+		ColumnPublishFinalizeEnqueueActivationDurationMS:   durationMS(stats.ColumnPublishFinalizeEnqueueActivation),
+		ColumnPublishFinalizeAdmissionWaitDurationMS:       durationMS(stats.ColumnPublishFinalizeAdmissionWait),
+		ColumnPublishFinalizeDurabilityWaitDurationMS:      durationMS(stats.ColumnPublishFinalizeDurabilityWait),
+		ColumnPublishPostFinalizeDurationMS:                durationMS(stats.ColumnPublishPostFinalize),
 		ColumnPublishDocumentExtractionDurationMS:          durationMS(stats.ColumnPublishDocumentExtraction),
 		ColumnPublishDeclaredColumnDurationMS:              durationMS(stats.ColumnPublishDeclaredColumnEncoding),
 		ColumnPublishAssetPreparationDurationMS:            durationMS(stats.ColumnPublishAssetPreparation),
@@ -4895,6 +4931,18 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `build_column_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildColumnDeltaDurationMS, stats.ColumnPublishBuildColumnDeltaNsPerRow))
 		sb.WriteString(fmt.Sprintf("| `build_system_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildSystemDeltaDurationMS, stats.ColumnPublishBuildSystemDeltaNsPerRow))
 		sb.WriteString(fmt.Sprintf("| `publish_commit_total` | %.3f | %.1f |\n", stats.ColumnPublishCommitDurationMS, stats.ColumnPublishCommitNsPerRow))
+		sb.WriteString(fmt.Sprintf("| `write_lock_wait` | %.3f |  |\n", stats.ColumnPublishWriteLockWaitDurationMS))
+		sb.WriteString(fmt.Sprintf("| `preflight` | %.3f |  |\n", stats.ColumnPublishPreflightDurationMS))
+		sb.WriteString(fmt.Sprintf("| `command_wal_append` | %.3f |  |\n", stats.ColumnPublishCommandWALAppendDurationMS))
+		sb.WriteString(fmt.Sprintf("| `ordered_root_apply` | %.3f |  |\n", stats.ColumnPublishOrderedRootApplyDurationMS))
+		sb.WriteString(fmt.Sprintf("| `system_root_apply` | %.3f |  |\n", stats.ColumnPublishSystemRootApplyDurationMS))
+		sb.WriteString(fmt.Sprintf("| `finalize` | %.3f |  |\n", stats.ColumnPublishFinalizeDurationMS))
+		sb.WriteString(fmt.Sprintf("| `finalize_prepare_durability` | %.3f |  |\n", stats.ColumnPublishFinalizePrepareDurabilityDurationMS))
+		sb.WriteString(fmt.Sprintf("| `finalize_candidate_build` | %.3f |  |\n", stats.ColumnPublishFinalizeCandidateBuildDurationMS))
+		sb.WriteString(fmt.Sprintf("| `finalize_enqueue_activation` | %.3f |  |\n", stats.ColumnPublishFinalizeEnqueueActivationDurationMS))
+		sb.WriteString(fmt.Sprintf("| `finalize_admission_wait` | %.3f |  |\n", stats.ColumnPublishFinalizeAdmissionWaitDurationMS))
+		sb.WriteString(fmt.Sprintf("| `finalize_durability_wait` | %.3f |  |\n", stats.ColumnPublishFinalizeDurabilityWaitDurationMS))
+		sb.WriteString(fmt.Sprintf("| `post_finalize` | %.3f |  |\n", stats.ColumnPublishPostFinalizeDurationMS))
 		sb.WriteString(fmt.Sprintf("| `document_extraction` | %.3f |  |\n", stats.ColumnPublishDocumentExtractionDurationMS))
 		sb.WriteString(fmt.Sprintf("| `declared_column_encoding` | %.3f |  |\n", stats.ColumnPublishDeclaredColumnDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_preparation` | %.3f |  |\n", stats.ColumnPublishAssetPreparationDurationMS))
@@ -4939,6 +4987,18 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 	return stats.ColumnPublishBuildColumnDeltaDurationMS > 0 ||
 		stats.ColumnPublishBuildSystemDeltaDurationMS > 0 ||
 		stats.ColumnPublishCommitDurationMS > 0 ||
+		stats.ColumnPublishWriteLockWaitDurationMS > 0 ||
+		stats.ColumnPublishPreflightDurationMS > 0 ||
+		stats.ColumnPublishCommandWALAppendDurationMS > 0 ||
+		stats.ColumnPublishOrderedRootApplyDurationMS > 0 ||
+		stats.ColumnPublishSystemRootApplyDurationMS > 0 ||
+		stats.ColumnPublishFinalizeDurationMS > 0 ||
+		stats.ColumnPublishFinalizePrepareDurabilityDurationMS > 0 ||
+		stats.ColumnPublishFinalizeCandidateBuildDurationMS > 0 ||
+		stats.ColumnPublishFinalizeEnqueueActivationDurationMS > 0 ||
+		stats.ColumnPublishFinalizeAdmissionWaitDurationMS > 0 ||
+		stats.ColumnPublishFinalizeDurabilityWaitDurationMS > 0 ||
+		stats.ColumnPublishPostFinalizeDurationMS > 0 ||
 		stats.ColumnPublishDocumentExtractionDurationMS > 0 ||
 		stats.ColumnPublishDeclaredColumnDurationMS > 0 ||
 		stats.ColumnPublishAssetPreparationDurationMS > 0 ||

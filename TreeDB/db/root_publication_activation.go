@@ -594,6 +594,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	inlinePrepareGuard *finalizeCommitPrepareGuard,
 	releaseDurablePublish func(),
 ) (finalizeCommitPost, error) {
+	candidateBuildStart := time.Now()
 	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
 	if runtime == nil || runtime.coordinator == nil || builder == nil || idx == nil || releaseDurablePublish == nil {
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
@@ -678,8 +679,15 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
 	}
+	if opts.publishTiming != nil {
+		opts.publishTiming.FinalizeCandidateBuild += time.Since(candidateBuildStart)
+	}
 
+	enqueueStart := time.Now()
 	receipt, enqueueErr := runtime.coordinator.EnqueueBuilt(candidate, builder)
+	if opts.publishTiming != nil {
+		opts.publishTiming.FinalizeEnqueueActivation += time.Since(enqueueStart)
+	}
 	if enqueueErr != nil {
 		enqueueErr = publicRootPublicationErrorV1(enqueueErr)
 		if abandonErr := candidate.Abandon(); abandonErr != nil {
@@ -700,14 +708,28 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if reportErr != nil {
 		db.reportError(reportErr)
 	}
+	admissionStart := time.Now()
 	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
+		if opts.publishTiming != nil {
+			opts.publishTiming.FinalizeAdmissionWait += time.Since(admissionStart)
+		}
 		post = db.finalizeAcceptedCommitPostWorkOnError(post)
 		return post, wrapAcceptedFinalizeCommitError(publicRootPublicationErrorV1(err))
 	}
+	if opts.publishTiming != nil {
+		opts.publishTiming.FinalizeAdmissionWait += time.Since(admissionStart)
+	}
 	if syncWrite && !db.commandWAL {
+		durabilityStart := time.Now()
 		if err := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil {
+			if opts.publishTiming != nil {
+				opts.publishTiming.FinalizeDurabilityWait += time.Since(durabilityStart)
+			}
 			post = db.finalizeAcceptedCommitPostWorkOnError(post)
 			return post, wrapAcceptedFinalizeCommitError(publicRootPublicationErrorV1(err))
+		}
+		if opts.publishTiming != nil {
+			opts.publishTiming.FinalizeDurabilityWait += time.Since(durabilityStart)
 		}
 	}
 	return post, nil

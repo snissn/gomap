@@ -274,6 +274,9 @@ func applyQueryReadyExecutionDiagnostics(diag *ColumnPhysicalQueryDiagnostics, r
 	diag.QueryReadyCodeTranslations, diag.QueryReadyDictionaryDomains, diag.QueryReadyScratchBytes = stats.CodeTranslations, stats.DictionaryDomains, stats.ScratchBytes
 	diag.QueryReadyPreparationNanos, diag.QueryReadyBaseScanNanos, diag.QueryReadyDeltaMergeNanos = stats.PreparationNanos, stats.BaseScanNanos, stats.DeltaMergeNanos
 	diag.QueryReadyPredicateNanos, diag.QueryReadyReductionNanos = stats.PredicateNanos, stats.ReductionNanos
+	diag.QueryReadyFusedPredicateReductionExecutions = stats.FusedPredicateReductionExecutions
+	diag.QueryReadyFusedPredicateReductionWorkers = stats.FusedPredicateReductionWorkers
+	diag.QueryReadyFusedPredicateReductionNanos = stats.FusedPredicateReductionNanos
 	diag.QueryReadyGroupingNanos, diag.QueryReadyOrderingTopKNanos = stats.GroupingNanos, stats.OrderingTopKNanos
 	diag.QueryReadyLegacyFallbacks, diag.QueryReadyPrecomputedAnswers = stats.LegacyScanFallbacks, stats.PrecomputedAnswers
 	diag.DocumentMaterializations, diag.FallbackReads = stats.DocumentMaterializations, stats.Fallbacks

@@ -571,14 +571,30 @@ type CollectionInsertStats struct {
 	RetainedStreamValueLogBytes                     int64
 	// ColumnPublish* fields are populated for typed-column InsertBatch paths
 	// that route through the command-WAL column manifest publish path.
-	ColumnPublishBuildColumnDelta       time.Duration
-	ColumnPublishBuildSystemDelta       time.Duration
-	ColumnPublishCommit                 time.Duration
-	ColumnPublishDocumentExtraction     time.Duration
-	ColumnPublishDeclaredColumnEncoding time.Duration
-	ColumnPublishAssetPreparation       time.Duration
-	ColumnPublishRowAssetPreparation    time.Duration
-	ColumnPublishTypedColumnPreparation time.Duration
+	ColumnPublishBuildColumnDelta time.Duration
+	ColumnPublishBuildSystemDelta time.Duration
+	ColumnPublishCommit           time.Duration
+	// ColumnPublish* below decompose the DB portion of ColumnPublishCommit into
+	// non-overlapping ordered-root publication phases.
+	ColumnPublishWriteLockWait    time.Duration
+	ColumnPublishPreflight        time.Duration
+	ColumnPublishCommandWALAppend time.Duration
+	ColumnPublishOrderedRootApply time.Duration
+	ColumnPublishSystemRootApply  time.Duration
+	ColumnPublishFinalize         time.Duration
+	// ColumnPublishFinalize* fields subdivide ColumnPublishFinalize. They are
+	// diagnostic children and are not added to CommitExclusiveTotal.
+	ColumnPublishFinalizePrepareDurability time.Duration
+	ColumnPublishFinalizeCandidateBuild    time.Duration
+	ColumnPublishFinalizeEnqueueActivation time.Duration
+	ColumnPublishFinalizeAdmissionWait     time.Duration
+	ColumnPublishFinalizeDurabilityWait    time.Duration
+	ColumnPublishPostFinalize              time.Duration
+	ColumnPublishDocumentExtraction        time.Duration
+	ColumnPublishDeclaredColumnEncoding    time.Duration
+	ColumnPublishAssetPreparation          time.Duration
+	ColumnPublishRowAssetPreparation       time.Duration
+	ColumnPublishTypedColumnPreparation    time.Duration
 
 	ColumnPublishTypedColumnDictionaryBuild    time.Duration
 	ColumnPublishTypedColumnRowMaterialization time.Duration
@@ -642,6 +658,15 @@ type CollectionInsertStats struct {
 	SecondarySortedRuns                                int
 	SecondaryUnsortedRuns                              int
 	SecondaryRuns                                      []CollectionSecondaryRunStats
+}
+
+// ColumnPublishCommitExclusiveTotal returns the non-overlapping DB publication
+// phases recorded for the most recent typed-column insert.
+func (s CollectionInsertStats) ColumnPublishCommitExclusiveTotal() time.Duration {
+	return s.ColumnPublishWriteLockWait + s.ColumnPublishPreflight +
+		s.ColumnPublishBuildColumnDelta + s.ColumnPublishBuildSystemDelta +
+		s.ColumnPublishCommandWALAppend + s.ColumnPublishOrderedRootApply +
+		s.ColumnPublishSystemRootApply + s.ColumnPublishFinalize + s.ColumnPublishPostFinalize
 }
 
 // CollectionSecondaryRunStats captures per-secondary-index run construction

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	SchemaVersion             = "gomap-jsonbench-canonical/v1"
+	SchemaVersion             = "gomap-jsonbench-canonical/v2"
 	TreeDBResultSchemaVersion = "jsonbench-treedb-report/v1"
 )
 
@@ -76,9 +76,10 @@ type Pins struct {
 }
 
 type DatasetPin struct {
-	Identity string `json:"identity"`
-	Rows     int64  `json:"rows"`
-	SHA256   string `json:"sha256"`
+	Identity      string `json:"identity"`
+	RequestedRows int64  `json:"requested_rows"`
+	ValidRows     int64  `json:"valid_rows"`
+	SHA256        string `json:"sha256"`
 }
 
 type Host struct {
@@ -393,8 +394,14 @@ func validatePins(pins Pins, add func(string, ...any)) {
 	if strings.TrimSpace(pins.Dataset.Identity) == "" {
 		add("pins.dataset.identity is required")
 	}
-	if pins.Dataset.Rows <= 0 {
-		add("pins.dataset.rows must be positive")
+	if pins.Dataset.RequestedRows <= 0 {
+		add("pins.dataset.requested_rows must be positive")
+	}
+	if pins.Dataset.ValidRows <= 0 {
+		add("pins.dataset.valid_rows must be positive")
+	}
+	if pins.Dataset.ValidRows > pins.Dataset.RequestedRows {
+		add("pins.dataset.valid_rows cannot exceed pins.dataset.requested_rows")
 	}
 	if len(pins.Dataset.SHA256) != 64 || !validHex(pins.Dataset.SHA256) {
 		add("pins.dataset.sha256 must be a 64-character hexadecimal digest")
@@ -585,6 +592,7 @@ type recordedResult struct {
 	SchemaVersion        string           `json:"schema_version"`
 	Query                string           `json:"query"`
 	Profile              string           `json:"profile"`
+	RequestedRows        int64            `json:"requested_rows"`
 	DatasetSize          int64            `json:"dataset_size"`
 	QueryMode            string           `json:"query_mode"`
 	MetadataMode         string           `json:"metadata_mode"`
@@ -655,10 +663,15 @@ func validateResult(path string, attemptIndex int, manifest Manifest, add func(s
 		} else if row.Profile != manifest.TreeDB.RequestedProfile {
 			add("requested profile %q does not match recorded profile %q", manifest.TreeDB.RequestedProfile, row.Profile)
 		}
+		if row.RequestedRows == 0 {
+			add("%s.requested_rows is required", prefix)
+		} else if row.RequestedRows != manifest.Pins.Dataset.RequestedRows {
+			add("%s.requested_rows %d does not match pinned requested_rows %d", prefix, row.RequestedRows, manifest.Pins.Dataset.RequestedRows)
+		}
 		if row.DatasetSize == 0 {
 			add("%s.dataset_size is required", prefix)
-		} else if row.DatasetSize != manifest.Pins.Dataset.Rows {
-			add("%s.dataset_size %d does not match pinned rows %d", prefix, row.DatasetSize, manifest.Pins.Dataset.Rows)
+		} else if row.DatasetSize != manifest.Pins.Dataset.ValidRows {
+			add("%s.dataset_size %d does not match pinned valid_rows %d", prefix, row.DatasetSize, manifest.Pins.Dataset.ValidRows)
 		}
 		if row.QueryMode == "" {
 			add("%s.query_mode is required", prefix)
@@ -718,14 +731,14 @@ func validateClickHouseResult(path string, attemptIndex int, manifest Manifest, 
 	if result.Version != manifest.Pins.ClickHouseVersion {
 		add("clickhouse result[%d].version %q does not match pins.clickhouse_version %q", attemptIndex, result.Version, manifest.Pins.ClickHouseVersion)
 	}
-	if result.RequestedRows != manifest.Pins.Dataset.Rows {
-		add("clickhouse result[%d].requested_rows %d does not match pinned rows %d", attemptIndex, result.RequestedRows, manifest.Pins.Dataset.Rows)
+	if result.RequestedRows != manifest.Pins.Dataset.RequestedRows {
+		add("clickhouse result[%d].requested_rows %d does not match pinned requested_rows %d", attemptIndex, result.RequestedRows, manifest.Pins.Dataset.RequestedRows)
 	}
-	if result.DatasetSize != manifest.Pins.Dataset.Rows {
-		add("clickhouse result[%d].dataset_size %d does not match pinned rows %d", attemptIndex, result.DatasetSize, manifest.Pins.Dataset.Rows)
+	if result.DatasetSize != manifest.Pins.Dataset.ValidRows {
+		add("clickhouse result[%d].dataset_size %d does not match pinned valid_rows %d", attemptIndex, result.DatasetSize, manifest.Pins.Dataset.ValidRows)
 	}
-	if result.NumLoadedDocuments != manifest.Pins.Dataset.Rows {
-		add("clickhouse result[%d].num_loaded_documents %d does not match pinned rows %d", attemptIndex, result.NumLoadedDocuments, manifest.Pins.Dataset.Rows)
+	if result.NumLoadedDocuments != manifest.Pins.Dataset.ValidRows {
+		add("clickhouse result[%d].num_loaded_documents %d does not match pinned valid_rows %d", attemptIndex, result.NumLoadedDocuments, manifest.Pins.Dataset.ValidRows)
 	}
 	if len(result.Result) != len(manifest.Comparison.QueryOrder) {
 		add("clickhouse result[%d] has %d query lanes, want %d", attemptIndex, len(result.Result), len(manifest.Comparison.QueryOrder))

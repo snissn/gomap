@@ -226,33 +226,36 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareQ2GroupGlobalCodeRemapNanos         int64
 	TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos      int64
 
-	ColumnAssetReadIntegrity     string
-	StorageSource                ColumnPhysicalQueryStorageSource
-	FallbackReason               ColumnPhysicalQueryFallbackReason
-	ScanNanos                    int64
-	VisibilityNanos              int64
-	ReduceNanos                  int64
-	ResultShapeNanos             int64
-	ReconstructionNanos          int64
-	QueryReadyEncodedExecutions  int
-	QueryReadyPreparedParts      int
-	QueryReadyBaseParts          int
-	QueryReadyDeltaParts         int
-	QueryReadyRowsCandidate      int
-	QueryReadyRowsVisible        int
-	QueryReadyRowsSuperseded     int
-	QueryReadyCodeTranslations   int
-	QueryReadyDictionaryDomains  int
-	QueryReadyScratchBytes       int64
-	QueryReadyPreparationNanos   int64
-	QueryReadyBaseScanNanos      int64
-	QueryReadyDeltaMergeNanos    int64
-	QueryReadyPredicateNanos     int64
-	QueryReadyReductionNanos     int64
-	QueryReadyGroupingNanos      int64
-	QueryReadyOrderingTopKNanos  int64
-	QueryReadyLegacyFallbacks    int
-	QueryReadyPrecomputedAnswers int
+	ColumnAssetReadIntegrity                    string
+	StorageSource                               ColumnPhysicalQueryStorageSource
+	FallbackReason                              ColumnPhysicalQueryFallbackReason
+	ScanNanos                                   int64
+	VisibilityNanos                             int64
+	ReduceNanos                                 int64
+	ResultShapeNanos                            int64
+	ReconstructionNanos                         int64
+	QueryReadyEncodedExecutions                 int
+	QueryReadyPreparedParts                     int
+	QueryReadyBaseParts                         int
+	QueryReadyDeltaParts                        int
+	QueryReadyRowsCandidate                     int
+	QueryReadyRowsVisible                       int
+	QueryReadyRowsSuperseded                    int
+	QueryReadyCodeTranslations                  int
+	QueryReadyDictionaryDomains                 int
+	QueryReadyScratchBytes                      int64
+	QueryReadyPreparationNanos                  int64
+	QueryReadyBaseScanNanos                     int64
+	QueryReadyDeltaMergeNanos                   int64
+	QueryReadyPredicateNanos                    int64
+	QueryReadyReductionNanos                    int64
+	QueryReadyFusedPredicateReductionExecutions int
+	QueryReadyFusedPredicateReductionWorkers    int
+	QueryReadyFusedPredicateReductionNanos      int64
+	QueryReadyGroupingNanos                     int64
+	QueryReadyOrderingTopKNanos                 int64
+	QueryReadyLegacyFallbacks                   int
+	QueryReadyPrecomputedAnswers                int
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -1563,6 +1566,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.QueryReadyDeltaMergeNanos += right.QueryReadyDeltaMergeNanos
 	left.QueryReadyPredicateNanos += right.QueryReadyPredicateNanos
 	left.QueryReadyReductionNanos += right.QueryReadyReductionNanos
+	left.QueryReadyFusedPredicateReductionExecutions += right.QueryReadyFusedPredicateReductionExecutions
+	left.QueryReadyFusedPredicateReductionWorkers = max(left.QueryReadyFusedPredicateReductionWorkers, right.QueryReadyFusedPredicateReductionWorkers)
+	left.QueryReadyFusedPredicateReductionNanos += right.QueryReadyFusedPredicateReductionNanos
 	left.QueryReadyGroupingNanos += right.QueryReadyGroupingNanos
 	left.QueryReadyOrderingTopKNanos += right.QueryReadyOrderingTopKNanos
 	left.QueryReadyLegacyFallbacks += right.QueryReadyLegacyFallbacks
