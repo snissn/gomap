@@ -12,6 +12,10 @@ DOCS="${DOCS:-10000}"
 DIMS="${DIMS:-64}"
 QUERIES="${QUERIES:-10000}"
 VALIDATE_QUERIES="${VALIDATE_QUERIES:-64}"
+EXPORT_TRUTH_QUERIES="$VALIDATE_QUERIES"
+if ((EXPORT_TRUTH_QUERIES > QUERIES)); then
+	EXPORT_TRUTH_QUERIES="$QUERIES"
+fi
 TOP_K="${TOP_K:-10}"
 SEARCH_CONCURRENCY="${SEARCH_CONCURRENCY:-2,4,8,16,32,64,128}"
 M="${M:-16}"
@@ -240,6 +244,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - dims: \`$DIMS\`
 - queries: \`$QUERIES\`
 - validate queries: \`$VALIDATE_QUERIES\`
+- exported truth queries: \`$EXPORT_TRUTH_QUERIES\`
 - validate docs: \`$VALIDATE_DOCS\`
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
@@ -312,7 +317,7 @@ GOWORK=off go run ./cmd/treedb_vector_dataset_export \
 	-docs "$DOCS" \
 	-dims "$DIMS" \
 	-queries "$QUERIES" \
-	-truth-queries "$VALIDATE_QUERIES" \
+	-truth-queries "$EXPORT_TRUTH_QUERIES" \
 	-top-k "$TOP_K" \
 	-json >"$RUN_DIR/dataset_export.json"
 
