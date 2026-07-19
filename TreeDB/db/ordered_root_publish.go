@@ -1098,6 +1098,25 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, u
 	if err != nil {
 		return false
 	}
+	return orderedRootCollectionDescriptorTransitionsCoveredEntries(
+		baseEntries,
+		newEntries,
+		userRoot,
+		baseSystemRoot,
+		newSystemRoot,
+		baseRoots,
+		newRoots,
+	)
+}
+
+func orderedRootCollectionDescriptorTransitionsCoveredEntries(
+	baseEntries, newEntries []collectionEntry,
+	userRoot, baseSystemRoot, newSystemRoot uint64,
+	baseRoots, newRoots []uint64,
+) bool {
+	if baseSystemRoot == 0 || newSystemRoot == 0 || len(baseRoots) != len(newRoots) {
+		return false
+	}
 	if len(baseEntries) == 0 || len(baseEntries) != len(newEntries) {
 		// Cold attachment, removal, and key-set changes retain the exact
 		// candidate scanner. The bounded proof only covers warm retargeting of
@@ -1118,6 +1137,21 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, u
 			newReachable[rootID] = struct{}{}
 		}
 	}
+	if _, aliasesSystemRoot := baseReachable[baseSystemRoot]; aliasesSystemRoot {
+		// The system-root delta and the grouped collection-root delta would
+		// otherwise split one deduplicated maintenance root into two changes.
+		return false
+	}
+	if _, aliasesSystemRoot := newReachable[newSystemRoot]; aliasesSystemRoot {
+		// Likewise, joining a collection transition into the new system root
+		// cannot be represented by independently merged ref deltas.
+		return false
+	}
+	// Include the implicit system-root transition in the cross-role
+	// reachability checks below. This also rejects transitions that reuse the
+	// old system root as a new collection root or vice versa.
+	baseReachable[baseSystemRoot] = struct{}{}
+	newReachable[newSystemRoot] = struct{}{}
 	if userRoot != 0 {
 		// The primary user root is unchanged by these grouped collection
 		// publications and participates in both maintenance closures. A

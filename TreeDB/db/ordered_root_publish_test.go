@@ -668,6 +668,59 @@ func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsPrimaryRootAlia
 	}
 }
 
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsSystemRootAlias(t *testing.T) {
+	tests := []struct {
+		name                          string
+		baseDescriptor, newDescriptor uint64
+		baseSystemRoot, newSystemRoot uint64
+	}{
+		{
+			name:           "base descriptor aliases base system root",
+			baseDescriptor: 101, newDescriptor: 201,
+			baseSystemRoot: 101, newSystemRoot: 301,
+		},
+		{
+			name:           "new descriptor aliases new system root",
+			baseDescriptor: 101, newDescriptor: 301,
+			baseSystemRoot: 201, newSystemRoot: 301,
+		},
+		{
+			name:           "new descriptor reuses base system root",
+			baseDescriptor: 101, newDescriptor: 201,
+			baseSystemRoot: 201, newSystemRoot: 301,
+		},
+		{
+			name:           "base descriptor aliases new system root",
+			baseDescriptor: 301, newDescriptor: 201,
+			baseSystemRoot: 101, newSystemRoot: 301,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEntries := []collectionEntry{{
+				key:           []byte(collectionRootDescriptorPrefix + "system-alias"),
+				sourceRootIDs: []uint64{tc.baseDescriptor},
+			}}
+			newEntries := []collectionEntry{{
+				key:           []byte(collectionRootDescriptorPrefix + "system-alias"),
+				sourceRootIDs: []uint64{tc.newDescriptor},
+			}}
+
+			if orderedRootCollectionDescriptorTransitionsCoveredEntries(
+				baseEntries,
+				newEntries,
+				0,
+				tc.baseSystemRoot,
+				tc.newSystemRoot,
+				[]uint64{tc.baseDescriptor},
+				[]uint64{tc.newDescriptor},
+			) {
+				t.Fatal("descriptor proof unexpectedly covered a grouped transition aliased by a system root")
+			}
+		})
+	}
+}
+
 func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	tests := []struct {
 		name    string
