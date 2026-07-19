@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -1079,6 +1080,140 @@ func orderedRootDeltaMayChangeCollectionRootDescriptors(delta *batch.Batch) bool
 		}
 	}
 	return false
+}
+
+func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, userRoot, baseSystemRoot, newSystemRoot uint64, baseRoots, newRoots []uint64) bool {
+	if db == nil || idx == nil || idx.pager == nil || baseSystemRoot == 0 || newSystemRoot == 0 || len(baseRoots) != len(newRoots) {
+		return false
+	}
+	// Descriptor values may themselves be value-log pointers. The publication
+	// path holds writeMu while both roots and all producer-reported segments are
+	// stable, so the live manager can resolve them without refreshing inventory.
+	// Missing, unregistered, or malformed pointers still fail this proof closed.
+	baseEntries, err := vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, baseSystemRoot)
+	if err != nil {
+		return false
+	}
+	newEntries, err := vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, newSystemRoot)
+	if err != nil {
+		return false
+	}
+	return orderedRootCollectionDescriptorTransitionsCoveredEntries(
+		baseEntries,
+		newEntries,
+		userRoot,
+		baseSystemRoot,
+		newSystemRoot,
+		baseRoots,
+		newRoots,
+	)
+}
+
+func orderedRootCollectionDescriptorTransitionsCoveredEntries(
+	baseEntries, newEntries []collectionEntry,
+	userRoot, baseSystemRoot, newSystemRoot uint64,
+	baseRoots, newRoots []uint64,
+) bool {
+	if baseSystemRoot == 0 || newSystemRoot == 0 || len(baseRoots) != len(newRoots) {
+		return false
+	}
+	if len(baseEntries) == 0 || len(baseEntries) != len(newEntries) {
+		// Cold attachment, removal, and key-set changes retain the exact
+		// candidate scanner. The bounded proof only covers warm retargeting of
+		// an already-attached descriptor set.
+		return false
+	}
+	baseByKey := make(map[string][]uint64, len(baseEntries))
+	baseReachable := make(map[uint64]struct{})
+	for i := range baseEntries {
+		baseByKey[string(baseEntries[i].key)] = baseEntries[i].sourceRootIDs
+		for _, rootID := range baseEntries[i].sourceRootIDs {
+			baseReachable[rootID] = struct{}{}
+		}
+	}
+	newReachable := make(map[uint64]struct{})
+	for i := range newEntries {
+		for _, rootID := range newEntries[i].sourceRootIDs {
+			newReachable[rootID] = struct{}{}
+		}
+	}
+	if _, aliasesSystemRoot := baseReachable[baseSystemRoot]; aliasesSystemRoot {
+		// The system-root delta and the grouped collection-root delta would
+		// otherwise split one deduplicated maintenance root into two changes.
+		return false
+	}
+	if _, aliasesSystemRoot := newReachable[newSystemRoot]; aliasesSystemRoot {
+		// Likewise, joining a collection transition into the new system root
+		// cannot be represented by independently merged ref deltas.
+		return false
+	}
+	// Include the implicit system-root transition in the cross-role
+	// reachability checks below. This also rejects transitions that reuse the
+	// old system root as a new collection root or vice versa.
+	baseReachable[baseSystemRoot] = struct{}{}
+	newReachable[newSystemRoot] = struct{}{}
+	if userRoot != 0 {
+		// The primary user root is unchanged by these grouped collection
+		// publications and participates in both maintenance closures. A
+		// descriptor transition that aliases it cannot be represented by the
+		// per-root replacement delta alone, so retain the exact projection.
+		baseReachable[userRoot] = struct{}{}
+		newReachable[userRoot] = struct{}{}
+	}
+	type rootTransition struct {
+		base uint64
+		next uint64
+	}
+	publishedTransitions := make(map[rootTransition]int, len(baseRoots))
+	for i := range baseRoots {
+		if baseRoots[i] != newRoots[i] {
+			publishedTransitions[rootTransition{base: baseRoots[i], next: newRoots[i]}]++
+		}
+	}
+	consumedTransitions := make(map[rootTransition]struct{}, len(publishedTransitions))
+	baseToNew := make(map[uint64]uint64)
+	newToBase := make(map[uint64]uint64)
+	changed := false
+	for i := range newEntries {
+		baseRootIDs, ok := baseByKey[string(newEntries[i].key)]
+		if !ok || len(baseRootIDs) != len(newEntries[i].sourceRootIDs) {
+			return false
+		}
+		for rootIdx, newRootID := range newEntries[i].sourceRootIDs {
+			baseRootID := baseRootIDs[rootIdx]
+			if baseRootID == newRootID {
+				continue
+			}
+			// The merged per-root ref deltas describe replacement of one
+			// reachable root by one new reachable root. Reject alias splits,
+			// joins, and partial retargets where either side remains reachable;
+			// those set-level changes are not represented by a bijective delta.
+			if _, remainsReachable := newReachable[baseRootID]; remainsReachable {
+				return false
+			}
+			if _, alreadyReachable := baseReachable[newRootID]; alreadyReachable {
+				return false
+			}
+			transition := rootTransition{base: baseRootID, next: newRootID}
+			if publishedTransitions[transition] != 1 {
+				return false
+			}
+			if mapped, ok := baseToNew[baseRootID]; ok && mapped != newRootID {
+				return false
+			}
+			if mapped, ok := newToBase[newRootID]; ok && mapped != baseRootID {
+				return false
+			}
+			baseToNew[baseRootID] = newRootID
+			newToBase[newRootID] = baseRootID
+			consumedTransitions[transition] = struct{}{}
+			changed = true
+		}
+		delete(baseByKey, string(newEntries[i].key))
+	}
+	return changed &&
+		len(baseByKey) == 0 &&
+		len(consumedTransitions) == len(publishedTransitions)
 }
 
 func orderedRootRangeOverlapsPrefix(start, end, prefix, prefixEnd []byte) bool {
@@ -2607,7 +2742,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		err = ErrCommandWALUnsupported
 		return 0, nil, err
 	}
-	if db.idx.Load() == nil {
+	idxGen := db.idx.Load()
+	if idxGen == nil {
 		err = errOrderedRootPublishMissingIndex
 		return 0, nil, err
 	}
@@ -2776,7 +2912,15 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		exactValueLogRefDelta = false
 	} else {
 		if systemRefDelta.requiresCandidateProjection {
-			exactValueLogRefDelta = false
+			baseRoots := make([]uint64, len(allOrdered))
+			for idx := range allOrdered {
+				baseRoots[idx] = allOrdered[idx].BaseRoot
+			}
+			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
+				systemRefDelta.requiresCandidateProjection = false
+			} else {
+				exactValueLogRefDelta = false
+			}
 		}
 		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
 		releaseValueLogRefDelta(systemRefDelta)
@@ -3785,7 +3929,15 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		exactValueLogRefDelta = false
 	} else {
 		if systemRefDelta.requiresCandidateProjection {
-			exactValueLogRefDelta = false
+			baseRoots := make([]uint64, len(allOrdered))
+			for idx := range allOrdered {
+				baseRoots[idx] = allOrdered[idx].BaseRoot
+			}
+			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
+				systemRefDelta.requiresCandidateProjection = false
+			} else {
+				exactValueLogRefDelta = false
+			}
 		}
 		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
 		releaseValueLogRefDelta(systemRefDelta)
