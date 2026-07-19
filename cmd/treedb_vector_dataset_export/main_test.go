@@ -57,7 +57,7 @@ func TestExportDatasetSmoke(t *testing.T) {
 	if _, ok := parsed.Files["manifest.json"]; ok {
 		t.Fatalf("manifest should not include self-referential manifest.json stats: %+v", parsed.Files["manifest.json"])
 	}
-	if parsed.ExactTruthFile != "exact_truth.jsonl" || parsed.ExactTruthKind != "exhaustive_cosine_distance_then_id_top_k_v1" {
+	if parsed.ExactTruthFile != "exact_truth.jsonl" || parsed.ExactTruthKind != "exhaustive_cosine_distance_ascending_then_id_top_k_v1" {
 		t.Fatalf("missing declared exact truth: %+v", parsed)
 	}
 }
@@ -75,8 +75,36 @@ func TestExportExactTruthIncludesTopK(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(string(raw)), "\n")[0]), &row); err != nil {
 		t.Fatal(err)
 	}
-	if len(row.Neighbors) != 3 || row.Kind != "exhaustive_cosine_distance_then_id_top_k_v1" {
+	if len(row.Neighbors) != 3 || row.Kind != "exhaustive_cosine_distance_ascending_then_id_top_k_v1" {
 		t.Fatalf("truth=%+v", row)
+	}
+}
+
+func TestExportDatasetIsByteStableAndTruthUsesAscendingDistance(t *testing.T) {
+	a, b := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
+	cfg := config{docs: 8, dimensions: 4, queries: 2, topK: 3}
+	cfg.out = a
+	if _, err := exportDataset(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.out = b
+	if _, err := exportDataset(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"manifest.json", "documents.f32", "queries.f32", "documents.jsonl", "queries.jsonl", "exact_truth.jsonl"} {
+		x, _ := os.ReadFile(filepath.Join(a, name))
+		y, _ := os.ReadFile(filepath.Join(b, name))
+		if string(x) != string(y) {
+			t.Fatalf("%s is not stable", name)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(a, "exact_truth.jsonl"))
+	var row exactTruthJSONL
+	_ = json.Unmarshal([]byte(strings.Split(strings.TrimSpace(string(raw)), "\n")[0]), &row)
+	for i := 1; i < len(row.Neighbors); i++ {
+		if row.Neighbors[i-1].Distance > row.Neighbors[i].Distance {
+			t.Fatal("truth distances are not ascending")
+		}
 	}
 }
 

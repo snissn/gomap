@@ -15,8 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"time"
 )
 
 const (
@@ -87,7 +85,7 @@ type queryJSONL struct {
 
 type truthNeighbor struct {
 	DocumentID string  `json:"document_id"`
-	Score      float64 `json:"score"`
+	Distance   float64 `json:"distance"`
 }
 type exactTruthJSONL struct {
 	QueryID   string          `json:"query_id"`
@@ -222,7 +220,7 @@ func exportDataset(cfg config) (exportResult, error) {
 		QueriesJSONLFile:    "queries.jsonl",
 		FloatFormat:         "float32_le_row_major",
 		ExactTruthFile:      "exact_truth.jsonl",
-		ExactTruthKind:      "exhaustive_cosine_distance_then_id_top_k_v1",
+		ExactTruthKind:      "exhaustive_cosine_distance_ascending_then_id_top_k_v1",
 		Files:               files,
 	}
 	if err := writeManifest(filepath.Join(out, "manifest.json"), m); err != nil {
@@ -239,14 +237,7 @@ func checkedVectorBytes(count, dims int) (int64, error) {
 }
 
 func manifestCreatedAt() (string, error) {
-	if raw := os.Getenv("SOURCE_DATE_EPOCH"); raw != "" {
-		epoch, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return "", fmt.Errorf("parse SOURCE_DATE_EPOCH: %w", err)
-		}
-		return time.Unix(epoch, 0).UTC().Format(time.RFC3339), nil
-	}
-	return time.Now().UTC().Format(time.RFC3339), nil
+	return "1970-01-01T00:00:00Z", nil
 }
 
 func prepareOutputDir(path string) error {
@@ -316,19 +307,19 @@ func writeExactTruthJSONL(path string, cfg config, files map[string]fileManifest
 				for d, x := range embedding(j, cfg.dimensions) {
 					score += float64(x) * float64(query[d])
 				}
-				rows[j] = scored{j, score}
+				rows[j] = scored{j, 1 - score}
 			}
 			sort.Slice(rows, func(a, b int) bool {
 				if rows[a].score == rows[b].score {
 					return rows[a].id < rows[b].id
 				}
-				return rows[a].score > rows[b].score
+				return rows[a].score < rows[b].score
 			})
 			neighbors := make([]truthNeighbor, cfg.topK)
 			for j := range neighbors {
 				neighbors[j] = truthNeighbor{documentID(rows[j].id), rows[j].score}
 			}
-			if err := enc.Encode(exactTruthJSONL{QueryID: fmt.Sprintf("query-%06d", i), Neighbors: neighbors, Kind: "exhaustive_cosine_distance_then_id_top_k_v1"}); err != nil {
+			if err := enc.Encode(exactTruthJSONL{QueryID: fmt.Sprintf("query-%06d", i), Neighbors: neighbors, Kind: "exhaustive_cosine_distance_ascending_then_id_top_k_v1"}); err != nil {
 				return err
 			}
 		}

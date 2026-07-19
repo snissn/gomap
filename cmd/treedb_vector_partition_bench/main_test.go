@@ -158,7 +158,7 @@ func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 	if len(entries) != 12 {
 		t.Fatalf("artifacts=%d want 12", len(entries))
 	}
-	raw, err := os.ReadFile(filepath.Join(out, "simulation_p4_o0.20.json"))
+	raw, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Probes: 4, Overlap: .2, TopK: 10})+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 	if result.Command[0] != "treedb_vector_partition_bench" || result.Metrics.MeasurementStatus != "simulation_not_measured" || result.Metrics.SelectedPartitions != 4 {
 		t.Fatalf("artifact metadata=%+v", result)
 	}
-	md, err := os.ReadFile(filepath.Join(out, "simulation_p4_o0.20.md"))
+	md, err := os.ReadFile(filepath.Join(out, artifactBasename(runResult{Probes: 4, Overlap: .2, TopK: 10})+".md"))
 	if err != nil {
 		t.Fatal(err)
 	}

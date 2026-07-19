@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -43,6 +44,8 @@ type config struct {
 	command      []string
 	maxVectors   int
 	maxBytes     int64
+	baseSHA      string
+	headSHA      string
 }
 
 type fixtureManifest struct {
@@ -62,13 +65,15 @@ type neighbor struct {
 	Distance float64 `json:"distance"`
 }
 type stageResult struct {
-	Name      string  `json:"name"`
-	Method    string  `json:"method"`
-	Enabled   bool    `json:"enabled"`
-	Lossy     bool    `json:"lossy"`
-	RecallAtK float64 `json:"recall_at_k"`
-	Queries   int     `json:"queries"`
-	Probes    int     `json:"probes"`
+	Name              string  `json:"name"`
+	Method            string  `json:"method"`
+	Enabled           bool    `json:"enabled"`
+	Lossy             bool    `json:"lossy"`
+	RecallAtK         float64 `json:"recall_at_k"`
+	Queries           int     `json:"queries"`
+	Probes            int     `json:"probes"`
+	Available         bool    `json:"available"`
+	UnavailableReason string  `json:"unavailable_reason,omitempty"`
 }
 
 // metricsV1 reserves every M0 evidence field. Simulation leaves production-only
@@ -150,6 +155,9 @@ func run(args []string, stdout io.Writer) error {
 		return err
 	}
 	cfg.command = append([]string{"treedb_vector_partition_bench"}, args...)
+	if cfg.baseSHA, cfg.headSHA, err = provenance(); err != nil {
+		return err
+	}
 	fixture, err := loadFixture(cfg.dataset)
 	if err != nil {
 		return err
@@ -161,6 +169,9 @@ func run(args []string, stdout io.Writer) error {
 		return errors.New("top-k cannot exceed fixture vectors")
 	}
 	vectors, queries := deterministicFixture(fixture)
+	if fixtureChecksum(fixture.Vectors, fixture.Queries, fixture.Dimensions, fixture.Seed) != fixture.Checksum {
+		return errors.New("fixture checksum does not match generated vector/query/truth stream")
+	}
 	for _, overlap := range cfg.overlaps {
 		for _, probes := range cfg.probes {
 			result, err := simulate(cfg, fixture, vectors, queries, probes, overlap)
@@ -281,6 +292,30 @@ func parseFloats(raw string) ([]float64, error) {
 	}
 	return out, nil
 }
+func provenance() (string, string, error) {
+	base, head := os.Getenv("BASE_SHA"), os.Getenv("GITHUB_SHA")
+	if head == "" {
+		out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+		if err != nil {
+			return "", "", errors.New("git head unavailable: set GITHUB_SHA")
+		}
+		head = strings.TrimSpace(string(out))
+	}
+	if base == "" {
+		out, err := exec.Command("git", "merge-base", "HEAD", "origin/main").Output()
+		if err != nil {
+			return "", "", errors.New("git merge-base unavailable: set BASE_SHA")
+		}
+		base = strings.TrimSpace(string(out))
+	}
+	if _, err := hex.DecodeString(base); err != nil || len(base) != 40 {
+		return "", "", errors.New("invalid BASE_SHA")
+	}
+	if _, err := hex.DecodeString(head); err != nil || len(head) != 40 {
+		return "", "", errors.New("invalid GITHUB_SHA")
+	}
+	return base, head, nil
+}
 
 func loadFixture(dir string) (fixtureManifest, error) {
 	b, e := os.ReadFile(filepath.Join(dir, "fixture_manifest.json"))
@@ -319,7 +354,7 @@ func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) 
 	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != "treedb_vector_partition_fixture_v1" || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Queries > capVectors || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
-	if int64(m.Vectors) > capBytes/(int64(m.Dimensions)*8) || int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
+	if int64(m.Vectors) > capBytes/(int64(m.Dimensions)*8) || int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) || int64(m.Vectors)+int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
 		return errors.New("fixture byte product exceeds pre-allocation cap")
 	}
 	_, e := hex.DecodeString(m.Checksum)
@@ -377,9 +412,20 @@ func exactTopK(v [][]float64, q []float64, k int) []neighbor {
 	return out[:k]
 }
 func partitionTopK(v [][]float64, q []float64, k, partitions, probes int) []neighbor {
-	all := make([]neighbor, 0, len(v)*probes/partitions+1)
+	selected := make([]int, probes)
+	for i := range selected {
+		selected[i] = i
+	}
+	return selectedPartitionTopK(v, q, k, partitions, selected)
+}
+func selectedPartitionTopK(v [][]float64, q []float64, k, partitions int, selected []int) []neighbor {
+	want := map[int]bool{}
+	for _, p := range selected {
+		want[p] = true
+	}
+	all := make([]neighbor, 0, len(v)*len(selected)/partitions+1)
 	for i, row := range v {
-		if i%partitions >= probes {
+		if !want[i%partitions] {
 			continue
 		}
 		var dot float64
@@ -399,6 +445,55 @@ func partitionTopK(v [][]float64, q []float64, k, partitions, probes int) []neig
 	}
 	return all[:k]
 }
+func orderedEqual(a, b []neighbor) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+func representativePartitions(v [][]float64, q []float64, partitions, probes int, approx bool) []int {
+	sums := make([][]float64, partitions)
+	counts := make([]int, partitions)
+	for i, row := range v {
+		p := i % partitions
+		if sums[p] == nil {
+			sums[p] = make([]float64, len(q))
+		}
+		for d := range row {
+			sums[p][d] += row[d]
+		}
+		counts[p]++
+	}
+	scores := make([]neighbor, partitions)
+	for p, sum := range sums {
+		var dot float64
+		for d := range sum {
+			dot += q[d] * (sum[d] / float64(counts[p]))
+		}
+		scores[p] = neighbor{ID: fmt.Sprintf("p-%06d", p), Distance: 1 - dot}
+	}
+	sort.Slice(scores, func(i, j int) bool {
+		if scores[i].Distance == scores[j].Distance {
+			return scores[i].ID < scores[j].ID
+		}
+		return scores[i].Distance < scores[j].Distance
+	})
+	out := make([]int, probes)
+	for i := range out {
+		idx := i
+		if approx && probes < partitions && i == probes-1 {
+			idx = probes
+		}
+		out[i] = int(parsePartitionID(scores[idx].ID))
+	}
+	return out
+}
+func parsePartitionID(id string) int { n, _ := strconv.Atoi(strings.TrimPrefix(id, "p-")); return n }
 func recall(want, got []neighbor) float64 {
 	found := map[string]bool{}
 	for _, x := range got {
@@ -418,33 +513,67 @@ func simulate(cfg config, m fixtureManifest, v, q [][]float64, probes int, overl
 	}
 	if overlap != 0 { /* M0 reports budget only; M3 owns membership copies. */
 	}
-	totals := map[string]float64{"global": 0, "partition": 0}
+	totals := map[string]float64{}
+	exactParity := true
 	for _, query := range q {
 		truth := exactTopK(v, query, cfg.topK)
-		totals["global"] += recall(truth, exactTopK(v, query, cfg.topK))
-		totals["partition"] += recall(truth, partitionTopK(v, query, cfg.topK, cfg.partitions, probes))
+		if cfg.stages["exact_global_top_k"] {
+			totals["exact_global_top_k"] += 1
+		}
+		if cfg.stages["partition_oracle"] {
+			got := partitionTopK(v, query, cfg.topK, cfg.partitions, probes)
+			totals["partition_oracle"] += recall(truth, got)
+			if probes == cfg.partitions && !orderedEqual(truth, got) {
+				exactParity = false
+			}
+		}
+		if cfg.stages["exact_representative_routing"] {
+			got := selectedPartitionTopK(v, query, cfg.topK, cfg.partitions, representativePartitions(v, query, cfg.partitions, probes, false))
+			totals["exact_representative_routing"] += recall(truth, got)
+		}
+		if cfg.stages["approximate_representative_routing"] {
+			got := selectedPartitionTopK(v, query, cfg.topK, cfg.partitions, representativePartitions(v, query, cfg.partitions, probes, true))
+			totals["approximate_representative_routing"] += recall(truth, got)
+		}
+		if cfg.stages["exact_partition_local"] {
+			parts := representativePartitions(v, query, cfg.partitions, probes, false)
+			got := selectedPartitionTopK(v, query, cfg.topK, cfg.partitions, parts)
+			totals["exact_partition_local"] += recall(truth, got)
+		}
+		if cfg.stages["end_to_end_distributed_simulation"] {
+			parts := representativePartitions(v, query, cfg.partitions, probes, true)
+			got := selectedPartitionTopK(v, query, cfg.topK, cfg.partitions, parts)
+			totals["end_to_end_distributed_simulation"] += recall(truth, dedupeStable(got))
+		}
 	}
 	n := float64(len(q))
-	sha := os.Getenv("GITHUB_SHA")
-	if sha == "" {
-		sha = "local"
-	}
 	stage := func(name, method string, lossy bool, value float64, p int) stageResult {
-		return stageResult{Name: name, Method: method, Enabled: cfg.stages[name], Lossy: lossy, RecallAtK: value, Queries: len(q), Probes: p}
+		return stageResult{Name: name, Method: method, Enabled: cfg.stages[name], Lossy: lossy, RecallAtK: value, Queries: len(q), Probes: p, Available: true}
 	}
-	allStages := []stageResult{stage("exact_global_top_k", "global_exhaustive", false, totals["global"]/n, cfg.partitions), stage("partition_oracle", "deterministic_partition_exhaustive", probes < cfg.partitions, totals["partition"]/n, probes), stage("exact_representative_routing", "M0_equivalent_to_partition_oracle", false, totals["partition"]/n, probes), stage("approximate_representative_routing", "M0_equivalent_to_exact_representative", false, totals["partition"]/n, probes), stage("exact_partition_local", "partition_exhaustive", false, totals["partition"]/n, probes), stage("treedb_partition_local_hnsw", "M0_placeholder_exact_local_not_production_HNSW", false, totals["partition"]/n, probes), stage("end_to_end_distributed_simulation", "sequential_deterministic_merge", probes < cfg.partitions, totals["partition"]/n, probes)}
+	allStages := []stageResult{stage("exact_global_top_k", "global_exhaustive", false, totals["exact_global_top_k"]/n, cfg.partitions), stage("partition_oracle", "round_robin_partition_exhaustive", probes < cfg.partitions, totals["partition_oracle"]/n, probes), stage("exact_representative_routing", "centroid_representative_routing", probes < cfg.partitions, totals["exact_representative_routing"]/n, probes), stage("approximate_representative_routing", "deterministic_last_representative_perturbation", probes < cfg.partitions, totals["approximate_representative_routing"]/n, probes), stage("exact_partition_local", "centroid_selected_partition_exhaustive", probes < cfg.partitions, totals["exact_partition_local"]/n, probes), {Name: "treedb_partition_local_hnsw", Method: "unavailable_without_public_M0_HNSW_pack_api", Enabled: cfg.stages["treedb_partition_local_hnsw"], Available: false, UnavailableReason: "M0 has no public TreeDB partition-local HNSW pack API; refusing exact placeholder"}, stage("end_to_end_distributed_simulation", "approximate_router_then_local_exhaustive_dedupe", probes < cfg.partitions, totals["end_to_end_distributed_simulation"]/n, probes)}
 	selected := make([]stageResult, 0, len(allStages))
 	for _, s := range allStages {
 		if s.Enabled {
 			selected = append(selected, s)
 		}
 	}
-	metrics := metricsV1{MeasurementStatus: "simulation_not_measured", Balance: 1, MaxPartitionSize: (len(v) + cfg.partitions - 1) / cfg.partitions, ReplicationFactor: 1, UnassignedOverlapBudget: overlap, RoutedPartitionRecall: totals["partition"] / n, SelectedPartitions: probes}
-	r := runResult{SchemaVersion: schemaVersion, ResultKind: "simulation_only", ProductionEvidence: false, Command: cfg.command, BaseSHA: os.Getenv("BASE_SHA"), HeadSHA: sha, GoVersion: runtime.Version(), Hardware: runtime.GOARCH + "/" + runtime.GOOS, Dataset: m, Partitions: cfg.partitions, Overlap: overlap, Probes: probes, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Seed: cfg.seed, Warmup: 0, Samples: len(q), TimedBoundary: "exact in-memory distance and deterministic merge; excludes disk, TreeDB, RPC, and Raft", Stages: selected, Metrics: metrics}
-	if probes == cfg.partitions && totals["partition"]/n != 1 {
+	metrics := metricsV1{MeasurementStatus: "simulation_not_measured", Balance: 1, MaxPartitionSize: (len(v) + cfg.partitions - 1) / cfg.partitions, ReplicationFactor: 1, UnassignedOverlapBudget: overlap, RoutedPartitionRecall: totals["end_to_end_distributed_simulation"] / n, SelectedPartitions: probes}
+	r := runResult{SchemaVersion: schemaVersion, ResultKind: "simulation_only", ProductionEvidence: false, Command: cfg.command, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, GoVersion: runtime.Version(), Hardware: runtime.GOARCH + "/" + runtime.GOOS, Dataset: m, Partitions: cfg.partitions, Overlap: overlap, Probes: probes, TopK: cfg.topK, RecallTarget: cfg.recallTarget, Seed: cfg.seed, Warmup: 0, Samples: len(q), TimedBoundary: "exact in-memory distance and deterministic merge; excludes disk, TreeDB, RPC, and Raft", Stages: selected, Metrics: metrics}
+	if cfg.stages["partition_oracle"] && probes == cfg.partitions && !exactParity {
 		return r, errors.New("all-partition oracle parity failure")
 	}
 	return r, nil
+}
+func dedupeStable(in []neighbor) []neighbor {
+	seen := map[string]bool{}
+	out := make([]neighbor, 0, len(in))
+	for _, n := range in {
+		if !seen[n.ID] {
+			seen[n.ID] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
 func validateResult(r runResult) error {
 	if r.SchemaVersion != schemaVersion || r.ResultKind != "simulation_only" || r.ProductionEvidence || len(r.Stages) == 0 {
@@ -454,9 +583,18 @@ func validateResult(r runResult) error {
 		if s.Method == "" {
 			return errors.New("unlabelled attribution stage")
 		}
+		if !s.Available {
+			if s.UnavailableReason == "" {
+				return errors.New("unavailable stage without reason")
+			}
+			continue
+		}
 		if math.IsNaN(s.RecallAtK) || math.IsInf(s.RecallAtK, 0) || s.RecallAtK < 0 || s.RecallAtK > 1 {
 			return errors.New("non-finite metric")
 		}
+	}
+	if len(r.BaseSHA) < 7 || len(r.HeadSHA) < 7 {
+		return errors.New("missing git provenance")
 	}
 	if r.Metrics.MeasurementStatus != "simulation_not_measured" {
 		return errors.New("unknown metric measurement status")
@@ -472,7 +610,7 @@ func writeArtifacts(out string, r runResult) error {
 	if err := os.MkdirAll(out, 0755); err != nil {
 		return err
 	}
-	name := fmt.Sprintf("simulation_p%d_o%.2f", r.Probes, r.Overlap)
+	name := artifactBasename(r)
 	b, e := json.MarshalIndent(r, "", "  ")
 	if e != nil {
 		return e
@@ -480,8 +618,17 @@ func writeArtifacts(out string, r runResult) error {
 	if e = os.WriteFile(filepath.Join(out, name+".json"), append(b, '\n'), 0644); e != nil {
 		return e
 	}
-	md := fmt.Sprintf("# TreeDB vector partition M0 simulation\n\n**Simulation only; not production Raft evidence.**\n\n- fixture: `%s` (%s)\n- probes: %d/%d\n- overlap budget: %.2f\n- recall@%d: %.4f\n- timed boundary: %s\n", r.Dataset.Fixture, r.Dataset.Checksum, r.Probes, r.Partitions, r.Overlap, r.TopK, r.Stages[len(r.Stages)-1].RecallAtK, r.TimedBoundary)
+	stageSummary := "unavailable"
+	for _, s := range r.Stages {
+		if s.Name == "end_to_end_distributed_simulation" && s.Available {
+			stageSummary = fmt.Sprintf("recall@%d: %.4f", r.TopK, s.RecallAtK)
+		}
+	}
+	md := fmt.Sprintf("# TreeDB vector partition M0 simulation\n\n**Simulation only; not production Raft evidence.**\n\n- fixture: `%s` (%s)\n- probes: %d/%d\n- overlap budget: %.6g\n- end-to-end simulation: %s\n- timed boundary: %s\n", r.Dataset.Fixture, r.Dataset.Checksum, r.Probes, r.Partitions, r.Overlap, stageSummary, r.TimedBoundary)
 	return os.WriteFile(filepath.Join(out, name+".md"), []byte(md), 0644)
+}
+func artifactBasename(r runResult) string {
+	return fmt.Sprintf("simulation_p%d_o%016x_k%d", r.Probes, math.Float64bits(r.Overlap), r.TopK)
 }
 func fixtureChecksum(vectors, queries, dims int, seed int64) string {
 	m := fixtureManifest{Vectors: vectors, Queries: queries, Dimensions: dims, Seed: seed}

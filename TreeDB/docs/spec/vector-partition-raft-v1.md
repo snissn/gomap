@@ -50,7 +50,10 @@ consistency, or shard failure is an explicit error with no incomplete result.
 It emits `result_kind=simulation_only` and `production_evidence=false`; its
 Markdown artifacts repeat that it is not production Raft evidence. It records
 the exact global top-k, partition oracle, representative/local-HNSW attribution
-placeholders, and end-to-end simulation separately. With every partition
+stages, and end-to-end simulation separately. The TreeDB partition-local HNSW
+stage is explicitly unavailable in M0 because this harness has not yet created
+generation-bound partition-local packs; it MUST NOT be interpreted as an exact
+placeholder or production evidence. With every partition
 probed, the partition oracle MUST equal global exact top-k under distance then
 stable-ID ordering.
 
@@ -67,7 +70,9 @@ The schema reserves every descendant evidence family even when M0 emits
 `measurement_status=simulation_not_measured` and explicit finite zero values:
 build wall/CPU/RSS/temp/final bytes; balance/cut/overlap; representatives and
 router latency; fanout/RPC/bytes/shard/merge/failure counters; and QPS,
-percentiles, recall@1/10/100, allocations, resident/mapped bytes.
+percentiles, recall@1/10/100, allocations, resident/mapped bytes. Artifact
+provenance is the real `HEAD` and `merge-base HEAD origin/main` (or explicit
+`GITHUB_SHA`/`BASE_SHA` overrides); empty/local provenance is rejected.
 
 ## Parent invariant matrix
 
