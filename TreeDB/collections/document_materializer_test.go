@@ -71,6 +71,108 @@ func TestCollectionReadViewFetchDocumentsByIDUsesBatchViewForOwnedRetainedPayloa
 	}
 }
 
+func TestCollectionReadViewLookupDocumentRowRefsByIDEmptyCollectionReturnsMissingP3890(t *testing.T) {
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 0, nil)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
+	}
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+
+	ids := [][]byte{[]byte("missing-a"), []byte("missing-b")}
+	got, err := view.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
+	}
+	if len(got.Results) != len(ids) {
+		t.Fatalf("results=%d want %d", len(got.Results), len(ids))
+	}
+	for i := range ids {
+		if got.Results[i].Found || !bytes.Equal(got.Results[i].ID, ids[i]) {
+			t.Fatalf("result[%d]=%+v want owned missing id %q", i, got.Results[i], ids[i])
+		}
+	}
+	if got.Stats.DocumentsRequested != uint64(len(ids)) ||
+		got.Stats.RowLocatorLookups != uint64(len(ids)) ||
+		got.Stats.RowLocatorMisses != uint64(len(ids)) {
+		t.Fatalf("stats=%+v want requested/lookups/misses=%d", got.Stats, len(ids))
+	}
+}
+
+func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryFailsClosedP3890(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1")},
+		[][]byte{[]byte(`{"row_id":1,"kind":"alpha","score":1.5}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	catalogWithoutLocator := *view.catalog
+	catalogWithoutLocator.roots = make(map[string]uint64, len(view.catalog.roots))
+	for name, rootID := range view.catalog.roots {
+		catalogWithoutLocator.roots[name] = rootID
+	}
+	delete(catalogWithoutLocator.roots, collectionColumnRowLocatorRootName(view.catalog.meta.Name))
+	view.catalog = &catalogWithoutLocator
+
+	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "primary row locator root is absent") {
+		t.Fatalf("LookupDocumentRowRefsByID err=%v want absent-locator fail-closed error", err)
+	}
+}
+
+func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOverlayFailsClosedP3890(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1")},
+		[][]byte{[]byte(`{"row_id":1,"kind":"alpha","score":1.5}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	primaryRootName := collectionPrimaryRootName(view.catalog.meta.Name)
+	primaryRootID := view.catalog.rootID(primaryRootName)
+	if primaryRootID == 0 {
+		t.Fatal("test requires a populated primary root")
+	}
+	catalogWithPrimaryOverlay := *view.catalog
+	catalogWithPrimaryOverlay.roots = make(map[string]uint64, len(view.catalog.roots))
+	for name, rootID := range view.catalog.roots {
+		catalogWithPrimaryOverlay.roots[name] = rootID
+	}
+	delete(catalogWithPrimaryOverlay.roots, primaryRootName)
+	delete(catalogWithPrimaryOverlay.roots, collectionColumnRowLocatorRootName(view.catalog.meta.Name))
+	catalogWithPrimaryOverlay.rootOverlays = make(map[string][]uint64, len(view.catalog.rootOverlays)+1)
+	for name, rootIDs := range view.catalog.rootOverlays {
+		catalogWithPrimaryOverlay.rootOverlays[name] = append([]uint64(nil), rootIDs...)
+	}
+	catalogWithPrimaryOverlay.rootOverlays[primaryRootName] = []uint64{primaryRootID}
+	view.catalog = &catalogWithPrimaryOverlay
+
+	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "primary row locator root is absent") {
+		t.Fatalf("LookupDocumentRowRefsByID err=%v want overlay-primary absent-locator fail-closed error", err)
+	}
+}
+
 func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
@@ -861,7 +963,7 @@ func TestCollectionReadViewFetchDocumentsByRowRefMutationLatestVisible1874(t *te
 	if err != nil {
 		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
 	}
-	if !lookup.Results[0].Found || lookup.Results[1].Found || lookup.Stats.RowLocatorLookups != 2 || lookup.Stats.RowLocatorMisses != 1 || lookup.Stats.RowLocatorBuilds != 1 {
+	if !lookup.Results[0].Found || lookup.Results[1].Found || lookup.Stats.RowLocatorLookups != 2 || lookup.Stats.RowLocatorMisses != 1 || lookup.Stats.RowLocatorBuilds != 0 {
 		t.Fatalf("lookup=%+v stats=%+v want updated e1 ref and deleted e2 miss", lookup.Results, lookup.Stats)
 	}
 	current, err := currentView.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{})
@@ -997,7 +1099,7 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef: %v", err)
 	}
-	if view.rowLocator == nil || view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be populated before integrity change")
 	}
 	cfg := view.columnSnapshotView.Config
@@ -1026,7 +1128,7 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef after rebuild: %v", err)
 	}
-	if view.rowLocator == nil || view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be repopulated before close")
 	}
 	if err := view.Close(); err != nil {
