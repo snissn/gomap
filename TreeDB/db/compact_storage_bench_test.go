@@ -4,203 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
-	"strconv"
 	"sync/atomic"
 	"testing"
-	"time"
 )
-
-// BenchmarkCompactStorageM0 reports the stable M0 fixture name and adapter
-// metrics. Setup is intentionally outside the timed interval.
-func BenchmarkCompactStorageM0(b *testing.B) {
-	for fixtureIndex := range compactStorageM0Fixtures {
-		fixtureIndex := fixtureIndex
-		b.Run(compactStorageM0Fixtures[fixtureIndex].Name, func(b *testing.B) {
-			benchmarkCompactStorageM0Fixture(b, fixtureIndex)
-		})
-	}
-}
-
-func benchmarkCompactStorageM0Fixture(b *testing.B, fixtureIndex int) {
-	fixture := compactStorageM0Fixtures[fixtureIndex]
-	var totalWall, applyWall, reclaimedBytes, stableCalls int64
-	var foregroundP95, idleP95 int64
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		db := openCompactStorageM0Fixture(b, fixtureIndex)
-		plan, err := db.CompactStoragePlan(context.Background(), compactStorageM0Options(fixtureIndex))
-		if err != nil {
-			_ = db.Close()
-			b.Fatalf("CompactStoragePlan: %v", err)
-		}
-		fixture = compactStorageM0FixtureMetadata(fixture, db, plan)
-		recorder := newCompactStorageM0StableRecorder()
-		db.compactStorageBeforePhase = recorder.beginPhase
-		db.compactStorageAfterPhase = recorder.endPhase
-		restore := installCompactStorageM0Recorder(recorder)
-		checkpoint := compactStorageM0CheckpointBaseline(db, recorder)
-		if fixtureIndex == 5 {
-			idleP95 = int64(m0DurationPercentile(runCompactStorageM0IdleWrites(db, 64), 95))
-		}
-		b.StartTimer()
-		started := time.Now()
-		startForeground := make(chan struct{})
-		foregroundDone := make(chan []time.Duration, 1)
-		if fixtureIndex == 5 {
-			go runCompactStorageM0ForegroundWrites(db, startForeground, foregroundDone)
-			close(startForeground)
-		}
-		stats, err := db.CompactStorage(context.Background(), compactStorageM0Options(fixtureIndex))
-		elapsed := time.Since(started)
-		b.StopTimer()
-		if fixtureIndex == 5 {
-			foregroundP95 = int64(m0DurationPercentile(<-foregroundDone, 95))
-		}
-		restore()
-		db.compactStorageBeforePhase = nil
-		db.compactStorageAfterPhase = nil
-		if err != nil {
-			if fixtureIndex != 5 {
-				_ = db.Close()
-				b.Fatalf("CompactStorage: %v", err)
-			}
-			b.ReportMetric(1, "foreground_maintenance_error")
-		}
-		measurement := newCompactStorageMeasurement(fixture, elapsed.Nanoseconds(), stats)
-		measurement.Checkpoint = checkpoint
-		totalWall += measurement.TotalWallTimeNanos
-		applyWall += measurement.ApplyWallTimeNanos
-		reclaimedBytes += stats.LeafGenerationGC.BytesDeleted
-		stableCalls += int64(recorder.totalCalls())
-		if err := db.Close(); err != nil {
-			b.Fatalf("close: %v", err)
-		}
-	}
-	if b.N > 0 {
-		b.ReportMetric(float64(totalWall)/float64(b.N), "m0_total_wall_ns/op")
-		b.ReportMetric(float64(applyWall)/float64(b.N), "m0_apply_wall_ns/op")
-		b.ReportMetric(float64(reclaimedBytes)/float64(b.N), "m0_reclaimed_bytes/op")
-		b.ReportMetric(float64(stableCalls)/float64(b.N), "m0_stable_calls/op")
-		b.ReportMetric(float64(fixture.DatabaseBytes), "fixture_database_bytes")
-		b.ReportMetric(float64(fixture.PageCount), "fixture_pages")
-		b.ReportMetric(float64(fixture.GenerationCount), "fixture_generations")
-		if fixtureIndex == 5 {
-			b.ReportMetric(float64(foregroundP95), "foreground_p95_ns/op")
-			b.ReportMetric(float64(idleP95), "idle_control_p95_ns/op")
-		}
-	}
-}
-
-func runCompactStorageM0IdleWrites(db *DB, count int) []time.Duration {
-	latencies := make([]time.Duration, 0, count)
-	for i := 0; i < count; i++ {
-		started := time.Now()
-		_ = db.Set([]byte(fmt.Sprintf("m0/idle/%03d", i)), []byte("idle"))
-		latencies = append(latencies, time.Since(started))
-	}
-	return latencies
-}
-
-func runCompactStorageM0ForegroundWrites(db *DB, start <-chan struct{}, done chan<- []time.Duration) {
-	<-start
-	latencies := make([]time.Duration, 0, 64)
-	for i := 0; i < 64; i++ {
-		started := time.Now()
-		if err := db.Set([]byte(fmt.Sprintf("m0/foreground/%03d", i)), []byte("foreground")); err != nil {
-			break
-		}
-		latencies = append(latencies, time.Since(started))
-	}
-	done <- latencies
-}
-
-func m0DurationPercentile(values []time.Duration, percentile int) time.Duration {
-	if len(values) == 0 {
-		return 0
-	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
-	index := (len(values)*percentile + 99) / 100
-	if index < 1 {
-		index = 1
-	}
-	if index > len(values) {
-		index = len(values)
-	}
-	return values[index-1]
-}
-
-func compactStorageM0CheckpointBaseline(db *DB, recorder *compactStorageM0StableRecorder) compactStorageMeasurementCheckpoint {
-	result := compactStorageMeasurementCheckpoint{Availability: compactStorageMeasurementUnavailable, StableCallCounter: compactStorageMeasurementUnavailable, CoverageReason: "root-publication-stats-unavailable"}
-	if db == nil || db.rootPublication == nil {
-		return result
-	}
-	before := db.rootPublication.coordinator.Stats()
-	started := time.Now()
-	if err := db.Checkpoint(); err != nil {
-		result.CoverageReason = "checkpoint-error:" + err.Error()
-		return result
-	}
-	after := db.rootPublication.coordinator.Stats()
-	result.Availability = compactStorageMeasurementObserved
-	result.StableCallCounter = compactStorageMeasurementObserved
-	result.CoverageReason = "explicit-checkpoint-current-path"
-	result.ExactCoverageObserved = after.DurableCommitSeq >= after.VisibleCommitSeq
-	result.WallTimeNanos = time.Since(started).Nanoseconds()
-	result.BeforeVisibleFrontier = before.VisibleCommitSeq
-	result.AfterVisibleFrontier = after.VisibleCommitSeq
-	result.BeforeDurableFrontier = before.DurableCommitSeq
-	result.AfterDurableFrontier = after.DurableCommitSeq
-	result.StableCalls = recorder.totalCalls()
-	return result
-}
-
-func compactStorageM0Options(index int) CompactStorageOptions {
-	switch index {
-	case 0:
-		return CompactStorageOptions{LeafPackMaxPasses: 4, LeafPackMaxGenerationsPerPass: 1, LeafPackMinReclaimPerCopyPPM: 1}
-	case 5:
-		return CompactStorageOptions{Mode: CompactStorageFull, LeafPackMaxPasses: 4, LeafPackMaxGenerationsPerPass: 1, LeafPackMinReclaimPerCopyPPM: 1}
-	case 4:
-		return CompactStorageOptions{Mode: CompactStorageExhaustive}
-	default:
-		return CompactStorageOptions{Mode: CompactStorageFull}
-	}
-}
-
-func openCompactStorageM0Fixture(b *testing.B, index int) *DB {
-	if index == 0 || index == 1 || index == 4 {
-		return openCompactStorageLeafPackBenchmarkFixture(b)
-	}
-	if index == 5 {
-		return openCompactStorageRewritePolicyBenchmarkFixture(b, 2047, 1, 1024)
-	}
-	if index == 2 {
-		return openCompactStorageRewritePolicyBenchmarkFixture(b, 2047, 1, 1024)
-	}
-	return openCompactStorageRewritePolicyBenchmarkFixture(b, 1024, 2048, 1024)
-}
-
-func compactStorageM0FixtureMetadata(f compactStorageMeasurementFixture, db *DB, plan CompactStorageStats) compactStorageMeasurementFixture {
-	f.DatabaseBytesAvailability, f.PageCountAvailability, f.DebtAvailability = "unavailable", "unavailable", "unavailable"
-	for _, usage := range plan.Before {
-		if usage.Name == "total" {
-			f.DatabaseBytes, f.DatabaseBytesAvailability = usage.Bytes, "observed"
-		}
-	}
-	if generation := db.idx.Load(); generation != nil && generation.pager != nil {
-		f.PageCount, f.PageCountAvailability = int(generation.pager.PageCount()), "observed"
-	}
-	f.GenerationCount, f.DebtAvailability = len(plan.LeafGenerationPlan.Generations), "observed"
-	f.LiveDebtBytes = plan.LeafGenerationPlan.CandidateBytesLive
-	f.DeadDebtBytes = plan.LeafGenerationPlan.CandidateBytesDead
-	return f
-}
-
-func compactStorageM0ArtifactName(fixture string, iteration int) string {
-	return "compact-storage-m0/" + fixture + "/seed=" + strconv.Itoa(3733001+iteration)
-}
 
 func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 	var liveScans, packPasses atomic.Uint64
@@ -309,7 +115,6 @@ func openCompactStorageLeafPackBenchmarkFixture(b *testing.B) *DB {
 	db, err := Open(Options{
 		Dir:                        dir,
 		Durability:                 DurabilityWALOffRelaxed,
-		ValueLog:                   ValueLogOptions{PointerThreshold: 1},
 		DisableBackgroundPrune:     true,
 		IndexOuterLeavesInValueLog: true,
 		LeafPrefixCompression:      true,
@@ -422,8 +227,12 @@ func BenchmarkCompactStorageRewritePolicyMostlyLiveApply(b *testing.B) {
 }
 
 func openCompactStorageRewritePolicyBenchmarkFixture(tb testing.TB, liveRecords, staleRecords, valueSize int) *DB {
+	return openCompactStorageRewritePolicyBenchmarkFixtureWithThreshold(tb, liveRecords, staleRecords, valueSize, 1)
+}
+
+func openCompactStorageRewritePolicyBenchmarkFixtureWithThreshold(tb testing.TB, liveRecords, staleRecords, valueSize, pointerThreshold int) *DB {
 	tb.Helper()
-	db, err := Open(Options{Dir: tb.TempDir(), ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	db, err := Open(Options{Dir: tb.TempDir(), ValueLog: ValueLogOptions{PointerThreshold: pointerThreshold}})
 	if err != nil {
 		tb.Fatalf("open: %v", err)
 	}

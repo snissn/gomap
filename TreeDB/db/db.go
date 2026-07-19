@@ -106,8 +106,7 @@ type DB struct {
 	adaptive                       *adaptive.Controller
 	pruner                         pruneWorker
 	leafGenerationPins             leafGenerationPinTracker
-	// Test hook used to release synthetic snapshot pins at exact compaction
-	// phase boundaries.
+	// Test hooks used for exact compaction phase-boundary coordination.
 	compactStorageBeforePhase func(string)
 	compactStorageAfterPhase  func(string)
 	// Test hook used to observe whether fenced value-log reclaim resolved
