@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "fixture": "vector_partition_10k",
+  "generator": "treedb_vector_partition_fixture_v1",
+  "vectors": 10000,
+  "queries": 128,
+  "dimensions": 64,
+  "metric": "cosine",
+  "seed": 1,
+  "checksum": "67e7d10be48a63a63b6a0835d2eba1c0bee119fe24aabdc7c7d3dba846bf1a3f"
+}

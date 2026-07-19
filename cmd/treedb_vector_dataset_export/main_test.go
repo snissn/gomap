@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestExportDatasetSmoke(t *testing.T) {
 	if res.Manifest.Docs != 8 || res.Manifest.Dimensions != 4 || res.Manifest.Queries != 3 {
 		t.Fatalf("unexpected manifest: %+v", res.Manifest)
 	}
-	for _, name := range []string{"manifest.json", "documents.f32", "queries.f32", "documents.jsonl", "queries.jsonl"} {
+	for _, name := range []string{"manifest.json", "documents.f32", "queries.f32", "documents.jsonl", "queries.jsonl", "exact_truth.jsonl"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("stat %s: %v", name, err)
@@ -55,6 +56,36 @@ func TestExportDatasetSmoke(t *testing.T) {
 	}
 	if _, ok := parsed.Files["manifest.json"]; ok {
 		t.Fatalf("manifest should not include self-referential manifest.json stats: %+v", parsed.Files["manifest.json"])
+	}
+	if parsed.ExactTruthFile != "exact_truth.jsonl" || parsed.ExactTruthKind != "exhaustive_cosine_distance_then_id_top_k_v1" {
+		t.Fatalf("missing declared exact truth: %+v", parsed)
+	}
+}
+
+func TestExportExactTruthIncludesTopK(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "truth")
+	if _, err := exportDataset(config{out: dir, docs: 8, dimensions: 4, queries: 2, topK: 3}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "exact_truth.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row exactTruthJSONL
+	if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(string(raw)), "\n")[0]), &row); err != nil {
+		t.Fatal(err)
+	}
+	if len(row.Neighbors) != 3 || row.Kind != "exhaustive_cosine_distance_then_id_top_k_v1" {
+		t.Fatalf("truth=%+v", row)
+	}
+}
+
+func TestParseConfigRejectsCorpusCapsBeforeAllocation(t *testing.T) {
+	if _, err := parseConfig([]string{"-out", t.TempDir(), "-docs", "1000001"}); err == nil {
+		t.Fatal("accepted vector cap")
+	}
+	if _, err := checkedVectorBytes(maxDatasetVectors, maxDatasetDims); err == nil {
+		t.Fatal("accepted byte cap")
 	}
 }
 

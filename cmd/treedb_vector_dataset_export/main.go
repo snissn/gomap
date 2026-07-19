@@ -14,15 +14,20 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 )
 
 const (
-	defaultDocs       = 10000
-	defaultDimensions = 64
-	defaultQueries    = 10000
-	defaultTopK       = 10
+	defaultDocs         = 10000
+	defaultDimensions   = 64
+	defaultQueries      = 10000
+	defaultTopK         = 10
+	maxDatasetVectors   = 1_000_000
+	maxDatasetDims      = 4_096
+	maxDatasetBytes     = int64(4 << 30)
+	maxTruthComparisons = int64(200_000_000)
 )
 
 type config struct {
@@ -51,6 +56,8 @@ type manifest struct {
 	DocumentsJSONLFile  string                  `json:"documents_jsonl_file"`
 	QueriesJSONLFile    string                  `json:"queries_jsonl_file"`
 	FloatFormat         string                  `json:"float_format"`
+	ExactTruthFile      string                  `json:"exact_truth_file"`
+	ExactTruthKind      string                  `json:"exact_truth_kind"`
 	Files               map[string]fileManifest `json:"files"`
 }
 
@@ -76,6 +83,16 @@ type queryJSONL struct {
 	ID            string    `json:"id"`
 	DocumentIndex int       `json:"document_index"`
 	Embedding     []float32 `json:"embedding"`
+}
+
+type truthNeighbor struct {
+	DocumentID string  `json:"document_id"`
+	Score      float64 `json:"score"`
+}
+type exactTruthJSONL struct {
+	QueryID   string          `json:"query_id"`
+	Neighbors []truthNeighbor `json:"neighbors"`
+	Kind      string          `json:"kind"`
 }
 
 func main() {
@@ -142,6 +159,18 @@ func parseConfig(args []string) (config, error) {
 	if cfg.topK > cfg.docs {
 		return config{}, errors.New("-top-k cannot exceed -docs")
 	}
+	if cfg.docs > maxDatasetVectors || cfg.queries > maxDatasetVectors || cfg.dimensions > maxDatasetDims {
+		return config{}, fmt.Errorf("docs, queries, and dims exceed capped local-corpus limits")
+	}
+	if _, err := checkedVectorBytes(cfg.docs, cfg.dimensions); err != nil {
+		return config{}, err
+	}
+	if _, err := checkedVectorBytes(cfg.queries, cfg.dimensions); err != nil {
+		return config{}, err
+	}
+	if int64(cfg.docs) > maxTruthComparisons/int64(cfg.queries) {
+		return config{}, errors.New("exact truth comparison cap exceeded before allocation; reduce -queries or export in bounded shards")
+	}
 	return cfg, nil
 }
 
@@ -168,6 +197,9 @@ func exportDataset(cfg config) (exportResult, error) {
 	if err := writeQueriesJSONL(filepath.Join(out, "queries.jsonl"), cfg, files); err != nil {
 		return exportResult{}, err
 	}
+	if err := writeExactTruthJSONL(filepath.Join(out, "exact_truth.jsonl"), cfg, files); err != nil {
+		return exportResult{}, err
+	}
 	createdAt, err := manifestCreatedAt()
 	if err != nil {
 		return exportResult{}, err
@@ -189,12 +221,21 @@ func exportDataset(cfg config) (exportResult, error) {
 		DocumentsJSONLFile:  "documents.jsonl",
 		QueriesJSONLFile:    "queries.jsonl",
 		FloatFormat:         "float32_le_row_major",
+		ExactTruthFile:      "exact_truth.jsonl",
+		ExactTruthKind:      "exhaustive_cosine_distance_then_id_top_k_v1",
 		Files:               files,
 	}
 	if err := writeManifest(filepath.Join(out, "manifest.json"), m); err != nil {
 		return exportResult{}, err
 	}
 	return exportResult{Dir: out, Manifest: m}, nil
+}
+
+func checkedVectorBytes(count, dims int) (int64, error) {
+	if count < 1 || dims < 1 || int64(count) > maxDatasetBytes/4/int64(dims) {
+		return 0, errors.New("vector byte product exceeds cap before allocation")
+	}
+	return int64(count) * int64(dims) * 4, nil
 }
 
 func manifestCreatedAt() (string, error) {
@@ -230,6 +271,9 @@ func prepareOutputDir(path string) error {
 }
 
 func writeVectorFile(path string, count, dims int, vector func(int) []float32, files map[string]fileManifest, name string) error {
+	if _, err := checkedVectorBytes(count, dims); err != nil {
+		return err
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -255,6 +299,41 @@ func writeVectorFile(path string, count, dims int, vector func(int) []float32, f
 		return err
 	}
 	return recordFile(path, h, files, name)
+}
+
+func writeExactTruthJSONL(path string, cfg config, files map[string]fileManifest) error {
+	return writeJSONL(path, files, "exact_truth.jsonl", func(enc *json.Encoder) error {
+		stride := queryDocStride(cfg.docs)
+		for i := 0; i < cfg.queries; i++ {
+			query := embedding(queryDocIndex(i, cfg.docs, stride), cfg.dimensions)
+			type scored struct {
+				id    int
+				score float64
+			}
+			rows := make([]scored, cfg.docs)
+			for j := 0; j < cfg.docs; j++ {
+				var score float64
+				for d, x := range embedding(j, cfg.dimensions) {
+					score += float64(x) * float64(query[d])
+				}
+				rows[j] = scored{j, score}
+			}
+			sort.Slice(rows, func(a, b int) bool {
+				if rows[a].score == rows[b].score {
+					return rows[a].id < rows[b].id
+				}
+				return rows[a].score > rows[b].score
+			})
+			neighbors := make([]truthNeighbor, cfg.topK)
+			for j := range neighbors {
+				neighbors[j] = truthNeighbor{documentID(rows[j].id), rows[j].score}
+			}
+			if err := enc.Encode(exactTruthJSONL{QueryID: fmt.Sprintf("query-%06d", i), Neighbors: neighbors, Kind: "exhaustive_cosine_distance_then_id_top_k_v1"}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func writeDocumentsJSONL(path string, cfg config, files map[string]fileManifest) error {
