@@ -6,7 +6,46 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+// BenchmarkCompactStorageM0 reports the stable M0 fixture name and adapter
+// metrics. Setup is intentionally outside the timed interval.
+func BenchmarkCompactStorageM0(b *testing.B) {
+	fixture := CompactStorageM0Fixtures[0]
+	var totalWall, applyWall, reclaimedBytes int64
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		db := openCompactStorageLeafPackBenchmarkFixture(b)
+		b.StartTimer()
+		started := time.Now()
+		stats, err := db.CompactStorage(context.Background(), CompactStorageOptions{
+			LeafPackMaxPasses:             4,
+			LeafPackMaxGenerationsPerPass: 1,
+			LeafPackMinReclaimPerCopyPPM:  1,
+		})
+		elapsed := time.Since(started)
+		b.StopTimer()
+		if err != nil {
+			_ = db.Close()
+			b.Fatalf("CompactStorage: %v", err)
+		}
+		measurement := NewCompactStorageMeasurement(fixture, elapsed.Nanoseconds(), stats)
+		totalWall += measurement.TotalWallTimeNanos
+		applyWall += measurement.ApplyWallTimeNanos
+		reclaimedBytes += measurement.Vacuum.ReclaimedBytes
+		if err := db.Close(); err != nil {
+			b.Fatalf("close: %v", err)
+		}
+		b.StartTimer()
+	}
+	if b.N > 0 {
+		b.ReportMetric(float64(totalWall)/float64(b.N), "m0_total_wall_ns/op")
+		b.ReportMetric(float64(applyWall)/float64(b.N), "m0_apply_wall_ns/op")
+		b.ReportMetric(float64(reclaimedBytes)/float64(b.N), "m0_vacuum_reclaimed_bytes/op")
+	}
+}
 
 func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 	var liveScans, packPasses atomic.Uint64
