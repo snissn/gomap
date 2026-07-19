@@ -1091,7 +1091,7 @@ func TestPublicCommandWALWriteThenDirtyWriteSyncDurabilityLedger(t *testing.T) {
 			}
 
 			after := db.Stats()
-			for key, want := range publicCommandWALDurableShapeExpectedCounters("write_then_dirty_write_sync", tc.forcedPointers) {
+			for key, want := range publicCommandWALDurableShapeExpectedCounters("write_then_dirty_write_sync", tc.forcedPointers, DurabilityWALOnRelaxed) {
 				requirePublicStatDelta(t, before, after, key, want)
 			}
 			if err := db.Close(); err != nil {
@@ -3701,7 +3701,7 @@ func benchmarkPublicCommandWALDurableShape(b *testing.B, forcedPointers bool, sh
 	}
 	b.StopTimer()
 
-	perIteration := publicCommandWALDurableShapeExpectedCounters(shape, forcedPointers)
+	perIteration := publicCommandWALDurableShapeExpectedCounters(shape, forcedPointers, DurabilityDurable)
 	after := db.Stats()
 	for key, want := range perIteration {
 		requireBenchmarkStatDelta(b, before, after, key, want*uint64(b.N))
@@ -3773,7 +3773,7 @@ func benchmarkPublicCommandWALBatchWithSetView(b *testing.B, db *DB, prefix stri
 	return elapsed
 }
 
-func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers bool) map[string]uint64 {
+func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers bool, durability DurabilityMode) map[string]uint64 {
 	want := map[string]uint64{
 		"treedb.command_wal.write.errors_total":                         0,
 		"treedb.command_wal.file_sync.errors_total":                     0,
@@ -3795,9 +3795,9 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 	case "write_then_dirty_write_sync":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 3, 2, 1, 3, 1
 		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
-		// The relaxed prefix remains replay-self-contained in the command WAL;
-		// the following mutation-plus-barrier group closes that prefix without
-		// forcing the cache's deferred value-log materialization path.
+		// In the relaxed profile the first write remains replay-self-contained
+		// in the command WAL; the following mutation-plus-barrier group closes
+		// that prefix without forcing deferred value-log materialization.
 	case "empty_write_sync_after_write":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
@@ -3808,6 +3808,24 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 			// Public point commands remain inline command-WAL inputs. The batch
 			// materialization is the state-shaped external-value boundary.
 			valueLogMaterializationSyncs = 1
+		}
+	}
+	if durability == DurabilityDurable {
+		switch shape {
+		case "dirty_batch":
+			appendCalls, flushCalls, writeSyscalls, barrierSyncCalls = 2, 1, 2, 1
+		case "write_then_dirty_write_sync":
+			appendCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 4, 2, 4, 2, 2
+			if forcedPointers {
+				valueLogMaterializationSyncs = 2
+			}
+		case "empty_write_sync_after_write":
+			syncCalls, fileSyncCalls, barrierSyncCalls = 2, 2, 2
+			if forcedPointers {
+				valueLogMaterializationSyncs = 1
+			}
+		case "state_point_point_sync_batch_sync":
+			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 6, 3, 3, 6, 3, 3
 		}
 	}
 	valueLogSyncs := valueLogMaterializationSyncs + valueLogExternalRefSyncs + valueLogPendingBarrierSyncs
