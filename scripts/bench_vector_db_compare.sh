@@ -39,6 +39,18 @@ TREEDB_QUANTIZED_RERANK_MIN_RECALL="${TREEDB_QUANTIZED_RERANK_MIN_RECALL:-$TREED
 TREEDB_RABITQ_QUANTIZED_MIN_RECALL="${TREEDB_RABITQ_QUANTIZED_MIN_RECALL:-$TREEDB_QUANTIZED_MIN_RECALL}"
 TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL="${TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL:-$TREEDB_RABITQ_QUANTIZED_MIN_RECALL}"
 TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL="${TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL:-$TREEDB_RABITQ_QUANTIZED_MIN_RECALL}"
+EFFECTIVE_MIN_RECALL="$MIN_RECALL"
+EFFECTIVE_TREEDB_QUANTIZED_ONLY_MIN_RECALL="$TREEDB_QUANTIZED_ONLY_MIN_RECALL"
+EFFECTIVE_TREEDB_QUANTIZED_RERANK_MIN_RECALL="$TREEDB_QUANTIZED_RERANK_MIN_RECALL"
+EFFECTIVE_TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL="$TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL"
+EFFECTIVE_TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL="$TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL"
+if ((VALIDATE_QUERIES == 0)); then
+	EFFECTIVE_MIN_RECALL=0
+	EFFECTIVE_TREEDB_QUANTIZED_ONLY_MIN_RECALL=0
+	EFFECTIVE_TREEDB_QUANTIZED_RERANK_MIN_RECALL=0
+	EFFECTIVE_TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL=0
+	EFFECTIVE_TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL=0
+fi
 VALIDATE_DOCS="${VALIDATE_DOCS:-16}"
 TREEDB_COMPACT="${TREEDB_COMPACT:-}"
 TREEDB_COMPACT_SYNC_EACH_PHASE="${TREEDB_COMPACT_SYNC_EACH_PHASE:-}"
@@ -250,12 +262,12 @@ cat >"$RUN_DIR/README.md" <<EOF
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
 - TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
-- minimum recall: \`$MIN_RECALL\`
+- configured/effective minimum recall: \`$MIN_RECALL / $EFFECTIVE_MIN_RECALL\`
 - TreeDB legacy quantized codec/index/rerank candidates: \`$TREEDB_QUANTIZED_CODEC / $TREEDB_QUANTIZED_INDEX_NAME / $TREEDB_QUANTIZED_RERANK_CANDIDATES\`
 - TreeDB scalar_u8 quantized index: \`$TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME\`
 - TreeDB RaBitQ quantized index/rerank candidates: \`$TREEDB_RABITQ_QUANTIZED_INDEX_NAME / $TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES\`
-- TreeDB quantized-only/rerank minimum recall: \`$TREEDB_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_QUANTIZED_RERANK_MIN_RECALL\`
-- TreeDB RaBitQ quantized-only/rerank minimum recall: \`$TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL\`
+- TreeDB quantized-only/rerank configured/effective minimum recall: \`$TREEDB_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_QUANTIZED_RERANK_MIN_RECALL\` / \`$EFFECTIVE_TREEDB_QUANTIZED_ONLY_MIN_RECALL / $EFFECTIVE_TREEDB_QUANTIZED_RERANK_MIN_RECALL\`
+- TreeDB RaBitQ quantized-only/rerank configured/effective minimum recall: \`$TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL / $TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL\` / \`$EFFECTIVE_TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL / $EFFECTIVE_TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL\`
 - TreeDB storage/validation knobs:
   - \`VALIDATE_DOCS=$VALIDATE_DOCS\`
   - \`TREEDB_COMPACT=${TREEDB_COMPACT:-<unset>}\`
@@ -342,7 +354,7 @@ if contains_backend treedb; then
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$EF_SEARCH" \
-		-min-recall "$MIN_RECALL" \
+		-min-recall "$EFFECTIVE_MIN_RECALL" \
 		-json >"$RUN_DIR/treedb.json"
 	result_args+=(--result "$RUN_DIR/treedb.json")
 fi
@@ -367,7 +379,7 @@ if contains_backend treedb_column_graph; then
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
-		-min-recall "$MIN_RECALL" \
+		-min-recall "$EFFECTIVE_MIN_RECALL" \
 		-json >"$RUN_DIR/treedb_column_graph.json"
 	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
 fi
@@ -416,7 +428,7 @@ if contains_backend treedb_column_graph_quantized_only; then
 		"$TREEDB_QUANTIZED_CODEC" \
 		"$TREEDB_QUANTIZED_INDEX_NAME" \
 		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
-		"$TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
+		"$EFFECTIVE_TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
 		treedb_column_graph_quantized_only
 fi
 
@@ -427,7 +439,7 @@ if contains_backend treedb_column_graph_quantized_rerank; then
 		"$TREEDB_QUANTIZED_CODEC" \
 		"$TREEDB_QUANTIZED_INDEX_NAME" \
 		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
-		"$TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
+		"$EFFECTIVE_TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
 		treedb_column_graph_quantized_rerank
 fi
 
@@ -438,7 +450,7 @@ if contains_backend treedb_column_graph_scalar_u8_quantized_only; then
 		scalar_u8 \
 		"$TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME" \
 		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
-		"$TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
+		"$EFFECTIVE_TREEDB_QUANTIZED_ONLY_MIN_RECALL" \
 		treedb_column_graph_scalar_u8_quantized_only
 fi
 
@@ -449,7 +461,7 @@ if contains_backend treedb_column_graph_scalar_u8_quantized_rerank; then
 		scalar_u8 \
 		"$TREEDB_SCALAR_U8_QUANTIZED_INDEX_NAME" \
 		"$TREEDB_QUANTIZED_RERANK_CANDIDATES" \
-		"$TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
+		"$EFFECTIVE_TREEDB_QUANTIZED_RERANK_MIN_RECALL" \
 		treedb_column_graph_scalar_u8_quantized_rerank
 fi
 
@@ -460,7 +472,7 @@ if contains_backend treedb_column_graph_rabitq_1bit_quantized_only; then
 		rabitq_1bit \
 		"$TREEDB_RABITQ_QUANTIZED_INDEX_NAME" \
 		"$TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES" \
-		"$TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL" \
+		"$EFFECTIVE_TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL" \
 		treedb_column_graph_rabitq_1bit_quantized_only
 fi
 
@@ -471,7 +483,7 @@ if contains_backend treedb_column_graph_rabitq_1bit_quantized_rerank; then
 		rabitq_1bit \
 		"$TREEDB_RABITQ_QUANTIZED_INDEX_NAME" \
 		"$TREEDB_RABITQ_QUANTIZED_RERANK_CANDIDATES" \
-		"$TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL" \
+		"$EFFECTIVE_TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL" \
 		treedb_column_graph_rabitq_1bit_quantized_rerank
 fi
 
@@ -488,7 +500,7 @@ if contains_backend vectorlite; then
 		--m "$M" \
 		--ef-construction "$EF_CONSTRUCTION" \
 		--ef-search "$EF_SEARCH" \
-		--min-recall "$MIN_RECALL" >"$RUN_DIR/vectorlite.stdout.json"
+		--min-recall "$EFFECTIVE_MIN_RECALL" >"$RUN_DIR/vectorlite.stdout.json"
 	result_args+=(--result "$RUN_DIR/vectorlite.json")
 fi
 
@@ -508,7 +520,7 @@ if contains_backend pgvector; then
 		--m "$M"
 		--ef-construction "$EF_CONSTRUCTION"
 		--ef-search "$EF_SEARCH"
-		--min-recall "$MIN_RECALL"
+		--min-recall "$EFFECTIVE_MIN_RECALL"
 	)
 	if [[ "$PGVECTOR_DROP_SCHEMA_AFTER" == "true" ]]; then
 		pgvector_args+=(--drop-schema-after)
@@ -535,7 +547,7 @@ if contains_backend mongodb; then
 		--search-concurrency "$SEARCH_CONCURRENCY" \
 		--num-candidates "$MONGODB_VECTOR_NUM_CANDIDATES" \
 		--index-timeout-seconds "$MONGODB_VECTOR_INDEX_TIMEOUT_SECONDS" \
-		--min-recall "$MIN_RECALL" >"$RUN_DIR/mongodb.stdout.json"
+		--min-recall "$EFFECTIVE_MIN_RECALL" >"$RUN_DIR/mongodb.stdout.json"
 	result_args+=(--result "$RUN_DIR/mongodb.json")
 fi
 

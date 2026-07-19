@@ -893,12 +893,18 @@ func TestCanonicalRunWritesJSONAndMarkdown(t *testing.T) {
 
 func TestResultDecoderRejectsUnknownVersionAndTrailingValue(t *testing.T) {
 	r := runResult{SchemaVersion: 99, ResultKind: "simulation_only", Stages: []stageResult{{Method: "x"}}, Metrics: metricsV1{MeasurementStatus: "simulation_not_measured"}}
-	b, _ := json.Marshal(r)
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := decodeResult(b); err == nil {
 		t.Fatal("accepted unknown schema")
 	}
 	r.SchemaVersion = 1
-	b, _ = json.Marshal(r)
+	b, err = json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := decodeResult(append(b, []byte("{}")...)); err == nil {
 		t.Fatal("accepted trailing result")
 	}

@@ -303,7 +303,10 @@ func run(args []string, stdout io.Writer) (runErr error) {
 				return err
 			}
 			if cfg.format == "json" {
-				b, _ := json.Marshal(result)
+				b, err := json.Marshal(result)
+				if err != nil {
+					return fmt.Errorf("encode JSON result: %w", err)
+				}
 				fmt.Fprintln(stdout, string(b))
 			} else {
 				fmt.Fprintf(stdout, "simulation probes=%d overlap=%.2f recall@%d=%.4f\n", probes, overlap, cfg.topK, result.Stages[len(result.Stages)-1].RecallAtK)

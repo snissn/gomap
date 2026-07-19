@@ -115,6 +115,7 @@ class VectorDBCompareScriptTest(unittest.TestCase):
         *,
         exporter_truth_queries: str,
         consumer_validate_queries: str,
+        consumer_min_recall: str,
     ) -> None:
         exporter = next(
             command
@@ -134,12 +135,17 @@ class VectorDBCompareScriptTest(unittest.TestCase):
             self.flag_value(consumer, "-validate-queries"),
             consumer_validate_queries,
         )
+        self.assertEqual(
+            self.flag_value(consumer, "-min-recall"),
+            consumer_min_recall,
+        )
 
     def test_default_validation_is_bounded_by_short_query_count(self) -> None:
         self.assert_forwarding(
             self.run_with_fake_tools(validate_queries=None),
             exporter_truth_queries="10",
             consumer_validate_queries="64",
+            consumer_min_recall="0.95",
         )
 
     def test_zero_validation_still_disables_exported_truth(self) -> None:
@@ -147,6 +153,7 @@ class VectorDBCompareScriptTest(unittest.TestCase):
             self.run_with_fake_tools(validate_queries="0"),
             exporter_truth_queries="0",
             consumer_validate_queries="0",
+            consumer_min_recall="0",
         )
 
 

@@ -121,13 +121,16 @@ Configuration:
   `QUERIES`, but exhaustive `exact_truth.jsonl` covers only the leading
   `min(VALIDATE_QUERIES, QUERIES)` queries. The manifest records that effective
   prefix count as `exact_truth_queries`. Zero disables exported exact-truth rows
-  while retaining all query vectors, matching disabled recall validation.
+  while retaining all query vectors, matching disabled recall validation. When
+  validation is disabled, the runner passes an effective minimum recall of `0`
+  to every backend while retaining configured recall gates in the run metadata.
   Omitting the exporter's `-truth-queries` flag directly still preserves its
   standalone default of truth for all queries.
 - `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
 - `M`, `EF_CONSTRUCTION`, `EF_SEARCH`: HNSW parameters.
 - `MIN_RECALL`: recall gate for full-vector rows such as TreeDB exact/default,
-  Vectorlite, pgvector, and MongoDB. Defaults to `0.95`.
+  Vectorlite, pgvector, and MongoDB. Defaults to `0.95`; its effective value is
+  `0` when `VALIDATE_QUERIES=0`.
 - `TREEDB_COLUMN_GRAPH_EF_SEARCH`: optional efSearch override for TreeDB
   `column_graph` rows; defaults to `EF_SEARCH`.
 - `TREEDB_COMPACT`, `TREEDB_COMPACT_SYNC_EACH_PHASE`,
@@ -170,6 +173,7 @@ Configuration:
 - `TREEDB_QUANTIZED_MIN_RECALL`: recall gate for both TreeDB quantized rows.
   Defaults to `0`, so comparisons report quantized recall instead of failing
   before rendering; set a positive value to enforce a quantized recall floor.
+  All quantized recall gates are effectively `0` when `VALIDATE_QUERIES=0`.
 - `TREEDB_QUANTIZED_ONLY_MIN_RECALL` and
   `TREEDB_QUANTIZED_RERANK_MIN_RECALL`: optional scalar_u8/compat per-mode
   overrides for `TREEDB_QUANTIZED_MIN_RECALL`.
