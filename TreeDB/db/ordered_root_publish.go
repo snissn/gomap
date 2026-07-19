@@ -2378,10 +2378,14 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		defer unlockCommandWALPublish()
 		opts.rawPublishLocked = true
 	}
+	timing := commandWALIntent.publishTiming
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
+	if timing != nil {
+		timing.WriteLockWait += wait
+	}
 	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
@@ -2435,9 +2439,15 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
 			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+			if timing != nil {
+				timing.Preflight += time.Since(phaseStart)
+			}
 			return 0, nil, err
 		}
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		if timing != nil {
+			timing.Preflight += time.Since(phaseStart)
+		}
 	}
 
 	db.commitMu.Lock()
@@ -2451,7 +2461,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 			db.commitMu.Unlock()
 		}
 	}()
+	appendStart := time.Now()
 	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
+	if timing != nil {
+		timing.Append += time.Since(appendStart)
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -2469,7 +2483,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	}
 
 	if buildContextDeltas != nil {
+		contextBuildStart := time.Now()
 		contextOrdered, buildErr := buildContextDeltas(ctx)
+		if timing != nil {
+			timing.ContextBuild += time.Since(contextBuildStart)
+		}
 		if buildErr != nil {
 			closeUnconsumedOrderedRootDeltaPublishIterators(contextOrdered, nil)
 			err = buildErr
@@ -2512,6 +2530,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		ptrCollectors = append(ptrCollectors, ptrCollector)
 		rootID, rootRetired, metrics, rootTouched, err := db.publishOrderedRootDeltaIterator(allOrdered[idx].BaseRoot, collectedIter, opts)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		if timing != nil {
+			timing.RootApply += time.Since(phaseStart)
+		}
 		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
@@ -2527,6 +2548,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	phaseStart := time.Now()
 	iter, err := buildSystemDeltaIter(ctx, rootIDs)
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.SystemBuild += time.Since(phaseStart)
+	}
 	if err != nil {
 		if iter != nil {
 			_ = iter.Close()
@@ -2542,6 +2566,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	ptrCollectors = append(ptrCollectors, ptrCollector)
 	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, collectedIter, systemOpts)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.SystemApply += time.Since(phaseStart)
+	}
 	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
@@ -2572,6 +2599,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		durableResources = nil
 	}
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.publishTiming = timing
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
@@ -2590,6 +2618,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		},
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.Finalize += time.Since(phaseStart)
+	}
 	phaseStats.finalizeCalls++
 	if post.accepted {
 		commandAppended = false
@@ -2598,7 +2629,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if err != nil {
 		return 0, nil, err
 	}
+	postStart := time.Now()
 	db.finalizeCommitPostWork(post)
+	if timing != nil {
+		timing.PostFinalize += time.Since(postStart)
+	}
 	return newSystemRoot, rootIDs, nil
 }
 
@@ -3307,10 +3342,14 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		defer unlockCommandWALPublish()
 		opts.rawPublishLocked = true
 	}
+	timing := commandWALIntent.publishTiming
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
+	if timing != nil {
+		timing.WriteLockWait += wait
+	}
 	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
@@ -3360,9 +3399,15 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
 			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+			if timing != nil {
+				timing.Preflight += time.Since(phaseStart)
+			}
 			return 0, nil, err
 		}
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		if timing != nil {
+			timing.Preflight += time.Since(phaseStart)
+		}
 	}
 
 	db.commitMu.Lock()
@@ -3376,7 +3421,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.commitMu.Unlock()
 		}
 	}()
+	appendStart := time.Now()
 	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
+	if timing != nil {
+		timing.Append += time.Since(appendStart)
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3401,8 +3450,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		}
 	}()
 	if buildContextDeltas != nil {
+		contextBuildStart := time.Now()
 		var buildErr error
 		contextOrdered, buildErr = buildContextDeltas(ctx)
+		if timing != nil {
+			timing.ContextBuild += time.Since(contextBuildStart)
+		}
 		if buildErr != nil {
 			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
 			contextOrdered = nil
@@ -3436,6 +3489,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	phaseStart := time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply")
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.RootApply += time.Since(phaseStart)
+	}
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
 		for idx := range allOrdered {
@@ -3461,6 +3517,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	phaseStart = time.Now()
 	iter, err := buildSystemDeltaIter(ctx, rootIDs)
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.SystemBuild += time.Since(phaseStart)
+	}
 	if err != nil {
 		if iter != nil {
 			_ = iter.Close()
@@ -3476,6 +3535,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	ptrCollectors = append(ptrCollectors, ptrCollector)
 	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, collectedIter, systemOpts)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.SystemApply += time.Since(phaseStart)
+	}
 	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
@@ -3506,6 +3568,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		durableResources = nil
 	}
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.publishTiming = timing
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
@@ -3524,6 +3587,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		},
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if timing != nil {
+		timing.Finalize += time.Since(phaseStart)
+	}
 	phaseStats.finalizeCalls++
 	if post.accepted {
 		commandAppended = false
@@ -3532,7 +3598,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if err != nil {
 		return 0, nil, err
 	}
+	postStart := time.Now()
 	db.finalizeCommitPostWork(post)
+	if timing != nil {
+		timing.PostFinalize += time.Since(postStart)
+	}
 	return newSystemRoot, rootIDs, nil
 }
 
