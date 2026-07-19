@@ -71,6 +71,68 @@ func TestCollectionReadViewFetchDocumentsByIDUsesBatchViewForOwnedRetainedPayloa
 	}
 }
 
+func TestCollectionReadViewLookupDocumentRowRefsByIDEmptyCollectionReturnsMissingP3890(t *testing.T) {
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 0, nil)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
+	}
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+
+	ids := [][]byte{[]byte("missing-a"), []byte("missing-b")}
+	got, err := view.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
+	}
+	if len(got.Results) != len(ids) {
+		t.Fatalf("results=%d want %d", len(got.Results), len(ids))
+	}
+	for i := range ids {
+		if got.Results[i].Found || !bytes.Equal(got.Results[i].ID, ids[i]) {
+			t.Fatalf("result[%d]=%+v want owned missing id %q", i, got.Results[i], ids[i])
+		}
+	}
+	if got.Stats.DocumentsRequested != uint64(len(ids)) ||
+		got.Stats.RowLocatorLookups != uint64(len(ids)) ||
+		got.Stats.RowLocatorMisses != uint64(len(ids)) {
+		t.Fatalf("stats=%+v want requested/lookups/misses=%d", got.Stats, len(ids))
+	}
+}
+
+func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryFailsClosedP3890(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1")},
+		[][]byte{[]byte(`{"row_id":1,"kind":"alpha","score":1.5}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	catalogWithoutLocator := *view.catalog
+	catalogWithoutLocator.roots = make(map[string]uint64, len(view.catalog.roots))
+	for name, rootID := range view.catalog.roots {
+		catalogWithoutLocator.roots[name] = rootID
+	}
+	delete(catalogWithoutLocator.roots, collectionColumnRowLocatorRootName(view.catalog.meta.Name))
+	view.catalog = &catalogWithoutLocator
+
+	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "primary row locator root is absent") {
+		t.Fatalf("LookupDocumentRowRefsByID err=%v want absent-locator fail-closed error", err)
+	}
+}
+
 func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()

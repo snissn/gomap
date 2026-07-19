@@ -489,10 +489,6 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		response.Stats.RowRefUnsupported++
 		return response, errors.New("collections: document row ref lookup requires typed-storage reconstruction support")
 	}
-	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
-	if v.catalog.rootID(locatorRootName) == 0 {
-		return response, fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
-	}
 	var idArena []byte
 	for i, id := range ids {
 		if len(id) == 0 {
@@ -500,12 +496,23 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		}
 		idStart := len(idArena)
 		idArena = append(idArena, id...)
-		ownedID := idArena[idStart:len(idArena):len(idArena)]
-		response.Results[i].ID = ownedID
+		response.Results[i].ID = idArena[idStart:len(idArena):len(idArena)]
+	}
+	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
+	if v.catalog.rootID(locatorRootName) == 0 {
+		if v.catalog.rootID(collectionPrimaryRootName(v.catalog.meta.Name)) == 0 {
+			response.Stats.RowLocatorLookups = uint64(len(ids))
+			response.Stats.RowLocatorMisses = uint64(len(ids))
+			return response, nil
+		}
+		return response, fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
+	}
+	for i := range response.Results {
+		ownedID := response.Results[i].ID
 		response.Stats.RowLocatorLookups++
-		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, id, nil)
+		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, ownedID, nil)
 		if err != nil {
-			return response, fmt.Errorf("collections: primary row locator lookup for id %q: %w", string(id), err)
+			return response, fmt.Errorf("collections: primary row locator lookup for id %q: %w", string(ownedID), err)
 		}
 		if !found {
 			response.Stats.RowLocatorMisses++
