@@ -18,7 +18,13 @@ ROOT = SCRIPT.parents[1]
 
 
 class VectorDBCompareScriptTest(unittest.TestCase):
-    def run_with_fake_tools(self, *, validate_queries: str | None) -> list[list[str]]:
+    def run_with_fake_tools(
+        self,
+        *,
+        validate_queries: str | None,
+        backends: str = "treedb",
+        extra_env: dict[str, str] | None = None,
+    ) -> list[list[str]]:
         with tempfile.TemporaryDirectory(prefix="gomap_vector_db_compare_test_") as tmp:
             tmpdir = Path(tmp)
             fake_bin = tmpdir / "bin"
@@ -66,6 +72,16 @@ class VectorDBCompareScriptTest(unittest.TestCase):
             fake_go.chmod(0o755)
 
             env = os.environ.copy()
+            for name in (
+                "MIN_RECALL",
+                "TREEDB_QUANTIZED_MIN_RECALL",
+                "TREEDB_QUANTIZED_ONLY_MIN_RECALL",
+                "TREEDB_QUANTIZED_RERANK_MIN_RECALL",
+                "TREEDB_RABITQ_QUANTIZED_MIN_RECALL",
+                "TREEDB_RABITQ_QUANTIZED_ONLY_MIN_RECALL",
+                "TREEDB_RABITQ_QUANTIZED_RERANK_MIN_RECALL",
+            ):
+                env.pop(name, None)
             env.update(
                 {
                     "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
@@ -73,7 +89,7 @@ class VectorDBCompareScriptTest(unittest.TestCase):
                     "RUN_DIR": str(tmpdir / "run"),
                     "VENV": str(tmpdir / "venv"),
                     "PYTHON": str(fake_python),
-                    "BACKENDS": "treedb",
+                    "BACKENDS": backends,
                     "DOCS": "10",
                     "DIMS": "4",
                     "QUERIES": "10",
@@ -85,6 +101,8 @@ class VectorDBCompareScriptTest(unittest.TestCase):
                 env.pop("VALIDATE_QUERIES", None)
             else:
                 env["VALIDATE_QUERIES"] = validate_queries
+            if extra_env is not None:
+                env.update(extra_env)
 
             result = subprocess.run(
                 [str(SCRIPT)],
@@ -151,6 +169,30 @@ class VectorDBCompareScriptTest(unittest.TestCase):
     def test_zero_validation_still_disables_exported_truth(self) -> None:
         self.assert_forwarding(
             self.run_with_fake_tools(validate_queries="0"),
+            exporter_truth_queries="0",
+            consumer_validate_queries="0",
+            consumer_min_recall="0",
+        )
+
+    def test_quantized_recall_gate_is_preserved_with_validation(self) -> None:
+        self.assert_forwarding(
+            self.run_with_fake_tools(
+                validate_queries="1",
+                backends="treedb_column_graph_quantized_only",
+                extra_env={"TREEDB_QUANTIZED_ONLY_MIN_RECALL": "0.8"},
+            ),
+            exporter_truth_queries="1",
+            consumer_validate_queries="1",
+            consumer_min_recall="0.8",
+        )
+
+    def test_zero_validation_disables_quantized_recall_gate(self) -> None:
+        self.assert_forwarding(
+            self.run_with_fake_tools(
+                validate_queries="0",
+                backends="treedb_column_graph_quantized_only",
+                extra_env={"TREEDB_QUANTIZED_ONLY_MIN_RECALL": "0.8"},
+            ),
             exporter_truth_queries="0",
             consumer_validate_queries="0",
             consumer_min_recall="0",
