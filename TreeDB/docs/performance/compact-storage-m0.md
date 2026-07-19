@@ -13,10 +13,11 @@ Run the complete pinned collection protocol:
 scripts/compact_storage_m0_profile.sh
 ```
 
-The script defaults to 12 samples, CPUs `2-3`, `GOMAXPROCS=2`, and
-`GOMEMLIMIT=8GiB`. It creates the run directory under `${TMPDIR:-/tmp}`; set
-`TMPDIR` to a local NVMe mount when available. It writes environment and source
-metadata, raw benchmark and
+The script defaults to 12 samples, the first two CPUs in the process's allowed
+affinity mask, `GOMAXPROCS=2`, and `GOMEMLIMIT=8GiB`. `CPU_SET` remains an
+explicit override. The script creates the run directory under `${TMPDIR:-/tmp}`;
+set `TMPDIR` to a local NVMe mount when available. It writes environment and
+source metadata, raw benchmark and
 `benchstat` output, one JSON artifact per fixture/sample, instrumentation
 overhead evidence, CPU/allocation/block/mutex profiles, a runtime trace, and a
 stable-syscall `strace` summary. Diagnostic profiles disable the test recorder

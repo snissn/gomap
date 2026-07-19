@@ -255,6 +255,8 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 		"TMP_ROOT=${TMPDIR:-/tmp}",
 		"mkdir -p \"$TMP_ROOT\"",
 		"mktemp -d \"$TMP_ROOT/compact_storage_m0_XXXXXX\"",
+		"allowed=$(awk '/^Cpus_allowed_list:",
+		"CPU_SET=${CPU_SET:-$(default_cpu_set)}",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("profile script missing %q", want)
@@ -262,6 +264,9 @@ func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 	}
 	if strings.Contains(script, "RUN_DIR=${RUN_DIR:-$(mktemp -d /mnt/fast4tb/") {
 		t.Fatal("profile script retains a host-specific default run directory")
+	}
+	if strings.Contains(script, "CPU_SET=${CPU_SET:-2-3}") {
+		t.Fatal("profile script retains a host-specific default CPU set")
 	}
 }
 
@@ -271,8 +276,11 @@ func TestCompactStorageM0DocsUsePortablePrimaryCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	docs := string(raw)
-	if !strings.Contains(docs, "It creates the run directory under `${TMPDIR:-/tmp}`") {
+	if !strings.Contains(docs, "run directory under `${TMPDIR:-/tmp}`") {
 		t.Fatal("profile documentation does not describe the portable run-directory default")
+	}
+	if !strings.Contains(docs, "the first two CPUs in the process's allowed") {
+		t.Fatal("profile documentation does not describe the affinity-derived CPU default")
 	}
 	if strings.Contains(docs, "RUN_DIR=/mnt/fast4tb/compact_storage_m0_") {
 		t.Fatal("profile documentation retains a host-specific primary command")

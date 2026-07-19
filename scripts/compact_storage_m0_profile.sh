@@ -6,7 +6,41 @@ TMP_ROOT=${TMPDIR:-/tmp}
 mkdir -p "$TMP_ROOT"
 RUN_DIR=${RUN_DIR:-$(mktemp -d "$TMP_ROOT/compact_storage_m0_XXXXXX")}
 COUNT=${COUNT:-12}
-CPU_SET=${CPU_SET:-2-3}
+
+default_cpu_set() {
+  local allowed range start end cpu
+  local -a selected=()
+  allowed=$(awk '/^Cpus_allowed_list:/ { print $2; exit }' /proc/self/status)
+  if [[ -z "$allowed" ]]; then
+    printf 'unable to determine Cpus_allowed_list from /proc/self/status\n' >&2
+    return 1
+  fi
+  IFS=',' read -ra ranges <<<"$allowed"
+  for range in "${ranges[@]}"; do
+    if [[ "$range" == *-* ]]; then
+      start=${range%-*}
+      end=${range#*-}
+    else
+      start=$range
+      end=$range
+    fi
+    for ((cpu = start; cpu <= end && ${#selected[@]} < 2; cpu++)); do
+      selected+=("$cpu")
+    done
+    if ((${#selected[@]} == 2)); then
+      break
+    fi
+  done
+  if ((${#selected[@]} == 0)); then
+    printf 'Cpus_allowed_list did not contain an available CPU: %s\n' "$allowed" >&2
+    return 1
+  fi
+  local joined
+  joined=$(IFS=,; printf '%s' "${selected[*]}")
+  printf '%s\n' "$joined"
+}
+
+CPU_SET=${CPU_SET:-$(default_cpu_set)}
 GOMAXPROCS=${GOMAXPROCS:-2}
 GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
 BENCH='^BenchmarkCompactStorageM0$'
