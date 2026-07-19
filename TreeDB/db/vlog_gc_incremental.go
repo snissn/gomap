@@ -106,6 +106,8 @@ type valueLogRefDelta struct {
 	changes                     map[uint32]int64
 	positives                   map[uint32]int64
 	requiresCandidateProjection bool
+	allowEmptyDependencyReuse   bool
+	outerLeafDependencyReuse    bool
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -147,6 +149,8 @@ func (d *valueLogRefDelta) resetForReuse() {
 		d.inlineN = 0
 	}
 	d.requiresCandidateProjection = false
+	d.allowEmptyDependencyReuse = false
+	d.outerLeafDependencyReuse = false
 	if d.changes != nil {
 		// Keep small/typical maps warm for reuse; drop unusually large maps.
 		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
@@ -712,10 +716,38 @@ func (db *DB) shouldCollectValueLogRefDelta(baseSeq uint64) bool {
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool) (*valueLogRefDelta, error) {
-	if !db.shouldCollectValueLogRefDelta(baseSeq) {
+	delta, err := db.buildValueLogRefDeltaWithOptions(p, rootID, baseSeq, entries, ranges, oldPointerRefs, oldEntriesRemoved, oldPointerRefsCollected, false)
+	if delta != nil {
+		// The ordinary DB root follows the configured outer-leaf storage policy.
+		// Mark that evidence explicitly so durable capture replaces, rather than
+		// inherits, raw-leaf dependencies. Ordered multi-root callers override
+		// this per root because their system roots remain pager-backed.
+		delta.outerLeafDependencyReuse = db.indexOuterLeavesInValueLog
+	}
+	return delta, err
+}
+
+func (db *DB) buildValueLogRefDeltaWithOptions(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry, ranges []batchpkg.DeleteRange, oldPointerRefs *zipper.PointerRefCounts, oldEntriesRemoved uint64, oldPointerRefsCollected bool, force bool) (*valueLogRefDelta, error) {
+	if !force && !db.shouldCollectValueLogRefDelta(baseSeq) {
 		return nil, nil
 	}
 	delta := newValueLogRefDelta()
+	if db.indexOuterLeavesInValueLog {
+		// TreeDB's initial logical root is a non-zero empty leaf page. Inspect
+		// that one page rather than treating every dependency-empty rewrite as
+		// a first publication; the latter can hide collection-root resources.
+		switch {
+		case rootID == 0:
+			delta.allowEmptyDependencyReuse = true
+		case p != nil:
+			rootPage, err := p.Get(rootID)
+			if err != nil {
+				releaseValueLogRefDelta(delta)
+				return nil, err
+			}
+			delta.allowEmptyDependencyReuse = node.NewNode(rootPage).Count() == 0
+		}
+	}
 	if oldPointerRefsCollected {
 		delta.requiresCandidateProjection = db.indexOuterLeavesInValueLog && oldEntriesRemoved > 0
 		var countErr error

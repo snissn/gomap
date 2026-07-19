@@ -647,6 +647,50 @@ type orderedRootTouchedIterator struct {
 	touchedValueLogSegmentSet map[uint32]struct{}
 }
 
+type orderedRootValueLogRefDeltaIterator struct {
+	iterator.UnsafeIterator
+	delta                          *valueLogRefDelta
+	trackCollectionRootDescriptors bool
+	currentCaptured                bool
+}
+
+func (it *orderedRootValueLogRefDeltaIterator) capture(key []byte, ptr page.ValuePtr, flags byte) {
+	if it == nil || it.delta == nil || it.currentCaptured {
+		return
+	}
+	it.currentCaptured = true
+	if it.trackCollectionRootDescriptors &&
+		(bytes.HasPrefix(key, collectionRootDescriptorPrefixBytes) ||
+			bytes.HasPrefix(key, collectionRootOverlayDescriptorPrefixBytes)) {
+		it.delta.requiresCandidateProjection = true
+	}
+	if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+		it.delta.add(ptr.FileID, 1)
+	}
+}
+
+func (it *orderedRootValueLogRefDeltaIterator) UnsafeEntry() (val []byte, ptr page.ValuePtr, flags byte) {
+	val, ptr, flags = it.UnsafeIterator.UnsafeEntry()
+	it.capture(it.UnsafeIterator.UnsafeKey(), ptr, flags)
+	return val, ptr, flags
+}
+
+func (it *orderedRootValueLogRefDeltaIterator) UnsafeEntryWithRevision() (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	val, ptr, flags, revision = iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
+	it.capture(it.UnsafeIterator.UnsafeKey(), ptr, flags)
+	return val, ptr, flags, revision
+}
+
+func (it *orderedRootValueLogRefDeltaIterator) Next() {
+	it.currentCaptured = false
+	it.UnsafeIterator.Next()
+}
+
+func (it *orderedRootValueLogRefDeltaIterator) Seek(key []byte) {
+	it.currentCaptured = false
+	it.UnsafeIterator.Seek(key)
+}
+
 func (it *orderedRootTouchedIterator) capture() {
 	if it == nil {
 		return
@@ -976,7 +1020,78 @@ func positiveValueLogRefDeltaFileIDs(delta *valueLogRefDelta, dst []uint32) []ui
 	return dst
 }
 
+func mergeValueLogRefDeltaInto(dst **valueLogRefDelta, src *valueLogRefDelta) {
+	if src == nil {
+		return
+	}
+	if *dst == nil {
+		*dst = newValueLogRefDelta()
+	}
+	(*dst).requiresCandidateProjection = (*dst).requiresCandidateProjection || src.requiresCandidateProjection
+	(*dst).allowEmptyDependencyReuse = (*dst).allowEmptyDependencyReuse || src.allowEmptyDependencyReuse
+	(*dst).outerLeafDependencyReuse = (*dst).outerLeafDependencyReuse || src.outerLeafDependencyReuse
+	_ = src.forEachChange(func(fileID uint32, change int64) error {
+		(*dst).addChange(fileID, change)
+		return nil
+	})
+	_ = src.forEachPositive(func(fileID uint32, count int64) error {
+		(*dst).addPositive(fileID, count)
+		return nil
+	})
+}
+
+func addOrderedRootOuterLeafSegmentsToValueLogRefDelta(log LeafPageLog, delta *valueLogRefDelta) error {
+	if log == nil || delta == nil || !delta.outerLeafDependencyReuse {
+		return nil
+	}
+	created, err := leafPageLogCreatedSegments(log)
+	if err != nil {
+		return err
+	}
+	current, err := leafPageLogCurrentSegments(log)
+	if err != nil {
+		return err
+	}
+	segments := make([]LeafPageLogSegment, 0, len(created)+len(current))
+	segments = append(segments, created...)
+	segments = append(segments, current...)
+	for _, segment := range dedupeLeafPageLogSegments(segments) {
+		delta.addPositive(segment.FileID, 1)
+	}
+	return nil
+}
+
+func orderedRootDeltaMayChangeCollectionRootDescriptors(delta *batch.Batch) bool {
+	if delta == nil {
+		return false
+	}
+	entries, ranges := delta.ApplyPlan()
+	for i := range entries {
+		if bytes.HasPrefix(entries[i].Key, collectionRootDescriptorPrefixBytes) ||
+			bytes.HasPrefix(entries[i].Key, collectionRootOverlayDescriptorPrefixBytes) {
+			return true
+		}
+	}
+	for i := range ranges {
+		if orderedRootRangeOverlapsPrefix(ranges[i].Start, ranges[i].End, collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd()) ||
+			orderedRootRangeOverlapsPrefix(ranges[i].Start, ranges[i].End, collectionRootOverlayDescriptorPrefixBytes, collectionRootOverlayDescriptorPrefixEnd()) {
+			return true
+		}
+	}
+	return false
+}
+
+func orderedRootRangeOverlapsPrefix(start, end, prefix, prefixEnd []byte) bool {
+	return (len(end) == 0 || bytes.Compare(end, prefix) > 0) &&
+		(len(start) == 0 || len(prefixEnd) == 0 || bytes.Compare(start, prefixEnd) < 0)
+}
+
 func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, touchedValueLogSegments []uint32, err error) {
+	newRoot, retired, metrics, touchedValueLogSegments, _, err = db.publishOrderedRootDeltaIteratorWithValueLogRefs(baseRoot, iter, opts, 0, false, false)
+	return
+}
+
+func (db *DB) publishOrderedRootDeltaIteratorWithValueLogRefs(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions, baseSeq uint64, trackValueLogRefs, trackCollectionRootDescriptors bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, touchedValueLogSegments []uint32, vlogRefDelta *valueLogRefDelta, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -995,7 +1110,18 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 			DeltaOps:       orderedRootIteratorLenHint(iter),
 			ForceColdBuild: true,
 		}))
-		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: iter}
+		buildIter := iter
+		if trackValueLogRefs {
+			vlogRefDelta = newValueLogRefDelta()
+			vlogRefDelta.allowEmptyDependencyReuse = true
+			vlogRefDelta.outerLeafDependencyReuse = opts.outerLeavesInValueLog
+			buildIter = &orderedRootValueLogRefDeltaIterator{
+				UnsafeIterator:                 buildIter,
+				delta:                          vlogRefDelta,
+				trackCollectionRootDescriptors: trackCollectionRootDescriptors,
+			}
+		}
+		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: buildIter}
 		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, touchedIter, opts, false)
 		touchedValueLogSegments = touchedIter.touchedValueLogSegments
 		return
@@ -1013,18 +1139,22 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	}
 	delta, err := orderedRootDeltaBatchFromIterator(iter)
 	if err != nil {
-		return 0, nil, metrics, nil, err
+		return 0, nil, metrics, nil, nil, err
 	}
 	defer delta.Close()
 	if delta.IsEmpty() {
 		db.observeOrderedRootSpanNativeNoopFallback(opts, OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta iterator warm no-op")
-		return baseRoot, nil, metrics, nil, nil
+		if trackValueLogRefs {
+			vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+		}
+		return baseRoot, nil, metrics, nil, vlogRefDelta, nil
 	}
 	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
-		return 0, nil, metrics, nil, err
+		return 0, nil, metrics, nil, vlogRefDelta, err
 	}
 	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+	applyOpts.CollectOldPointerRefs = trackValueLogRefs
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
@@ -1048,6 +1178,36 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		if err != nil {
 			return
 		}
+		if trackValueLogRefs {
+			entries, ranges := delta.ApplyPlan()
+			vlogRefDelta, err = db.buildValueLogRefDeltaWithOptions(
+				idx.pager, baseRoot, baseSeq, entries, ranges,
+				&result.OldPointerRefs, result.OldEntriesRemoved, result.OldPointerRefsCollected,
+				opts.outerLeavesInValueLog,
+			)
+			if err != nil {
+				return 0, nil, metrics, touchedValueLogSegments, nil, err
+			}
+			if vlogRefDelta != nil {
+				// This ordered multi-root path retains the predecessor raw-leaf
+				// dependency set while admitting producer-reported current
+				// segments. Logical ValuePtr removals remain represented by the
+				// exact apply delta below. Ordinary DB-root publication does not
+				// take this exception and continues to project destructively for
+				// leaf-generation GC.
+				vlogRefDelta.requiresCandidateProjection = false
+				vlogRefDelta.allowEmptyDependencyReuse = true
+				vlogRefDelta.outerLeafDependencyReuse = opts.outerLeavesInValueLog
+				if trackCollectionRootDescriptors && orderedRootDeltaMayChangeCollectionRootDescriptors(delta) {
+					// System collection descriptors attach non-system roots to
+					// the durable reachability closure. Their nested value-log
+					// references are not represented by the system tree's
+					// apply-local pointer delta, so retain the exact candidate
+					// projection fallback when descriptor reachability changes.
+					vlogRefDelta.requiresCandidateProjection = true
+				}
+			}
+		}
 		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta, nil)
 		return
 	}
@@ -1070,6 +1230,28 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 		return
 	}
 	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, idx.allocator, false)
+}
+
+func (db *DB) buildOrderedRootDeltaBatchValueLogRefDelta(idx *indexGen, baseRoot, baseSeq uint64, delta *batch.Batch, outerLeavesInValueLog bool) (*valueLogRefDelta, error) {
+	if db == nil || idx == nil || delta == nil || (!outerLeavesInValueLog && !db.shouldCollectValueLogRefDelta(baseSeq)) {
+		return nil, nil
+	}
+	if baseRoot != 0 {
+		// The batch-group apply API does not yet return apply-local old-pointer
+		// evidence. Do not replace the candidate scan with one point lookup per
+		// delta key; leave warm batches on the existing exact projection path.
+		return nil, nil
+	}
+	entries, _ := delta.ApplyPlan()
+	refDelta := newValueLogRefDelta()
+	refDelta.allowEmptyDependencyReuse = true
+	refDelta.outerLeafDependencyReuse = outerLeavesInValueLog
+	for i := range entries {
+		if entries[i].Type == batch.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
+			refDelta.add(entries[i].ValuePtr.FileID, 1)
+		}
+	}
+	return refDelta, nil
 }
 
 func (db *DB) orderedRootDeltaBatchApplyOptions(opts orderedRootPublishOptions) zipper.ApplyOptions {
@@ -2508,8 +2690,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
+	var vlogRefDelta *valueLogRefDelta
+	exactValueLogRefDelta := true
 	var ptrCollectors []*pendingValueLogAppendPtrCollectingIterator
 	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
 		for _, collector := range ptrCollectors {
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
@@ -2528,14 +2715,23 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		phaseStart := time.Now()
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(allOrdered[idx].Iter)
 		ptrCollectors = append(ptrCollectors, ptrCollector)
-		rootID, rootRetired, metrics, rootTouched, err := db.publishOrderedRootDeltaIterator(allOrdered[idx].BaseRoot, collectedIter, opts)
+		rootID, rootRetired, metrics, rootTouched, refDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(allOrdered[idx].BaseRoot, collectedIter, opts, baseSeq, true, false)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		if timing != nil {
 			timing.RootApply += time.Since(phaseStart)
 		}
 		phaseStats.rootApplyCalls++
 		if err != nil {
+			if refDelta != nil {
+				releaseValueLogRefDelta(refDelta)
+			}
 			return 0, nil, err
+		}
+		if refDelta == nil {
+			exactValueLogRefDelta = false
+		} else {
+			mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
+			releaseValueLogRefDelta(refDelta)
 		}
 		touchedValueLogSegments = append(touchedValueLogSegments, rootTouched...)
 		rootIDs[idx] = rootID
@@ -2564,14 +2760,26 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	phaseStart = time.Now()
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
 	ptrCollectors = append(ptrCollectors, ptrCollector)
-	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, collectedIter, systemOpts)
+	rootID, rootRetired, metrics, systemTouched, systemRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(baseSystemRoot, collectedIter, systemOpts, baseSeq, true, true)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if timing != nil {
 		timing.SystemApply += time.Since(phaseStart)
 	}
 	phaseStats.systemApplyCalls++
 	if err != nil {
+		if systemRefDelta != nil {
+			releaseValueLogRefDelta(systemRefDelta)
+		}
 		return 0, nil, err
+	}
+	if systemRefDelta == nil {
+		exactValueLogRefDelta = false
+	} else {
+		if systemRefDelta.requiresCandidateProjection {
+			exactValueLogRefDelta = false
+		}
+		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
+		releaseValueLogRefDelta(systemRefDelta)
 	}
 	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
@@ -2588,7 +2796,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 
-	var vlogRefDelta *valueLogRefDelta
+	if !exactValueLogRefDelta {
+		releaseValueLogRefDelta(vlogRefDelta)
+		vlogRefDelta = nil
+	}
+	if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
+		return 0, nil, err
+	}
 	phaseStart = time.Now()
 	durableResources, err := durableResourceBuilder.Freeze()
 	if err != nil {
@@ -2629,6 +2843,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if err != nil {
 		return 0, nil, err
 	}
+	vlogRefDelta = nil
 	postStart := time.Now()
 	db.finalizeCommitPostWork(post)
 	if timing != nil {
@@ -3474,8 +3689,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
+	var vlogRefDelta *valueLogRefDelta
+	exactValueLogRefDelta := true
 	var ptrCollectors []*pendingValueLogAppendPtrCollectingIterator
 	defer func() {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+		}
 		for idx := range allOrdered {
 			db.releasePendingValueLogAppendFileIDsFromBatch(allOrdered[idx].Delta)
 		}
@@ -3485,6 +3705,22 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}()
 	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats); err != nil {
 		return 0, nil, err
+	}
+	for idx := range allOrdered {
+		rootOpts, optsErr := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
+		if optsErr != nil {
+			return 0, nil, optsErr
+		}
+		refDelta, buildErr := db.buildOrderedRootDeltaBatchValueLogRefDelta(idxGen, allOrdered[idx].BaseRoot, baseSeq, allOrdered[idx].Delta, rootOpts.outerLeavesInValueLog)
+		if buildErr != nil {
+			return 0, nil, buildErr
+		}
+		if refDelta == nil {
+			exactValueLogRefDelta = false
+			continue
+		}
+		mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
+		releaseValueLogRefDelta(refDelta)
 	}
 	phaseStart := time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply")
@@ -3533,14 +3769,26 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	phaseStart = time.Now()
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
 	ptrCollectors = append(ptrCollectors, ptrCollector)
-	rootID, rootRetired, metrics, systemTouched, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, collectedIter, systemOpts)
+	rootID, rootRetired, metrics, systemTouched, systemRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(baseSystemRoot, collectedIter, systemOpts, baseSeq, true, true)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if timing != nil {
 		timing.SystemApply += time.Since(phaseStart)
 	}
 	phaseStats.systemApplyCalls++
 	if err != nil {
+		if systemRefDelta != nil {
+			releaseValueLogRefDelta(systemRefDelta)
+		}
 		return 0, nil, err
+	}
+	if systemRefDelta == nil {
+		exactValueLogRefDelta = false
+	} else {
+		if systemRefDelta.requiresCandidateProjection {
+			exactValueLogRefDelta = false
+		}
+		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
+		releaseValueLogRefDelta(systemRefDelta)
 	}
 	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
 	newSystemRoot = rootID
@@ -3557,7 +3805,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 
-	var vlogRefDelta *valueLogRefDelta
+	if !exactValueLogRefDelta {
+		releaseValueLogRefDelta(vlogRefDelta)
+		vlogRefDelta = nil
+	}
+	if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
+		return 0, nil, err
+	}
 	phaseStart = time.Now()
 	durableResources, err := durableResourceBuilder.Freeze()
 	if err != nil {
@@ -3598,6 +3852,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if err != nil {
 		return 0, nil, err
 	}
+	vlogRefDelta = nil
 	postStart := time.Now()
 	db.finalizeCommitPostWork(post)
 	if timing != nil {

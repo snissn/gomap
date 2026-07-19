@@ -174,6 +174,13 @@ func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublica
 }
 
 func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
+	// The persisted tracker projects logical ValuePtr counts, but it does not
+	// describe raw outer-leaf LogRecordRef dependencies of collection-local
+	// roots. Those transitions either use the bounded predecessor/current
+	// segment plan below or fall back to the exact candidate scanner.
+	if delta != nil && delta.outerLeafDependencyReuse {
+		return nil, false, nil
+	}
 	tracker := db.valueLogRefTracker
 	if tracker == nil {
 		return nil, false, nil
@@ -495,15 +502,17 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // complete bounded projection for the next candidate. Their handles are still
 // recaptured so an append to an existing segment advances the stable frontier.
 // Logical value-pointer additions are supplied by the apply delta. Raw
-// outer-leaf identities remain complete for insert-only writes until the
-// producer rotates to a new segment; rotation and every destructive/unknown
-// transition deliberately fall back to the exact candidate scanner so
-// maintenance can retire unreachable files without granting authority to
-// unrelated inventory. A replacement generation manifest does not invalidate
-// this proof: the caller replaces that authoritative namespace token
-// independently while this plan recaptures only the raw/value-log handles.
+// outer-leaf identities remain safe as a predecessor dependency superset while
+// producer-reported current segments are admitted. Ordinary DB-root
+// destructive transitions keep requiresCandidateProjection set and therefore
+// fall back to the exact scanner for leaf-generation GC. The ordered multi-root
+// path may retain raw predecessor membership across segment rotation, while
+// negative logical ValuePtr transitions still fall back to exact projection.
+// A replacement generation manifest does not invalidate this proof: the caller
+// replaces that authoritative namespace token independently while this plan
+// recaptures only the raw/value-log handles.
 func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
-	if db == nil || !db.indexOuterLeavesInValueLog || delta == nil {
+	if db == nil || delta == nil || (!db.indexOuterLeavesInValueLog && !delta.outerLeafDependencyReuse) {
 		return nil, false, nil
 	}
 	if delta.requiresCandidateProjection {
@@ -532,6 +541,33 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			}
 		}
 	}
+	predecessorDependencyEmpty := len(known) == 0
+	// Producer-reported positive identities include newly created/current raw
+	// outer-leaf segments. Admit them before comparing the current segment set
+	// with the predecessor closure; otherwise the first publication after a
+	// rotation unnecessarily falls back to a full candidate scan.
+	if err := delta.forEachPositive(func(fileID uint32, _ int64) error {
+		known[fileID] = struct{}{}
+		if _, ownedByAdditional := additionalReferences[fileID]; !ownedByAdditional {
+			references[fileID] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, false, err
+	}
+	if predecessorDependencyEmpty && delta.allowEmptyDependencyReuse {
+		created, err := leafPageLogCreatedSegments(db.leafPageLog)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, segment := range created {
+			if segment.FileID == 0 {
+				continue
+			}
+			known[segment.FileID] = struct{}{}
+			references[segment.FileID] = struct{}{}
+		}
+	}
 	current, err := leafPageLogCurrentSegments(db.leafPageLog)
 	if err != nil {
 		return nil, false, err
@@ -547,6 +583,14 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			continue
 		}
 		if _, ok := known[segment.FileID]; !ok {
+			if predecessorDependencyEmpty && delta.allowEmptyDependencyReuse {
+				// The empty predecessor has no value-log or raw-leaf
+				// dependency to retire, so every producer-reported created and
+				// current segment can be admitted without a candidate scan.
+				references[segment.FileID] = struct{}{}
+				known[segment.FileID] = struct{}{}
+				continue
+			}
 			// The first publication into a new raw-leaf segment is the bounded
 			// point where the old segment set is re-projected exactly.
 			return nil, false, nil
@@ -638,7 +682,12 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	}
 	excludedInheritedKinds := []rootpublication.ResourceKind{
 		rootpublication.ResourceValueLog,
-		rootpublication.ResourceOuterLeafLog,
+	}
+	// A non-nil delta without outer-leaf evidence only changed pager-backed
+	// roots. Raw outer-leaf dependencies are therefore unchanged and must remain
+	// inherited; the logical value-pointer projection cannot rediscover them.
+	if delta == nil || delta.outerLeafDependencyReuse {
+		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafLog)
 	}
 	if hasReplacementManifest {
 		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafManifest)
