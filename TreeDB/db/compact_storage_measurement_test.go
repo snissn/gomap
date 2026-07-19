@@ -81,6 +81,47 @@ func TestNewCompactStorageMeasurementSeparatesTimedApplyAndWorkCounters(t *testi
 	}
 }
 
+func TestNewCompactStorageMeasurementPreservesPreApplyEvidence(t *testing.T) {
+	preApplyPlan := ValueLogRewritePlan{
+		SegmentsSelected:   1,
+		SelectedBytesTotal: 300,
+		SelectedBytesLive:  200,
+		SelectedBytesStale: 100,
+	}
+	finalStats := CompactStorageStats{
+		LeafGenerationPacks: []LeafGenerationPackRunOnceStats{{
+			Ran: true,
+			Pack: LeafGenerationPackStats{
+				ApplyStages: LeafGenerationPackApplyStageStats{
+					DirectorySyncTimeNanos:     31,
+					DirectorySyncWaitTimeNanos: 7,
+				},
+			},
+		}},
+		ValueLogRewrite: ValueLogRewriteStats{
+			SourceSegmentsRequested: 1,
+			SourceBytesRequested:    300,
+			RecordsCopied:           2,
+			ValueBytesCopied:        200,
+		},
+	}
+
+	m := newCompactStorageMeasurementWithPlan(
+		compactStorageM0Fixtures[0], "artifact", 123, preApplyPlan, finalStats, nil,
+	)
+	if m.LeafPack.DirectorySyncTimeNanos != 31 || m.LeafPack.DirectorySyncWaitNanos != 7 {
+		t.Fatalf("directory sync timing=%+v", m.LeafPack)
+	}
+	if m.ValueLog.PlanSegments != 1 || m.ValueLog.PlanBytesTotal != 300 ||
+		m.ValueLog.PlanBytesLive != 200 || m.ValueLog.PlanBytesStale != 100 {
+		t.Fatalf("pre-apply rewrite plan lost: %+v", m.ValueLog)
+	}
+	if m.ValueLog.SourceSegments != 1 || m.ValueLog.SourceBytes != 300 ||
+		m.ValueLog.RecordsCopied != 2 || m.ValueLog.ValueBytesCopied != 200 {
+		t.Fatalf("final rewrite counters lost: %+v", m.ValueLog)
+	}
+}
+
 func TestCompactStorageMeasurementJSONSchemaIsDeterministic(t *testing.T) {
 	stats := CompactStorageStats{Phases: []CompactStoragePhaseStats{{Name: "leaf-generation-pack-1", WallTimeNanos: 7}}}
 	first, err := json.Marshal(newCompactStorageMeasurement(compactStorageM0Fixtures[0], "artifact", 9, stats, nil))
