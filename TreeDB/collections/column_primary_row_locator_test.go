@@ -20,3 +20,21 @@ func TestColumnPrimaryRowLocatorRoundTripAndCorruptionP3890(t *testing.T) {
 		t.Fatalf("corrupt locator err=%v want fail-closed invalid locator", err)
 	}
 }
+
+func TestColumnPrimaryRowLocatorDeleteUsesTombstoneP3890(t *testing.T) {
+	table, err := buildColumnPrimaryRowLocatorTable(
+		ColumnPublishPlan{Operation: ColumnPublishOperationDelete, Rows: 1},
+		[]columnWriteDocument{{ID: []byte("doc-7")}},
+	)
+	if err != nil {
+		t.Fatalf("build delete locator table: %v", err)
+	}
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() || string(it.UnsafeKey()) != "doc-7" {
+		t.Fatalf("delete locator iterator valid=%t key=%q", it.Valid(), it.UnsafeKey())
+	}
+	if !it.IsDeleted() {
+		t.Fatal("delete locator entry is not a tombstone")
+	}
+}

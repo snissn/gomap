@@ -77,7 +77,7 @@ func buildColumnPrimaryRowLocatorTable(plan ColumnPublishPlan, documents []colum
 			return nil, fmt.Errorf("collections: row locator row %d missing document id", row)
 		}
 		if plan.Operation == ColumnPublishOperationDelete {
-			setCollectionRunValue(table, append([]byte(nil), document.ID...), nil)
+			table.DeleteSteal(append([]byte(nil), document.ID...))
 			continue
 		}
 		setCollectionRunValue(table, append([]byte(nil), document.ID...), encodeColumnPrimaryRowLocator(DocumentRowRef{Generation: plan.UpdatedActiveManifest.Generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: plan.AppliedCommandLSN}))
