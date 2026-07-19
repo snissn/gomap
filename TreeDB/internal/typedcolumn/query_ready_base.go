@@ -185,6 +185,240 @@ func BuildQueryReadyBaseGeneration(identity QueryReadyBaseIdentity, inputs []Que
 	return result, nil
 }
 
+// QueryReadyBaseStreamingPlanner retains only deterministic QRBG layout
+// metadata between source passes. It deliberately never retains a source image
+// or execution sidecar after Add returns.
+type QueryReadyBaseStreamingPlanner struct {
+	identity       QueryReadyBaseIdentity
+	parts          []queryReadyBaseStreamingPart
+	validationTime time.Duration
+}
+
+type queryReadyBaseStreamingPart struct {
+	ordinal           int
+	sourceGeneration  uint64
+	primaryIDMode     QueryReadyPrimaryIDMode
+	primaryIDBase     int64
+	partID            uint64
+	rows              int
+	imageBytes        int
+	imageChecksum     [sha256.Size]byte
+	executionBytes    int
+	executionUpper    int64
+	executionChecksum [sha256.Size]byte
+	executionColumns  int
+	imageOffset       int
+	executionOffset   int
+}
+
+// QueryReadyBaseStreamingPlan is a completed two-pass QRBG layout. Its
+// methods retain only fixed plan metadata; callers supply each source again to
+// Emit so source images and sidecars have bounded lifetimes.
+type QueryReadyBaseStreamingPlan struct {
+	identity       QueryReadyBaseIdentity
+	parts          []queryReadyBaseStreamingPart
+	payloadOffset  int
+	totalBytes     int
+	maxLiveBytes   int64
+	validationTime time.Duration
+}
+
+func NewQueryReadyBaseStreamingPlanner(identity QueryReadyBaseIdentity, capacity int) (*QueryReadyBaseStreamingPlanner, error) {
+	if err := validateQueryReadyBaseIdentity(identity); err != nil {
+		return nil, err
+	}
+	if capacity < 0 {
+		return nil, errors.New("typedcolumn: negative query-ready streaming planner capacity")
+	}
+	return &QueryReadyBaseStreamingPlanner{identity: identity, parts: make([]queryReadyBaseStreamingPart, 0, capacity)}, nil
+}
+
+// Add validates one source and records only its deterministic output metadata.
+func (p *QueryReadyBaseStreamingPlanner) Add(input QueryReadyBasePartInput) error {
+	if p == nil {
+		return errors.New("typedcolumn: nil query-ready streaming planner")
+	}
+	started := time.Now()
+	parsed, execution, executionColumns, err := inspectQueryReadyBasePart(p.identity, input)
+	p.validationTime += time.Since(started)
+	if err != nil {
+		return err
+	}
+	executionUpper, err := EstimateQueryReadyExecutionImageUpperBound(parsed)
+	if err != nil {
+		return err
+	}
+	part := queryReadyBaseStreamingPart{
+		ordinal:          len(p.parts),
+		sourceGeneration: input.SourceGeneration, primaryIDMode: input.PrimaryIDMode, primaryIDBase: input.PrimaryIDBase,
+		partID: parsed.PartID, rows: parsed.Rows, imageBytes: len(input.Image.Bytes), imageChecksum: sha256.Sum256(input.Image.Bytes),
+		executionBytes: len(execution), executionUpper: executionUpper, executionChecksum: sha256.Sum256(execution), executionColumns: executionColumns,
+	}
+	p.parts = append(p.parts, part)
+	return nil
+}
+
+func (p *QueryReadyBaseStreamingPlanner) Finish() (*QueryReadyBaseStreamingPlan, error) {
+	if p == nil {
+		return nil, errors.New("typedcolumn: nil query-ready streaming planner")
+	}
+	parts := append([]queryReadyBaseStreamingPart(nil), p.parts...)
+	sort.Slice(parts, func(i, j int) bool {
+		if parts[i].sourceGeneration != parts[j].sourceGeneration {
+			return parts[i].sourceGeneration < parts[j].sourceGeneration
+		}
+		return parts[i].partID < parts[j].partID
+	})
+	for i := 1; i < len(parts); i++ {
+		if parts[i-1].sourceGeneration == parts[i].sourceGeneration && parts[i-1].partID == parts[i].partID {
+			return nil, fmt.Errorf("typedcolumn: query-ready base duplicate dependency generation=%d part_id=%d", parts[i].sourceGeneration, parts[i].partID)
+		}
+	}
+	if len(parts) > math.MaxUint32 || len(parts) > (math.MaxInt-queryReadyBaseHeaderBytes)/queryReadyBasePartEntryBytes {
+		return nil, fmt.Errorf("typedcolumn: query-ready base parts=%d exceed format bounds", len(parts))
+	}
+	payloadOffset, err := queryReadyBaseAlign(queryReadyBaseHeaderBytes+len(parts)*queryReadyBasePartEntryBytes, queryReadyBasePayloadAlignment)
+	if err != nil {
+		return nil, err
+	}
+	total := payloadOffset
+	var maxLive int64
+	for i := range parts {
+		total, err = queryReadyBaseAlign(total, columnPartImageSectionAlignment)
+		if err != nil || parts[i].imageBytes > math.MaxInt-total {
+			return nil, errors.New("typedcolumn: query-ready base image exceeds host size")
+		}
+		parts[i].imageOffset = total
+		total += parts[i].imageBytes
+		total, err = queryReadyBaseAlign(total, queryReadyExecutionImagePayloadAlign)
+		if err != nil || parts[i].executionBytes > math.MaxInt-total {
+			return nil, errors.New("typedcolumn: query-ready execution image exceeds host size")
+		}
+		parts[i].executionOffset = total
+		total += parts[i].executionBytes
+		if parts[i].executionUpper < 0 || parts[i].executionUpper > math.MaxInt64/2 || int64(parts[i].imageBytes) > math.MaxInt64-parts[i].executionUpper*2 {
+			return nil, errors.New("typedcolumn: query-ready streaming live size overflow")
+		}
+		live := int64(parts[i].imageBytes) + parts[i].executionUpper*2
+		if live > maxLive {
+			maxLive = live
+		}
+	}
+	return &QueryReadyBaseStreamingPlan{identity: p.identity, parts: parts, payloadOffset: payloadOffset, totalBytes: total, maxLiveBytes: maxLive, validationTime: p.validationTime}, nil
+}
+
+func (p *QueryReadyBaseStreamingPlan) OutputBytes() int64 {
+	if p == nil {
+		return 0
+	}
+	return int64(p.totalBytes)
+}
+
+// EstimatedPeakBytes covers the final output, one live source image, its
+// execution sidecar plus conservative workspace, and fixed/dependency plan
+// metadata. It intentionally does not use cumulative source bytes.
+func (p *QueryReadyBaseStreamingPlan) EstimatedPeakBytes() (int64, error) {
+	if p == nil || p.totalBytes < 0 {
+		return 0, errors.New("typedcolumn: invalid query-ready streaming plan")
+	}
+	const fixedBuildBytes = int64(64 << 10)
+	metadata := int64(len(p.parts)) * (1024 + 64)
+	if len(p.parts) != 0 && metadata/int64(len(p.parts)) != 1088 {
+		return 0, errors.New("typedcolumn: query-ready streaming metadata size overflow")
+	}
+	if int64(p.totalBytes) > math.MaxInt64-p.maxLiveBytes || int64(p.totalBytes)+p.maxLiveBytes > math.MaxInt64-fixedBuildBytes || int64(p.totalBytes)+p.maxLiveBytes+fixedBuildBytes > math.MaxInt64-metadata {
+		return 0, errors.New("typedcolumn: query-ready streaming peak size overflow")
+	}
+	return int64(p.totalBytes) + p.maxLiveBytes + fixedBuildBytes + metadata, nil
+}
+
+// Emit rereads every source through load, validates it against pass-one
+// metadata, and writes the deterministic QRBG payload without retaining prior
+// sources. A mismatch fails closed before that source is emitted.
+func (p *QueryReadyBaseStreamingPlan) Emit(load func(int) (QueryReadyBasePartInput, error)) (QueryReadyBaseBuildResult, error) {
+	if p == nil || load == nil {
+		return QueryReadyBaseBuildResult{}, errors.New("typedcolumn: invalid query-ready streaming emit")
+	}
+	started := time.Now()
+	out := make([]byte, p.totalBytes)
+	binary.LittleEndian.PutUint32(out[0:4], queryReadyBaseMagic)
+	binary.LittleEndian.PutUint16(out[4:6], queryReadyBaseVersion)
+	binary.LittleEndian.PutUint64(out[8:16], p.identity.Generation)
+	copy(out[16:48], p.identity.SchemaHash[:])
+	binary.LittleEndian.PutUint32(out[48:52], uint32(len(p.parts)))
+	binary.LittleEndian.PutUint64(out[64:72], uint64(p.payloadOffset))
+	binary.LittleEndian.PutUint64(out[72:80], uint64(p.totalBytes))
+	dependencies := make([]QueryReadyBaseDependency, len(p.parts))
+	var rows, inputBytes, executionBytes int64
+	var executionColumns int
+	for i, expected := range p.parts {
+		input, err := load(expected.ordinal)
+		if err != nil {
+			return QueryReadyBaseBuildResult{}, err
+		}
+		parsed, execution, columns, err := inspectQueryReadyBasePart(p.identity, input)
+		if err != nil {
+			return QueryReadyBaseBuildResult{}, err
+		}
+		if input.SourceGeneration != expected.sourceGeneration || input.PrimaryIDMode != expected.primaryIDMode || input.PrimaryIDBase != expected.primaryIDBase || parsed.PartID != expected.partID || parsed.Rows != expected.rows || len(input.Image.Bytes) != expected.imageBytes || sha256.Sum256(input.Image.Bytes) != expected.imageChecksum || len(execution) != expected.executionBytes || sha256.Sum256(execution) != expected.executionChecksum || columns != expected.executionColumns {
+			return QueryReadyBaseBuildResult{}, fmt.Errorf("typedcolumn: query-ready streaming source[%d] changed between plan and emit", i)
+		}
+		entry := out[queryReadyBaseHeaderBytes+i*queryReadyBasePartEntryBytes:]
+		binary.LittleEndian.PutUint64(entry[0:8], expected.sourceGeneration)
+		binary.LittleEndian.PutUint64(entry[8:16], expected.partID)
+		binary.LittleEndian.PutUint64(entry[16:24], uint64(expected.imageOffset))
+		binary.LittleEndian.PutUint64(entry[24:32], uint64(expected.imageBytes))
+		binary.LittleEndian.PutUint64(entry[32:40], uint64(expected.rows))
+		binary.LittleEndian.PutUint64(entry[40:48], uint64(parsed.ManifestBytes))
+		copy(entry[48:80], expected.imageChecksum[:])
+		binary.LittleEndian.PutUint64(entry[80:88], uint64(expected.primaryIDBase))
+		entry[88] = byte(expected.primaryIDMode)
+		binary.LittleEndian.PutUint64(entry[96:104], uint64(expected.executionOffset))
+		binary.LittleEndian.PutUint64(entry[104:112], uint64(expected.executionBytes))
+		copy(entry[112:144], expected.executionChecksum[:])
+		copy(out[expected.imageOffset:], input.Image.Bytes)
+		copy(out[expected.executionOffset:], execution)
+		dependencies[i] = QueryReadyBaseDependency{SourceGeneration: expected.sourceGeneration, PartID: expected.partID, Rows: expected.rows, ImageBytes: expected.imageBytes, ImageChecksum: expected.imageChecksum, PrimaryIDMode: expected.primaryIDMode, PrimaryIDBase: expected.primaryIDBase}
+		rows += int64(expected.rows)
+		inputBytes += int64(expected.imageBytes)
+		executionBytes += int64(expected.executionBytes)
+		executionColumns += expected.executionColumns
+	}
+	table := out[queryReadyBaseHeaderBytes : queryReadyBaseHeaderBytes+len(p.parts)*queryReadyBasePartEntryBytes]
+	binary.LittleEndian.PutUint32(out[56:60], crc32.Checksum(table, queryReadyBaseCRCTable))
+	binary.LittleEndian.PutUint32(out[52:56], queryReadyBaseHeaderChecksum(out[:queryReadyBaseHeaderBytes]))
+	return QueryReadyBaseBuildResult{Bytes: out, Dependencies: dependencies, Stats: QueryReadyBaseBuildStats{Parts: len(p.parts), Rows: rows, InputBytes: inputBytes, OutputBytes: int64(len(out)), BytesCopied: inputBytes + executionBytes, BytesHashed: inputBytes + executionBytes, BytesChecksummed: int64(len(table) + queryReadyBaseHeaderBytes), ExecutionBytes: executionBytes, ExecutionColumns: executionColumns, ValidationTime: p.validationTime, BuildTime: time.Since(started) + p.validationTime}}, nil
+}
+
+func inspectQueryReadyBasePart(identity QueryReadyBaseIdentity, input QueryReadyBasePartInput) (ColumnPartImage, []byte, int, error) {
+	if input.SourceGeneration == 0 || input.SourceGeneration > identity.Generation {
+		return ColumnPartImage{}, nil, 0, fmt.Errorf("typedcolumn: query-ready base source generation=%d exceeds base generation=%d", input.SourceGeneration, identity.Generation)
+	}
+	parsed, err := ParseColumnPartImage(input.Image.Bytes)
+	if err != nil {
+		return ColumnPartImage{}, nil, 0, err
+	}
+	readOptions := ColumnPartImageReadOptions{}
+	if input.PrimaryIDMode == QueryReadyPrimaryIDDensePartLocal {
+		readOptions.IncludeRowLocators, readOptions.ValidateRowLocators = true, true
+	}
+	decoded, err := ColumnPartFromImageWithOptions(parsed, readOptions)
+	if err != nil {
+		return ColumnPartImage{}, nil, 0, err
+	}
+	if err := validateQueryReadyPrimaryIDInput(input, decoded); err != nil {
+		return ColumnPartImage{}, nil, 0, err
+	}
+	if _, err := CertifyColumnPartLayoutContractFromImage(parsed); err != nil {
+		return ColumnPartImage{}, nil, 0, err
+	}
+	execution, columns, err := buildQueryReadyExecutionImage(decoded)
+	if err != nil {
+		return ColumnPartImage{}, nil, 0, err
+	}
+	return parsed, execution, columns, nil
+}
+
 // prepareQueryReadyBaseGeneration validates the complete logical input set and
 // computes the exact deterministic layout without allocating the output image.
 // Envelope builders use the plan to encode QRBG directly into their final
