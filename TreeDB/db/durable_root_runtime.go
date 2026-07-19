@@ -541,6 +541,19 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			}
 		}
 	}
+	// Producer-reported positive identities include newly created/current raw
+	// outer-leaf segments. Admit them before comparing the current segment set
+	// with the predecessor closure; otherwise the first publication after a
+	// rotation unnecessarily falls back to a full candidate scan.
+	if err := delta.forEachPositive(func(fileID uint32, _ int64) error {
+		known[fileID] = struct{}{}
+		if _, ownedByAdditional := additionalReferences[fileID]; !ownedByAdditional {
+			references[fileID] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, false, err
+	}
 	current, err := leafPageLogCurrentSegments(db.leafPageLog)
 	if err != nil {
 		return nil, false, err
@@ -586,14 +599,6 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 		if errors.Is(err, errDurableRootDependencyProjectionRequired) {
 			return nil, false, nil
 		}
-		return nil, false, err
-	}
-	if err := delta.forEachPositive(func(fileID uint32, _ int64) error {
-		if _, ownedByAdditional := additionalReferences[fileID]; !ownedByAdditional {
-			references[fileID] = struct{}{}
-		}
-		return nil
-	}); err != nil {
 		return nil, false, err
 	}
 	for fileID := range additionalReferences {

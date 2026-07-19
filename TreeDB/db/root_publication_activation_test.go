@@ -248,6 +248,28 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	} else if reuse || references != nil {
 		t.Fatalf("destructive replacement-manifest transition reused references=%v reuse=%t", references, reuse)
 	}
+
+	previousLeafFileID := leafLog.fileID
+	// Model the producer's post-rotation current identity. The planner only
+	// consumes the stable identity; resource capture/opening is covered by the
+	// ordered publication integration tests.
+	leafLog.fileID++
+	rotated := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(rotated)
+	rotated.outerLeafDependencyReuse = true
+	rotated.addPositive(leafLog.fileID, 1)
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, rotated); err != nil {
+		t.Fatalf("plan rotated outer-leaf transition: %v", err)
+	} else if !reuse {
+		t.Fatal("rotated outer-leaf transition did not reuse predecessor dependencies")
+	} else {
+		if _, ok := references[previousLeafFileID]; !ok {
+			t.Fatalf("rotated outer-leaf references=%v, want predecessor file %d", references, previousLeafFileID)
+		}
+		if _, ok := references[leafLog.fileID]; !ok {
+			t.Fatalf("rotated outer-leaf references=%v, want current file %d", references, leafLog.fileID)
+		}
+	}
 }
 
 func TestRootPublicationBuildGroupStagesOnlyFinalCandidate(t *testing.T) {
