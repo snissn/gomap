@@ -176,6 +176,71 @@ func TestCompactStorageM0StableRecorderClassifiesPhaseResourceAndCall(t *testing
 	}
 }
 
+func TestCompactStorageM0StableRecorderIgnoresUserspaceFlushes(t *testing.T) {
+	r := newCompactStorageM0StableRecorder(nil)
+	r.beginPhase("value-log-rewrite")
+	for _, point := range []durabilitycut.Point{
+		durabilitycut.BeforeUserspaceFlush,
+		durabilitycut.AfterUserspaceFlush,
+	} {
+		if err := r.observe(durabilitycut.Event{Point: point, Resource: durabilitycut.ResourceCommandWAL}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.endPhase("value-log-rewrite")
+	if calls := r.measurements(); len(calls) != 0 || r.totalCalls() != 0 {
+		t.Fatalf("userspace flushes counted as durable calls: calls=%+v total=%d", calls, r.totalCalls())
+	}
+}
+
+func TestCompactStorageM0ForegroundHandshakeUsesWriteFlushBoundary(t *testing.T) {
+	handshake := newCompactStorageM0ForegroundHandshake()
+	restore := installCompactStorageM0Recorder(nil, handshake)
+	defer restore()
+
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeUserspaceFlush, durabilitycut.ResourceCommandWAL, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handshake.attempted:
+		t.Fatal("foreground handshake accepted an event before it was armed")
+	default:
+	}
+
+	handshake.arm()
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeUserspaceFlush, durabilitycut.ResourceCommandWAL, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handshake.attempted:
+	default:
+		t.Fatal("foreground write boundary did not release maintenance")
+	}
+}
+
+func TestValidateCompactStorageM0WorkRequiresExactRewriteDisposition(t *testing.T) {
+	noRewrite := compactStorageM0FixtureSpec{
+		metadata: compactStorageMeasurementFixture{Name: "no-rewrite"},
+	}
+	unexpected := CompactStorageStats{
+		ValueLogRewrite: ValueLogRewriteStats{SourceSegmentsRequested: 1},
+	}
+	if err := validateCompactStorageM0Work(noRewrite, unexpected); err == nil {
+		t.Fatal("unexpected value-log rewrite was accepted")
+	}
+
+	expectRewrite := compactStorageM0FixtureSpec{
+		metadata:      compactStorageMeasurementFixture{Name: "rewrite"},
+		expectRewrite: true,
+	}
+	if err := validateCompactStorageM0Work(expectRewrite, CompactStorageStats{}); err == nil {
+		t.Fatal("missing value-log rewrite was accepted")
+	}
+	if err := validateCompactStorageM0Work(expectRewrite, unexpected); err != nil {
+		t.Fatalf("expected value-log rewrite rejected: %v", err)
+	}
+}
+
 func TestCompactStorageM0LatencyPercentiles(t *testing.T) {
 	got := compactStorageMeasurementLatencyFor([]time.Duration{5, 1, 4, 2, 3})
 	if got.Count != 5 || got.P50 != 3 || got.P95 != 5 || got.P99 != 5 || got.Max != 5 {

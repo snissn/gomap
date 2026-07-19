@@ -37,13 +37,14 @@ blocks. The overhead collection alternates pair order for this reason. Start
 with 12 blocks; if the confidence interval still crosses the issue's minimum
 effect, continue sampling before accepting or rejecting the candidate.
 
-The JSON recorder reports logical production barriers. A single logical
-directory or index barrier may issue multiple kernel `fsync` or `msync`
-syscalls. `syscalls/operation_stable_calls.txt` preserves the physical calls,
-while `syscalls/checkpoint_stable_calls.txt` isolates checkpoint intervals.
-Accept a count difference only when this grouping explains it; an immediate
-checkpoint fast-path claim requires zero calls in the physical checkpoint
-file.
+The JSON recorder reports logical production durability barriers; relaxed
+userspace flushes are coordination events and are excluded from
+`stable_calls`. A single logical directory or index barrier may issue multiple
+kernel `fsync` or `msync` syscalls.
+`syscalls/operation_stable_calls.txt` preserves the physical calls, while
+`syscalls/checkpoint_stable_calls.txt` isolates checkpoint intervals. Accept a
+count difference only when this grouping explains it; an immediate checkpoint
+fast-path claim requires zero calls in the physical checkpoint file.
 
 Useful overrides:
 
@@ -52,6 +53,7 @@ COUNT=1 scripts/compact_storage_m0_profile.sh
 CPU_SET=4-5 GOMAXPROCS=2 GOMEMLIMIT=8GiB scripts/compact_storage_m0_profile.sh
 ```
 
-The benchmark is fail-closed: maintenance errors, foreground write errors, and
-missing declared leaf-pack or value-log rewrite work fail the run instead of
-emitting a zero-valued result.
+The benchmark is fail-closed: maintenance errors, foreground write errors,
+missing declared leaf-pack or value-log rewrite work, and unexpected rewrite
+selection in a no-rewrite control fixture fail the run instead of emitting a
+misclassified result.

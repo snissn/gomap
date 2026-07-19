@@ -156,29 +156,41 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 
 		instrumentationEnabled := os.Getenv("TREEDB_COMPACT_STORAGE_M0_INSTRUMENTATION") != "off"
 		var recorder *compactStorageM0StableRecorder
-		restore := func() {}
-		if instrumentationEnabled {
-			recorder = newCompactStorageM0StableRecorder(db)
-			restore = installCompactStorageM0Recorder(recorder)
-		}
 		var foregroundStart chan struct{}
+		var foregroundHandshake *compactStorageM0ForegroundHandshake
 		var foregroundDone chan compactStorageM0WriteResult
 		var foregroundStartOnce sync.Once
 		var foregroundResult compactStorageM0WriteResult
 		foregroundConsumed := false
+		foregroundAttemptedObserved := false
 		if spec.foreground {
 			foregroundStart = make(chan struct{})
+			foregroundHandshake = newCompactStorageM0ForegroundHandshake()
 			foregroundDone = make(chan compactStorageM0WriteResult, 1)
 		}
+		restore := func() {}
+		if instrumentationEnabled {
+			recorder = newCompactStorageM0StableRecorder(db)
+		}
+		if recorder != nil || foregroundHandshake != nil {
+			restore = installCompactStorageM0Recorder(recorder, foregroundHandshake)
+		}
 		db.compactStorageBeforePhase = func(name string) {
+			if spec.foreground && name == "value-log-rewrite" {
+				foregroundHandshake.arm()
+				foregroundStartOnce.Do(func() { close(foregroundStart) })
+				select {
+				case <-foregroundHandshake.attempted:
+					foregroundAttemptedObserved = true
+				case foregroundResult = <-foregroundDone:
+					foregroundConsumed = true
+				}
+			}
 			if os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1" {
 				fmt.Fprintf(os.Stderr, "TREEDB_M0_PHASE_BEGIN %s\n", name)
 			}
 			if recorder != nil {
 				recorder.beginPhase(name)
-			}
-			if spec.foreground && name == "value-log-rewrite" {
-				foregroundStartOnce.Do(func() { close(foregroundStart) })
 			}
 		}
 		db.compactStorageAfterPhase = func(name string) {
@@ -243,6 +255,10 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 		if maintenanceErr != nil || foregroundResult.err != nil {
 			_ = db.Close()
 			b.Fatalf("measured operation failed: maintenance=%v foreground=%v", maintenanceErr, foregroundResult.err)
+		}
+		if spec.foreground && !foregroundAttemptedObserved {
+			_ = db.Close()
+			b.Fatal("foreground writes completed without reaching the measured userspace-flush boundary before value-log rewrite")
 		}
 		if err := validateCompactStorageM0Work(spec, stats); err != nil {
 			_ = db.Close()
@@ -353,8 +369,13 @@ func validateCompactStorageM0Work(spec compactStorageM0FixtureSpec, stats Compac
 	if runs < spec.minPackRuns {
 		return fmt.Errorf("%s: leaf-pack runs=%d want >=%d", spec.metadata.Name, runs, spec.minPackRuns)
 	}
-	if spec.expectRewrite && stats.ValueLogRewrite.SourceSegmentsRequested == 0 {
-		return fmt.Errorf("%s: expected value-log rewrite did not run", spec.metadata.Name)
+	rewriteRan := stats.ValueLogRewrite.SourceSegmentsRequested > 0
+	if rewriteRan != spec.expectRewrite {
+		if spec.expectRewrite {
+			return fmt.Errorf("%s: expected value-log rewrite did not run", spec.metadata.Name)
+		}
+		return fmt.Errorf("%s: unexpected value-log rewrite selected %d source segments",
+			spec.metadata.Name, stats.ValueLogRewrite.SourceSegmentsRequested)
 	}
 	for _, phase := range stats.Phases {
 		if phase.Name == "index-vacuum" && !phase.Skipped {

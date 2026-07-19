@@ -169,7 +169,7 @@ awk '
 printf 'checkpoint_total %s\n' "$(wc -l <"$RUN_DIR/syscalls/checkpoint_stable_calls.txt")" \
   >>"$RUN_DIR/syscalls/strace_summary.txt"
 jq '{
-  recorder_stable_calls: ([.stable_calls[] | select(.call_type != "userspace-flush") | .count] | add // 0),
+  recorder_stable_calls: ([.stable_calls[].count] | add // 0),
   checkpoint_stable_calls: ([.checkpoints[].stable_calls] | add // 0)
 }' "$RUN_DIR/syscalls/compact-storage-m0/one-generation-per-pass/sample-106.json" \
   >"$RUN_DIR/syscalls/recorder_summary.json"

@@ -26,6 +26,26 @@ type compactStorageM0PhaseFrontier struct {
 	available                           bool
 }
 
+type compactStorageM0ForegroundHandshake struct {
+	attempted chan struct{}
+	armed     atomic.Bool
+	once      sync.Once
+}
+
+func newCompactStorageM0ForegroundHandshake() *compactStorageM0ForegroundHandshake {
+	return &compactStorageM0ForegroundHandshake{attempted: make(chan struct{})}
+}
+
+func (h *compactStorageM0ForegroundHandshake) arm() {
+	h.armed.Store(true)
+}
+
+func (h *compactStorageM0ForegroundHandshake) observe(event durabilitycut.Event) {
+	if h != nil && h.armed.Load() && event.Point == durabilitycut.BeforeUserspaceFlush {
+		h.once.Do(func() { close(h.attempted) })
+	}
+}
+
 type compactStorageM0StableRecorder struct {
 	db        *DB
 	mu        sync.Mutex
@@ -204,10 +224,6 @@ func (r *compactStorageM0StableRecorder) checkpointMeasurements(phases []Compact
 
 func compactStorageM0CallType(point durabilitycut.Point) (string, bool, bool) {
 	switch point {
-	case durabilitycut.BeforeUserspaceFlush:
-		return "userspace-flush", true, true
-	case durabilitycut.AfterUserspaceFlush:
-		return "userspace-flush", false, true
 	case durabilitycut.BeforeDependencyFileSync:
 		return "file-stable", true, true
 	case durabilitycut.AfterDependencyFileSync:
@@ -233,6 +249,12 @@ func compactStorageM0CallType(point durabilitycut.Point) (string, bool, bool) {
 	}
 }
 
-func installCompactStorageM0Recorder(r *compactStorageM0StableRecorder) func() {
-	return durabilitycut.Install(r.observe)
+func installCompactStorageM0Recorder(r *compactStorageM0StableRecorder, foregroundHandshake *compactStorageM0ForegroundHandshake) func() {
+	return durabilitycut.Install(func(event durabilitycut.Event) error {
+		foregroundHandshake.observe(event)
+		if r == nil {
+			return nil
+		}
+		return r.observe(event)
+	})
 }
