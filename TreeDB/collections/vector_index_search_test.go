@@ -3505,7 +3505,7 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) {
 		t.Fatalf("DocumentsFetched=%d want %d", got.Stats.DocumentsFetched, len(got.Results))
 	}
-	if got.Stats.DocumentRowRefStateFetches != uint64(len(got.Results)) || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorLookups != 0 || got.Stats.DocumentRowLocatorMisses != 0 || got.Stats.DocumentPointRowFetches != uint64(len(got.Results)) || got.Stats.DocumentPointRowDecodes != uint64(len(got.Results)) {
+	if got.Stats.DocumentRowRefStateFetches != uint64(len(got.Results)) || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorLookups != uint64(len(got.Results)) || got.Stats.DocumentRowLocatorMisses != 0 || got.Stats.DocumentPointRowFetches != uint64(len(got.Results)) || got.Stats.DocumentPointRowDecodes != uint64(len(got.Results)) {
 		t.Fatalf("stats=%+v want vector-index row refs and point row fetch per document", got.Stats)
 	}
 	if got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 || got.Stats.DocumentVisibilityRowsScanned != 0 {
@@ -3824,7 +3824,7 @@ func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T
 	if got.Stats.DocumentsFetched != 1 {
 		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
 	}
-	if got.Stats.DocumentRowRefStateFetches != 1 || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorLookups != 0 || got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentPointRowDecodes != 1 || got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 {
+	if got.Stats.DocumentRowRefStateFetches != 1 || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorLookups != 1 || got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentPointRowDecodes != 1 || got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 {
 		t.Fatalf("stats=%+v want prepared IncludeDocuments to use vector-index row refs and point fetches", got.Stats)
 	}
 	if searcher.documentView == nil || searcher.documentView.assetScopeKind != mappedresource.ScopePreparedSearch {

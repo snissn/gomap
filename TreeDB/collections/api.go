@@ -456,9 +456,14 @@ type CollectionDocumentScanStats struct {
 	PhysicalRows           uint64
 	PhysicalBytes          uint64
 	PhysicalDecodedBlocks  uint64
-	ReconstructedRows      uint64
-	MaxRecordWindow        uint64
-	MaxVisibleRowWindow    uint64
+	// LocatorLookupBatches and LocatorLookups are control-root point reads used
+	// by generic reconstruction. They are separate from whole-asset scan stats.
+	LocatorLookupBatches uint64
+	LocatorLookups       uint64
+	PointRowFetches      uint64
+	ReconstructedRows    uint64
+	MaxRecordWindow      uint64
+	MaxVisibleRowWindow  uint64
 	// MaxTypedGenerations is the peak number of resident typed generations.
 	MaxTypedGenerations uint64
 	// MaxTypedDecodedBytes is the peak owned decoded typed value state for one
@@ -20958,7 +20963,6 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 			return c.scanDocumentsFuncWithMonotonicColumnReconstruction(snap, catalog, maxDocuments, fn, &scanStats)
 		}
 		scanStats.GenericFallback = true
-		scanStats.PhysicalPasses++ // generic visibility scan follows any preflight pass.
 		return c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, fn, &scanStats)
 	}
 	truncated := false
@@ -21000,109 +21004,86 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	fn func(DocumentRecord) (bool, error),
 	stats *CollectionDocumentScanStats,
 ) (bool, error) {
-	columnStoreConfig := catalog.meta.Options.ColumnStore.copy()
 	capacity := maxDocuments
 	if capacity > 256 {
 		capacity = 256
 	}
-	records := make([]DocumentRecord, 0, capacity)
+	seen := 0
 	for it.Valid() {
-		if it.IsDeleted() {
+		ids := make([][]byte, 0, capacity)
+		for it.Valid() && len(ids) < capacity && seen+len(ids) < maxDocuments {
+			if !it.IsDeleted() {
+				ids = append(ids, bytes.Clone(it.UnsafeKey()))
+			}
 			it.Next()
-			continue
 		}
-		if len(records) >= maxDocuments {
+		if err := it.Error(); err != nil {
+			return false, err
+		}
+		if len(ids) == 0 {
 			break
 		}
-		records = append(records, DocumentRecord{
-			ID:       bytes.Clone(it.UnsafeKey()),
-			Document: it.ValueCopy(nil),
-		})
-		it.Next()
+		if stats != nil {
+			stats.LocatorLookupBatches++
+			if uint64(len(ids)) > stats.MaxRecordWindow {
+				stats.MaxRecordWindow = uint64(len(ids))
+			}
+		}
+		// Point-row and typed reconstruction caches are owned by the read view.
+		// Scope the view to this bounded ID window so scans spanning many
+		// immutable assets cannot retain one cache entry per asset.
+		view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+		refs, err := view.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+		if err != nil {
+			_ = view.Close()
+			return false, err
+		}
+		if stats != nil {
+			stats.LocatorLookups += refs.Stats.RowLocatorLookups
+		}
+		rowRefs := make([]DocumentRowRef, len(refs.Results))
+		for i, result := range refs.Results {
+			if !result.Found {
+				_ = view.Close()
+				return false, fmt.Errorf("collections: column reconstruction missing primary row locator for id %q", string(ids[i]))
+			}
+			rowRefs[i] = result.RowRef
+		}
+		fetched, err := view.fetchDocumentsByResolvedRowRef(rowRefs, DocumentFetchOptions{})
+		if err != nil {
+			_ = view.Close()
+			return false, err
+		}
+		if err := view.Close(); err != nil {
+			return false, err
+		}
+		if stats != nil {
+			stats.PointRowFetches += fetched.Stats.PointRowFetches
+		}
+		for _, result := range fetched.Results {
+			if !result.Found {
+				return false, fmt.Errorf("collections: column reconstruction missing point row")
+			}
+			seen++
+			next, err := fn(DocumentRecord{ID: bytes.Clone(result.ID), Document: result.Document})
+			if err != nil {
+				return false, err
+			}
+			if !next {
+				return false, nil
+			}
+		}
 	}
 	if err := it.Error(); err != nil {
 		return false, err
 	}
-	truncated := false
 	for it.Valid() {
 		if !it.IsDeleted() {
-			truncated = true
-			break
+			return true, nil
 		}
 		it.Next()
 	}
-	if err := it.Error(); err != nil {
-		return false, err
-	}
-	if len(records) == 0 {
-		return truncated, nil
-	}
-	ids := make([][]byte, len(records))
-	for i := range records {
-		ids[i] = records[i].ID
-	}
-	visible, err := c.scanColumnPhysicalVisibleRowsAtSnapshotForTargets(
-		snap,
-		catalog,
-		catalog.meta.Name,
-		catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
-		columnStoreConfig,
-		true,
-		newColumnPhysicalVisibilityTargetIDs(ids),
-		nil,
-	)
-	if err != nil {
-		return false, err
-	}
-	if stats != nil {
-		stats.PhysicalRows += uint64(visible.Diagnostics.RowsScanned)
-		stats.PhysicalBytes += uint64(visible.Diagnostics.PhysicalBytesScanned)
-		stats.PhysicalDecodedBlocks += uint64(visible.Diagnostics.DecodedBlocks)
-	}
-	visibleRows := visible.Rows
-	visiblePos := 0
-	var typedColumnCache *typedColumnPartReconstructionCache
-	if columnStoreHasTypedColumnPartOwners(columnStoreConfig) {
-		typedColumnCache = &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues)}
-	}
-	retainedSemanticCache := newColumnRetainedSemanticStreamV1DecodeCacheForDocumentRecords(&columnStoreConfig, records)
-	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
-	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(columnStoreConfig)))
-	mergeScratch := make([]columnDeclaredValue, 0, len(columnStoreConfig.Columns))
-	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(snap, catalog)
-	for _, record := range records {
-		for visiblePos < len(visibleRows) && bytes.Compare(visibleRows[visiblePos].ID, record.ID) < 0 {
-			visiblePos++
-		}
-		if visiblePos >= len(visibleRows) || !bytes.Equal(visibleRows[visiblePos].ID, record.ID) {
-			return false, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(record.ID))
-		}
-		typedValues, err := c.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(snap, manifestRootID, columnStoreConfig, visibleRows[visiblePos], typedColumnCache, typedScratch)
-		if err != nil {
-			return false, err
-		}
-		fullValues, err := mergeColumnReconstructionValuesInto(columnStoreConfig, visibleRows[visiblePos].Values, typedValues.Values, mergeScratch)
-		if err != nil {
-			return false, err
-		}
-		retainedDocument, err := resolveColumnRetainedPayloadAtSnapshotWithCache(snap, catalog, columnStoreConfig, record.Document, retainedSemanticCache)
-		if err != nil {
-			return false, err
-		}
-		_, reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(nil, columnStoreConfig, retainedDocument, visibleRows[visiblePos], fullValues, nil, nil, retainedTemplateResolver)
-		if err != nil {
-			return false, err
-		}
-		record.Document = reconstructed
-		next, err := fn(record)
-		if err != nil {
-			return false, err
-		}
-		if !next {
-			return false, nil
-		}
-	}
-	return truncated, nil
+	return false, it.Error()
 }
 
 func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {
@@ -21280,6 +21261,10 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 	case collectionIndexStateRootName(meta.Name):
 		return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
 	case collectionColumnManifestRootName(meta.Name):
+		if meta.Options.ColumnStore != nil {
+			return backendRootStoragePolicy(meta.Options.ColumnStore.ControlRootStoragePolicy)
+		}
+	case collectionColumnRowLocatorRootName(meta.Name):
 		if meta.Options.ColumnStore != nil {
 			return backendRootStoragePolicy(meta.Options.ColumnStore.ControlRootStoragePolicy)
 		}
@@ -22398,6 +22383,10 @@ func collectionRootNames(meta CollectionMeta) []string {
 	}
 	if meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled {
 		out = append(out, collectionColumnManifestRootName(meta.Name))
+		// The locator maps each live primary ID to the physical row created by
+		// the same command-WAL publication. It is deliberately a separate root:
+		// primary values remain their existing raw-document/value-log payloads.
+		out = append(out, collectionColumnRowLocatorRootName(meta.Name))
 	}
 	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
 		out = append(out, collectionRetainedSemanticStreamRootName(meta.Name))
@@ -22428,6 +22417,10 @@ func collectionIndexStateRootName(collection string) string {
 
 func collectionColumnManifestRootName(collection string) string {
 	return collection + "/column/manifest"
+}
+
+func collectionColumnRowLocatorRootName(collection string) string {
+	return collection + "/column/row-locator"
 }
 
 func collectionRetainedSemanticStreamRootName(collection string) string {
