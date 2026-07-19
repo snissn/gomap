@@ -335,6 +335,392 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextProjectsCollectionDesc
 	}
 }
 
+func TestPublishOrderedRootCommandWALContextWarmCoveredDescriptorTransitionAvoidsCandidateScan(t *testing.T) {
+	tests := []struct {
+		name    string
+		publish func(*testing.T, *DB, uint64, string) uint64
+	}{
+		{
+			name: "iterator-group",
+			publish: func(t *testing.T, db *DB, baseRoot uint64, commandKey string) uint64 {
+				t.Helper()
+				rootDelta := mustFrozenSystemMemtable(t, "sys/1024", "value-updated")
+				if baseRoot == 0 {
+					rootDelta = mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+				}
+				_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+					[]OrderedRootDeltaPublishInput{{BaseRoot: baseRoot, Iter: rootDelta.NewIterator(nil, nil)}},
+					mustRawKVCommandWALIntent(t, db, commandKey, "1"),
+					func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenRawMemtable(t,
+							collectionRootDescriptorPrefix+"covered-iterator",
+							encodeMaintenanceRootID(rootIDs[0]),
+						).NewIterator(nil, nil), nil
+					},
+				)
+				if err != nil {
+					t.Fatalf("publish iterator base root %d: %v", baseRoot, err)
+				}
+				return rootIDs[0]
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			db := openCommandWALDB(t, dir)
+			defer db.Close()
+
+			baseRoot := test.publish(t, db, 0, "cmd/covered-base")
+			if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+				t.Fatalf("prime value-log reference tracker: %v", err)
+			}
+			var scans atomic.Int64
+			db.testScanCandidateExternalReferencesHook = func() { scans.Add(1) }
+			newRoot := test.publish(t, db, baseRoot, "cmd/covered-warm")
+			db.testScanCandidateExternalReferencesHook = nil
+			if newRoot == baseRoot {
+				t.Fatalf("warm publish root=%d want a distinct root transition", newRoot)
+			}
+			if got := scans.Load(); got != 0 {
+				t.Fatalf("warm covered descriptor candidate dependency scans=%d want 0", got)
+			}
+		})
+	}
+}
+
+func TestPublishOrderedRootCommandWALContextWarmUnmatchedDescriptorTransitionRetainsCandidateScan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	publish := func(baseRoot uint64, descriptorRoot uint64, commandKey string) uint64 {
+		t.Helper()
+		rootDelta := mustFrozenSystemMemtable(t, "sys/1024", "value-updated")
+		if baseRoot == 0 {
+			rootDelta = mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+		}
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+			[]OrderedRootDeltaPublishInput{{BaseRoot: baseRoot, Iter: rootDelta.NewIterator(nil, nil)}},
+			mustRawKVCommandWALIntent(t, db, commandKey, "1"),
+			func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				rootID := descriptorRoot
+				if rootID == 0 {
+					rootID = rootIDs[0]
+				}
+				return mustFrozenRawMemtable(t,
+					collectionRootDescriptorPrefix+"unmatched-iterator",
+					encodeMaintenanceRootID(rootID),
+				).NewIterator(nil, nil), nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("publish iterator base root %d: %v", baseRoot, err)
+		}
+		return rootIDs[0]
+	}
+
+	baseRoot := publish(0, 0, "cmd/unmatched-base")
+	if _, err := db.referencedValueLogSegments(context.Background()); err != nil {
+		t.Fatalf("prime value-log reference tracker: %v", err)
+	}
+	unrelatedTable := mustFrozenSystemMemtable(t, "unrelated/root", "value")
+	unrelatedRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		unrelatedTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish unrelated root: %v", err)
+	}
+
+	var scans atomic.Int64
+	db.testScanCandidateExternalReferencesHook = func() { scans.Add(1) }
+	newRoot := publish(baseRoot, unrelatedRoot, "cmd/unmatched-warm")
+	db.testScanCandidateExternalReferencesHook = nil
+	if newRoot == baseRoot {
+		t.Fatalf("warm publish root=%d want a distinct grouped root transition", newRoot)
+	}
+	if got := scans.Load(); got != 1 {
+		t.Fatalf("unmatched descriptor candidate dependency scans=%d want 1", got)
+	}
+}
+
+func TestOrderedRootCollectionDescriptorTransitionsCoveredResolvesPointerBackedDescriptors(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	baseTable := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	baseRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base collection root: %v", err)
+	}
+	newTable := mustFrozenSystemMemtable(t, "sys/1024", "value-updated")
+	newRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseRoot,
+		newTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new collection root: %v", err)
+	}
+	if newRoot == baseRoot {
+		t.Fatalf("collection root transition=%d want distinct roots", newRoot)
+	}
+
+	appendDescriptor := func(seq uint32, rootID uint64) page.ValuePtr {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], rootID)
+		return appendPointersInNewSegment(t, dir, 0, seq, uint64(seq)*1000, 1, func(int) []byte {
+			return encoded[:]
+		})[0]
+	}
+	descriptorKey := collectionRootDescriptorPrefix + "pointer-backed"
+	basePtr := appendDescriptor(191, baseRoot)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh base descriptor segment: %v", err)
+	}
+	baseSystemTable := mustFrozenSystemPointerMemtable(t, descriptorKey, basePtr)
+	baseSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base system root: %v", err)
+	}
+
+	newPtr := appendDescriptor(192, newRoot)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh new descriptor segment: %v", err)
+	}
+	newSystemTable := mustFrozenSystemPointerMemtable(t, descriptorKey, newPtr)
+	newSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseSystemRoot,
+		newSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new system root: %v", err)
+	}
+
+	if !db.orderedRootCollectionDescriptorTransitionsCovered(
+		db.idx.Load(),
+		0,
+		baseSystemRoot,
+		newSystemRoot,
+		[]uint64{baseRoot},
+		[]uint64{newRoot},
+	) {
+		t.Fatal("pointer-backed exact descriptor transition was not covered")
+	}
+}
+
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsAliasFanOut(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	baseSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"alias-a", encodeMaintenanceRootID(101),
+		collectionRootDescriptorPrefix+"alias-b", encodeMaintenanceRootID(101),
+	)
+	baseSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base system root: %v", err)
+	}
+	newSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"alias-a", encodeMaintenanceRootID(201),
+		collectionRootDescriptorPrefix+"alias-b", encodeMaintenanceRootID(202),
+	)
+	newSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseSystemRoot,
+		newSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new system root: %v", err)
+	}
+
+	if db.orderedRootCollectionDescriptorTransitionsCovered(
+		db.idx.Load(),
+		0,
+		baseSystemRoot,
+		newSystemRoot,
+		[]uint64{101, 101},
+		[]uint64{201, 202},
+	) {
+		t.Fatal("alias fan-out descriptor transition unexpectedly covered")
+	}
+}
+
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsUnconsumedGroupTransition(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	baseSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"consumed", encodeMaintenanceRootID(101),
+	)
+	baseSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base system root: %v", err)
+	}
+	newSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"consumed", encodeMaintenanceRootID(201),
+	)
+	newSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseSystemRoot,
+		newSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new system root: %v", err)
+	}
+
+	if db.orderedRootCollectionDescriptorTransitionsCovered(
+		db.idx.Load(),
+		0,
+		baseSystemRoot,
+		newSystemRoot,
+		[]uint64{101, 301},
+		[]uint64{201, 302},
+	) {
+		t.Fatal("descriptor proof unexpectedly covered an unconsumed grouped transition")
+	}
+}
+
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsPrimaryRootAlias(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	baseSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"primary-alias", encodeMaintenanceRootID(101),
+	)
+	baseSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base system root: %v", err)
+	}
+	newSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"primary-alias", encodeMaintenanceRootID(201),
+	)
+	newSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseSystemRoot,
+		newSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new system root: %v", err)
+	}
+
+	if db.orderedRootCollectionDescriptorTransitionsCovered(
+		db.idx.Load(),
+		101,
+		baseSystemRoot,
+		newSystemRoot,
+		[]uint64{101},
+		[]uint64{201},
+	) {
+		t.Fatal("descriptor proof unexpectedly covered a root still reachable through the primary user root")
+	}
+}
+
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsSystemRootAlias(t *testing.T) {
+	tests := []struct {
+		name                          string
+		baseDescriptor, newDescriptor uint64
+		baseSystemRoot, newSystemRoot uint64
+	}{
+		{
+			name:           "base descriptor aliases base system root",
+			baseDescriptor: 101, newDescriptor: 201,
+			baseSystemRoot: 101, newSystemRoot: 301,
+		},
+		{
+			name:           "new descriptor aliases new system root",
+			baseDescriptor: 101, newDescriptor: 301,
+			baseSystemRoot: 201, newSystemRoot: 301,
+		},
+		{
+			name:           "new descriptor reuses base system root",
+			baseDescriptor: 101, newDescriptor: 201,
+			baseSystemRoot: 201, newSystemRoot: 301,
+		},
+		{
+			name:           "base descriptor aliases new system root",
+			baseDescriptor: 301, newDescriptor: 201,
+			baseSystemRoot: 101, newSystemRoot: 301,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			baseEntries := []collectionEntry{{
+				key:           []byte(collectionRootDescriptorPrefix + "system-alias"),
+				sourceRootIDs: []uint64{tc.baseDescriptor},
+			}}
+			newEntries := []collectionEntry{{
+				key:           []byte(collectionRootDescriptorPrefix + "system-alias"),
+				sourceRootIDs: []uint64{tc.newDescriptor},
+			}}
+
+			if orderedRootCollectionDescriptorTransitionsCoveredEntries(
+				baseEntries,
+				newEntries,
+				0,
+				tc.baseSystemRoot,
+				tc.newSystemRoot,
+				[]uint64{tc.baseDescriptor},
+				[]uint64{tc.newDescriptor},
+			) {
+				t.Fatal("descriptor proof unexpectedly covered a grouped transition aliased by a system root")
+			}
+		})
+	}
+}
+
 func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	tests := []struct {
 		name    string
