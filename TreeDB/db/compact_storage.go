@@ -1364,6 +1364,9 @@ func (db *DB) compactStorageReferencedValueLogRefs(ctx context.Context) (map[uin
 }
 
 func (db *DB) runCompactStoragePhase(stats *CompactStorageStats, name string, fn func() error) error {
+	if db != nil && db.compactStorageBeforePhase != nil {
+		db.compactStorageBeforePhase(name)
+	}
 	started := time.Now()
 	err := fn()
 	stats.Phases = append(stats.Phases, CompactStoragePhaseStats{
