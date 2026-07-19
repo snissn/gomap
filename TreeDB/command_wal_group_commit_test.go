@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -116,6 +117,7 @@ func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.barrier.count_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.groups_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 0)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypasses_total", 1)
 	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.bypass.reason.solo_durable_sync_total", 1)
 
 	frames := scanPublicCommandWALV2(t, dir)
@@ -125,6 +127,79 @@ func TestPublicCommandWALGroupCommitSoloDurableSyncBypassesCollection(t *testing
 	if frames[0].Kind == commitlog.CommandKindDurablePrefixBarrier {
 		t.Fatalf("solo durable frame=%+v, want mutation rather than collection barrier", frames[0])
 	}
+	if frames[0].DurabilityClass != commitlog.CommandDurabilityDurable {
+		t.Fatalf("solo durable frame class=%v, want durable", frames[0].DurabilityClass)
+	}
+}
+
+func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublication(t *testing.T) {
+	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	soloRegistered := make(chan struct{})
+	releaseSolo := make(chan struct{})
+	db.commandWALGroupCommit.testAfterSoloRegister = func(ticket uint64) {
+		if ticket != 1 {
+			t.Errorf("solo ticket=%d, want 1", ticket)
+		}
+		close(soloRegistered)
+		<-releaseSolo
+	}
+
+	soloDone := make(chan error, 1)
+	go func() {
+		soloDone <- db.SetSync([]byte("solo-first"), []byte("one"))
+	}()
+	select {
+	case <-soloRegistered:
+	case <-time.After(time.Second):
+		t.Fatal("solo durable publication did not register")
+	}
+
+	relaxedDone := make(chan error, 1)
+	go func() {
+		relaxedDone <- db.Set([]byte("relaxed-second"), []byte("two"))
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		db.commandWALGroupCommit.mu.Lock()
+		nextTicket := db.commandWALGroupCommit.nextTicket
+		completedTicket := db.commandWALGroupCommit.completedTicket
+		publishTicket := db.commandWALGroupCommit.publishTicket
+		db.commandWALGroupCommit.mu.Unlock()
+		if nextTicket == 2 && completedTicket == 2 && publishTicket == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("later relaxed publication did not queue behind solo ticket: next=%d completed=%d publish=%d",
+				nextTicket, completedTicket, publishTicket)
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-relaxedDone:
+		t.Fatalf("later relaxed publication completed ahead of solo ticket: %v", err)
+	default:
+	}
+	for _, key := range []string{"solo-first", "relaxed-second"} {
+		if got, err := db.Get([]byte(key)); err != nil || got != nil {
+			t.Fatalf("Get(%q) before solo publication=(%q, %v), want missing", key, got, err)
+		}
+	}
+
+	close(releaseSolo)
+	if err := <-soloDone; err != nil {
+		t.Fatalf("solo SetSync: %v", err)
+	}
+	if err := <-relaxedDone; err != nil {
+		t.Fatalf("later relaxed Set: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("solo-first"), []byte("one"))
+	requireRawKVValue(t, db, []byte("relaxed-second"), []byte("two"))
 }
 
 func TestPublicCommandWALGroupCommitSoloDurableSyncFailurePoisonsLaterAppends(t *testing.T) {

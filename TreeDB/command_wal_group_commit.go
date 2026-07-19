@@ -14,29 +14,30 @@ const (
 )
 
 type publicCommandWALGroupCommit struct {
-	mu                   sync.Mutex
-	cond                 sync.Cond
-	wake                 chan struct{}
-	timer                *time.Timer
-	leaderActive         bool
-	nextTicket           uint64
-	completedTicket      uint64
-	publishTicket        uint64
-	terminalErr          error
-	pendingCount         int
-	pendingCommits       int
-	pendingBytes         int
-	pendingForceTickets  []uint64
-	pendingTriggered     bool
-	retryableErrors      map[uint64]error
-	delay                time.Duration
-	maxCommits           int
-	maxBytes             int
-	testBeforeSync       func(groupSize int)
-	testAfterRegister    func(ticket uint64, durable bool)
-	testAfterWait        func(ticket uint64)
-	testBeforeLeaderWait func()
-	durableIntents       atomic.Int64
+	mu                    sync.Mutex
+	cond                  sync.Cond
+	wake                  chan struct{}
+	timer                 *time.Timer
+	leaderActive          bool
+	nextTicket            uint64
+	completedTicket       uint64
+	publishTicket         uint64
+	terminalErr           error
+	pendingCount          int
+	pendingCommits        int
+	pendingBytes          int
+	pendingForceTickets   []uint64
+	pendingTriggered      bool
+	retryableErrors       map[uint64]error
+	delay                 time.Duration
+	maxCommits            int
+	maxBytes              int
+	testBeforeSync        func(groupSize int)
+	testAfterRegister     func(ticket uint64, durable bool)
+	testAfterWait         func(ticket uint64)
+	testBeforeLeaderWait  func()
+	testAfterSoloRegister func(ticket uint64)
+	durableIntents        atomic.Int64
 
 	attempts             atomic.Uint64
 	groups               atomic.Uint64
@@ -196,6 +197,7 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 		}
 	}
 	var ticket uint64
+	var afterSoloRegister func(uint64)
 	if err == nil && lsn != 0 {
 		group.mu.Lock()
 		if group.terminalErr != nil {
@@ -205,6 +207,7 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 			ticket = group.nextTicket
 			group.completedTicket = ticket
 			group.bypassSoloDurable.Add(1)
+			afterSoloRegister = group.testAfterSoloRegister
 			group.cond.Broadcast()
 		}
 		group.mu.Unlock()
@@ -213,6 +216,9 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 	tdb.commandWALPublicOperationGate.Unlock()
 	if err != nil || ticket == 0 {
 		return publication, true, err
+	}
+	if afterSoloRegister != nil {
+		afterSoloRegister(ticket)
 	}
 
 	publication.ticket = ticket

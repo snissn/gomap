@@ -4185,8 +4185,8 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 		statMapUint64(t, before, "treedb.command_wal.group_commit.groups_total")
 	forcedGroups := statMapUint64(t, after, "treedb.command_wal.group_commit.forced_total") -
 		statMapUint64(t, before, "treedb.command_wal.group_commit.forced_total")
-	if groupCount <= forcedGroups {
-		t.Fatalf("group commits=%d forced groups=%d, want at least one durable mutation group", groupCount, forcedGroups)
+	if groupCount < forcedGroups {
+		t.Fatalf("group commits=%d forced groups=%d, want every forced group represented", groupCount, forcedGroups)
 	}
 	durableGroups := groupCount - forcedGroups
 	if durableGroups > 8 {
