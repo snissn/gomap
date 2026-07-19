@@ -2842,9 +2842,9 @@ func TestPublicCommandWALBatchAppendUsesStablePayload(t *testing.T) {
 	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount || wrapped.payload.Count() != 2 {
 		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable count 2", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
 	}
+	savedScratch := wrapped.beginGroupPublicationTicketHandoff()
 	appendErr := wrapped.appendCommandWAL(false)
-	publication := wrapped.groupPublication
-	wrapped.groupPublication = publicCommandWALPublication{}
+	publication := wrapped.finishGroupPublicationTicketHandoff(savedScratch)
 	if wrapped.db != nil {
 		wrapped.db.finishPublicCommandWALGroupPublication(publication, appendErr)
 	}
@@ -3042,9 +3042,9 @@ func TestPublicCommandWALBatchBypassStreamsReplayToCommandWAL(t *testing.T) {
 	if !wrapped.payloadBypass {
 		t.Fatal("batch did not take payload-bypass path")
 	}
+	savedScratch := wrapped.beginGroupPublicationTicketHandoff()
 	appendErr := wrapped.appendCommandWAL(false)
-	publication := wrapped.groupPublication
-	wrapped.groupPublication = publicCommandWALPublication{}
+	publication := wrapped.finishGroupPublicationTicketHandoff(savedScratch)
 	db.finishPublicCommandWALGroupPublication(publication, appendErr)
 	if appendErr != nil {
 		t.Fatalf("appendCommandWAL: %v", appendErr)
@@ -3110,9 +3110,9 @@ func TestPublicCommandWALBatchStablePayloadAppendsWithoutReplay(t *testing.T) {
 	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount {
 		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable payload", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
 	}
+	savedScratch := wrapped.beginGroupPublicationTicketHandoff()
 	appendErr := wrapped.appendCommandWAL(false)
-	publication := wrapped.groupPublication
-	wrapped.groupPublication = publicCommandWALPublication{}
+	publication := wrapped.finishGroupPublicationTicketHandoff(savedScratch)
 	db.finishPublicCommandWALGroupPublication(publication, appendErr)
 	if appendErr != nil {
 		_ = db.Close()
@@ -3187,9 +3187,9 @@ func TestPublicCommandWALBatchOrdinarySetStablePayloadAppendsWithoutReplay(t *te
 	if inner.setViewCalls != 2 || inner.setCalls != 0 {
 		t.Fatalf("inner calls: setView=%d set=%d, want 2/0", inner.setViewCalls, inner.setCalls)
 	}
+	savedScratch := wrapped.beginGroupPublicationTicketHandoff()
 	appendErr := wrapped.appendCommandWAL(false)
-	publication := wrapped.groupPublication
-	wrapped.groupPublication = publicCommandWALPublication{}
+	publication := wrapped.finishGroupPublicationTicketHandoff(savedScratch)
 	db.finishPublicCommandWALGroupPublication(publication, appendErr)
 	if appendErr != nil {
 		_ = db.Close()
