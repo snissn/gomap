@@ -50,6 +50,24 @@ A TreeDB deployment uses:
   `stable/`, `apply/`, `snapshots/`, and `peers/<peer-id>/` directories,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
+Before a writable public open can succeed, TreeDB establishes the complete
+directory dependency chain from the outer database root through `maindb`,
+enabled side-store roots, and each backend's `wal`, `value_vlog`, `leaf_vlog`,
+and `column_assets` directories. Missing components are created in parent-first
+order. On platforms with parent-directory sync, the distinct parents of newly
+created names are synchronized deepest-first, including the parent of a newly
+created outer root. Windows uses its narrower exact-child creation persistence
+primitive for each new component. Fully existing initialized layouts add no
+creation sync; partial initialized layouts synchronize only the parents of
+names created by that open. Until a backend `index.db` exists as initialization
+proof, writable open conservatively synchronizes every ancestor edge from the
+requested directories through the filesystem or volume root, deepest-first and
+deduplicated. This closes intermediate edges left by a failed attempt even
+though the proof alone cannot recover the original pre-existing boundary. Any
+namespace sync failure aborts open, and an unavailable primitive returns the
+typed `ErrNamespacePersistenceUnsupported` result rather than certifying the
+layout.
+
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
 `collection_wal_v1`) is deprecated before becoming the active committed format.
 It is retained in `collection-wal-durability-plan.md` as historical design
