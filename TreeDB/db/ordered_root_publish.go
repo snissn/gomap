@@ -1128,6 +1128,7 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, b
 			publishedTransitions[rootTransition{base: baseRoots[i], next: newRoots[i]}]++
 		}
 	}
+	consumedTransitions := make(map[rootTransition]struct{}, len(publishedTransitions))
 	baseToNew := make(map[uint64]uint64)
 	newToBase := make(map[uint64]uint64)
 	changed := false
@@ -1163,11 +1164,14 @@ func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, b
 			}
 			baseToNew[baseRootID] = newRootID
 			newToBase[newRootID] = baseRootID
+			consumedTransitions[transition] = struct{}{}
 			changed = true
 		}
 		delete(baseByKey, string(newEntries[i].key))
 	}
-	return changed && len(baseByKey) == 0
+	return changed &&
+		len(baseByKey) == 0 &&
+		len(consumedTransitions) == len(publishedTransitions)
 }
 
 func orderedRootRangeOverlapsPrefix(start, end, prefix, prefixEnd []byte) bool {

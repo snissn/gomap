@@ -576,6 +576,50 @@ func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsAliasFanOut(t *
 	}
 }
 
+func TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsUnconsumedGroupTransition(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	baseSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"consumed", encodeMaintenanceRootID(101),
+	)
+	baseSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		0,
+		baseSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish base system root: %v", err)
+	}
+	newSystemTable := mustFrozenRawMemtable(t,
+		collectionRootDescriptorPrefix+"consumed", encodeMaintenanceRootID(201),
+	)
+	newSystemRoot, _, _, _, _, err := db.publishOrderedRootIterator(
+		baseSystemRoot,
+		newSystemTable.NewIterator(nil, nil),
+		systemRootOrderedPublishOptions(db),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("publish new system root: %v", err)
+	}
+
+	if db.orderedRootCollectionDescriptorTransitionsCovered(
+		db.idx.Load(),
+		baseSystemRoot,
+		newSystemRoot,
+		[]uint64{101, 301},
+		[]uint64{201, 302},
+	) {
+		t.Fatal("descriptor proof unexpectedly covered an unconsumed grouped transition")
+	}
+}
+
 func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *testing.T) {
 	tests := []struct {
 		name    string
