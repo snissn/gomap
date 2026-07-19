@@ -576,18 +576,25 @@ type CollectionInsertStats struct {
 	ColumnPublishCommit           time.Duration
 	// ColumnPublish* below decompose the DB portion of ColumnPublishCommit into
 	// non-overlapping ordered-root publication phases.
-	ColumnPublishWriteLockWait          time.Duration
-	ColumnPublishPreflight              time.Duration
-	ColumnPublishCommandWALAppend       time.Duration
-	ColumnPublishOrderedRootApply       time.Duration
-	ColumnPublishSystemRootApply        time.Duration
-	ColumnPublishFinalize               time.Duration
-	ColumnPublishPostFinalize           time.Duration
-	ColumnPublishDocumentExtraction     time.Duration
-	ColumnPublishDeclaredColumnEncoding time.Duration
-	ColumnPublishAssetPreparation       time.Duration
-	ColumnPublishRowAssetPreparation    time.Duration
-	ColumnPublishTypedColumnPreparation time.Duration
+	ColumnPublishWriteLockWait    time.Duration
+	ColumnPublishPreflight        time.Duration
+	ColumnPublishCommandWALAppend time.Duration
+	ColumnPublishOrderedRootApply time.Duration
+	ColumnPublishSystemRootApply  time.Duration
+	ColumnPublishFinalize         time.Duration
+	// ColumnPublishFinalize* fields subdivide ColumnPublishFinalize. They are
+	// diagnostic children and are not added to CommitExclusiveTotal.
+	ColumnPublishFinalizePrepareDurability time.Duration
+	ColumnPublishFinalizeCandidateBuild    time.Duration
+	ColumnPublishFinalizeEnqueueActivation time.Duration
+	ColumnPublishFinalizeAdmissionWait     time.Duration
+	ColumnPublishFinalizeDurabilityWait    time.Duration
+	ColumnPublishPostFinalize              time.Duration
+	ColumnPublishDocumentExtraction        time.Duration
+	ColumnPublishDeclaredColumnEncoding    time.Duration
+	ColumnPublishAssetPreparation          time.Duration
+	ColumnPublishRowAssetPreparation       time.Duration
+	ColumnPublishTypedColumnPreparation    time.Duration
 
 	ColumnPublishTypedColumnDictionaryBuild    time.Duration
 	ColumnPublishTypedColumnRowMaterialization time.Duration

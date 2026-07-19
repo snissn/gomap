@@ -62,6 +62,11 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishOrderedRootApply += src.ColumnPublishOrderedRootApply
 	dst.ColumnPublishSystemRootApply += src.ColumnPublishSystemRootApply
 	dst.ColumnPublishFinalize += src.ColumnPublishFinalize
+	dst.ColumnPublishFinalizePrepareDurability += src.ColumnPublishFinalizePrepareDurability
+	dst.ColumnPublishFinalizeCandidateBuild += src.ColumnPublishFinalizeCandidateBuild
+	dst.ColumnPublishFinalizeEnqueueActivation += src.ColumnPublishFinalizeEnqueueActivation
+	dst.ColumnPublishFinalizeAdmissionWait += src.ColumnPublishFinalizeAdmissionWait
+	dst.ColumnPublishFinalizeDurabilityWait += src.ColumnPublishFinalizeDurabilityWait
 	dst.ColumnPublishPostFinalize += src.ColumnPublishPostFinalize
 	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
 	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
@@ -163,6 +168,11 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_ordered_root_apply_ns/doc", stats.ColumnPublishOrderedRootApply)
 	reportDuration("column_publish_system_root_apply_ns/doc", stats.ColumnPublishSystemRootApply)
 	reportDuration("column_publish_finalize_ns/doc", stats.ColumnPublishFinalize)
+	reportDuration("column_publish_finalize_prepare_durability_ns/doc", stats.ColumnPublishFinalizePrepareDurability)
+	reportDuration("column_publish_finalize_candidate_build_ns/doc", stats.ColumnPublishFinalizeCandidateBuild)
+	reportDuration("column_publish_finalize_enqueue_activation_ns/doc", stats.ColumnPublishFinalizeEnqueueActivation)
+	reportDuration("column_publish_finalize_admission_wait_ns/doc", stats.ColumnPublishFinalizeAdmissionWait)
+	reportDuration("column_publish_finalize_durability_wait_ns/doc", stats.ColumnPublishFinalizeDurabilityWait)
 	reportDuration("column_publish_post_finalize_ns/doc", stats.ColumnPublishPostFinalize)
 	reportDuration("column_publish_document_extraction_ns/doc", stats.ColumnPublishDocumentExtraction)
 	reportDuration("column_publish_declared_column_encoding_ns/doc", stats.ColumnPublishDeclaredColumnEncoding)

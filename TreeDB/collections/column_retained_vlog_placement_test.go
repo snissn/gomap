@@ -389,7 +389,15 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 	if stats.ColumnPublishCommitExclusiveTotal() > stats.ColumnPublishCommit {
 		t.Fatalf("column publish exclusive phases exceed commit wall time: exclusive=%s commit=%s", stats.ColumnPublishCommitExclusiveTotal(), stats.ColumnPublishCommit)
 	}
-	t.Logf("column publish phase evidence: commit=%s exclusive=%s append=%s root_apply=%s system_apply=%s finalize=%s", stats.ColumnPublishCommit, stats.ColumnPublishCommitExclusiveTotal(), stats.ColumnPublishCommandWALAppend, stats.ColumnPublishOrderedRootApply, stats.ColumnPublishSystemRootApply, stats.ColumnPublishFinalize)
+	finalizeChildren := stats.ColumnPublishFinalizePrepareDurability +
+		stats.ColumnPublishFinalizeCandidateBuild +
+		stats.ColumnPublishFinalizeEnqueueActivation +
+		stats.ColumnPublishFinalizeAdmissionWait +
+		stats.ColumnPublishFinalizeDurabilityWait
+	if finalizeChildren <= 0 || finalizeChildren > stats.ColumnPublishFinalize {
+		t.Fatalf("column publish finalize children=%s finalize=%s", finalizeChildren, stats.ColumnPublishFinalize)
+	}
+	t.Logf("column publish phase evidence: commit=%s exclusive=%s append=%s root_apply=%s system_apply=%s finalize=%s finalize_prepare=%s finalize_candidate=%s finalize_enqueue=%s finalize_admission=%s", stats.ColumnPublishCommit, stats.ColumnPublishCommitExclusiveTotal(), stats.ColumnPublishCommandWALAppend, stats.ColumnPublishOrderedRootApply, stats.ColumnPublishSystemRootApply, stats.ColumnPublishFinalize, stats.ColumnPublishFinalizePrepareDurability, stats.ColumnPublishFinalizeCandidateBuild, stats.ColumnPublishFinalizeEnqueueActivation, stats.ColumnPublishFinalizeAdmissionWait)
 	if stats.ColumnPublishAssetPreparation <= 0 {
 		t.Fatalf("column publish asset-preparation timing missing: %+v", stats)
 	}

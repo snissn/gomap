@@ -172,15 +172,20 @@ type CommandWALIntent struct {
 // ordered-root publication. It is opt-in because callers normally need only
 // the aggregate DB telemetry. An intent is single-use while it is published.
 type CommandWALPublishTiming struct {
-	WriteLockWait time.Duration
-	Preflight     time.Duration
-	Append        time.Duration
-	ContextBuild  time.Duration
-	RootApply     time.Duration
-	SystemBuild   time.Duration
-	SystemApply   time.Duration
-	Finalize      time.Duration
-	PostFinalize  time.Duration
+	WriteLockWait             time.Duration
+	Preflight                 time.Duration
+	Append                    time.Duration
+	ContextBuild              time.Duration
+	RootApply                 time.Duration
+	SystemBuild               time.Duration
+	SystemApply               time.Duration
+	Finalize                  time.Duration
+	FinalizePrepareDurability time.Duration
+	FinalizeCandidateBuild    time.Duration
+	FinalizeEnqueueActivation time.Duration
+	FinalizeAdmissionWait     time.Duration
+	FinalizeDurabilityWait    time.Duration
+	PostFinalize              time.Duration
 }
 
 // SetPublishTiming requests request-scoped ordered-root publication timings
@@ -210,6 +215,11 @@ func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
 	timing.SystemBuild += other.SystemBuild
 	timing.SystemApply += other.SystemApply
 	timing.Finalize += other.Finalize
+	timing.FinalizePrepareDurability += other.FinalizePrepareDurability
+	timing.FinalizeCandidateBuild += other.FinalizeCandidateBuild
+	timing.FinalizeEnqueueActivation += other.FinalizeEnqueueActivation
+	timing.FinalizeAdmissionWait += other.FinalizeAdmissionWait
+	timing.FinalizeDurabilityWait += other.FinalizeDurabilityWait
 	timing.PostFinalize += other.PostFinalize
 }
 

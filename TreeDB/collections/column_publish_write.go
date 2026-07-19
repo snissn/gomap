@@ -578,6 +578,11 @@ func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.Co
 	stats.ColumnPublishOrderedRootApply += timing.RootApply
 	stats.ColumnPublishSystemRootApply += timing.SystemApply
 	stats.ColumnPublishFinalize += timing.Finalize
+	stats.ColumnPublishFinalizePrepareDurability += timing.FinalizePrepareDurability
+	stats.ColumnPublishFinalizeCandidateBuild += timing.FinalizeCandidateBuild
+	stats.ColumnPublishFinalizeEnqueueActivation += timing.FinalizeEnqueueActivation
+	stats.ColumnPublishFinalizeAdmissionWait += timing.FinalizeAdmissionWait
+	stats.ColumnPublishFinalizeDurabilityWait += timing.FinalizeDurabilityWait
 	stats.ColumnPublishPostFinalize += timing.PostFinalize
 }
 

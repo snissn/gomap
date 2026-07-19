@@ -2599,6 +2599,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		durableResources = nil
 	}
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.publishTiming = timing
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
@@ -3567,6 +3568,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		durableResources = nil
 	}
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
+	finalizeOpts.publishTiming = timing
 	finalizeOpts.closeTeardownPinned = true
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
