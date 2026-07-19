@@ -35,7 +35,7 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 	}
 	defer db.Close()
 
-	assertCuts := func(name string, sync bool, write func() error) {
+	assertCuts := func(name string, _ bool, write func() error) {
 		t.Helper()
 		var events []durabilitycut.Event
 		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -49,15 +49,15 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		beforeFlush, afterFlush := durabilitycut.BeforeUserspaceFlush, durabilitycut.AfterUserspaceFlush
-		if sync {
-			beforeFlush, afterFlush = durabilitycut.BeforeDependencyFileSync, durabilitycut.AfterDependencyFileSync
-		}
 		want := []durabilitycut.Point{
 			durabilitycut.BeforeDependencyAppend,
 			durabilitycut.AfterDependencyAppend,
-			beforeFlush,
-			afterFlush,
+			durabilitycut.BeforeUserspaceFlush,
+			durabilitycut.AfterUserspaceFlush,
+			durabilitycut.BeforeDependencyAppend,
+			durabilitycut.AfterDependencyAppend,
+			durabilitycut.BeforeDependencyFileSync,
+			durabilitycut.AfterDependencyFileSync,
 		}
 		if len(events) != len(want) {
 			t.Fatalf("%s events=%+v, want points %v", name, events, want)
@@ -67,14 +67,16 @@ func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
 				t.Fatalf("%s event[%d].Point=%q, want %q (events=%+v)", name, i, events[i].Point, point, events)
 			}
 		}
-		if events[1].LSN == 0 {
-			t.Fatalf("%s after-append LSN=0", name)
+		if events[1].LSN == 0 || events[5].LSN != events[1].LSN+1 {
+			t.Fatalf("%s mutation/barrier LSNs=(%d,%d), want adjacent non-zero", name, events[1].LSN, events[5].LSN)
 		}
 		if events[1].Path == "" {
 			t.Fatalf("%s after-append omitted exact segment path", name)
 		}
-		if events[2].Path == "" || events[3].Path != events[2].Path {
-			t.Fatalf("%s flush paths=(%q,%q), want same non-empty path", name, events[2].Path, events[3].Path)
+		if events[2].Path == "" || events[3].Path != events[2].Path ||
+			events[6].Path == "" || events[7].Path != events[6].Path {
+			t.Fatalf("%s flush paths relaxed=(%q,%q) durable=(%q,%q), want paired non-empty paths",
+				name, events[2].Path, events[3].Path, events[6].Path, events[7].Path)
 		}
 	}
 
@@ -538,6 +540,7 @@ func requirePublicBatchWriteSyncPhasePartitions(t *testing.T, stats map[string]s
 		statMapUint64(t, stats, prefix+"command_external_ref_ordering.ns_total") +
 		statMapUint64(t, stats, prefix+"command_append.ns_total") +
 		statMapUint64(t, stats, prefix+"command_flush.ns_total") +
+		statMapUint64(t, stats, prefix+"command_group_commit_wait.ns_total") +
 		statMapUint64(t, stats, prefix+"command_sync.ns_total") +
 		statMapUint64(t, stats, prefix+"command_post_append_pending_lsn_bookkeeping.ns_total") +
 		statMapUint64(t, stats, prefix+"command_empty_barrier.ns_total") +
@@ -624,10 +627,10 @@ func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
 
 	stats := db.Stats()
 	for key, want := range map[string]uint64{
-		"treedb.command_wal.append.count_total":         2,
+		"treedb.command_wal.append.count_total":         3,
 		"treedb.command_wal.append.point.count_total":   1,
 		"treedb.command_wal.append.payload.count_total": 1,
-		"treedb.command_wal.flush.count_total":          1,
+		"treedb.command_wal.flush.count_total":          2,
 		"treedb.command_wal.sync.count_total":           1,
 	} {
 		if got := statMapUint64(t, stats, key); got != want {
@@ -702,7 +705,7 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *
 	if got := before[prefix+"top_level_partition"]; got != "checkpoint_gate+preflight_materialization+command_callback+memtable_publication_reset+residual" {
 		t.Fatalf("top-level partition=%q", got)
 	}
-	if got := before[prefix+"command_callback_partition"]; got != "command_public_payload_entry_scan_preparation+command_publish_lock_barrier_wait+command_backend_intent_planning_serialization+command_external_ref_ordering+command_append+(command_flush|command_sync)+command_post_append_pending_lsn_bookkeeping+command_empty_barrier+command_other" {
+	if got := before[prefix+"command_callback_partition"]; got != "command_public_payload_entry_scan_preparation+command_publish_lock_barrier_wait+command_backend_intent_planning_serialization+command_external_ref_ordering+command_append+command_flush+command_group_commit_wait+command_sync+command_post_append_pending_lsn_bookkeeping+command_empty_barrier+command_other" {
 		t.Fatalf("command partition=%q", got)
 	}
 
@@ -778,11 +781,14 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *
 	if got := statMapUint64(t, after, prefix+"command_append.calls_total"); got != 2 {
 		t.Fatalf("phase command append calls=%d, want 2 (stats=%#v)", got, after)
 	}
-	if got := statMapUint64(t, after, prefix+"command_sync.calls_total"); got != 2 {
-		t.Fatalf("phase command sync calls=%d, want 2 (stats=%#v)", got, after)
+	if got := statMapUint64(t, after, prefix+"command_group_commit_wait.calls_total"); got != 2 {
+		t.Fatalf("phase command group wait calls=%d, want 2 (stats=%#v)", got, after)
 	}
-	if got := statMapUint64(t, after, prefix+"command_flush.calls_total"); got != 0 {
-		t.Fatalf("phase command flush calls=%d, want 0 (stats=%#v)", got, after)
+	if got := statMapUint64(t, after, prefix+"command_group_commit_wait.ns_total"); got == 0 {
+		t.Fatalf("phase command group wait ns=0, want measured wait (stats=%#v)", after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_sync.calls_total"); got != 0 {
+		t.Fatalf("phase command sync calls=%d, want 0 because shared sync is group-scoped (stats=%#v)", got, after)
 	}
 	if got := statMapUint64(t, after, prefix+"command_public_payload_entry_scan_preparation.calls_total"); got != 2 {
 		t.Fatalf("phase public preparation calls=%d, want 2 (stats=%#v)", got, after)
@@ -842,11 +848,11 @@ func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelsRelaxedExplicitSync(t *te
 
 	stats := db.Stats()
 	prefix := "treedb.public.batch.write_sync.phase."
-	if got := statMapUint64(t, stats, prefix+"command_flush.calls_total"); got != 0 {
-		t.Fatalf("phase command flush calls=%d, want 0 (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, prefix+"command_group_commit_wait.calls_total"); got != 1 {
+		t.Fatalf("phase command group wait calls=%d, want 1 (stats=%#v)", got, stats)
 	}
-	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 1 {
-		t.Fatalf("phase command sync calls=%d, want 1 (stats=%#v)", got, stats)
+	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 0 {
+		t.Fatalf("phase command sync calls=%d, want 0 because shared sync is group-scoped (stats=%#v)", got, stats)
 	}
 	requirePublicBatchWriteSyncPhasePartitions(t, stats)
 }
@@ -882,7 +888,9 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 		t.Fatalf("phase external-ref ordering calls=%d, want 1 (stats=%#v)", got, stats)
 	}
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.sync.count_total", 1)
-	requirePublicStatDelta(t, before, stats, "treedb.command_wal.write.syscalls_total", 1)
+	// The mutation frame and the durable-prefix barrier are distinct WAL
+	// writes, but the group still owns exactly one shared file sync.
+	requirePublicStatDelta(t, before, stats, "treedb.command_wal.write.syscalls_total", 2)
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.file_sync.calls_total", 1)
 	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.calls_total", 1)
 	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.materialization.calls_total", 1)
@@ -925,16 +933,16 @@ func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
 	after := db.Stats()
 
 	for key, want := range map[string]uint64{
-		"treedb.command_wal.append.count_total":            3,
+		"treedb.command_wal.append.count_total":            5,
 		"treedb.command_wal.append.point.count_total":      2,
 		"treedb.command_wal.append.entry_scan.count_total": 1,
-		"treedb.command_wal.flush.count_total":             1,
-		"treedb.command_wal.flush.point.count_total":       1,
+		"treedb.command_wal.flush.count_total":             3,
+		"treedb.command_wal.flush.point.count_total":       2,
 		"treedb.command_wal.sync.count_total":              2,
-		"treedb.command_wal.sync.point.count_total":        1,
-		"treedb.command_wal.sync.entry_scan.count_total":   1,
-		"treedb.command_wal.sync.barrier.count_total":      0,
-		"treedb.command_wal.write.syscalls_total":          3,
+		"treedb.command_wal.sync.point.count_total":        0,
+		"treedb.command_wal.sync.entry_scan.count_total":   0,
+		"treedb.command_wal.sync.barrier.count_total":      2,
+		"treedb.command_wal.write.syscalls_total":          5,
 		"treedb.command_wal.write.errors_total":            0,
 		"treedb.command_wal.file_sync.calls_total":         2,
 		"treedb.command_wal.file_sync.errors_total":        0,
@@ -1137,7 +1145,7 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 		t.Fatalf("SetSync: %v", err)
 	}
 	afterSetSync := db.Stats()
-	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.append.count_total", 1)
+	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.append.count_total", 2)
 	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.append.point.count_total", 1)
 	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.sync.count_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -1146,7 +1154,7 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 		t.Fatalf("DeleteSync: %v", err)
 	}
 	afterDeleteSync := db.Stats()
-	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.append.count_total", 2)
+	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.append.count_total", 4)
 	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.append.point.count_total", 2)
 	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.sync.count_total", 2)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -1164,9 +1172,9 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 		t.Fatalf("batch Write Close: %v", err)
 	}
 	afterBatchWrite := db.Stats()
-	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.count_total", 3)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.count_total", 6)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.payload.count_total", 1)
-	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.sync.count_total", 3)
 	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.public.batch.write.calls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -1184,9 +1192,9 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 		t.Fatalf("batch WriteSync Close: %v", err)
 	}
 	afterBatchWriteSync := db.Stats()
-	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.count_total", 4)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.count_total", 8)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.payload.count_total", 2)
-	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.sync.count_total", 4)
 	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.public.batch.write_sync.calls_total", 1)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
@@ -1195,9 +1203,9 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 		t.Fatalf("DeleteRange: %v", err)
 	}
 	afterRangeDelete := db.Stats()
-	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.count_total", 5)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.count_total", 10)
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.entry_scan.count_total", 1)
-	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 0)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 5)
 	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.sync.count_total", 5)
 	requirePublicCommandWALNoCheckpointSince(t, db, before)
 
@@ -1210,7 +1218,7 @@ func TestPublicCommandWALDurableOrdinaryAndExplicitSyncBoundaryMatrixDoesNotChec
 			t.Fatalf("%s remains visible after delete/delete-range", key)
 		}
 	}
-	assertPublicCommandWALFrames(t, db, 5)
+	assertPublicCommandWALFrames(t, db, 10)
 }
 
 func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
@@ -1329,11 +1337,11 @@ func TestPublicCommandWALLiveCountersDoNotRequireStatsScan(t *testing.T) {
 		t.Fatalf("stats_scan=%q, want false (stats=%#v)", got, stats)
 	}
 	for key, want := range map[string]string{
-		"treedb.command_wal.live_accepted_frames":  "2",
-		"treedb.command_wal.live_accepted_max_lsn": "2",
-		"treedb.command_wal.live_covered_frames":   "2",
-		"treedb.command_wal.live_covered_max_lsn":  "2",
-		"treedb.applied_command_lsn":               "2",
+		"treedb.command_wal.live_accepted_frames":  "4",
+		"treedb.command_wal.live_accepted_max_lsn": "4",
+		"treedb.command_wal.live_covered_frames":   "4",
+		"treedb.command_wal.live_covered_max_lsn":  "4",
+		"treedb.applied_command_lsn":               "4",
 	} {
 		if got := stats[key]; got != want {
 			t.Fatalf("stats[%q]=%q, want %q (stats=%#v)", key, got, want, stats)
@@ -1864,12 +1872,12 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 
-	if got := db.backend.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("AppliedCommandLSN after checkpoint=%d, want only covered LSN 1", got)
+	if got := db.backend.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after checkpoint=%d, want covered mutation and barrier through LSN 2", got)
 	}
 	first, last := db.publicCommandWALPendingRange()
-	if first != 2 || last != 2 {
-		t.Fatalf("pending command WAL range=(%d,%d), want post-cut LSN range (2,2)", first, last)
+	if first != 3 || last != 4 {
+		t.Fatalf("pending command WAL range=(%d,%d), want post-cut mutation and barrier range (3,4)", first, last)
 	}
 	got, err := db.Get([]byte("post-cut"))
 	if err != nil {
@@ -1881,8 +1889,8 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("second Checkpoint: %v", err)
 	}
-	if got := db.backend.State().AppliedCommandLSN; got != 2 {
-		t.Fatalf("AppliedCommandLSN after second checkpoint=%d, want 2", got)
+	if got := db.backend.State().AppliedCommandLSN; got != 4 {
+		t.Fatalf("AppliedCommandLSN after second checkpoint=%d, want 4", got)
 	}
 }
 
@@ -1902,22 +1910,22 @@ func TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN(t *testing.T) {
 		t.Fatalf("covered Set: %v", err)
 	}
 	db.snapshotPublicCommandWALCheckpointCutover()
-	db.recordPublicCommandWALPendingLSN(2)
+	db.recordPublicCommandWALPendingLSN(3)
 
 	applied, ranges, err := db.preparePublicCommandWALPendingPublish(false)
 	if err != nil {
 		t.Fatalf("preparePublicCommandWALPendingPublish: %v", err)
 	}
-	if applied != 1 {
-		t.Fatalf("prepared AppliedCommandLSN=%d, want cutover LSN 1", applied)
+	if applied != 2 {
+		t.Fatalf("prepared AppliedCommandLSN=%d, want cutover barrier LSN 2", applied)
 	}
-	if len(ranges) != 1 || ranges[0].First != 1 || ranges[0].Last != 1 {
-		t.Fatalf("prepared ranges=%+v, want [{First:1 Last:1}]", ranges)
+	if len(ranges) != 1 || ranges[0].First != 1 || ranges[0].Last != 2 {
+		t.Fatalf("prepared ranges=%+v, want [{First:1 Last:2}]", ranges)
 	}
 
 	// The synthetic post-cutover LSN is not backed by a cached mutation in this
 	// test. Clear it so the close-time checkpoint does not try to publish it.
-	db.clearPublicCommandWALPendingThrough(2)
+	db.clearPublicCommandWALPendingThrough(3)
 }
 
 func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing.T) {
@@ -2102,8 +2110,8 @@ func TestPublicCommandWALCheckpointPiggybacksAppliedLSN(t *testing.T) {
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if got := db.backend.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	if got := db.backend.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN=%d, want mutation and barrier through LSN 2", got)
 	}
 	stats := db.cached.Stats()
 	if got := stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"]; got != "1" {
@@ -3735,11 +3743,11 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 			valueLogMaterializationSyncs = 1
 		}
 	case "write_then_dirty_write_sync":
-		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
-		batchWriteCalls, batchWriteSyncCalls = 1, 1
+		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 3, 2, 1, 3, 1
+		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
 		// The relaxed prefix remains replay-self-contained in the command WAL;
-		// the following explicit sync closes that prefix without forcing the
-		// cache's deferred value-log materialization path.
+		// the following mutation-plus-barrier group closes that prefix without
+		// forcing the cache's deferred value-log materialization path.
 	case "empty_write_sync_after_write":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls, barrierSyncCalls = 1, 1, 1
@@ -3954,13 +3962,13 @@ func TestPublicCommandWALDurableTinyBatchWriteSyncShapes(t *testing.T) {
 			}
 
 			after := db.Stats()
-			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 2)
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.payload.count_total", 1)
-			requirePublicStatDelta(t, before, after, "treedb.command_wal.flush.count_total", 0)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.flush.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
 			requirePublicCommandWALNoCheckpointSince(t, db, before)
-			assertPublicCommandWALFrames(t, db, 1)
+			assertPublicCommandWALFrames(t, db, 2)
 		})
 	}
 }
@@ -4107,10 +4115,25 @@ func TestPublicCommandWALAutoCheckpointOverlapAdmitsPostFrontierWrites(t *testin
 	requirePublicStatDelta(t, before, after, "treedb.cache.write.wait.checkpoint_drain.count_total", 0)
 	requirePublicStatDelta(t, before, after, "treedb.public.batch.write.calls_total", 8)
 	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 8)
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 16)
-	// The delta includes the auto-checkpoint's command-WAL publish boundary plus
-	// the eight durable overlap writes.
-	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 9)
+	groupCount := statMapUint64(t, after, "treedb.command_wal.group_commit.groups_total") -
+		statMapUint64(t, before, "treedb.command_wal.group_commit.groups_total")
+	forcedGroups := statMapUint64(t, after, "treedb.command_wal.group_commit.forced_total") -
+		statMapUint64(t, before, "treedb.command_wal.group_commit.forced_total")
+	if groupCount <= forcedGroups {
+		t.Fatalf("group commits=%d forced groups=%d, want at least one durable mutation group", groupCount, forcedGroups)
+	}
+	durableGroups := groupCount - forcedGroups
+	if durableGroups > 8 {
+		t.Fatalf("durable overlap groups=%d, want at most one per durable caller", durableGroups)
+	}
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", 8)
+	// Each of the sixteen writes contributes one mutation frame. The eight
+	// durable writes contribute one barrier per coordinator group, whose exact
+	// count depends on how the concurrent callers coalesce.
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 16+durableGroups)
+	// The auto-checkpoint itself contributes one direct durable-prefix sync in
+	// addition to the coordinator-owned durable mutation groups.
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", groupCount+1)
 	requirePublicStatDelta(t, before, after, "treedb.public.checkpoint.calls_total", 0)
 }
 
@@ -4204,7 +4227,7 @@ func TestPublicCommandWALCheckpointPostFrontierRangeWritesWaitForDrain(t *testin
 			requirePublicStatDelta(t, before, after, "treedb.cache.write.wait_for_checkpoint.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.cache.write.wait.checkpoint_drain.count_total", 1)
 			requirePublicStatDelta(t, before, after, "treedb.cache.write.post_frontier_admission.count_total", 0)
-			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 1)
+			requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 2)
 			for _, key := range []string{"range/a", "range/b"} {
 				if got, err := db.Get([]byte(key)); err != nil || got != nil {
 					t.Fatalf("Get(%q) after range write=(%q, %v), want missing", key, got, err)
@@ -4254,8 +4277,8 @@ func TestPublicCommandWALCheckpointPostFrontierAdmissionPropagatesPublishError(t
 	if err := db.cached.Drain(); err != nil {
 		t.Fatalf("Drain after failed checkpoint: %v", err)
 	}
-	if first, last := db.publicCommandWALPendingRange(); first != 1 || last != 2 {
-		t.Fatalf("pending command-WAL range after failed publish=(%d,%d), want (1,2)", first, last)
+	if first, last := db.publicCommandWALPendingRange(); first != 1 || last != 4 {
+		t.Fatalf("pending command-WAL range after failed publish=(%d,%d), want mutation-plus-barrier prefix (1,4)", first, last)
 	}
 	requireRawKVValue(t, db, []byte("publish-error/pre-cut"), []byte("pre-value"))
 	requireRawKVValue(t, db, []byte("publish-error/post-cut"), []byte("post-value"))
@@ -4270,8 +4293,8 @@ func TestPublicCommandWALCheckpointPostFrontierAdmissionPropagatesPublishError(t
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("retry Checkpoint: %v", err)
 	}
-	if got := db.backend.State().AppliedCommandLSN; got != 2 {
-		t.Fatalf("AppliedCommandLSN after retry=%d, want 2", got)
+	if got := db.backend.State().AppliedCommandLSN; got != 4 {
+		t.Fatalf("AppliedCommandLSN after retry=%d, want 4", got)
 	}
 }
 
@@ -4381,11 +4404,11 @@ func TestHelperPublicCommandWALCheckpointPostFrontierCrashWriter(t *testing.T) {
 	if err := waitForPublicCommandWALCheckpointPhase(cleanupComplete, "crash helper checkpoint cleanup"); err != nil {
 		t.Fatal(err)
 	}
-	if got := db.backend.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("AppliedCommandLSN=%d, want pre-cut LSN 1", got)
+	if got := db.backend.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN=%d, want pre-cut mutation and barrier through LSN 2", got)
 	}
-	if first, last := db.publicCommandWALPendingRange(); first != 2 || last != 2 {
-		t.Fatalf("pending command-WAL range=(%d,%d), want post-cut range (2,2)", first, last)
+	if first, last := db.publicCommandWALPendingRange(); first != 3 || last != 4 {
+		t.Fatalf("pending command-WAL range=(%d,%d), want post-cut mutation and barrier range (3,4)", first, last)
 	}
 	segmentsAfter := publicCommandWALSegmentNames(t, dir)
 	if len(segmentsAfter) == 0 {
@@ -4428,8 +4451,8 @@ func TestPublicCommandWALCheckpointPostFrontierGenerationSurvivesCrashReopen(t *
 	postValue := bytes.Repeat([]byte("b"), 64<<10)
 	requireRawKVValue(t, reopen, []byte("frontier/pre-cut"), preValue)
 	requireRawKVValue(t, reopen, []byte("frontier/post-cut"), postValue)
-	if got := reopen.backend.State().AppliedCommandLSN; got < 2 {
-		t.Fatalf("reopened AppliedCommandLSN=%d, want post-cut LSN 2 replayed", got)
+	if got := reopen.backend.State().AppliedCommandLSN; got < 4 {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want post-cut barrier LSN 4 replayed", got)
 	}
 	if _, err := reopen.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
 		t.Fatalf("ValueLogGC after post-frontier replay: %v", err)
@@ -4631,8 +4654,8 @@ func TestPublicCommandWALDeleteRangeCachedReopen(t *testing.T) {
 	if err := db.DeleteRange([]byte("b"), []byte("d")); err != nil {
 		t.Fatalf("DeleteRange: %v", err)
 	}
-	if got := publicCommandWALFrameCount(t, db); got != before+1 {
-		t.Fatalf("command_wal.frames=%d, want %d after one DB-level DeleteRange", got, before+1)
+	if got := publicCommandWALFrameCount(t, db); got != before+2 {
+		t.Fatalf("command_wal.frames=%d, want %d after DeleteRange mutation and durable-prefix barrier", got, before+2)
 	}
 	for _, key := range []string{"b", "c"} {
 		has, err := db.Has([]byte(key))
@@ -4660,8 +4683,8 @@ func TestPublicCommandWALDeleteRangeCachedReopen(t *testing.T) {
 	}
 	requireRawKVValue(t, reopen, []byte("a"), []byte("va"))
 	requireRawKVValue(t, reopen, []byte("d"), []byte("vd"))
-	if got := reopen.backend.State().AppliedCommandLSN; got < before+1 {
-		t.Fatalf("AppliedCommandLSN=%d, want at least %d after reopen", got, before+1)
+	if got := reopen.backend.State().AppliedCommandLSN; got < before+2 {
+		t.Fatalf("AppliedCommandLSN=%d, want at least %d after reopen", got, before+2)
 	}
 }
 
@@ -4775,8 +4798,8 @@ func TestPublicCommandWALDeleteRangeBoundsNoopFramesAndCheckpointLSN(t *testing.
 	if err := db.DeleteRange(nil, []byte("b")); err != nil {
 		t.Fatalf("DeleteRange nil,b: %v", err)
 	}
-	if got := publicCommandWALFrameCount(t, db); got != baseFrames+1 {
-		t.Fatalf("frames after lower-unbounded DeleteRange=%d, want %d", got, baseFrames+1)
+	if got := publicCommandWALFrameCount(t, db); got != baseFrames+2 {
+		t.Fatalf("frames after lower-unbounded DeleteRange=%d, want %d", got, baseFrames+2)
 	}
 	for _, key := range []string{"a"} {
 		has, err := db.Has([]byte(key))
@@ -4791,8 +4814,8 @@ func TestPublicCommandWALDeleteRangeBoundsNoopFramesAndCheckpointLSN(t *testing.
 	if err := db.DeleteRange([]byte("z"), nil); err != nil {
 		t.Fatalf("DeleteRange z,nil: %v", err)
 	}
-	if got := publicCommandWALFrameCount(t, db); got != baseFrames+2 {
-		t.Fatalf("frames after upper-unbounded DeleteRange=%d, want %d", got, baseFrames+2)
+	if got := publicCommandWALFrameCount(t, db); got != baseFrames+4 {
+		t.Fatalf("frames after upper-unbounded DeleteRange=%d, want %d", got, baseFrames+4)
 	}
 	has, err := db.Has([]byte("z"))
 	if err != nil || has {
@@ -4800,14 +4823,14 @@ func TestPublicCommandWALDeleteRangeBoundsNoopFramesAndCheckpointLSN(t *testing.
 	}
 
 	first, last := db.publicCommandWALPendingRange()
-	if first == 0 || last != baseFrames+2 {
-		t.Fatalf("pending command WAL range=(%d,%d), want non-empty ending at %d", first, last, baseFrames+2)
+	if first == 0 || last != baseFrames+4 {
+		t.Fatalf("pending command WAL range=(%d,%d), want non-empty ending at %d", first, last, baseFrames+4)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if got := db.backend.State().AppliedCommandLSN; got != baseFrames+2 {
-		t.Fatalf("AppliedCommandLSN=%d, want %d", got, baseFrames+2)
+	if got := db.backend.State().AppliedCommandLSN; got != baseFrames+4 {
+		t.Fatalf("AppliedCommandLSN=%d, want %d", got, baseFrames+4)
 	}
 }
 
@@ -4833,8 +4856,8 @@ func TestPublicCommandWALDeleteRangeFullRangeInMemoryCheckpoint(t *testing.T) {
 	if err := db.DeleteRange(nil, nil); err != nil {
 		t.Fatalf("DeleteRange nil,nil: %v", err)
 	}
-	if got := publicCommandWALFrameCount(t, db); got != before+1 {
-		t.Fatalf("frames after full-range DeleteRange=%d, want %d", got, before+1)
+	if got := publicCommandWALFrameCount(t, db); got != before+2 {
+		t.Fatalf("frames after full-range DeleteRange=%d, want %d", got, before+2)
 	}
 	for _, key := range []string{"a", "b"} {
 		has, err := db.Has([]byte(key))
@@ -4845,8 +4868,8 @@ func TestPublicCommandWALDeleteRangeFullRangeInMemoryCheckpoint(t *testing.T) {
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if got := db.backend.State().AppliedCommandLSN; got != before+1 {
-		t.Fatalf("AppliedCommandLSN=%d, want %d", got, before+1)
+	if got := db.backend.State().AppliedCommandLSN; got != before+2 {
+		t.Fatalf("AppliedCommandLSN=%d, want %d", got, before+2)
 	}
 }
 
@@ -4991,10 +5014,10 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("batch Close: %v", err)
 	}
-	assertPublicCommandWALFrames(t, db, 1)
-	if frames := publicCommandWALFrameCount(t, db); frames != 1 {
+	assertPublicCommandWALFrames(t, db, 2)
+	if frames := publicCommandWALFrameCount(t, db); frames != 2 {
 		_ = db.Close()
-		t.Fatalf("command_wal.frames=%d, want exactly 1", frames)
+		t.Fatalf("command_wal.frames=%d, want mutation and durable-prefix barrier", frames)
 	}
 	for key, value := range values {
 		requireRawKVValue(t, db, []byte(key), value)
@@ -5135,9 +5158,9 @@ func TestPublicCommandWALBatchDeleteRangeWithPointerUsesCompactRangeFrame(t *tes
 		_ = db.Close()
 		t.Fatalf("batch Close: %v", err)
 	}
-	if frames := publicCommandWALFrameCount(t, db); frames != before+1 {
+	if frames := publicCommandWALFrameCount(t, db); frames != before+2 {
 		_ = db.Close()
-		t.Fatalf("command_wal.frames=%d want %d", frames, before+1)
+		t.Fatalf("command_wal.frames=%d want %d", frames, before+2)
 	}
 	has, err := db.Has([]byte("range-0000"))
 	if err != nil || has {

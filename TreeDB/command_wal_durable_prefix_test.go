@@ -50,7 +50,7 @@ func writeEmptyPublicCommandWALSync(db *DB) error {
 	return errors.Join(writeErr, b.Close())
 }
 
-func TestPublicCommandWALRelaxedExplicitSyncPersistsDurableV2Class(t *testing.T) {
+func TestPublicCommandWALRelaxedExplicitSyncPersistsGroupedDurablePrefix(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
 	if err != nil {
@@ -63,14 +63,20 @@ func TestPublicCommandWALRelaxedExplicitSyncPersistsDurableV2Class(t *testing.T)
 	}
 
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 1 {
-		t.Fatalf("frames=%d, want 1: %+v", len(frames), frames)
+	if len(frames) != 2 {
+		t.Fatalf("frames=%d, want relaxed mutation plus grouped durable-prefix barrier: %+v", len(frames), frames)
 	}
-	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityDurable {
-		t.Fatalf("durability class=%v, want durable", got)
+	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityRelaxed {
+		t.Fatalf("mutation durability class=%v, want relaxed group member", got)
 	}
 	if got := frames[0].Kind; got != commitlog.CommandKindRawKVBatch {
 		t.Fatalf("kind=%v, want RawKVBatch", got)
+	}
+	if got := frames[1].DurabilityClass; got != commitlog.CommandDurabilityDurable {
+		t.Fatalf("barrier durability class=%v, want durable", got)
+	}
+	if got := frames[1].Kind; got != commitlog.CommandKindDurablePrefixBarrier {
+		t.Fatalf("barrier kind=%v, want DurablePrefixBarrier", got)
 	}
 }
 
@@ -277,8 +283,8 @@ func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 		t.Fatalf("SetSync: %v", err)
 	}
 	stats = db.Stats()
-	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
-		t.Fatalf("durable_wal_lsn=%q, want 2", got)
+	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "3" {
+		t.Fatalf("durable_wal_lsn=%q, want grouped barrier LSN 3", got)
 	}
 	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
 		t.Fatalf("pending debt entries=%q, want 0 after SetSync", got)
@@ -352,7 +358,7 @@ func TestPublicCommandWALRelaxedPointerDebtEmitsExactDependencySyncCuts(t *testi
 			beforeSync = i
 		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.AfterDependencyFileSync && containsPath(event, relaxedValuePath):
 			afterSync = i
-		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 2:
+		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend && event.LSN == 3:
 			durableAppend = i
 		}
 	}

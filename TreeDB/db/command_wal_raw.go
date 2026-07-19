@@ -205,9 +205,10 @@ func (db *DB) CommandWALEnabled() bool {
 }
 
 // CommandWALRequestTiming reports request-scoped command-journal phases for an
-// opt-in diagnostic caller. All durations are exclusive. Append and Flush are
-// non-overlapping; Sync reports whether the flush phase used the durable sync
-// path rather than a kernel flush.
+// opt-in diagnostic caller. All durations are exclusive. Append, Flush, and
+// GroupCommitWait are non-overlapping. Sync reports whether the request joined
+// a durable public group; the shared physical sync is not attributed to one
+// request's Flush phase.
 type CommandWALRequestTiming struct {
 	PublicPayloadEntryScanPreparation          time.Duration
 	PublishLockBarrierWait                     time.Duration
@@ -215,6 +216,7 @@ type CommandWALRequestTiming struct {
 	ExternalRefOrdering                        time.Duration
 	Append                                     time.Duration
 	Flush                                      time.Duration
+	GroupCommitWait                            time.Duration
 	PostAppendPendingLSNBookkeeping            time.Duration
 	PublicPreparationObserved                  bool
 	PublishLockBarrierWaitObserved             bool
@@ -222,6 +224,7 @@ type CommandWALRequestTiming struct {
 	ExternalRefOrderingObserved                bool
 	AppendObserved                             bool
 	FlushObserved                              bool
+	GroupCommitWaitObserved                    bool
 	PostAppendPendingLSNBookkeepingObserved    bool
 	Sync                                       bool
 }
