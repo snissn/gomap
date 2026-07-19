@@ -342,6 +342,84 @@ func TestModeledPeakMemoryBudgetEnforcedBeforeGeneration(t *testing.T) {
 	}
 }
 
+func TestBenchmarkWorkBudgetBoundaryAndCanonicalShape(t *testing.T) {
+	boundary := fixtureManifest{Vectors: 10, Queries: 10}
+	cfg := config{
+		probes:   []int{1},
+		overlaps: []float64{0},
+		stages:   stageSet("exact_global_top_k"),
+	}
+	plan, err := validateBenchmarkWork(cfg, boundary, 200)
+	if err != nil {
+		t.Fatalf("exact work-budget boundary rejected: %v", err)
+	}
+	if plan.VectorQueryPairs != 100 || plan.CorpusPasses != 2 || plan.VectorQueryVisits != 200 {
+		t.Fatalf("boundary work plan=%+v", plan)
+	}
+	cfg.overlaps = []float64{0, .2}
+	if _, err := validateBenchmarkWork(cfg, boundary, 200); err == nil {
+		t.Fatal("accepted work plan above exact boundary")
+	}
+
+	canonical, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPlan, err := validateBenchmarkWork(config{
+		probes:   []int{1, 2, 4},
+		overlaps: []float64{0, .2},
+		stages:   stageSet("all"),
+	}, canonical, maxBenchmarkWorkUnits)
+	if err != nil {
+		t.Fatalf("canonical work plan rejected: %v", err)
+	}
+	if canonicalPlan.CorpusPasses != 67 || canonicalPlan.VectorQueryVisits != 85_760_000 {
+		t.Fatalf("canonical work plan=%+v", canonicalPlan)
+	}
+}
+
+func TestPathologicalBenchmarkWorkRejectsBeforeGenerationOrEvidence(t *testing.T) {
+	dataset := t.TempDir()
+	fixture := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "pathological-work",
+		Generator:     "treedb_vector_partition_fixture_v1",
+		Vectors:       500_000,
+		Queries:       500_000,
+		Dimensions:    1,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	raw, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataset, "fixture_manifest.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	err = runWithHermeticProvenance(t, []string{
+		"-dataset", dataset,
+		"-out", out,
+		"-partitions", "1",
+		"-probes", "1",
+		"-overlap", "0",
+		"-top-k", "1",
+		"-stages", "exact_global_top_k",
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "modeled benchmark work") {
+		t.Fatalf("pathological work error=%v", err)
+	}
+	entries, readErr := os.ReadDir(out)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rejected work budget emitted evidence: %+v", entries)
+	}
+}
+
 func TestRunRejectsSeedThatDoesNotMatchFixtureBeforeEvidence(t *testing.T) {
 	out := t.TempDir()
 	err := runWithHermeticProvenance(t, []string{

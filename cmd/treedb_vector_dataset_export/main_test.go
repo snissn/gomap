@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -231,6 +232,50 @@ func TestExportDatasetIsByteStableAndTruthUsesAscendingDistance(t *testing.T) {
 	}
 }
 
+func TestExportMaterializesDocumentVectorsOnceForAllQueries(t *testing.T) {
+	const (
+		docs    = 11
+		queries = 7
+		dims    = 5
+	)
+	calls := 0
+	_, err := exportDatasetWithDocumentGenerator(config{
+		out:        filepath.Join(t.TempDir(), "dataset"),
+		docs:       docs,
+		dimensions: dims,
+		queries:    queries,
+		topK:       4,
+	}, func(document, dimensions int) []float32 {
+		calls++
+		return embedding(document, dimensions)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != docs {
+		t.Fatalf("document generator calls=%d want exactly docs=%d, independent of queries=%d", calls, docs, queries)
+	}
+}
+
+func TestMillionDocumentSingleQueryTruthPeakIsFeasible(t *testing.T) {
+	peak, err := checkedTruthPeakBytes(maxDatasetVectors, 64, 10)
+	if err != nil {
+		t.Fatalf("1M-document single-query truth shape rejected: %v", err)
+	}
+	if peak >= maxDatasetBytes {
+		t.Fatalf("1M-document single-query modeled peak=%d cap=%d", peak, maxDatasetBytes)
+	}
+	if _, err := parseConfig([]string{
+		"-out", t.TempDir(),
+		"-docs", strconv.Itoa(maxDatasetVectors),
+		"-queries", "1",
+		"-dims", "64",
+		"-top-k", "10",
+	}); err != nil {
+		t.Fatalf("1M-document single-query config rejected: %v", err)
+	}
+}
+
 func TestParseConfigRejectsCorpusCapsBeforeAllocation(t *testing.T) {
 	if _, err := parseConfig([]string{"-out", t.TempDir(), "-docs", "1000001"}); err == nil {
 		t.Fatal("accepted vector cap")
@@ -240,6 +285,9 @@ func TestParseConfigRejectsCorpusCapsBeforeAllocation(t *testing.T) {
 	}
 	if _, err := checkedCombinedVectorBytes(maxDatasetVectors, maxDatasetVectors, maxDatasetDims); err == nil {
 		t.Fatal("accepted combined document/query byte cap")
+	}
+	if _, err := checkedTruthPeakBytes(maxDatasetVectors, maxDatasetDims, 1); err == nil {
+		t.Fatal("accepted exact truth peak above cap")
 	}
 }
 

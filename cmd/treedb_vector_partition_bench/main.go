@@ -33,6 +33,7 @@ const (
 	maxDimensions                   = 4_096
 	maxPartitions                   = 16_384
 	maxFixtureBytes           int64 = 4 << 30
+	maxBenchmarkWorkUnits     int64 = 200_000_000
 	maxManifestBytes          int64 = 64 << 10
 	maxGitHubEventBytes       int64 = 2 << 20
 	partitionHNSWIndex              = "embedding_graph"
@@ -45,6 +46,7 @@ const (
 	memorySlackNumerator            = 5
 	memorySlackDenominator          = 4
 	memoryBudgetScope               = "modeled_peak_live_bytes_v1: contiguous generated float64 fixture/query matrices and row headers; exact/selected top-k candidates; representative routing; HNSW partition JSON plus decoded JSON/vector batch; HNSW query merge and cache; 25% allocation slack; excludes TreeDB engine/index internals, Go runtime/GC metadata, and artifact/CLI encoding"
+	benchmarkWorkScope              = "benchmark_owned_vector_query_corpus_visits_v1: checksum exact truth once; mandatory truth plus enabled exhaustive/routing corpus passes for every probe/overlap row; excludes TreeDB HNSW engine-internal search work"
 )
 
 type config struct {
@@ -261,6 +263,9 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	}
 	if cfg.seed != fixture.Seed {
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
+	}
+	if _, err := validateBenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
+		return err
 	}
 	cfg.memory, err = planBenchmarkMemory(cfg, fixture)
 	if err != nil {
@@ -536,6 +541,70 @@ func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) 
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
+}
+
+type benchmarkWorkPlan struct {
+	VectorQueryPairs  int64
+	CorpusPasses      int64
+	VectorQueryVisits int64
+}
+
+func validateBenchmarkWork(cfg config, m fixtureManifest, capUnits int64) (benchmarkWorkPlan, error) {
+	if capUnits < 1 || len(cfg.probes) == 0 || len(cfg.overlaps) == 0 {
+		return benchmarkWorkPlan{}, errors.New("cannot plan benchmark work without a positive cap, probes, and overlap rows")
+	}
+	stages := cfg.stages
+	if stages == nil {
+		stages = stageSet("all")
+	}
+
+	// simulate always computes global exact truth once per query. Every
+	// selected exhaustive/routing helper below makes the documented number of
+	// additional full corpus visits for each probe/overlap artifact row.
+	passesPerSimulation := int64(1)
+	if stages["partition_oracle"] {
+		passesPerSimulation++
+	}
+	for _, stage := range []string{
+		"exact_representative_routing",
+		"approximate_representative_routing",
+		"exact_partition_local",
+		"end_to_end_distributed_simulation",
+	} {
+		if stages[stage] {
+			passesPerSimulation += 2 // representative selection plus selected exact top-k
+		}
+	}
+	if stages["treedb_partition_local_hnsw"] {
+		passesPerSimulation++ // representative selection; HNSW engine work is excluded
+	}
+
+	simulationRows, err := memoryMul(int64(len(cfg.probes)), int64(len(cfg.overlaps)))
+	if err != nil {
+		return benchmarkWorkPlan{}, err
+	}
+	simulationPasses, err := memoryMul(simulationRows, passesPerSimulation)
+	if err != nil {
+		return benchmarkWorkPlan{}, err
+	}
+	corpusPasses, err := memoryAdd(1, simulationPasses) // checksum exact truth
+	if err != nil {
+		return benchmarkWorkPlan{}, err
+	}
+	vectorQueryPairs, err := memoryMul(int64(m.Vectors), int64(m.Queries))
+	if err != nil {
+		return benchmarkWorkPlan{}, err
+	}
+	plan := benchmarkWorkPlan{
+		VectorQueryPairs: vectorQueryPairs,
+		CorpusPasses:     corpusPasses,
+	}
+	if vectorQueryPairs > capUnits/corpusPasses {
+		return plan, fmt.Errorf("modeled benchmark work exceeds %d-unit cap (%s): vector_query_pairs=%d corpus_passes=%d",
+			capUnits, benchmarkWorkScope, vectorQueryPairs, corpusPasses)
+	}
+	plan.VectorQueryVisits = vectorQueryPairs * corpusPasses
+	return plan, nil
 }
 
 func planBenchmarkMemory(cfg config, m fixtureManifest) (benchmarkMemoryPlan, error) {

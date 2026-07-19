@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"container/heap"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -26,6 +27,10 @@ const (
 	maxDatasetDims      = 4_096
 	maxDatasetBytes     = int64(4 << 30)
 	maxTruthComparisons = int64(200_000_000)
+	truthCandidateBytes = int64(16)
+	truthNeighborBytes  = int64(48)
+	truthJSONBytes      = int64(192)
+	truthBufferBytes    = int64(1 << 20)
 )
 
 type config struct {
@@ -87,6 +92,44 @@ type truthNeighbor struct {
 	DocumentID string  `json:"document_id"`
 	Distance   float64 `json:"distance"`
 }
+
+type truthCandidate struct {
+	Document int
+	Distance float64
+}
+
+type truthCandidateMaxHeap []truthCandidate
+
+func (h truthCandidateMaxHeap) Len() int { return len(h) }
+func (h truthCandidateMaxHeap) Less(i, j int) bool {
+	return truthCandidateLess(h[j], h[i])
+}
+func (h truthCandidateMaxHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *truthCandidateMaxHeap) Push(x any) {
+	*h = append(*h, x.(truthCandidate))
+}
+func (h *truthCandidateMaxHeap) Pop() any {
+	old := *h
+	last := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return last
+}
+
+type documentCorpus struct {
+	values       []float32
+	squaredNorms []float64
+	dimensions   int
+}
+
+func (c documentCorpus) rows() int {
+	return len(c.squaredNorms)
+}
+
+func (c documentCorpus) row(index int) []float32 {
+	start := index * c.dimensions
+	return c.values[start : start+c.dimensions]
+}
+
 type exactTruthJSONL struct {
 	QueryID   string          `json:"query_id"`
 	Neighbors []truthNeighbor `json:"neighbors"`
@@ -169,6 +212,9 @@ func parseConfig(args []string) (config, error) {
 	if _, err := checkedCombinedVectorBytes(cfg.docs, cfg.queries, cfg.dimensions); err != nil {
 		return config{}, err
 	}
+	if _, err := checkedTruthPeakBytes(cfg.docs, cfg.dimensions, cfg.topK); err != nil {
+		return config{}, err
+	}
 	if int64(cfg.docs) > maxTruthComparisons/int64(cfg.queries) {
 		return config{}, errors.New("exact truth comparison cap exceeded before allocation; reduce -queries or export in bounded shards")
 	}
@@ -176,29 +222,40 @@ func parseConfig(args []string) (config, error) {
 }
 
 func exportDataset(cfg config) (exportResult, error) {
+	return exportDatasetWithDocumentGenerator(cfg, embedding)
+}
+
+func exportDatasetWithDocumentGenerator(cfg config, generate func(int, int) []float32) (exportResult, error) {
+	if _, err := checkedTruthPeakBytes(cfg.docs, cfg.dimensions, cfg.topK); err != nil {
+		return exportResult{}, err
+	}
 	out := filepath.Clean(cfg.out)
 	if err := prepareOutputDir(out); err != nil {
 		return exportResult{}, err
 	}
+	documents, err := materializeDocumentCorpus(cfg.docs, cfg.dimensions, generate)
+	if err != nil {
+		return exportResult{}, err
+	}
 	files := make(map[string]fileManifest)
 	if err := writeVectorFile(filepath.Join(out, "documents.f32"), cfg.docs, cfg.dimensions, func(i int) []float32 {
-		return embedding(i, cfg.dimensions)
+		return documents.row(i)
 	}, files, "documents.f32"); err != nil {
 		return exportResult{}, err
 	}
 	queryStride := queryDocStride(cfg.docs)
 	if err := writeVectorFile(filepath.Join(out, "queries.f32"), cfg.queries, cfg.dimensions, func(i int) []float32 {
-		return embedding(queryDocIndex(i, cfg.docs, queryStride), cfg.dimensions)
+		return documents.row(queryDocIndex(i, cfg.docs, queryStride))
 	}, files, "queries.f32"); err != nil {
 		return exportResult{}, err
 	}
-	if err := writeDocumentsJSONL(filepath.Join(out, "documents.jsonl"), cfg, files); err != nil {
+	if err := writeDocumentsJSONL(filepath.Join(out, "documents.jsonl"), cfg, documents, files); err != nil {
 		return exportResult{}, err
 	}
-	if err := writeQueriesJSONL(filepath.Join(out, "queries.jsonl"), cfg, files); err != nil {
+	if err := writeQueriesJSONL(filepath.Join(out, "queries.jsonl"), cfg, documents, files); err != nil {
 		return exportResult{}, err
 	}
-	if err := writeExactTruthJSONL(filepath.Join(out, "exact_truth.jsonl"), cfg, files); err != nil {
+	if err := writeExactTruthJSONL(filepath.Join(out, "exact_truth.jsonl"), cfg, documents, files); err != nil {
 		return exportResult{}, err
 	}
 	createdAt, err := manifestCreatedAt()
@@ -248,6 +305,60 @@ func checkedCombinedVectorBytes(docs, queries, dims int) (int64, error) {
 		return 0, errors.New("combined document/query vector byte product exceeds cap before allocation")
 	}
 	return combined * int64(dims) * 4, nil
+}
+
+func checkedTruthPeakBytes(docs, dims, topK int) (int64, error) {
+	if docs < 1 || dims < 1 || topK < 1 || topK > docs {
+		return 0, errors.New("exact truth peak requires positive docs, dimensions, and top-k no larger than docs")
+	}
+	documentValues, err := checkedVectorBytes(docs, dims)
+	if err != nil {
+		return 0, err
+	}
+	return checkedDatasetByteSum(
+		documentValues,
+		int64(docs)*8,   // precomputed float64 squared norms
+		int64(dims)*4*2, // one generator row and one encoding/query scratch row
+		int64(topK)*truthCandidateBytes,
+		int64(topK)*truthNeighborBytes,
+		int64(topK)*truthJSONBytes, // encoded truth row plus buffer growth
+		truthBufferBytes,
+	)
+}
+
+func checkedDatasetByteSum(values ...int64) (int64, error) {
+	var total int64
+	for _, value := range values {
+		if value < 0 || total > maxDatasetBytes-value {
+			return 0, errors.New("exact truth modeled peak bytes exceed cap before allocation")
+		}
+		total += value
+	}
+	return total, nil
+}
+
+func materializeDocumentCorpus(docs, dims int, generate func(int, int) []float32) (documentCorpus, error) {
+	if generate == nil {
+		return documentCorpus{}, errors.New("document vector generator is required")
+	}
+	if _, err := checkedVectorBytes(docs, dims); err != nil {
+		return documentCorpus{}, err
+	}
+	corpus := documentCorpus{
+		values:       make([]float32, docs*dims),
+		squaredNorms: make([]float64, docs),
+		dimensions:   dims,
+	}
+	for document := 0; document < docs; document++ {
+		generated := generate(document, dims)
+		if len(generated) != dims {
+			return documentCorpus{}, fmt.Errorf("document vector %d dimensions=%d want %d", document, len(generated), dims)
+		}
+		row := corpus.row(document)
+		copy(row, generated)
+		corpus.squaredNorms[document] = squaredNorm(row)
+	}
+	return corpus, nil
 }
 
 func manifestCreatedAt() (string, error) {
@@ -306,12 +417,12 @@ func writeVectorFile(path string, count, dims int, vector func(int) []float32, f
 	return recordFile(path, h, files, name)
 }
 
-func writeExactTruthJSONL(path string, cfg config, files map[string]fileManifest) error {
+func writeExactTruthJSONL(path string, cfg config, documents documentCorpus, files map[string]fileManifest) error {
 	return writeJSONL(path, files, "exact_truth.jsonl", func(enc *json.Encoder) error {
 		stride := queryDocStride(cfg.docs)
 		for i := 0; i < cfg.queries; i++ {
-			query := embedding(queryDocIndex(i, cfg.docs, stride), cfg.dimensions)
-			neighbors := exactTruthForQuery(query, cfg.docs, cfg.dimensions, cfg.topK)
+			query := documents.row(queryDocIndex(i, cfg.docs, stride))
+			neighbors := exactTruthForCorpus(query, documents, cfg.topK)
 			if err := enc.Encode(exactTruthJSONL{QueryID: fmt.Sprintf("query-%06d", i), Neighbors: neighbors, Kind: "exhaustive_cosine_distance_ascending_then_id_top_k_v1"}); err != nil {
 				return err
 			}
@@ -320,36 +431,70 @@ func writeExactTruthJSONL(path string, cfg config, files map[string]fileManifest
 	})
 }
 
-func exactTruthForQuery(query []float32, docs, dims, topK int) []truthNeighbor {
-	return exactTruthForVectors(query, docs, topK, func(document int) []float32 {
-		return embedding(document, dims)
+func exactTruthForCorpus(query []float32, documents documentCorpus, topK int) []truthNeighbor {
+	queryNorm := squaredNorm(query)
+	return boundedExactTruth(documents.rows(), topK, func(document int) float64 {
+		return cosineDistanceWithNorms(query, queryNorm, documents.row(document), documents.squaredNorms[document])
 	})
 }
 
 func exactTruthForVectors(query []float32, docs, topK int, vector func(int) []float32) []truthNeighbor {
-	neighbors := make([]truthNeighbor, docs)
+	return boundedExactTruth(docs, topK, func(document int) float64 {
+		return cosineDistance(query, vector(document))
+	})
+}
+
+func boundedExactTruth(docs, topK int, distance func(int) float64) []truthNeighbor {
+	candidates := make(truthCandidateMaxHeap, 0, min(docs, topK))
 	for document := 0; document < docs; document++ {
-		neighbors[document] = truthNeighbor{
-			DocumentID: documentID(document),
-			Distance:   cosineDistance(query, vector(document)),
+		candidate := truthCandidate{Document: document, Distance: distance(document)}
+		if len(candidates) < topK {
+			heap.Push(&candidates, candidate)
+		} else if truthCandidateLess(candidate, candidates[0]) {
+			candidates[0] = candidate
+			heap.Fix(&candidates, 0)
 		}
 	}
-	sort.Slice(neighbors, func(i, j int) bool {
-		return truthNeighborLess(neighbors[i], neighbors[j])
+	sort.Slice(candidates, func(i, j int) bool {
+		return truthCandidateLess(candidates[i], candidates[j])
 	})
-	return neighbors[:topK]
+	neighbors := make([]truthNeighbor, len(candidates))
+	for i, candidate := range candidates {
+		neighbors[i] = truthNeighbor{DocumentID: documentID(candidate.Document), Distance: candidate.Distance}
+	}
+	return neighbors
+}
+
+func truthCandidateLess(a, b truthCandidate) bool {
+	if a.Distance == b.Distance {
+		return a.Document < b.Document
+	}
+	return a.Distance < b.Distance
 }
 
 func cosineDistance(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return math.NaN()
 	}
-	var dot, normA, normB float64
+	return cosineDistanceWithNorms(a, squaredNorm(a), b, squaredNorm(b))
+}
+
+func squaredNorm(vector []float32) float64 {
+	var norm float64
+	for _, value := range vector {
+		norm += float64(value) * float64(value)
+	}
+	return norm
+}
+
+func cosineDistanceWithNorms(a []float32, normA float64, b []float32, normB float64) float64 {
+	if len(a) != len(b) {
+		return math.NaN()
+	}
+	var dot float64
 	for i, av := range a {
 		bv := b[i]
 		dot += float64(av) * float64(bv)
-		normA += float64(av) * float64(av)
-		normB += float64(bv) * float64(bv)
 	}
 	if normA == 0 || normB == 0 {
 		return 1
@@ -366,14 +511,14 @@ func truthNeighborLess(a, b truthNeighbor) bool {
 	return a.Distance < b.Distance
 }
 
-func writeDocumentsJSONL(path string, cfg config, files map[string]fileManifest) error {
+func writeDocumentsJSONL(path string, cfg config, documents documentCorpus, files map[string]fileManifest) error {
 	return writeJSONL(path, files, "documents.jsonl", func(enc *json.Encoder) error {
 		for i := 0; i < cfg.docs; i++ {
 			if err := enc.Encode(documentJSONL{
 				Index:     i,
 				ID:        documentID(i),
 				Group:     i % 16,
-				Embedding: embedding(i, cfg.dimensions),
+				Embedding: documents.row(i),
 			}); err != nil {
 				return err
 			}
@@ -382,7 +527,7 @@ func writeDocumentsJSONL(path string, cfg config, files map[string]fileManifest)
 	})
 }
 
-func writeQueriesJSONL(path string, cfg config, files map[string]fileManifest) error {
+func writeQueriesJSONL(path string, cfg config, documents documentCorpus, files map[string]fileManifest) error {
 	return writeJSONL(path, files, "queries.jsonl", func(enc *json.Encoder) error {
 		stride := queryDocStride(cfg.docs)
 		for i := 0; i < cfg.queries; i++ {
@@ -391,7 +536,7 @@ func writeQueriesJSONL(path string, cfg config, files map[string]fileManifest) e
 				Index:         i,
 				ID:            fmt.Sprintf("query-%06d", i),
 				DocumentIndex: docIndex,
-				Embedding:     embedding(docIndex, cfg.dimensions),
+				Embedding:     documents.row(docIndex),
 			}); err != nil {
 				return err
 			}

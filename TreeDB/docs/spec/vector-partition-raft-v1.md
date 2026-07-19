@@ -102,6 +102,15 @@ artifact records the requested cap, modeled peak, and this scope. Checksum
 validation consumes the already generated matrices and does not regenerate a
 second full fixture.
 
+An independent fixed work gate rejects more than 200,000,000 modeled
+benchmark-owned vector/query corpus visits before fixture generation or
+evidence. One visit is one vector considered for one query. The model counts
+checksum exact truth once, the mandatory global truth pass for every
+probe/overlap artifact row, and each enabled exhaustive or representative
+routing corpus pass. It excludes TreeDB HNSW engine-internal search work. The
+canonical `10k x 128`, three-probe, two-overlap, all-stage shape has 67 corpus
+passes, or 85,760,000 visits, and remains within the gate.
+
 The schema reserves every descendant evidence family even when M0 emits
 `measurement_status=simulation_not_measured` and explicit finite zero values:
 build wall/CPU/RSS/temp/final bytes; balance/cut/overlap; representatives and
@@ -144,8 +153,15 @@ real multi-group matched-recall evidence.
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
 vector/query checksums, dimensions, metric, query set, and an exhaustive
-distance-then-ID top-k truth stream. Exact truth is deliberately comparison
-capped; a feasible declared 1M export uses one bounded query shard:
+distance-then-ID top-k truth stream. The exporter materializes document vectors
+once in a contiguous `float32` corpus, precomputes their squared norms, and
+reuses those bytes for vector/JSON output, query selection, and exact truth.
+Truth selection retains only bounded top-k candidates. Its modeled truth peak
+cap includes the document corpus, norm array, generator/query scratch, top-k
+candidates/results, conservative encoded truth-row growth, and a 1 MiB
+per-row encoding allowance; combined output vector bytes remain separately
+capped. Exact truth is deliberately comparison capped; a feasible declared 1M
+export uses one bounded query shard:
 `GOWORK=off go run ./cmd/treedb_vector_dataset_export -out "$OUT" -docs 1000000 -queries 1 -dims 64 -top-k 10`.
 It is a corpus export contract, not a claim that M0 has run a 1M-vector
 exhaustive top-k benchmark.
