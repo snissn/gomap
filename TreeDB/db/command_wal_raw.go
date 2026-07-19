@@ -164,7 +164,35 @@ func (db *DB) commandWALJournalUnavailableError() error {
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
 // higher-level deterministic command executors such as collections.
 type CommandWALIntent struct {
-	inner commandWALBatchIntent
+	inner         commandWALBatchIntent
+	publishTiming *CommandWALPublishTiming
+}
+
+// CommandWALPublishTiming captures exclusive phases of one command-WAL
+// ordered-root publication. It is opt-in because callers normally need only
+// the aggregate DB telemetry. An intent is single-use while it is published.
+type CommandWALPublishTiming struct {
+	WriteLockWait time.Duration
+	Preflight     time.Duration
+	Append        time.Duration
+	ContextBuild  time.Duration
+	RootApply     time.Duration
+	SystemBuild   time.Duration
+	SystemApply   time.Duration
+	Finalize      time.Duration
+	PostFinalize  time.Duration
+}
+
+// SetPublishTiming requests request-scoped ordered-root publication timings
+// for this intent. Passing nil disables collection of the optional timings and
+// the previous target is returned so nested diagnostic callers can restore it.
+func (intent *CommandWALIntent) SetPublishTiming(timing *CommandWALPublishTiming) (previous *CommandWALPublishTiming) {
+	if intent == nil {
+		return nil
+	}
+	previous = intent.publishTiming
+	intent.publishTiming = timing
+	return previous
 }
 
 var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")

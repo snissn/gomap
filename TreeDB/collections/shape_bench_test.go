@@ -56,6 +56,13 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
 	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
 	dst.ColumnPublishCommit += src.ColumnPublishCommit
+	dst.ColumnPublishWriteLockWait += src.ColumnPublishWriteLockWait
+	dst.ColumnPublishPreflight += src.ColumnPublishPreflight
+	dst.ColumnPublishCommandWALAppend += src.ColumnPublishCommandWALAppend
+	dst.ColumnPublishOrderedRootApply += src.ColumnPublishOrderedRootApply
+	dst.ColumnPublishSystemRootApply += src.ColumnPublishSystemRootApply
+	dst.ColumnPublishFinalize += src.ColumnPublishFinalize
+	dst.ColumnPublishPostFinalize += src.ColumnPublishPostFinalize
 	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
 	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
 	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
@@ -150,6 +157,13 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_build_column_delta_ns/doc", stats.ColumnPublishBuildColumnDelta)
 	reportDuration("column_publish_build_system_delta_ns/doc", stats.ColumnPublishBuildSystemDelta)
 	reportDuration("column_publish_commit_ns/doc", stats.ColumnPublishCommit)
+	reportDuration("column_publish_write_lock_wait_ns/doc", stats.ColumnPublishWriteLockWait)
+	reportDuration("column_publish_preflight_ns/doc", stats.ColumnPublishPreflight)
+	reportDuration("column_publish_command_wal_append_ns/doc", stats.ColumnPublishCommandWALAppend)
+	reportDuration("column_publish_ordered_root_apply_ns/doc", stats.ColumnPublishOrderedRootApply)
+	reportDuration("column_publish_system_root_apply_ns/doc", stats.ColumnPublishSystemRootApply)
+	reportDuration("column_publish_finalize_ns/doc", stats.ColumnPublishFinalize)
+	reportDuration("column_publish_post_finalize_ns/doc", stats.ColumnPublishPostFinalize)
 	reportDuration("column_publish_document_extraction_ns/doc", stats.ColumnPublishDocumentExtraction)
 	reportDuration("column_publish_declared_column_encoding_ns/doc", stats.ColumnPublishDeclaredColumnEncoding)
 	reportDuration("column_publish_asset_prepare_ns/doc", stats.ColumnPublishAssetPreparation)

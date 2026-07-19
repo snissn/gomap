@@ -220,6 +220,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		}
 		return iter, err
 	}
+	var publishTiming backenddb.CommandWALPublishTiming
+	previousTiming := input.commandWALIntent.SetPublishTiming(&publishTiming)
+	defer input.commandWALIntent.SetPublishTiming(previousTiming)
 	commitStart := time.Now()
 	if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
@@ -239,6 +242,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		)
 	}
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
+	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
@@ -339,6 +343,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
+	var publishTiming backenddb.CommandWALPublishTiming
+	previousTiming := input.commandWALIntent.SetPublishTiming(&publishTiming)
+	defer input.commandWALIntent.SetPublishTiming(previousTiming)
 	commitStart := time.Now()
 	if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
@@ -346,6 +353,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	}
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
+	recordColumnPublishTiming(input.insertStats, publishTiming)
 	if err != nil {
 		// The DB publish helper owns context-built batch deltas on publish errors.
 		return 0, nil, CollectionMeta{}, nil, err
@@ -552,6 +560,19 @@ func recordColumnPublishCommit(stats *CollectionInsertStats, elapsed time.Durati
 		return
 	}
 	stats.ColumnPublishCommit += elapsed
+}
+
+func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.CommandWALPublishTiming) {
+	if stats == nil {
+		return
+	}
+	stats.ColumnPublishWriteLockWait += timing.WriteLockWait
+	stats.ColumnPublishPreflight += timing.Preflight
+	stats.ColumnPublishCommandWALAppend += timing.Append
+	stats.ColumnPublishOrderedRootApply += timing.RootApply
+	stats.ColumnPublishSystemRootApply += timing.SystemApply
+	stats.ColumnPublishFinalize += timing.Finalize
+	stats.ColumnPublishPostFinalize += timing.PostFinalize
 }
 
 func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, error) {

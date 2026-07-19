@@ -383,6 +383,13 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 	if stats.ColumnPublishBuildColumnDelta <= 0 || stats.ColumnPublishCommit <= 0 {
 		t.Fatalf("column publish callback/commit timings missing: %+v", stats)
 	}
+	if stats.ColumnPublishOrderedRootApply <= 0 || stats.ColumnPublishCommandWALAppend <= 0 {
+		t.Fatalf("column publish exclusive ordered-root/command-WAL timings missing: %+v", stats)
+	}
+	if stats.ColumnPublishCommitExclusiveTotal() > stats.ColumnPublishCommit {
+		t.Fatalf("column publish exclusive phases exceed commit wall time: exclusive=%s commit=%s", stats.ColumnPublishCommitExclusiveTotal(), stats.ColumnPublishCommit)
+	}
+	t.Logf("column publish phase evidence: commit=%s exclusive=%s append=%s root_apply=%s system_apply=%s finalize=%s", stats.ColumnPublishCommit, stats.ColumnPublishCommitExclusiveTotal(), stats.ColumnPublishCommandWALAppend, stats.ColumnPublishOrderedRootApply, stats.ColumnPublishSystemRootApply, stats.ColumnPublishFinalize)
 	if stats.ColumnPublishAssetPreparation <= 0 {
 		t.Fatalf("column publish asset-preparation timing missing: %+v", stats)
 	}
