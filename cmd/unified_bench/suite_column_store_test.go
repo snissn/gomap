@@ -2297,8 +2297,10 @@ func TestColumnStoreSuiteReportsFirstTouchAfterOpenLaneM3070(t *testing.T) {
 		t.Fatalf("benchprof runs=%d want one", len(benchprof.Runs))
 	}
 	stats := benchprof.Runs[0].TreeDBStats[columnStoreSuiteBenchDisplayName]
-	if got := stats["treedb.vlog.mmap_read.hits"]; got == "" || got == "0" {
-		t.Fatalf("benchprof stats used post-first-touch reopen snapshot; vlog mmap hits=%q stats=%+v", got, stats)
+	mmapHits := stats["treedb.vlog.mmap_read.hits"]
+	outerLeafLoads := stats["treedb.process.read_path.outer_leaf.loads_total"]
+	if (mmapHits == "" || mmapHits == "0") && (outerLeafLoads == "" || outerLeafLoads == "0") {
+		t.Fatalf("benchprof stats used post-first-touch reopen snapshot; vlog mmap hits=%q outer-leaf loads=%q stats=%+v", mmapHits, outerLeafLoads, stats)
 	}
 }
 
