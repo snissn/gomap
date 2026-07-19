@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -432,6 +433,30 @@ type typedColumnPartReconstructionCache struct {
 	CacheMisses      uint64
 	PartLoads        uint64
 	TypedPartDecodes uint64
+
+	// Window* describe only the current bounded selective reconstruction
+	// window. They deliberately do not accumulate across a scan.
+	WindowDecodedBytes    uint64
+	WindowGenerations     uint64
+	WindowSourcePartBytes uint64
+
+	// SelectivePart is a source-backed adapter retained only while the
+	// certified physical stream remains on one generation. Its image aliases
+	// ReadCache's reusable source scratch. Decoded values must own any data that
+	// outlives a read because a later generation reuses that scratch.
+	SelectivePart           *typedColumnAdapterPart
+	SelectivePartGeneration uint64
+}
+
+func typedColumnPartDecodedValuesResidentBytes(values typedColumnPartDecodedValues) uint64 {
+	bytes := uint64(len(values.PrimaryIDs))*uint64(unsafe.Sizeof(int64(0))) + uint64(len(values.RowByPrimaryID))*uint64(unsafe.Sizeof(int(0)))
+	for _, row := range values.Values {
+		bytes += uint64(cap(row)) * uint64(unsafe.Sizeof(columnDeclaredValue{}))
+		for _, value := range row {
+			bytes += uint64(cap(value.Float32Vector))*4 + uint64(cap(value.DenseNumericVector)) + uint64(cap(value.Uint32List))*4 + uint64(cap(value.AdjacencyList))*4 + uint64(cap(value.Bytes)) + uint64(cap(value.StringBytes)) + uint64(len(value.String))
+		}
+	}
+	return bytes
 }
 
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow) (typedColumnPartVisibleValues, error) {

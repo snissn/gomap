@@ -409,6 +409,8 @@ type Collection struct {
 	lastInsertStats            CollectionInsertStats
 	updateStatsMu              sync.RWMutex
 	lastUpdateStats            CollectionUpdateStats
+	documentScanStatsMu        sync.RWMutex
+	lastDocumentScanStats      CollectionDocumentScanStats
 	vectorIndexLoadMu          sync.Mutex
 	vectorIndexesMu            sync.RWMutex
 	vectorIndexes              map[string]*VectorIndex
@@ -442,6 +444,34 @@ type Collection struct {
 	queryReadyGenerationHits          uint64
 	queryReadyGenerationBuilds        uint64
 	queryReadyGenerationInvalidations uint64
+}
+
+// CollectionDocumentScanStats describes the most recent ScanDocumentsFunc
+// execution on this Collection handle. It is a per-scan snapshot, not a
+// cumulative process metric.
+type CollectionDocumentScanStats struct {
+	CertifiedMonotonicPath bool
+	GenericFallback        bool
+	PhysicalPasses         uint64
+	PhysicalRows           uint64
+	PhysicalBytes          uint64
+	PhysicalDecodedBlocks  uint64
+	ReconstructedRows      uint64
+	MaxRecordWindow        uint64
+	MaxVisibleRowWindow    uint64
+	// MaxTypedGenerations is the peak number of resident typed generations.
+	MaxTypedGenerations uint64
+	// MaxTypedDecodedBytes is the peak owned decoded typed value state for one
+	// bounded reconstruction window. It excludes source part bytes.
+	MaxTypedDecodedBytes uint64
+	// MaxTypedSourcePartBytes is the largest encoded typed part read while
+	// reconstructing a bounded window. It is reported separately from owned
+	// decoded state because the read cache reuses its source buffer.
+	MaxTypedSourcePartBytes uint64
+	// MaxRetainedBlocks is the peak number of decoded semantic-stream retained
+	// blocks kept by the scan-wide fixed-capacity cache.
+	MaxRetainedBlocks         uint64
+	PreflightProjectedColumns uint64
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -1512,6 +1542,26 @@ func cloneCollectionUpdateStats(stats CollectionUpdateStats) CollectionUpdateSta
 		stats.SecondaryRuns = append([]CollectionUpdateSecondaryRunStats(nil), stats.SecondaryRuns...)
 	}
 	return stats
+}
+
+// LastDocumentScanStats returns an owned snapshot of the most recent
+// ScanDocumentsFunc execution on this Collection handle.
+func (c *Collection) LastDocumentScanStats() CollectionDocumentScanStats {
+	if c == nil {
+		return CollectionDocumentScanStats{}
+	}
+	c.documentScanStatsMu.RLock()
+	defer c.documentScanStatsMu.RUnlock()
+	return c.lastDocumentScanStats
+}
+
+func (c *Collection) setLastDocumentScanStats(stats CollectionDocumentScanStats) {
+	if c == nil {
+		return
+	}
+	c.documentScanStatsMu.Lock()
+	c.lastDocumentScanStats = stats
+	c.documentScanStatsMu.Unlock()
 }
 
 func initCollectionUpdateIndexStats(stats *CollectionUpdateStats, collectionName string, runtimes []indexRuntime, enabled bool) {
@@ -20840,6 +20890,8 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	if fn == nil {
 		return false, errors.New("collections: scan callback is nil")
 	}
+	var scanStats CollectionDocumentScanStats
+	defer func() { c.setLastDocumentScanStats(scanStats) }()
 	if err := c.flushBufferedWrites(); err != nil {
 		return false, err
 	}
@@ -20865,7 +20917,24 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	defer func() { _ = it.Close() }()
 	reconstructDocuments := columnStoreCanReconstructDocument(catalog.meta)
 	if reconstructDocuments {
-		return c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, fn)
+		certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog)
+		if err != nil {
+			return false, err
+		}
+		if preflightRan {
+			scanStats.PreflightProjectedColumns = uint64(preflightDiag.ProjectedColumns)
+			scanStats.PhysicalPasses++
+			scanStats.PhysicalRows += uint64(preflightDiag.RowsScanned)
+			scanStats.PhysicalBytes += uint64(preflightDiag.PhysicalBytesScanned)
+			scanStats.PhysicalDecodedBlocks += uint64(preflightDiag.DecodedBlocks)
+		}
+		if certified {
+			scanStats.CertifiedMonotonicPath = true
+			return c.scanDocumentsFuncWithMonotonicColumnReconstruction(snap, catalog, maxDocuments, fn, &scanStats)
+		}
+		scanStats.GenericFallback = true
+		scanStats.PhysicalPasses++ // generic visibility scan follows any preflight pass.
+		return c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, fn, &scanStats)
 	}
 	truncated := false
 	scanned := 0
@@ -20904,6 +20973,7 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	it iterator.UnsafeIterator,
 	maxDocuments int,
 	fn func(DocumentRecord) (bool, error),
+	stats *CollectionDocumentScanStats,
 ) (bool, error) {
 	columnStoreConfig := catalog.meta.Options.ColumnStore.copy()
 	capacity := maxDocuments
@@ -20958,6 +21028,11 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	)
 	if err != nil {
 		return false, err
+	}
+	if stats != nil {
+		stats.PhysicalRows += uint64(visible.Diagnostics.RowsScanned)
+		stats.PhysicalBytes += uint64(visible.Diagnostics.PhysicalBytesScanned)
+		stats.PhysicalDecodedBlocks += uint64(visible.Diagnostics.DecodedBlocks)
 	}
 	visibleRows := visible.Rows
 	visiblePos := 0
