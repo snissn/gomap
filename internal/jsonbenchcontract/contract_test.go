@@ -188,7 +188,7 @@ func TestCanonicalJSONBenchReportValidatesEveryRow(t *testing.T) {
 	})
 
 	err := Validate(manifest, filepath.Dir(manifest.TreeDB.ResultPaths[0]))
-	assertErrorContains(t, err, "treedb result[0] row[1].dataset_size 999999 does not match pinned rows 1000000")
+	assertErrorContains(t, err, "treedb result[0] row[1].dataset_size 999999 does not match pinned valid_rows 1000000")
 	assertErrorContains(t, err, `treedb result[0] row[1].query_mode "hot_prepared_run" does not match comparison.query_mode "one_shot_end_to_end"`)
 }
 
@@ -426,7 +426,12 @@ func validManifest(t *testing.T) Manifest {
 			GomapCommit:       "d1b2d909ee6a1fd409d63ef895245c04b0f1376f",
 			JSONBenchCommit:   "7886cc3ff909e733b3aa5d68aa8203db67349be2",
 			ClickHouseVersion: "26.4.2.10",
-			Dataset:           DatasetPin{Identity: "bluesky/file_0001.json.gz", Rows: 1_000_000, SHA256: strings.Repeat("a", 64)},
+			Dataset: DatasetPin{
+				Identity:      "bluesky/file_0001.json.gz",
+				RequestedRows: 1_000_000,
+				ValidRows:     1_000_000,
+				SHA256:        strings.Repeat("a", 64),
+			},
 		},
 		Host:         Host{Identity: "test-host/linux-amd64"},
 		ArtifactRoot: root,
@@ -514,6 +519,7 @@ func validTreeDBRows() []map[string]any {
 		rows = append(rows, map[string]any{
 			"query":                  query,
 			"profile":                "durable",
+			"requested_rows":         1_000_000,
 			"dataset_size":           1_000_000,
 			"query_mode":             "one_shot_end_to_end",
 			"metadata_mode":          "no_aggregate_metadata",
