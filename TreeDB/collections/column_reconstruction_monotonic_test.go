@@ -463,11 +463,24 @@ func TestScanDocumentsFuncMonotonicReconstructionTypedSortKeyFallsBackP3887(t *t
 	if err != nil || truncated || len(got) != rows {
 		t.Fatalf("scan err=%v truncated=%t rows=%d want %d", err, truncated, len(got), rows)
 	}
+	wantDigest := sha256.New()
+	gotDigest := sha256.New()
 	for i, record := range got {
 		if want := string(ids[i]); string(record.ID) != want {
 			t.Fatalf("id[%d]=%q want %q", i, record.ID, want)
 		}
 		assertJSONEqualM13C(t, record.Document, docs[i])
+		wantDigest.Write(ids[i])
+		wantDigest.Write([]byte{0})
+		wantDigest.Write(docs[i])
+		wantDigest.Write([]byte{'\n'})
+		gotDigest.Write(record.ID)
+		gotDigest.Write([]byte{0})
+		gotDigest.Write(record.Document)
+		gotDigest.Write([]byte{'\n'})
+	}
+	if got, want := gotDigest.Sum(nil), wantDigest.Sum(nil); !bytes.Equal(got, want) {
+		t.Fatalf("reconstruction digest=%x want %x", got, want)
 	}
 	stats := col.LastDocumentScanStats()
 	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 3 || stats.MaxRecordWindow != columnReconstructionMonotonicBatchSize || stats.MaxVisibleRowWindow != columnReconstructionMonotonicBatchSize || stats.ReconstructedRows != rows || stats.PhysicalRows == 0 || stats.PhysicalDecodedBlocks == 0 {
