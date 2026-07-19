@@ -489,20 +489,9 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		response.Stats.RowRefUnsupported++
 		return response, errors.New("collections: document row ref lookup requires typed-storage reconstruction support")
 	}
-	cfg := v.catalog.meta.Options.ColumnStore.copy()
-	readIntegrity := opts.ColumnAssetReadIntegrity
-	if readIntegrity == "" {
-		readIntegrity = ColumnAssetReadIntegrityVerify
-	}
-	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
-		return response, err
-	}
-	assetCountersBefore := v.assetCounters()
-	defer func() {
-		addDocumentMaterializerAssetCounterDeltas(&response.Stats, assetCountersBefore, v.assetCounters())
-	}()
-	if err := v.ensureDocumentRowLocator(cfg, readIntegrity, &response.Stats); err != nil {
-		return response, err
+	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
+	if v.catalog.rootID(locatorRootName) == 0 {
+		return response, fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
 	}
 	var idArena []byte
 	for i, id := range ids {
@@ -514,12 +503,18 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		ownedID := idArena[idStart:len(idArena):len(idArena)]
 		response.Results[i].ID = ownedID
 		response.Stats.RowLocatorLookups++
-		rowRef, ok := v.rowLocator.byID[string(id)]
-		if !ok {
+		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, id, nil)
+		if err != nil {
+			return response, fmt.Errorf("collections: primary row locator lookup for id %q: %w", string(id), err)
+		}
+		if !found || len(value) == 0 {
 			response.Stats.RowLocatorMisses++
 			continue
 		}
-		rowRef.DocumentID = ownedID
+		rowRef, err := decodeColumnPrimaryRowLocator(ownedID, value)
+		if err != nil {
+			return response, err
+		}
 		response.Results[i].RowRef = rowRef
 		response.Results[i].Found = true
 	}
@@ -614,19 +609,30 @@ func noColumnPhysicalScanProjection(cfg ColumnStoreConfig) columnPhysicalScanPro
 }
 
 func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, stats *DocumentMaterializationStats) error {
-	if v == nil || v.rowLocator == nil {
-		return nil
+	if v == nil || v.catalog == nil || v.snapshot == nil {
+		return errors.New("collections: nil collection read view")
 	}
 	if stats != nil {
 		stats.RowLocatorLookups++
 	}
-	latest, ok := v.rowLocator.byID[string(ref.DocumentID)]
-	if !ok {
+	locatorRootName := collectionColumnRowLocatorRootName(v.catalog.meta.Name)
+	if v.catalog.rootID(locatorRootName) == 0 {
+		return fmt.Errorf("collections: primary row locator root is absent for collection %q", v.catalog.meta.Name)
+	}
+	value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, locatorRootName, ref.DocumentID, nil)
+	if err != nil {
+		return fmt.Errorf("collections: primary row locator validation for id %q: %w", string(ref.DocumentID), err)
+	}
+	if !found || len(value) == 0 {
 		if stats != nil {
 			stats.RowLocatorMisses++
 			stats.RowRefValidationFailures++
 		}
-		return fmt.Errorf("collections: document row ref for id %q is not latest-visible in snapshot", string(ref.DocumentID))
+		return fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(ref.DocumentID))
+	}
+	latest, err := decodeColumnPrimaryRowLocator(ref.DocumentID, value)
+	if err != nil {
+		return err
 	}
 	if err := validateDocumentRowRefMatchesRowRef(ref, latest); err != nil {
 		if stats != nil {
@@ -924,11 +930,6 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	if err != nil {
 		return out, err
 	}
-	if view.MutationParts != 0 {
-		if err := v.ensureDocumentRowLocator(cfg, readIntegrity, &out.Stats); err != nil {
-			return out, err
-		}
-	}
 	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
 	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
 	typedProjection := documentProjectionTypedColumnPartSelection(cfg, selectedColumns)
@@ -948,10 +949,8 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			out.Stats.RowRefValidationFailures++
 			return out, fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(out.Results[i].ID))
 		}
-		if view.MutationParts != 0 {
-			if err := v.validateDocumentRowRefLatest(refs[i], &out.Stats); err != nil {
-				return out, err
-			}
+		if err := v.validateDocumentRowRefLatest(refs[i], &out.Stats); err != nil {
+			return out, err
 		}
 		row, err := v.fetchDocumentPointRow(view, refs[i], pointProjection, &rowScratch, &out.Stats)
 		if err != nil {

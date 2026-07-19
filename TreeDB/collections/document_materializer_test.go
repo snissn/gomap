@@ -861,7 +861,7 @@ func TestCollectionReadViewFetchDocumentsByRowRefMutationLatestVisible1874(t *te
 	if err != nil {
 		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
 	}
-	if !lookup.Results[0].Found || lookup.Results[1].Found || lookup.Stats.RowLocatorLookups != 2 || lookup.Stats.RowLocatorMisses != 1 || lookup.Stats.RowLocatorBuilds != 1 {
+	if !lookup.Results[0].Found || lookup.Results[1].Found || lookup.Stats.RowLocatorLookups != 2 || lookup.Stats.RowLocatorMisses != 1 || lookup.Stats.RowLocatorBuilds != 0 {
 		t.Fatalf("lookup=%+v stats=%+v want updated e1 ref and deleted e2 miss", lookup.Results, lookup.Stats)
 	}
 	current, err := currentView.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{})
