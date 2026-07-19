@@ -169,7 +169,7 @@ func newCompactStorageMeasurement(fixture compactStorageMeasurementFixture, arti
 		Audit:              stats.Audit,
 		Vacuum: compactStorageMeasurementVacuum{
 			Availability:      compactStorageMeasurementObserved,
-			StableCallCounter: compactStorageMeasurementObserved,
+			StableCallCounter: compactStorageMeasurementUnavailable,
 			PlanReason:        "production-index-vacuum-invoked",
 		},
 	}
@@ -235,6 +235,7 @@ func newCompactStorageMeasurement(fixture compactStorageMeasurementFixture, arti
 		m.StableCalls = recorder.measurements()
 		m.Checkpoints = recorder.checkpointMeasurements(stats.Phases)
 		m.Vacuum.StableCalls = recorder.phaseCallCount("index-vacuum")
+		m.Vacuum.StableCallCounter = compactStorageMeasurementObserved
 	}
 	return m
 }

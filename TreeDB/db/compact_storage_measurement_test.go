@@ -68,8 +68,15 @@ func TestNewCompactStorageMeasurementSeparatesTimedApplyAndWorkCounters(t *testi
 		t.Fatalf("leaf pack=%+v", m.LeafPack)
 	}
 	if !m.Vacuum.Attempted || m.Vacuum.Ran || m.Vacuum.SkipReason != "unsupported" ||
-		m.Vacuum.Availability != compactStorageMeasurementObserved {
+		m.Vacuum.Availability != compactStorageMeasurementObserved ||
+		m.Vacuum.StableCallCounter != compactStorageMeasurementUnavailable {
 		t.Fatalf("vacuum=%+v", m.Vacuum)
+	}
+	withRecorder := newCompactStorageMeasurement(
+		compactStorageM0Fixtures[0], "artifact", 123, stats, newCompactStorageM0StableRecorder(nil),
+	)
+	if withRecorder.Vacuum.StableCallCounter != compactStorageMeasurementObserved {
+		t.Fatalf("vacuum recorder availability=%+v", withRecorder.Vacuum)
 	}
 }
 
@@ -215,6 +222,31 @@ func TestCompactStorageM0ForegroundHandshakeUsesWriteFlushBoundary(t *testing.T)
 	case <-handshake.attempted:
 	default:
 		t.Fatal("foreground write boundary did not release maintenance")
+	}
+}
+
+func TestWaitForCompactStorageM0ForegroundAttemptPrioritizesObservedBoundary(t *testing.T) {
+	attempted := make(chan struct{})
+	done := make(chan compactStorageM0WriteResult, 1)
+	close(attempted)
+	done <- compactStorageM0WriteResult{}
+
+	for range 100 {
+		_, consumed, observed := waitForCompactStorageM0ForegroundAttempt(attempted, done)
+		if !observed {
+			t.Fatal("simultaneously ready completion hid the observed write boundary")
+		}
+		if consumed {
+			done <- compactStorageM0WriteResult{}
+		}
+	}
+
+	notAttempted := make(chan struct{})
+	doneOnly := make(chan compactStorageM0WriteResult, 1)
+	doneOnly <- compactStorageM0WriteResult{}
+	_, consumed, observed := waitForCompactStorageM0ForegroundAttempt(notAttempted, doneOnly)
+	if !consumed || observed {
+		t.Fatalf("completion without boundary: consumed=%v observed=%v", consumed, observed)
 	}
 }
 

@@ -180,12 +180,8 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 			if spec.foreground && name == "value-log-rewrite" {
 				foregroundHandshake.arm()
 				foregroundStartOnce.Do(func() { close(foregroundStart) })
-				select {
-				case <-foregroundHandshake.attempted:
-					foregroundAttemptedObserved = true
-				case foregroundResult = <-foregroundDone:
-					foregroundConsumed = true
-				}
+				foregroundResult, foregroundConsumed, foregroundAttemptedObserved =
+					waitForCompactStorageM0ForegroundAttempt(foregroundHandshake.attempted, foregroundDone)
 			}
 			if os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1" {
 				fmt.Fprintf(os.Stderr, "TREEDB_M0_PHASE_BEGIN %s\n", name)
@@ -326,6 +322,23 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 type compactStorageM0WriteResult struct {
 	latencies []time.Duration
 	err       error
+}
+
+func waitForCompactStorageM0ForegroundAttempt(
+	attempted <-chan struct{},
+	done <-chan compactStorageM0WriteResult,
+) (compactStorageM0WriteResult, bool, bool) {
+	select {
+	case <-attempted:
+		return compactStorageM0WriteResult{}, false, true
+	case result := <-done:
+		select {
+		case <-attempted:
+			return result, true, true
+		default:
+			return result, true, false
+		}
+	}
 }
 
 func runCompactStorageM0Writes(db *DB, label string, count int) ([]time.Duration, error) {
