@@ -408,6 +408,50 @@ func TestScanDocumentsFuncMonotonicReconstructionSelectiveTypedColumnP3887(t *te
 	}
 }
 
+func TestScanDocumentsFuncMonotonicReconstructionUnsupportedSelectedTypedFallsBackP3887(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "maybe_kind", Path: "maybe_kind", ValueType: ColumnStoreValueString, Dictionary: true, Nullable: true, Owner: TypedStorageOwnerColumnPart},
+		{Name: "tags", Path: "tags", ValueType: ColumnStoreValueUint32List, Owner: TypedStorageOwnerColumnPart},
+	}}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{
+		[]byte(`{"maybe_kind":"present","tags":[1,2],"retained":"first"}`),
+		[]byte(`{"tags":[3],"retained":"second"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got []DocumentRecord
+	truncated, err := col.ScanDocumentsFunc(2, func(record DocumentRecord) (bool, error) {
+		got = append(got, record)
+		return true, nil
+	})
+	if err != nil || truncated || len(got) != 2 {
+		t.Fatalf("scan err=%v truncated=%t rows=%d", err, truncated, len(got))
+	}
+	assertJSONMapEqual1875(t, got[0].Document, map[string]any{"maybe_kind": "present", "tags": []any{float64(1), float64(2)}, "retained": "first"})
+	assertJSONMapEqual1875(t, got[1].Document, map[string]any{"tags": []any{float64(3)}, "retained": "second"})
+	stats := col.LastDocumentScanStats()
+	if stats.CertifiedMonotonicPath || !stats.GenericFallback || stats.PhysicalPasses != 1 {
+		t.Fatalf("scan stats=%+v want generic fallback before selected-row typed decoding", stats)
+	}
+}
+
 func TestScanDocumentsFuncMonotonicReconstructionBoundsRetainedSemanticCacheP3887(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {

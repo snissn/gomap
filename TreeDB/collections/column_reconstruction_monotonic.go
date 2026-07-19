@@ -14,12 +14,41 @@ const columnReconstructionMonotonicBatchSize = 256
 
 var errColumnReconstructionMonotonicStop = errors.New("collections: stop monotonic reconstruction scan")
 
+// columnStoreSupportsMonotonicSelectedTypedReconstruction is a metadata-only
+// gate for the certified path. That path asks each typed-column part to decode
+// selected rows; keep it opt-in to exactly the shapes supported by
+// scanColumnValuesRows so incompatible layouts retain the generic, full-part
+// reconstruction behavior.
+func columnStoreSupportsMonotonicSelectedTypedReconstruction(cfg ColumnStoreConfig) bool {
+	for _, field := range columnStoreTypedColumnPartFields(cfg) {
+		if field.Nullable {
+			return false
+		}
+		if columnStoreValueTypeIsPrimitiveScalar(field.ValueType) ||
+			columnStoreValueTypeIsDenseNumericVector(field.ValueType) ||
+			field.ValueType == ColumnStoreValueByteVector ||
+			columnStoreValueTypeIsPackedUintVector(field.ValueType) {
+			continue
+		}
+		switch field.ValueType {
+		case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // preflightMonotonicColumnReconstruction certifies that the physical row assets
 // and primary root describe the same ordered, insert-only snapshot. Any normal
 // mutation or ordering mismatch declines the fast path; structural mismatch
 // fails closed.
 func (c *Collection) preflightMonotonicColumnReconstruction(snap *backenddb.Snapshot, catalog *collectionCatalog) (bool, columnPhysicalScanDiagnostics, bool, error) {
 	cfg := catalog.meta.Options.ColumnStore.copy()
+	if !columnStoreSupportsMonotonicSelectedTypedReconstruction(cfg) {
+		return false, columnPhysicalScanDiagnostics{}, false, nil
+	}
 	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, catalog.meta.Name, rootID, cfg, true)
 	if err != nil {
