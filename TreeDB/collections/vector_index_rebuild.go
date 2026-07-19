@@ -394,7 +394,7 @@ func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Sn
 		return true, nil
 	}
 	if columnStoreCanReconstructDocument(catalog.meta) {
-		_, err = c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxCollectionInt, visit)
+		_, err = c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxCollectionInt, visit, nil)
 		return rows, err
 	}
 	for it.Valid() {
