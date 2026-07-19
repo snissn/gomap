@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -1079,6 +1080,60 @@ func orderedRootDeltaMayChangeCollectionRootDescriptors(delta *batch.Batch) bool
 		}
 	}
 	return false
+}
+
+func (db *DB) orderedRootCollectionDescriptorTransitionsCovered(idx *indexGen, baseSystemRoot, newSystemRoot uint64, baseRoots, newRoots []uint64) bool {
+	if db == nil || idx == nil || idx.pager == nil || baseSystemRoot == 0 || newSystemRoot == 0 || len(baseRoots) != len(newRoots) {
+		return false
+	}
+	// Descriptor values may themselves be value-log pointers. The publication
+	// path holds writeMu while both roots and all producer-reported segments are
+	// stable, so the live manager can resolve them without refreshing inventory.
+	// Missing, unregistered, or malformed pointers still fail this proof closed.
+	baseEntries, err := vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, baseSystemRoot)
+	if err != nil {
+		return false
+	}
+	newEntries, err := vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, newSystemRoot)
+	if err != nil {
+		return false
+	}
+	if len(baseEntries) == 0 || len(baseEntries) != len(newEntries) {
+		// Cold attachment, removal, and key-set changes retain the exact
+		// candidate scanner. The bounded proof only covers warm retargeting of
+		// an already-attached descriptor set.
+		return false
+	}
+	baseByKey := make(map[string][]uint64, len(baseEntries))
+	for i := range baseEntries {
+		baseByKey[string(baseEntries[i].key)] = baseEntries[i].sourceRootIDs
+	}
+	changed := false
+	for i := range newEntries {
+		baseRootIDs, ok := baseByKey[string(newEntries[i].key)]
+		if !ok || len(baseRootIDs) != len(newEntries[i].sourceRootIDs) {
+			return false
+		}
+		for rootIdx, newRootID := range newEntries[i].sourceRootIDs {
+			baseRootID := baseRootIDs[rootIdx]
+			if baseRootID == newRootID {
+				continue
+			}
+			covered := false
+			for publishIdx := range baseRoots {
+				if baseRoots[publishIdx] == baseRootID && newRoots[publishIdx] == newRootID {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				return false
+			}
+			changed = true
+		}
+		delete(baseByKey, string(newEntries[i].key))
+	}
+	return changed && len(baseByKey) == 0
 }
 
 func orderedRootRangeOverlapsPrefix(start, end, prefix, prefixEnd []byte) bool {
@@ -2607,7 +2662,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		err = ErrCommandWALUnsupported
 		return 0, nil, err
 	}
-	if db.idx.Load() == nil {
+	idxGen := db.idx.Load()
+	if idxGen == nil {
 		err = errOrderedRootPublishMissingIndex
 		return 0, nil, err
 	}
@@ -2776,7 +2832,15 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		exactValueLogRefDelta = false
 	} else {
 		if systemRefDelta.requiresCandidateProjection {
-			exactValueLogRefDelta = false
+			baseRoots := make([]uint64, len(allOrdered))
+			for idx := range allOrdered {
+				baseRoots[idx] = allOrdered[idx].BaseRoot
+			}
+			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, baseSystemRoot, rootID, baseRoots, rootIDs) {
+				systemRefDelta.requiresCandidateProjection = false
+			} else {
+				exactValueLogRefDelta = false
+			}
 		}
 		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
 		releaseValueLogRefDelta(systemRefDelta)
@@ -3785,7 +3849,15 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		exactValueLogRefDelta = false
 	} else {
 		if systemRefDelta.requiresCandidateProjection {
-			exactValueLogRefDelta = false
+			baseRoots := make([]uint64, len(allOrdered))
+			for idx := range allOrdered {
+				baseRoots[idx] = allOrdered[idx].BaseRoot
+			}
+			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, baseSystemRoot, rootID, baseRoots, rootIDs) {
+				systemRefDelta.requiresCandidateProjection = false
+			} else {
+				exactValueLogRefDelta = false
+			}
 		}
 		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
 		releaseValueLogRefDelta(systemRefDelta)
