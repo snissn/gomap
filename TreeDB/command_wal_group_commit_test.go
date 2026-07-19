@@ -142,6 +142,11 @@ func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublicati
 
 	soloRegistered := make(chan struct{})
 	releaseSolo := make(chan struct{})
+	var releaseSoloOnce sync.Once
+	releaseSoloPublication := func() {
+		releaseSoloOnce.Do(func() { close(releaseSolo) })
+	}
+	defer releaseSoloPublication()
 	db.commandWALGroupCommit.testAfterSoloRegister = func(ticket uint64) {
 		if ticket != 1 {
 			t.Errorf("solo ticket=%d, want 1", ticket)
@@ -191,7 +196,7 @@ func TestPublicCommandWALGroupCommitSoloDurableTicketBlocksLaterRelaxedPublicati
 		}
 	}
 
-	close(releaseSolo)
+	releaseSoloPublication()
 	if err := <-soloDone; err != nil {
 		t.Fatalf("solo SetSync: %v", err)
 	}
