@@ -174,7 +174,9 @@ func benchmarkCompactStorageM0Fixture(b *testing.B, spec compactStorageM0Fixture
 			recorder = newCompactStorageM0StableRecorder(db)
 		}
 		if recorder != nil || foregroundHandshake != nil {
-			restore = installCompactStorageM0Recorder(recorder, foregroundHandshake)
+			restore = compactStorageM0RestoreWithCleanup(
+				b, installCompactStorageM0Recorder(recorder, foregroundHandshake),
+			)
 		}
 		markersEnabled := os.Getenv("TREEDB_COMPACT_STORAGE_M0_STRACE_MARKERS") == "1"
 		if compactStorageM0PhaseHooksRequired(recorder != nil, spec.foreground, markersEnabled) {
@@ -330,6 +332,15 @@ type compactStorageM0WriteResult struct {
 
 func compactStorageM0PhaseHooksRequired(recorder, foreground, markers bool) bool {
 	return recorder || foreground || markers
+}
+
+func compactStorageM0RestoreWithCleanup(tb interface{ Cleanup(func()) }, restore func()) func() {
+	var once sync.Once
+	guarded := func() {
+		once.Do(restore)
+	}
+	tb.Cleanup(guarded)
+	return guarded
 }
 
 func waitForCompactStorageM0ForegroundAttempt(

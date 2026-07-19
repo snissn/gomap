@@ -245,6 +245,32 @@ func TestCompactStorageM0PhaseHooksRequired(t *testing.T) {
 	}
 }
 
+func TestCompactStorageM0RestoreWithCleanupRunsExactlyOnce(t *testing.T) {
+	calls := 0
+	t.Run("explicit-restore", func(t *testing.T) {
+		restore := compactStorageM0RestoreWithCleanup(t, func() { calls++ })
+		restore()
+		restore()
+	})
+	if calls != 1 {
+		t.Fatalf("explicit restore calls=%d want=1", calls)
+	}
+
+	t.Run("cleanup-only", func(t *testing.T) {
+		compactStorageM0RestoreWithCleanup(t, func() { calls++ })
+	})
+	if calls != 2 {
+		t.Fatalf("cleanup-only calls=%d want=2", calls)
+	}
+
+	t.Run("installed-observer", func(t *testing.T) {
+		restore := installCompactStorageM0Recorder(newCompactStorageM0StableRecorder(nil), nil)
+		compactStorageM0RestoreWithCleanup(t, restore)
+	})
+	restore := installCompactStorageM0Recorder(newCompactStorageM0StableRecorder(nil), nil)
+	restore()
+}
+
 func TestCompactStorageM0ProfileScriptUsesPortableTempRoot(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "compact_storage_m0_profile.sh"))
 	if err != nil {
