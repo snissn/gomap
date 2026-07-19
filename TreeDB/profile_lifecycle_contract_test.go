@@ -114,8 +114,14 @@ func TestProductionProfileLifecycleFrontiersMatchFrozenContract(t *testing.T) {
 				if afterOrdinary.appliedCommand != before.appliedCommand {
 					t.Fatalf("ordinary Set applied command frontier: before=%+v after=%+v", before, afterOrdinary)
 				}
-				if afterOrdinary.nextWAL != before.nextWAL+1 {
-					t.Fatalf("ordinary Set next WAL=%d, want %d", afterOrdinary.nextWAL, before.nextWAL+1)
+				wantNext := before.nextWAL + 1
+				if tc.profile == ProfileCommandWALDurable {
+					// The durable profile closes every acknowledged mutation with
+					// an explicit durable-prefix barrier frame.
+					wantNext++
+				}
+				if afterOrdinary.nextWAL != wantNext {
+					t.Fatalf("ordinary Set next WAL=%d, want mutation-plus-profile-barrier frontier %d", afterOrdinary.nextWAL, wantNext)
 				}
 				wantDurable := before.durableWAL
 				if tc.profile == ProfileCommandWALDurable {
@@ -152,8 +158,8 @@ func TestProductionProfileLifecycleFrontiersMatchFrozenContract(t *testing.T) {
 			afterSetSync := readProfileLifecycleFrontiers(t, db, tc.commandWAL)
 			if tc.commandWAL {
 				requireProfileLifecycleRootUnchanged(t, afterEmptySync, afterSetSync)
-				if afterSetSync.nextWAL != afterEmptySync.nextWAL+1 || afterSetSync.durableWAL != afterSetSync.nextWAL-1 {
-					t.Fatalf("SetSync did not close the command-WAL call frontier: before=%+v after=%+v", afterEmptySync, afterSetSync)
+				if afterSetSync.nextWAL != afterEmptySync.nextWAL+2 || afterSetSync.durableWAL != afterSetSync.nextWAL-1 {
+					t.Fatalf("SetSync did not append one mutation plus its durable-prefix barrier: before=%+v after=%+v", afterEmptySync, afterSetSync)
 				}
 			} else {
 				requireProfileLifecycleDurableRoot(t, afterEmptySync, afterSetSync)
@@ -170,7 +176,9 @@ func TestProductionProfileLifecycleFrontiersMatchFrozenContract(t *testing.T) {
 			afterCheckpoint := readProfileLifecycleFrontiers(t, db, tc.commandWAL)
 			requireProfileLifecycleDurableRoot(t, beforeCheckpoint, afterCheckpoint)
 			if tc.commandWAL {
-				if afterCheckpoint.appliedCommand != beforeCheckpoint.nextWAL-1 || afterCheckpoint.durableWAL != beforeCheckpoint.nextWAL-1 {
+				wantApplied := beforeCheckpoint.nextWAL - 1
+				wantNext := beforeCheckpoint.nextWAL
+				if afterCheckpoint.nextWAL != wantNext || afterCheckpoint.appliedCommand != wantApplied || afterCheckpoint.durableWAL != wantApplied {
 					t.Fatalf("checkpoint did not publish the dependency-closed WAL frontier: before=%+v after=%+v", beforeCheckpoint, afterCheckpoint)
 				}
 			}
@@ -192,8 +200,11 @@ func TestProductionProfileLifecycleFrontiersMatchFrozenContract(t *testing.T) {
 			defer func() { _ = reopen.Close() }()
 			afterReopen := readProfileLifecycleFrontiers(t, reopen, tc.commandWAL)
 			requireProfileLifecycleDurableRoot(t, beforeClose, afterReopen)
-			if tc.commandWAL && afterReopen.appliedCommand <= beforeClose.appliedCommand {
-				t.Fatalf("clean Close did not publish the final command frontier: before=%+v after=%+v", beforeClose, afterReopen)
+			if tc.commandWAL {
+				wantApplied := beforeClose.nextWAL - 1
+				if afterReopen.appliedCommand != wantApplied || afterReopen.durableWAL != wantApplied {
+					t.Fatalf("clean Close did not publish the final dependency-closed WAL frontier %d: before=%+v after=%+v", wantApplied, beforeClose, afterReopen)
+				}
 			}
 			for key, want := range map[string]string{
 				"ordinary":   "one",

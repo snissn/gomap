@@ -19,6 +19,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestPublicCommandWALDirectRoutesEmitAppendAndFlushCuts(t *testing.T) {
@@ -2843,8 +2844,14 @@ func TestPublicCommandWALBatchAppendUsesStablePayload(t *testing.T) {
 	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount || wrapped.payload.Count() != 2 {
 		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable count 2", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
 	}
-	if err := wrapped.appendCommandWAL(false); err != nil {
-		t.Fatalf("appendCommandWAL: %v", err)
+	appendErr := wrapped.appendCommandWAL(false)
+	publication := wrapped.groupPublication
+	wrapped.groupPublication = publicCommandWALPublication{}
+	if wrapped.db != nil {
+		wrapped.db.finishPublicCommandWALGroupPublication(publication, appendErr)
+	}
+	if appendErr != nil {
+		t.Fatalf("appendCommandWAL: %v", appendErr)
 	}
 	if inner.replayCalls != 0 {
 		t.Fatalf("inner replay calls=%d, want 0 for stable payload append", inner.replayCalls)
@@ -3037,8 +3044,12 @@ func TestPublicCommandWALBatchBypassStreamsReplayToCommandWAL(t *testing.T) {
 	if !wrapped.payloadBypass {
 		t.Fatal("batch did not take payload-bypass path")
 	}
-	if err := wrapped.appendCommandWAL(false); err != nil {
-		t.Fatalf("appendCommandWAL: %v", err)
+	appendErr := wrapped.appendCommandWAL(false)
+	publication := wrapped.groupPublication
+	wrapped.groupPublication = publicCommandWALPublication{}
+	db.finishPublicCommandWALGroupPublication(publication, appendErr)
+	if appendErr != nil {
+		t.Fatalf("appendCommandWAL: %v", appendErr)
 	}
 	if inner.replayCalls != 2 {
 		t.Fatalf("inner replay calls=%d, want 2 planning/writing scans", inner.replayCalls)
@@ -3101,9 +3112,13 @@ func TestPublicCommandWALBatchStablePayloadAppendsWithoutReplay(t *testing.T) {
 	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount {
 		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable payload", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
 	}
-	if err := wrapped.appendCommandWAL(false); err != nil {
+	appendErr := wrapped.appendCommandWAL(false)
+	publication := wrapped.groupPublication
+	wrapped.groupPublication = publicCommandWALPublication{}
+	db.finishPublicCommandWALGroupPublication(publication, appendErr)
+	if appendErr != nil {
 		_ = db.Close()
-		t.Fatalf("appendCommandWAL: %v", err)
+		t.Fatalf("appendCommandWAL: %v", appendErr)
 	}
 	if inner.replayCalls != 0 {
 		_ = db.Close()
@@ -3174,9 +3189,13 @@ func TestPublicCommandWALBatchOrdinarySetStablePayloadAppendsWithoutReplay(t *te
 	if inner.setViewCalls != 2 || inner.setCalls != 0 {
 		t.Fatalf("inner calls: setView=%d set=%d, want 2/0", inner.setViewCalls, inner.setCalls)
 	}
-	if err := wrapped.appendCommandWAL(false); err != nil {
+	appendErr := wrapped.appendCommandWAL(false)
+	publication := wrapped.groupPublication
+	wrapped.groupPublication = publicCommandWALPublication{}
+	db.finishPublicCommandWALGroupPublication(publication, appendErr)
+	if appendErr != nil {
 		_ = db.Close()
-		t.Fatalf("appendCommandWAL: %v", err)
+		t.Fatalf("appendCommandWAL: %v", appendErr)
 	}
 	if inner.replayCalls != 0 {
 		_ = db.Close()
@@ -3376,6 +3395,26 @@ type commandWALPayloadSoftCapBatch struct {
 
 func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand func() error) error {
 	if err := appendCommand(); err != nil {
+		return err
+	}
+	b.writeAfterCalls++
+	b.Reset()
+	return nil
+}
+
+func (b *commandWALHookBatch) WriteAfterCommandWALAppendWithPreparedRevision(_ bool, appendCommand func(func() page.EntryRevision) error) error {
+	revision := page.EntryRevision(1)
+	assignRevision := func() page.EntryRevision {
+		for i := range b.entries {
+			entry := &b.entries[i]
+			if entry.Type != batch.OpDeleteRange && entry.Revision == page.LegacyEntryRevision {
+				entry.Revision = revision
+			}
+		}
+		return revision
+	}
+	assignRevision()
+	if err := appendCommand(assignRevision); err != nil {
 		return err
 	}
 	b.writeAfterCalls++

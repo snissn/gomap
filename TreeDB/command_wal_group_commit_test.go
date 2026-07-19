@@ -476,12 +476,10 @@ func TestPublicCommandWALGroupCommitMeasuresRelaxedWaitBehindDurablePrefix(t *te
 		err    error
 	}
 	appendMeasured := func(payload []byte, sync bool, done chan<- measuredResult) {
-		var ticket uint64
-		timing, err := db.appendPublicRawKVCommandPayloadMeasured(payload, sync, &ticket)
-		if err == nil {
-			db.finishPublicCommandWALGroupPublication(ticket, nil)
-		}
-		done <- measuredResult{timing: timing, ticket: ticket, err: err}
+		var publication publicCommandWALPublication
+		timing, err := db.appendPublicRawKVCommandPayloadMeasured(payload, sync, &publication)
+		db.finishPublicCommandWALGroupPublication(publication, err)
+		done <- measuredResult{timing: timing, ticket: publication.ticket, err: err}
 	}
 	durableDone := make(chan measuredResult, 1)
 	go appendMeasured(durablePayload, true, durableDone)
@@ -801,6 +799,185 @@ func TestPublicCommandWALGroupCommitCoversRotationAndExternalValueDependencies(t
 		t.Fatalf("shared group dependency proof external_sync=%t rotation_namespace_sync=%t barrier=%t events=%#v",
 			sawExternalSync, sawRotationNamespaceSync, sawBarrier, events)
 	}
+}
+
+func TestPublicCommandWALGroupCommitFastRelaxedPublicationsOverlapWithoutCoordinator(t *testing.T) {
+	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	type observedMutation struct {
+		key      string
+		value    string
+		revision uint64
+	}
+	observed := make(chan observedMutation, 2)
+	releases := map[string]chan struct{}{
+		"first":  make(chan struct{}),
+		"second": make(chan struct{}),
+	}
+	defer func() {
+		for _, release := range releases {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}
+	}()
+	testAfterPublicCommandWALPointAppend = func(op commitlog.RawKVOperation) {
+		key := string(op.Key)
+		if key != "fast-relaxed/first" && key != "fast-relaxed/second" {
+			return
+		}
+		value := string(op.Value)
+		observed <- observedMutation{key: key, value: value, revision: op.Revision}
+		<-releases[value]
+	}
+	defer func() { testAfterPublicCommandWALPointAppend = nil }()
+
+	type writeResult struct {
+		value string
+		err   error
+	}
+	results := make(chan writeResult, 2)
+	for _, value := range []string{"first", "second"} {
+		go func(value string) {
+			results <- writeResult{
+				value: value,
+				err:   db.Set([]byte("fast-relaxed/"+value), []byte(value)),
+			}
+		}(value)
+	}
+
+	mutations := make([]observedMutation, 0, 2)
+	for len(mutations) < 2 {
+		select {
+		case mutation := <-observed:
+			mutations = append(mutations, mutation)
+		case <-time.After(time.Second):
+			t.Fatalf("only %d/2 relaxed appends overlapped before publication release", len(mutations))
+		}
+	}
+	if mutations[0].revision == mutations[1].revision {
+		t.Fatalf("overlapping relaxed revisions are equal: %+v", mutations)
+	}
+
+	db.commandWALGroupCommit.mu.Lock()
+	nextTicket := db.commandWALGroupCommit.nextTicket
+	completedTicket := db.commandWALGroupCommit.completedTicket
+	publishTicket := db.commandWALGroupCommit.publishTicket
+	pendingCount := db.commandWALGroupCommit.pendingCount
+	leaderActive := db.commandWALGroupCommit.leaderActive
+	condInitialized := db.commandWALGroupCommit.cond.L != nil
+	timer := db.commandWALGroupCommit.timer
+	db.commandWALGroupCommit.mu.Unlock()
+	if nextTicket != 0 || completedTicket != 0 || publishTicket != 0 ||
+		pendingCount != 0 || leaderActive || condInitialized || timer != nil {
+		t.Fatalf("fast relaxed writes entered coordinator: next=%d completed=%d publish=%d pending=%d leader=%t cond=%t timer=%v",
+			nextTicket, completedTicket, publishTicket, pendingCount, leaderActive, condInitialized, timer)
+	}
+
+	for _, mutation := range mutations {
+		close(releases[mutation.value])
+		if result := <-results; result.err != nil || result.value != mutation.value {
+			t.Fatalf("publication result=%+v, want value %q with nil error", result, mutation.value)
+		}
+	}
+
+	for _, mutation := range mutations {
+		got, revision, err := db.GetVersioned([]byte(mutation.key))
+		if err != nil {
+			t.Fatalf("GetVersioned(%q): %v", mutation.key, err)
+		}
+		if string(got) != mutation.value || uint64(revision) != mutation.revision {
+			t.Fatalf("published %q=(%q,%d), want (%q,%d)",
+				mutation.key, got, revision, mutation.value, mutation.revision)
+		}
+	}
+	stats := db.Stats()
+	if got := statMapUint64(t, stats, "treedb.command_wal.group_commit.groups_total"); got != 0 {
+		t.Fatalf("group commits=%d, want 0 for fast relaxed publications", got)
+	}
+}
+
+func TestPublicCommandWALGroupCommitDurableBarrierWaitsForRelaxedPublicationLease(t *testing.T) {
+	opts := relaxedCommandWALDurablePrefixOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.commandWALGroupCommit.delay = time.Hour
+	db.commandWALGroupCommit.maxCommits = 1
+	db.commandWALGroupCommit.maxBytes = 1 << 30
+	relaxedAppended := make(chan struct{})
+	releaseRelaxed := make(chan struct{})
+	var relaxedOnce sync.Once
+	testAfterPublicCommandWALPointAppend = func(op commitlog.RawKVOperation) {
+		if string(op.Value) == "relaxed" {
+			relaxedOnce.Do(func() { close(relaxedAppended) })
+			<-releaseRelaxed
+		}
+	}
+	defer func() { testAfterPublicCommandWALPointAppend = nil }()
+
+	durableRegistered := make(chan struct{})
+	db.commandWALGroupCommit.testAfterRegister = func(ticket uint64, durable bool) {
+		if ticket != 1 || !durable {
+			t.Errorf("first coordinator registration=(ticket=%d,durable=%t), want durable ticket 1", ticket, durable)
+		}
+		close(durableRegistered)
+	}
+	barrierEntered := make(chan struct{})
+	var barrierOnce sync.Once
+	db.commandWALGroupCommit.testBeforeSync = func(int) {
+		barrierOnce.Do(func() { close(barrierEntered) })
+	}
+
+	relaxedDone := make(chan error, 1)
+	go func() {
+		relaxedDone <- db.Set([]byte("lease/relaxed"), []byte("relaxed"))
+	}()
+	select {
+	case <-relaxedAppended:
+	case <-time.After(time.Second):
+		t.Fatal("relaxed append did not retain its publication lease")
+	}
+
+	durableDone := make(chan error, 1)
+	go func() {
+		durableDone <- db.SetSync([]byte("lease/durable"), []byte("durable"))
+	}()
+	select {
+	case <-durableRegistered:
+	case <-time.After(time.Second):
+		t.Fatal("durable request did not register behind relaxed publication")
+	}
+	select {
+	case <-barrierEntered:
+		t.Fatal("durable barrier entered before preexisting relaxed publication released its read lease")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseRelaxed)
+	if err := <-relaxedDone; err != nil {
+		t.Fatalf("relaxed Set: %v", err)
+	}
+	select {
+	case <-barrierEntered:
+	case <-time.After(time.Second):
+		t.Fatal("durable barrier did not enter after relaxed publication released its lease")
+	}
+	if err := <-durableDone; err != nil {
+		t.Fatalf("durable SetSync: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("lease/relaxed"), []byte("relaxed"))
+	requireRawKVValue(t, db, []byte("lease/durable"), []byte("durable"))
 }
 
 func TestPublicCommandWALGroupCommitRelaxedOnlyDoesNotStartTimerOrSync(t *testing.T) {

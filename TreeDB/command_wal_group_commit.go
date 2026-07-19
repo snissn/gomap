@@ -36,6 +36,7 @@ type publicCommandWALGroupCommit struct {
 	testAfterRegister    func(ticket uint64, durable bool)
 	testAfterWait        func(ticket uint64)
 	testBeforeLeaderWait func()
+	durableIntents       atomic.Int64
 
 	groups          atomic.Uint64
 	commits         atomic.Uint64
@@ -53,6 +54,11 @@ type publicCommandWALGroupCommit struct {
 	waitNsMax       atomic.Uint64
 }
 
+type publicCommandWALPublication struct {
+	ticket      uint64
+	fastRelaxed bool
+}
+
 func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	if tdb == nil || !tdb.commandWALCached {
 		return nil
@@ -60,9 +66,11 @@ func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	if tdb.backend == nil {
 		return ErrClosed
 	}
+	tdb.commandWALPublicOperationGate.RLock()
 	tdb.commandWALPublicPublishMu.Lock()
 	ticket, leader, err := tdb.commandWALGroupCommit.register(0, true, true)
 	tdb.commandWALPublicPublishMu.Unlock()
+	tdb.commandWALPublicOperationGate.RUnlock()
 	if err != nil {
 		return err
 	}
@@ -70,10 +78,27 @@ func (tdb *DB) forcePublicCommandWALGroupCommit() error {
 	return err
 }
 
-func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, appendFrame func() (uint64, error)) (uint64, error) {
+func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, durable bool, pendingBookkeeping, groupCommitWait *time.Duration, appendFrame func() (uint64, error)) (publicCommandWALPublication, error) {
+	var publication publicCommandWALPublication
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
-		return 0, ErrClosed
+		return publication, ErrClosed
 	}
+	if !durable && tdb.beginFastRelaxedPublicCommandWALPublication() {
+		publication.fastRelaxed = true
+		lsn, err := appendFrame()
+		if lsn != 0 {
+			start := time.Now()
+			tdb.recordPublicCommandWALPendingLSN(lsn)
+			if pendingBookkeeping != nil {
+				*pendingBookkeeping += time.Since(start)
+			}
+		}
+		return publication, err
+	}
+	if durable {
+		tdb.commandWALGroupCommit.durableIntents.Add(1)
+	}
+	tdb.commandWALPublicOperationGate.RLock()
 	tdb.commandWALPublicPublishMu.Lock()
 	lsn, err := appendFrame()
 	if lsn != 0 {
@@ -86,12 +111,20 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, durable bool, pendin
 	var ticket uint64
 	var leader bool
 	if err == nil && lsn != 0 {
+		if preparedBytes != nil {
+			bytes = *preparedBytes
+		}
 		ticket, leader, err = tdb.commandWALGroupCommit.register(bytes, durable, false)
 	}
 	tdb.commandWALPublicPublishMu.Unlock()
-	if err != nil || ticket == 0 {
-		return 0, err
+	tdb.commandWALPublicOperationGate.RUnlock()
+	if durable {
+		tdb.commandWALGroupCommit.durableIntents.Add(-1)
 	}
+	if err != nil || ticket == 0 {
+		return publication, err
+	}
+	publication.ticket = ticket
 	if hook := tdb.commandWALGroupCommit.testAfterRegister; hook != nil {
 		hook(ticket, durable)
 	}
@@ -100,7 +133,34 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, durable bool, pendin
 	if groupCommitWait != nil {
 		*groupCommitWait += time.Since(waitStart)
 	}
-	return ticket, err
+	publication.ticket = ticket
+	return publication, err
+}
+
+func (tdb *DB) beginFastRelaxedPublicCommandWALPublication() bool {
+	if tdb == nil {
+		return false
+	}
+	tdb.commandWALPublicOperationGate.RLock()
+	group := &tdb.commandWALGroupCommit
+	group.mu.Lock()
+	idle := group.fastRelaxedPublicationIdleLocked()
+	group.mu.Unlock()
+	if !idle {
+		tdb.commandWALPublicOperationGate.RUnlock()
+	}
+	return idle
+}
+
+func (group *publicCommandWALGroupCommit) fastRelaxedPublicationIdleLocked() bool {
+	if group == nil || group.terminalErr != nil || group.durableIntents.Load() != 0 ||
+		group.leaderActive || group.pendingCount != 0 {
+		return false
+	}
+	if group.cond.L == nil {
+		return group.nextTicket == 0 && group.completedTicket == 0 && group.publishTicket == 0
+	}
+	return group.completedTicket == group.nextTicket && group.publishTicket == group.nextTicket+1
 }
 
 func (group *publicCommandWALGroupCommit) register(bytes int, durable, force bool) (ticket uint64, leader bool, err error) {
@@ -233,6 +293,10 @@ func (tdb *DB) closePublicCommandWALGroupCommit() {
 		}
 		group.cond.Wait()
 	}
+	group.mu.Unlock()
+	tdb.commandWALPublicOperationGate.Lock()
+	defer tdb.commandWALPublicOperationGate.Unlock()
+	group.mu.Lock()
 	if group.timer != nil {
 		if !group.timer.Stop() {
 			select {
@@ -246,8 +310,29 @@ func (tdb *DB) closePublicCommandWALGroupCommit() {
 	group.mu.Unlock()
 }
 
-func (tdb *DB) finishPublicCommandWALGroupPublication(ticket uint64, publishErr error) {
-	if tdb == nil || ticket == 0 {
+func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandWALPublication, publishErr error) {
+	if tdb == nil {
+		return
+	}
+	if publication.fastRelaxed {
+		if publishErr != nil {
+			if tdb.backend != nil {
+				tdb.backend.MarkCommandWALRecoveryRequired()
+			}
+			group := &tdb.commandWALGroupCommit
+			group.mu.Lock()
+			if group.terminalErr == nil {
+				group.errors.Add(1)
+				group.terminalErr = publishErr
+				group.cond.Broadcast()
+			}
+			group.mu.Unlock()
+		}
+		tdb.commandWALPublicOperationGate.RUnlock()
+		return
+	}
+	ticket := publication.ticket
+	if ticket == 0 {
 		return
 	}
 	if publishErr != nil && tdb.backend != nil {
@@ -323,6 +408,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	// Public append and ticket registration use the same outer mutex. Holding
 	// it from snapshot through the backend barrier makes the batch an exact WAL
 	// prefix: no frame can land between the snapshot and the barrier.
+	tdb.commandWALPublicOperationGate.Lock()
 	tdb.commandWALPublicPublishMu.Lock()
 	group.mu.Lock()
 	batchCount := group.pendingCount
@@ -346,6 +432,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 		group.cond.Broadcast()
 		group.mu.Unlock()
 		tdb.commandWALPublicPublishMu.Unlock()
+		tdb.commandWALPublicOperationGate.Unlock()
 		return
 	}
 
@@ -384,6 +471,7 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	group.cond.Broadcast()
 	group.mu.Unlock()
 	tdb.commandWALPublicPublishMu.Unlock()
+	tdb.commandWALPublicOperationGate.Unlock()
 }
 
 func (group *publicCommandWALGroupCommit) observeCompletedBatch(batchCount, batchCommits int) {

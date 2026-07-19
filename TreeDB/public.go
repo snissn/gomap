@@ -165,6 +165,7 @@ type DB struct {
 	commandWALCached                     bool
 	commandWALPendingMu                  sync.Mutex
 	commandWALPublicPublishMu            sync.Mutex
+	commandWALPublicOperationGate        sync.RWMutex
 	commandWALPublicPayloadPool          sync.Pool
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
@@ -1917,11 +1918,11 @@ func (db *DB) Set(key, value []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			var publicationTicket uint64
-			err := db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), db.commandWALOrdinaryWriteRequiresSync(), &publicationTicket)
+			var publication publicCommandWALPublication
+			err := db.cached.SetAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, assignRevision, db.commandWALOrdinaryWriteRequiresSync(), &publication)
 			})
-			db.finishPublicCommandWALGroupPublication(publicationTicket, err)
+			db.finishPublicCommandWALGroupPublication(publication, err)
 			return err
 		}
 		return db.cached.Set(key, value)
@@ -1941,11 +1942,11 @@ func (db *DB) SetSync(key, value []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			var publicationTicket uint64
-			err := db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), true, &publicationTicket)
+			var publication publicCommandWALPublication
+			err := db.cached.SetAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, assignRevision, true, &publication)
 			})
-			db.finishPublicCommandWALGroupPublication(publicationTicket, err)
+			db.finishPublicCommandWALGroupPublication(publication, err)
 			return err
 		}
 		return db.cached.SetSync(key, value)
@@ -2083,11 +2084,11 @@ func (db *DB) Delete(key []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			var publicationTicket uint64
-			err := db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), db.commandWALOrdinaryWriteRequiresSync(), &publicationTicket)
+			var publication publicCommandWALPublication
+			err := db.cached.DeleteAfterCommandWALAppendWithPreparedRevision(key, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, assignRevision, db.commandWALOrdinaryWriteRequiresSync(), &publication)
 			})
-			db.finishPublicCommandWALGroupPublication(publicationTicket, err)
+			db.finishPublicCommandWALGroupPublication(publication, err)
 			return err
 		}
 		return db.cached.Delete(key)
@@ -2109,15 +2110,15 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			return nil
 		}
 		appended := false
-		var publicationTicket uint64
+		var publication publicCommandWALPublication
 		err := db.cached.DeleteRangeAfterCommandWALAppend(start, end, func() error {
-			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, db.commandWALOrdinaryWriteRequiresSync(), &publicationTicket); err != nil {
+			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, db.commandWALOrdinaryWriteRequiresSync(), &publication); err != nil {
 				return err
 			}
 			appended = true
 			return nil
 		})
-		db.finishPublicCommandWALGroupPublication(publicationTicket, err)
+		db.finishPublicCommandWALGroupPublication(publication, err)
 		if err != nil && appended && db.backend != nil {
 			db.backend.MarkCommandWALRecoveryRequired()
 		}
@@ -2158,11 +2159,11 @@ func (db *DB) DeleteSync(key []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			var publicationTicket uint64
-			err := db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), true, &publicationTicket)
+			var publication publicCommandWALPublication
+			err := db.cached.DeleteAfterCommandWALAppendWithPreparedRevision(key, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, assignRevision, true, &publication)
 			})
-			db.finishPublicCommandWALGroupPublication(publicationTicket, err)
+			db.finishPublicCommandWALGroupPublication(publication, err)
 			return err
 		}
 		return db.cached.DeleteSync(key)

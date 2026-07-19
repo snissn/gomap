@@ -10638,6 +10638,26 @@ func (b *Batch) PointRevisionStats() (page.EntryRevision, bool) {
 	return pointEntryRevisionStats(b.entries)
 }
 
+// AssignExternalCommandWALPointRevisions assigns one fresh revision to legacy
+// point entries immediately before their external command-WAL frame is encoded.
+// Explicit non-legacy revisions are preserved and advance the assignment floor.
+func (b *Batch) AssignExternalCommandWALPointRevisions() page.EntryRevision {
+	if b == nil || b.db == nil || len(b.entries) == 0 || !b.db.externalCommandWAL {
+		return page.LegacyEntryRevision
+	}
+	maxRevision, hasLegacy := b.db.prepareEntryRevisionAssignment(b.entries)
+	if !hasLegacy {
+		return maxRevision
+	}
+	revision := b.db.nextEntryRevision()
+	assignedMax := assignLegacyPointEntryRevisions(b.entries, revision)
+	if assignedMax > maxRevision {
+		maxRevision = assignedMax
+	}
+	b.entryRevision = revision
+	return maxRevision
+}
+
 // OrderedEntries returns the submission-order operation stream. The returned
 // slice aliases batch-owned storage and must be treated as read-only.
 func (b *Batch) OrderedEntries() []batch.Entry {
@@ -25160,6 +25180,21 @@ func (db *DB) SetAfterCommandWALAppendWithRevision(key, value []byte, appendComm
 	return db.setDirectAfterCommandWALAppendWithRevision(key, value, appendCommand)
 }
 
+// SetAfterCommandWALAppendWithPreparedRevision defers revision allocation until
+// appendCommand invokes assignRevision. Command-WAL callers use this to assign
+// the exact revision while holding their WAL append serialization boundary.
+func (db *DB) SetAfterCommandWALAppendWithPreparedRevision(key, value []byte, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.waitForCheckpointForWrite()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
+	return db.setDirectAfterCommandWALAppendWithPreparedRevision(key, value, appendCommand)
+}
+
 // Update applies fn to the current value for key and writes the returned
 // mutation without forcing an fsync boundary.
 func (db *DB) Update(key []byte, fn backenddb.UpdateFunc) error {
@@ -25483,6 +25518,12 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 }
 
 func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appendCommand func(page.EntryRevision) error) error {
+	return db.setDirectAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+		return appendCommand(assignRevision())
+	})
+}
+
+func (db *DB) setDirectAfterCommandWALAppendWithPreparedRevision(key, value []byte, appendCommand func(func() page.EntryRevision) error) error {
 	if !db.externalCommandWAL {
 		return fmt.Errorf("cachingdb: command wal point writes require external command wal cached mode")
 	}
@@ -25566,13 +25607,26 @@ func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appe
 		}
 	}
 
-	revision := db.nextEntryRevision()
-	if err := appendCommand(revision); err != nil {
+	revision := page.LegacyEntryRevision
+	assignRevision := func() page.EntryRevision {
+		if revision == page.LegacyEntryRevision {
+			revision = db.nextEntryRevision()
+		}
+		return revision
+	}
+	if err := appendCommand(assignRevision); err != nil {
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
 		}
 		db.writeMu.RUnlock()
 		return err
+	}
+	if revision == page.LegacyEntryRevision {
+		if retainPath != "" {
+			db.markValueLogRetain(retainPath)
+		}
+		db.writeMu.RUnlock()
+		return fmt.Errorf("cachingdb: command wal append did not assign an entry revision")
 	}
 
 	db.conditionalRecordPointWrite(batch.OpPut, key)
@@ -26511,6 +26565,19 @@ func (db *DB) DeleteAfterCommandWALAppendWithRevision(key []byte, appendCommand 
 	return db.deleteDirectAfterCommandWALAppendWithRevision(key, appendCommand)
 }
 
+// DeleteAfterCommandWALAppendWithPreparedRevision is the tombstone counterpart
+// to SetAfterCommandWALAppendWithPreparedRevision.
+func (db *DB) DeleteAfterCommandWALAppendWithPreparedRevision(key []byte, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+	key = normalizeRawKVPointKey(key)
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.waitForCheckpointForWrite()
+	guard := db.lockUpdateKey(key)
+	defer guard.Unlock()
+	return db.deleteDirectAfterCommandWALAppendWithPreparedRevision(key, appendCommand)
+}
+
 func (db *DB) lockUpdateKey(key []byte) keyupdate.Guard {
 	if db == nil {
 		return keyupdate.Guard{}
@@ -26614,6 +26681,12 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 }
 
 func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCommand func(page.EntryRevision) error) error {
+	return db.deleteDirectAfterCommandWALAppendWithPreparedRevision(key, func(assignRevision func() page.EntryRevision) error {
+		return appendCommand(assignRevision())
+	})
+}
+
+func (db *DB) deleteDirectAfterCommandWALAppendWithPreparedRevision(key []byte, appendCommand func(func() page.EntryRevision) error) error {
 	if !db.externalCommandWAL {
 		return fmt.Errorf("cachingdb: command wal point writes require external command wal cached mode")
 	}
@@ -26631,10 +26704,20 @@ func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCo
 	}
 	shard.mu.Unlock()
 
-	revision := db.nextEntryRevision()
-	if err := appendCommand(revision); err != nil {
+	revision := page.LegacyEntryRevision
+	assignRevision := func() page.EntryRevision {
+		if revision == page.LegacyEntryRevision {
+			revision = db.nextEntryRevision()
+		}
+		return revision
+	}
+	if err := appendCommand(assignRevision); err != nil {
 		db.writeMu.RUnlock()
 		return err
+	}
+	if revision == page.LegacyEntryRevision {
+		db.writeMu.RUnlock()
+		return fmt.Errorf("cachingdb: command wal append did not assign an entry revision")
 	}
 
 	db.conditionalRecordPointWrite(batch.OpDelete, key)
@@ -33248,6 +33331,7 @@ type Batch struct {
 	hasDeleteRanges              bool
 	entryRevision                page.EntryRevision
 	commandWALAppend             func() error
+	commandWALPreparedRevision   bool
 	valueCopyShard               *memShard
 	appendOnlyDirectValueCopier  func([]byte) []byte
 
@@ -34345,6 +34429,7 @@ func (b *Batch) Reset() {
 	b.entryRevision = page.LegacyEntryRevision
 	b.maxEntries = 0
 	b.commandWALAppend = nil
+	b.commandWALPreparedRevision = false
 	b.valueCopyShard = nil
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
@@ -35511,6 +35596,44 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 	return b.writeRegular(sync)
 }
 
+// WriteAfterCommandWALAppendWithPreparedRevision is the ordered-revision
+// variant used by the public command-WAL adapter. Legacy point revisions remain
+// unassigned through preflight; appendCommand must invoke assignRevision while
+// holding the command-WAL append serialization boundary.
+func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+	if b == nil || b.db == nil {
+		return backenddb.ErrClosed
+	}
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	if !b.db.externalCommandWAL {
+		return fmt.Errorf("cachingdb: command wal batch writes require external command wal cached mode")
+	}
+	b.db.waitForCheckpointForWrite()
+	if b.backend != nil {
+		return fmt.Errorf("cachingdb: command wal batch writes require cached memtable path")
+	}
+
+	prevAppend := b.commandWALAppend
+	prevPreparedRevision := b.commandWALPreparedRevision
+	b.commandWALPreparedRevision = true
+	b.commandWALAppend = func() error {
+		return appendCommand(b.AssignExternalCommandWALPointRevisions)
+	}
+	defer func() {
+		b.commandWALAppend = prevAppend
+		b.commandWALPreparedRevision = prevPreparedRevision
+	}()
+	if b.hasDeleteRanges {
+		return b.writeRangeBatch(sync)
+	}
+	return b.writeRegular(sync)
+}
+
 // WriteAfterCommandWALAppendMeasured is the opt-in diagnostic counterpart to
 // WriteAfterCommandWALAppend. It preserves the same write ordering while
 // measuring non-overlapping request phases. Normal writes use the unmeasured
@@ -35552,6 +35675,64 @@ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func
 	b.commandWALAppend = measuredAppend
 	defer func() {
 		b.commandWALAppend = prevAppend
+	}()
+	if b.hasDeleteRanges {
+		err = b.writeRangeBatch(sync)
+	} else {
+		err = b.writeRegular(sync)
+	}
+	writeEnd := time.Now()
+	if callbackInvoked {
+		timing.MemtablePublicationReset = writeEnd.Sub(postCallbackStart)
+	} else {
+		timing.PreflightMaterialization = writeEnd.Sub(phaseStart)
+	}
+	return timing, err
+}
+
+// WriteAfterCommandWALAppendWithPreparedRevisionMeasured preserves the prepared
+// revision ordering while exposing the same phase diagnostics as the ordinary
+// measured command-WAL batch path.
+func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool, appendCommand func(assignRevision func() page.EntryRevision) error) (timing CommandWALBatchWriteTiming, err error) {
+	if b == nil || b.db == nil {
+		return timing, backenddb.ErrClosed
+	}
+	if b.closed {
+		return timing, ErrBatchClosed
+	}
+	if appendCommand == nil {
+		return timing, fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	if !b.db.externalCommandWAL {
+		return timing, fmt.Errorf("cachingdb: command wal batch writes require external command wal cached mode")
+	}
+
+	checkpointStart := time.Now()
+	b.db.waitForCheckpointForWrite()
+	phaseStart := time.Now()
+	timing.CheckpointGate = phaseStart.Sub(checkpointStart)
+	if b.backend != nil {
+		return timing, fmt.Errorf("cachingdb: command wal batch writes require cached memtable path")
+	}
+
+	callbackInvoked := false
+	postCallbackStart := time.Time{}
+	measuredAppend := func() error {
+		callbackStart := time.Now()
+		timing.PreflightMaterialization = callbackStart.Sub(phaseStart)
+		callbackInvoked = true
+		appendErr := appendCommand(b.AssignExternalCommandWALPointRevisions)
+		postCallbackStart = time.Now()
+		timing.CommandCallback = postCallbackStart.Sub(callbackStart)
+		return appendErr
+	}
+	prevAppend := b.commandWALAppend
+	prevPreparedRevision := b.commandWALPreparedRevision
+	b.commandWALPreparedRevision = true
+	b.commandWALAppend = measuredAppend
+	defer func() {
+		b.commandWALAppend = prevAppend
+		b.commandWALPreparedRevision = prevPreparedRevision
 	}()
 	if b.hasDeleteRanges {
 		err = b.writeRangeBatch(sync)
@@ -36394,7 +36575,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 
 	_, hasLegacyRevisions := b.db.prepareEntryRevisionAssignment(b.entries)
-	if b.db.disableJournal && hasLegacyRevisions {
+	if b.db.disableJournal && hasLegacyRevisions && !b.commandWALPreparedRevision {
 		assignLegacyPointEntryRevisions(b.entries, b.db.nextEntryRevision())
 	}
 

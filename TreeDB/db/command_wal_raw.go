@@ -1018,6 +1018,87 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintMeasured(scanEntries 
 	return lsn, timing, err
 }
 
+// AppendRawKVCommandWALOrderedEntryScanWithHintPrepared assigns any caller
+// metadata while holding the barrier-aware publish lock, then plans and appends
+// the ordered entry scan under that same serialization boundary.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, error) {
+	lsn, _, err := db.appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare, scanEntries, opHint, sync, false)
+	return lsn, err
+}
+
+// AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured is the
+// diagnostic counterpart to the prepared ordered-entry scan append.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare, scanEntries, opHint, sync, true)
+}
+
+func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool, measured bool) (uint64, CommandWALRequestTiming, error) {
+	var timing CommandWALRequestTiming
+	if db == nil || !db.commandWAL {
+		return 0, timing, nil
+	}
+	if db.readOnly {
+		return 0, timing, ErrReadOnly
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, timing, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if prepare == nil || scanEntries == nil {
+		return 0, timing, nil
+	}
+	publishStart := time.Time{}
+	if measured {
+		publishStart = time.Now()
+		timing.PublishLockBarrierWaitObserved = true
+	}
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		if measured {
+			timing.PublishLockBarrierWait += time.Since(publishStart)
+		}
+		return 0, timing, err
+	}
+	defer unlockCommandWALPublish()
+	if measured {
+		timing.PublishLockBarrierWait += time.Since(publishStart)
+	}
+	if db.closing.Load() {
+		return 0, timing, ErrClosed
+	}
+	if db.commandJournal == nil {
+		return 0, timing, db.commandWALJournalUnavailableError()
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, timing, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	planningStart := time.Time{}
+	if measured {
+		planningStart = time.Now()
+		timing.BackendIntentPlanningSerializationObserved = true
+	}
+	if err := prepare(); err != nil {
+		if measured {
+			timing.BackendIntentPlanningSerialization += time.Since(planningStart)
+		}
+		return 0, timing, err
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, opHint)
+	if measured {
+		timing.BackendIntentPlanningSerialization += time.Since(planningStart)
+	}
+	if intent == nil || err != nil {
+		return 0, timing, err
+	}
+	defer releaseUnassignedCommandWALIntent(intent)
+	lsn, err := db.appendCommandWALIntentWithTiming(intent, sync, func() *CommandWALRequestTiming {
+		if measured {
+			return &timing
+		}
+		return nil
+	}())
+	return lsn, timing, err
+}
+
 func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
 	if len(entries) == 0 {
 		return nil, nil
@@ -1583,6 +1664,51 @@ func (db *DB) AppendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	return db.appendRawKVPointCommandWALTrustedWithRevision(op, key, value, uint64(revision), sync)
 }
 
+// AppendRawKVPointCommandWALTrustedWithPreparedRevision assigns the cached
+// entry revision while holding the same barrier-aware publish lock that orders
+// command-WAL frames. The assigned revision is therefore ordered with the
+// frame's LSN and may be reused by the caller for subsequent memtable publish.
+func (db *DB) AppendRawKVPointCommandWALTrustedWithPreparedRevision(op commitlog.RawKVOp, key, value []byte, assignRevision func() page.EntryRevision, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if assignRevision == nil {
+		return 0, fmt.Errorf("%w: missing command wal revision allocator", ErrCommandWALRejected)
+	}
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return 0, err
+	}
+	defer unlockCommandWALPublish()
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
+	if db.commandJournal == nil {
+		return 0, db.commandWALJournalUnavailableError()
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	revision := assignRevision()
+	if revision == page.LegacyEntryRevision {
+		return 0, fmt.Errorf("%w: command wal revision allocator returned legacy revision", ErrCommandWALRejected)
+	}
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op: op, Key: key, Value: value, Revision: uint64(revision),
+	}})
+	if err != nil {
+		return 0, err
+	}
+	return db.appendCommandWALIntent(&commandWALBatchIntent{
+		kind: commitlog.CommandKindRawKVBatch, scope: commitlog.CommandScopeRawKV,
+		payloadFormat: commitlog.PayloadFormatRawKVBatchV1, payload: payload, trustedPayload: true,
+		statsPath: commandWALAppendStatsPoint, statsPathSet: true,
+	}, sync)
+}
+
 func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp, key, value []byte, revision uint64, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
@@ -1643,12 +1769,35 @@ func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedMeasured(payload []byte, s
 }
 
 func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVBatchPayloadCommandWALPrepared(func() ([]byte, error) {
+		return payload, nil
+	}, sync, trusted, measured)
+}
+
+// AppendRawKVBatchPayloadCommandWALTrustedPrepared builds a trusted payload
+// while holding the barrier-aware command-WAL publish lock, then appends that
+// exact payload before releasing the lock.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPrepared(prepare func() ([]byte, error), sync bool) (uint64, error) {
+	lsn, _, err := db.appendRawKVBatchPayloadCommandWALPrepared(prepare, sync, true, false)
+	return lsn, err
+}
+
+// AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasured is the diagnostic
+// counterpart to AppendRawKVBatchPayloadCommandWALTrustedPrepared.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrustedPreparedMeasured(prepare func() ([]byte, error), sync bool) (uint64, CommandWALRequestTiming, error) {
+	return db.appendRawKVBatchPayloadCommandWALPrepared(prepare, sync, true, true)
+}
+
+func (db *DB) appendRawKVBatchPayloadCommandWALPrepared(prepare func() ([]byte, error), sync bool, trusted bool, measured bool) (uint64, CommandWALRequestTiming, error) {
 	var requestTiming CommandWALRequestTiming
 	if db == nil || !db.commandWAL {
 		return 0, requestTiming, nil
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, requestTiming, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if prepare == nil {
+		return 0, requestTiming, fmt.Errorf("%w: missing command wal payload preparation", ErrCommandWALRejected)
 	}
 	publishStart := time.Time{}
 	if measured {
@@ -1679,6 +1828,13 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	if measured {
 		backendStart = time.Now()
 		requestTiming.BackendIntentPlanningSerializationObserved = true
+	}
+	payload, err := prepare()
+	if err != nil {
+		if measured {
+			requestTiming.BackendIntentPlanningSerialization += time.Since(backendStart)
+		}
+		return 0, requestTiming, err
 	}
 	if measured {
 		requestTiming.BackendIntentPlanningSerialization += time.Since(backendStart)
