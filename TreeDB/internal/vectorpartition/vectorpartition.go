@@ -160,7 +160,14 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	}
 	cap := partitionCap(len(v), cfg.Partitions, cfg.Imbalance)
 	started = time.Now()
-	a, err := backend.Partition(g, cfg.Partitions, cap)
+	backendGraph := g
+	if !isReferencePartitioner(backend) {
+		backendGraph, err = cloneGraphBounded(g, cfg.MaxEdges)
+		if err != nil {
+			return Artifact{}, phases, err
+		}
+	}
+	a, err := backend.Partition(backendGraph, cfg.Partitions, cap)
 	phases.BackendPartitionNanos = time.Since(started).Nanoseconds()
 	if err != nil {
 		return Artifact{}, phases, err
@@ -185,6 +192,41 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	}
 	phases.ValidationNanos = time.Since(started).Nanoseconds()
 	return art, phases, nil
+}
+
+// Non-reference in-process backends receive an isolated graph because Graph
+// contains mutable nested slices. The canonical graph remains the one built
+// from vectors and recorded in the artifact. The clone has exact backing
+// storage and is bounded by the already-validated MaxVectors/MaxEdges limits.
+func cloneGraphBounded(g Graph, maxEdges int) (Graph, error) {
+	if len(g.Neighbors) > maxVectors || maxEdges < 0 {
+		return Graph{}, errors.New("backend graph copy exceeds bounds")
+	}
+	total := 0
+	for _, neighbors := range g.Neighbors {
+		if len(neighbors) > maxEdges-total {
+			return Graph{}, errors.New("backend graph copy exceeds edge bound")
+		}
+		total += len(neighbors)
+	}
+	clone := Graph{Neighbors: make([][]int, len(g.Neighbors))}
+	backing := make([]int, total)
+	at := 0
+	for i, neighbors := range g.Neighbors {
+		clone.Neighbors[i] = backing[at : at+len(neighbors) : at+len(neighbors)]
+		copy(clone.Neighbors[i], neighbors)
+		at += len(neighbors)
+	}
+	return clone, nil
+}
+
+func isReferencePartitioner(backend Partitioner) bool {
+	switch backend.(type) {
+	case ReferencePartitioner, *ReferencePartitioner:
+		return true
+	default:
+		return false
+	}
 }
 func validateRequestedSource(s Source) error {
 	if s.SourceID == "" || len(s.SourceID) > 1024 {

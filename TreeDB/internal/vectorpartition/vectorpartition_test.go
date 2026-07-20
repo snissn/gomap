@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -349,6 +350,74 @@ func (p assignmentPartitioner) Name() string    { return "assignment-test" }
 func (p assignmentPartitioner) License() string { return "test" }
 func (p assignmentPartitioner) Partition(Graph, int, int) ([]int, error) {
 	return p.assignment, nil
+}
+
+type mutatingPartitioner struct {
+	assignment []int
+	err        error
+}
+
+func (mutatingPartitioner) Name() string    { return (ReferencePartitioner{}).Name() }
+func (mutatingPartitioner) License() string { return (ReferencePartitioner{}).License() }
+func (p mutatingPartitioner) Partition(g Graph, _ int, _ int) ([]int, error) {
+	for i, neighbors := range g.Neighbors {
+		if len(neighbors) > 1 {
+			neighbors[0], neighbors[len(neighbors)-1] = neighbors[len(neighbors)-1], neighbors[0]
+			g.Neighbors[i] = neighbors[:1]
+		} else {
+			g.Neighbors[i] = nil
+		}
+	}
+	if p.err != nil {
+		return nil, p.err
+	}
+	return append([]int(nil), p.assignment...), nil
+}
+
+func TestBuildWithPartitionerPreservesCanonicalGraphAgainstMutation(t *testing.T) {
+	canonical, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "inline_vectors_v1"}, mutatingPartitioner{assignment: canonical.Assignment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Graph, canonical.Graph) {
+		t.Fatalf("backend mutation changed canonical graph: got=%v want=%v", got.Graph, canonical.Graph)
+	}
+	if got.Metrics != canonical.Metrics {
+		t.Fatalf("backend mutation changed canonical metrics: got=%+v want=%+v", got.Metrics, canonical.Metrics)
+	}
+	if gotDigest, wantDigest := mustDigest(t, got), mustDigest(t, canonical); gotDigest != wantDigest {
+		t.Fatalf("backend mutation changed canonical artifact digest: got=%s want=%s", gotDigest, wantDigest)
+	}
+}
+
+func TestBuildWithPartitionerFailsClosedAfterMutatingBackendFailure(t *testing.T) {
+	_, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "inline_vectors_v1"}, mutatingPartitioner{err: fmt.Errorf("backend failure")})
+	if err == nil || !strings.Contains(err.Error(), "backend failure") {
+		t.Fatalf("mutating backend failure accepted: %v", err)
+	}
+	_, err = BuildWithPartitioner(fixture(), config(), Source{SourceID: "inline_vectors_v1"}, mutatingPartitioner{assignment: make([]int, len(fixture()))})
+	if err == nil {
+		t.Fatal("mutating backend malformed assignment accepted")
+	}
+}
+
+func TestCloneGraphBoundedUsesIndependentExactBacking(t *testing.T) {
+	original := Graph{Neighbors: [][]int{{1, 2}, {0}}}
+	clone, err := cloneGraphBounded(original, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone.Neighbors[0][0] = 99
+	if original.Neighbors[0][0] != 1 {
+		t.Fatalf("backend graph clone aliases canonical graph: %v", original)
+	}
+	if _, err := cloneGraphBounded(original, 2); err == nil {
+		t.Fatal("oversized backend graph copy accepted")
+	}
 }
 func TestBuildFailsClosedOnMalformedBackendAssignment(t *testing.T) {
 	for _, assignment := range [][]int{nil, {0}, {0, 1, 0, 1, 0, 1, 0}, {-1, 0, 0, 1, 1, 0}, {2, 0, 0, 1, 1, 0}} {
