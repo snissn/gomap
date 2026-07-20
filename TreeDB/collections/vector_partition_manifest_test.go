@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,4 +298,33 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
 	m.Canonicalize()
 	return m
+}
+
+func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
+	for _, rows := range []int{10_000, 100_000, 1_000_000} {
+		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
+			m := testVectorPartitionManifestV1()
+			m.SourceRowCount = uint64(rows)
+			m.PartitionCount = 1
+			m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
+			m.Memberships = make([]VectorPartitionMembershipV1, rows)
+			for i := range m.Memberships {
+				m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+			}
+			m.Assets = m.Assets[:1]
+			m.Canonicalize()
+			raw, err := EncodeVectorPartitionManifestV1(m)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportMetric(float64(len(raw))/float64(rows), "metadata-bytes/vector")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+				if err != nil || got.SourceRowCount != uint64(rows) {
+					b.Fatalf("decode: %v", err)
+				}
+			}
+		})
+	}
 }
