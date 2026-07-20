@@ -292,10 +292,11 @@ func run(args []string, stdout io.Writer) (runErr error) {
 		if err := vectorpartition.ValidateReferenceInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
 			return err
 		}
-		vectors, queries := deterministicFixture(fixture)
-		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
-			return errors.New("fixture checksum does not match generated vector/query/truth stream")
-		}
+		// The artifact's Source.Checksum is computed over these generated vectors
+		// by BuildWithPartitioner. The manifest checksum additionally commits the
+		// simulation-only query/truth stream, so verifying it here would recreate
+		// queries and exact truth that this stage deliberately does not own.
+		vectors := deterministicVectors(fixture)
 		return runPartitionStage(cfg, fixture, vectors, stdout)
 	}
 	if cfg.topK > fixture.Vectors {
@@ -952,6 +953,14 @@ func memoryScaleCeil(value, numerator, denominator int64) (int64, error) {
 // deterministicFixture has intentionally visible cluster/boundary pairs and a
 // duplicate pair, so tie ordering remains part of the executable M0 contract.
 func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
+	v := deterministicVectors(m)
+	return v, deterministicQueries(v, m)
+}
+
+// deterministicVectors is the partition-stage corpus generator. It must not
+// inspect m.Queries: partition artifacts bind the vector corpus only, while
+// simulation mode separately generates and verifies queries and exact truth.
+func deterministicVectors(m fixtureManifest) [][]float64 {
 	v := contiguousFloat64Matrix(m.Vectors, m.Dimensions)
 	for i := range v {
 		row := v[i]
@@ -965,11 +974,15 @@ func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
 	if len(v) > 1 {
 		copy(v[1], v[0])
 	}
+	return v
+}
+
+func deterministicQueries(v [][]float64, m fixtureManifest) [][]float64 {
 	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
 	for i := range q {
 		copy(q[i], v[(i*7919+17)%len(v)])
 	}
-	return v, q
+	return q
 }
 
 func contiguousFloat64Matrix(rows, dimensions int) [][]float64 {

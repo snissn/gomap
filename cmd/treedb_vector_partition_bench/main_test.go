@@ -205,6 +205,62 @@ func TestPartitionStageSkipsSimulationOnlyValidation(t *testing.T) {
 	}
 }
 
+func TestPartitionStageIgnoresLargeSimulationOnlyQueryStream(t *testing.T) {
+	const vectors = 20_000
+	m := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "partition-only-large-query-stream",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       vectors,
+		Queries:       maxVectors - vectors,
+		Dimensions:    1,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	dataset := t.TempDir()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataset, "fixture_manifest.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-dataset", dataset, "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "2", "-partition-degree", "1"}
+	var first bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &first); err != nil {
+		t.Fatalf("partition stage charged simulation-only queries: %v", err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(first.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	artifactRaw, err := os.ReadFile(report.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Source != report.Source || artifact.Source.Vectors != vectors || artifact.Source.Dimensions != 1 {
+		t.Fatalf("partition artifact lost vector-corpus identity: %+v", artifact.Source)
+	}
+	args[3] = t.TempDir()
+	var second bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &second); err != nil {
+		t.Fatal(err)
+	}
+	var again partitionRun
+	if err := json.Unmarshal(second.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if report.ArtifactSHA256 != again.ArtifactSHA256 || report.Source != again.Source {
+		t.Fatalf("partition-only output changed with irrelevant query stream: first=%+v second=%+v", report, again)
+	}
+}
+
 func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
 	m, err := loadFixture(fixturePath(t))
 	if err != nil {
