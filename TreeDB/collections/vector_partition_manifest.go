@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math"
 	"os"
@@ -1076,7 +1077,11 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		return err
 	}
 	if m.State == "ready" {
-		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
+		namespace := ""
+		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
+			namespace = cfg.AssetManager.Namespace
+		}
+		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), namespace, append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
 			return err
 		}
 	}
@@ -1109,7 +1114,7 @@ func (c *Collection) validateVectorPartitionSourceIdentityV1(m VectorPartitionMa
 	return nil
 }
 
-func verifyVectorPartitionAssetsV1(root string, assets []VectorPartitionAssetV1) error {
+func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartitionAssetV1) error {
 	for _, a := range assets {
 		if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
 			return fmt.Errorf("collections: vector partition asset %q ref: %w", a.ID, err)
@@ -1117,15 +1122,38 @@ func verifyVectorPartitionAssetsV1(root string, assets []VectorPartitionAssetV1)
 		if a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
 			return fmt.Errorf("collections: vector partition asset %q ref bytes mismatch", a.ID)
 		}
-		raw, err := readColumnPhysicalAssetFromManager(root, a.Ref)
+		if namespace == "" || a.Ref.Namespace != namespace {
+			return fmt.Errorf("collections: vector partition asset %q foreign namespace", a.ID)
+		}
+		path, err := columnAssetSegmentPath(root, a.Ref)
 		if err != nil {
 			return fmt.Errorf("collections: vector partition asset %q: %w", a.ID, err)
 		}
-		if uint64(len(raw)) != a.Bytes {
-			return fmt.Errorf("collections: vector partition asset %q size mismatch", a.ID)
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("collections: vector partition asset %q: %w", a.ID, err)
 		}
-		sum := sha256.Sum256(raw)
-		if hex.EncodeToString(sum[:]) != a.Checksum {
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return err
+		}
+		if a.Ref.Offset < 0 || a.Ref.Length < 0 || a.Ref.Offset > info.Size() || a.Ref.Length > info.Size()-a.Ref.Offset {
+			file.Close()
+			return fmt.Errorf("collections: vector partition asset %q truncated", a.ID)
+		}
+		section := io.NewSectionReader(file, a.Ref.Offset, a.Ref.Length)
+		sha := sha256.New()
+		crc := crc32.NewIEEE()
+		written, err := io.CopyBuffer(io.MultiWriter(sha, crc), section, make([]byte, 64<<10))
+		closeErr := file.Close()
+		if err != nil || closeErr != nil || uint64(written) != a.Bytes {
+			return fmt.Errorf("collections: vector partition asset %q streaming read", a.ID)
+		}
+		if crc.Sum32() != a.Ref.Checksum {
+			return fmt.Errorf("collections: vector partition asset %q CRC mismatch", a.ID)
+		}
+		if hex.EncodeToString(sha.Sum(nil)) != a.Checksum {
 			return fmt.Errorf("collections: vector partition asset %q sha256 mismatch", a.ID)
 		}
 	}
