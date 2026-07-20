@@ -691,7 +691,7 @@ func TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay(t *test
 		t.Fatalf("parse applied_command_lsn=%q: %v", stats["treedb.applied_command_lsn"], err)
 	}
 	if applied != 8 {
-		t.Fatalf("applied_command_lsn=%d, want 8 after replaying the complete relaxed suffix (stats=%#v)", applied, stats)
+		t.Fatalf("applied_command_lsn=%d, want 8 after replaying the durable mutation prefix (stats=%#v)", applied, stats)
 	}
 	if stats["treedb.cache.redo_log.mode"] != "external_command_wal" ||
 		stats["treedb.cache.redo_log.enabled"] != "false" {

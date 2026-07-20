@@ -61,11 +61,12 @@ GOWORK=off go test ./benchmarks/dgraph_durability \
 ```
 
 It reports per-acknowledgement p50/p95/p99 latency. TreeDB rows additionally
-report command-WAL flush/sync, aggregate value-log sync, checkpoint, iterator
-rotation/source, and queue metrics where the public `Stats` map exposes them.
-`command_wal_syncs/write_commit` is also the inverse attribution needed to
-derive acknowledged commits per command-WAL sync. The current implementation
-has no production group-commit counter, so the harness does not invent one.
+report command-WAL flush/sync, group acknowledgements and syncs, aggregate
+value-log sync, checkpoint, iterator rotation/source, and queue metrics where
+the public `Stats` map exposes them. `command_wal_group_commits/sync`,
+`command_wal_group_syncs/ack`, and `command_wal_group_size_max` are derived
+from production coordinator counters; they are not inferred from benchmark
+concurrency.
 
 The MVCC package has a separately named write/read-alternating row:
 
