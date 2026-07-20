@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -217,26 +218,36 @@ func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits
 }
 func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]struct{}, kind string, rows uint64, base bool, capPer int) error {
 	var prev VectorPartitionMembershipV1
-	counts := make(map[uint64]int)
+	var ordinalCount int
+	partitionCounts := make(map[uint32]int)
 	for i, x := range ms {
-		if x.VectorOrdinal >= rows || capPer <= 0 || counts[x.VectorOrdinal] >= capPer {
+		if x.VectorOrdinal >= rows || capPer <= 0 {
 			return fmt.Errorf("%w: %s ordinal/cap", ErrVectorPartitionManifestInvalid, kind)
 		}
-		counts[x.VectorOrdinal]++
 		if _, ok := ps[x.PartitionID]; !ok {
 			return fmt.Errorf("%w: %s unknown partition", ErrVectorPartitionManifestInvalid, kind)
 		}
 		if i > 0 && (x.VectorOrdinal < prev.VectorOrdinal || x.VectorOrdinal == prev.VectorOrdinal && x.PartitionID <= prev.PartitionID) {
 			return fmt.Errorf("%w: noncanonical %s", ErrVectorPartitionManifestInvalid, kind)
 		}
-		prev = x
-	}
-	if base {
-		for i := uint64(0); i < rows; i++ {
-			if counts[i] != 1 {
-				return fmt.Errorf("%w: disjoint coverage", ErrVectorPartitionManifestInvalid)
-			}
+		if base && x.VectorOrdinal != uint64(i) {
+			return fmt.Errorf("%w: disjoint coverage", ErrVectorPartitionManifestInvalid)
 		}
+		if kind == "representative" {
+			if partitionCounts[x.PartitionID] >= capPer {
+				return fmt.Errorf("%w: representative partition cap", ErrVectorPartitionManifestInvalid)
+			}
+			partitionCounts[x.PartitionID]++
+		} else {
+			if i == 0 || x.VectorOrdinal != prev.VectorOrdinal {
+				ordinalCount = 0
+			}
+			if ordinalCount >= capPer {
+				return fmt.Errorf("%w: %s ordinal/cap", ErrVectorPartitionManifestInvalid, kind)
+			}
+			ordinalCount++
+		}
+		prev = x
 	}
 	return nil
 }
@@ -253,12 +264,17 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 		writeU32VPM(h, p.PartitionID)
 		writeStringVPM(h, p.GroupID)
 	}
-	for _, a := range append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset) {
+	for _, a := range m.Assets {
 		writeStringVPM(h, a.ID)
 		writeStringVPM(h, a.Checksum)
 		writeU64VPM(h, a.Bytes)
 		writeColumnAssetRefVPM(h, a.Ref)
 	}
+	a := m.RouterAsset
+	writeStringVPM(h, a.ID)
+	writeStringVPM(h, a.Checksum)
+	writeU64VPM(h, a.Bytes)
+	writeColumnAssetRefVPM(h, a.Ref)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -292,6 +308,9 @@ func (m *VectorPartitionManifestV1) Canonicalize() {
 // EncodeVectorPartitionManifestV1 is a strict, stable binary record. There
 // are no tagged optional fields: newer records fail closed on this decoder.
 func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error) {
+	if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
+		return nil, err
+	}
 	m.Canonicalize()
 	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 		return nil, err
@@ -319,6 +338,31 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	putMembershipsVPM(b, m.Representatives)
 	putAssetsVPM(b, m.Assets)
 	return b.Bytes(), nil
+}
+func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPartitionManifestLimits) error {
+	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships {
+		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
+	}
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
+		if len(s) > l.MaxStringBytes {
+			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
+		}
+	}
+	for _, p := range m.Placements {
+		if len(p.GroupID) > l.MaxStringBytes {
+			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
+		}
+	}
+	for _, a := range m.Assets {
+		if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
+			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
+		}
+	}
+	a := m.RouterAsset
+	if len(a.ID) > l.MaxStringBytes || len(a.Checksum) > l.MaxStringBytes || len(a.Ref.Namespace) > l.MaxStringBytes || len(a.Ref.Kind) > l.MaxStringBytes {
+		return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
+	}
+	return nil
 }
 func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits) (VectorPartitionManifestV1, error) {
 	if l.MaxBytes <= 0 {
@@ -579,6 +623,10 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 			return nil, nil, fmt.Errorf("collections: vector partition manifest %q: %w", entry.Name(), err)
 		}
 		if m.Collection == c.name {
+			wantName := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(m.Collection), safeVPM(m.IndexName), m.Generation)
+			if entry.Name() != wantName {
+				return nil, nil, fmt.Errorf("collections: vector partition manifest filename does not bind decoded identity")
+			}
 			byIndex[m.IndexName] = append(byIndex[m.IndexName], m)
 		}
 	}
@@ -699,8 +747,15 @@ func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
 	if e = syncFileVPM(tmp); e != nil {
 		return e
 	}
-	if e = os.Rename(tmp, filepath.Join(s.dir, name)); e != nil {
-		return e
+	target := filepath.Join(s.dir, name)
+	if e = os.Link(tmp, target); e != nil {
+		if !errors.Is(e, os.ErrExist) {
+			return e
+		}
+		existing, readErr := readBoundedVPM(target, DefaultVectorPartitionManifestLimits().MaxBytes)
+		if readErr != nil || !bytes.Equal(existing, raw) {
+			return fmt.Errorf("%w: generation %d already published with different bytes", ErrVectorPartitionManifestInvalid, m.Generation)
+		}
 	}
 	if e = syncDirVPM(s.dir); e != nil {
 		return e
@@ -740,18 +795,26 @@ func (s *VectorPartitionStoreV1) uniqueTemp(name string) (string, error) {
 }
 func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
 	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
-	info, e := os.Stat(p)
-	if e != nil {
-		return VectorPartitionManifestV1{}, e
-	}
-	if info.Size() < 0 || info.Size() > int64(DefaultVectorPartitionManifestLimits().MaxBytes) {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: stored bytes cap", ErrVectorPartitionManifestInvalid)
-	}
-	raw, e := os.ReadFile(p)
+	raw, e := readBoundedVPM(p, DefaultVectorPartitionManifestLimits().MaxBytes)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
 	return DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+}
+func readBoundedVPM(path string, max int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > max {
+		return nil, fmt.Errorf("%w: stored bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	return raw, nil
 }
 func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
 	return s.openPointer(collection, index, ".active")
@@ -836,23 +899,30 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
 	}
+	retiredMatches := false
 	if retired, err := s.OpenRetired(collection, index); err == nil {
-		if retired.Generation == generation {
-			if err := os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")); err != nil {
-				return err
-			}
-			if err := syncDirVPM(s.dir); err != nil {
-				return err
-			}
-		}
+		retiredMatches = retired.Generation == generation
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", err)
 	}
 	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
-	if e := os.Remove(p); e != nil {
+	if e := os.Remove(p); e != nil && !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
-	return syncDirVPM(s.dir)
+	if err := syncDirVPM(s.dir); err != nil {
+		return err
+	}
+	if retiredMatches || errors.Is(s.OpenRetiredError(collection, index), os.ErrNotExist) {
+		if err := os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return syncDirVPM(s.dir)
+	}
+	return nil
+}
+func (s *VectorPartitionStoreV1) OpenRetiredError(collection, index string) error {
+	_, err := s.OpenRetired(collection, index)
+	return err
 }
 
 type VectorPartitionStatusV1 struct {
@@ -956,7 +1026,7 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	if c == nil || c.db == nil {
 		return VectorPartitionStatusV1{}, errors.New("collections: closed collection")
 	}
-	s, e := OpenVectorPartitionStoreV1(c.db.Dir())
+	s, e := OpenExistingVectorPartitionStoreV1(c.db.Dir())
 	if e != nil {
 		return VectorPartitionStatusV1{}, e
 	}
