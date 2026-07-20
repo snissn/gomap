@@ -123,6 +123,8 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishDirectViewSegmentAppendCount += src.ColumnPublishDirectViewSegmentAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
+	dst.ColumnPublishManifestMutationRecords += src.ColumnPublishManifestMutationRecords
+	dst.ColumnPublishManifestMutationBytes += src.ColumnPublishManifestMutationBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
 	dst.TemplateRunBuild += src.TemplateRunBuild
 	dst.PrimaryRunBuild += src.PrimaryRunBuild
@@ -211,6 +213,12 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	}
 	if stats.ColumnPublishManifestBytes > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishManifestBytes)/float64(docs), "column_publish_manifest_bytes/doc")
+	}
+	if stats.ColumnPublishManifestMutationRecords > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishManifestMutationRecords)/float64(batches), "column_publish_manifest_mutation_records/batch")
+	}
+	if stats.ColumnPublishManifestMutationBytes > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishManifestMutationBytes)/float64(batches), "column_publish_manifest_mutation_bytes/batch")
 	}
 	if stats.ColumnPublishAssetAppenderCloseCount > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishAssetAppenderCloseCount)/float64(batches), "column_publish_asset_appender_closes/batch")
@@ -315,6 +323,8 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 			ColumnPublishPreparedAssets:                        2,
 			ColumnPublishRequiredAssetBytes:                    2048,
 			ColumnPublishManifestBytes:                         512,
+			ColumnPublishManifestMutationRecords:               7,
+			ColumnPublishManifestMutationBytes:                 256,
 			ColumnPublishSharedSegmentAppendBytes:              1000,
 			ColumnPublishSharedSegmentAppendCount:              3,
 			ColumnPublishSharedSegmentAppenderCloseCount:       1,
@@ -344,6 +354,12 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 	}
 	if got := result.Extra["column_publish_manifest_bytes/doc"]; got <= 0 {
 		t.Fatalf("column publish manifest bytes metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_manifest_mutation_records/batch"]; got <= 0 {
+		t.Fatalf("column publish manifest mutation records metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_manifest_mutation_bytes/batch"]; got <= 0 {
+		t.Fatalf("column publish manifest mutation bytes metric=%v want positive", got)
 	}
 	for _, name := range []string{
 		"column_publish_shared_segment_asset_appends/batch",
