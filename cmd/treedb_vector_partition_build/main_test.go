@@ -21,7 +21,9 @@ func TestOraclePartsUsesTruthMembershipNotCentroids(t *testing.T) {
 	}
 }
 func TestCorpusPathAndChecksumGuards(t *testing.T) {
-	for _, p := range []string{"../x", "/tmp/x", "a/b", "a\\b", ""} {
+	// Dot names alias the dataset directory/current parent rather than a corpus
+	// file; reject them alongside traversal and separator forms before joining.
+	for _, p := range []string{".", "..", "../x", "/tmp/x", "a/b", "a\\b", ""} {
 		if safeCorpusName(p) {
 			t.Fatalf("unsafe path accepted %q", p)
 		}

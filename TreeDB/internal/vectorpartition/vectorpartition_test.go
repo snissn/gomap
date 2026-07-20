@@ -483,6 +483,32 @@ func TestZeroDegreeGraphRowsAreCanonicalEmptyArrays(t *testing.T) {
 	}
 }
 
+func TestValidateInputReportsSpecificIDFailures(t *testing.T) {
+	chunk := strings.Repeat("x", maxIDBytes)
+	aggregate := make([]Vector, maxTotalIDBytes/maxIDBytes+1)
+	for i := range aggregate {
+		aggregate[i] = Vector{ID: chunk, Values: []float64{1}}
+	}
+	cases := []struct {
+		name string
+		v    []Vector
+		want string
+	}{
+		{name: "empty", v: []Vector{{ID: "", Values: []float64{1}}}, want: "empty vector ID"},
+		{name: "invalid UTF-8", v: []Vector{{ID: string([]byte{0xff}), Values: []float64{1}}}, want: "invalid UTF-8 vector ID"},
+		{name: "per-ID cap", v: []Vector{{ID: strings.Repeat("x", maxIDBytes+1), Values: []float64{1}}}, want: "vector ID exceeds per-ID byte cap"},
+		{name: "aggregate cap", v: aggregate, want: "vector ID aggregate bytes exceed cap"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateInput(tc.v, 1)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("validateInput error=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestStrictDecoderRejectsNonCanonicalAndMetricForgery(t *testing.T) {
 	a, err := Build(fixture(), config())
 	if err != nil {

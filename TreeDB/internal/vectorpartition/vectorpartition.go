@@ -373,8 +373,17 @@ func validateInput(v []Vector, dimensions int) error {
 		if len(x.Values) != dimensions {
 			return errors.New("wrong vector dimension")
 		}
-		if x.ID == "" || !utf8.ValidString(x.ID) || len(x.ID) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(x.ID) {
+		if x.ID == "" {
 			return errors.New("empty vector ID")
+		}
+		if !utf8.ValidString(x.ID) {
+			return errors.New("invalid UTF-8 vector ID")
+		}
+		if len(x.ID) > maxIDBytes {
+			return errors.New("vector ID exceeds per-ID byte cap")
+		}
+		if totalIDBytes > maxTotalIDBytes-len(x.ID) {
+			return errors.New("vector ID aggregate bytes exceed cap")
 		}
 		totalIDBytes += len(x.ID)
 		for _, n := range x.Values {

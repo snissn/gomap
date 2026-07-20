@@ -341,7 +341,7 @@ func loadCorpus(dir string, m manifest) ([]vectorpartition.Vector, [][]float64, 
 	return vs, qs, nil
 }
 func safeCorpusName(name string) bool {
-	return name != "" && !filepath.IsAbs(name) && filepath.Base(name) == name && !strings.Contains(name, "\\")
+	return name != "" && name != "." && name != ".." && !filepath.IsAbs(name) && filepath.Base(name) == name && !strings.Contains(name, "\\")
 }
 func readF32(path string, fi fileInfo, rows, dims int) ([]float32, error) {
 	want, ok := checkedByteCount(rows, dims)
