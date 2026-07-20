@@ -671,59 +671,68 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 	if err != nil {
 		return nil, nil, err
 	}
-	entries, err := os.ReadDir(s.dir)
+	dir, err := os.Open(s.dir)
 	if err != nil {
 		return nil, nil, err
 	}
+	defer dir.Close()
 	byIndex := make(map[string][]VectorPartitionManifestV1)
 	prefix := safeVPM(c.name) + "-"
 	var totalBytes int64
-	var retained int
+	var relevant int
 	activeNames := make(map[string]struct{})
 	retiredNames := make(map[string]struct{})
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
-			continue
+	for {
+		entries, readErr := dir.ReadDir(64)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, nil, readErr
 		}
-		if strings.HasSuffix(entry.Name(), ".active") {
-			activeNames[entry.Name()] = struct{}{}
-			continue
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+				continue
+			}
+			if len(entry.Name()) > 256 {
+				return nil, nil, fmt.Errorf("collections: vector partition entry name cap")
+			}
+			relevant++
+			if relevant > vectorPartitionStoreMaxEntriesV1 {
+				return nil, nil, fmt.Errorf("collections: vector partition retained entry cap")
+			}
+			if strings.HasSuffix(entry.Name(), ".active") {
+				activeNames[entry.Name()] = struct{}{}
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".retired") {
+				retiredNames[entry.Name()] = struct{}{}
+				continue
+			}
+			if filepath.Ext(entry.Name()) != ".vpm" {
+				return nil, nil, fmt.Errorf("collections: unexpected vector partition entry %q", entry.Name())
+			}
+			raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes)
+			if err != nil {
+				return nil, nil, err
+			}
+			if totalBytes > vectorPartitionStoreMaxBytesV1-int64(len(raw)) {
+				return nil, nil, fmt.Errorf("collections: vector partition retained bytes cap")
+			}
+			totalBytes += int64(len(raw))
+			m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+			if err != nil {
+				return nil, nil, fmt.Errorf("collections: vector partition manifest %q: %w", entry.Name(), err)
+			}
+			if m.Collection != c.name {
+				return nil, nil, fmt.Errorf("collections: vector partition manifest filename collection mismatch")
+			}
+			wantName := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(m.Collection), safeVPM(m.IndexName), m.Generation)
+			if entry.Name() != wantName {
+				return nil, nil, fmt.Errorf("collections: vector partition manifest filename does not bind decoded identity")
+			}
+			byIndex[m.IndexName] = append(byIndex[m.IndexName], m)
 		}
-		if strings.HasSuffix(entry.Name(), ".retired") {
-			retiredNames[entry.Name()] = struct{}{}
-			continue
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
-		if filepath.Ext(entry.Name()) != ".vpm" {
-			return nil, nil, fmt.Errorf("collections: unexpected vector partition entry %q", entry.Name())
-		}
-		retained++
-		if retained > vectorPartitionStoreMaxEntriesV1 {
-			return nil, nil, fmt.Errorf("collections: vector partition retained manifest cap")
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil, nil, err
-		}
-		if info.Size() < 0 || info.Size() > int64(DefaultVectorPartitionManifestLimits().MaxBytes) || totalBytes > vectorPartitionStoreMaxBytesV1-info.Size() {
-			return nil, nil, fmt.Errorf("collections: vector partition retained bytes cap")
-		}
-		totalBytes += info.Size()
-		raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes)
-		if err != nil {
-			return nil, nil, err
-		}
-		m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
-		if err != nil {
-			return nil, nil, fmt.Errorf("collections: vector partition manifest %q: %w", entry.Name(), err)
-		}
-		if m.Collection != c.name {
-			return nil, nil, fmt.Errorf("collections: vector partition manifest filename collection mismatch")
-		}
-		wantName := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(m.Collection), safeVPM(m.IndexName), m.Generation)
-		if entry.Name() != wantName {
-			return nil, nil, fmt.Errorf("collections: vector partition manifest filename does not bind decoded identity")
-		}
-		byIndex[m.IndexName] = append(byIndex[m.IndexName], m)
 	}
 	var prepared, pinned []ColumnAssetRef
 	expectedActive := make(map[string]struct{})
@@ -803,6 +812,11 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 	}
 	d := filepath.Join(root, "vector_partitions")
 	if err := os.MkdirAll(d, 0700); err != nil {
+		return nil, err
+	}
+	// A first store creation changes root's directory entries. Sync it too so a
+	// returned store is rooted in durable metadata, not merely a durable child.
+	if err := syncDirVPM(root); err != nil {
 		return nil, err
 	}
 	return &VectorPartitionStoreV1{root: root, dir: d}, nil
@@ -929,16 +943,12 @@ func (s *VectorPartitionStoreV1) OpenRetired(collection, index string) (VectorPa
 }
 func (s *VectorPartitionStoreV1) openPointer(collection, index, suffix string) (VectorPartitionManifestV1, error) {
 	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+suffix)
-	info, e := os.Stat(p)
+	raw, e := readBoundedVPM(p, 32)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
-	if info.Size() < 2 || info.Size() > 32 {
+	if len(raw) < 2 || len(raw) > 32 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer size", ErrVectorPartitionManifestInvalid)
-	}
-	raw, e := os.ReadFile(p)
-	if e != nil {
-		return VectorPartitionManifestV1{}, e
 	}
 	if raw[len(raw)-1] != '\n' || bytes.IndexByte(raw[:len(raw)-1], '\n') >= 0 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)

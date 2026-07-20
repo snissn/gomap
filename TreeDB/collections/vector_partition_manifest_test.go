@@ -272,6 +272,33 @@ func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionStoreV1OpenBindsDecodedIdentityAndBoundsPointers(t *testing.T) {
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.IndexName = "other"
+	m.Canonicalize()
+	raw, err := EncodeVectorPartitionManifestV1(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoofed := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM("docs"), safeVPM("embedding"), m.Generation))
+	if err := os.WriteFile(spoofed, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Open("docs", "embedding", m.Generation); err == nil {
+		t.Fatal("stored manifest identity mismatch accepted")
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, safeVPM("docs")+"-"+safeVPM("embedding")+".active"), []byte(strings.Repeat("1", 33)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OpenActive("docs", "embedding"); err == nil {
+		t.Fatal("oversized active pointer accepted")
+	}
+}
+
 func TestVectorPartitionManifestJSONV1RejectsUnknownAndTrailing(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestJSONV1(m)
