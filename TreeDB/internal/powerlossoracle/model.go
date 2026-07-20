@@ -367,6 +367,20 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 			eventPaths = append(eventPaths, normalized)
 		}
 	}
+	createdDirectory := ""
+	if event.CreatedDirectory != "" {
+		if event.Point != durabilitycut.BeforeNewFileDirectorySync && event.Point != durabilitycut.AfterNewFileDirectorySync {
+			return fmt.Errorf("powerlossoracle: cut %s carries a created-directory target", event.Point)
+		}
+		rel, err := filepath.Rel(root, event.CreatedDirectory)
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: cut %s created directory %q: %w", event.Point, event.CreatedDirectory, err)
+		}
+		createdDirectory, err = normalize(filepath.ToSlash(rel))
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: cut %s created directory %q is outside root %q: %w", event.Point, event.CreatedDirectory, root, err)
+		}
+	}
 	if err := m.Overlay(root); err != nil {
 		return err
 	}
@@ -378,7 +392,14 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 			}
 		}
 	case durabilitycut.AfterNewFileDirectorySync:
-		if err := m.SyncDir(eventPaths[0]); err != nil {
+		dir := eventPaths[0]
+		if createdDirectory != "" {
+			if _, ok := m.volatileDirs[createdDirectory]; !ok {
+				return fmt.Errorf("powerlossoracle: created-directory sync missing directory %q", createdDirectory)
+			}
+			dir = cleanInternal(pathpkg.Dir(createdDirectory))
+		}
+		if err := m.SyncDir(dir); err != nil {
 			return err
 		}
 	case durabilitycut.AfterIndexDataSync, durabilitycut.AfterMetaSync:

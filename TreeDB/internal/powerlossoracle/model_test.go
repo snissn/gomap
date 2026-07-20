@@ -283,6 +283,49 @@ func TestObserveNewFileDirectorySyncPromotesExactDirectoryChildren(t *testing.T)
 	}
 }
 
+func TestObserveCreatedDirectoryChildSyncPromotesEntryNotContents(t *testing.T) {
+	root := t.TempDir()
+	model, err := Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(root, "created")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Resource:  durabilitycut.ResourceAuxiliary,
+		Namespace: durabilitycut.NamespaceCreate,
+		Root:      root,
+		NewPath:   child,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(child, "still-volatile")
+	if err := os.WriteFile(file, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{
+		Point:            durabilitycut.AfterNewFileDirectorySync,
+		Resource:         durabilitycut.ResourceAuxiliary,
+		Root:             child,
+		Path:             child,
+		CreatedDirectory: child,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(crashDir, "created")); err != nil || !info.IsDir() {
+		t.Fatalf("stable created directory info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "created", "still-volatile")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("child-handle creation sync persisted directory contents: %v", err)
+	}
+}
+
 func TestStableAndVolatileBytesAreIndependent(t *testing.T) {
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o644); err != nil {

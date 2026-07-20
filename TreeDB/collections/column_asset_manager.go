@@ -314,11 +314,17 @@ func ensureStableColumnAssetManagerNamespace(namespace columnAssetManagerNamespa
 		if runtime.GOOS == "windows" {
 			persistencePath = cleanDir
 		}
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, persistencePath, persistencePath); err != nil {
+		emitPersistenceBoundary := func(point durabilitycut.Point) error {
+			if runtime.GOOS == "windows" && missingBefore {
+				return durabilitycut.EmitCreatedDirectoryPath(point, durabilitycut.ResourceAuxiliary, persistencePath, persistencePath, cleanDir)
+			}
+			return durabilitycut.EmitPath(point, durabilitycut.ResourceAuxiliary, persistencePath, persistencePath)
+		}
+		if err := emitPersistenceBoundary(durabilitycut.BeforeNewFileDirectorySync); err != nil {
 			_ = child.Close()
 			return nil, err
 		}
-		if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, persistencePath, persistencePath); err != nil {
+		if err := emitPersistenceBoundary(durabilitycut.AfterNewFileDirectorySync); err != nil {
 			_ = child.Close()
 			return nil, err
 		}
