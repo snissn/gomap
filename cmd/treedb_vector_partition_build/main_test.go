@@ -217,6 +217,8 @@ func TestRunPreflightsManifestShapeAndConfigBeforeCorpusIO(t *testing.T) {
 	}{
 		{name: "over-cap shape", docs: 1_000_000, dims: 4096, want: "configured graph scalar-work bound exceeded before allocation"},
 		{name: "pivot work before missing corpus", docs: 310_000, dims: 64, args: []string{"-partitions", "1", "-probes", "1", "-repetitions", "1", "-pivots", "1024", "-max-leaf-bucket", "2", "-degree", "1"}, want: "configured graph scalar-work bound exceeded before allocation"},
+		{name: "reference partition work before missing corpus", docs: 1_000_000, dims: 1, args: []string{"-partitions", "238", "-probes", "1", "-repetitions", "1", "-pivots", "2", "-max-leaf-bucket", "2", "-degree", "1"}, want: "partition work bound exceeded before allocation"},
+		{name: "top-level overlap before missing corpus", docs: 300_000, dims: 1, args: []string{"-partitions", "1", "-probes", "1", "-repetitions", "1", "-pivots", "2", "-max-leaf-bucket", "65536", "-degree", "1"}, want: "configured graph scalar-work bound exceeded before allocation"},
 		{name: "invalid requested config", docs: 1, dims: 1, args: []string{"-partitions", "1", "-probes", "1", "-repetitions", "33"}, want: "invalid vector partition configuration"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

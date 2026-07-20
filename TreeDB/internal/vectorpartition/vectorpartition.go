@@ -146,6 +146,11 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	if err := validateInput(vectors, cfg); err != nil {
 		return Artifact{}, phases, err
 	}
+	if isReferencePartitioner(backend) {
+		if err := ValidateReferenceInputShape(cfg, len(vectors), len(vectors[0].Values)); err != nil {
+			return Artifact{}, phases, err
+		}
+	}
 	v := append([]Vector(nil), vectors...)
 	sort.Slice(v, func(i, j int) bool { return v[i].ID < v[j].ID })
 	for i := 1; i < len(v); i++ {
@@ -331,10 +336,25 @@ func ValidateInputShape(c Config, vectors, dimensions int) error {
 	return nil
 }
 
-// graphDistanceWorkExceeds accounts for the shape-fixed first-carve pivot
-// comparisons and the worst bounded leaf comparisons in every repetition.
-// Recursive carve work is geometry-dependent and remains guarded by
-// distanceBudget at runtime.
+// ValidateReferenceInputShape adds the repository reference partitioner's
+// deterministic work cap to the graph/input shape checks. Other backends may
+// have distinct work contracts and are intentionally not charged this bound.
+func ValidateReferenceInputShape(c Config, vectors, dimensions int) error {
+	if err := ValidateInputShape(c, vectors, dimensions); err != nil {
+		return err
+	}
+	if partitionWorkExceeded(vectors, c.Partitions, c.Degree) {
+		return errors.New("partition work bound exceeded before allocation")
+	}
+	return nil
+}
+
+// graphDistanceWorkExceeds accounts for every shape-fixed graph phase: the
+// first-carve pivot comparisons, plus the bounded leaf comparisons. At depth
+// zero carveDepth deliberately puts each vector in both its closest and
+// second-closest bucket, so two leaf memberships are possible whenever there
+// are at least two top-level pivots. Recursive carve work is
+// geometry-dependent and remains guarded by distanceBudget at runtime.
 func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
 	topLevelPivots := 0
 	if vectors > c.MaxLeafBucket {
@@ -344,8 +364,13 @@ func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
 		return true
 	}
 	topLevelPivotWork := int64(vectors) * int64(topLevelPivots) * int64(c.Repetitions) * int64(dimensions)
+	topLevelMemberships := 1
+	if topLevelPivots >= 2 {
+		// carveDepth adds the closest and second-closest top-level bucket.
+		topLevelMemberships = 2
+	}
 	leafComparisons := max(0, min(c.MaxLeafBucket, vectors)-1)
-	return exceedsProduct(maxDistanceWork-topLevelPivotWork, int64(vectors), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
+	return exceedsProduct(maxDistanceWork-topLevelPivotWork, int64(vectors), int64(topLevelMemberships), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
 }
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 

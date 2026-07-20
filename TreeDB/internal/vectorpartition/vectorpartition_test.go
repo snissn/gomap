@@ -173,6 +173,40 @@ func TestInputShapePreflightCountsTopLevelPivotWork(t *testing.T) {
 		t.Fatalf("pivot-work shape error=%v; expected scalar-work rejection", err)
 	}
 }
+
+func TestInputShapePreflightCountsTopLevelOverlapLeafWork(t *testing.T) {
+	c := DefaultConfig()
+	c.Partitions = 1
+	c.Repetitions = 1
+	c.Pivots = 2
+	c.MaxLeafBucket = 65_536
+	c.Degree = 1
+	if err := ValidateInputShape(c, 150_000, 1); err != nil {
+		t.Fatalf("overlap-work shape below cap rejected: %v", err)
+	}
+	if err := ValidateInputShape(c, 300_000, 1); err == nil || !strings.Contains(err.Error(), "scalar-work") {
+		t.Fatalf("overlap-work shape error=%v; expected scalar-work rejection", err)
+	}
+}
+
+func TestReferenceInputShapeSharesReferencePartitionWorkGate(t *testing.T) {
+	c := DefaultConfig()
+	c.Partitions = 238
+	c.Repetitions = 1
+	c.Pivots = 2
+	c.MaxLeafBucket = 2
+	c.Degree = 1
+	const vectors = 1_000_000
+	if !partitionWorkExceeded(vectors, c.Partitions, c.Degree) {
+		t.Fatal("test shape must exceed the reference partition work cap")
+	}
+	if err := ValidateInputShape(c, vectors, 1); err != nil {
+		t.Fatalf("generic shape preflight unexpectedly rejected reference-only shape: %v", err)
+	}
+	if err := ValidateReferenceInputShape(c, vectors, 1); err == nil || !strings.Contains(err.Error(), "partition work") {
+		t.Fatalf("reference shape error=%v; expected partition-work rejection", err)
+	}
+}
 func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 	a, e := Build(fixture(), config())
 	if e != nil {

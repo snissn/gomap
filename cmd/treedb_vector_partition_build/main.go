@@ -133,7 +133,7 @@ func run(args []string) error {
 	cfg.Degree = degree
 	cfg.Imbalance = imbalance
 	const graphRecallSamples = 64
-	if err := vectorpartition.ValidateInputShape(cfg, m.Docs, m.Dimensions); err != nil {
+	if err := vectorpartition.ValidateReferenceInputShape(cfg, m.Docs, m.Dimensions); err != nil {
 		return err
 	}
 	if err := validateQualityWork(m.Docs, min(m.Queries, maxQueries), m.Dimensions, min(graphRecallSamples, m.Docs)); err != nil {
