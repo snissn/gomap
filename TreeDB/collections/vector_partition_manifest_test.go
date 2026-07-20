@@ -511,3 +511,28 @@ func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
+	s, err := OpenVectorPartitionStoreV1(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	if err := s.Publish(m); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("open", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if _, err := s.Open(m.Collection, m.IndexName, m.Generation); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("active", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if _, err := s.OpenActive(m.Collection, m.IndexName); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
