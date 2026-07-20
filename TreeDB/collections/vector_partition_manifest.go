@@ -531,6 +531,11 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	if c == nil || c.db == nil {
 		return errors.New("collections: closed collection")
 	}
+	// The source validation and active-pointer rename must share the collection
+	// mutation barrier. A catalog read lock alone does not prevent a column
+	// publication from advancing TVIS between validation and activation.
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
 	c.catalogMu.RLock()
 	defer c.catalogMu.RUnlock()
 	if m.Collection != c.name {

@@ -107,6 +107,36 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *testing.T) {
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.IndexName = def.Name
+	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	writeVectorPartitionAssetsForTest(t, d.Dir(), &m)
+	m.Canonicalize()
+	held := col.lockMutation()
+	done := make(chan error, 1)
+	go func() { done <- col.PublishVectorPartitionManifestV1(m) }()
+	select {
+	case err := <-done:
+		t.Fatalf("publish escaped mutation barrier: %v", err)
+	default:
+	}
+	held.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestV1(m)
