@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -356,6 +357,10 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	if len(frames) == 0 {
 		return nil
 	}
+	pendingMaterializedRIDHighWater, err := commandWALReplayPendingMaterializedRIDHighWater(frames, applied)
+	if err != nil {
+		return err
+	}
 	replayDependencies, err := captureCommandWALReplayRelaxedDependencies(db, frames, classification.DurableFrontier, ridMap)
 	if err != nil {
 		return err
@@ -412,6 +417,14 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
 		if err != nil {
 			return nil, nil, err
+		}
+		if pendingMaterializedRIDHighWater >= inlineAppender.nextRID {
+			if pendingMaterializedRIDHighWater == ^uint64(0) {
+				_ = inlineAppender.close()
+				inlineAppender = nil
+				return nil, nil, fmt.Errorf("value-log rid space exhausted")
+			}
+			inlineAppender.nextRID = pendingMaterializedRIDHighWater + 1
 		}
 		db.SetValueLogAppender(inlineAppender)
 		valueLogAppenderInstalled = true
@@ -653,6 +666,28 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 		return hasUnappliedRawKVBatch, nil
 	}
 	return false, nil
+}
+
+func commandWALReplayPendingMaterializedRIDHighWater(frames []commandWALReplayFrame, applied uint64) (uint64, error) {
+	var highWater uint64
+	for _, frame := range frames {
+		if frame.env.LSN <= applied || frame.env.Kind != commitlog.CommandKindRawKVBatch {
+			continue
+		}
+		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, _, value []byte) error {
+			if op != commitlog.RawKVOpSetMaterializedRID {
+				return nil
+			}
+			rid := binary.LittleEndian.Uint64(value[:8])
+			if rid > highWater {
+				highWater = rid
+			}
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return highWater, nil
 }
 
 func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {

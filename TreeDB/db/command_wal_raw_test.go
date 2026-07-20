@@ -956,6 +956,30 @@ func TestRawKVCommandWALMaterializedRIDSelectionRequiresDurableModeAndBounds(t *
 		}
 	})
 
+	t.Run("operation-count-cap-stops-materialization-validation", func(t *testing.T) {
+		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		pointer := appendCommandWALPointerEntry(t, d, []byte("pointer-000"), materializedValue)
+		entries := make([]batchpkg.Entry, RawKVCommandWALMaterializedRIDMaxOperations+1)
+		for i := range entries {
+			entries[i] = pointer
+			entries[i].Key = []byte(fmt.Sprintf("pointer-%03d", i))
+		}
+		entries[len(entries)-1].Value = []byte("conflicting-retained-value-after-cap")
+
+		intent, err := d.newRawKVCommandWALIntentFromEntries(entries, true)
+		if err != nil {
+			t.Fatalf("newRawKVCommandWALIntentFromEntries after cap: %v", err)
+		}
+		defer releaseUnassignedCommandWALIntent(intent)
+		if intent.payloadFormat != commitlog.PayloadFormatRawKVBatchV1 || !intent.externalRefs {
+			t.Fatalf("257-op capped intent format=%d external=%t, want V1 external", intent.payloadFormat, intent.externalRefs)
+		}
+	})
+
 	t.Run("frame-over-bound", func(t *testing.T) {
 		d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, Durability: DurabilityWALOnRelaxed, DisableBackgroundPrune: true})
 		if err != nil {

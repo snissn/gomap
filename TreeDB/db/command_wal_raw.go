@@ -1326,11 +1326,12 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 	materializedRefs := false
 	materializedEligible := true
 	operations := 0
-	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+	planScan := commitlog.RawKVBatchOperationScanner(func(emit func(commitlog.RawKVOperation) error) error {
 		if scanEntries == nil {
 			return nil
 		}
 		return scanEntries(func(entry batchpkg.Entry) error {
+			materializeEntry := materialize
 			if materialize {
 				operations++
 				if operations > RawKVCommandWALMaterializedRIDMaxOperations {
@@ -1342,13 +1343,22 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 						materializedEligible = false
 					}
 				}
+				materializeEntry = materializedEligible
 			}
 			if entry.Type != batchpkg.OpDeleteRange && entry.Revision > maxEntryRevision {
 				maxEntryRevision = entry.Revision
 			}
-			return emit(entry)
+			validateRetainedValue := !materialize || materializeEntry
+			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, &ridCache, &externalRefs, &externalRefFileIDs, opHint, materializeEntry, validateRetainedValue)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			return emit(op)
 		})
-	}, &ridCache, &externalRefs, &externalRefFileIDs, opHint, materialize, true)
+	})
 	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
 	if err != nil {
 		return nil, err
