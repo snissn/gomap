@@ -36960,6 +36960,13 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				unlockWriteMu()
 				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
 			}
+			// Materialized command-WAL pointers retain their values through the
+			// append callback so SetMaterializedRID can serialize them. After the
+			// callback succeeds, pointer-in-memtable publication stores only the
+			// pointer metadata and does not borrow those value bytes.
+			if b.commandWALMaterializedRID && b.db.memtableValueLogPointers && b.entries[idx].IsPtr {
+				continue
+			}
 			if b.entries[idx].Value == nil {
 				continue
 			}
