@@ -3,17 +3,19 @@
 package collections
 
 import (
+	"fmt"
 	"golang.org/x/sys/windows"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-// Windows has no sound generic directory-handle fsync: opening a directory
-// through os.File and calling Sync returns ERROR_ACCESS_DENIED. TreeDB's
-// rootpublication contract instead makes a created child durable through its
-// FlushFileBuffers proof. Every VPM temporary/linked child is file-synced, and
-// replacement transitions use MOVEFILE_WRITE_THROUGH below. Therefore this is
-// not a skipped Unix directory durability claim; it is the platform-specific
-// namespace primitive used by the rest of TreeDB's stable-resource layer.
-func syncDirVPM(string) error { return nil }
+// Windows cannot provide a generic durable proof for the link/remove namespace
+// transitions used by VPM. A write-through replacement alone does not prove
+// link creation or removal. M1 therefore rejects every mutation before it
+// changes the namespace; read-only restore/open remains supported.
+func syncDirVPM(path string) error {
+	return fmt.Errorf("%w: vector partition namespace %q requires link/remove durability", rootpublication.ErrNamespacePersistenceUnsupported, path)
+}
 
 func renameVPM(old, new string) error {
 	oldp, err := windows.UTF16PtrFromString(old)
@@ -26,3 +28,5 @@ func renameVPM(old, new string) error {
 	}
 	return windows.MoveFileEx(oldp, newp, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
+
+func vpmNamespacePersistenceSupported() bool { return false }

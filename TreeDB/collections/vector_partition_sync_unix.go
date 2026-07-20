@@ -15,3 +15,5 @@ func syncDirVPM(path string) error {
 }
 
 func renameVPM(old, new string) error { return os.Rename(old, new) }
+
+func vpmNamespacePersistenceSupported() bool { return true }

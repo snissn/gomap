@@ -1138,13 +1138,23 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 		return nil, errors.New("collections: empty vector partition store root")
 	}
 	d := filepath.Join(root, "vector_partitions")
+	_, existedErr := os.Stat(d)
+	existed := existedErr == nil
+	if existedErr != nil && !errors.Is(existedErr, os.ErrNotExist) {
+		return nil, existedErr
+	}
 	if err := os.MkdirAll(d, 0700); err != nil {
 		return nil, err
 	}
 	// A first store creation changes root's directory entries. Sync it too so a
 	// returned store is rooted in durable metadata, not merely a durable child.
-	if err := syncDirVPM(root); err != nil {
-		return nil, err
+	if !existed && !vpmNamespacePersistenceSupported() {
+		return nil, fmt.Errorf("%w: vector partition store creation", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
+	if !existed {
+		if err := syncDirVPM(root); err != nil {
+			return nil, err
+		}
 	}
 	return &VectorPartitionStoreV1{root: root, dir: d}, nil
 }
@@ -1185,6 +1195,9 @@ func (s *VectorPartitionStoreV1) publishValidatedReady(m VectorPartitionManifest
 	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
 }
 func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) error {
+	if !vpmNamespacePersistenceSupported() {
+		return fmt.Errorf("%w: vector partition publication", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	if m.State == "ready" {
 		if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err == nil {
 			return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
@@ -1325,6 +1338,9 @@ func (s *VectorPartitionStoreV1) Deactivate(collection, index string) error {
 	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deactivateLocked(collection, index) })
 }
 func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) error {
+	if !vpmNamespacePersistenceSupported() {
+		return fmt.Errorf("%w: vector partition deactivation", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	active, err := s.OpenActive(collection, index)
 	if err != nil {
 		return err
@@ -1434,6 +1450,9 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deleteLocked(collection, index, generation, eligibility) })
 }
 func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
+	if !vpmNamespacePersistenceSupported() {
+		return fmt.Errorf("%w: vector partition deletion", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	if !eligibility.Deletable() {
 		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
 	}
@@ -1503,6 +1522,9 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstone(m VectorPartitionManifestV
 	return s.writeDeleteTombstoneState(state)
 }
 func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartitionReclaimStateV1) error {
+	if !vpmNamespacePersistenceSupported() {
+		return fmt.Errorf("%w: vector partition reclaim journal", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	state, err := canonicalVectorPartitionReclaimStateV1(input)
 	if err != nil {
 		return err
