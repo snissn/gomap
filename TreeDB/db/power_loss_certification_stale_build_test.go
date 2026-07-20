@@ -145,13 +145,22 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 	}
 	assertRejectedStaleBuildAbsent(t, backend, predecessor)
 
-	if err := publishDelta("sys/certification/second", "retry-second"); err != nil {
+	// Close the predecessor's publication before arming the terminal cut. On a
+	// loaded runner, PublishOrderedRootDeltaGroupWithSystemDeltaBuilder can
+	// return while its relaxed publication is still queued; otherwise the first
+	// observed meta sync below can belong to the predecessor rather than the
+	// distinguishable retry.
+	if err := backend.Checkpoint(); err != nil {
 		restoreCut()
-		t.Fatalf("successor retry: %v", err)
+		t.Fatalf("checkpoint predecessor before retry: %v", err)
 	}
 	observeMu.Lock()
 	checkpointArmed = true
 	observeMu.Unlock()
+	if err := publishDelta("sys/certification/second", "retry-second"); err != nil {
+		restoreCut()
+		t.Fatalf("successor retry: %v", err)
+	}
 	if err := backend.Checkpoint(); err != nil {
 		restoreCut()
 		t.Fatalf("checkpoint predecessor and retry: %v", err)
