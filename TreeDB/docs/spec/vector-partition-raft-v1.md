@@ -1,7 +1,23 @@
-# Vector-partitioned ANN over Raft: M0 contract
+# Vector-partitioned ANN over Raft: M1 durable-manifest contract
 
-Status: **M0 executable contract** for #3908/#3909. This document deliberately
-defines boundaries and evidence before M1--M8 implement production assets.
+Status: **M1 durable identity and lifecycle contract** for #3908/#3910.
+M1 persists and validates generation manifests; it does not build, route, or
+search ANN packs.
+
+## M1 durable lifecycle
+
+Each ready manifest stores typed `ColumnAssetRef`s, not paths. Every partition
+asset has an explicit logical `partition_id`; every declared logical partition
+must have at least one asset, while the router is a separate asset. Asset refs,
+checksums, lengths, and aggregate referenced bytes are bounded and canonical.
+The active pointer pins one ready generation. `Deactivate` durably changes that
+generation to retained/prepared-only; deletion then permits column-asset GC.
+Corrupt pointers, filenames, manifests, or catalog-group mappings fail closed.
+
+`VectorPartitionStatusV1.Ready` means the stored generation is complete.
+`Active` additionally requires it to be the active pointer target and source
+valid. M1 has no partition search readers, so `ReaderPins` is always zero; a
+later serving milestone must attach reader pins before exposing search.
 
 ## Identity and placement
 
