@@ -74,17 +74,17 @@ host. They are offline quality/resource evidence, not a server speed claim:
 
 | corpus and builder configuration | wall | peak RSS | artifact bytes/vector | graph recall sample | partition recall@10 / hash | cap/balance |
 |---|---:|---:|---:|---:|---:|---:|
-| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | build 3.500s / total 3.662s, build/total CPU 3.504/3.671s | 34.7 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
-| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | build 6.387s / total 6.901s, build/total CPU 5.905/6.435s | 103.5 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.00608 |
-| 1M x 16, r1/d4/leaf32, 16 parts, 4 probes | build 20.451s / total 23.731s, build/total CPU 20.923/24.386s | 1.244 GB | 44.67 | 0.394 (64 samples) | 1.000 / 0.700 | 1.000000 |
+| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | build 3.400s / total 3.524s, build/total CPU 3.414/3.543s | 34.5 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
+| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | build 4.184s / total 4.693s, build/total CPU 4.239/4.762s | 102.9 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.00608 |
+| 1M x 16, r1/d4/leaf32, 16 parts, 4 probes | build 20.667s / total 23.977s, build/total CPU 21.141/24.577s | 1.245 GB | 44.67 | 0.394 (64 samples) | 1.000 / 0.700 | 1.000000 |
 
 The exact handoff artifacts (artifact then compact report) were:
 
 | corpus | artifact path and SHA-256 | report path |
 |---|---|---|
-| 10k | `/tmp/treedb_m2_out10k_final4_rcOIjD/vector_partition_c270226154a4e741.json` `c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935` | `/tmp/treedb_m2_out10k_final4_rcOIjD/vector_partition_report_c270226154a4e741.json` |
-| 100k | `/tmp/treedb_m2_out100k_final4_Zan6Uv/vector_partition_627778e026d17732.json` `627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae` | `/tmp/treedb_m2_out100k_final4_Zan6Uv/vector_partition_report_627778e026d17732.json` |
-| 1M | `/tmp/treedb_m2_out1m_final4_Tc8db4/vector_partition_f76fba39db8a51fb.json` `f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413` | `/tmp/treedb_m2_out1m_final4_Tc8db4/vector_partition_report_f76fba39db8a51fb.json` |
+| 10k | `/tmp/treedb_m2_out10k_final6_EEB82V/vector_partition_c270226154a4e741.json` `c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935` | `/tmp/treedb_m2_out10k_final6_EEB82V/vector_partition_report_c270226154a4e741.json` |
+| 100k | `/tmp/treedb_m2_out100k_final6_JOpR05/vector_partition_627778e026d17732.json` `627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae` | `/tmp/treedb_m2_out100k_final6_JOpR05/vector_partition_report_627778e026d17732.json` |
+| 1M | `/tmp/treedb_m2_out1m_final6_mZHdfj/vector_partition_f76fba39db8a51fb.json` `f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413` | `/tmp/treedb_m2_out1m_final6_mZHdfj/vector_partition_report_f76fba39db8a51fb.json` |
 
 These paths are host-local handoff locations, while the canonical manifest/source digest,
 exact commands, and compact report fields make the run reproducible without
@@ -97,17 +97,17 @@ which is the logical manifest binding used in `source_id`; it is explicitly
 not the raw `manifest.json` file-byte hash. The manifest itself lists the raw
 SHA-256 and byte count for every exported corpus file.
 All three runs used binaries built from implementation commit
-`23683ea4ddd2e2da6e267a4983b73d285eb65f5f`. Earlier docs/evidence commits
-through `f34b5b1b817d95e33c8e46221935f5482d9aacd0` changed no implementation
-files. This separates
+`58db38e173093126e5b1ef3c92d79e160d63b0cf`, after merging
+`origin/main` `3e225cb99`. The following evidence commit changes only
+documentation/evidence. This separates
 the exact algorithm binding from the necessarily later commit that records its
 measurements.
 
 The 1M artifact was
-`/tmp/treedb_m2_out1m_final4_Tc8db4/vector_partition_f76fba39db8a51fb.json`
+`/tmp/treedb_m2_out1m_final5_pG2Xts/vector_partition_f76fba39db8a51fb.json`
 (SHA-256 `f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413`);
 the matching report sits beside it. Its deterministic source corpus is
-`/tmp/treedb_m2_dataset1m_final4_Qvn2ew`, generated with:
+`/tmp/treedb_m2_dataset1m_final5_nC3l7B`, generated with:
 
 ```sh
 DATASET=$(mktemp -d /tmp/treedb_m2_dataset1m_XXXXXX)
@@ -153,11 +153,15 @@ quality row is therefore scoped to that declared one-query fixed-budget corpus,
 not a population-level claim. The 10k and 100k rows use 16 and 8 deterministic
 query vectors respectively. `FinalBytes` is artifact plus compact provenance
 report bytes; reports no longer embed or print a duplicate artifact payload.
-The final 1M report records load 0.296s, graph build 18.533s, backend
-partition 0.096s, validation 0.773s, quality 0.993s, temporary disk 0 bytes,
-artifact 44,672,391 bytes, report 2,549 bytes, and final output 44,674,940
+The final 1M report records load 0.293s, graph build 18.665s, backend
+partition 0.099s, validation 0.812s, quality 1.012s, temporary disk 0 bytes,
+artifact 44,672,391 bytes, report 2,638 bytes, and final output 44,675,029
 bytes.
 
+CPU and RSS values are emitted only when their corresponding `*_available`
+flag is true. CPU is collected through Unix `getrusage`; peak RSS is Linux
+`/proc/self/status` `VmHWM`. On unsupported platforms the value is omitted and
+the availability flag is false rather than treating zero as a measurement.
 Peak RSS is `/proc/self/status` `VmHWM` for the builder process. It includes
 the loaded corpus, graph, assignment, quality-oracle work, Go runtime and GC;
 it does not represent a TreeDB server resident-memory claim.
