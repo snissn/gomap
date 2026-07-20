@@ -38,8 +38,8 @@ func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Col
 }
 
 func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
-	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
-	defer d.Close()
+	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer func() { _ = d.Close() }()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +77,20 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m, resources); err != nil {
 		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close after ready VPM publication: %v", err)
+	}
+	d = openCollectionCommandWALDB(t, dir)
+	var reopenErr error
+	col, reopenErr = NewCollectionManager(d).OpenCollection("docs")
+	if reopenErr != nil {
+		t.Fatalf("reopen collection after ready VPM publication: %v", reopenErr)
+	}
+	if active, err := OpenVectorPartitionStoreV1(d.Dir()); err != nil {
+		t.Fatal(err)
+	} else if got, err := active.OpenActive(m.Collection, m.IndexName); err != nil || got.Generation != m.Generation || got.State != "ready" {
+		t.Fatalf("reopened active ready VPM=%+v err=%v", got, err)
 	}
 	status, err := col.VectorPartitionStatusV1(def.Name, 7)
 	if err != nil {
