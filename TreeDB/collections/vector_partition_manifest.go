@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -1884,12 +1885,23 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		for _, record := range records {
 			candidates = append(candidates, record.state.debtRefs()...)
 		}
-		stats, err := c.columnAssetGC(ctx, ColumnAssetGCOptions{
-			CandidateRefs:                    candidates,
-			releaseVectorPartitionReclaimIDs: reclaimIDs,
-		})
-		if err != nil {
-			return err
+		var stats ColumnAssetGCStats
+		// Durable-root activation can advance while GC audits the captured
+		// recovery closure. Rebuild from a fresh plan/capability only when the
+		// stale pass has not deleted anything; retrying a partially applied
+		// destructive pass would not preserve the original candidate frontier.
+		const maxRecoverableRootRefreshes = 8
+		for attempt := 0; ; attempt++ {
+			stats, err = c.columnAssetGC(ctx, ColumnAssetGCOptions{
+				CandidateRefs:                    candidates,
+				releaseVectorPartitionReclaimIDs: reclaimIDs,
+			})
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) || stats.SegmentsDeleted != 0 || attempt+1 >= maxRecoverableRootRefreshes {
+				return err
+			}
 		}
 		for _, record := range records {
 			complete := true

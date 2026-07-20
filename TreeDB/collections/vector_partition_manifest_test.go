@@ -18,6 +18,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func requireVectorPartitionPersistenceV1(t testing.TB) {
+	t.Helper()
+	if !vpmNamespacePersistenceSupported() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
+}
+
 func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, fileID uint32) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
 	t.Helper()
 	lease, err := d.AcquireStableResourceCaptureLease()
@@ -65,6 +72,7 @@ func vectorPartitionManifestWithFreshStableAssetsV1(t testing.TB, d *backenddb.D
 }
 
 func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer func() { _ = d.Close() }()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
@@ -236,6 +244,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 }
 
 func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -271,9 +280,7 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 }
 
 func TestVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *testing.T) {
-	if !vpmNamespacePersistenceSupported() {
-		t.Skip("namespace persistence unsupported")
-	}
+	requireVectorPartitionPersistenceV1(t)
 	boundaries := []string{"generation_temp_synced", "generation_linked", "generation_dir_synced", "active_temp_synced", "active_renamed", "active_dir_synced", "retired_removed", "publication_complete"}
 	for _, boundary := range boundaries {
 		t.Run(boundary, func(t *testing.T) {
@@ -325,6 +332,7 @@ func TestVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *test
 }
 
 func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -352,6 +360,7 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 }
 
 func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -378,6 +387,7 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 }
 
 func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	_, d, col, _ := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
 	defer d.Close()
 	lease, err := d.AcquireStableResourceCaptureLease()
@@ -453,6 +463,7 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 
 func prepareMixedVectorPartitionReclaimV1(t *testing.T, generation uint64) (string, *backenddb.DB, *Collection, *VectorPartitionStoreV1, []ColumnAssetRef, ColumnAssetRef, string) {
 	t.Helper()
+	requireVectorPartitionPersistenceV1(t)
 	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -714,6 +725,7 @@ func TestCollectionVectorPartitionReclaimV1PartialMultiRecordJournalRetries(t *t
 }
 
 func TestVectorPartitionReclaimRecordV1ChecksumFailsClosed(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -783,6 +795,7 @@ func TestVectorPartitionReclaimRecordV1MalformedVersionTruncationAndCountFailClo
 }
 
 func TestVectorPartitionStoreV1SameGenerationPublicationIsExactByteIdempotent(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -803,6 +816,7 @@ func TestVectorPartitionStoreV1SameGenerationPublicationIsExactByteIdempotent(t 
 }
 
 func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer d.Close()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
@@ -847,7 +861,7 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	}
 }
 
-func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
+func TestVectorPartitionManifestV1CanonicalRoundTrip(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestV1(m)
 	if err != nil {
@@ -860,6 +874,11 @@ func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
 	if got.ReadySetDigest == "" || got.Placements[0].PartitionID != 0 {
 		t.Fatalf("bad round trip: %+v", got)
 	}
+}
+
+func TestVectorPartitionStoreV1CanonicalReopen(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	m := testVectorPartitionManifestV1()
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -873,6 +892,7 @@ func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
 }
 
 func TestVectorPartitionStoreV1OpenBindsDecodedIdentityAndBoundsPointers(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1033,7 +1053,7 @@ func TestVectorPartitionManifestV1StrictMalformedJSONAndBinaryMatrix(t *testing.
 	}
 }
 
-func TestVectorPartitionManifestV1TotalMembershipCapAndRawReadyAuthority(t *testing.T) {
+func TestVectorPartitionManifestV1TotalMembershipCap(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.Representatives = nil
 	m.Canonicalize()
@@ -1047,6 +1067,10 @@ func TestVectorPartitionManifestV1TotalMembershipCapAndRawReadyAuthority(t *test
 	if err := m.Validate(limits); err == nil {
 		t.Fatal("split membership cap overflow accepted")
 	}
+}
+
+func TestVectorPartitionStoreV1RejectsRawReadyAuthority(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1109,6 +1133,7 @@ func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
 }
 
 func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
+	requireVectorPartitionPersistenceV1(b)
 	s, err := OpenVectorPartitionStoreV1(b.TempDir())
 	if err != nil {
 		b.Fatal(err)
@@ -1132,6 +1157,7 @@ func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
 // real ready publication.  It deliberately uses producer-issued stable
 // resources so this does not benchmark an authority-bypassing fixture.
 func BenchmarkVectorPartitionStatusV1Warm(b *testing.B) {
+	requireVectorPartitionPersistenceV1(b)
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(b, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer d.Close()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {

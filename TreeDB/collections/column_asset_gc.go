@@ -570,7 +570,10 @@ func (c *Collection) pinRecoverableColumnAssetSegments(ctx context.Context, root
 		if snapshot == nil {
 			return backenddb.ErrRecoverableRootSetStale
 		}
-		catalog, err := c.catalogForSnapshot(snapshot)
+		// Recoverable roots may intentionally be older than the collection's
+		// current catalog. Loading one is an audit operation: it must not replace
+		// the handle-local latest catalog cache with historical state.
+		catalog, err := loadCollectionCatalog(snapshot, c.collectionName())
 		if err != nil {
 			_ = snapshot.Close()
 			if errors.Is(err, errCollectionNotFound) {
