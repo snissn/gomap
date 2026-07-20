@@ -62,12 +62,12 @@ host. They are offline quality/resource evidence, not a server speed claim:
 
 | corpus and builder configuration | wall | peak RSS | artifact bytes/vector | graph recall sample | partition recall@10 / hash | cap/balance |
 |---|---:|---:|---:|---:|---:|---:|
-| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | 1.560s | 36.2 MB | 95.59 | 0.900 | 0.594 / 0.163 | 1.0512 |
-| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | 3.023s | 112.1 MB | 64.62 | 0.775 | 0.475 / 0.250 | 1.0048 |
-| 1M x 16, r2/d8/leaf64, 16 parts, 4 probes | 36.872s CPU 45.743s | 1.325 GB | 72.47 | 0.794 | 0.300 / 0.100 | 1.000112 |
+| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | 1.597s CPU 1.901s | 34.6 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
+| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | 2.888s CPU 5.016s | 108.4 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.0048 |
+| 1M x 16, r2/d8/leaf64, 16 parts, 4 probes | 34.927s CPU 58.008s | 1.330 GB | 72.47 | 0.781 (64 samples) | 1.000 / 0.700 | 1.000112 |
 
 The 1M artifact was
-`/tmp/treedb_m2_build1m_cpu_WYHa/vector_partition_9274f9f3d7b900dd.json`
+`/tmp/treedb_m2_final1m_HPRB/vector_partition_9274f9f3d7b900dd.json`
 (SHA-256 `9274f9f3d7b900dd931881c2ce544b68ac6ddac198008ab307c6b57469f62ec1`);
 the matching report sits beside it. Its deterministic source corpus is
 `/tmp/treedb_m2_export1m_rHdo`, generated with:
@@ -80,7 +80,21 @@ GOWORK=off go run ./cmd/treedb_vector_partition_build \
   -repetitions 2 -degree 8 -max-leaf-bucket 64
 ```
 
+The reported recall is a true M2 partition oracle: global exact top-10 first
+selects the partitions containing the most truth neighbors (stable partition
+ID ties), then the same selected-partition exact scan runs for graph and
+stable-hash assignments. It deliberately contains no centroid/router loss.
 At the same fixed four-probe candidate budget, the declared 1M corpus clears
-the M2 quality gate (`0.300 > 0.100` recall@10). The lower-budget 100k
+the M2 quality gate (`1.000 > 0.700` recall@10). The lower-budget 100k
 two-probe/r1/d4 attempt failed (`0.113 <= 0.150`) and was not substituted for
 the reported four-probe gate.
+
+The 1M exporter shape intentionally has **one deterministic query** and no
+exporter truth stream (the builder computes its own exact query truth); its
+quality row is therefore scoped to that declared one-query fixed-budget corpus,
+not a population-level claim. The 10k and 100k rows use 16 and 8 deterministic
+query vectors respectively. `FinalBytes` is artifact plus compact provenance
+report bytes; reports no longer embed or print a duplicate artifact payload.
+The final 1M report records graph build 30.488s, backend partition 0.310s,
+validation 2.336s, temporary disk 0 bytes, artifact 72,473,746 bytes, report
+2,415 bytes, and final output 72,476,161 bytes.

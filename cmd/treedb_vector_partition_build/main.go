@@ -55,23 +55,31 @@ type manifest struct {
 	Files               map[string]fileInfo `json:"files"`
 }
 type report struct {
-	SchemaVersion             int                      `json:"schema_version"`
-	ResultKind                string                   `json:"result_kind"`
-	Dataset                   manifest                 `json:"dataset"`
-	Artifact                  vectorpartition.Artifact `json:"artifact"`
-	BuildWallNanos            int64                    `json:"build_wall_nanos"`
-	BuildCPUNanos             int64                    `json:"build_cpu_nanos"`
-	PeakRSSBytes              int64                    `json:"peak_rss_bytes"`
-	TemporaryBytes            int64                    `json:"temporary_bytes"`
-	FinalBytes                int64                    `json:"final_bytes"`
-	BytesPerVector            float64                  `json:"bytes_per_vector"`
-	Balance                   float64                  `json:"balance"`
-	GraphNeighborRecall       float64                  `json:"graph_neighbor_recall_sample"`
-	GraphNeighborSamples      int                      `json:"graph_neighbor_samples"`
-	PartitionOracleRecallAt10 float64                  `json:"partition_oracle_recall_at_10"`
-	StableHashRecallAt10      float64                  `json:"stable_hash_recall_at_10"`
-	Probes                    int                      `json:"probes"`
-	ArtifactSHA256            string                   `json:"artifact_sha256"`
+	SchemaVersion             int                     `json:"schema_version"`
+	ResultKind                string                  `json:"result_kind"`
+	Dataset                   manifest                `json:"dataset"`
+	Source                    vectorpartition.Source  `json:"source"`
+	Config                    vectorpartition.Config  `json:"config"`
+	Metrics                   vectorpartition.Metrics `json:"metrics"`
+	ArtifactPath              string                  `json:"artifact_path"`
+	BuildWallNanos            int64                   `json:"build_wall_nanos"`
+	BuildCPUNanos             int64                   `json:"build_cpu_nanos"`
+	GraphBuildNanos           int64                   `json:"graph_build_nanos"`
+	BackendPartitionNanos     int64                   `json:"backend_partition_nanos"`
+	ValidationNanos           int64                   `json:"validation_nanos"`
+	PeakRSSBytes              int64                   `json:"peak_rss_bytes"`
+	TemporaryBytes            int64                   `json:"temporary_bytes"`
+	ArtifactBytes             int64                   `json:"artifact_bytes"`
+	ReportBytes               int64                   `json:"report_bytes"`
+	FinalBytes                int64                   `json:"final_bytes"`
+	BytesPerVector            float64                 `json:"bytes_per_vector"`
+	Balance                   float64                 `json:"balance"`
+	GraphNeighborRecall       float64                 `json:"graph_neighbor_recall_sample"`
+	GraphNeighborSamples      int                     `json:"graph_neighbor_samples"`
+	PartitionOracleRecallAt10 float64                 `json:"partition_oracle_recall_at_10"`
+	StableHashRecallAt10      float64                 `json:"stable_hash_recall_at_10"`
+	Probes                    int                     `json:"probes"`
+	ArtifactSHA256            string                  `json:"artifact_sha256"`
 }
 
 func main() {
@@ -116,7 +124,7 @@ func run(args []string) error {
 	cfg.Imbalance = imbalance
 	start := time.Now()
 	cpuStart := cpuNanos()
-	art, err := vectorpartition.BuildWithPartitioner(vs, cfg, vectorpartition.Source{SourceID: "exporter_manifest:" + manifestDigest(m)}, vectorpartition.ReferencePartitioner{})
+	art, phases, err := vectorpartition.BuildWithPartitionerPhased(vs, cfg, vectorpartition.Source{SourceID: "exporter_manifest:" + manifestDigest(m)}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		return err
 	}
@@ -129,7 +137,8 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	gr := graphRecall(vs, art, 16)
+	const graphRecallSamples = 64
+	gr := graphRecall(vs, art, min(graphRecallSamples, len(vs)))
 	pr, hr := oracleRecall(vs, qs, art, probes, 10)
 	if pr <= hr {
 		return fmt.Errorf("quality gate failed: partition oracle recall@10 %.4f <= stable hash %.4f at probes=%d", pr, hr, probes)
@@ -145,15 +154,26 @@ func run(args []string) error {
 	st, _ := os.Stat(path)
 	cap := art.Metrics.Cap
 	bal := float64(art.Metrics.MaxPartitionSize) * float64(partitions) / float64(len(vs))
-	r := report{1, "offline_partition_builder_exporter_v1", m, art, wall, cpuNanos() - cpuStart, peakRSS(), 0, st.Size(), float64(st.Size()) / float64(len(vs)), bal, gr, min(16, len(vs)), pr, hr, probes, digest}
+	r := report{SchemaVersion: 1, ResultKind: "offline_partition_builder_exporter_v1", Dataset: m, Source: art.Source, Config: art.Config, Metrics: art.Metrics, ArtifactPath: path, BuildWallNanos: wall, BuildCPUNanos: cpuNanos() - cpuStart, GraphBuildNanos: phases.GraphBuildNanos, BackendPartitionNanos: phases.BackendPartitionNanos, ValidationNanos: phases.ValidationNanos, PeakRSSBytes: peakRSS(), TemporaryBytes: 0, ArtifactBytes: st.Size(), BytesPerVector: float64(st.Size()) / float64(len(vs)), Balance: bal, GraphNeighborRecall: gr, GraphNeighborSamples: min(graphRecallSamples, len(vs)), PartitionOracleRecallAt10: pr, StableHashRecallAt10: hr, Probes: probes, ArtifactSHA256: digest}
 	rr, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	if err = os.WriteFile(filepath.Join(out, "vector_partition_report_"+digest[:16]+".json"), rr, 0644); err != nil {
+	reportPath := filepath.Join(out, "vector_partition_report_"+digest[:16]+".json")
+	// Account for the report itself without embedding the artifact or writing a
+	// second giant JSON stream. A bounded fixed-point pass stabilizes FinalBytes.
+	for i := 0; i < 2; i++ {
+		r.ReportBytes = int64(len(rr))
+		r.FinalBytes = r.ArtifactBytes + r.ReportBytes
+		rr, err = json.Marshal(r)
+		if err != nil {
+			return err
+		}
+	}
+	if err = os.WriteFile(reportPath, rr, 0644); err != nil {
 		return err
 	}
-	fmt.Println(string(rr))
+	fmt.Printf("partition artifact=%s report=%s digest=%s final_bytes=%d oracle_recall_at_10=%.4f hash_recall_at_10=%.4f\n", path, reportPath, digest, r.FinalBytes, pr, hr)
 	_ = cap
 	return nil
 }
@@ -282,22 +302,24 @@ func graphRecall(v []vectorpartition.Vector, a vectorpartition.Artifact, n int) 
 	}
 	return sum / float64(n)
 }
+
+// oracleRecall intentionally has no centroid/router step: it uses the global
+// exact top-k truth to select the partitions holding most truth neighbors,
+// with stable partition-ID ties. That isolates M2 assignment quality from M4.
 func oracleRecall(v []vectorpartition.Vector, qs [][]float64, a vectorpartition.Artifact, probes, k int) (float64, float64) {
 	if len(qs) == 0 {
 		return 0, 0
 	}
-	pcent := centroids(v, a.Assignment, a.Config.Partitions)
 	hassign := make([]int, len(v))
 	for i, x := range v {
 		s := sha256.Sum256([]byte(x.ID))
 		hassign[i] = int(binary.BigEndian.Uint64(s[:8]) % uint64(a.Config.Partitions))
 	}
-	hcent := centroids(v, hassign, a.Config.Partitions)
 	var pr, hr float64
 	for _, q := range qs {
 		truth := nearest(v, q, k, func(int) bool { return true })
-		p := topParts(pcent, q, probes)
-		h := topParts(hcent, q, probes)
+		p := oracleParts(truth, a.Assignment, a.Config.Partitions, probes)
+		h := oracleParts(truth, hassign, a.Config.Partitions, probes)
 		pr += recall(truth, nearest(v, q, k, func(i int) bool {
 			for _, x := range p {
 				if a.Assignment[i] == x {
@@ -316,6 +338,20 @@ func oracleRecall(v []vectorpartition.Vector, qs [][]float64, a vectorpartition.
 		}))
 	}
 	return pr / float64(len(qs)), hr / float64(len(qs))
+}
+func oracleParts(truth, assignment []int, partitions, probes int) []int {
+	counts := make([]int, partitions)
+	for _, i := range truth {
+		counts[assignment[i]]++
+	}
+	order := make([]int, partitions)
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return counts[order[i]] > counts[order[j]] || counts[order[i]] == counts[order[j]] && order[i] < order[j]
+	})
+	return order[:probes]
 }
 func centroids(v []vectorpartition.Vector, a []int, p int) [][]float64 {
 	o := make([][]float64, p)

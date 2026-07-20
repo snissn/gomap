@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -85,6 +86,11 @@ type Source struct {
 	Dimensions int    `json:"dimensions"`
 	Metric     string `json:"metric"`
 }
+type PhaseMetrics struct {
+	GraphBuildNanos       int64
+	BackendPartitionNanos int64
+	ValidationNanos       int64
+}
 type Artifact struct {
 	SchemaVersion  int      `json:"schema_version"`
 	Backend        string   `json:"backend"`
@@ -117,27 +123,36 @@ func Build(vectors []Vector, cfg Config) (Artifact, error) {
 // partitioner's result is never trusted: graph, assignment, source and metrics
 // are independently validated before the artifact is returned.
 func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend Partitioner) (Artifact, error) {
+	a, _, err := BuildWithPartitionerPhased(vectors, cfg, source, backend)
+	return a, err
+}
+func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, backend Partitioner) (Artifact, PhaseMetrics, error) {
+	var phases PhaseMetrics
 	if backend == nil || backend.Name() == "" || backend.License() == "" || len(backend.License()) > 1024 {
-		return Artifact{}, errors.New("partition backend identity is required")
+		return Artifact{}, phases, errors.New("partition backend identity is required")
 	}
 	if err := validateInput(vectors, cfg); err != nil {
-		return Artifact{}, err
+		return Artifact{}, phases, err
 	}
 	v := append([]Vector(nil), vectors...)
 	sort.Slice(v, func(i, j int) bool { return v[i].ID < v[j].ID })
 	for i := 1; i < len(v); i++ {
 		if v[i].ID == v[i-1].ID {
-			return Artifact{}, fmt.Errorf("duplicate vector ID %q", v[i].ID)
+			return Artifact{}, phases, fmt.Errorf("duplicate vector ID %q", v[i].ID)
 		}
 	}
+	started := time.Now()
 	g, err := buildGraph(v, cfg)
+	phases.GraphBuildNanos = time.Since(started).Nanoseconds()
 	if err != nil {
-		return Artifact{}, err
+		return Artifact{}, phases, err
 	}
 	cap := partitionCap(len(v), cfg.Partitions, cfg.Imbalance)
+	started = time.Now()
 	a, err := backend.Partition(g, cfg.Partitions, cap)
+	phases.BackendPartitionNanos = time.Since(started).Nanoseconds()
 	if err != nil {
-		return Artifact{}, err
+		return Artifact{}, phases, err
 	}
 	ids := make([]string, len(v))
 	for i := range v {
@@ -145,14 +160,17 @@ func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend P
 	}
 	computed := sourceFor(v, cfg.Metric, source.SourceID)
 	if source.Checksum != "" && source != computed {
-		return Artifact{}, errors.New("source identity does not match input snapshot")
+		return Artifact{}, phases, errors.New("source identity does not match input snapshot")
 	}
 	art := Artifact{SchemaVersion: SchemaVersion, Backend: backend.Name(), BackendLicense: backend.License(), Source: computed, Config: cfg, IDs: ids, Graph: g, Assignment: a}
 	art.Metrics = metrics(art)
+	started = time.Now()
 	if err := ValidateArtifact(art); err != nil {
-		return Artifact{}, err
+		phases.ValidationNanos = time.Since(started).Nanoseconds()
+		return Artifact{}, phases, err
 	}
-	return art, nil
+	phases.ValidationNanos = time.Since(started).Nanoseconds()
+	return art, phases, nil
 }
 
 func sourceFor(v []Vector, metric, id string) Source {
