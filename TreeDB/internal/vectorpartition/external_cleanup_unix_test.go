@@ -22,7 +22,15 @@ func TestExternalBackendRootExitKillsProcessGroupMember(t *testing.T) {
 	t.Setenv("TREE_DB_CHILD_PID", pidFile)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; (sleep 5) & echo $! > \"$TREE_DB_CHILD_PID\"; exit 0"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	request, buildErr := Build(fixture(), config())
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+	requestRaw, marshalErr := CanonicalJSON(request)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	_, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; (sleep 5) & echo $! > \"$TREE_DB_CHILD_PID\"; exit 0"}, requestRaw, ExternalJSONLimits{MaxInput: len(requestRaw), MaxOutput: 1024}, request)
 	if err == nil {
 		t.Fatal("root-exited backend accepted")
 	}

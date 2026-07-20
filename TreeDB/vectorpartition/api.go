@@ -50,3 +50,6 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, source Source) (Artifact, error) {
 	return internal.RunExternalJSONForSourceWithLimits(ctx, command, input, limits, source)
 }
+func RunExternalJSONForRequestWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, request Artifact) (Artifact, error) {
+	return internal.RunExternalJSONForRequestWithLimits(ctx, command, input, limits, request)
+}

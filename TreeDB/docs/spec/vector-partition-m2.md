@@ -22,14 +22,17 @@ coverage, cap, and recomputed metrics. `DecodeArtifact` additionally rejects
 oversized, unknown-field, trailing, and non-canonical JSON; a backend cannot
 publish a forged metric report.
 
-The usable optional external adapter (`RunExternalJSONForSource`) is offline
-only; the unbound `RunExternalJSON` deliberately errors. It receives
+The usable optional external adapter (`RunExternalJSONForRequestWithLimits`) is
+offline only; source-only and unbound entrypoints deliberately error because
+they cannot bind a response to the requested graph. It receives
 an explicit command, private input/output paths, context cancellation, a
-fully bound expected source snapshot, and independent request/output-byte
-caps. The default request cap is derived from bounded M2 graph ordinals and
+fully validated requested artifact (source, IDs, config, and graph), and
+independent request/output-byte caps. The default request cap is derived from bounded M2 graph ordinals and
 worst-case JSON escaping for IDs and source/backend identity fields; callers
 may set a smaller request cap without inflating the
-output cap. It removes the
+output cap. The input bytes must be the requested artifact's exact canonical
+JSON, so the graph being executed and the graph to which the response is bound
+are the same object. It removes the
 entire private temporary directory on command failure, cancellation, timeout,
 malformed output, or success. On Unix it also kills the dedicated process group
 after `Wait`, including when the root exits normally while a same-group child

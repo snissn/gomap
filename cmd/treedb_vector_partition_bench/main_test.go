@@ -261,6 +261,42 @@ func TestPartitionStageIgnoresLargeSimulationOnlyQueryStream(t *testing.T) {
 	}
 }
 
+func TestPartitionFixtureValidationUsesVectorOnlyCaps(t *testing.T) {
+	base := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "partition-vector-boundary",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       maxVectors,
+		Queries:       1,
+		Dimensions:    1,
+		Metric:        "cosine",
+		Checksum:      strings.Repeat("0", 64),
+	}
+	if err := validatePartitionFixtureWithCaps(base, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("max vector corpus plus required query rejected in partition mode: %v", err)
+	}
+	queryHeavy := base
+	queryHeavy.Queries = maxVectors * 4
+	if err := validatePartitionFixtureWithCaps(queryHeavy, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("irrelevant query count affected partition mode: %v", err)
+	}
+	if err := validateFixtureWithCaps(queryHeavy, maxVectors, maxFixtureBytes); err == nil {
+		t.Fatal("simulation accepted query-heavy fixture")
+	}
+	overCount := base
+	overCount.Vectors++
+	if err := validatePartitionFixtureWithCaps(overCount, maxVectors, maxFixtureBytes); err == nil {
+		t.Fatal("partition mode accepted over-count vector corpus")
+	}
+	overBytes := base
+	overBytes.Vectors = 2
+	overBytes.Dimensions = 2
+	if err := validatePartitionFixtureWithCaps(overBytes, maxVectors, 8); err == nil {
+		t.Fatal("partition mode accepted over-byte vector corpus")
+	}
+}
+
 func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
 	m, err := loadFixture(fixturePath(t))
 	if err != nil {

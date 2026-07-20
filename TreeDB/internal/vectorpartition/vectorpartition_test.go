@@ -578,13 +578,13 @@ func TestExternalBackendSeparatesInputAndOutputCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := bytes.Repeat([]byte("x"), len(raw)+1)
+	input := raw
 	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	got, err := RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(raw)}, a.Source)
+	got, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(raw)}, a)
 	if err != nil {
-		t.Fatalf("larger bounded input with compact response rejected: %v", err)
+		t.Fatalf("canonical requested artifact rejected: %v", err)
 	}
 	if !reflect.DeepEqual(got, a) {
 		t.Fatal("external backend response changed")
@@ -592,9 +592,13 @@ func TestExternalBackendSeparatesInputAndOutputCaps(t *testing.T) {
 }
 
 func TestExternalBackendRejectsInputCapBeforeExecution(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := RunExternalJSONForSourceWithLimits(ctx, []string{"definitely-not-an-executable"}, []byte("{}"), ExternalJSONLimits{MaxInput: 1, MaxOutput: 1024}, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	_, err = RunExternalJSONForRequestWithLimits(ctx, []string{"definitely-not-an-executable"}, []byte("{}"), ExternalJSONLimits{MaxInput: 1, MaxOutput: 1024}, a)
 	if err == nil || !strings.Contains(err.Error(), "input exceeds cap") {
 		t.Fatalf("over-input cap reached backend or returned wrong error: %v", err)
 	}
@@ -612,24 +616,29 @@ func TestExternalRequestBoundAccountsForEscapedIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := CanonicalJSON(a)
+	// Six control-byte IDs require six escaped bytes each in JSON. The bounded
+	// request reaches the backend at its explicit cap rather than being rejected
+	// by the global request ceiling.
+	request := a
+	request.IDs = append([]string(nil), a.IDs...)
+	for i := range request.IDs {
+		request.IDs[i] = string([]byte{0, byte('a' + i)})
+	}
+	request.Metrics = metrics(request)
+	input, err := CanonicalJSON(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Four control-byte IDs require six escaped bytes each in JSON. The bounded
-	// request reaches the backend at its explicit cap rather than being rejected
-	// by the global request ceiling.
-	input := []byte(`{"ids":["\u0000\u0001\u0002\u0003"]}`)
 	if len(input) > bound {
 		t.Fatalf("escaped request length=%d exceeds modeled bound=%d", len(input), bound)
 	}
-	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
+	t.Setenv("TREE_DB_TEST_RESPONSE", string(input))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(raw)}, a.Source); err != nil {
+	if _, err := RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(input)}, request); err != nil {
 		t.Fatalf("escaped bounded input rejected before backend: %v", err)
 	}
-	_, err = RunExternalJSONForSourceWithLimits(ctx, []string{"definitely-not-an-executable"}, input, ExternalJSONLimits{MaxInput: len(input) - 1, MaxOutput: len(raw)}, a.Source)
+	_, err = RunExternalJSONForRequestWithLimits(ctx, []string{"definitely-not-an-executable"}, input, ExternalJSONLimits{MaxInput: len(input) - 1, MaxOutput: len(input)}, request)
 	if err == nil || !strings.Contains(err.Error(), "input exceeds cap") {
 		t.Fatalf("one-over input cap reached backend or returned wrong error: %v", err)
 	}
@@ -647,7 +656,7 @@ func TestExternalBackendStillRejectsOutputOverflow(t *testing.T) {
 	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err = RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, []byte("{}"), ExternalJSONLimits{MaxInput: 2, MaxOutput: len(raw) - 1}, a.Source)
+	_, err = RunExternalJSONForRequestWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, raw, ExternalJSONLimits{MaxInput: len(raw), MaxOutput: len(raw) - 1}, a)
 	if err == nil || !strings.Contains(err.Error(), "output exceeds cap") {
 		t.Fatalf("output overflow accepted or wrong error: %v", err)
 	}
@@ -680,6 +689,83 @@ func TestDecodeArtifactForSourceRejectsForgedSource(t *testing.T) {
 	expected.Checksum = strings.Repeat("f", 64)
 	if _, err := DecodeArtifactForSource(raw, len(raw), expected); err == nil {
 		t.Fatal("forged expected source accepted")
+	}
+}
+
+func TestDecodeArtifactForRequestBindsGraphConfigAndIDs(t *testing.T) {
+	request, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRejected := func(t *testing.T, response Artifact) {
+		t.Helper()
+		response.Metrics = metrics(response)
+		raw, err := CanonicalJSON(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeArtifactForRequest(raw, len(raw), request); err == nil || !strings.Contains(err.Error(), "requested graph/configuration") {
+			t.Fatalf("forged requested binding accepted: %v", err)
+		}
+	}
+	t.Run("IDs", func(t *testing.T) {
+		response := request
+		response.IDs = append([]string(nil), request.IDs...)
+		response.IDs[0] = response.IDs[0] + "-changed"
+		assertRejected(t, response)
+	})
+	t.Run("config", func(t *testing.T) {
+		response := request
+		response.Config.Seed++
+		assertRejected(t, response)
+	})
+	t.Run("graph", func(t *testing.T) {
+		response := request
+		response.Graph.Neighbors = make([][]int, len(request.Graph.Neighbors))
+		assertRejected(t, response)
+	})
+	// Assignment is the intended backend result. A different valid assignment
+	// remains supported as long as it is self-consistent and the request graph,
+	// IDs, config, and corpus source remain exact.
+	response := request
+	response.Assignment = append([]int(nil), request.Assignment...)
+	left, right := -1, -1
+	for i, p := range response.Assignment {
+		if p == 0 && left < 0 {
+			left = i
+		}
+		if p == 1 && right < 0 {
+			right = i
+		}
+	}
+	if left < 0 || right < 0 {
+		t.Fatal("fixture did not cover both partitions")
+	}
+	response.Assignment[left], response.Assignment[right] = response.Assignment[right], response.Assignment[left]
+	response.Metrics = metrics(response)
+	raw, err := CanonicalJSON(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DecodeArtifactForRequest(raw, len(raw), request); err != nil || !reflect.DeepEqual(got.Assignment, response.Assignment) {
+		t.Fatalf("valid custom backend assignment rejected: artifact=%+v err=%v", got, err)
+	}
+}
+
+func TestExternalBackendRequestMustBeExactCanonicalArtifact(t *testing.T) {
+	request, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = RunExternalJSONForRequestWithLimits(ctx, []string{"definitely-not-an-executable"}, append(raw, '\n'), ExternalJSONLimits{MaxInput: len(raw) + 1, MaxOutput: len(raw)}, request)
+	if err == nil || !strings.Contains(err.Error(), "input does not match requested artifact") {
+		t.Fatalf("non-canonical or mismatched request reached backend: %v", err)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -983,6 +984,24 @@ func DecodeArtifactForSource(raw []byte, maxBytes int, expected Source) (Artifac
 	return a, nil
 }
 
+// DecodeArtifactForRequest binds an external backend response to the exact
+// deterministic corpus, IDs, configuration, and graph supplied to it. The
+// assignment intentionally remains backend output, but must satisfy the
+// independent artifact validator.
+func DecodeArtifactForRequest(raw []byte, maxBytes int, request Artifact) (Artifact, error) {
+	if err := ValidateArtifact(request); err != nil {
+		return Artifact{}, fmt.Errorf("invalid external backend request: %w", err)
+	}
+	a, err := DecodeArtifactForSource(raw, maxBytes, request.Source)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if !reflect.DeepEqual(a.IDs, request.IDs) || a.Config != request.Config || !reflect.DeepEqual(a.Graph, request.Graph) {
+		return Artifact{}, errors.New("backend artifact does not match requested graph/configuration")
+	}
+	return a, nil
+}
+
 // RunExternalJSON is an optional offline adapter seam. It never becomes a
 // TreeDB runtime dependency. Its output is written to a private temp path and
 // removed on cancellation, timeout, command failure, or invalid output.
@@ -990,13 +1009,31 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 	return Artifact{}, errors.New("external backend requires expected source binding")
 }
 func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, expected Source) (Artifact, error) {
-	return RunExternalJSONForSourceWithLimits(ctx, command, input, ExternalJSONLimits{MaxInput: maxExternalJSONBytes, MaxOutput: maxOutput}, expected)
+	if err := validateExpectedSource(expected); err != nil {
+		return Artifact{}, err
+	}
+	return Artifact{}, errors.New("external backend requires requested artifact binding")
 }
 
 // RunExternalJSONForSourceWithLimits runs an optional backend with separately
 // bounded request and response files. It is for callers that need a smaller
 // request cap than the M2-derived default without weakening the output cap.
 func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, expected Source) (Artifact, error) {
+	if err := validateExpectedSource(expected); err != nil {
+		return Artifact{}, err
+	}
+	return Artifact{}, errors.New("external backend requires requested artifact binding")
+}
+
+// RunExternalJSONForRequestWithLimits runs an optional backend with separately
+// bounded request/response files and binds its response to request's exact
+// deterministic graph and configuration.
+func RunExternalJSONForRequestWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, request Artifact) (Artifact, error) {
+	canonicalRequest, err := CanonicalJSON(request)
+	if err != nil {
+		return Artifact{}, fmt.Errorf("invalid external backend request: %w", err)
+	}
+	expected := request.Source
 	if err := validateExpectedSource(expected); err != nil {
 		return Artifact{}, err
 	}
@@ -1011,6 +1048,9 @@ func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, i
 	}
 	if len(input) > limits.MaxInput {
 		return Artifact{}, errors.New("external partition backend input exceeds cap")
+	}
+	if !bytes.Equal(input, canonicalRequest) {
+		return Artifact{}, errors.New("external backend input does not match requested artifact")
 	}
 	dir, err := os.MkdirTemp("", "treedb-vectorpartition-backend-*")
 	if err != nil {
@@ -1049,7 +1089,7 @@ func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, i
 	if len(raw) > limits.MaxOutput {
 		return Artifact{}, errors.New("external partition backend output exceeds cap")
 	}
-	return DecodeArtifactForSource(raw, limits.MaxOutput, expected)
+	return DecodeArtifactForRequest(raw, limits.MaxOutput, request)
 }
 
 func validateExpectedSource(s Source) error {

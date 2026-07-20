@@ -276,7 +276,12 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if err := validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes); err != nil {
+	if cfg.stage == "partition" {
+		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
+	} else {
+		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
+	}
+	if err != nil {
 		return err
 	}
 	if cfg.partitions > fixture.Vectors {
@@ -661,7 +666,10 @@ func validateFixture(m fixtureManifest) error {
 	return validateFixtureWithCaps(m, maxVectors, maxFixtureBytes)
 }
 func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Queries > capVectors || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if err := validateFixtureSyntax(m, capVectors); err != nil {
+		return err
+	}
+	if m.Queries > capVectors {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
 	if int64(m.Vectors)+int64(m.Queries) > int64(capVectors) {
@@ -669,6 +677,26 @@ func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) 
 	}
 	if int64(m.Vectors)+int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
 		return errors.New("fixture float64 data alone exceeds pre-allocation memory cap")
+	}
+	return nil
+}
+
+// validatePartitionFixtureWithCaps applies only syntax/integrity and vector
+// corpus allocation caps. Partition mode never generates the query/truth
+// stream, so simulation-only query count and byte limits do not apply here.
+func validatePartitionFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) error {
+	if err := validateFixtureSyntax(m, capVectors); err != nil {
+		return err
+	}
+	if int64(m.Vectors) > capBytes/(int64(m.Dimensions)*8) {
+		return errors.New("partition vector data exceeds pre-allocation memory cap")
+	}
+	return nil
+}
+
+func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+		return errors.New("unsupported or malformed fixture manifest")
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
