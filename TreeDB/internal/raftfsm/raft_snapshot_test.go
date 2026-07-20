@@ -216,6 +216,8 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 		t.Fatal(err)
 	}
 	manifest := raftSnapshotVectorPartitionManifestForTest(t, sourceDB)
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, collections.VectorPartitionAssetV1{}, ""
+	manifest.Canonicalize()
 	if err := store.Publish(manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -230,18 +232,22 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	installRaftSnapshotForTest(t, targetFSM, snapshot)
-	targetStore, err := collections.OpenVectorPartitionStoreV1(targetDir)
+	targetStore, err := collections.OpenExistingVectorPartitionStoreV1(targetDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := targetStore.OpenActive(manifest.Collection, manifest.IndexName)
+	got, err := targetStore.Open(manifest.Collection, manifest.IndexName, manifest.Generation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Generation != manifest.Generation || got.ReadySetDigest != manifest.ReadySetDigest {
 		t.Fatalf("restored vector partition manifest=%+v, want generation=%d digest=%s", got, manifest.Generation, manifest.ReadySetDigest)
 	}
-	for _, asset := range append(append([]collections.VectorPartitionAssetV1(nil), manifest.Assets...), manifest.RouterAsset) {
+	assets := append([]collections.VectorPartitionAssetV1(nil), manifest.Assets...)
+	if manifest.State == "ready" {
+		assets = append(assets, manifest.RouterAsset)
+	}
+	for _, asset := range assets {
 		path := filepath.Join(targetDB.ColumnAssetRootDir(), asset.Ref.Namespace, "assets", "segments", fmt.Sprintf("segment-%06d.tca", asset.Ref.FileID))
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -302,6 +308,8 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 				b.Fatal(err)
 			}
 			manifest := raftSnapshotVectorPartitionManifestForBenchmark(b, sourceDB, rows)
+			manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, collections.VectorPartitionAssetV1{}, ""
+			manifest.Canonicalize()
 			if err := store.Publish(manifest); err != nil {
 				b.Fatal(err)
 			}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -148,7 +149,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if _, err := os.Stat(oldSegment); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reclaimed partition segment still present: %v", err)
 	}
-	if err := store.Publish(m); err != nil {
+	if err := store.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte("not-a-generation\n"), 0600); err != nil {
@@ -161,7 +162,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
 		t.Fatal("corrupt active vector partition pointer did not fail closed")
 	}
-	if err := store.Publish(m); err != nil {
+	if err := store.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+"-999.vpm"), []byte("corrupt"), 0600); err != nil {
@@ -192,7 +193,7 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := testVectorPartitionManifestV1()
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Delete("docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err == nil {
@@ -202,7 +203,7 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	newer.Generation = 8
 	newer.RouterGeneration = 8
 	newer.Canonicalize()
-	if err := s.Publish(newer); err != nil {
+	if err := s.publishLocked(newer); err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range []VectorPartitionCleanupEligibilityV1{{Active: true}, {ReaderPins: 1}, {SnapshotReferences: 1}, {CatalogReferences: 1}} {
@@ -227,7 +228,7 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 		t.Fatal(err)
 	}
 	m := testVectorPartitionManifestV1()
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
@@ -254,7 +255,7 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := testVectorPartitionManifestV1()
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
@@ -309,6 +310,7 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 		m.Representatives = nil
 		m.Assets = []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: strings.Repeat("a", 64), Bytes: uint64(refs[offset].Length), Ref: refs[offset]}}
 		m.RouterAsset = VectorPartitionAssetV1{}
+		m.ReadySetDigest = ""
 		for i := range m.Assets {
 			raw, e := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), m.Assets[i].Ref)
 			if e != nil {
@@ -318,7 +320,6 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 			m.Assets[i].Checksum = hex.EncodeToString(sum[:])
 		}
 		m.Canonicalize()
-		m.ReadySetDigest = ""
 		if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 			t.Fatal(err)
 		}
@@ -685,10 +686,10 @@ func TestVectorPartitionStoreV1SameGenerationPublicationIsExactByteIdempotent(t 
 		t.Fatal(err)
 	}
 	m := testVectorPartitionManifestV1()
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		t.Fatalf("identical retry: %v", err)
 	}
 	changed := m
@@ -761,7 +762,7 @@ func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Publish(m); err != nil {
+	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open("docs", "embedding", 7); err != nil {
@@ -855,6 +856,62 @@ func TestVectorPartitionManifestV1RejectsUntypedAssetAuthority(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionManifestV1IntegrityRejectsSemanticMutation(t *testing.T) {
+	base := testVectorPartitionManifestV1()
+	for name, mutate := range map[string]func(*VectorPartitionManifestV1){
+		"identity":  func(m *VectorPartitionManifestV1) { m.SourceChecksum++ },
+		"placement": func(m *VectorPartitionManifestV1) { m.Placements[0].GroupID = "raft-other" },
+		"membership": func(m *VectorPartitionManifestV1) {
+			m.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+		},
+		"representative": func(m *VectorPartitionManifestV1) {
+			m.Representatives = []VectorPartitionMembershipV1{{VectorOrdinal: 1, PartitionID: 1}}
+		},
+		"policy":     func(m *VectorPartitionManifestV1) { m.BalancePolicy = "other" },
+		"generation": func(m *VectorPartitionManifestV1) { m.Generation++ },
+		"asset":      func(m *VectorPartitionManifestV1) { m.Assets[0].Checksum = strings.Repeat("c", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := base
+			m.Placements = append([]VectorPartitionPlacementV1(nil), base.Placements...)
+			m.Memberships = append([]VectorPartitionMembershipV1(nil), base.Memberships...)
+			m.Assets = append([]VectorPartitionAssetV1(nil), base.Assets...)
+			mutate(&m) // preserve the old integrity digest intentionally.
+			raw, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeVectorPartitionManifestJSONV1(raw, DefaultVectorPartitionManifestLimits()); err == nil {
+				t.Fatal("semantic mutation accepted with stale record integrity digest")
+			}
+		})
+	}
+}
+
+func TestVectorPartitionManifestV1TotalMembershipCapAndRawReadyAuthority(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.Representatives = nil
+	m.Canonicalize()
+	limits := DefaultVectorPartitionManifestLimits()
+	limits.MaxMemberships = len(m.Memberships)
+	if err := m.Validate(limits); err != nil {
+		t.Fatalf("exact total membership cap: %v", err)
+	}
+	m.OverlapMemberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 1}}
+	m.Canonicalize()
+	if err := m.Validate(limits); err == nil {
+		t.Fatal("split membership cap overflow accepted")
+	}
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := testVectorPartitionManifestV1()
+	if err := s.Publish(ready); err == nil {
+		t.Fatal("raw ready publication bypass accepted")
+	}
+}
+
 func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	h := strings.Repeat("a", 64)
 	b := strings.Repeat("b", 64)
@@ -912,6 +969,8 @@ func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
 		b.Fatal(err)
 	}
 	m := testVectorPartitionManifestV1()
+	m.State, m.RouterGeneration, m.RouterAsset, m.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	m.Canonicalize()
 	if err := s.Publish(m); err != nil {
 		b.Fatal(err)
 	}

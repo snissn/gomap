@@ -60,7 +60,7 @@ type VectorPartitionMembershipV1 struct {
 // are sorted. ReadySetDigest is SHA-256 of its required assets and placements.
 type VectorPartitionManifestV1 struct {
 	Format, State                                                      string
-	Collection, IndexName, IndexDefinitionDigest                       string
+	Collection, IndexName, IndexDefinitionDigest, IntegrityDigest      string
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	Generation, RouterGeneration                                       uint64
 	PartitionCount                                                     uint32
@@ -109,13 +109,13 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	if l.MaxBytes <= 0 {
 		l = DefaultVectorPartitionManifestLimits()
 	}
-	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
+	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
 	}
-	if m.SourceRowCount > uint64(l.MaxMemberships) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes {
+	if m.SourceRowCount > uint64(l.MaxMemberships) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes || len(m.IntegrityDigest) > l.MaxStringBytes {
 		return fmt.Errorf("%w: source/string cap", ErrVectorPartitionManifestInvalid)
 	}
-	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
+	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.MaxMemberships || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
 		return fmt.Errorf("%w: incomplete ready set or capped list", ErrVectorPartitionManifestInvalid)
 	}
 	if m.State == "ready" {
@@ -194,7 +194,21 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	if m.State == "ready" && m.ReadySetDigest != m.readyDigest() {
 		return fmt.Errorf("%w: ready-set digest mismatch", ErrVectorPartitionManifestInvalid)
 	}
+	if m.IntegrityDigest != m.integrityDigest() {
+		return fmt.Errorf("%w: record integrity digest mismatch", ErrVectorPartitionManifestInvalid)
+	}
 	return nil
+}
+
+func totalMembershipsVPM(lists ...[]VectorPartitionMembershipV1) int {
+	total := 0
+	for _, list := range lists {
+		if len(list) > math.MaxInt-total {
+			return math.MaxInt
+		}
+		total += len(list)
+	}
+	return total
 }
 func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits) error {
 	if a.ID == "" || len(a.ID) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
@@ -233,7 +247,7 @@ func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits
 		}
 		return add(8*5 + 4 + 4 + 4) // logical partition + bytes + generation + part + offset + length + file + checksum
 	}
-	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		if err := str(s); err != nil {
 			return 0, err
 		}
@@ -332,6 +346,23 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 
 // Canonicalize sorts caller-provided lists then fills the ready-set digest.
 func (m *VectorPartitionManifestV1) Canonicalize() {
+	// Normalize empty lists so the semantic digest does not distinguish an
+	// in-memory nil from the decoder's zero-length allocation.
+	if m.Placements == nil {
+		m.Placements = []VectorPartitionPlacementV1{}
+	}
+	if m.Memberships == nil {
+		m.Memberships = []VectorPartitionMembershipV1{}
+	}
+	if m.OverlapMemberships == nil {
+		m.OverlapMemberships = []VectorPartitionMembershipV1{}
+	}
+	if m.Representatives == nil {
+		m.Representatives = []VectorPartitionMembershipV1{}
+	}
+	if m.Assets == nil {
+		m.Assets = []VectorPartitionAssetV1{}
+	}
 	if m.Format == "" {
 		m.Format = VectorPartitionManifestFormatV1
 	}
@@ -357,6 +388,17 @@ func (m *VectorPartitionManifestV1) Canonicalize() {
 	if m.State == "ready" {
 		m.ReadySetDigest = m.readyDigest()
 	}
+	m.IntegrityDigest = m.integrityDigest()
+}
+
+func (m VectorPartitionManifestV1) integrityDigest() string {
+	m.IntegrityDigest = ""
+	raw, err := json.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // EncodeVectorPartitionManifestV1 is a strict, stable binary record. There
@@ -377,8 +419,8 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 1)
-	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
+	putU32VPM(b, 2)
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
 	for _, n := range []uint64{m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount, m.Generation, m.RouterGeneration} {
@@ -394,10 +436,10 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	return b.Bytes(), nil
 }
 func preflightVectorPartitionManifestV1(m VectorPartitionManifestV1, l VectorPartitionManifestLimits) error {
-	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships {
+	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.MaxMemberships {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
-	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		if len(s) > l.MaxStringBytes {
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
@@ -426,11 +468,11 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
 	}
 	r := vpmReader{b: raw, l: l}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 1 {
+	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 2 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
-	ss := []*string{&m.Format, &m.State, &m.Collection, &m.IndexName, &m.IndexDefinitionDigest, &m.BalancePolicy, &m.ReadySetDigest}
+	ss := []*string{&m.Format, &m.State, &m.Collection, &m.IndexName, &m.IndexDefinitionDigest, &m.IntegrityDigest, &m.BalancePolicy, &m.ReadySetDigest}
 	for _, p := range ss {
 		*p = r.str()
 	}
@@ -503,10 +545,11 @@ func DecodeVectorPartitionManifestJSONV1(raw []byte, l VectorPartitionManifestLi
 }
 
 type vpmReader struct {
-	b   []byte
-	off int
-	l   VectorPartitionManifestLimits
-	err error
+	b               []byte
+	off             int
+	membershipTotal int
+	l               VectorPartitionManifestLimits
+	err             error
 }
 
 func (r *vpmReader) u32() uint32 {
@@ -576,9 +619,11 @@ func (r *vpmReader) placements() []VectorPartitionPlacementV1 {
 }
 func (r *vpmReader) memberships() []VectorPartitionMembershipV1 {
 	n := r.count(r.l.MaxMemberships)
-	if r.err != nil {
+	if r.err != nil || n > r.l.MaxMemberships-r.membershipTotal {
+		r.err = errors.New("total membership cap")
 		return nil
 	}
+	r.membershipTotal += n
 	x := make([]VectorPartitionMembershipV1, n)
 	for i := range x {
 		x[i] = VectorPartitionMembershipV1{r.u64(), r.u32()}
@@ -1121,7 +1166,22 @@ func OpenExistingVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, e
 	}
 	return &VectorPartitionStoreV1{root: root, dir: d}, nil
 }
+
+// Publish persists only a non-ready building generation. Ready publication is
+// intentionally unavailable on the raw store: it must flow through
+// Collection.PublishVectorPartitionManifestV1, which owns live TVIS, asset,
+// namespace, and stable-resource authority checks.
 func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
+	if m.State == "ready" {
+		return errors.New("collections: ready vector partition publication requires collection authority")
+	}
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
+}
+
+func (s *VectorPartitionStoreV1) publishValidatedReady(m VectorPartitionManifestV1) error {
+	if m.State != "ready" {
+		return errors.New("collections: validated ready publication requires ready manifest")
+	}
 	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
 }
 func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) error {
@@ -1175,7 +1235,7 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		if e = syncFileVPM(atmp); e != nil {
 			return e
 		}
-		if e = os.Rename(atmp, active); e != nil {
+		if e = renameVPM(atmp, active); e != nil {
 			return e
 		}
 		// The replacement pointer is durable before a stale retired marker is
@@ -1281,7 +1341,7 @@ func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) erro
 	if err = syncFileVPM(tmp); err != nil {
 		return err
 	}
-	if err = os.Rename(tmp, retired); err != nil {
+	if err = renameVPM(tmp, retired); err != nil {
 		return err
 	}
 	if err = syncDirVPM(s.dir); err != nil {
@@ -1472,7 +1532,7 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartition
 			return err
 		}
 	}
-	if err = os.Rename(tmp, tombstone); err != nil {
+	if err = renameVPM(tmp, tombstone); err != nil {
 		return err
 	}
 	if err = syncDirVPM(s.dir); err != nil {
@@ -1816,6 +1876,9 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	if e != nil {
 		return e
 	}
+	if m.State == "ready" {
+		return s.publishValidatedReady(m)
+	}
 	return s.Publish(m)
 }
 
@@ -1949,14 +2012,6 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 func safeVPM(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func syncFileVPM(p string) error {
 	f, e := os.OpenFile(p, os.O_RDWR, 0)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	return f.Sync()
-}
-func syncDirVPM(p string) error {
-	f, e := os.Open(p)
 	if e != nil {
 		return e
 	}
