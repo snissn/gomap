@@ -239,6 +239,36 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	}
 }
 
+func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T) {
+	root := t.TempDir()
+	db := openRaftSnapshotFSMTestDB(t, root, true)
+	defer func() { _ = db.Close() }()
+	fsm := openRaftSnapshotFSMForTest(t, db, root, true)
+	defer func() { _ = fsm.Close() }()
+	applySnapshotSourceEntries(t, fsm, []byte(`{"_id":"barrier","name":"snapshot"}`))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		holderDone <- collections.WithVectorPartitionStorageBarrierV1(root, func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	exportDone := make(chan error, 1)
+	go func() { _, err := fsm.ExportRaftSnapshotV1(); exportDone <- err }()
+	select {
+	case err := <-exportDone:
+		t.Fatalf("snapshot escaped vector-partition barrier: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-holderDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-exportDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func raftSnapshotVectorPartitionManifestForTest() collections.VectorPartitionManifestV1 {
 	ref := func(partID uint64, fileID uint32, length int64) collections.ColumnAssetRef {
 		return collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "snapshot-test", Generation: 4, PartID: partID, FileID: fileID, Length: length}
