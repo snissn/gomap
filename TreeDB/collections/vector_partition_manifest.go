@@ -652,7 +652,7 @@ func putMembershipsVPM(b *bytes.Buffer, x []VectorPartitionMembershipV1) {
 
 // VectorPartitionStoreV1 uses write-sync-rename-sync publication. The active
 // pointer changes only after its complete generation has been made durable.
-type VectorPartitionStoreV1 struct{ dir string }
+type VectorPartitionStoreV1 struct{ root, dir string }
 
 const (
 	vectorPartitionStoreMaxEntriesV1 = 4096
@@ -804,7 +804,7 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 	if err := os.MkdirAll(d, 0700); err != nil {
 		return nil, err
 	}
-	return &VectorPartitionStoreV1{d}, nil
+	return &VectorPartitionStoreV1{root: root, dir: d}, nil
 }
 
 // OpenExistingVectorPartitionStoreV1 is read-only with respect to directory
@@ -822,9 +822,12 @@ func OpenExistingVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, e
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%w: store is not a directory", ErrVectorPartitionManifestInvalid)
 	}
-	return &VectorPartitionStoreV1{d}, nil
+	return &VectorPartitionStoreV1{root: root, dir: d}, nil
 }
 func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
+}
+func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) error {
 	raw, e := EncodeVectorPartitionManifestV1(m)
 	if e != nil {
 		return e
@@ -943,6 +946,9 @@ func (s *VectorPartitionStoreV1) openPointer(collection, index, suffix string) (
 // marker identifies the last active generation for audit/cleanup while making
 // its assets prepared-only rather than query-pinned after the directory sync.
 func (s *VectorPartitionStoreV1) Deactivate(collection, index string) error {
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deactivateLocked(collection, index) })
+}
+func (s *VectorPartitionStoreV1) deactivateLocked(collection, index string) error {
 	active, err := s.OpenActive(collection, index)
 	if err != nil {
 		return err
@@ -983,6 +989,9 @@ func (e VectorPartitionCleanupEligibilityV1) Deletable() bool {
 }
 
 func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
+	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.deleteLocked(collection, index, generation, eligibility) })
+}
+func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
 	if !eligibility.Deletable() {
 		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
 	}

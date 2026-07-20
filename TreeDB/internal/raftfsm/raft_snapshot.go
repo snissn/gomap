@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -55,6 +56,16 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	var snapshot raftcluster.RaftSnapshotV1
+	err := collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error {
+		var inner error
+		snapshot, inner = f.exportRaftSnapshotV1Locked()
+		return inner
+	})
+	return snapshot, err
+}
+
+func (f *FSM) exportRaftSnapshotV1Locked() (raftcluster.RaftSnapshotV1, error) {
 	if err := f.requireRaftSnapshotOpenV1(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
