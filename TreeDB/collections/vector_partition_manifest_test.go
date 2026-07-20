@@ -72,6 +72,16 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	if err := s.Publish(m); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Delete("docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err == nil {
+		t.Fatal("active generation deleted")
+	}
+	newer := m
+	newer.Generation = 8
+	newer.RouterGeneration = 8
+	newer.Canonicalize()
+	if err := s.Publish(newer); err != nil {
+		t.Fatal(err)
+	}
 	for _, e := range []VectorPartitionCleanupEligibilityV1{{Active: true}, {ReaderPins: 1}, {SnapshotReferences: 1}, {CatalogReferences: 1}} {
 		if err := s.Delete("docs", "embedding", 7, e); err == nil {
 			t.Fatalf("eligible=%+v deleted", e)
