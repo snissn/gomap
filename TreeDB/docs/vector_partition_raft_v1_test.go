@@ -32,14 +32,17 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 		ResultKind         string `json:"result_kind"`
 		ProductionEvidence bool   `json:"production_evidence"`
 		Candidate          string `json:"candidate_head_sha"`
-		Codec              []struct {
+		RawArtifacts       []struct {
+			Hash string `json:"sha256"`
+		} `json:"raw_artifacts"`
+		Codec []struct {
 			Metadata float64 `json:"metadata_bytes_per_vector"`
 		} `json:"codec"`
 	}
 	if err := json.Unmarshal(raw, &ledger); err != nil {
 		t.Fatal(err)
 	}
-	if ledger.SchemaVersion != 1 || ledger.ResultKind != "local_microbenchmark" || ledger.ProductionEvidence || len(ledger.Candidate) != 40 || len(ledger.Codec) != 3 || ledger.Codec[2].Metadata != 12.000642 {
+	if ledger.SchemaVersion != 1 || ledger.ResultKind != "local_microbenchmark" || ledger.ProductionEvidence || len(ledger.Candidate) != 40 || len(ledger.RawArtifacts) != 1 || len(ledger.RawArtifacts[0].Hash) != 64 || len(ledger.Codec) != 3 || ledger.Codec[2].Metadata != 12.000642 {
 		t.Fatalf("invalid M1 evidence ledger: %+v", ledger)
 	}
 }

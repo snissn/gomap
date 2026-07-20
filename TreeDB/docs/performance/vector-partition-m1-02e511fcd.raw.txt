@@ -1,0 +1,10 @@
+Candidate: 02e511fcd2418c764e6f4d504f8ba2140ceff334 (detached clean worktree)
+Toolchain: go test; linux/amd64; CPU: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+All commands: /usr/bin/time -v env GOWORK=off go test ... -benchtime=1x -benchmem -count=1
+codec rows=10000: decode_validate 925041 ns/op, 560992 B/op, 67 allocs/op; encode 3280907 ns/op, 913888 B/op, 92 allocs/op; maximum RSS kbytes 2566320.
+codec rows=100000: decode_validate 10667467 ns/op, 14003376 B/op, 96 allocs/op; encode 22707662 ns/op, 17594728 B/op, 113 allocs/op; maximum RSS kbytes 432000.
+codec rows=1000000: decode_validate 106372428 ns/op, 191125256 B/op, 96 allocs/op; encode 262745323 ns/op, 228014552 B/op, 119 allocs/op; maximum RSS kbytes 417280; encoded manifest bytes 12000642; metadata bytes/vector 12.000642.
+warm: open 90883 ns/op, 14440 B/op, 63 allocs/op; status 16321054 ns/op, 215136 B/op, 1301 allocs/op; maximum RSS kbytes 427776.
+snapshot rows=10000: archive 78327107 ns/op, 663552 archive-bytes, 2223744 B/op, 1728 allocs/op; install 487352045 ns/op, 57045768 B/op, 9054 allocs/op; maximum RSS kbytes 1254384.
+snapshot rows=100000: archive 53153022 ns/op, 1743360 archive-bytes, 5115288 B/op, 1733 allocs/op; install 341202066 ns/op, 57082048 B/op, 9071 allocs/op; maximum RSS kbytes 328576.
+snapshot rows=1000000: archive 57249101 ns/op, 12543488 archive-bytes, 25728856 B/op, 975 allocs/op; install 359247160 ns/op, 57061912 B/op, 9056 allocs/op; maximum RSS kbytes 327552.

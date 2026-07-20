@@ -6,20 +6,21 @@
   "candidate_head_sha": "02e511fcd2418c764e6f4d504f8ba2140ceff334",
   "base_sha": "3e225cb992f0ccc6b2a0f7022c00414d8c783715",
   "environment": {"goos":"linux","goarch":"amd64","go_toolchain":"go test", "cpu":"11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz"},
-  "timed_boundary": "one benchmark iteration; fixture setup excluded by benchmark timer; RSS is complete Go test process maximum",
+  "timed_boundary": "one benchmark iteration; fixture setup excluded by benchmark timer; RSS is complete Go test process maximum; measurements ran in detached clean candidate worktree",
+  "raw_artifacts": [{"path":"vector-partition-m1-02e511fcd.raw.txt","sha256":"15ff3487e38972d6397ea6cbf20e39c2075ad6656e37c1a94864d9329cd6570e"}],
   "commands": [
     "env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^(BenchmarkVectorPartitionManifestV1Scale|BenchmarkVectorPartitionStoreV1WarmOpen|BenchmarkVectorPartitionStatusV1Warm)$' -benchtime=1x -benchmem -count=1",
     "env GOWORK=off go test ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$' -benchtime=1x -benchmem -count=1"
   ],
   "codec": [
-    {"memberships":10000,"decode_ns_op":997293,"decode_b_op":1609696,"decode_allocs_op":85,"encode_ns_op":3223032,"encode_b_op":1962592,"encode_allocs_op":109},
-    {"memberships":100000,"decode_ns_op":11619822,"decode_b_op":13997816,"decode_allocs_op":90,"encode_ns_op":18383728,"encode_b_op":17594776,"encode_allocs_op":114},
-    {"memberships":1000000,"decode_ns_op":113986675,"decode_b_op":191125336,"decode_allocs_op":95,"encode_ns_op":189531693,"encode_b_op":228014456,"encode_allocs_op":119,"manifest_bytes":12000642,"metadata_bytes_per_vector":12.000642}
+    {"memberships":10000,"decode_ns_op":925041,"decode_b_op":560992,"decode_allocs_op":67,"encode_ns_op":3280907,"encode_b_op":913888,"encode_allocs_op":92,"peak_rss_kb":2566320},
+    {"memberships":100000,"decode_ns_op":10667467,"decode_b_op":14003376,"decode_allocs_op":96,"encode_ns_op":22707662,"encode_b_op":17594728,"encode_allocs_op":113,"peak_rss_kb":432000},
+    {"memberships":1000000,"decode_ns_op":106372428,"decode_b_op":191125256,"decode_allocs_op":96,"encode_ns_op":262745323,"encode_b_op":228014552,"encode_allocs_op":119,"peak_rss_kb":417280,"manifest_bytes":12000642,"metadata_bytes_per_vector":12.000642}
   ],
-  "warm": {"open_ns_op":67727,"open_b_op":14424,"open_allocs_op":63,"status_ns_op":41085966,"status_b_op":1144304,"status_allocs_op":3290,"collections_harness_max_rss_kb":432000},
+  "warm": {"open_ns_op":90883,"open_b_op":14440,"open_allocs_op":63,"status_ns_op":16321054,"status_b_op":215136,"status_allocs_op":1301,"peak_rss_kb":427776},
   "snapshot": [
-    {"memberships":10000,"archive_ns_op":106342060,"archive_bytes":663552,"install_ns_op":367483827},
-    {"memberships":100000,"archive_ns_op":70821281,"archive_bytes":1743360,"install_ns_op":346961677},
-    {"memberships":1000000,"archive_ns_op":59378419,"archive_bytes":12543488,"install_ns_op":361695147,"harness_max_rss_kb":1264540}
+    {"memberships":10000,"archive_ns_op":78327107,"archive_bytes":663552,"install_ns_op":487352045,"peak_rss_kb":1254384},
+    {"memberships":100000,"archive_ns_op":53153022,"archive_bytes":1743360,"install_ns_op":341202066,"peak_rss_kb":328576},
+    {"memberships":1000000,"archive_ns_op":57249101,"archive_bytes":12543488,"install_ns_op":359247160,"peak_rss_kb":327552}
   ]
 }
