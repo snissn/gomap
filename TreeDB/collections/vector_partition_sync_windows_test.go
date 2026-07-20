@@ -4,6 +4,8 @@ package collections
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -13,7 +15,11 @@ import (
 // needs. This runtime test protects against accidentally reviving a no-op
 // directory Sync or a raw write-through-only publication claim.
 func TestVectorPartitionWindowsMutationsFailClosedWithoutNamespaceProof(t *testing.T) {
-	if _, err := OpenVectorPartitionStoreV1(t.TempDir()); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
+	root := t.TempDir()
+	if _, err := OpenVectorPartitionStoreV1(root); !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) {
 		t.Fatalf("store creation err=%v want namespace persistence unsupported", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "vector_partitions")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed store creation mutated namespace: stat err=%v", err)
 	}
 }

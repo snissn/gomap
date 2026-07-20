@@ -1143,14 +1143,17 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 	if existedErr != nil && !errors.Is(existedErr, os.ErrNotExist) {
 		return nil, existedErr
 	}
+	// On Windows the namespace protocol has no proof for the initial directory
+	// creation, link, and later remove transitions. Refuse before MkdirAll so
+	// even a failed request cannot leave a new namespace behind.
+	if !existed && !vpmNamespacePersistenceSupported() {
+		return nil, fmt.Errorf("%w: vector partition store creation", rootpublication.ErrNamespacePersistenceUnsupported)
+	}
 	if err := os.MkdirAll(d, 0700); err != nil {
 		return nil, err
 	}
 	// A first store creation changes root's directory entries. Sync it too so a
 	// returned store is rooted in durable metadata, not merely a durable child.
-	if !existed && !vpmNamespacePersistenceSupported() {
-		return nil, fmt.Errorf("%w: vector partition store creation", rootpublication.ErrNamespacePersistenceUnsupported)
-	}
 	if !existed {
 		if err := syncDirVPM(root); err != nil {
 			return nil, err
@@ -1717,6 +1720,9 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 	var zero ColumnAssetGCStats
 	if c == nil || c.db == nil {
 		return zero, errors.New("collections: closed collection")
+	}
+	if !vpmNamespacePersistenceSupported() {
+		return zero, fmt.Errorf("%w: vector partition reclaim", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	if ctx == nil {
 		ctx = context.Background()
