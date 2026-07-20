@@ -10,9 +10,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const VectorPartitionManifestFormatV1 = "vector_partition_manifest_v1"
@@ -82,6 +84,7 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
 	}
+	if m.SourceRowCount > uint64(l.MaxMemberships) || len(m.Collection)>l.MaxStringBytes || len(m.IndexName)>l.MaxStringBytes || len(m.State)>l.MaxStringBytes || len(m.BalancePolicy)>l.MaxStringBytes || len(m.IndexDefinitionDigest)>l.MaxStringBytes { return fmt.Errorf("%w: source/string cap", ErrVectorPartitionManifestInvalid) }
 	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
 		return fmt.Errorf("%w: incomplete ready set or capped list", ErrVectorPartitionManifestInvalid)
 	}
@@ -98,7 +101,7 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	seenP := make(map[uint32]struct{}, len(m.Placements))
 	lastP := uint32(0)
 	for i, p := range m.Placements {
-		if p.GroupID == "" || int(p.PartitionID) >= int(m.PartitionCount) || (i > 0 && p.PartitionID <= lastP) {
+		if p.GroupID == "" || len(p.GroupID)>l.MaxStringBytes || int(p.PartitionID) >= int(m.PartitionCount) || (i > 0 && p.PartitionID <= lastP) {
 			return fmt.Errorf("%w: noncanonical placement", ErrVectorPartitionManifestInvalid)
 		}
 		if _, ok := seenP[p.PartitionID]; ok {
@@ -112,13 +115,13 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 			return fmt.Errorf("%w: missing partition %d", ErrVectorPartitionManifestInvalid, i)
 		}
 	}
-	if err := validateMembershipsVPM(m.Memberships, seenP, "membership", m.SourceRowCount, true); err != nil {
+	if err := validateMembershipsVPM(m.Memberships, seenP, "membership", m.SourceRowCount, true, l.MaxMembershipsPerVector); err != nil {
 		return err
 	}
-	if err := validateMembershipsVPM(m.OverlapMemberships, seenP, "overlap", m.SourceRowCount, false); err != nil {
+	if err := validateMembershipsVPM(m.OverlapMemberships, seenP, "overlap", m.SourceRowCount, false, l.MaxMembershipsPerVector); err != nil {
 		return err
 	}
-	if err := validateMembershipsVPM(m.Representatives, seenP, "representative", m.SourceRowCount, false); err != nil {
+	if err := validateMembershipsVPM(m.Representatives, seenP, "representative", m.SourceRowCount, false, l.MaxRepresentativesPerPartition); err != nil {
 		return err
 	}
 	lastID := ""
@@ -142,11 +145,11 @@ func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits)
 	}
 	return nil
 }
-func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]struct{}, kind string, rows uint64, base bool) error {
+func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]struct{}, kind string, rows uint64, base bool, capPer int) error {
 	var prev VectorPartitionMembershipV1
 	counts := make(map[uint64]int)
 	for i, x := range ms {
-		if x.VectorOrdinal >= rows || counts[x.VectorOrdinal] >= 16 {
+		if x.VectorOrdinal >= rows || capPer <= 0 || counts[x.VectorOrdinal] >= capPer {
 			return fmt.Errorf("%w: %s ordinal/cap", ErrVectorPartitionManifestInvalid, kind)
 		}
 		counts[x.VectorOrdinal]++
@@ -523,11 +526,41 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	if m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(*def) {
 		return errors.New("collections: vector partition index definition digest mismatch")
 	}
+	if m.State == "ready" {
+		if err := verifyVectorPartitionAssetsV1(c.db.Dir(), append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
+			return err
+		}
+	}
 	s, e := OpenVectorPartitionStoreV1(c.db.Dir())
 	if e != nil {
 		return e
 	}
 	return s.Publish(m)
+}
+
+func verifyVectorPartitionAssetsV1(root string, assets []VectorPartitionAssetV1) error {
+	for _, a := range assets {
+		if filepath.IsAbs(a.Path) || strings.Contains(a.Path, "..") {
+			return fmt.Errorf("collections: unsafe vector partition asset path %q", a.Path)
+		}
+		f, err := os.Open(filepath.Join(root, a.Path))
+		if err != nil {
+			return fmt.Errorf("collections: vector partition asset %q: %w", a.ID, err)
+		}
+		h := sha256.New()
+		n, copyErr := io.Copy(h, f)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if uint64(n) != a.Bytes || hex.EncodeToString(h.Sum(nil)) != a.Checksum {
+			return fmt.Errorf("collections: vector partition asset %q checksum/size mismatch", a.ID)
+		}
+	}
+	return nil
 }
 
 func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (VectorPartitionStatusV1, error) {

@@ -1,6 +1,10 @@
 package collections
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,6 +23,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 	m := testVectorPartitionManifestV1()
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(col.meta.VectorIndexes[0])
+	writeVectorPartitionAssetsForTest(t, d.Dir(), &m)
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
 		t.Fatal(err)
@@ -27,7 +32,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != 39 {
+	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != 28 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	m.IndexDefinitionDigest = strings.Repeat("f", 64)
@@ -35,6 +40,27 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err := col.PublishVectorPartitionManifestV1(m); err == nil {
 		t.Fatal("wrong index digest accepted")
 	}
+}
+
+func writeVectorPartitionAssetsForTest(t *testing.T, root string, m *VectorPartitionManifestV1) {
+	t.Helper()
+	assets := append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)
+	for i := range assets {
+		raw := []byte(assets[i].ID)
+		p := filepath.Join(root, assets[i].Path)
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		h := sha256.Sum256(raw)
+		assets[i].Bytes = uint64(len(raw))
+		assets[i].Checksum = hex.EncodeToString(h[:])
+	}
+	copy(m.Assets, assets[:len(m.Assets)])
+	m.RouterAsset = assets[len(assets)-1]
+	m.Canonicalize()
 }
 
 func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
