@@ -990,6 +990,49 @@ func TestVectorPartitionManifestV1IntegrityRejectsSemanticMutation(t *testing.T)
 	}
 }
 
+func TestVectorPartitionManifestV1StrictMalformedJSONAndBinaryMatrix(t *testing.T) {
+	base := testVectorPartitionManifestV1()
+	jsonCases := map[string]func(*VectorPartitionManifestV1){
+		"membership_ordinal_out_of_range": func(m *VectorPartitionManifestV1) { m.Memberships[1].VectorOrdinal = m.SourceRowCount },
+		"membership_unknown_partition":    func(m *VectorPartitionManifestV1) { m.Memberships[1].PartitionID = m.PartitionCount },
+		"membership_noncanonical": func(m *VectorPartitionManifestV1) {
+			m.Memberships[0], m.Memberships[1] = m.Memberships[1], m.Memberships[0]
+		},
+		"router_generation":        func(m *VectorPartitionManifestV1) { m.RouterGeneration++ },
+		"router_missing_reference": func(m *VectorPartitionManifestV1) { m.RouterAsset.Ref = ColumnAssetRef{} },
+		"asset_sha":                func(m *VectorPartitionManifestV1) { m.Assets[0].Checksum = "not-a-sha256" },
+		"asset_crc_semantic":       func(m *VectorPartitionManifestV1) { m.Assets[0].Ref.Checksum++ },
+	}
+	for name, mutate := range jsonCases {
+		t.Run("json/"+name, func(t *testing.T) {
+			m := base
+			m.Placements = append([]VectorPartitionPlacementV1(nil), base.Placements...)
+			m.Memberships = append([]VectorPartitionMembershipV1(nil), base.Memberships...)
+			m.Assets = append([]VectorPartitionAssetV1(nil), base.Assets...)
+			mutate(&m) // Keep the certified digest, as an untrusted JSON record would.
+			raw, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeVectorPartitionManifestJSONV1(raw, DefaultVectorPartitionManifestLimits()); err == nil {
+				t.Fatal("malformed JSON manifest accepted")
+			}
+		})
+	}
+	raw, err := EncodeVectorPartitionManifestV1(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownVersion := append([]byte(nil), raw...)
+	binary.BigEndian.PutUint32(unknownVersion[4:8], 99)
+	if _, err := DecodeVectorPartitionManifestV1(unknownVersion, DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("unknown binary version accepted")
+	}
+	if _, err := DecodeVectorPartitionManifestV1(append(raw, []byte("trailing")...), DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("binary trailing data accepted")
+	}
+}
+
 func TestVectorPartitionManifestV1TotalMembershipCapAndRawReadyAuthority(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.Representatives = nil
