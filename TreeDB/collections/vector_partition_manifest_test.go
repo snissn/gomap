@@ -54,6 +54,10 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 	_ = view
 	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 701)
+	oldSegment, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
 		if err != nil {
@@ -139,6 +143,9 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 	if _, err := os.Stat(store.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("completed reclaim record remains: %v", err)
+	}
+	if _, err := os.Stat(oldSegment); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reclaimed partition segment still present: %v", err)
 	}
 	if err := store.Publish(m); err != nil {
 		t.Fatal(err)
