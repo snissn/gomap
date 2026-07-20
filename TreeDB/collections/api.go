@@ -652,6 +652,8 @@ type CollectionInsertStats struct {
 	ColumnPublishDirectViewSegmentAppendCount          int
 	ColumnPublishRequiredAssetBytes                    int64
 	ColumnPublishManifestBytes                         int64
+	ColumnPublishManifestMutationRecords               int
+	ColumnPublishManifestMutationBytes                 int64
 	UniqueIndexPreflight                               time.Duration
 	TemplateRunBuild                                   time.Duration
 	PrimaryRunBuild                                    time.Duration
