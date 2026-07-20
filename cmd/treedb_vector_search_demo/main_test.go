@@ -638,6 +638,21 @@ func TestExecuteDatasetDirClampsValidateQueries(t *testing.T) {
 	}
 }
 
+func TestLoadWorkloadAcceptsPartialExactTruthCoverage(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 64, 8, 5, 3)
+	cfg := config{datasetDir: datasetDir, docs: 64, dimensions: 8, queries: 5, validateQueries: 4}
+	work, err := loadWorkload(&cfg)
+	if err != nil {
+		t.Fatalf("partial exact-truth coverage rejected: %v", err)
+	}
+	if work.manifest.ExactTruthQueries != 1 || work.manifest.ExactTruthQueries == work.manifest.Queries {
+		t.Fatalf("consumer did not preserve partial exact-truth coverage: %+v", work.manifest)
+	}
+	if cfg.validateQueries != 4 {
+		t.Fatalf("consumer incorrectly clamped validation to truth rows: %d", cfg.validateQueries)
+	}
+}
+
 func TestRunJSONOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1368,6 +1383,7 @@ func writeDemoDataset(t *testing.T, docs, dims, queries, topK int) string {
 		"docs":                  docs,
 		"dimensions":            dims,
 		"queries":               queries,
+		"exact_truth_queries":   min(1, queries),
 		"top_k":                 topK,
 		"metric":                "cosine",
 		"document_vectors_file": "documents.f32",

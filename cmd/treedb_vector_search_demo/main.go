@@ -271,6 +271,7 @@ type datasetManifest struct {
 	Docs                int    `json:"docs"`
 	Dimensions          int    `json:"dimensions"`
 	Queries             int    `json:"queries"`
+	ExactTruthQueries   int    `json:"exact_truth_queries"`
 	TopK                int    `json:"top_k"`
 	Metric              string `json:"metric"`
 	DocumentVectorsFile string `json:"document_vectors_file"`
@@ -1419,6 +1420,9 @@ func loadWorkload(cfg *config) (workload, error) {
 	}
 	if cfg.queries > m.Queries {
 		return workload{}, fmt.Errorf("dataset queries=%d is less than -queries=%d", m.Queries, cfg.queries)
+	}
+	if m.ExactTruthQueries < 0 || m.ExactTruthQueries > m.Queries {
+		return workload{}, fmt.Errorf("dataset exact_truth_queries=%d is outside 0..queries=%d", m.ExactTruthQueries, m.Queries)
 	}
 	if cfg.validateQueries > m.Queries {
 		cfg.validateQueries = m.Queries
