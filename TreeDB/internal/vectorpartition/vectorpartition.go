@@ -572,14 +572,17 @@ func partitionWorkUnits(n, parts, degree int) (int64, bool) {
 	if n < 0 || parts < 0 || degree < 0 {
 		return 0, true
 	}
-	// Deliberately overcount every loop/allocation family. Per-node work covers
-	// validation (degree+1), bucket fill/order, output zeroing/initialization,
-	// candidate reset/assignment, the partition scan, neighbor marking, and
-	// affinity rescans. Global setup covers zeroing loads and marks, the reserve
-	// pass, and initialization/iteration/allocation for degree buckets and the
-	// candidate buffer. An accepted shape therefore stays below this conservative
-	// declared cap even if a future implementation detail adds constant work.
-	perNode := int64(degree+1) + 6 + int64(parts) + int64(degree) + int64(degree)*int64(degree+1)
+	// Deliberately overcount every loop/allocation family. Per-node work charges
+	// validation (degree+1); bucket append plus amortized backing growth (2);
+	// order backing zeroing plus append (2); output backing zeroing plus -1
+	// initialization (2); candidate reset (1); assignment/load update (1); the
+	// partition scan; candidate construction including the least-loaded choice
+	// (degree+1); its outer scoring iteration (degree+1); and affinity rescans.
+	// Global setup covers zeroing loads and marks, the reserve pass, and
+	// initialization/iteration/allocation for degree buckets and candidate
+	// backing. An accepted shape therefore stays below this conservative declared
+	// cap even if a future implementation detail adds constant work.
+	perNode := int64(degree+1) + 8 + int64(parts) + 2*int64(degree+1) + int64(degree)*int64(degree+1)
 	if int64(n) != 0 && perNode > math.MaxInt64/int64(n) {
 		return 0, true
 	}
