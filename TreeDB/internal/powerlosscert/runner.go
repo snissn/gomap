@@ -979,17 +979,27 @@ func observedWitnessStateForComparison(recovery recoveryTraceArtifact, compariso
 	stat := func(key string) string { return recovery.Stats[key] }
 	selectedSlot := stat("treedb.durable_root.selected_slot")
 	selectedCommit := stat("treedb.durable_root.commit_seq")
-	var fallbackCommit string
+	var selectedSlotCommit, fallbackCommit string
 	switch selectedSlot {
 	case "0":
+		selectedSlotCommit = stat("treedb.durable_root.slot0.commit_seq")
 		fallbackCommit = stat("treedb.durable_root.slot1.commit_seq")
 	case "1":
+		selectedSlotCommit = stat("treedb.durable_root.slot1.commit_seq")
 		fallbackCommit = stat("treedb.durable_root.slot0.commit_seq")
 	default:
 		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid selected slot %q", selectedSlot)
 	}
 	if selectedCommit == "" || fallbackCommit == "" {
 		return WitnessState{}, fmt.Errorf("logical-horizon state is missing selected or fallback commit sequence")
+	}
+	if selectedSlotCommit != selectedCommit {
+		return WitnessState{}, fmt.Errorf("logical-horizon state selected slot commit=%q does not match durable root commit=%q", selectedSlotCommit, selectedCommit)
+	}
+	selectedCommitNumber, selectedErr := strconv.ParseUint(selectedCommit, 10, 64)
+	fallbackCommitNumber, fallbackErr := strconv.ParseUint(fallbackCommit, 10, 64)
+	if selectedErr != nil || fallbackErr != nil || selectedCommitNumber <= fallbackCommitNumber {
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid selected/fallback commits %q/%q", selectedCommit, fallbackCommit)
 	}
 	freelistGeneration, err := strconv.ParseUint(stat("treedb.durable_root.freelist.generation"), 10, 64)
 	if err != nil || freelistGeneration == 0 {
