@@ -3299,7 +3299,7 @@ func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 	badDelta.Identity = badIdentity
 	badDelta.IdentityRecord = encodeColumnManifestIdentityRecordArray(badIdentity)
 	badDelta.StoragePolicy = normalized.ManifestRoot.StoragePolicy
-	if err := validateColumnManifestRootDeltaForPlan(badDelta, delta.BaseRootID, *normalized, badIdentity); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if err := validateColumnManifestRootDeltaForPlan(badDelta, nil, delta.BaseRootID, *normalized, badIdentity); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("validate bad manifest checksum err=%v want checksum failure", err)
 	}
 }

@@ -46,6 +46,15 @@ type columnManifestRecord struct {
 	value []byte
 }
 
+// columnManifestMutation is one root-local change between two complete logical
+// manifest snapshots. A deleted mutation carries only the removed record key.
+// The complete post-state remains available separately for checksum and
+// correctness validation.
+type columnManifestMutation struct {
+	record  columnManifestRecord
+	deleted bool
+}
+
 type columnManifestSnapshot struct {
 	Collection         string
 	Operation          ColumnPublishOperation
@@ -219,8 +228,108 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 	return ColumnPublishManifestEncodeResult{
 		Identity:      identity,
 		ManifestBytes: columnManifestRecordsBytes(records),
-		Records:       cloneColumnManifestRecords(records),
+		Records:       records,
 	}, nil
+}
+
+// buildColumnManifestMutationDelta returns the minimal sorted mutation stream
+// that transforms current into next. Both inputs must be strictly sorted by
+// unique key; this is also the ordering required by ordered-root publication.
+func buildColumnManifestMutationDelta(current, next []columnManifestRecord) ([]columnManifestMutation, error) {
+	if err := validateSortedUniqueColumnManifestRecords(current, "current"); err != nil {
+		return nil, err
+	}
+	if err := validateSortedUniqueColumnManifestRecords(next, "next"); err != nil {
+		return nil, err
+	}
+	mutationCapacity := len(current) + len(next)
+	if mutationCapacity > 8 {
+		mutationCapacity = 8
+	}
+	mutations := make([]columnManifestMutation, 0, mutationCapacity)
+	for currentIndex, nextIndex := 0, 0; currentIndex < len(current) || nextIndex < len(next); {
+		if currentIndex == len(current) {
+			mutations = append(mutations, cloneColumnManifestMutation(next[nextIndex], false))
+			nextIndex++
+			continue
+		}
+		if nextIndex == len(next) {
+			mutations = append(mutations, cloneColumnManifestMutation(current[currentIndex], true))
+			currentIndex++
+			continue
+		}
+		switch comparison := bytes.Compare(current[currentIndex].key, next[nextIndex].key); {
+		case comparison < 0:
+			mutations = append(mutations, cloneColumnManifestMutation(current[currentIndex], true))
+			currentIndex++
+		case comparison > 0:
+			mutations = append(mutations, cloneColumnManifestMutation(next[nextIndex], false))
+			nextIndex++
+		default:
+			if !bytes.Equal(current[currentIndex].value, next[nextIndex].value) {
+				mutations = append(mutations, cloneColumnManifestMutation(next[nextIndex], false))
+			}
+			currentIndex++
+			nextIndex++
+		}
+	}
+	return mutations, nil
+}
+
+func validateSortedUniqueColumnManifestRecords(records []columnManifestRecord, name string) error {
+	for i, record := range records {
+		if len(record.key) == 0 {
+			return fmt.Errorf("collections: %s column manifest record[%d] has empty key", name, i)
+		}
+		if i > 0 && bytes.Compare(records[i-1].key, record.key) >= 0 {
+			return fmt.Errorf("collections: %s column manifest records are not strictly sorted at index %d", name, i)
+		}
+	}
+	return nil
+}
+
+func cloneColumnManifestMutation(record columnManifestRecord, deleted bool) columnManifestMutation {
+	mutation := columnManifestMutation{
+		record:  columnManifestRecord{key: bytes.Clone(record.key)},
+		deleted: deleted,
+	}
+	if !deleted {
+		mutation.record.value = bytes.Clone(record.value)
+	}
+	return mutation
+}
+
+func columnManifestMutationsEqual(left, right []columnManifestMutation) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].deleted != right[i].deleted ||
+			!bytes.Equal(left[i].record.key, right[i].record.key) ||
+			!bytes.Equal(left[i].record.value, right[i].record.value) {
+			return false
+		}
+	}
+	return true
+}
+
+func columnManifestMutationBytes(mutations []columnManifestMutation) int64 {
+	var total int64
+	for _, mutation := range mutations {
+		total += int64(len(mutation.record.key))
+		if !mutation.deleted {
+			total += int64(len(mutation.record.value))
+		}
+	}
+	return total
+}
+
+func columnManifestRootMutationRecordCount(mutations []columnManifestMutation) int {
+	return 1 + len(mutations) // independently stored manifest identity record
+}
+
+func columnManifestRootMutationBytes(mutations []columnManifestMutation) int64 {
+	return int64(len(columnManifestIdentityRecordKey)+columnManifestIdentityRecordSize) + columnManifestMutationBytes(mutations)
 }
 
 func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
@@ -969,6 +1078,29 @@ func columnManifestRootRecordIterator(identityRecord [columnManifestIdentityReco
 			key:   bytes.Clone(record.key),
 			value: bytes.Clone(record.value),
 		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].key, entries[j].key) < 0
+	})
+	return &systemTargetIterator{entries: entries}
+}
+
+func columnManifestRootMutationIterator(identityRecord [columnManifestIdentityRecordSize]byte, mutations []columnManifestMutation) *systemTargetIterator {
+	entries := make([]systemTargetEntry, 0, 1+len(mutations))
+	identityValue := make([]byte, len(identityRecord))
+	copy(identityValue, identityRecord[:])
+	entries = append(entries, systemTargetEntry{
+		key:   newColumnManifestIdentityRecordKey(),
+		value: identityValue,
+	})
+	for _, mutation := range mutations {
+		entry := systemTargetEntry{key: bytes.Clone(mutation.record.key)}
+		if mutation.deleted {
+			entry.flags = node.FlagTombstone
+		} else {
+			entry.value = bytes.Clone(mutation.record.value)
+		}
+		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return bytes.Compare(entries[i].key, entries[j].key) < 0

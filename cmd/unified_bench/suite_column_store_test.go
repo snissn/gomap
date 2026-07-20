@@ -728,7 +728,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.InsertStats.ColumnPublishRows != report.Rows {
 		t.Fatalf("column publish rows=%d want %d: %+v", report.InsertStats.ColumnPublishRows, report.Rows, report.InsertStats)
 	}
-	if report.InsertStats.ColumnPublishPreparedAssets == 0 || report.InsertStats.ColumnPublishRequiredAssetBytes == 0 || report.InsertStats.ColumnPublishManifestBytes == 0 {
+	if report.InsertStats.ColumnPublishPreparedAssets == 0 || report.InsertStats.ColumnPublishRequiredAssetBytes == 0 || report.InsertStats.ColumnPublishManifestBytes == 0 || report.InsertStats.ColumnPublishManifestMutationRecords == 0 || report.InsertStats.ColumnPublishManifestMutationBytes == 0 {
 		t.Fatalf("column publish asset counters missing: %+v", report.InsertStats)
 	}
 	if report.InsertStats.ColumnPublishBuildColumnDeltaDurationMS <= 0 || report.InsertStats.ColumnPublishBuildColumnDeltaNsPerRow <= 0 {

@@ -314,6 +314,8 @@ type columnStoreInsertPhaseMetric struct {
 
 	ColumnPublishRequiredAssetBytes           int64   `json:"column_publish_required_asset_bytes,omitempty"`
 	ColumnPublishManifestBytes                int64   `json:"column_publish_manifest_bytes,omitempty"`
+	ColumnPublishManifestMutationRecords      int     `json:"column_publish_manifest_mutation_records,omitempty"`
+	ColumnPublishManifestMutationBytes        int64   `json:"column_publish_manifest_mutation_bytes,omitempty"`
 	PrimaryRunBuildDurationMS                 float64 `json:"primary_run_build_duration_ms,omitempty"`
 	PrimaryRunBuildNsPerRow                   float64 `json:"primary_run_build_ns_per_row,omitempty"`
 	PublishDurationMS                         float64 `json:"publish_duration_ms,omitempty"`
@@ -1716,6 +1718,8 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishDirectViewSegmentAppendCount += src.ColumnPublishDirectViewSegmentAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
+	dst.ColumnPublishManifestMutationRecords += src.ColumnPublishManifestMutationRecords
+	dst.ColumnPublishManifestMutationBytes += src.ColumnPublishManifestMutationBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
 	dst.TemplateRunBuild += src.TemplateRunBuild
 	dst.PrimaryRunBuild += src.PrimaryRunBuild
@@ -1833,6 +1837,8 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishDirectViewSegmentAppendCount:          stats.ColumnPublishDirectViewSegmentAppendCount,
 		ColumnPublishRequiredAssetBytes:                    stats.ColumnPublishRequiredAssetBytes,
 		ColumnPublishManifestBytes:                         stats.ColumnPublishManifestBytes,
+		ColumnPublishManifestMutationRecords:               stats.ColumnPublishManifestMutationRecords,
+		ColumnPublishManifestMutationBytes:                 stats.ColumnPublishManifestMutationBytes,
 		PrimaryRunBuildDurationMS:                          durationMS(stats.PrimaryRunBuild),
 		PrimaryRunBuildNsPerRow:                            nsPerRow(stats.PrimaryRunBuild, rows),
 		PublishDurationMS:                                  durationMS(stats.Publish),
@@ -4900,7 +4906,9 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_append_file_sync_count: %d\n", stats.ColumnPublishDirectViewSegmentAppendFileSyncCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_append_sync_epoch_count: %d\n", stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_required_asset_bytes: %d\n", stats.ColumnPublishRequiredAssetBytes))
-	sb.WriteString(fmt.Sprintf("- column_publish_manifest_bytes: %d\n\n", stats.ColumnPublishManifestBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_manifest_bytes: %d\n", stats.ColumnPublishManifestBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_manifest_mutation_records: %d\n", stats.ColumnPublishManifestMutationRecords))
+	sb.WriteString(fmt.Sprintf("- column_publish_manifest_mutation_bytes: %d\n\n", stats.ColumnPublishManifestMutationBytes))
 
 	sb.WriteString("| phase | ms | ns/row |\n")
 	sb.WriteString("|---|---:|---:|\n")
