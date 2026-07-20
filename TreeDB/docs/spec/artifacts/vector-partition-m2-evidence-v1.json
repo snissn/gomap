@@ -2,8 +2,8 @@
   "schema_version": 1,
   "kind": "treedb_vector_partition_m2_reproduction_evidence",
   "note": "Compact reviewer-accessible evidence. Generated artifacts remain host-local; commands and digests reproduce and verify them.",
-  "implementation_commit": "7a5d61e60cec2c55ea8befe656e76631742b4b1d",
-  "implementation_commit_note": "All three fresh runs used binaries built from this exact implementation commit. Commit cec947921b190ef9370de9e1542040a962c086c5 refreshed only documentation/evidence and changed no implementation files.",
+  "implementation_commit": "9bab19104ecd223c6c15c67469b6cdb8748e802e",
+  "implementation_commit_note": "All three fresh runs used binaries built from this exact implementation commit. Earlier commits cec947921b190ef9370de9e1542040a962c086c5 and e2869cd31c37d24ee18cae86a0cb6a578ff52513 refreshed only documentation/evidence and changed no implementation files.",
   "canonical_manifest_digest_definition": "SHA-256 of json.Marshal on the decoded typed exporter manifest, including the sorted file map. This is the logical canonical manifest digest used in source_id, not a hash of manifest.json bytes.",
   "runs": [
     {
@@ -14,7 +14,7 @@
       "canonical_manifest_digest": "ea980008813897107cd1a150b96e2ef497ec4d26b815dbbc5f9b8d6ddef6ed58",
       "source_checksum": "64bc8b935db050e2cb126f6e1bca6e4378d56464b0141128726b3445d4a34b62",
       "artifact_sha256": "c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935",
-      "report_sha256": "f3f4bdaa28c1714a9ff345e820cf47f7dbafbfee4d047d620121929ec498abca"
+      "report_sha256": "42138984601bf18776af8a33391d535a222e9c58496453551eb1807bddba2e53"
     },
     {
       "name": "100k",
@@ -24,7 +24,7 @@
       "canonical_manifest_digest": "04ab185b349d794b034550b117d9cbc20dff8131bb1c1986e63d52191240c2ec",
       "source_checksum": "e56afe5df826acc8ab2bea01b09c3676a7ccf2cbf2743a46a0f63ce741ffd0c3",
       "artifact_sha256": "627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae",
-      "report_sha256": "8ab20305d25060a6fdab43cc1de910c8a302400fc491725c0139eb9ee423de55"
+      "report_sha256": "bdab9c4628efea5f12b52d59c05b09686f88e892e5ad3aa44bc9de6d49feb390"
     },
     {
       "name": "1m",
@@ -34,7 +34,7 @@
       "canonical_manifest_digest": "a7814b879e2e5d49c9038502fe7c7eb26fa5b2917af72b87d2d1321f66ab2f5b",
       "source_checksum": "b6f7ce2ab91728cd869139672d8e902618f792e4cb10a8679bfc6612146f7f42",
       "artifact_sha256": "f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413",
-      "report_sha256": "c7164fb947cd1f6f1cf0e5774c6edde7652f25384e40cf897f1ba5ce4a1df59b"
+      "report_sha256": "9c00d6ef6c364840ac0e63f74954352e0730f5360ac715845d602407ce8faa46"
     }
   ]
 }
