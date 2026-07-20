@@ -198,6 +198,73 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 	assertSnapshotDocument(t, targetFSM, "u-large", largeDoc)
 }
 
+func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testing.T) {
+	requireRaftSnapshotInstallSupportedV1(t)
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+
+	store, err := collections.OpenVectorPartitionStoreV1(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := raftSnapshotVectorPartitionManifestForTest()
+	if err := store.Publish(manifest); err != nil {
+		t.Fatal(err)
+	}
+	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"partition-snapshot","name":"metadata"}`))
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetDir := filepath.Join(root, "target")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+	defer func() { _ = targetFSM.Close() }()
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
+	targetStore, err := collections.OpenVectorPartitionStoreV1(targetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := targetStore.OpenActive(manifest.Collection, manifest.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Generation != manifest.Generation || got.ReadySetDigest != manifest.ReadySetDigest {
+		t.Fatalf("restored vector partition manifest=%+v, want generation=%d digest=%s", got, manifest.Generation, manifest.ReadySetDigest)
+	}
+}
+
+func raftSnapshotVectorPartitionManifestForTest() collections.VectorPartitionManifestV1 {
+	ref := func(partID uint64, fileID uint32, length int64) collections.ColumnAssetRef {
+		return collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "snapshot-test", Generation: 4, PartID: partID, FileID: fileID, Length: length}
+	}
+	manifest := collections.VectorPartitionManifestV1{
+		State:                 "ready",
+		Collection:            "docs",
+		IndexName:             "embedding",
+		IndexDefinitionDigest: strings.Repeat("a", 64),
+		SourceGeneration:      4,
+		SourceChecksum:        9,
+		SourceSchemaHash:      11,
+		SourceRowCount:        1,
+		Generation:            7,
+		RouterGeneration:      7,
+		PartitionCount:        1,
+		BalancePolicy:         "disjoint_v1",
+		Placements:            []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}},
+		Memberships:           []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}},
+		Assets:                []collections.VectorPartitionAssetV1{{ID: "partition/0", Checksum: strings.Repeat("b", 64), Bytes: 12, Ref: ref(1, 1, 12)}},
+		RouterAsset:           collections.VectorPartitionAssetV1{ID: "router", Checksum: strings.Repeat("c", 64), Bytes: 14, Ref: ref(2, 2, 14)},
+	}
+	manifest.Canonicalize()
+	return manifest
+}
+
 func TestRaftSnapshotV1ExportStagesArchiveWithoutPayloadAndReleaseCleans(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
