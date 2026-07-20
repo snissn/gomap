@@ -132,6 +132,79 @@ func TestBuildRejectsOverCapBeforeVectorElementValidation(t *testing.T) {
 	}
 }
 
+func TestBuildPreflightsSelectedShapeBeforeFullVectorScan(t *testing.T) {
+	shapeConfig := func() Config {
+		c := DefaultConfig()
+		c.Repetitions = 1
+		c.Pivots = 2
+		c.MaxLeafBucket = 2
+		c.Degree = 1
+		return c
+	}
+	edge := shapeConfig()
+	edge.Partitions, edge.Degree, edge.MaxEdges = 1, 2, 1
+	pivot := shapeConfig()
+	pivot.Partitions, pivot.Pivots = 1, maxPivots
+	overlap := shapeConfig()
+	overlap.Partitions, overlap.MaxLeafBucket = 1, 65_536
+	partition := shapeConfig()
+	partition.Partitions = 238
+	for _, tc := range []struct {
+		name  string
+		count int
+		dims  int
+		cfg   Config
+		want  string
+	}{
+		{"edge bound", 2, 1, edge, "graph edge bound"},
+		{"pivot scalar work", 310_000, 64, pivot, "scalar-work"},
+		{"dual leaf scalar work", 300_000, 1, overlap, "scalar-work"},
+		{"reference partition work", 1_000_000, 1, partition, "partition work"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shared := make([]float64, tc.dims)
+			shared[0] = math.NaN()
+			vectors := make([]Vector, tc.count)
+			for i := range vectors {
+				// An element scan would reject this empty ID/non-finite value
+				// instead of the selected deterministic shape bound.
+				vectors[i] = Vector{Values: shared}
+			}
+			_, err := Build(vectors, tc.cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Build error=%v; want preflight %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildAppliesReferenceWorkOnlyToReferenceBackend(t *testing.T) {
+	c := DefaultConfig()
+	c.Partitions, c.Repetitions, c.Pivots, c.MaxLeafBucket, c.Degree = 238, 1, 2, 2, 1
+	vectors := make([]Vector, 1_000_000)
+	shared := []float64{math.NaN()}
+	for i := range vectors {
+		vectors[i] = Vector{ID: "valid", Values: shared}
+	}
+	_, err := BuildWithPartitioner(vectors, c, Source{SourceID: "custom"}, assignmentPartitioner{})
+	if err == nil || !strings.Contains(err.Error(), "non-finite vector value") {
+		t.Fatalf("custom backend incorrectly received reference work gate: %v", err)
+	}
+}
+
+func TestBuildChecksLaterDimensionBeforeValues(t *testing.T) {
+	c := config()
+	c.Partitions = 2
+	vectors := []Vector{
+		{ID: "first", Values: []float64{1}},
+		{ID: "second", Values: []float64{math.NaN(), 1}},
+	}
+	_, err := Build(vectors, c)
+	if err == nil || !strings.Contains(err.Error(), "wrong vector dimension") {
+		t.Fatalf("heterogeneous dimension did not fail before scalar scan: %v", err)
+	}
+}
+
 func TestBuildAndArtifactRejectInvalidUTF8IDs(t *testing.T) {
 	vectors := fixture()
 	vectors[0].ID = string([]byte{0xff})

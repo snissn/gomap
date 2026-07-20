@@ -154,13 +154,12 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	if err := validateRequestedSource(source); err != nil {
 		return Artifact{}, phases, err
 	}
-	if err := validateInput(vectors, cfg); err != nil {
+	dimensions, err := preflightInputShape(vectors, cfg, backend)
+	if err != nil {
 		return Artifact{}, phases, err
 	}
-	if isReferencePartitioner(backend) {
-		if err := ValidateReferenceInputShape(cfg, len(vectors), len(vectors[0].Values)); err != nil {
-			return Artifact{}, phases, err
-		}
+	if err := validateInput(vectors, dimensions); err != nil {
+		return Artifact{}, phases, err
 	}
 	v := append([]Vector(nil), vectors...)
 	sort.Slice(v, func(i, j int) bool { return v[i].ID < v[j].ID })
@@ -282,31 +281,43 @@ func sourceFor(v []Vector, metric, id string) Source {
 	return Source{SourceID: id, Checksum: hex.EncodeToString(h.Sum(nil)), Vectors: len(v), Dimensions: len(v[0].Values), Metric: metric}
 }
 
-func validateInput(v []Vector, c Config) error {
+// preflightInputShape derives the declared dimension from the first vector only
+// after count validation, then runs every selected-backend shape gate before
+// inspecting caller-owned IDs or scalar values. Later vectors are checked for
+// exactly this dimension before their values are read by validateInput.
+func preflightInputShape(v []Vector, c Config, backend Partitioner) (int, error) {
 	if err := ValidateConfig(c); err != nil {
-		return err
+		return 0, err
 	}
-	// Reject count-derived allocation abuse before examining a caller-owned
-	// element. Dimensions still require the post-scan shape validation below.
 	if len(v) < c.Partitions || len(v) > c.MaxVectors {
-		return errors.New("vector count outside configured bounds")
+		return 0, errors.New("vector count outside configured bounds")
 	}
-	dims := 0
+	dimensions := len(v[0].Values)
+	if err := ValidateInputShape(c, len(v), dimensions); err != nil {
+		return 0, err
+	}
+	if isReferencePartitioner(backend) {
+		if err := ValidateReferenceInputShape(c, len(v), dimensions); err != nil {
+			return 0, err
+		}
+	}
+	return dimensions, nil
+}
+
+// validateInput validates every vector after preflightInputShape has bounded
+// the aggregate shape. Dimension equality is intentionally checked before ID
+// or scalar inspection for each vector, preventing a heterogeneous later
+// vector from evading the declared-dimension bound.
+func validateInput(v []Vector, dimensions int) error {
 	totalIDBytes := 0
 	for _, x := range v {
+		if len(x.Values) != dimensions {
+			return errors.New("wrong vector dimension")
+		}
 		if x.ID == "" || !utf8.ValidString(x.ID) || len(x.ID) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(x.ID) {
 			return errors.New("empty vector ID")
 		}
 		totalIDBytes += len(x.ID)
-		if dims == 0 {
-			dims = len(x.Values)
-			if dims < 1 || dims > maxDimensions {
-				return errors.New("invalid vector dimensions")
-			}
-		}
-		if len(x.Values) != dims {
-			return errors.New("wrong vector dimension")
-		}
 		for _, n := range x.Values {
 			if !finite(n) {
 				return errors.New("non-finite vector value")
@@ -316,7 +327,7 @@ func validateInput(v []Vector, c Config) error {
 			return errors.New("zero-norm vector")
 		}
 	}
-	return ValidateInputShape(c, len(v), dims)
+	return nil
 }
 
 // ValidateConfig validates bounded offline builder options before corpus I/O.
