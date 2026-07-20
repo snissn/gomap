@@ -83,6 +83,16 @@ syncs any newly appended value-log bytes before publishing roots and
 `AppliedCommandLSN`, so a replay crash can safely retry without allocating a
 different RID or duplicating a logical record.
 
+The backend encoder independently enforces the same 64 KiB value, 1 MiB frame,
+and 256 total-operation bounds. Retaining `entry.Value` beside a pointer is not
+by itself permission to emit `SetMaterializedRID`. One-shot raw entry APIs must
+declare one of three append modes: relaxed, directly durable, or a grouped
+durable-prefix participant. Relaxed mode always emits the V1 `SetRID` fallback.
+A prefix participant may emit bounded V2 while appending an individually
+relaxed frame, but its caller must not acknowledge the mutation until a later
+durable-prefix barrier covers that frame. Reusable entry intents, whose eventual
+boundary is unknown, conservatively remain V1.
+
 ### `SetRID` fallback
 
 If any materialized value or the estimated frame exceeds the bounds above, or

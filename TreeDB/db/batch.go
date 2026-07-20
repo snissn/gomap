@@ -322,7 +322,7 @@ func (b *Batch) write(sync bool) error {
 			return err
 		}
 		var err error
-		intent, err = b.db.prepareRawKVCommandWALIntent(b)
+		intent, err = b.db.prepareRawKVCommandWALIntent(b, sync)
 		if err != nil {
 			return err
 		}
@@ -845,7 +845,7 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 		if err := b.db.runCommandWALRawPublishBarriers(); err != nil {
 			return err
 		}
-		intent, err = b.db.prepareRawKVCommandWALIntent(b)
+		intent, err = b.db.prepareRawKVCommandWALIntent(b, sync)
 		if err != nil {
 			return err
 		}

@@ -78,11 +78,11 @@ var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 const (
-	commandWALMaterializedRIDMaxValueBytes  = 64 << 10
-	commandWALMaterializedRIDMaxBatchBytes  = 1 << 20
-	commandWALMaterializedRIDMaxOps         = 256
+	commandWALMaterializedRIDMaxValueBytes  = backenddb.RawKVCommandWALMaterializedRIDMaxValueBytes
+	commandWALMaterializedRIDMaxBatchBytes  = backenddb.RawKVCommandWALMaterializedRIDMaxFrameBytes
+	commandWALMaterializedRIDMaxOps         = backenddb.RawKVCommandWALMaterializedRIDMaxOperations
 	commandWALDefaultMaxSegmentBytes        = 64 << 20
-	commandWALMaterializedRIDFrameReserve   = 256
+	commandWALMaterializedRIDFrameReserve   = backenddb.RawKVCommandWALMaterializedRIDFrameReserve
 	commandWALMaterializedRIDOpOverhead     = 17 + 8
 	commandWALMaterializedRIDVLogReserve    = 1 << 20
 	commandWALMaterializedRIDVLogOpOverhead = 64

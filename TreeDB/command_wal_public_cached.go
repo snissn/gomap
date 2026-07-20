@@ -18,6 +18,16 @@ func (tdb *DB) commandWALOrdinaryWriteRequiresSync() bool {
 	return tdb != nil && tdb.commandWALCached && tdb.resolvedProfile == ProfileCommandWALDurable
 }
 
+func publicRawKVCommandWALAppendMode(durable, appendSync bool) db.RawKVCommandWALAppendMode {
+	if appendSync {
+		return db.RawKVCommandWALAppendDurable
+	}
+	if durable {
+		return db.RawKVCommandWALAppendDurablePrefixParticipant
+	}
+	return db.RawKVCommandWALAppendRelaxed
+}
+
 func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []byte, assignRevision func() page.EntryRevision, sync bool, publication *publicCommandWALPublication) error {
 	if tdb == nil || !tdb.commandWALCached {
 		return nil
@@ -138,7 +148,7 @@ func (tdb *DB) appendPublicRawKVCommandEntries(entries []batch.Entry, sync bool,
 		return ErrClosed
 	}
 	result, err := tdb.appendAndRegisterPublicCommandWAL(len(entries)*64, nil, sync, nil, nil, nil, func(appendSync bool) (uint64, error) {
-		return tdb.backend.AppendRawKVCommandWALOrderedEntries(entries, appendSync)
+		return tdb.backend.AppendRawKVCommandWALOrderedEntriesWithMode(entries, publicRawKVCommandWALAppendMode(sync, appendSync))
 	})
 	if publication != nil {
 		*publication = result
@@ -154,7 +164,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Ent
 		return ErrClosed
 	}
 	result, err := tdb.appendAndRegisterPublicCommandWAL(opHint*64, nil, sync, nil, nil, nil, func(appendSync bool) (uint64, error) {
-		return tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHint(scanEntries, opHint, appendSync)
+		return tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintAndMode(scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
 	})
 	if publication != nil {
 		*publication = result
@@ -174,7 +184,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanMeasured(scanEntries func(func(b
 	result, err := tdb.appendAndRegisterPublicCommandWAL(opHint*64, nil, sync, &timing.PostAppendPendingLSNBookkeeping, &timing.GroupCommitWait, &timing.GroupCommitWaitObserved, func(appendSync bool) (uint64, error) {
 		var appendErr error
 		var lsn uint64
-		lsn, timing, appendErr = tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintMeasured(scanEntries, opHint, appendSync)
+		lsn, timing, appendErr = tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintAndModeMeasured(scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
 		return lsn, appendErr
 	})
 	if publication != nil {
@@ -192,7 +202,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanPrepared(prepare func() error, s
 		return ErrClosed
 	}
 	result, err := tdb.appendAndRegisterPublicCommandWAL(opHint*64, nil, sync, nil, nil, nil, func(appendSync bool) (uint64, error) {
-		return tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare, scanEntries, opHint, appendSync)
+		return tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndMode(prepare, scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
 	})
 	if publicationTicket != nil {
 		*publicationTicket = result.ticket
@@ -212,7 +222,7 @@ func (tdb *DB) appendPublicRawKVCommandEntryScanPreparedMeasured(prepare func() 
 	result, err := tdb.appendAndRegisterPublicCommandWAL(opHint*64, nil, sync, &timing.PostAppendPendingLSNBookkeeping, &timing.GroupCommitWait, &timing.GroupCommitWaitObserved, func(appendSync bool) (uint64, error) {
 		var appendErr error
 		var lsn uint64
-		lsn, timing, appendErr = tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedMeasured(prepare, scanEntries, opHint, appendSync)
+		lsn, timing, appendErr = tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHintPreparedAndModeMeasured(prepare, scanEntries, opHint, publicRawKVCommandWALAppendMode(sync, appendSync))
 		return lsn, appendErr
 	})
 	if publicationTicket != nil {

@@ -2145,7 +2145,13 @@ whose RID and bytes both match or appends the bytes under that exact RID before
 publishing the pointer. A present RID with different bytes is corruption.
 Materialized RID operations are self-contained and do not enter the external
 RID fence; `SetRID` operations in the same V2 payload retain the normal fence
-and stable dependency closure.
+and stable dependency closure. Live encoding selects V2 only through an
+explicit directly durable or durable-prefix-participant append mode and only
+within the shared 64 KiB/value, 1 MiB/frame, and 256-operation bounds. An
+ordinary relaxed append and a reusable intent with no declared final durability
+boundary use V1 even if pointer entries retain logical value bytes. A grouped
+participant's envelope remains individually relaxed; its later durable-prefix
+barrier is the acknowledgement boundary that stabilizes the preceding frame.
 
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
