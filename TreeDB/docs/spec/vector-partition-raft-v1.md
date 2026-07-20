@@ -16,8 +16,12 @@ Corrupt pointers, filenames, manifests, or catalog-group mappings fail closed.
 
 `VectorPartitionStatusV1.Ready` means the stored generation is complete.
 `Active` additionally requires it to be the active pointer target and source
-valid. M1 has no partition search readers, so `ReaderPins` is always zero; a
-later serving milestone must attach reader pins before exposing search.
+valid. M1 provides explicit in-process reader-pin handles; status and deletion
+observe those pins. `SnapshotReferences` and `CatalogReferences` remain
+trusted caller-supplied cleanup authority inputs: M1 does not infer external
+backup or catalog reachability. M7 owns durable catalog/cutover derivation.
+Raft archives are self-contained copies and do not pin live side-store files
+after export.
 
 ## Identity and placement
 
