@@ -360,7 +360,11 @@ func stageRaftSnapshotSyntheticReadyScaleForBenchmark(tb testing.TB, root string
 	if rows == 1_000_000 && len(raw) > rows*64 {
 		tb.Fatalf("synthetic ready manifest=%d bytes exceeds 64 B/vector", len(raw))
 	}
-	path := filepath.Join(root, "vector_partitions", "docs-embedding-7.vpm")
+	paths, err := filepath.Glob(filepath.Join(root, "vector_partitions", "*.vpm"))
+	if err != nil || len(paths) != 1 {
+		tb.Fatalf("synthetic ready fixture manifests=%v err=%v want one", paths, err)
+	}
+	path := paths[0]
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		tb.Fatal(err)
 	}
