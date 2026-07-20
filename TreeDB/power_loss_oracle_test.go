@@ -350,7 +350,7 @@ func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
 	currentTargetSequence := baseSequence
 	currentTargetState := baseState
 	latestSealedSequence := baseSequence
-	currentAppliedLSN := uint64(1)
+	currentAppliedLSN := publicAppliedCommandLSN(t, db)
 	sealWriteObserved := false
 	var dependencyPaths []string
 	var commandFrames []observedPowerLossCommandFrame
@@ -1596,6 +1596,15 @@ func publicCommitSequence(t *testing.T, db *treedb.DB) uint64 {
 		t.Fatalf("parse public commit sequence: %v", err)
 	}
 	return sequence
+}
+
+func publicAppliedCommandLSN(t *testing.T, db *treedb.DB) uint64 {
+	t.Helper()
+	applied, err := strconv.ParseUint(db.Stats()["treedb.applied_command_lsn"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse public applied command LSN: %v", err)
+	}
+	return applied
 }
 
 func validateActualCutReopen(t *testing.T, model *powerlossoracle.Model, opts treedb.Options, cut powerlossoracle.CutPoint, occurrence int, readOnly bool, generations []powerlossoracle.Generation, latestSealedSequence uint64, expectedByAppliedLSN map[uint64]map[string]map[string]string, observedCommandFrames []observedPowerLossCommandFrame, durableSequence uint64, durableAcknowledged bool) {

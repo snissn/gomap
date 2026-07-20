@@ -13,9 +13,11 @@ import (
 func TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
+		Dir:                              dir,
+		Durability:                       treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog:       true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 		},
@@ -57,9 +59,11 @@ func TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan(t *testing.T) {
 func TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
+		Dir:                              dir,
+		Durability:                       treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog:       true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 		},
@@ -101,9 +105,11 @@ func TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack(t *testing.T) {
 func TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
+		Dir:                              dir,
+		Durability:                       treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog:       true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 		},
@@ -142,9 +148,11 @@ func TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError(t 
 func TestLeafGenerationPackRunOnce_CachedModeCheckpointsBeforeSkip(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{
-		Dir:                        dir,
-		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeavesInValueLog: true,
+		Dir:                              dir,
+		Durability:                       treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog:       true,
+		BackgroundCheckpointInterval:     -1,
+		BackgroundCheckpointIdleDuration: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 		},

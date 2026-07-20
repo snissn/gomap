@@ -28,11 +28,14 @@ func TestConcurrentDurableMatrix(t *testing.T) {
 
 func TestCounterSchemaIncludesAttributionBoundaries(t *testing.T) {
 	want := map[string]bool{
-		"iterator_snapshot_rotations/lookup": false,
-		"iterator_sources/lookup":            false,
-		"command_wal_syncs/write_commit":     false,
-		"value_log_syncs/write_commit":       false,
-		"checkpoints/write_commit":           false,
+		"iterator_snapshot_rotations/lookup":       false,
+		"iterator_sources/lookup":                  false,
+		"command_wal_syncs/write_commit":           false,
+		"command_wal_group_acks/write_commit":      false,
+		"command_wal_group_syncs/write_commit":     false,
+		"command_wal_group_fallbacks/write_commit": false,
+		"value_log_syncs/write_commit":             false,
+		"checkpoints/write_commit":                 false,
 	}
 	for _, metric := range storeCounterMetrics {
 		if _, ok := want[metric.name]; ok {
