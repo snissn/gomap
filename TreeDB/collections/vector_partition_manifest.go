@@ -663,43 +663,251 @@ const (
 	vectorPartitionStoreMaxEntriesV1 = 4096
 	vectorPartitionStoreMaxBytesV1   = 64 << 20
 	vectorPartitionReclaimMagicV1    = "VPR1"
+	vectorPartitionReclaimVersionV1  = 1
+	vectorPartitionReclaimMaxRefsV1  = 1 << 19
+	vectorPartitionReclaimMaxBytesV1 = vectorPartitionStoreMaxBytesV1
 )
 
-// A reclaim record retains the complete canonical manifest until the dedicated
-// maintenance transaction proves that its physical ranges are gone. The hash
-// binds the record bytes before they are permitted to affect reachability.
-func encodeVectorPartitionReclaimRecordV1(m VectorPartitionManifestV1) ([]byte, error) {
-	raw, err := EncodeVectorPartitionManifestV1(m)
+// vectorPartitionReclaimStateV1 is a bounded durable deletion journal. Original
+// refs are copied from the generation manifest before that manifest is removed.
+// Superseded refs are added before a mixed-segment rewrite may publish its
+// remap, so a restart never loses the old live ranges that GC must retire.
+type vectorPartitionReclaimStateV1 struct {
+	Collection, IndexName string
+	Generation            uint64
+	OriginalRefs          []ColumnAssetRef
+	SupersededRefs        []ColumnAssetRef
+}
+
+var vectorPartitionReclaimPersistHooksV1 struct {
+	sync.RWMutex
+	beforeRename func(string, vectorPartitionReclaimStateV1) error
+	afterCommit  func(string, vectorPartitionReclaimStateV1) error
+}
+
+func setVectorPartitionReclaimPersistHooksForTestV1(beforeRename, afterCommit func(string, vectorPartitionReclaimStateV1) error) func() {
+	vectorPartitionReclaimPersistHooksV1.Lock()
+	oldBefore := vectorPartitionReclaimPersistHooksV1.beforeRename
+	oldAfter := vectorPartitionReclaimPersistHooksV1.afterCommit
+	vectorPartitionReclaimPersistHooksV1.beforeRename = beforeRename
+	vectorPartitionReclaimPersistHooksV1.afterCommit = afterCommit
+	vectorPartitionReclaimPersistHooksV1.Unlock()
+	return func() {
+		vectorPartitionReclaimPersistHooksV1.Lock()
+		vectorPartitionReclaimPersistHooksV1.beforeRename = oldBefore
+		vectorPartitionReclaimPersistHooksV1.afterCommit = oldAfter
+		vectorPartitionReclaimPersistHooksV1.Unlock()
+	}
+}
+
+func vectorPartitionReclaimRefsFromManifestV1(m VectorPartitionManifestV1) []ColumnAssetRef {
+	refs := make([]ColumnAssetRef, 0, len(m.Assets)+1)
+	for _, asset := range m.Assets {
+		refs = append(refs, asset.Ref)
+	}
+	if m.RouterAsset.Ref.Kind != "" {
+		refs = append(refs, m.RouterAsset.Ref)
+	}
+	return refs
+}
+
+func newVectorPartitionReclaimStateV1(m VectorPartitionManifestV1) (vectorPartitionReclaimStateV1, error) {
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+		return vectorPartitionReclaimStateV1{}, err
+	}
+	return canonicalVectorPartitionReclaimStateV1(vectorPartitionReclaimStateV1{
+		Collection:   m.Collection,
+		IndexName:    m.IndexName,
+		Generation:   m.Generation,
+		OriginalRefs: vectorPartitionReclaimRefsFromManifestV1(m),
+	})
+}
+
+func canonicalVectorPartitionReclaimStateV1(state vectorPartitionReclaimStateV1) (vectorPartitionReclaimStateV1, error) {
+	limits := DefaultVectorPartitionManifestLimits()
+	if state.Collection == "" || state.IndexName == "" || state.Generation == 0 || len(state.Collection) > limits.MaxStringBytes || len(state.IndexName) > limits.MaxStringBytes {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
+	}
+	if len(state.OriginalRefs) == 0 || len(state.OriginalRefs) > vectorPartitionReclaimMaxRefsV1 || len(state.SupersededRefs) > vectorPartitionReclaimMaxRefsV1-len(state.OriginalRefs) {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record ref count", ErrVectorPartitionManifestInvalid)
+	}
+	canonicalize := func(refs []ColumnAssetRef) ([]ColumnAssetRef, error) {
+		out := append([]ColumnAssetRef(nil), refs...)
+		for _, ref := range out {
+			if err := validateColumnAssetRefForPlan(ref); err != nil {
+				return nil, fmt.Errorf("%w: reclaim record ref: %v", ErrVectorPartitionManifestInvalid, err)
+			}
+			if len(ref.Kind) > limits.MaxStringBytes || len(ref.Namespace) > limits.MaxStringBytes || ref.Offset > math.MaxInt64-ref.Length {
+				return nil, fmt.Errorf("%w: reclaim record ref bounds", ErrVectorPartitionManifestInvalid)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return compareColumnAssetRefs(out[i], out[j]) < 0 })
+		write := 0
+		for _, ref := range out {
+			if write != 0 && compareColumnAssetRefs(out[write-1], ref) == 0 {
+				continue
+			}
+			out[write] = ref
+			write++
+		}
+		return out[:write], nil
+	}
+	var err error
+	state.OriginalRefs, err = canonicalize(state.OriginalRefs)
+	if err != nil {
+		return vectorPartitionReclaimStateV1{}, err
+	}
+	state.SupersededRefs, err = canonicalize(state.SupersededRefs)
+	if err != nil {
+		return vectorPartitionReclaimStateV1{}, err
+	}
+	original := make(map[ColumnAssetRef]struct{}, len(state.OriginalRefs))
+	namespace := state.OriginalRefs[0].Namespace
+	for _, ref := range state.OriginalRefs {
+		if ref.Namespace != namespace {
+			return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record namespace", ErrVectorPartitionManifestInvalid)
+		}
+		original[ref] = struct{}{}
+	}
+	write := 0
+	for _, ref := range state.SupersededRefs {
+		if ref.Namespace != namespace {
+			return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record namespace", ErrVectorPartitionManifestInvalid)
+		}
+		if _, duplicate := original[ref]; duplicate {
+			continue
+		}
+		state.SupersededRefs[write] = ref
+		write++
+	}
+	state.SupersededRefs = state.SupersededRefs[:write]
+	return state, nil
+}
+
+func vectorPartitionReclaimStateEncodedSizeV1(state vectorPartitionReclaimStateV1) (int, error) {
+	total := uint64(12 + sha256.Size) // magic, version, payload length, checksum
+	add := func(n uint64) error {
+		if n > vectorPartitionReclaimMaxBytesV1 || total > vectorPartitionReclaimMaxBytesV1-n {
+			return fmt.Errorf("%w: reclaim record bytes cap", ErrVectorPartitionManifestInvalid)
+		}
+		total += n
+		return nil
+	}
+	if err := add(4 + uint64(len(state.Collection))); err != nil {
+		return 0, err
+	}
+	if err := add(4 + uint64(len(state.IndexName)) + 8 + 4 + 4); err != nil {
+		return 0, err
+	}
+	for _, refs := range [][]ColumnAssetRef{state.OriginalRefs, state.SupersededRefs} {
+		for _, ref := range refs {
+			if err := add(4 + uint64(len(ref.Kind)) + 4 + uint64(len(ref.Namespace)) + 8 + 8 + 4 + 8 + 8 + 4); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return int(total), nil
+}
+
+// The checksum binds the header, format version, and canonical payload before
+// decoded refs are allowed to influence reachability or deletion.
+func encodeVectorPartitionReclaimRecordV1(input vectorPartitionReclaimStateV1) ([]byte, error) {
+	state, err := canonicalVectorPartitionReclaimStateV1(input)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > DefaultVectorPartitionManifestLimits().MaxBytes {
-		return nil, fmt.Errorf("%w: reclaim record bytes cap", ErrVectorPartitionManifestInvalid)
+	size, err := vectorPartitionReclaimStateEncodedSizeV1(state)
+	if err != nil {
+		return nil, err
 	}
-	sum := sha256.Sum256(raw)
-	out := make([]byte, 0, 8+len(raw)+len(sum))
+	payload := bytes.NewBuffer(make([]byte, 0, size-12-sha256.Size))
+	putStringVPM(payload, state.Collection)
+	putStringVPM(payload, state.IndexName)
+	putU64VPM(payload, state.Generation)
+	putU32VPM(payload, uint32(len(state.OriginalRefs)))
+	for _, ref := range state.OriginalRefs {
+		putColumnAssetRefVPM(payload, ref)
+	}
+	putU32VPM(payload, uint32(len(state.SupersededRefs)))
+	for _, ref := range state.SupersededRefs {
+		putColumnAssetRefVPM(payload, ref)
+	}
+	out := make([]byte, 0, size)
 	out = append(out, vectorPartitionReclaimMagicV1...)
-	var length [4]byte
-	binary.BigEndian.PutUint32(length[:], uint32(len(raw)))
-	out = append(out, length[:]...)
-	out = append(out, raw...)
+	var field [4]byte
+	binary.BigEndian.PutUint32(field[:], vectorPartitionReclaimVersionV1)
+	out = append(out, field[:]...)
+	binary.BigEndian.PutUint32(field[:], uint32(payload.Len()))
+	out = append(out, field[:]...)
+	out = append(out, payload.Bytes()...)
+	sum := sha256.Sum256(out)
 	out = append(out, sum[:]...)
 	return out, nil
 }
-func decodeVectorPartitionReclaimRecordV1(raw []byte) (VectorPartitionManifestV1, error) {
-	if len(raw) < 8+sha256.Size || string(raw[:4]) != vectorPartitionReclaimMagicV1 {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record header", ErrVectorPartitionManifestInvalid)
+
+func decodeVectorPartitionReclaimRecordV1(raw []byte) (vectorPartitionReclaimStateV1, error) {
+	if len(raw) < 12+sha256.Size || len(raw) > vectorPartitionReclaimMaxBytesV1 || string(raw[:4]) != vectorPartitionReclaimMagicV1 {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record header", ErrVectorPartitionManifestInvalid)
 	}
-	n := int(binary.BigEndian.Uint32(raw[4:8]))
-	if n < 1 || n > DefaultVectorPartitionManifestLimits().MaxBytes || len(raw) != 8+n+sha256.Size {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record length", ErrVectorPartitionManifestInvalid)
+	if binary.BigEndian.Uint32(raw[4:8]) != vectorPartitionReclaimVersionV1 {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record version", ErrVectorPartitionManifestInvalid)
 	}
-	payload := raw[8 : 8+n]
-	sum := sha256.Sum256(payload)
-	if !bytes.Equal(sum[:], raw[8+n:]) {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record checksum", ErrVectorPartitionManifestInvalid)
+	n := uint64(binary.BigEndian.Uint32(raw[8:12]))
+	if n == 0 || n > uint64(vectorPartitionReclaimMaxBytesV1-12-sha256.Size) || uint64(len(raw)) != 12+n+sha256.Size {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record length", ErrVectorPartitionManifestInvalid)
 	}
-	return DecodeVectorPartitionManifestV1(payload, DefaultVectorPartitionManifestLimits())
+	sum := sha256.Sum256(raw[:12+int(n)])
+	if !bytes.Equal(sum[:], raw[12+int(n):]) {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record checksum", ErrVectorPartitionManifestInvalid)
+	}
+	r := vpmReader{b: raw[12 : 12+int(n)], l: VectorPartitionManifestLimits{MaxStringBytes: DefaultVectorPartitionManifestLimits().MaxStringBytes}}
+	state := vectorPartitionReclaimStateV1{Collection: r.str(), IndexName: r.str(), Generation: r.u64()}
+	originalCount := r.count(vectorPartitionReclaimMaxRefsV1)
+	const minEncodedColumnAssetRefBytes = 48
+	if r.err == nil && (originalCount > (len(r.b)-r.off)/minEncodedColumnAssetRefBytes || len(r.b)-r.off-originalCount*minEncodedColumnAssetRefBytes < 4) {
+		r.err = errors.New("ref count exceeds remaining bytes")
+	}
+	if r.err == nil {
+		state.OriginalRefs = make([]ColumnAssetRef, originalCount)
+		for i := range state.OriginalRefs {
+			state.OriginalRefs[i] = r.columnRef()
+		}
+	}
+	supersededCount := r.count(vectorPartitionReclaimMaxRefsV1 - len(state.OriginalRefs))
+	if r.err == nil && supersededCount > (len(r.b)-r.off)/minEncodedColumnAssetRefBytes {
+		r.err = errors.New("ref count exceeds remaining bytes")
+	}
+	if r.err == nil {
+		state.SupersededRefs = make([]ColumnAssetRef, supersededCount)
+		for i := range state.SupersededRefs {
+			state.SupersededRefs[i] = r.columnRef()
+		}
+	}
+	if r.err != nil || r.off != len(r.b) {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record truncated, over-cap, or trailing: %v", ErrVectorPartitionManifestInvalid, r.err)
+	}
+	canonical, err := canonicalVectorPartitionReclaimStateV1(state)
+	if err != nil {
+		return vectorPartitionReclaimStateV1{}, err
+	}
+	encoded, err := encodeVectorPartitionReclaimRecordV1(canonical)
+	if err != nil || !bytes.Equal(encoded, raw) {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: noncanonical reclaim record", ErrVectorPartitionManifestInvalid)
+	}
+	return canonical, nil
+}
+
+func (state vectorPartitionReclaimStateV1) debtRefs() []ColumnAssetRef {
+	refs := make([]ColumnAssetRef, 0, len(state.OriginalRefs)+len(state.SupersededRefs))
+	refs = append(refs, state.OriginalRefs...)
+	refs = append(refs, state.SupersededRefs...)
+	return refs
+}
+
+func (state vectorPartitionReclaimStateV1) clone() vectorPartitionReclaimStateV1 {
+	state.OriginalRefs = append([]ColumnAssetRef(nil), state.OriginalRefs...)
+	state.SupersededRefs = append([]ColumnAssetRef(nil), state.SupersededRefs...)
+	return state
 }
 
 func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[string]struct{}) ([]ColumnAssetRef, []ColumnAssetRef, error) {
@@ -721,6 +929,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 	byIndex := make(map[string][]VectorPartitionManifestV1)
 	prefix := safeVPM(c.name) + "-"
 	var totalBytes int64
+	var reclaimBytes int64
 	var relevant int
 	var reclaimPrepared []ColumnAssetRef
 	activeNames := make(map[string]struct{})
@@ -750,18 +959,20 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[str
 				continue
 			}
 			if strings.HasSuffix(entry.Name(), ".deleting") {
-				raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes+64)
+				raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), vectorPartitionReclaimMaxBytesV1)
 				if err != nil {
 					return nil, nil, err
 				}
+				if reclaimBytes > vectorPartitionStoreMaxBytesV1-int64(len(raw)) {
+					return nil, nil, fmt.Errorf("collections: vector partition reclaim bytes cap")
+				}
+				reclaimBytes += int64(len(raw))
 				reclaim, err := decodeVectorPartitionReclaimRecordV1(raw)
 				if err != nil || reclaim.Collection != c.name || entry.Name() != s.deleteTombstoneName(reclaim.Collection, reclaim.IndexName, reclaim.Generation) {
 					return nil, nil, fmt.Errorf("collections: invalid vector partition reclaim record %q", entry.Name())
 				}
 				if _, releasing := releaseReclaimIDs[entry.Name()]; !releasing {
-					for _, asset := range append(append([]VectorPartitionAssetV1(nil), reclaim.Assets...), reclaim.RouterAsset) {
-						reclaimPrepared = append(reclaimPrepared, asset.Ref)
-					}
+					reclaimPrepared = append(reclaimPrepared, reclaim.debtRefs()...)
 				}
 				continue
 			}
@@ -1225,8 +1436,19 @@ func (s *VectorPartitionStoreV1) deleteTombstoneName(collection, index string, g
 	return fmt.Sprintf("%s-%s-%d.deleting", safeVPM(collection), safeVPM(index), generation)
 }
 func (s *VectorPartitionStoreV1) writeDeleteTombstone(m VectorPartitionManifestV1) error {
-	tombstone := s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)
-	raw, err := encodeVectorPartitionReclaimRecordV1(m)
+	state, err := newVectorPartitionReclaimStateV1(m)
+	if err != nil {
+		return err
+	}
+	return s.writeDeleteTombstoneState(state)
+}
+func (s *VectorPartitionStoreV1) writeDeleteTombstoneState(input vectorPartitionReclaimStateV1) error {
+	state, err := canonicalVectorPartitionReclaimStateV1(input)
+	if err != nil {
+		return err
+	}
+	tombstone := s.deleteTombstonePath(state.Collection, state.IndexName, state.Generation)
+	raw, err := encodeVectorPartitionReclaimRecordV1(state)
 	if err != nil {
 		return err
 	}
@@ -1241,26 +1463,41 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstone(m VectorPartitionManifestV
 	if err = syncFileVPM(tmp); err != nil {
 		return err
 	}
-	if err = os.Link(tmp, tombstone); err != nil && !errors.Is(err, os.ErrExist) {
+	vectorPartitionReclaimPersistHooksV1.RLock()
+	beforeRename := vectorPartitionReclaimPersistHooksV1.beforeRename
+	afterCommit := vectorPartitionReclaimPersistHooksV1.afterCommit
+	vectorPartitionReclaimPersistHooksV1.RUnlock()
+	if beforeRename != nil {
+		if err := beforeRename(tombstone, state); err != nil {
+			return err
+		}
+	}
+	if err = os.Rename(tmp, tombstone); err != nil {
 		return err
 	}
-	return syncDirVPM(s.dir)
+	if err = syncDirVPM(s.dir); err != nil {
+		return err
+	}
+	if afterCommit != nil {
+		return afterCommit(tombstone, state)
+	}
+	return nil
 }
-func (s *VectorPartitionStoreV1) openDeleteTombstone(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
-	raw, err := readBoundedVPM(s.deleteTombstonePath(collection, index, generation), DefaultVectorPartitionManifestLimits().MaxBytes+64)
+func (s *VectorPartitionStoreV1) openDeleteTombstone(collection, index string, generation uint64) (vectorPartitionReclaimStateV1, error) {
+	raw, err := readBoundedVPM(s.deleteTombstonePath(collection, index, generation), vectorPartitionReclaimMaxBytesV1)
 	if err != nil {
-		return VectorPartitionManifestV1{}, err
+		return vectorPartitionReclaimStateV1{}, err
 	}
-	m, err := decodeVectorPartitionReclaimRecordV1(raw)
-	if err != nil || m.Collection != collection || m.IndexName != index || m.Generation != generation {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
+	state, err := decodeVectorPartitionReclaimRecordV1(raw)
+	if err != nil || state.Collection != collection || state.IndexName != index || state.Generation != generation {
+		return vectorPartitionReclaimStateV1{}, fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
 	}
-	return m, nil
+	return state, nil
 }
 
 type vectorPartitionReclaimRecordV1 struct {
-	id string
-	m  VectorPartitionManifestV1
+	id    string
+	state vectorPartitionReclaimStateV1
 }
 
 func (s *VectorPartitionStoreV1) reclaimRecords(collection string) ([]vectorPartitionReclaimRecordV1, error) {
@@ -1271,6 +1508,7 @@ func (s *VectorPartitionStoreV1) reclaimRecords(collection string) ([]vectorPart
 	defer dir.Close()
 	prefix := safeVPM(collection) + "-"
 	var records []vectorPartitionReclaimRecordV1
+	var totalBytes int64
 	for {
 		entries, readErr := dir.ReadDir(64)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
@@ -1283,28 +1521,116 @@ func (s *VectorPartitionStoreV1) reclaimRecords(collection string) ([]vectorPart
 			if len(records) >= vectorPartitionStoreMaxEntriesV1 {
 				return nil, fmt.Errorf("collections: vector partition reclaim record cap")
 			}
-			raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes+64)
+			raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), vectorPartitionReclaimMaxBytesV1)
 			if err != nil {
 				return nil, err
 			}
-			m, err := decodeVectorPartitionReclaimRecordV1(raw)
-			if err != nil || m.Collection != collection || entry.Name() != s.deleteTombstoneName(m.Collection, m.IndexName, m.Generation) {
+			if totalBytes > vectorPartitionStoreMaxBytesV1-int64(len(raw)) {
+				return nil, fmt.Errorf("collections: vector partition reclaim bytes cap")
+			}
+			totalBytes += int64(len(raw))
+			state, err := decodeVectorPartitionReclaimRecordV1(raw)
+			if err != nil || state.Collection != collection || entry.Name() != s.deleteTombstoneName(state.Collection, state.IndexName, state.Generation) {
 				return nil, fmt.Errorf("%w: reclaim record", ErrVectorPartitionManifestInvalid)
 			}
-			records = append(records, vectorPartitionReclaimRecordV1{id: entry.Name(), m: m})
+			records = append(records, vectorPartitionReclaimRecordV1{id: entry.Name(), state: state})
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 	}
+	sort.Slice(records, func(i, j int) bool { return records[i].id < records[j].id })
 	return records, nil
+}
+
+func vectorPartitionReclaimRefsEqualV1(a, b []ColumnAssetRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+type vectorPartitionReclaimSegmentKeyV1 struct {
+	namespace string
+	fileID    uint32
+}
+
+func (s *VectorPartitionStoreV1) persistVectorPartitionRewriteDebtV1(records []vectorPartitionReclaimRecordV1, oldRefs []ColumnAssetRef) error {
+	if len(oldRefs) == 0 {
+		return nil
+	}
+	updates := make([]vectorPartitionReclaimStateV1, len(records))
+	changed := make([]bool, len(records))
+	recordsBySegment := make(map[vectorPartitionReclaimSegmentKeyV1][]int)
+	for i := range records {
+		seen := make(map[vectorPartitionReclaimSegmentKeyV1]struct{})
+		for _, ref := range records[i].state.debtRefs() {
+			key := vectorPartitionReclaimSegmentKeyV1{namespace: ref.Namespace, fileID: ref.FileID}
+			if _, duplicate := seen[key]; duplicate {
+				continue
+			}
+			seen[key] = struct{}{}
+			recordsBySegment[key] = append(recordsBySegment[key], i)
+		}
+	}
+	for _, oldRef := range oldRefs {
+		key := vectorPartitionReclaimSegmentKeyV1{namespace: oldRef.Namespace, fileID: oldRef.FileID}
+		indexes := recordsBySegment[key]
+		if len(indexes) == 0 {
+			return fmt.Errorf("%w: rewrite ref has no reclaim segment", ErrVectorPartitionManifestInvalid)
+		}
+		for _, i := range indexes {
+			if updates[i].Collection == "" {
+				updates[i] = records[i].state.clone()
+			}
+			updates[i].SupersededRefs = append(updates[i].SupersededRefs, oldRef)
+		}
+	}
+	for i := range records {
+		if updates[i].Collection == "" {
+			updates[i] = records[i].state.clone()
+		}
+		canonical, err := canonicalVectorPartitionReclaimStateV1(updates[i])
+		if err != nil {
+			return err
+		}
+		updates[i] = canonical
+		changed[i] = !vectorPartitionReclaimRefsEqualV1(canonical.SupersededRefs, records[i].state.SupersededRefs)
+	}
+	var updatedBytes int64
+	for i := range updates {
+		raw, err := encodeVectorPartitionReclaimRecordV1(updates[i])
+		if err != nil {
+			return err
+		}
+		if updatedBytes > vectorPartitionStoreMaxBytesV1-int64(len(raw)) {
+			return fmt.Errorf("%w: reclaim records exceed store bytes cap", ErrVectorPartitionManifestInvalid)
+		}
+		updatedBytes += int64(len(raw))
+	}
+	for i := range records {
+		if !changed[i] {
+			continue
+		}
+		if err := s.writeDeleteTombstoneState(updates[i]); err != nil {
+			return err
+		}
+		records[i].state = updates[i]
+	}
+	return nil
 }
 
 // ReclaimVectorPartitionGenerationV1 is the only path that releases a
 // persisted partition reclaim record. It holds the collection mutation barrier
 // throughout rewrite and GC, excludes only this exact record from VPM prepared
-// roots, and removes the record only after every original range's segment is
-// physically absent. All errors leave the checksummed record durable for retry.
+// roots, journals every old live ref before remap publication, and removes the
+// record only after every original and superseded segment is physically absent.
+// All errors leave a checksummed, canonical record durable for retry.
 func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, index string, generation uint64) (ColumnAssetGCStats, error) {
 	var zero ColumnAssetGCStats
 	if c == nil || c.db == nil {
@@ -1335,25 +1661,38 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		}
 		reclaimIDs := make(map[string]struct{}, len(records))
 		refs := make([]ColumnAssetRef, 0, len(records)*2)
+		expectedNamespace := ""
+		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
+			expectedNamespace = cfg.AssetManager.Namespace
+		}
+		if expectedNamespace == "" {
+			return errors.New("collections: vector partition reclaim requires column asset namespace")
+		}
 		requestedID := s.deleteTombstoneName(c.name, index, generation)
 		requestedComplete := false
 		for _, record := range records {
 			reclaimIDs[record.id] = struct{}{}
-			for _, asset := range record.m.Assets {
-				refs = append(refs, asset.Ref)
-			}
-			if record.m.RouterAsset.Ref.Kind != "" {
-				refs = append(refs, record.m.RouterAsset.Ref)
+			for _, ref := range record.state.debtRefs() {
+				if ref.Namespace != expectedNamespace {
+					return fmt.Errorf("%w: reclaim record collection namespace", ErrVectorPartitionManifestInvalid)
+				}
+				refs = append(refs, ref)
 			}
 		}
 		rewrite, err := c.columnAssetRewrite(ctx, columnAssetRewriteOptions{
-			ColumnAssetRewriteOptions:        ColumnAssetRewriteOptions{CandidateRefs: refs},
+			ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{CandidateRefs: refs},
+			beforeRemapPublish: func(oldRefs []ColumnAssetRef) error {
+				return s.persistVectorPartitionRewriteDebtV1(records, oldRefs)
+			},
 			releaseVectorPartitionReclaimIDs: reclaimIDs,
 		})
 		if err != nil {
 			return err
 		}
-		candidates := append(refs, rewrite.SupersededRefs...)
+		candidates := make([]ColumnAssetRef, 0, len(refs)+len(rewrite.SupersededRefs))
+		for _, record := range records {
+			candidates = append(candidates, record.state.debtRefs()...)
+		}
 		stats, err := c.columnAssetGC(ctx, ColumnAssetGCOptions{
 			CandidateRefs:                    candidates,
 			releaseVectorPartitionReclaimIDs: reclaimIDs,
@@ -1363,12 +1702,8 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		}
 		for _, record := range records {
 			complete := true
-			assets := append([]VectorPartitionAssetV1(nil), record.m.Assets...)
-			if record.m.RouterAsset.Ref.Kind != "" {
-				assets = append(assets, record.m.RouterAsset)
-			}
-			for _, asset := range assets {
-				path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
+			for _, ref := range record.state.debtRefs() {
+				path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
 				if err != nil {
 					return err
 				}
@@ -1387,11 +1722,11 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 				}
 			}
 		}
-		if !requestedComplete {
-			return fmt.Errorf("collections: vector partition reclaim generation %d not physically complete", generation)
-		}
 		if err := syncDirVPM(s.dir); err != nil {
 			return err
+		}
+		if !requestedComplete {
+			return fmt.Errorf("collections: vector partition reclaim generation %d not physically complete", generation)
 		}
 		zero = stats
 		return nil

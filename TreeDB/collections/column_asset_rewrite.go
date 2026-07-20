@@ -35,8 +35,11 @@ type ColumnAssetRewriteOptions struct {
 
 type columnAssetRewriteOptions struct {
 	ColumnAssetRewriteOptions
-	afterCopyHookForTest             func() error
-	afterPrePublishHookForTest       func() error
+	afterCopyHookForTest       func() error
+	afterPrePublishHookForTest func() error
+	// beforeRemapPublish receives the complete old-ref set after copying and
+	// preflight, while an error can still guarantee that no remap is published.
+	beforeRemapPublish               func([]ColumnAssetRef) error
 	releaseVectorPartitionReclaimIDs map[string]struct{}
 }
 
@@ -237,6 +240,16 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 			return stats, err
 		}
+	}
+	if opts.beforeRemapPublish != nil {
+		if err := opts.beforeRemapPublish(slices.Clone(remap.oldRefs)); err != nil {
+			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+			return stats, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, err
 	}
 
 	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecordsInPlace(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)

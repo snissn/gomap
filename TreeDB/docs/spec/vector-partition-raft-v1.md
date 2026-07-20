@@ -205,6 +205,16 @@ an old complete pointer or a new complete pointer, never a partial generation.
 Raft snapshot archives include `db/vector_partitions`. Deletion requires an
 explicit proof that the generation is inactive and has no reader pin, snapshot
 reference, or catalog reference; M1 does not infer those external references.
+Before removing the generation manifest, deletion durably replaces it with a
+bounded, versioned, canonical, checksummed reclaim journal containing every
+original asset ref. If an original ref shares a physical segment with a live
+column-manifest ref, the mixed-segment rewrite write-sync-renames the journal
+with those superseded live refs and syncs its directory before the remap may be
+published. A persistence error, or cancellation observed before remap
+publication, leaves the old manifest mapping authoritative. Recovery retries
+with both original and superseded refs, and retains the journal until all of
+their segment debt is physically absent; the durable-root fallback generation
+can therefore delay, but never bypass, deletion.
 
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins

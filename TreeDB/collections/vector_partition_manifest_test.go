@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -347,6 +348,268 @@ func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.
 	}
 }
 
+func prepareMixedVectorPartitionReclaimV1(t *testing.T, generation uint64) (string, *backenddb.DB, *Collection, *VectorPartitionStoreV1, []ColumnAssetRef, ColumnAssetRef, string) {
+	t.Helper()
+	requireColumnAssetExactDestructiveGCTest(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	liveRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(liveRefs) == 0 {
+		t.Fatal("mixed reclaim test requires live manifest refs")
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, generation+100, 99)
+	if candidate.FileID != liveRefs[0].FileID {
+		t.Fatalf("candidate file_id=%d live file_id=%d, test requires a mixed segment", candidate.FileID, liveRefs[0].FileID)
+	}
+	for _, ref := range liveRefs {
+		if ref.FileID != candidate.FileID {
+			t.Fatalf("live ref file_id=%d candidate file_id=%d, test requires one mixed segment", ref.FileID, candidate.FileID)
+		}
+	}
+	store, err := OpenVectorPartitionStoreV1(d.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishDeletedVectorPartitionReclaimCandidateV1(t, d, col, store, candidate, generation)
+	segmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, d, col, store, liveRefs, candidate, segmentPath
+}
+
+func publishDeletedVectorPartitionReclaimCandidateV1(t *testing.T, d *backenddb.DB, col *Collection, store *VectorPartitionStoreV1, candidate ColumnAssetRef, generation uint64) {
+	t.Helper()
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("read candidate: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	m := testVectorPartitionManifestV1()
+	m.Collection = col.name
+	m.State = "building"
+	m.SourceRowCount = 1
+	m.Generation = generation
+	m.RouterGeneration = 0
+	m.PartitionCount = 1
+	m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
+	m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+	m.OverlapMemberships = nil
+	m.Representatives = nil
+	m.Assets = []VectorPartitionAssetV1{{
+		ID:          "partition/0",
+		PartitionID: 0,
+		Checksum:    hex.EncodeToString(sum[:]),
+		Bytes:       uint64(candidate.Length),
+		Ref:         candidate,
+	}}
+	m.RouterAsset = VectorPartitionAssetV1{}
+	m.ReadySetDigest = ""
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatalf("mixed reclaim manifest: %v", err)
+	}
+	if err := store.Publish(m); err != nil {
+		t.Fatalf("publish mixed reclaim manifest: %v", err)
+	}
+	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatalf("delete mixed reclaim manifest: %v", err)
+	}
+}
+
+func TestCollectionVectorPartitionReclaimV1PersistsMixedDebtAcrossReopenAndFallbackAdvance(t *testing.T) {
+	dir, d, col, store, beforeRefs, candidate, oldSegmentPath := prepareMixedVectorPartitionReclaimV1(t, 31)
+	dClosed := false
+	defer func() {
+		if !dClosed {
+			_ = d.Close()
+		}
+	}()
+
+	if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 31); err == nil || !strings.Contains(err.Error(), "not physically complete") {
+		t.Fatalf("first reclaim err=%v, want durable-fallback incomplete", err)
+	}
+	afterRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	assertColumnAssetRefsRemappedM15C(t, beforeRefs, afterRefs)
+	state, err := store.openDeleteTombstone(col.name, "embedding", 31)
+	if err != nil {
+		t.Fatalf("open persisted reclaim state: %v", err)
+	}
+	if len(state.OriginalRefs) != 1 || state.OriginalRefs[0] != candidate || len(state.SupersededRefs) != len(beforeRefs) {
+		t.Fatalf("reclaim state original=%+v superseded=%+v want candidate plus %d live refs", state.OriginalRefs, state.SupersededRefs, len(beforeRefs))
+	}
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("fallback-pinned mixed segment missing: %v", err)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("close after incomplete reclaim: %v", err)
+	}
+	dClosed = true
+	reopenedDB := openCollectionCommandWALDB(t, dir)
+	defer reopenedDB.Close()
+	reopened := openColumnStoreCollectionM10B(t, reopenedDB)
+	reopenedRefs := columnManifestAssetRefsForCollectionM12A(t, reopenedDB, reopened)
+	assertColumnAssetRefsEqualM15C(t, afterRefs, reopenedRefs)
+	if got, err := reopened.Get([]byte("e1")); err != nil || got == nil {
+		t.Fatalf("Get after reopen got=%s err=%v", got, err)
+	}
+	if _, err := reopened.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 31); err == nil || !strings.Contains(err.Error(), "not physically complete") {
+		t.Fatalf("retry before fallback advance err=%v, want incomplete", err)
+	}
+	advanceColumnAssetDurableFallbackM15C(t, reopenedDB)
+	if _, err := reopened.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 31); err != nil {
+		t.Fatalf("retry after fallback advance: %v", err)
+	}
+	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old mixed segment remains: %v", err)
+	}
+	reopenedStore, err := OpenExistingVectorPartitionStoreV1(reopenedDB.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(reopenedStore.deleteTombstonePath(reopened.name, "embedding", 31)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed reclaim journal remains: %v", err)
+	}
+	for _, ref := range reopenedRefs {
+		if _, err := readColumnPhysicalAssetFromManager(reopenedDB.ColumnAssetRootDir(), ref); err != nil {
+			t.Fatalf("remapped ref %+v unreadable after physical deletion: %v", ref, err)
+		}
+	}
+	if got, err := reopened.Get([]byte("e1")); err != nil || got == nil {
+		t.Fatalf("Get after physical deletion got=%s err=%v", got, err)
+	}
+}
+
+func TestCollectionVectorPartitionReclaimV1PersistenceFailurePreventsRemapPublish(t *testing.T) {
+	_, d, col, store, beforeRefs, _, oldSegmentPath := prepareMixedVectorPartitionReclaimV1(t, 32)
+	defer d.Close()
+	injected := errors.New("injected reclaim journal persistence failure")
+	restore := setVectorPartitionReclaimPersistHooksForTestV1(func(_ string, state vectorPartitionReclaimStateV1) error {
+		if len(state.SupersededRefs) != 0 {
+			return injected
+		}
+		return nil
+	}, nil)
+	defer restore()
+	if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 32); !errors.Is(err, injected) {
+		t.Fatalf("reclaim err=%v, want injected persistence failure", err)
+	}
+	afterRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	assertColumnAssetRefsEqualM15C(t, beforeRefs, afterRefs)
+	state, err := store.openDeleteTombstone(col.name, "embedding", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.SupersededRefs) != 0 {
+		t.Fatalf("failed replacement changed durable reclaim state: %+v", state.SupersededRefs)
+	}
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("persistence failure removed mixed segment: %v", err)
+	}
+}
+
+func TestCollectionVectorPartitionReclaimV1CancellationAfterJournalCommitRetries(t *testing.T) {
+	_, d, col, store, beforeRefs, _, _ := prepareMixedVectorPartitionReclaimV1(t, 33)
+	defer d.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	restore := setVectorPartitionReclaimPersistHooksForTestV1(nil, func(_ string, state vectorPartitionReclaimStateV1) error {
+		if len(state.SupersededRefs) != 0 {
+			cancel()
+		}
+		return nil
+	})
+	restored := false
+	defer func() {
+		if !restored {
+			restore()
+		}
+	}()
+	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, "embedding", 33); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled reclaim err=%v, want context canceled", err)
+	}
+	restore()
+	restored = true
+	assertColumnAssetRefsEqualM15C(t, beforeRefs, columnManifestAssetRefsForCollectionM12A(t, d, col))
+	state, err := store.openDeleteTombstone(col.name, "embedding", 33)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.SupersededRefs) != len(beforeRefs) {
+		t.Fatalf("canceled reclaim persisted superseded=%d want %d", len(state.SupersededRefs), len(beforeRefs))
+	}
+	if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 33); err == nil || !strings.Contains(err.Error(), "not physically complete") {
+		t.Fatalf("retry err=%v, want rewrite success with fallback debt retained", err)
+	}
+	assertColumnAssetRefsRemappedM15C(t, beforeRefs, columnManifestAssetRefsForCollectionM12A(t, d, col))
+}
+
+func TestCollectionVectorPartitionReclaimV1PartialMultiRecordJournalRetries(t *testing.T) {
+	_, d, col, store, beforeRefs, firstCandidate, _ := prepareMixedVectorPartitionReclaimV1(t, 34)
+	defer d.Close()
+	secondCandidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 235, 100)
+	if secondCandidate.FileID != firstCandidate.FileID {
+		t.Fatalf("second candidate file_id=%d first=%d, want same mixed segment", secondCandidate.FileID, firstCandidate.FileID)
+	}
+	publishDeletedVectorPartitionReclaimCandidateV1(t, d, col, store, secondCandidate, 35)
+	injected := errors.New("injected second reclaim journal failure")
+	commits := 0
+	restore := setVectorPartitionReclaimPersistHooksForTestV1(func(_ string, state vectorPartitionReclaimStateV1) error {
+		if len(state.SupersededRefs) == 0 {
+			return nil
+		}
+		commits++
+		if commits == 2 {
+			return injected
+		}
+		return nil
+	}, nil)
+	restored := false
+	defer func() {
+		if !restored {
+			restore()
+		}
+	}()
+	if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 34); !errors.Is(err, injected) {
+		t.Fatalf("partial reclaim err=%v, want injected second write failure", err)
+	}
+	assertColumnAssetRefsEqualM15C(t, beforeRefs, columnManifestAssetRefsForCollectionM12A(t, d, col))
+	state34, err := store.openDeleteTombstone(col.name, "embedding", 34)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state35, err := store.openDeleteTombstone(col.name, "embedding", 35)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (len(state34.SupersededRefs) == 0) == (len(state35.SupersededRefs) == 0) {
+		t.Fatalf("partial write states superseded=(%d,%d), want exactly one committed", len(state34.SupersededRefs), len(state35.SupersededRefs))
+	}
+	restore()
+	restored = true
+	if _, err := col.ReclaimVectorPartitionGenerationV1(t.Context(), "embedding", 34); err == nil || !strings.Contains(err.Error(), "not physically complete") {
+		t.Fatalf("partial retry err=%v, want rewrite success with fallback debt retained", err)
+	}
+	assertColumnAssetRefsRemappedM15C(t, beforeRefs, columnManifestAssetRefsForCollectionM12A(t, d, col))
+	for _, generation := range []uint64{34, 35} {
+		state, err := store.openDeleteTombstone(col.name, "embedding", generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(state.SupersededRefs) != len(beforeRefs) {
+			t.Fatalf("retry generation=%d superseded=%d want %d", generation, len(state.SupersededRefs), len(beforeRefs))
+		}
+	}
+}
+
 func TestVectorPartitionReclaimRecordV1ChecksumFailsClosed(t *testing.T) {
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
@@ -367,6 +630,52 @@ func TestVectorPartitionReclaimRecordV1ChecksumFailsClosed(t *testing.T) {
 	}
 	if _, err := s.openDeleteTombstone(m.Collection, m.IndexName, m.Generation); err == nil {
 		t.Fatal("corrupt reclaim record accepted")
+	}
+}
+
+func TestVectorPartitionReclaimRecordV1MalformedVersionTruncationAndCountFailClosed(t *testing.T) {
+	state, err := newVectorPartitionReclaimStateV1(testVectorPartitionManifestV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := encodeVectorPartitionReclaimRecordV1(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := func() []byte { return append([]byte(nil), raw...) }
+	resign := func(record []byte) {
+		sum := sha256.Sum256(record[:len(record)-sha256.Size])
+		copy(record[len(record)-sha256.Size:], sum[:])
+	}
+	originalCountOffset := 12
+	originalCountOffset += 4 + int(binary.BigEndian.Uint32(raw[originalCountOffset:]))
+	originalCountOffset += 4 + int(binary.BigEndian.Uint32(raw[originalCountOffset:]))
+	originalCountOffset += 8
+	tests := map[string][]byte{
+		"truncated": raw[:len(raw)-1],
+		"overflow_length": func() []byte {
+			x := clone()
+			binary.BigEndian.PutUint32(x[8:12], ^uint32(0))
+			return x
+		}(),
+		"unknown_version": func() []byte {
+			x := clone()
+			binary.BigEndian.PutUint32(x[4:8], vectorPartitionReclaimVersionV1+1)
+			return x
+		}(),
+		"overflow_count": func() []byte {
+			x := clone()
+			binary.BigEndian.PutUint32(x[originalCountOffset:], ^uint32(0))
+			resign(x)
+			return x
+		}(),
+	}
+	for name, malformed := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeVectorPartitionReclaimRecordV1(malformed); !errors.Is(err, ErrVectorPartitionManifestInvalid) {
+				t.Fatalf("decode err=%v, want fail-closed invalid record", err)
+			}
+		})
 	}
 }
 
