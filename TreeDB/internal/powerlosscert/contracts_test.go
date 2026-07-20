@@ -19,6 +19,15 @@ func TestValidateWitnessContractsRejectsCoverageRelabeling(t *testing.T) {
 	}
 }
 
+func TestValidateWitnessContractsRejectsPriorSchema(t *testing.T) {
+	plan := testRunPlan()
+	contracts := testWitnessContracts(plan)
+	contracts.SchemaVersion = "treedb-power-loss-witness-contracts/v3"
+	if err := ValidateWitnessContracts(plan, contracts); err == nil || !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("ValidateWitnessContracts prior schema error=%v", err)
+	}
+}
+
 func TestValidateWitnessContractsRejectsRecoveryDirectorySubstitution(t *testing.T) {
 	plan := testRunPlan()
 	plan.Cases[0].ExpectedRecovery.Dir = "recovery-input/db"

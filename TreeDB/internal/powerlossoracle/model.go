@@ -946,6 +946,28 @@ func stableDirReachable(dirs map[string]rootpublication.StableIdentity, dir stri
 // Trace returns the deterministic operation trace used in failure diagnostics.
 func (m *Model) Trace() []string { return append([]string(nil), m.trace...) }
 
+// BeginReplayWindow records a stable address boundary without discarding the
+// persistence trace that precedes it. Tests with asynchronous setup can use a
+// window-relative cut occurrence while retained evidence still shows every
+// resource and namespace event that made the setup durable.
+//
+// Callers must serialize this method with Observe when observations may arrive
+// concurrently, just as they serialize concurrent Observe calls themselves.
+func (m *Model) BeginReplayWindow(variantID string) error {
+	if m == nil {
+		return errorsf("begin replay window on nil model")
+	}
+	if strings.TrimSpace(variantID) == "" || strings.ContainsAny(variantID, "\r\n") {
+		return errorsf("invalid replay window variant %q", variantID)
+	}
+	m.trace = append(m.trace, replayWindowMarker(variantID))
+	return nil
+}
+
+func replayWindowMarker(variantID string) string {
+	return "replay-window:" + variantID
+}
+
 // UseObservedTrace binds an adversarial selective-writeback model to the
 // operation trace captured from the corresponding real production cut. It
 // intentionally changes no namespace or byte state: callers first derive the

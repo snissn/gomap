@@ -721,6 +721,9 @@ func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Art
 		"TREEDB_POWERLOSS_REOPEN_MODE":      runCase.ReopenMode,
 		powerLossProfileEnv:                 runCase.Profile,
 	}
+	if runCase.ReplayWindow != "" {
+		env[powerLossReplayWindowEnv] = runCase.ReplayWindow
+	}
 	ledgerPath := filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json")
 	if _, err := os.Stat(ledgerPath); err == nil {
 		env["TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"] = "inputs/power_loss_counterexamples.json"
@@ -899,7 +902,7 @@ func environmentList(values map[string]string) []string {
 
 func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, recovery recoveryTraceArtifact) error {
 	prefix := fmt.Sprintf("powerlosscert: case %q", runCase.ID)
-	if trace.CutID != runCase.CutID || trace.VariantID != runCase.VariantID || trace.Seed != strconv.FormatUint(runCase.Seed, 10) || trace.DeclaredCutPoint != runCase.CutPoint {
+	if trace.CutID != runCase.CutID || trace.VariantID != runCase.VariantID || trace.Seed != strconv.FormatUint(runCase.Seed, 10) || trace.DeclaredCutPoint != runCase.CutPoint || trace.ReplayWindow != runCase.ReplayWindow {
 		return fmt.Errorf("%s operation trace does not match the frozen replay selector", prefix)
 	}
 	_, occurrence, err := parseCutAddress(runCase.CutID)
@@ -930,7 +933,11 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 	if err := validateRecoveryStats(recovery, runCase.Profile); err != nil {
 		return fmt.Errorf("%s: %w", prefix, err)
 	}
-	if got := observedWitnessState(recovery); got != runCase.State {
+	got, err := observedWitnessStateForComparison(recovery, runCase.StateComparison)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	if got != runCase.State {
 		return fmt.Errorf("%s observed recovery state=%+v want frozen state=%+v", prefix, got, runCase.State)
 	}
 	return nil
@@ -960,6 +967,58 @@ func observedWitnessState(recovery recoveryTraceArtifact) WitnessState {
 		CleanupPins: fmt.Sprintf("slot0_commit_seq=%s slot1_commit_seq=%s",
 			stat("treedb.durable_root.slot0.commit_seq"), stat("treedb.durable_root.slot1.commit_seq")),
 	}
+}
+
+func observedWitnessStateForComparison(recovery recoveryTraceArtifact, comparison string) (WitnessState, error) {
+	if comparison == stateComparisonExact {
+		return observedWitnessState(recovery), nil
+	}
+	if comparison != stateComparisonLogicalHorizon {
+		return WitnessState{}, fmt.Errorf("invalid state comparison %q", comparison)
+	}
+	if recovery.Rejected {
+		return WitnessState{}, fmt.Errorf("logical-horizon state comparison requires accepted recovery")
+	}
+	stat := func(key string) string { return recovery.Stats[key] }
+	selectedSlot := stat("treedb.durable_root.selected_slot")
+	selectedCommit := stat("treedb.durable_root.commit_seq")
+	var selectedSlotCommit, fallbackCommit string
+	switch selectedSlot {
+	case "0":
+		selectedSlotCommit = stat("treedb.durable_root.slot0.commit_seq")
+		fallbackCommit = stat("treedb.durable_root.slot1.commit_seq")
+	case "1":
+		selectedSlotCommit = stat("treedb.durable_root.slot1.commit_seq")
+		fallbackCommit = stat("treedb.durable_root.slot0.commit_seq")
+	default:
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid selected slot %q", selectedSlot)
+	}
+	if selectedCommit == "" || fallbackCommit == "" {
+		return WitnessState{}, fmt.Errorf("logical-horizon state is missing selected or fallback commit sequence")
+	}
+	if selectedSlotCommit != selectedCommit {
+		return WitnessState{}, fmt.Errorf("logical-horizon state selected slot commit=%q does not match durable root commit=%q", selectedSlotCommit, selectedCommit)
+	}
+	selectedCommitNumber, selectedErr := strconv.ParseUint(selectedCommit, 10, 64)
+	fallbackCommitNumber, fallbackErr := strconv.ParseUint(fallbackCommit, 10, 64)
+	if selectedErr != nil || fallbackErr != nil || selectedCommitNumber <= fallbackCommitNumber {
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid selected/fallback commits %q/%q", selectedCommit, fallbackCommit)
+	}
+	freelistGeneration, err := strconv.ParseUint(stat("treedb.durable_root.freelist.generation"), 10, 64)
+	if err != nil || freelistGeneration == 0 {
+		return WitnessState{}, fmt.Errorf("logical-horizon state has invalid freelist generation %q", stat("treedb.durable_root.freelist.generation"))
+	}
+	return WitnessState{
+		RootMetaGeneration: fmt.Sprintf("selected_commit_seq=%s fallback_commit_seq=%s", selectedCommit, fallbackCommit),
+		FreelistGeneration: "generation=persisted",
+		ExternalFrontiers: fmt.Sprintf("stable_image_tree_artifact=stable_image_tree.json manifest_entries=%s",
+			stat("treedb.durable_root.manifest.entries")),
+		NamespaceGeneration: "stable_image_tree_artifact=stable_image_tree.json",
+		WALLineage:          fmt.Sprintf("profile=%s applied_lsn=%s", stat("treedb.profile.resolved"), stat("treedb.applied_command_lsn")),
+		DurableLSN: fmt.Sprintf("durable_wal_lsn=%s durable_root_commit_seq=%s",
+			stat("treedb.command_wal.durable_wal_lsn"), selectedCommit),
+		CleanupPins: fmt.Sprintf("selected_commit_seq=%s fallback_commit_seq=%s", selectedCommit, fallbackCommit),
+	}, nil
 }
 
 func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Artifact, executed []executedCase, performanceSHA string) (ChildManifest, error) {
@@ -996,6 +1055,10 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 		if err != nil {
 			return ChildManifest{}, fmt.Errorf("powerlosscert: case %q: %w", runCase.ID, err)
 		}
+		state, err := observedWitnessStateForComparison(result.recovery, runCase.StateComparison)
+		if err != nil {
+			return ChildManifest{}, fmt.Errorf("powerlosscert: case %q: %w", runCase.ID, err)
+		}
 		witness := Witness{
 			ID:                     runCase.ID,
 			EvidenceTier:           EvidenceTierModeledCrash,
@@ -1011,7 +1074,9 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 			ActualOutcome:          runCase.ExpectedOutcome,
 			TypedError:             runCase.ExpectedTypedError,
 			ExpectedRecoveryDir:    expectedRecoveryDir,
-			State:                  observedWitnessState(result.recovery),
+			State:                  state,
+			StateComparison:        runCase.StateComparison,
+			ReplayWindow:           runCase.ReplayWindow,
 			CounterexampleID:       runCase.CounterexampleID,
 			NegativeControlID:      runCase.NegativeControlID,
 			Seed:                   runCase.Seed,

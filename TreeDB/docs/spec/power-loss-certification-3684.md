@@ -82,7 +82,9 @@ TREEDB_POWERLOSS_REOPEN_MODE=read-write|read-only
 
 The evidence directory must be empty. Capture writes:
 
-- `operation_trace.json` with the declared cut and actual observed event count;
+- `operation_trace.json` with the declared cut, replay variant, optional
+  replay-window contract, scoped observed event count, and complete retained
+  operation trace;
 - immutable `stable-image/` and `dirty-image/` trees plus deterministic tree
   manifests that bind the complete directory namespace (including empty
   directories) and every regular file;
@@ -96,12 +98,17 @@ The evidence directory must be empty. Capture writes:
 - `metrics.json` with image sizes, file counts, trace count, and stable-image
 fingerprint.
 
-The directory-bound contract uses run-plan and witness-contract schema v3,
-child-manifest schema v2, and recovery-trace schema v2. The plan freezes the
-expected slash-separated recovery directory; the child manifest retains that
-expectation, and the trace must identify the same canonical `recovery-input`
-root or descendant. These version bumps are intentional because strict readers
-of the preceding schemas do not accept the new fields or child-root semantics.
+The current contract uses run-plan and witness-contract schema v4,
+child-manifest schema v3, operation-trace schema v2, and recovery-trace schema
+v2. The plan freezes the expected slash-separated recovery directory; the
+child manifest retains that expectation, and the recovery trace must identify
+the same canonical `recovery-input` root or descendant. A windowed case also
+freezes one replay window equal to its replay variant. Capture and retained
+verification require exactly one matching marker followed by the selected cut;
+missing, duplicate, mismatched, late, or undeclared markers fail closed while
+the full pre-window trace remains retained. These version bumps are intentional
+because strict readers of the preceding schemas do not accept the new fields,
+child-root semantics, state comparison, or window-relative cut addressing.
 
 Every modeled witness registers those five JSON files and
 `command_log.json` at their canonical names directly below its declared
@@ -129,12 +136,13 @@ not evidence.
 
 ## Exact-SHA runner
 
-`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and version-3
+`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and version-4
 run plan. The plan freezes `refs/remotes/origin/main`, its exact repository SHA,
-PR provenance, replay selector, profile, reopen mode, expected outcome, typed
-error, complete expected recovery state, per-case timeout, captured-output
-limit, per-case evidence limit, and whole-bundle byte limit before any case
-runs. Before checking out evidence, the runner proves that the frozen cases
+PR provenance, replay selector and optional replay window, profile, reopen
+mode, expected outcome, typed error, state-comparison rule, complete expected
+recovery state, per-case timeout, captured-output limit, per-case evidence
+limit, and whole-bundle byte limit before any case runs. Before checking out
+evidence, the runner proves that the frozen cases
 match the committed witness contracts and cover every inventory value, retained
 counterexample, negative control, and required interaction. It then refuses a
 different current-main ref or HEAD, tracked or untracked worktree changes, and
