@@ -2,7 +2,11 @@ package vectorpartition
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -87,5 +91,73 @@ func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 	a.Graph.Neighbors[0] = append(a.Graph.Neighbors[0], 0)
 	if e := ValidateArtifact(a); e == nil {
 		t.Fatal("self edge accepted")
+	}
+}
+
+func TestStrictDecoderRejectsNonCanonicalAndMetricForgery(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeArtifact(raw, len(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeArtifact(append(raw, '\n'), len(raw)+1); err == nil {
+		t.Fatal("noncanonical whitespace accepted")
+	}
+	a.Metrics.EdgeCut++
+	bad, _ := json.Marshal(a)
+	if _, err := DecodeArtifact(bad, len(bad)); err == nil {
+		t.Fatal("forged metrics accepted")
+	}
+}
+
+func TestGraphPartitionBeatsStableIDHashOnClusteredFixture(t *testing.T) {
+	v := make([]Vector, 24)
+	for i := range v {
+		cluster := i / 12
+		x, y := 0.0, 0.0
+		if cluster == 0 {
+			x = 1
+		} else {
+			y = 1
+		}
+		v[i] = Vector{ID: string(rune('a' + i)), Values: []float64{x, y}}
+	}
+	c := config()
+	c.Partitions = 2
+	c.MaxLeafBucket = 32
+	c.Degree = 4
+	c.MaxEdges = 256
+	a, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Metrics.EdgeCut >= a.Metrics.StableIDHashEdgeCut {
+		t.Fatalf("graph cut=%d hash=%d", a.Metrics.EdgeCut, a.Metrics.StableIDHashEdgeCut)
+	}
+}
+
+func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TMPDIR", root)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := RunExternalJSON(ctx, []string{"sh", "-c", "sleep 1"}, []byte("{}"), 1024)
+	if err == nil {
+		t.Fatal("cancelled backend accepted")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && filepath.Base(entry.Name()) != "" {
+			t.Fatalf("backend temporary directory leaked: %s", entry.Name())
+		}
 	}
 }

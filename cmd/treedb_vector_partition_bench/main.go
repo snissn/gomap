@@ -21,10 +21,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const (
@@ -69,6 +71,17 @@ type config struct {
 	headSHA      string
 	hnsw         *treeDBPartitionHNSW
 	memory       benchmarkMemoryPlan
+	stage        string
+	partition    vectorpartition.Config
+}
+
+type partitionRun struct {
+	SchemaVersion  int                      `json:"schema_version"`
+	ResultKind     string                   `json:"result_kind"`
+	Dataset        fixtureManifest          `json:"dataset"`
+	Artifact       vectorpartition.Artifact `json:"artifact"`
+	BuildNanos     int64                    `json:"build_nanos"`
+	ArtifactSHA256 string                   `json:"artifact_sha256"`
 }
 
 type fixtureManifest struct {
@@ -281,6 +294,9 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 		return errors.New("fixture checksum does not match generated vector/query/truth stream")
 	}
+	if cfg.stage == "partition" {
+		return runPartitionStage(cfg, fixture, vectors, stdout)
+	}
 	if cfg.stages["treedb_partition_local_hnsw"] {
 		cfg.hnsw, err = newTreeDBPartitionHNSW(vectors, cfg.partitions)
 		if err != nil {
@@ -317,7 +333,7 @@ func run(args []string, stdout io.Writer) (runErr error) {
 }
 
 func parseConfig(args []string) (config, error) {
-	cfg := config{format: "json", topK: 10, recallTarget: .9, seed: 1}
+	cfg := config{format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation", partition: vectorpartition.DefaultConfig()}
 	var probes, overlap string
 	var stages string
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
@@ -330,11 +346,23 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
+	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation or partition")
+	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
+	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
+	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
+	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
+	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
+	}
+	// The offline M2 builder does not execute M0 probe simulations. Preserve
+	// the simulation requirement while allowing the issue's partition-stage
+	// invocation to omit a meaningless -probes flag.
+	if cfg.stage == "partition" && probes == "" {
+		probes = "1"
 	}
 	var err error
 	if cfg.probes, err = parseInts(probes); err != nil {
@@ -343,7 +371,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" {
+	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
@@ -363,7 +391,54 @@ func parseConfig(args []string) (config, error) {
 	if len(cfg.stages) == 0 {
 		return config{}, errors.New("stages must name known stages or all")
 	}
+	cfg.partition.Seed = cfg.seed
+	cfg.partition.Partitions = cfg.partitions
+	cfg.partition.MaxVectors = cfg.maxVectors
+	if cfg.partition.MaxEdges > maxVectors*cfg.partition.Degree {
+		cfg.partition.MaxEdges = maxVectors * cfg.partition.Degree
+	}
 	return cfg, nil
+}
+
+func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64, stdout io.Writer) error {
+	input := make([]vectorpartition.Vector, len(vectors))
+	for i, values := range vectors {
+		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
+	}
+	started := time.Now()
+	artifact, err := vectorpartition.Build(input, cfg.partition)
+	if err != nil {
+		return fmt.Errorf("build validated vector partition artifact: %w", err)
+	}
+	bytes, err := vectorpartition.CanonicalJSON(artifact)
+	if err != nil {
+		return err
+	}
+	digest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cfg.out, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(cfg.out, "vector_partition_artifact_v1.json")
+	if err := os.WriteFile(path, bytes, 0644); err != nil {
+		return err
+	}
+	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Artifact: artifact, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_v1.json"), append(raw, '\n'), 0644); err != nil {
+		return err
+	}
+	if cfg.format == "json" {
+		_, err = fmt.Fprintln(stdout, string(raw))
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "partition artifact=%s edges=%d cut=%d cap=%d\n", path, artifact.Metrics.GraphEdges, artifact.Metrics.EdgeCut, artifact.Metrics.Cap)
+	return err
 }
 
 var knownStages = []string{"exact_global_top_k", "partition_oracle", "exact_representative_routing", "approximate_representative_routing", "exact_partition_local", "treedb_partition_local_hnsw", "end_to_end_distributed_simulation"}

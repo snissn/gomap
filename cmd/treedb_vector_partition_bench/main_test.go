@@ -104,6 +104,37 @@ func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
 	}
 }
 
+func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
+	dataset := writeFixtureForTest(t, 16, 2, 4)
+	args := []string{"-dataset", dataset, "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "4", "-partition-degree", "2"}
+	var first bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &first); err != nil {
+		t.Fatal(err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(first.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ResultKind != "offline_partition_builder" || report.Artifact.Metrics.MaxPartitionSize > report.Artifact.Metrics.Cap {
+		t.Fatalf("report=%+v", report)
+	}
+	if _, err := os.Stat(filepath.Join(args[3], "vector_partition_artifact_v1.json")); err != nil {
+		t.Fatal(err)
+	}
+	var second bytes.Buffer
+	args[3] = t.TempDir()
+	if err := runWithHermeticProvenance(t, args, &second); err != nil {
+		t.Fatal(err)
+	}
+	var again partitionRun
+	if err := json.Unmarshal(second.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if report.ArtifactSHA256 != again.ArtifactSHA256 {
+		t.Fatalf("digest changed: %s %s", report.ArtifactSHA256, again.ArtifactSHA256)
+	}
+}
+
 func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
 	m, err := loadFixture(fixturePath(t))
 	if err != nil {

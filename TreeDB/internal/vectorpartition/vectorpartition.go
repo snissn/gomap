@@ -4,15 +4,21 @@
 package vectorpartition
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
-	"time"
 )
 
 const (
@@ -46,19 +52,19 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: true, MaxVectors: maxVectors, MaxEdges: maxEdges}
+	return Config{Metric: "cosine", Seed: 1, Repetitions: 4, Pivots: 8, MaxLeafBucket: 128, Degree: 16, Partitions: 16, Imbalance: .05, Symmetric: false, MaxVectors: maxVectors, MaxEdges: maxEdges}
 }
 
 type Graph struct {
 	Neighbors [][]int `json:"neighbors"`
 }
 type Metrics struct {
-	BuildNanos       int64 `json:"build_nanos"`
-	GraphEdges       int   `json:"graph_edges"`
-	MaxDegree        int   `json:"max_degree"`
-	EdgeCut          int   `json:"edge_cut"`
-	MaxPartitionSize int   `json:"max_partition_size"`
-	Cap              int   `json:"cap"`
+	GraphEdges          int `json:"graph_edges"`
+	MaxDegree           int `json:"max_degree"`
+	EdgeCut             int `json:"edge_cut"`
+	StableIDHashEdgeCut int `json:"stable_id_hash_edge_cut"`
+	MaxPartitionSize    int `json:"max_partition_size"`
+	Cap                 int `json:"cap"`
 }
 type Artifact struct {
 	SchemaVersion  int      `json:"schema_version"`
@@ -82,7 +88,6 @@ type ReferencePartitioner struct{}
 func (ReferencePartitioner) Name() string { return "treedb_reference_greedy_v1" }
 
 func Build(vectors []Vector, cfg Config) (Artifact, error) {
-	start := time.Now()
 	if err := validateInput(vectors, cfg); err != nil {
 		return Artifact{}, err
 	}
@@ -108,9 +113,6 @@ func Build(vectors []Vector, cfg Config) (Artifact, error) {
 	}
 	art := Artifact{SchemaVersion: SchemaVersion, Backend: ReferencePartitioner{}.Name(), BackendLicense: "TreeDB clean-room reference implementation (repository license)", Config: cfg, IDs: ids, Graph: g, Assignment: a}
 	art.Metrics = metrics(art)
-	// Timings are run-report data rather than immutable artifact data. Keeping
-	// this field zero makes CanonicalJSON byte-identical for identical input.
-	_ = start
 	if err := ValidateArtifact(art); err != nil {
 		return Artifact{}, err
 	}
@@ -144,7 +146,7 @@ func validateInput(v []Vector, c Config) error {
 			}
 		}
 	}
-	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) {
+	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
 		return errors.New("configured graph edge bound exceeded before allocation")
 	}
 	return nil
@@ -155,12 +157,12 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	n := len(v)
 	sets := make([]map[int]struct{}, n)
 	for i := range sets {
-		sets[i] = make(map[int]struct{}, c.Degree*c.Repetitions)
+		sets[i] = make(map[int]struct{}, c.Degree)
 	}
 	for rep := 0; rep < c.Repetitions; rep++ {
 		r := rand.New(rand.NewSource(c.Seed + int64(rep)*0x9e3779b))
 		order := r.Perm(n)
-		if err := carve(v, order, c, sets); err != nil {
+		if err := carveDepth(v, order, c, sets, 0); err != nil {
 			return Graph{}, err
 		}
 	}
@@ -176,27 +178,17 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 			g.Neighbors[i] = g.Neighbors[i][:c.Degree]
 		}
 	}
-	if c.Symmetric { // symmetric policy is bounded by retaining mutual/lowest ordinal candidates deterministically.
-		for i := range g.Neighbors {
-			for _, j := range g.Neighbors[i] {
-				addBounded(&g.Neighbors[j], i, c.Degree)
-			}
-		}
-		for i := range g.Neighbors {
-			sort.Ints(g.Neighbors[i])
-			if len(g.Neighbors[i]) > c.Degree {
-				g.Neighbors[i] = g.Neighbors[i][:c.Degree]
-			}
-		}
+	if c.Symmetric {
+		return Graph{}, errors.New("symmetric graph policy is not supported by bounded reference backend")
 	}
 	return g, nil
 }
-func carve(v []Vector, ids []int, c Config, sets []map[int]struct{}) error {
+func carveDepth(v []Vector, ids []int, c Config, sets []map[int]struct{}, depth int) error {
 	if len(ids) <= c.MaxLeafBucket {
 		for _, i := range ids {
 			nearest := nearest(v, ids, i, c.Degree)
 			for _, j := range nearest {
-				sets[i][j] = struct{}{}
+				addSetBounded(sets[i], j, c.Degree)
 			}
 		}
 		return nil
@@ -205,28 +197,36 @@ func carve(v []Vector, ids []int, c Config, sets []map[int]struct{}) error {
 	pivots := append([]int(nil), ids[:k]...)
 	buckets := make([][]int, k)
 	for _, i := range ids {
-		best := 0
+		best, second := 0, -1
 		bestD := distance(v[i].Values, v[pivots[0]].Values)
 		for p := 1; p < k; p++ {
 			d := distance(v[i].Values, v[pivots[p]].Values)
 			if d < bestD || d == bestD && pivots[p] < pivots[best] {
-				best, bestD = p, d
+				second, best, bestD = best, p, d
+			} else if second < 0 || d < distance(v[i].Values, v[pivots[second]].Values) || d == distance(v[i].Values, v[pivots[second]].Values) && pivots[p] < pivots[second] {
+				second = p
 			}
 		}
 		buckets[best] = append(buckets[best], i)
+		// The paper sketch allows one-or-more nearest top-level pivots. The
+		// reference intentionally adds exactly one bounded extra membership at
+		// depth zero; deeper levels use one pivot to keep work bounded.
+		if depth == 0 && second >= 0 {
+			buckets[second] = append(buckets[second], i)
+		}
 	}
 	for _, b := range buckets {
 		if len(b) == len(ids) { // duplicate/skew progress guarantee: deterministic chunking.
 			for start := 0; start < len(b); start += c.MaxLeafBucket {
 				end := min(start+c.MaxLeafBucket, len(b))
-				if err := carve(v, b[start:end], c, sets); err != nil {
+				if err := carveDepth(v, b[start:end], c, sets, depth+1); err != nil {
 					return err
 				}
 			}
 			continue
 		}
 		if len(b) > 0 {
-			if err := carve(v, b, c, sets); err != nil {
+			if err := carveDepth(v, b, c, sets, depth+1); err != nil {
 				return err
 			}
 		}
@@ -266,16 +266,23 @@ func distance(a, b []float64) float64 {
 	}
 	return 1 - dot/math.Sqrt(na*nb)
 }
-func addBounded(a *[]int, x, cap int) {
-	for _, v := range *a {
-		if v == x {
-			return
+func addSetBounded(s map[int]struct{}, x, cap int) {
+	if _, ok := s[x]; ok {
+		return
+	}
+	if len(s) < cap {
+		s[x] = struct{}{}
+		return
+	}
+	worst := -1
+	for v := range s {
+		if v > worst {
+			worst = v
 		}
 	}
-	*a = append(*a, x)
-	sort.Ints(*a)
-	if len(*a) > cap {
-		*a = (*a)[:cap]
+	if x < worst {
+		delete(s, worst)
+		s[x] = struct{}{}
 	}
 }
 
@@ -283,6 +290,9 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	n := len(g.Neighbors)
 	if parts < 1 || cap < 1 || n < parts {
 		return nil, errors.New("invalid partition request")
+	}
+	if err := validateGraph(g, n, maxVectors); err != nil {
+		return nil, err
 	}
 	order := make([]int, n)
 	for i := range order {
@@ -333,6 +343,9 @@ func metrics(a Artifact) Metrics {
 			if a.Assignment[i] != a.Assignment[j] {
 				m.EdgeCut++
 			}
+			if stableIDPartition(a.IDs[i], a.Config.Partitions) != stableIDPartition(a.IDs[j], a.Config.Partitions) {
+				m.StableIDHashEdgeCut++
+			}
 		}
 	}
 	for p := 0; p < a.Config.Partitions; p++ {
@@ -348,6 +361,10 @@ func metrics(a Artifact) Metrics {
 	}
 	return m
 }
+func stableIDPartition(id string, partitions int) int {
+	sum := sha256.Sum256([]byte(id))
+	return int(binary.BigEndian.Uint64(sum[:8]) % uint64(partitions))
+}
 
 func ValidateArtifact(a Artifact) error {
 	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
@@ -355,6 +372,9 @@ func ValidateArtifact(a Artifact) error {
 	}
 	if err := validateInput(makeVectors(a.IDs, a.Graph.Neighbors), a.Config); err != nil {
 		return fmt.Errorf("artifact config: %w", err)
+	}
+	if err := validateGraph(a.Graph, len(a.IDs), a.Config.Degree); err != nil {
+		return err
 	}
 	cap := partitionCap(len(a.IDs), a.Config.Partitions, a.Config.Imbalance)
 	loads := make([]int, a.Config.Partitions)
@@ -367,20 +387,32 @@ func ValidateArtifact(a Artifact) error {
 			return errors.New("assignment out of range")
 		}
 		loads[p]++
-		seen := map[int]bool{}
-		for _, j := range a.Graph.Neighbors[i] {
-			if j < 0 || j >= len(a.IDs) || j == i || seen[j] {
-				return errors.New("invalid graph edge")
-			}
-			seen[j] = true
-		}
-		if len(a.Graph.Neighbors[i]) > a.Config.Degree {
-			return errors.New("degree cap exceeded")
-		}
 	}
 	for _, n := range loads {
 		if n > cap {
 			return errors.New("partition cap exceeded")
+		}
+	}
+	m := metrics(a)
+	if a.Metrics.GraphEdges != m.GraphEdges || a.Metrics.MaxDegree != m.MaxDegree || a.Metrics.EdgeCut != m.EdgeCut || a.Metrics.StableIDHashEdgeCut != m.StableIDHashEdgeCut || a.Metrics.MaxPartitionSize != m.MaxPartitionSize || a.Metrics.Cap != m.Cap {
+		return errors.New("artifact metrics do not match graph and assignment")
+	}
+	return nil
+}
+func validateGraph(g Graph, n, degree int) error {
+	if len(g.Neighbors) != n {
+		return errors.New("graph node count mismatch")
+	}
+	for i, ns := range g.Neighbors {
+		if len(ns) > degree {
+			return errors.New("degree cap exceeded")
+		}
+		seen := map[int]bool{}
+		for _, j := range ns {
+			if j < 0 || j >= n || j == i || seen[j] {
+				return errors.New("invalid graph edge")
+			}
+			seen[j] = true
 		}
 	}
 	return nil
@@ -399,6 +431,72 @@ func CanonicalJSON(a Artifact) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(a)
+}
+
+// DecodeArtifact is a strict bounded decoder for offline backend output. It
+// rejects unknown fields, trailing bytes, non-canonical encodings, and output
+// whose independently recomputed metrics do not match its graph/assignment.
+func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
+	if maxBytes < 1 || len(raw) > maxBytes {
+		return Artifact{}, errors.New("partition artifact exceeds byte cap")
+	}
+	var a Artifact
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&a); err != nil {
+		return Artifact{}, err
+	}
+	var extra any
+	if err := d.Decode(&extra); err != io.EOF {
+		return Artifact{}, errors.New("partition artifact has trailing JSON")
+	}
+	if err := ValidateArtifact(a); err != nil {
+		return Artifact{}, err
+	}
+	canonical, err := CanonicalJSON(a)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if !bytes.Equal(raw, canonical) {
+		return Artifact{}, errors.New("partition artifact is not canonical JSON")
+	}
+	return a, nil
+}
+
+// RunExternalJSON is an optional offline adapter seam. It never becomes a
+// TreeDB runtime dependency. Its output is written to a private temp path and
+// removed on cancellation, timeout, command failure, or invalid output.
+func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOutput int) (Artifact, error) {
+	if len(command) == 0 || maxOutput < 1 {
+		return Artifact{}, errors.New("invalid external backend command")
+	}
+	dir, err := os.MkdirTemp("", "treedb-vectorpartition-backend-*")
+	if err != nil {
+		return Artifact{}, err
+	}
+	defer os.RemoveAll(dir)
+	in := filepath.Join(dir, "input.json")
+	out := filepath.Join(dir, "output.json")
+	if err = os.WriteFile(in, input, 0600); err != nil {
+		return Artifact{}, err
+	}
+	cmd := exec.CommandContext(ctx, command[0], append(command[1:], in, out)...)
+	if b, e := cmd.CombinedOutput(); e != nil {
+		return Artifact{}, fmt.Errorf("external partition backend: %w: %s", e, bytes.TrimSpace(b))
+	}
+	f, e := os.Open(out)
+	if e != nil {
+		return Artifact{}, e
+	}
+	defer f.Close()
+	raw, e := io.ReadAll(io.LimitReader(f, int64(maxOutput)+1))
+	if e != nil {
+		return Artifact{}, e
+	}
+	if len(raw) > maxOutput {
+		return Artifact{}, errors.New("external partition backend output exceeds cap")
+	}
+	return DecodeArtifact(raw, maxOutput)
 }
 func Digest(a Artifact) (string, error) {
 	b, e := CanonicalJSON(a)
