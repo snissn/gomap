@@ -18,12 +18,21 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.IndexName = def.Name
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
-	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	_, graph, view, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-	writeVectorPartitionAssetsForTest(t, d.Dir(), &m)
+	if len(view.VectorIndexState.Assets) == 0 {
+		t.Fatal("missing typed state asset")
+	}
+	ref := view.VectorIndexState.Assets[0].Ref
+	for i := range m.Assets {
+		m.Assets[i].Ref = ref
+		m.Assets[i].Bytes = uint64(ref.Length)
+	}
+	m.RouterAsset.Ref = ref
+	m.RouterAsset.Bytes = uint64(ref.Length)
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
 		t.Fatal(err)
@@ -32,7 +41,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != 28 {
+	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != uint64(ref.Length*3) {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	m.IndexDefinitionDigest = strings.Repeat("f", 64)
@@ -113,7 +122,7 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
 	}
-	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	_, graph, view, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +130,13 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	m.IndexName = def.Name
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-	writeVectorPartitionAssetsForTest(t, d.Dir(), &m)
+	ref := view.VectorIndexState.Assets[0].Ref
+	for i := range m.Assets {
+		m.Assets[i].Ref = ref
+		m.Assets[i].Bytes = uint64(ref.Length)
+	}
+	m.RouterAsset.Ref = ref
+	m.RouterAsset.Bytes = uint64(ref.Length)
 	m.Canonicalize()
 	held := col.lockMutation()
 	done := make(chan error, 1)
@@ -198,7 +213,7 @@ func TestVectorPartitionManifestV1DecodeCapsBeforeAllocation(t *testing.T) {
 func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	h := strings.Repeat("a", 64)
 	b := strings.Repeat("b", 64)
-	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{"partition/0", "assets/p0", b, 12}, {"partition/1", "assets/p1", b, 13}}, RouterAsset: VectorPartitionAssetV1{"router", "assets/router", b, 14}}
+	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", Path: "assets/p0", Checksum: b, Bytes: 12}, {ID: "partition/1", Path: "assets/p1", Checksum: b, Bytes: 13}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Path: "assets/router", Checksum: b, Bytes: 14}}
 	m.Canonicalize()
 	return m
 }

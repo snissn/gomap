@@ -10,12 +10,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 const VectorPartitionManifestFormatV1 = "vector_partition_manifest_v1"
@@ -34,6 +32,7 @@ func DefaultVectorPartitionManifestLimits() VectorPartitionManifestLimits {
 type VectorPartitionAssetV1 struct {
 	ID, Path, Checksum string
 	Bytes              uint64
+	Ref                ColumnAssetRef
 }
 type VectorPartitionPlacementV1 struct {
 	PartitionID uint32
@@ -191,6 +190,7 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 		putStringVPM(b, a.Path)
 		putStringVPM(b, a.Checksum)
 		putU64VPM(b, a.Bytes)
+		putColumnAssetRefVPM(b, a.Ref)
 	}
 	h := sha256.Sum256(b.Bytes())
 	return hex.EncodeToString(h[:])
@@ -344,9 +344,12 @@ func (r *vpmReader) assets() []VectorPartitionAssetV1 {
 	}
 	x := make([]VectorPartitionAssetV1, n)
 	for i := range x {
-		x[i] = VectorPartitionAssetV1{r.str(), r.str(), r.str(), r.u64()}
+		x[i] = VectorPartitionAssetV1{ID: r.str(), Path: r.str(), Checksum: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
 	}
 	return x
+}
+func (r *vpmReader) columnRef() ColumnAssetRef {
+	return ColumnAssetRef{Kind: ColumnAssetKind(r.str()), Namespace: r.str(), Generation: r.u64(), PartID: r.u64(), FileID: r.u32(), Offset: int64(r.u64()), Length: int64(r.u64()), Checksum: r.u32()}
 }
 func (r *vpmReader) placements() []VectorPartitionPlacementV1 {
 	n := r.count(r.l.MaxPartitions)
@@ -388,7 +391,18 @@ func putAssetsVPM(b *bytes.Buffer, x []VectorPartitionAssetV1) {
 		putStringVPM(b, a.Path)
 		putStringVPM(b, a.Checksum)
 		putU64VPM(b, a.Bytes)
+		putColumnAssetRefVPM(b, a.Ref)
 	}
+}
+func putColumnAssetRefVPM(b *bytes.Buffer, r ColumnAssetRef) {
+	putStringVPM(b, string(r.Kind))
+	putStringVPM(b, r.Namespace)
+	putU64VPM(b, r.Generation)
+	putU64VPM(b, r.PartID)
+	putU32VPM(b, r.FileID)
+	putU64VPM(b, uint64(r.Offset))
+	putU64VPM(b, uint64(r.Length))
+	putU32VPM(b, r.Checksum)
 }
 func putPlacementsVPM(b *bytes.Buffer, x []VectorPartitionPlacementV1) {
 	putU32VPM(b, uint32(len(x)))
@@ -558,7 +572,7 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		return err
 	}
 	if m.State == "ready" {
-		if err := verifyVectorPartitionAssetsV1(c.db.Dir(), append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
+		if err := verifyVectorPartitionAssetsV1(c.db.ColumnAssetRootDir(), append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
 			return err
 		}
 	}
@@ -593,24 +607,18 @@ func (c *Collection) validateVectorPartitionSourceIdentityV1(m VectorPartitionMa
 
 func verifyVectorPartitionAssetsV1(root string, assets []VectorPartitionAssetV1) error {
 	for _, a := range assets {
-		if filepath.IsAbs(a.Path) || strings.Contains(a.Path, "..") {
-			return fmt.Errorf("collections: unsafe vector partition asset path %q", a.Path)
+		if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
+			return fmt.Errorf("collections: vector partition asset %q ref: %w", a.ID, err)
 		}
-		f, err := os.Open(filepath.Join(root, a.Path))
+		if a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
+			return fmt.Errorf("collections: vector partition asset %q ref bytes mismatch", a.ID)
+		}
+		raw, err := readColumnPhysicalAssetFromManager(root, a.Ref)
 		if err != nil {
 			return fmt.Errorf("collections: vector partition asset %q: %w", a.ID, err)
 		}
-		h := sha256.New()
-		n, copyErr := io.Copy(h, f)
-		closeErr := f.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if uint64(n) != a.Bytes || hex.EncodeToString(h.Sum(nil)) != a.Checksum {
-			return fmt.Errorf("collections: vector partition asset %q checksum/size mismatch", a.ID)
+		if uint64(len(raw)) != a.Bytes {
+			return fmt.Errorf("collections: vector partition asset %q size mismatch", a.ID)
 		}
 	}
 	return nil
