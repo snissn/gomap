@@ -202,6 +202,7 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 	if result.Rejected || recovered == nil {
 		t.Fatalf("public Open rejected stale-build stable image: %v", result.Err)
 	}
+	assertStaleBuildRecoveryStats(t, result)
 	value, err := recovered.Get([]byte("stale-build/public-baseline"))
 	if err != nil || string(value) != "stable" {
 		t.Fatalf("recovered public baseline=%q err=%v want stable", value, err)
@@ -211,6 +212,37 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 	}
 	assertStableStaleBuildSystemValues(t, model, opts)
 	t.Logf("recovered rejected-stale counterexample at commit %d", result.CommitSeq)
+}
+
+func assertStaleBuildRecoveryStats(t *testing.T, result powerlossreopen.Result) {
+	t.Helper()
+	if result.CommitSeq != 4 || result.AppliedLSN != 0 {
+		t.Fatalf("recovered horizon=(commit=%d applied_lsn=%d), want (commit=4 applied_lsn=0)", result.CommitSeq, result.AppliedLSN)
+	}
+	want := []struct {
+		key   string
+		value string
+	}{
+		{key: "treedb.profile.resolved", value: "no_wal_fast"},
+		{key: "treedb.applied_command_lsn", value: "0"},
+		{key: "treedb.command_wal.durable_wal_lsn", value: "0"},
+		{key: "treedb.durable_root.selected_slot", value: "1"},
+		{key: "treedb.durable_root.commit_seq", value: "4"},
+		{key: "treedb.durable_root.slot0.commit_seq", value: "3"},
+		{key: "treedb.durable_root.slot1.commit_seq", value: "4"},
+		{key: "treedb.durable_root.freelist.generation", value: "8"},
+		{key: "treedb.durable_root.manifest.entries", value: "1"},
+		{key: "treedb.durable_root.durable_seq", value: "4"},
+	}
+	for _, item := range want {
+		got, ok := result.Stats[item.key]
+		if !ok {
+			t.Fatalf("recovery stats missing %q", item.key)
+		}
+		if got != item.value {
+			t.Fatalf("recovery stats[%q]=%q, want %q", item.key, got, item.value)
+		}
+	}
 }
 
 func mustFrozenStaleBuildDelta(t *testing.T, key, value string) memtable.Table {

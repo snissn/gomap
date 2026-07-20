@@ -1244,13 +1244,13 @@
       "expected_outcome": "accepted:new-root",
       "expected_typed_error": "none",
       "state": {
-        "root_meta_generation": "selected_slot=0 commit_seq=4 slot0=4 slot1=2",
-        "freelist_generation": "generation=7",
+        "root_meta_generation": "selected_slot=1 commit_seq=4 slot0=3 slot1=4",
+        "freelist_generation": "generation=8",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
-        "cleanup_maintenance_pins": "slot0_commit_seq=4 slot1_commit_seq=2"
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=4",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=4"
       },
       "counterexample_id": "stale-build-base-root-publication",
       "seed": 12505447533306515078,
