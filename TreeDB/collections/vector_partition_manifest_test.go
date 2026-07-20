@@ -25,6 +25,29 @@ func requireVectorPartitionPersistenceV1(t testing.TB) {
 	}
 }
 
+func TestShouldRefreshVectorPartitionReclaimGCPlanV1(t *testing.T) {
+	stale := backenddb.ErrRecoverableRootSetStale
+	tests := []struct {
+		name    string
+		err     error
+		stats   ColumnAssetGCStats
+		attempt int
+		want    bool
+	}{
+		{name: "fresh stale authority", err: stale, attempt: 0, want: true},
+		{name: "stale authority after deletion", err: stale, stats: ColumnAssetGCStats{SegmentsDeleted: 1}, attempt: 0},
+		{name: "unrelated error", err: errors.New("injected"), attempt: 0},
+		{name: "attempt bound exhausted", err: stale, attempt: vectorPartitionReclaimRecoverableRootAttemptsV1 - 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRefreshVectorPartitionReclaimGCPlanV1(tt.err, tt.stats, tt.attempt); got != tt.want {
+				t.Fatalf("shouldRefreshVectorPartitionReclaimGCPlanV1()=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, fileID uint32) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
 	t.Helper()
 	lease, err := d.AcquireStableResourceCaptureLease()

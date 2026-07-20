@@ -1814,6 +1814,15 @@ func (s *VectorPartitionStoreV1) persistVectorPartitionRewriteDebtV1(records []v
 	return nil
 }
 
+// Use the same bounded convergence budget as RecoverableRootSet capture.
+const vectorPartitionReclaimRecoverableRootAttemptsV1 = 8
+
+func shouldRefreshVectorPartitionReclaimGCPlanV1(err error, stats ColumnAssetGCStats, attempt int) bool {
+	return errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
+		stats.SegmentsDeleted == 0 &&
+		attempt+1 < vectorPartitionReclaimRecoverableRootAttemptsV1
+}
+
 // ReclaimVectorPartitionGenerationV1 is the only path that releases a
 // persisted partition reclaim record. It holds the collection mutation barrier
 // throughout rewrite and GC, excludes only this exact record from VPM prepared
@@ -1890,7 +1899,6 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		// recovery closure. Rebuild from a fresh plan/capability only when the
 		// stale pass has not deleted anything; retrying a partially applied
 		// destructive pass would not preserve the original candidate frontier.
-		const maxRecoverableRootRefreshes = 8
 		for attempt := 0; ; attempt++ {
 			stats, err = c.columnAssetGC(ctx, ColumnAssetGCOptions{
 				CandidateRefs:                    candidates,
@@ -1899,7 +1907,7 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 			if err == nil {
 				break
 			}
-			if !errors.Is(err, backenddb.ErrRecoverableRootSetStale) || stats.SegmentsDeleted != 0 || attempt+1 >= maxRecoverableRootRefreshes {
+			if !shouldRefreshVectorPartitionReclaimGCPlanV1(err, stats, attempt) {
 				return err
 			}
 		}
