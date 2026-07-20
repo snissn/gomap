@@ -118,7 +118,7 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	if report.ResultKind != "offline_partition_builder" || report.Artifact.Metrics.MaxPartitionSize > report.Artifact.Metrics.Cap {
 		t.Fatalf("report=%+v", report)
 	}
-	if _, err := os.Stat(filepath.Join(args[3], "vector_partition_artifact_v1.json")); err != nil {
+	if _, err := os.Stat(report.ArtifactPath); err != nil {
 		t.Fatal(err)
 	}
 	var second bytes.Buffer

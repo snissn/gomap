@@ -82,6 +82,9 @@ type partitionRun struct {
 	Artifact       vectorpartition.Artifact `json:"artifact"`
 	BuildNanos     int64                    `json:"build_nanos"`
 	ArtifactSHA256 string                   `json:"artifact_sha256"`
+	BaseSHA        string                   `json:"base_sha"`
+	HeadSHA        string                   `json:"head_sha"`
+	ArtifactPath   string                   `json:"artifact_path"`
 }
 
 type fixtureManifest struct {
@@ -421,16 +424,17 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	if err := os.MkdirAll(cfg.out, 0755); err != nil {
 		return err
 	}
-	path := filepath.Join(cfg.out, "vector_partition_artifact_v1.json")
+	name := fmt.Sprintf("vector_partition_%s_%s_%s.json", digest[:12], cfg.baseSHA[:12], cfg.headSHA[:12])
+	path := filepath.Join(cfg.out, name)
 	if err := os.WriteFile(path, bytes, 0644); err != nil {
 		return err
 	}
-	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Artifact: artifact, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest}
+	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Artifact: artifact, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path}
 	raw, err := json.Marshal(report)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_v1.json"), append(raw, '\n'), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+digest[:12]+"_"+cfg.baseSHA[:12]+"_"+cfg.headSHA[:12]+".json"), append(raw, '\n'), 0644); err != nil {
 		return err
 	}
 	if cfg.format == "json" {

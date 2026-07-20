@@ -22,10 +22,17 @@ import (
 )
 
 const (
-	SchemaVersion = 1
-	maxVectors    = 1_000_000
-	maxDimensions = 4096
-	maxEdges      = 64_000_000
+	SchemaVersion   = 1
+	maxVectors      = 1_000_000
+	maxDimensions   = 4096
+	maxEdges        = 64_000_000
+	maxRepetitions  = 32
+	maxPivots       = 1024
+	maxLeafBucket   = 65536
+	maxDegree       = 1024
+	maxPartitions   = 16384
+	maxIDBytes      = 1 << 20
+	maxDistanceWork = int64(1_000_000_000)
 )
 
 // Vector IDs must be unique and are canonically ordered before construction.
@@ -160,7 +167,7 @@ func sourceFor(v []Vector, metric, id string) Source {
 }
 
 func validateInput(v []Vector, c Config) error {
-	if c.Metric != "cosine" || c.Repetitions < 1 || c.Pivots < 2 || c.MaxLeafBucket < 2 || c.Degree < 1 || c.Partitions < 1 || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges {
+	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges {
 		return errors.New("invalid vector partition configuration")
 	}
 	if len(v) < c.Partitions || len(v) > c.MaxVectors {
@@ -168,7 +175,7 @@ func validateInput(v []Vector, c Config) error {
 	}
 	dims := 0
 	for _, x := range v {
-		if x.ID == "" {
+		if x.ID == "" || len(x.ID) > maxIDBytes {
 			return errors.New("empty vector ID")
 		}
 		if dims == 0 {
@@ -186,7 +193,7 @@ func validateInput(v []Vector, c Config) error {
 			}
 		}
 	}
-	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
+	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) || int64(len(v))*int64(c.MaxLeafBucket)*int64(c.Repetitions) > maxDistanceWork {
 		return errors.New("configured graph edge bound exceeded before allocation")
 	}
 	return nil
