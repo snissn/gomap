@@ -437,7 +437,7 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 				if len(parents) != 2 {
 					return fmt.Errorf("%s head_sha=%s is not a non-first merge parent and does not produce the exact squash merge tree for merge_sha=%s", prefix, pr.HeadSHA, pr.MergeSHA)
 				}
-				prospectiveTree, err := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parents[1], pr.HeadSHA)
+				prospectiveTree, err := prospectiveSquashMergeTree(repoRoot, gitEnvironment, gitBinary, parents[1], pr.HeadSHA)
 				if err != nil {
 					return fmt.Errorf("%s compute exact squash merge tree from head_sha=%s: %w", prefix, pr.HeadSHA, err)
 				}
@@ -450,6 +450,53 @@ func requirePullRequestProvenance(repoRoot, repositorySHA string, pullRequests [
 		previousMergeSHA = pr.MergeSHA
 	}
 	return nil
+}
+
+// prospectiveSquashMergeTree computes the tree produced by applying head to
+// parent without committing it. Git 2.38 added merge-tree --write-tree; older
+// trusted system Git versions use an isolated clone so certification keeps the
+// same exact-tree provenance gate without mutating the candidate repository.
+func prospectiveSquashMergeTree(repoRoot string, gitEnvironment []string, gitBinary, parent, head string) (string, error) {
+	prospectiveTree, fastErr := commandOutputWithEnvironment(repoRoot, gitEnvironment, gitBinary, "merge-tree", "--write-tree", parent, head)
+	if fastErr == nil {
+		return prospectiveTree, nil
+	}
+	prospectiveTree, err := prospectiveSquashMergeTreeFallback(repoRoot, gitEnvironment, gitBinary, parent, head)
+	if err != nil {
+		return "", fmt.Errorf("fast merge-tree failed (%v); isolated fallback failed: %w", fastErr, err)
+	}
+	return prospectiveTree, nil
+}
+
+func prospectiveSquashMergeTreeFallback(repoRoot string, gitEnvironment []string, gitBinary, parent, head string) (string, error) {
+	privateRoot, err := os.MkdirTemp("", "treedb-power-loss-cert-merge-tree-*")
+	if err != nil {
+		return "", fmt.Errorf("create isolated merge-tree checkout: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(privateRoot) }()
+	checkout := filepath.Join(privateRoot, "checkout")
+	if _, err := commandOutputWithEnvironment("", gitEnvironment, gitBinary, "clone", "--no-checkout", "--no-hardlinks", "--", repoRoot, checkout); err != nil {
+		return "", fmt.Errorf("clone isolated merge-tree checkout: %w", err)
+	}
+	if _, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "checkout", "--detach", parent); err != nil {
+		return "", fmt.Errorf("checkout merge parent %s: %w", parent, err)
+	}
+	if _, err := commandOutputWithEnvironment(
+		checkout,
+		gitEnvironment,
+		gitBinary,
+		"-c", "user.name=TreeDB power-loss certification",
+		"-c", "user.email=powerlosscert@example.invalid",
+		"-c", "commit.gpgSign=false",
+		"merge", "--no-commit", "--no-ff", head,
+	); err != nil {
+		return "", fmt.Errorf("merge head %s: %w", head, err)
+	}
+	prospectiveTree, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("write isolated prospective tree: %w", err)
+	}
+	return prospectiveTree, nil
 }
 
 func requireEmptyOutputRoot(root string) error {

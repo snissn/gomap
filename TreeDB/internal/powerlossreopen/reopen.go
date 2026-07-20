@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
@@ -43,12 +44,30 @@ var recoveryStatKeys = []string{
 // modeled identity scope and removes the materialized image whether Open
 // accepts or rejects it.
 func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
+	return stableRelative(model, ".", opts, readOnly)
+}
+
+// StableChild materializes the model's stable parent image and reopens a
+// relative child through the normal public TreeDB API. This is required for a
+// fresh database root whose directory entry itself is part of the modeled
+// namespace rather than an already-existing materialization root.
+func StableChild(model *powerlossoracle.Model, relativeDir string, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
+	relativeDir, err := cleanRelativeDir(relativeDir)
+	if err != nil {
+		return Result{}, nil, nil, err
+	}
+	return stableRelative(model, relativeDir, opts, readOnly)
+}
+
+func stableRelative(model *powerlossoracle.Model, relativeDir string, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
 	evidence, err := powerlossoracle.BeginEvidenceFromEnv(model, readOnly)
 	if err != nil {
 		return Result{}, nil, nil, err
 	}
 	if evidence != nil {
-		result, db, closeFn, err := openAt(evidence.RecoveryInputDir(), model, opts, readOnly, false)
+		materializationRoot := evidence.RecoveryInputDir()
+		openDir := filepath.Join(materializationRoot, relativeDir)
+		result, db, closeFn, err := openAt(materializationRoot, openDir, model, opts, readOnly, false)
 		if err != nil {
 			return Result{}, nil, nil, err
 		}
@@ -69,8 +88,8 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 		}{
 			SchemaVersion:      "treedb-power-loss-recovery-trace/v1",
 			PublicAPI:          "treedb.Open",
-			Dir:                "recovery-input",
-			PreOpenSnapshotDir: "recovery-preopen",
+			Dir:                filepath.ToSlash(filepath.Join("recovery-input", relativeDir)),
+			PreOpenSnapshotDir: filepath.ToSlash(filepath.Join("recovery-preopen", relativeDir)),
 			InputTreeSHA256:    evidence.StableImageTreeSHA256(),
 			StableFingerprint:  evidence.StableFingerprint(),
 			ReadOnly:           result.ReadOnly,
@@ -93,7 +112,7 @@ func Stable(model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (R
 	if err != nil {
 		return Result{}, nil, nil, err
 	}
-	return stableAt(dir, model, opts, readOnly, true)
+	return stableRelativeAt(dir, relativeDir, model, opts, readOnly, true)
 }
 
 // StableAt materializes the stable-only crash image at a caller-owned path and
@@ -103,27 +122,40 @@ func StableAt(dir string, model *powerlossoracle.Model, opts treedb.Options, rea
 	if err := requireEmptyDestination(dir); err != nil {
 		return Result{}, nil, nil, err
 	}
-	return stableAt(dir, model, opts, readOnly, false)
+	return stableRelativeAt(dir, ".", model, opts, readOnly, false)
 }
 
-func stableAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
-	if err := model.MaterializeStable(dir); err != nil {
+// StableChildAt is StableChild with a caller-owned materialization root. The
+// close callback preserves root for inspection.
+func StableChildAt(root, relativeDir string, model *powerlossoracle.Model, opts treedb.Options, readOnly bool) (Result, *treedb.DB, func() error, error) {
+	if err := requireEmptyDestination(root); err != nil {
+		return Result{}, nil, nil, err
+	}
+	relativeDir, err := cleanRelativeDir(relativeDir)
+	if err != nil {
+		return Result{}, nil, nil, err
+	}
+	return stableRelativeAt(root, relativeDir, model, opts, readOnly, false)
+}
+
+func stableRelativeAt(root, relativeDir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
+	if err := model.MaterializeStable(root); err != nil {
 		if removeOnClose {
-			_ = os.RemoveAll(dir)
+			_ = os.RemoveAll(root)
 		}
 		return Result{}, nil, nil, err
 	}
-	return openAt(dir, model, opts, readOnly, removeOnClose)
+	return openAt(root, filepath.Join(root, relativeDir), model, opts, readOnly, removeOnClose)
 }
 
-func openAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
+func openAt(materializationRoot, dir string, model *powerlossoracle.Model, opts treedb.Options, readOnly, removeOnClose bool) (Result, *treedb.DB, func() error, error) {
 	cleanup := func() error {
 		if removeOnClose {
-			return os.RemoveAll(dir)
+			return os.RemoveAll(materializationRoot)
 		}
 		return nil
 	}
-	releaseIdentities, err := model.InstallStableIdentityOverrides(dir)
+	releaseIdentities, err := model.InstallStableIdentityOverrides(materializationRoot)
 	if err != nil {
 		_ = cleanup()
 		return Result{}, nil, nil, err
@@ -159,6 +191,17 @@ func openAt(dir string, model *powerlossoracle.Model, opts treedb.Options, readO
 		return result, nil, nil, fmt.Errorf("powerlossreopen: public Open returned nil DB and nil error")
 	}
 	return result, db, closeFn, nil
+}
+
+func cleanRelativeDir(relativeDir string) (string, error) {
+	if relativeDir == "" || filepath.IsAbs(relativeDir) {
+		return "", fmt.Errorf("powerlossreopen: child directory %q must be a non-empty relative path", relativeDir)
+	}
+	clean := filepath.Clean(relativeDir)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("powerlossreopen: child directory %q escapes the materialized root", relativeDir)
+	}
+	return clean, nil
 }
 
 func requireEmptyDestination(dir string) error {

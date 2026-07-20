@@ -238,6 +238,68 @@ func TestRequirePullRequestProvenanceBindsClaimsToCertifiedGraph(t *testing.T) {
 	}
 }
 
+func TestProspectiveSquashMergeTreeFallbackMatchesCommittedTree(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	writeSource := func(contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "powerlosscert@example.invalid")
+	runGit("config", "user.name", "powerlosscert test")
+	writeSource("package fixture\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "base")
+	baseSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "-b", "feature")
+	writeSource("package fixture\n\nconst Feature = true\n")
+	runGit("add", "tracked.go")
+	runGit("commit", "-m", "feature head")
+	headSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "main")
+	if err := os.WriteFile(filepath.Join(repo, "main_only.go"), []byte("package fixture\n\nconst MainOnly = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "main_only.go")
+	runGit("commit", "-m", "advance main before squash")
+	parentSHA := runGit("rev-parse", "HEAD")
+	runGit("merge", "--squash", "feature")
+	runGit("commit", "-m", "Feature (#42)")
+	wantTree := runGit("rev-parse", "HEAD^{tree}")
+
+	gitBinary, err := resolveGitBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTree, err := prospectiveSquashMergeTreeFallback(repo, certificationGitEnvironment(), gitBinary, parentSHA, headSHA)
+	if err != nil {
+		t.Fatalf("prospectiveSquashMergeTreeFallback: %v", err)
+	}
+	if strings.TrimSpace(gotTree) != wantTree {
+		t.Fatalf("fallback tree=%q, want committed squash tree %q", strings.TrimSpace(gotTree), wantTree)
+	}
+	unrelatedTree, err := prospectiveSquashMergeTreeFallback(repo, certificationGitEnvironment(), gitBinary, parentSHA, baseSHA)
+	if err != nil {
+		t.Fatalf("prospectiveSquashMergeTreeFallback(unrelated): %v", err)
+	}
+	if strings.TrimSpace(unrelatedTree) == wantTree {
+		t.Fatalf("unrelated head unexpectedly produced certified tree %q", wantTree)
+	}
+}
+
 func TestCertificationExecutableResolutionIgnoresInheritedPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell executable shadow fixture is Unix-specific")

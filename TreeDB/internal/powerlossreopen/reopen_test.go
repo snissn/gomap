@@ -55,6 +55,51 @@ func TestStableAtPreservesCallerOwnedCrashImage(t *testing.T) {
 	}
 }
 
+func TestStableChildAtReopensModeledRelativeDatabaseRoot(t *testing.T) {
+	sourceRoot := t.TempDir()
+	sourceDB := filepath.Join(sourceRoot, "db")
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, sourceDB)
+	opts.DisableSideStores = true
+	opts.DisableBackgroundPrune = true
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSync([]byte("stable-child"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	model, err := powerlossoracle.Capture(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinationRoot := filepath.Join(canonicalTempDir(t), "relative-parent")
+	result, reopened, closeFn, err := powerlossreopen.StableChildAt(destinationRoot, "db", model, opts, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Dir != filepath.Join(destinationRoot, "db") || result.Rejected || reopened == nil {
+		t.Fatalf("StableChildAt result=%+v reopened=%v", result, reopened)
+	}
+	got, err := reopened.Get([]byte("stable-child"))
+	if err != nil || !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("Get stable-child=%q err=%v", got, err)
+	}
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(destinationRoot); err != nil {
+		t.Fatalf("caller-owned parent image removed: %v", err)
+	}
+
+	if _, _, _, err := powerlossreopen.StableChildAt(filepath.Join(canonicalTempDir(t), "escape-parent"), "../db", model, opts, true); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("StableChildAt traversal error=%v", err)
+	}
+}
+
 func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	source := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, source)

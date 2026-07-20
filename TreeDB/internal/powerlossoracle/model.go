@@ -244,6 +244,9 @@ func (m *Model) PathStable(root, path string) (bool, error) {
 	if !volatileOK || !stableOK || volatileID != stableID {
 		return false, nil
 	}
+	if !stableDirReachable(m.stableDirs, cleanInternal(pathpkg.Dir(rel))) {
+		return false, nil
+	}
 	node := m.inodes[volatileID]
 	return node != nil && bytes.Equal(node.volatile, node.stable), nil
 }
@@ -650,11 +653,6 @@ func (m *Model) SyncDir(dir string) error {
 	if _, ok := m.volatileDirs[dir]; !ok {
 		return fmt.Errorf("powerlossoracle: sync missing directory %q", dir)
 	}
-	if dir != "." {
-		if _, ok := m.stableDirs[dir]; !ok {
-			return fmt.Errorf("powerlossoracle: sync unreachable directory %q before parent directory entry", dir)
-		}
-	}
 	for path := range m.stable {
 		if cleanInternal(pathpkg.Dir(path)) == dir {
 			delete(m.stable, path)
@@ -701,13 +699,16 @@ func (m *Model) SyncDir(dir string) error {
 
 // Crash discards every volatile byte and namespace mutation.
 func (m *Model) Crash() {
-	m.volatile = make(map[string]uint64, len(m.stable))
-	for path, id := range m.stable {
+	reachableDirs, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	m.stableDirs = reachableDirs
+	m.stable = reachableFiles
+	m.volatile = make(map[string]uint64, len(reachableFiles))
+	for path, id := range reachableFiles {
 		m.volatile[path] = id
 		m.inodes[id].volatile = clone(m.inodes[id].stable)
 	}
-	m.volatileDirs = make(map[string]rootpublication.StableIdentity, len(m.stableDirs))
-	for dir, identity := range m.stableDirs {
+	m.volatileDirs = make(map[string]rootpublication.StableIdentity, len(reachableDirs))
+	for dir, identity := range reachableDirs {
 		m.volatileDirs[dir] = identity
 	}
 	m.trace = append(m.trace, "crash")
@@ -729,6 +730,9 @@ func (m *Model) MaterializeVolatile(root string) error {
 func (m *Model) materialize(root string, dirs map[string]rootpublication.StableIdentity, files map[string]uint64, bytesFor func(*inode) []byte, label string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
+	}
+	if label == "stable" {
+		dirs, files = reachableNamespace(dirs, files)
 	}
 	dirPaths := keys(dirs)
 	sort.Slice(dirPaths, func(i, j int) bool {
@@ -780,13 +784,14 @@ func (m *Model) InstallStableIdentityOverrides(root string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	overrides := make(map[string]rootpublication.StableIdentity, len(m.stable)+len(m.stableDirs))
-	for dir, identity := range m.stableDirs {
+	reachableDirs, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	overrides := make(map[string]rootpublication.StableIdentity, len(reachableFiles)+len(reachableDirs))
+	for dir, identity := range reachableDirs {
 		if validStableIdentity(identity) {
 			overrides[filepath.Join(root, filepath.FromSlash(dir))] = physicalStableIdentity(identity)
 		}
 	}
-	for path, id := range m.stable {
+	for path, id := range reachableFiles {
 		identity := m.inodes[id].stableIdentity
 		if validStableIdentity(identity) {
 			overrides[filepath.Join(root, filepath.FromSlash(path))] = physicalStableIdentity(identity)
@@ -797,8 +802,9 @@ func (m *Model) InstallStableIdentityOverrides(root string) (func(), error) {
 
 // StablePaths returns stable regular-file paths in deterministic order.
 func (m *Model) StablePaths() []string {
-	paths := make([]string, 0, len(m.stable))
-	for path := range m.stable {
+	_, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	paths := make([]string, 0, len(reachableFiles))
+	for path := range reachableFiles {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
@@ -813,6 +819,52 @@ func (m *Model) VolatilePaths() []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+// reachableNamespace projects per-directory durable contents onto the names
+// reachable from the materialized root. A child directory can be synced before
+// its own parent entry; its durable contents become reachable only if a later
+// ancestor sync persists the chain.
+func reachableNamespace(dirs map[string]rootpublication.StableIdentity, files map[string]uint64) (map[string]rootpublication.StableIdentity, map[string]uint64) {
+	reachableDirs := make(map[string]rootpublication.StableIdentity, len(dirs))
+	if identity, ok := dirs["."]; ok {
+		reachableDirs["."] = identity
+	}
+	dirPaths := keys(dirs)
+	sort.Slice(dirPaths, func(i, j int) bool {
+		di, dj := strings.Count(dirPaths[i], "/"), strings.Count(dirPaths[j], "/")
+		if di == dj {
+			return dirPaths[i] < dirPaths[j]
+		}
+		return di < dj
+	})
+	for _, dir := range dirPaths {
+		if dir == "." {
+			continue
+		}
+		if _, ok := reachableDirs[cleanInternal(pathpkg.Dir(dir))]; ok {
+			reachableDirs[dir] = dirs[dir]
+		}
+	}
+	reachableFiles := make(map[string]uint64, len(files))
+	for path, id := range files {
+		if _, ok := reachableDirs[cleanInternal(pathpkg.Dir(path))]; ok {
+			reachableFiles[path] = id
+		}
+	}
+	return reachableDirs, reachableFiles
+}
+
+func stableDirReachable(dirs map[string]rootpublication.StableIdentity, dir string) bool {
+	for {
+		if _, ok := dirs[dir]; !ok {
+			return false
+		}
+		if dir == "." {
+			return true
+		}
+		dir = cleanInternal(pathpkg.Dir(dir))
+	}
 }
 
 // Trace returns the deterministic operation trace used in failure diagnostics.

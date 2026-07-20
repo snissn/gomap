@@ -354,7 +354,7 @@ func TestMaterializeVolatileWritesProcessVisibleImage(t *testing.T) {
 	}
 }
 
-func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
+func TestNestedCreateBecomesReachableOnlyAfterStableAncestorChain(t *testing.T) {
 	model := newModel()
 	if err := model.Create("a/b/value", []byte("stable")); err != nil {
 		t.Fatal(err)
@@ -362,10 +362,17 @@ func TestNestedCreateRequiresStableAncestorChain(t *testing.T) {
 	if err := model.SyncFile("a/b/value"); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.SyncDir("a/b"); err == nil {
-		t.Fatal("SyncDir(a/b) succeeded before parent entries were stable")
+	if err := model.SyncDir("a/b"); err != nil {
+		t.Fatalf("SyncDir(a/b): %v", err)
 	}
-	for _, dir := range []string{".", "a", "a/b"} {
+	unreachable := t.TempDir()
+	if err := model.MaterializeStable(unreachable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(unreachable, "a")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreachable stable child materialized before ancestor sync: %v", err)
+	}
+	for _, dir := range []string{".", "a"} {
 		if err := model.SyncDir(dir); err != nil {
 			t.Fatalf("SyncDir(%q): %v", dir, err)
 		}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -357,12 +358,18 @@ func syncStorageLayoutDirRequired(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("treedb: empty storage layout namespace")
 	}
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir); err != nil {
+		return errors.Join(err, ErrRecoveryRequired)
+	}
 	if runtime.GOOS == "windows" {
-		return fmt.Errorf("%w: generic parent-directory sync is unavailable on windows", ErrNamespacePersistenceUnsupported)
+		return errors.Join(
+			fmt.Errorf("%w: generic parent-directory sync is unavailable on windows", ErrNamespacePersistenceUnsupported),
+			ErrRecoveryRequired,
+		)
 	}
 	file, err := os.Open(dir)
 	if err != nil {
-		return err
+		return errors.Join(err, ErrRecoveryRequired)
 	}
 	defer func() { _ = file.Close() }()
 	if err := file.Sync(); err != nil {
@@ -372,9 +379,15 @@ func syncStorageLayoutDirRequired(dir string) error {
 			errors.Is(err, syscall.ENOTSUP) ||
 			errors.Is(err, syscall.ENOSYS) ||
 			strings.Contains(lowerErr, "not supported") {
-			return fmt.Errorf("%w: sync directory %q: %v", ErrNamespacePersistenceUnsupported, dir, err)
+			return errors.Join(
+				fmt.Errorf("%w: sync directory %q: %v", ErrNamespacePersistenceUnsupported, dir, err),
+				ErrRecoveryRequired,
+			)
 		}
-		return err
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir); err != nil {
+		return errors.Join(err, ErrRecoveryRequired)
 	}
 	return nil
 }
