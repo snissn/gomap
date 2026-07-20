@@ -232,6 +232,102 @@ func TestBuildAndArtifactRejectInvalidUTF8IDs(t *testing.T) {
 	}
 }
 
+func TestIdentityStringsRejectInvalidUTF8BeforeBackendEffects(t *testing.T) {
+	invalid := string([]byte{0xff})
+	for _, tc := range []struct {
+		name    string
+		source  Source
+		backend identityPartitioner
+	}{
+		{name: "source ID", source: Source{SourceID: invalid}, backend: identityPartitioner{name: "backend", license: "license"}},
+		{name: "backend name", source: Source{SourceID: "source"}, backend: identityPartitioner{name: invalid, license: "license"}},
+		{name: "backend license", source: Source{SourceID: "source"}, backend: identityPartitioner{name: "backend", license: invalid}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			tc.backend.called = &called
+			_, err := BuildWithPartitioner(fixture(), config(), tc.source, tc.backend)
+			if err == nil {
+				t.Fatal("invalid UTF-8 identity accepted")
+			}
+			if called {
+				t.Fatal("invalid UTF-8 identity reached backend")
+			}
+		})
+	}
+}
+
+func TestArtifactIdentityStringsRejectInvalidUTF8AndDecodeStrictly(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := string([]byte{0xff})
+	for _, tc := range []struct {
+		name   string
+		valid  string
+		mutate func(*Artifact)
+	}{
+		{name: "source ID", valid: a.Source.SourceID, mutate: func(x *Artifact) { x.Source.SourceID = invalid }},
+		{name: "backend name", valid: a.Backend, mutate: func(x *Artifact) { x.Backend = invalid }},
+		{name: "backend license", valid: a.BackendLicense, mutate: func(x *Artifact) { x.BackendLicense = invalid }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forged := a
+			tc.mutate(&forged)
+			if err := ValidateArtifact(forged); err == nil {
+				t.Fatal("ValidateArtifact accepted invalid UTF-8 identity")
+			}
+			if _, err := CanonicalJSON(forged); err == nil {
+				t.Fatal("CanonicalJSON accepted invalid UTF-8 identity")
+			}
+			invalidRaw := bytes.Replace(raw, []byte("\""+tc.valid+"\""), []byte{'"', 0xff, '"'}, 1)
+			if bytes.Equal(invalidRaw, raw) {
+				t.Fatal("test did not forge identity bytes")
+			}
+			if _, err := DecodeArtifact(invalidRaw, len(invalidRaw)); err == nil {
+				t.Fatal("DecodeArtifact accepted invalid UTF-8 identity bytes")
+			}
+		})
+	}
+	invalidExpected := a.Source
+	invalidExpected.SourceID = invalid
+	if _, err := DecodeArtifactForSource(raw, len(raw), invalidExpected); err == nil {
+		t.Fatal("DecodeArtifactForSource accepted invalid expected source ID")
+	}
+}
+
+func TestUnicodeIdentityStringsRoundTripCanonically(t *testing.T) {
+	canonical, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID, backendName, backendLicense := "source-東京", "backend-雪", "license-λ"
+	a, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: sourceID}, identityPartitioner{name: backendName, license: backendLicense, assignment: canonical.Assignment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeArtifact(raw, len(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := CanonicalJSON(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, again) || decoded.Source.SourceID != sourceID || decoded.Backend != backendName || decoded.BackendLicense != backendLicense {
+		t.Fatalf("unicode identities did not round trip canonically: decoded=%+v", decoded)
+	}
+}
+
 func TestInputShapePreflightCountsTopLevelPivotWork(t *testing.T) {
 	c := DefaultConfig()
 	c.Partitions = 1
@@ -504,6 +600,41 @@ func TestExternalBackendRejectsInputCapBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestExternalRequestBoundAccountsForEscapedIdentities(t *testing.T) {
+	bound, ok := externalJSONByteBound(4, 0, 1)
+	if !ok || bound < 6*4 {
+		t.Fatalf("escaped identity bound=%d ok=%v", bound, ok)
+	}
+	if maxExternalJSONBytes < 6*maxTotalIDBytes {
+		t.Fatalf("production request cap=%d undercharges escaped IDs", maxExternalJSONBytes)
+	}
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Four control-byte IDs require six escaped bytes each in JSON. The bounded
+	// request reaches the backend at its explicit cap rather than being rejected
+	// by the global request ceiling.
+	input := []byte(`{"ids":["\u0000\u0001\u0002\u0003"]}`)
+	if len(input) > bound {
+		t.Fatalf("escaped request length=%d exceeds modeled bound=%d", len(input), bound)
+	}
+	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(raw)}, a.Source); err != nil {
+		t.Fatalf("escaped bounded input rejected before backend: %v", err)
+	}
+	_, err = RunExternalJSONForSourceWithLimits(ctx, []string{"definitely-not-an-executable"}, input, ExternalJSONLimits{MaxInput: len(input) - 1, MaxOutput: len(raw)}, a.Source)
+	if err == nil || !strings.Contains(err.Error(), "input exceeds cap") {
+		t.Fatalf("one-over input cap reached backend or returned wrong error: %v", err)
+	}
+}
+
 func TestExternalBackendStillRejectsOutputOverflow(t *testing.T) {
 	a, err := Build(fixture(), config())
 	if err != nil {
@@ -565,6 +696,21 @@ type assignmentPartitioner struct{ assignment []int }
 func (p assignmentPartitioner) Name() string    { return "assignment-test" }
 func (p assignmentPartitioner) License() string { return "test" }
 func (p assignmentPartitioner) Partition(Graph, int, int) ([]int, error) {
+	return p.assignment, nil
+}
+
+type identityPartitioner struct {
+	name, license string
+	assignment    []int
+	called        *bool
+}
+
+func (p identityPartitioner) Name() string    { return p.name }
+func (p identityPartitioner) License() string { return p.license }
+func (p identityPartitioner) Partition(Graph, int, int) ([]int, error) {
+	if p.called != nil {
+		*p.called = true
+	}
 	return p.assignment, nil
 }
 

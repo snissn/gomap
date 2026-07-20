@@ -27,7 +27,8 @@ only; the unbound `RunExternalJSON` deliberately errors. It receives
 an explicit command, private input/output paths, context cancellation, a
 fully bound expected source snapshot, and independent request/output-byte
 caps. The default request cap is derived from bounded M2 graph ordinals and
-ID serialization; callers may set a smaller request cap without inflating the
+worst-case JSON escaping for IDs and source/backend identity fields; callers
+may set a smaller request cap without inflating the
 output cap. It removes the
 entire private temporary directory on command failure, cancellation, timeout,
 malformed output, or success. On Unix it also kills the dedicated process group

@@ -40,11 +40,63 @@ const (
 	maxDistanceWork  = int64(20_000_000_000) // scalar cosine dimensions
 	maxPartitionWork = int64(250_000_000)
 	maxCarveDepth    = 64
-	// External JSON can carry every bounded graph ordinal (up to nine bytes each
-	// in canonical JSON), all bounded ID bytes, and one bounded per-vector field.
-	// This is a request/output ceiling, separate from a caller's output cap.
-	maxExternalJSONBytes = maxTotalIDBytes + maxEdges*9 + maxVectors*16
 )
+
+const externalJSONFixedSyntaxBytes = 1 << 20
+
+var maxExternalJSONBytes = mustExternalJSONByteBound(maxTotalIDBytes, maxEdges, maxVectors)
+
+// externalJSONByteBound conservatively bounds a serialized M2 graph request or
+// artifact. JSON control bytes may escape to six bytes, so ID, source ID,
+// backend name, and backend license all receive that multiplier. Graph
+// ordinals, per-vector syntax, and a fixed field/syntax reserve are charged
+// separately with checked integer arithmetic.
+func externalJSONByteBound(totalIDBytes, edges, vectors int) (int, bool) {
+	if totalIDBytes < 0 || edges < 0 || vectors < 0 {
+		return 0, false
+	}
+	total := 0
+	add := func(n int) bool {
+		if n < 0 || total > math.MaxInt-n {
+			return false
+		}
+		total += n
+		return true
+	}
+	mul := func(a, b int) (int, bool) {
+		if a < 0 || b < 0 || a != 0 && b > math.MaxInt/a {
+			return 0, false
+		}
+		return a * b, true
+	}
+	escapedIDs, ok := mul(totalIDBytes, 6)
+	if !ok || !add(escapedIDs) {
+		return 0, false
+	}
+	// The largest caller-controlled non-vector identity fields are SourceID,
+	// backend Name, and backend License.
+	escapedIdentities, ok := mul(1024+256+1024, 6)
+	if !ok || !add(escapedIdentities) {
+		return 0, false
+	}
+	graph, ok := mul(edges, 9) // ordinal, comma, and conservative syntax slack
+	if !ok || !add(graph) {
+		return 0, false
+	}
+	perVector, ok := mul(vectors, 32) // IDs/arrays/assignment/metric syntax
+	if !ok || !add(perVector) || !add(externalJSONFixedSyntaxBytes) {
+		return 0, false
+	}
+	return total, true
+}
+
+func mustExternalJSONByteBound(totalIDBytes, edges, vectors int) int {
+	bound, ok := externalJSONByteBound(totalIDBytes, edges, vectors)
+	if !ok {
+		panic("external JSON byte bound overflow")
+	}
+	return bound
+}
 
 // Vector IDs must be unique and are canonically ordered before construction.
 type Vector struct {
@@ -148,7 +200,7 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 		return Artifact{}, phases, errors.New("partition backend identity is required")
 	}
 	backendName, backendLicense := backend.Name(), backend.License()
-	if backendName == "" || len(backendName) > 256 || backendLicense == "" || len(backendLicense) > 1024 {
+	if backendName == "" || !utf8.ValidString(backendName) || len(backendName) > 256 || backendLicense == "" || !utf8.ValidString(backendLicense) || len(backendLicense) > 1024 {
 		return Artifact{}, phases, errors.New("partition backend identity is required")
 	}
 	if err := validateRequestedSource(source); err != nil {
@@ -245,7 +297,7 @@ func isReferencePartitioner(backend Partitioner) bool {
 	}
 }
 func validateRequestedSource(s Source) error {
-	if s.SourceID == "" || len(s.SourceID) > 1024 {
+	if s.SourceID == "" || !utf8.ValidString(s.SourceID) || len(s.SourceID) > 1024 {
 		return errors.New("source ID is required")
 	}
 	if s == (Source{SourceID: s.SourceID}) {
@@ -785,7 +837,7 @@ func stableIDPartition(id string, partitions int) int {
 }
 
 func ValidateArtifact(a Artifact) error {
-	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.Backend) > 256 || a.BackendLicense == "" || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || strings.ToLower(a.Source.Checksum) != a.Source.Checksum || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Dimensions > maxDimensions || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
+	if a.SchemaVersion != SchemaVersion || a.Backend == "" || !utf8.ValidString(a.Backend) || len(a.Backend) > 256 || a.BackendLicense == "" || !utf8.ValidString(a.BackendLicense) || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || !utf8.ValidString(a.Source.SourceID) || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || strings.ToLower(a.Source.Checksum) != a.Source.Checksum || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Dimensions > maxDimensions || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
 		return errors.New("malformed partition artifact")
 	}
 	if err := validateArtifactConfig(a.IDs, a.Config); err != nil {
@@ -889,6 +941,9 @@ func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 	if maxBytes < 1 || len(raw) > maxBytes {
 		return Artifact{}, errors.New("partition artifact exceeds byte cap")
 	}
+	if !utf8.Valid(raw) {
+		return Artifact{}, errors.New("partition artifact contains invalid UTF-8")
+	}
 	var a Artifact
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
@@ -915,6 +970,9 @@ func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 // DecodeArtifactForSource additionally binds untrusted backend output to the
 // source snapshot supplied by the caller.
 func DecodeArtifactForSource(raw []byte, maxBytes int, expected Source) (Artifact, error) {
+	if err := validateExpectedSource(expected); err != nil {
+		return Artifact{}, err
+	}
 	a, err := DecodeArtifact(raw, maxBytes)
 	if err != nil {
 		return Artifact{}, err
@@ -995,7 +1053,7 @@ func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, i
 }
 
 func validateExpectedSource(s Source) error {
-	if s.SourceID == "" || len(s.SourceID) > 1024 || len(s.Checksum) != 64 || strings.ToLower(s.Checksum) != s.Checksum || s.Vectors < 1 || s.Vectors > maxVectors || s.Dimensions < 1 || s.Dimensions > maxDimensions || s.Metric != "cosine" {
+	if s.SourceID == "" || !utf8.ValidString(s.SourceID) || len(s.SourceID) > 1024 || len(s.Checksum) != 64 || strings.ToLower(s.Checksum) != s.Checksum || s.Vectors < 1 || s.Vectors > maxVectors || s.Dimensions < 1 || s.Dimensions > maxDimensions || s.Metric != "cosine" {
 		return errors.New("invalid expected source binding")
 	}
 	if _, err := hex.DecodeString(s.Checksum); err != nil {
