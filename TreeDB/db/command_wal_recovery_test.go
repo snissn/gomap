@@ -1878,6 +1878,99 @@ func TestCommandWALMaterializedRIDRecoveryReusesMatchingRID(t *testing.T) {
 	}
 }
 
+func TestCommandWALMaterializedRIDRecoverySyncsReusedRIDBeforeDurableRootPublication(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	ptr := writeValueLogRID(t, dir, 42, []byte("materialized"))
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+	valueLogPath := valuelog.SegmentPath(ValueLogDirPath(dir), ptr.FileID)
+	containsValueLogPath := func(event durabilitycut.Event) bool {
+		if event.Path == valueLogPath {
+			return true
+		}
+		for _, path := range event.Paths {
+			if path == valueLogPath {
+				return true
+			}
+		}
+		return false
+	}
+
+	var events []durabilitycut.Event
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	reopen := openCommandWALDB(t, dir)
+	restore()
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "materialized")
+
+	beforeSync, afterSync, applied, beforeSeal := -1, -1, -1, -1
+	for i, event := range events {
+		switch {
+		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.BeforeDependencyFileSync && containsValueLogPath(event):
+			beforeSync = i
+		case event.Resource == durabilitycut.ResourceAuxiliary && event.Point == durabilitycut.AfterDependencyFileSync && containsValueLogPath(event):
+			afterSync = i
+		case event.Resource == durabilitycut.ResourceMeta && event.Point == durabilitycut.AfterAppliedLSNAdvance && event.LSN == 1:
+			applied = i
+		case event.Resource == durabilitycut.ResourceSeal && event.Point == durabilitycut.BeforePublicationSealWrite:
+			beforeSeal = i
+		}
+	}
+	if applied < 0 || beforeSync <= applied || afterSync <= beforeSync || beforeSeal <= afterSync {
+		t.Fatalf("reused RID sync must precede durable root publication: applied=%d before=%d after=%d seal=%d path=%q events=%#v", applied, beforeSync, afterSync, beforeSeal, valueLogPath, events)
+	}
+}
+
+func TestCommandWALMaterializedRIDRecoveryReusedRIDSyncFailureFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	ptr := writeValueLogRID(t, dir, 42, []byte("materialized"))
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42, Value: []byte("materialized"),
+	}})
+	valueLogPath := valuelog.SegmentPath(ValueLogDirPath(dir), ptr.FileID)
+	wantErr := errors.New("injected reused RID sync failure")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource != durabilitycut.ResourceAuxiliary || event.Point != durabilitycut.BeforeDependencyFileSync {
+			return nil
+		}
+		if event.Path == valueLogPath {
+			return wantErr
+		}
+		for _, path := range event.Paths {
+			if path == valueLogPath {
+				return wantErr
+			}
+		}
+		return nil
+	})
+	_, err := Open(Options{Dir: dir})
+	restore()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Open reused RID sync error=%v, want %v", err, wantErr)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "materialized")
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1 after successful retry", got)
+	}
+}
+
 func TestCommandWALMaterializedRIDRecoveryPreservesExistingRIDHighWaterAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

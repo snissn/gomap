@@ -2630,6 +2630,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			if ok {
 				got, producedThisFrame := materializedThisFrame[entry.RID]
 				if !producedThisFrame {
+					// Registration binds this exact existing segment to the synchronous
+					// root-publication closure below. That closure syncs it after the
+					// provisional in-memory LSN assignment but before the publication
+					// seal, index, and durable meta make the LSN/root tuple stable.
 					if err := db.registerReplayValueLogPointer(ptr); err != nil {
 						return err
 					}
