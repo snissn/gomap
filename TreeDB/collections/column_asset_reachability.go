@@ -35,7 +35,7 @@ type ColumnAssetReachabilityOptions struct {
 	QuarantineRefs                        []ColumnAssetRef
 	QuarantineSegments                    []ColumnAssetQuarantineSegment
 	PinnedRefs                            []ColumnAssetRef
-	releaseVectorPartitionReclaimID       string
+	releaseVectorPartitionReclaimIDs      map[string]struct{}
 }
 
 type columnAssetReachabilityOptionsInternal struct {

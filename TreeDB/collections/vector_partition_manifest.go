@@ -699,7 +699,7 @@ func decodeVectorPartitionReclaimRecordV1(raw []byte) (VectorPartitionManifestV1
 	return DecodeVectorPartitionManifestV1(payload, DefaultVectorPartitionManifestLimits())
 }
 
-func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimID string) ([]ColumnAssetRef, []ColumnAssetRef, error) {
+func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimIDs map[string]struct{}) ([]ColumnAssetRef, []ColumnAssetRef, error) {
 	if c == nil || c.db == nil {
 		return nil, nil, nil
 	}
@@ -755,7 +755,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimID string) 
 				if err != nil || reclaim.Collection != c.name || entry.Name() != s.deleteTombstoneName(reclaim.Collection, reclaim.IndexName, reclaim.Generation) {
 					return nil, nil, fmt.Errorf("collections: invalid vector partition reclaim record %q", entry.Name())
 				}
-				if entry.Name() != releaseReclaimID {
+				if _, releasing := releaseReclaimIDs[entry.Name()]; !releasing {
 					for _, asset := range append(append([]VectorPartitionAssetV1(nil), reclaim.Assets...), reclaim.RouterAsset) {
 						reclaimPrepared = append(reclaimPrepared, asset.Ref)
 					}
@@ -1186,6 +1186,48 @@ func (s *VectorPartitionStoreV1) openDeleteTombstone(collection, index string, g
 	return m, nil
 }
 
+type vectorPartitionReclaimRecordV1 struct {
+	id string
+	m  VectorPartitionManifestV1
+}
+
+func (s *VectorPartitionStoreV1) reclaimRecords(collection string) ([]vectorPartitionReclaimRecordV1, error) {
+	dir, err := os.Open(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	prefix := safeVPM(collection) + "-"
+	var records []vectorPartitionReclaimRecordV1
+	for {
+		entries, readErr := dir.ReadDir(64)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, readErr
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".deleting") {
+				continue
+			}
+			if len(records) >= vectorPartitionStoreMaxEntriesV1 {
+				return nil, fmt.Errorf("collections: vector partition reclaim record cap")
+			}
+			raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes+64)
+			if err != nil {
+				return nil, err
+			}
+			m, err := decodeVectorPartitionReclaimRecordV1(raw)
+			if err != nil || m.Collection != collection || entry.Name() != s.deleteTombstoneName(m.Collection, m.IndexName, m.Generation) {
+				return nil, fmt.Errorf("%w: reclaim record", ErrVectorPartitionManifestInvalid)
+			}
+			records = append(records, vectorPartitionReclaimRecordV1{id: entry.Name(), m: m})
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+	return records, nil
+}
+
 // ReclaimVectorPartitionGenerationV1 is the only path that releases a
 // persisted partition reclaim record. It holds the collection mutation barrier
 // throughout rewrite and GC, excludes only this exact record from VPM prepared
@@ -1212,44 +1254,63 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		if err != nil {
 			return err
 		}
-		reclaimID := s.deleteTombstoneName(c.name, index, generation)
-		m, err := s.openDeleteTombstone(c.name, index, generation)
+		if _, err := s.openDeleteTombstone(c.name, index, generation); err != nil {
+			return err
+		}
+		records, err := s.reclaimRecords(c.name)
 		if err != nil {
 			return err
 		}
-		refs := make([]ColumnAssetRef, 0, len(m.Assets)+1)
-		for _, asset := range m.Assets {
-			refs = append(refs, asset.Ref)
+		reclaimIDs := make(map[string]struct{}, len(records))
+		refs := make([]ColumnAssetRef, 0, len(records)*2)
+		requestedID := s.deleteTombstoneName(c.name, index, generation)
+		requestedComplete := false
+		for _, record := range records {
+			reclaimIDs[record.id] = struct{}{}
+			for _, asset := range record.m.Assets {
+				refs = append(refs, asset.Ref)
+			}
+			refs = append(refs, record.m.RouterAsset.Ref)
 		}
-		refs = append(refs, m.RouterAsset.Ref)
 		rewrite, err := c.columnAssetRewrite(ctx, columnAssetRewriteOptions{
-			ColumnAssetRewriteOptions:       ColumnAssetRewriteOptions{CandidateRefs: refs},
-			releaseVectorPartitionReclaimID: reclaimID,
+			ColumnAssetRewriteOptions:        ColumnAssetRewriteOptions{CandidateRefs: refs},
+			releaseVectorPartitionReclaimIDs: reclaimIDs,
 		})
 		if err != nil {
 			return err
 		}
 		candidates := append(refs, rewrite.SupersededRefs...)
 		stats, err := c.columnAssetGC(ctx, ColumnAssetGCOptions{
-			CandidateRefs:                   candidates,
-			releaseVectorPartitionReclaimID: reclaimID,
+			CandidateRefs:                    candidates,
+			releaseVectorPartitionReclaimIDs: reclaimIDs,
 		})
 		if err != nil {
 			return err
 		}
-		for _, ref := range refs {
-			path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
-			if err != nil {
-				return err
+		for _, record := range records {
+			complete := true
+			for _, asset := range append(append([]VectorPartitionAssetV1(nil), record.m.Assets...), record.m.RouterAsset) {
+				path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
+				if err != nil {
+					return err
+				}
+				if _, err := os.Stat(path); err == nil {
+					complete = false
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
 			}
-			if _, err := os.Stat(path); err == nil {
-				return fmt.Errorf("collections: vector partition reclaim generation %d not physically complete", generation)
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return err
+			if complete {
+				if err := os.Remove(filepath.Join(s.dir, record.id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				if record.id == requestedID {
+					requestedComplete = true
+				}
 			}
 		}
-		if err := os.Remove(s.deleteTombstonePath(c.name, index, generation)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+		if !requestedComplete {
+			return fmt.Errorf("collections: vector partition reclaim generation %d not physically complete", generation)
 		}
 		if err := syncDirVPM(s.dir); err != nil {
 			return err
