@@ -182,6 +182,71 @@ func TestPublicCommandWALGroupCommitSoloDurablePanicReleasesGates(t *testing.T) 
 	db.commandWALPublicOperationGate.Unlock()
 }
 
+func TestPublicCommandWALGroupCommitGroupedPanicReleasesGates(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.commandWALGroupCommit.testAfterRegister = func(uint64, bool) {}
+	recovered := func() (recovered any) {
+		defer func() {
+			recovered = recover()
+		}()
+		_, _ = db.appendAndRegisterPublicCommandWAL(1, nil, true, nil, nil, nil, func(bool) (uint64, error) {
+			panic("injected grouped append panic")
+		})
+		t.Fatal("grouped durable panic path returned")
+		return nil
+	}()
+	if recovered == nil {
+		t.Fatal("grouped durable append panic was not observed")
+	}
+	if got := db.commandWALGroupCommit.durableIntents.Load(); got != 0 {
+		t.Fatalf("durable intents after recovered panic=%d, want 0", got)
+	}
+
+	if !db.commandWALPublicOperationGate.TryLock() {
+		t.Fatal("grouped durable append panic left the public operation gate locked")
+	}
+	if !db.commandWALPublicPublishMu.TryLock() {
+		db.commandWALPublicOperationGate.Unlock()
+		t.Fatal("grouped durable append panic left the public publish gate locked")
+	}
+	db.commandWALPublicPublishMu.Unlock()
+	db.commandWALPublicOperationGate.Unlock()
+}
+
+func TestPublicCommandWALGroupCommitFastRelaxedPanicReleasesGate(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	recovered := func() (recovered any) {
+		defer func() {
+			recovered = recover()
+		}()
+		_, _ = db.appendAndRegisterPublicCommandWAL(1, nil, false, nil, nil, nil, func(bool) (uint64, error) {
+			panic("injected relaxed append panic")
+		})
+		t.Fatal("fast relaxed panic path returned")
+		return nil
+	}()
+	if recovered == nil {
+		t.Fatal("fast relaxed append panic was not observed")
+	}
+	if !db.commandWALPublicOperationGate.TryLock() {
+		t.Fatal("fast relaxed append panic left the public operation gate locked")
+	}
+	db.commandWALPublicOperationGate.Unlock()
+}
+
 func TestPublicCommandWALGroupCommitFastRelaxedPreAppendErrorDoesNotPoison(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	ApplyProfile(&opts, ProfileCommandWALRelaxed)

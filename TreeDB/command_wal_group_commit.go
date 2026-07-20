@@ -95,6 +95,12 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 	}
 	if !durable && tdb.beginFastRelaxedPublicCommandWALPublication() {
 		publication.ticket = publicCommandWALFastRelaxedTicket
+		leasePending := true
+		defer func() {
+			if leasePending {
+				tdb.commandWALPublicOperationGate.RUnlock()
+			}
+		}()
 		lsn, err := appendFrame(false)
 		if lsn != 0 {
 			publication.ticket = publicCommandWALFastRelaxedAppendedTicket
@@ -104,6 +110,7 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 				*pendingBookkeeping += time.Since(start)
 			}
 		}
+		leasePending = false
 		return publication, err
 	}
 	durableIntentPending := false
@@ -125,26 +132,31 @@ func (tdb *DB) appendAndRegisterPublicCommandWAL(bytes int, preparedBytes *int, 
 			return direct, err
 		}
 	}
-	tdb.commandWALPublicOperationGate.RLock()
-	tdb.commandWALPublicPublishMu.Lock()
-	lsn, err := appendFrame(false)
-	if lsn != 0 {
-		start := time.Now()
-		tdb.recordPublicCommandWALPendingLSN(lsn)
-		if pendingBookkeeping != nil {
-			*pendingBookkeeping += time.Since(start)
-		}
-	}
 	var ticket uint64
 	var leader bool
-	if err == nil && lsn != 0 {
-		if preparedBytes != nil {
-			bytes = *preparedBytes
+	var err error
+	func() {
+		tdb.commandWALPublicOperationGate.RLock()
+		defer tdb.commandWALPublicOperationGate.RUnlock()
+		tdb.commandWALPublicPublishMu.Lock()
+		defer tdb.commandWALPublicPublishMu.Unlock()
+
+		lsn, appendErr := appendFrame(false)
+		err = appendErr
+		if lsn != 0 {
+			start := time.Now()
+			tdb.recordPublicCommandWALPendingLSN(lsn)
+			if pendingBookkeeping != nil {
+				*pendingBookkeeping += time.Since(start)
+			}
 		}
-		ticket, leader, err = tdb.commandWALGroupCommit.register(bytes, durable, false)
-	}
-	tdb.commandWALPublicPublishMu.Unlock()
-	tdb.commandWALPublicOperationGate.RUnlock()
+		if err == nil && lsn != 0 {
+			if preparedBytes != nil {
+				bytes = *preparedBytes
+			}
+			ticket, leader, err = tdb.commandWALGroupCommit.register(bytes, durable, false)
+		}
+	}()
 	if durable {
 		releaseDurableIntent()
 	}
@@ -221,14 +233,8 @@ func (tdb *DB) trySoloDurablePublicCommandWAL(
 		}
 		if err == nil && lsn != 0 {
 			group.mu.Lock()
-			if group.terminalErr != nil {
-				err = group.terminalErr
-			} else if group.nextTicket == publicCommandWALFastRelaxedAppendedTicket-1 {
-				err = fmt.Errorf("treedb: command wal publication ticket space exhausted")
-				group.terminalErr = err
-			} else {
-				group.nextTicket++
-				ticket = group.nextTicket
+			ticket, err = group.allocateTicketLocked()
+			if err == nil {
 				group.completedTicket = ticket
 				group.bypassSoloDurable.Add(1)
 				afterSoloRegister = group.testAfterSoloRegister
@@ -310,12 +316,10 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 	if group.terminalErr != nil {
 		return 0, false, group.terminalErr
 	}
-	if group.nextTicket == publicCommandWALFastRelaxedAppendedTicket-1 {
-		group.terminalErr = fmt.Errorf("treedb: command wal publication ticket space exhausted")
-		return 0, false, group.terminalErr
+	ticket, err = group.allocateTicketLocked()
+	if err != nil {
+		return 0, false, err
 	}
-	group.nextTicket++
-	ticket = group.nextTicket
 	if !durable && !group.leaderActive && group.pendingCount == 0 {
 		group.bypassRelaxedNoGroup.Add(1)
 		group.completedTicket = ticket
@@ -347,6 +351,18 @@ func (group *publicCommandWALGroupCommit) register(bytes int, durable, force boo
 		group.triggerLocked(&group.triggerBytes)
 	}
 	return ticket, leader, nil
+}
+
+func (group *publicCommandWALGroupCommit) allocateTicketLocked() (uint64, error) {
+	if group.terminalErr != nil {
+		return 0, group.terminalErr
+	}
+	if group.nextTicket == publicCommandWALFastRelaxedAppendedTicket-1 {
+		group.terminalErr = fmt.Errorf("treedb: command wal publication ticket space exhausted")
+		return 0, group.terminalErr
+	}
+	group.nextTicket++
+	return group.nextTicket, nil
 }
 
 func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64, leader, force, observeWait bool) (uint64, error) {
