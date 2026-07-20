@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -19,6 +20,61 @@ var stableColumnDurableRequirementFields = []rootpublication.ReachabilityField{
 	rootpublication.ReachabilityTypedColumnCode,
 	rootpublication.ReachabilityHNSWSearchPack,
 	rootpublication.ReachabilityVectorGraphPack,
+}
+
+// stableColumnManifestDurableMutation derives exact logical-obligation changes
+// from the already-validated root-local manifest mutation delta. It performs
+// binary probes for only changed keys, so append-only publication evidence is
+// proportional to the mutation set rather than the retained manifest.
+func stableColumnManifestDurableMutation(current []columnManifestRecord, mutations []columnManifestMutation, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationMutation, error) {
+	result := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: append([]rootpublication.ReachabilityField(nil), stableColumnDurableRequirementFields...),
+	}
+	obligationsForRecord := func(record columnManifestRecord) ([]rootpublication.StableLogicalObligation, error) {
+		requirements, err := stableColumnManifestDurableRequirements([]columnManifestRecord{record}, activeGeneration, expectedNamespace)
+		if err != nil {
+			return nil, err
+		}
+		return requirements.Obligations, nil
+	}
+	for i, mutation := range mutations {
+		position := sort.Search(len(current), func(index int) bool {
+			return bytes.Compare(current[index].key, mutation.record.key) >= 0
+		})
+		var previous []rootpublication.StableLogicalObligation
+		if position < len(current) && bytes.Equal(current[position].key, mutation.record.key) {
+			var err error
+			previous, err = obligationsForRecord(current[position])
+			if err != nil {
+				return rootpublication.StableLogicalObligationMutation{}, fmt.Errorf("collections: decode prior durable mutation record %d: %w", i, err)
+			}
+		}
+		var next []rootpublication.StableLogicalObligation
+		if !mutation.deleted {
+			var err error
+			next, err = obligationsForRecord(mutation.record)
+			if err != nil {
+				return rootpublication.StableLogicalObligationMutation{}, fmt.Errorf("collections: decode next durable mutation record %d: %w", i, err)
+			}
+		}
+		previousSet := make(map[rootpublication.StableLogicalObligation]struct{}, len(previous))
+		nextSet := make(map[rootpublication.StableLogicalObligation]struct{}, len(next))
+		for _, obligation := range previous {
+			previousSet[obligation] = struct{}{}
+		}
+		for _, obligation := range next {
+			nextSet[obligation] = struct{}{}
+			if _, unchanged := previousSet[obligation]; !unchanged {
+				result.Added = append(result.Added, obligation)
+			}
+		}
+		for _, obligation := range previous {
+			if _, unchanged := nextSet[obligation]; !unchanged {
+				result.Removed = append(result.Removed, obligation)
+			}
+		}
+	}
+	return rootpublication.NormalizeStableLogicalObligationMutation(result)
 }
 
 // stableColumnManifestDurableRequirements derives the complete authoritative

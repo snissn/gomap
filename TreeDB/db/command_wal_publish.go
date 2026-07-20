@@ -94,6 +94,9 @@ type finalizeCommitOptions struct {
 	// durableResourceRequirements scopes exact logical obligations for external
 	// resources whose physical files can outlive several root generations.
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
+	// durableResourceMutation is exact root-local addition/removal evidence used
+	// to derive inherited resource pins without replaying retained history.
+	durableResourceMutation rootpublication.StableLogicalObligationMutation
 	// valueLogPublicationLocked proves the caller already owns the exclusive
 	// valueLogPublicationMu lease. Candidate dependency capture must reuse that
 	// lease instead of recursively acquiring its read side.

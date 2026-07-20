@@ -190,7 +190,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	database.testScanCandidateExternalReferencesHook = func() { scans++ }
 	captured, err := database.captureDurableRootResourcesFromBaseV1(
 		database.idx.Load(), database.meta, appendOnly, base, additional,
-		rootpublication.StableLogicalObligationRequirements{}, false,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{}, false, nil,
 	)
 	database.testScanCandidateExternalReferencesHook = nil
 	if err != nil {

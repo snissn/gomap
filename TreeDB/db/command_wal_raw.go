@@ -224,10 +224,21 @@ type CommandWALPublishTiming struct {
 	Finalize                  time.Duration
 	FinalizePrepareDurability time.Duration
 	FinalizeCandidateBuild    time.Duration
-	FinalizeEnqueueActivation time.Duration
-	FinalizeAdmissionWait     time.Duration
-	FinalizeDurabilityWait    time.Duration
-	PostFinalize              time.Duration
+	// FinalizeCandidate* below are additive children of
+	// FinalizeCandidateBuild. ResourceWork counts exact physical-entry and
+	// logical-obligation work performed by those phases.
+	FinalizeCandidateVisibleBaseClone time.Duration
+	FinalizeCandidateInheritedFilter  time.Duration
+	FinalizeCandidateFreshCapture     time.Duration
+	FinalizeCandidateClosureAssemble  time.Duration
+	FinalizeCandidateVisibleClone     time.Duration
+	FinalizeCandidateCOWPrepare       time.Duration
+	FinalizeCandidateOther            time.Duration
+	FinalizeCandidateResourceWork     rootpublication.StableResourceClosureWork
+	FinalizeEnqueueActivation         time.Duration
+	FinalizeAdmissionWait             time.Duration
+	FinalizeDurabilityWait            time.Duration
+	PostFinalize                      time.Duration
 }
 
 // SetPublishTiming requests request-scoped timings from the preflight
@@ -262,6 +273,14 @@ func (timing *CommandWALPublishTiming) Add(other CommandWALPublishTiming) {
 	timing.Finalize += other.Finalize
 	timing.FinalizePrepareDurability += other.FinalizePrepareDurability
 	timing.FinalizeCandidateBuild += other.FinalizeCandidateBuild
+	timing.FinalizeCandidateVisibleBaseClone += other.FinalizeCandidateVisibleBaseClone
+	timing.FinalizeCandidateInheritedFilter += other.FinalizeCandidateInheritedFilter
+	timing.FinalizeCandidateFreshCapture += other.FinalizeCandidateFreshCapture
+	timing.FinalizeCandidateClosureAssemble += other.FinalizeCandidateClosureAssemble
+	timing.FinalizeCandidateVisibleClone += other.FinalizeCandidateVisibleClone
+	timing.FinalizeCandidateCOWPrepare += other.FinalizeCandidateCOWPrepare
+	timing.FinalizeCandidateOther += other.FinalizeCandidateOther
+	timing.FinalizeCandidateResourceWork.Add(other.FinalizeCandidateResourceWork)
 	timing.FinalizeEnqueueActivation += other.FinalizeEnqueueActivation
 	timing.FinalizeAdmissionWait += other.FinalizeAdmissionWait
 	timing.FinalizeDurabilityWait += other.FinalizeDurabilityWait

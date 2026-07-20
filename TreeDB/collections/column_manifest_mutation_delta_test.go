@@ -159,6 +159,32 @@ func TestColumnManifestMutationDeltaProductionRepeatedPublishReopen(t *testing.T
 			t.Fatalf("InsertBatch %d: %v", i, err)
 		}
 		stats := col.LastInsertStats()
+		candidateChildren := stats.ColumnPublishFinalizeCandidateVisibleBaseClone +
+			stats.ColumnPublishFinalizeCandidateInheritedFilter +
+			stats.ColumnPublishFinalizeCandidateFreshCapture +
+			stats.ColumnPublishFinalizeCandidateClosureAssemble +
+			stats.ColumnPublishFinalizeCandidateVisibleClone +
+			stats.ColumnPublishFinalizeCandidateCOWPrepare +
+			stats.ColumnPublishFinalizeCandidateOther
+		if candidateChildren != stats.ColumnPublishFinalizeCandidateBuild {
+			t.Fatalf("publish %d candidate child timings=%s want additive total=%s", i, candidateChildren, stats.ColumnPublishFinalizeCandidateBuild)
+		}
+		work := stats.ColumnPublishFinalizeCandidateResourceWork
+		if work.AppendOnlyFastPath == 0 || work.NewlyAdmittedObligations == 0 {
+			t.Fatalf("publish %d did not certify append-only resource admission: %+v", i, work)
+		}
+		// The retained semantic closure grows every generation, but candidate
+		// construction may visit only this root-local mutation plus the
+		// persistent-index path for each newly admitted obligation.
+		if work.SourceObligationsInspected > work.NewlyAdmittedObligations || work.CopiedObligations != 0 {
+			t.Fatalf("publish %d rescanned/copied retained obligation history: %+v", i, work)
+		}
+		if work.RetainedIndexNodeVisits > work.NewlyAdmittedObligations*16 || work.RetainedIndexNodeCopies > work.NewlyAdmittedObligations*16 {
+			t.Fatalf("publish %d persistent-index work exceeds mutation-local depth bound: %+v", i, work)
+		}
+		if work.PhysicalHandleCopies > 12 {
+			t.Fatalf("publish %d physical handle copies=%d grow with retained history: %+v", i, work.PhysicalHandleCopies, work)
+		}
 		if stats.ColumnPublishManifestMutationRecords == 0 || stats.ColumnPublishManifestMutationBytes == 0 {
 			t.Fatalf("publish %d missing mutation accounting: %+v", i, stats)
 		}

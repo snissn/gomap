@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -33,6 +34,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 				if len(insertedIDs) != len(batch.ids) {
 					b.Fatalf("InsertBatch inserted=%d, want %d", len(insertedIDs), len(batch.ids))
 				}
+				totals.addPublishStats(collection.LastInsertStats())
 			}
 			b.StopTimer()
 
@@ -62,6 +64,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 				if len(results) != len(batch.updates) {
 					b.Fatalf("UpdateBatch results=%d, want %d", len(results), len(batch.updates))
 				}
+				totals.addPublishStats(collection.LastInsertStats())
 			}
 			b.StopTimer()
 
@@ -91,6 +94,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 				if deleted != len(batch.ids) {
 					b.Fatalf("DeleteBatch deleted=%d, want %d", deleted, len(batch.ids))
 				}
+				totals.addPublishStats(collection.LastInsertStats())
 			}
 			b.StopTimer()
 
@@ -174,8 +178,13 @@ type columnStoreCommandWALBenchBatch struct {
 }
 
 type columnStoreCommandWALBenchTotals struct {
-	docs  int
-	bytes int
+	docs             int
+	bytes            int
+	commit           time.Duration
+	orderedRootApply time.Duration
+	finalize         time.Duration
+	candidateBuild   time.Duration
+	admissionWait    time.Duration
 }
 
 func (totals *columnStoreCommandWALBenchTotals) add(batch columnStoreCommandWALBenchBatch, includeDocs bool) {
@@ -184,6 +193,14 @@ func (totals *columnStoreCommandWALBenchTotals) add(batch columnStoreCommandWALB
 	if includeDocs {
 		totals.bytes += batch.docBytes
 	}
+}
+
+func (totals *columnStoreCommandWALBenchTotals) addPublishStats(stats CollectionInsertStats) {
+	totals.commit += stats.ColumnPublishCommit
+	totals.orderedRootApply += stats.ColumnPublishOrderedRootApply
+	totals.finalize += stats.ColumnPublishFinalize
+	totals.candidateBuild += stats.ColumnPublishFinalizeCandidateBuild
+	totals.admissionWait += stats.ColumnPublishFinalizeAdmissionWait
 }
 
 func openColumnStoreCommandWALRootPublicationBenchmark(b *testing.B, columnStore bool) (*backenddb.DB, *Collection) {
@@ -291,6 +308,14 @@ func reportColumnStoreCommandWALBenchMetrics(b *testing.B, totals columnStoreCom
 	}
 	b.ReportMetric(float64(totals.docs)/elapsed, "docs/s")
 	b.ReportMetric((float64(totals.bytes)/(1024*1024))/elapsed, "payload_MiB/s")
+	if b.N > 0 {
+		iterations := float64(b.N)
+		b.ReportMetric(float64(totals.commit.Nanoseconds())/iterations, "publish_commit_ns/op")
+		b.ReportMetric(float64(totals.orderedRootApply.Nanoseconds())/iterations, "ordered_root_apply_ns/op")
+		b.ReportMetric(float64(totals.finalize.Nanoseconds())/iterations, "finalize_ns/op")
+		b.ReportMetric(float64(totals.candidateBuild.Nanoseconds())/iterations, "candidate_build_ns/op")
+		b.ReportMetric(float64(totals.admissionWait.Nanoseconds())/iterations, "admission_wait_ns/op")
+	}
 }
 
 func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int, uint64) {
