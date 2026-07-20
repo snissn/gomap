@@ -218,6 +218,29 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionReclaimRecordV1ChecksumFailsClosed(t *testing.T) {
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	if err := s.writeDeleteTombstone(m); err != nil {
+		t.Fatal(err)
+	}
+	p := s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 0xff
+	if err := os.WriteFile(p, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.openDeleteTombstone(m.Collection, m.IndexName, m.Generation); err == nil {
+		t.Fatal("corrupt reclaim record accepted")
+	}
+}
+
 func TestVectorPartitionStoreV1SameGenerationPublicationIsExactByteIdempotent(t *testing.T) {
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
