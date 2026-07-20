@@ -103,6 +103,7 @@ const (
 	PayloadFormatCatalogCreateCollectionV1      PayloadFormat = 6
 	PayloadFormatCollectionRebuildVectorIndexV1 PayloadFormat = 7
 	PayloadFormatDurablePrefixBarrierV1         PayloadFormat = 8
+	PayloadFormatRawKVBatchV2                   PayloadFormat = 9
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -115,6 +116,7 @@ const (
 	RawKVOpDelete
 	RawKVOpSetRID
 	RawKVOpDeleteRange
+	RawKVOpSetMaterializedRID
 )
 
 // RawKVOperation represents a single operation in a RawKVBatch command frame.
@@ -127,10 +129,13 @@ const (
 //   - RawKVOpDeleteRange: Key is the start bound and Value is the exclusive
 //     end bound. Nil bounds are unbounded and are encoded with a sentinel
 //     length; bounded empty/reversed ranges are invalid in command frames.
+//   - RawKVOpSetMaterializedRID: Key and Value are the raw bytes and RID is
+//     non-zero. Recovery must preserve that logical RID, reusing a matching
+//     value-log record or materializing Value under that exact RID.
 //
 // Revision is optional per-entry metadata. Zero is the legacy/no-revision
-// value. Revision is valid on point Set/Delete/SetRID operations; range deletes
-// do not carry per-item revision metadata.
+// value. Revision is valid on point Set/Delete/SetRID/SetMaterializedRID
+// operations; range deletes do not carry per-item revision metadata.
 type RawKVOperation struct {
 	Op       RawKVOp
 	Key      []byte
@@ -145,8 +150,9 @@ type RawKVOperation struct {
 // a canonical payload slice.
 type RawKVBatchOperationScanner func(func(RawKVOperation) error) error
 
-// RawKVBatchPayloadPlan is the exact RawKVBatchV1 payload shape for a replayable
-// operation source.
+// RawKVBatchPayloadPlan is the exact shared RawKVBatchV1/V2 payload shape for a
+// replayable operation source. The enclosing payload-format ID gates V2-only
+// operations.
 type RawKVBatchPayloadPlan struct {
 	Count          int
 	PayloadLen     int
@@ -736,6 +742,8 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		valueLen = 8
+	} else if op.Op == RawKVOpSetMaterializedRID {
+		valueLen += 8
 	}
 	if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
 		return nil, nil, ErrRecordTooLarge
@@ -745,6 +753,11 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 	if op.Op == RawKVOpSetRID {
 		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
 		value = ridBuf[:]
+	} else if op.Op == RawKVOpSetMaterializedRID {
+		materialized := make([]byte, 8+len(op.Value))
+		binary.LittleEndian.PutUint64(materialized[:8], op.RID)
+		copy(materialized[8:], op.Value)
+		value = materialized
 	}
 	return b.appendValidatedWithRevision(op.Op, op.Key, value, op.Revision)
 }
@@ -1750,6 +1763,9 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	if err := validateRawKVOperation(&op); err != nil {
 		return nil, err
 	}
+	if op.Op == RawKVOpSetMaterializedRID {
+		return nil, ErrCommandWALUnsupportedVersion
+	}
 	if op.Op == RawKVOpDeleteRange {
 		payload, err := EncodeRawKVSingleOperationPayload(op)
 		if err != nil {
@@ -2119,8 +2135,16 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 	}
 	switch env.Kind {
 	case CommandKindRawKVBatch:
-		if env.Scope != CommandScopeRawKV || env.PayloadFormat != PayloadFormatRawKVBatchV1 {
+		if env.Scope != CommandScopeRawKV ||
+			(env.PayloadFormat != PayloadFormatRawKVBatchV1 && env.PayloadFormat != PayloadFormatRawKVBatchV2) {
 			return ErrCorrupt
+		}
+		// RawKVBatchV2 is coupled to the V2 frame's persisted durability
+		// class and external-reference fence. Never allow a legacy V1 frame
+		// (including a zero-version caller that defaults to V1) to carry the
+		// V2 payload identity and bypass those checks.
+		if env.PayloadFormat == PayloadFormatRawKVBatchV2 && env.Version != CommandFrameVersionV2 {
+			return ErrCommandWALUnsupportedVersion
 		}
 	case CommandKindCollectionInsertBatchByID:
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
@@ -2151,7 +2175,7 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	switch env.Kind {
 	case CommandKindRawKVBatch:
-		return validateRawKVBatchPayload(env.Payload)
+		return validateRawKVBatchPayloadForFormat(env.PayloadFormat, env.Payload)
 	case CommandKindCollectionInsertBatchByID:
 		_, err := DecodeCollectionInsertBatchByIDPayload(env.Payload)
 		return err
@@ -2245,6 +2269,11 @@ func rawKVOperationPayloadLens(op *RawKVOperation) (keyBytes, valueBytes int, er
 	valueBytes = len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		valueBytes = 8
+	} else if op.Op == RawKVOpSetMaterializedRID {
+		if len(op.Value) > int(^uint(0)>>1)-8 {
+			return 0, 0, ErrRecordTooLarge
+		}
+		valueBytes = 8 + len(op.Value)
 	} else if op.Op == RawKVOpDeleteRange {
 		_, startBytes, err := rawKVRangeBoundEncodedLen(op.Key)
 		if err != nil {
@@ -2399,6 +2428,8 @@ func writeRawKVOperationPayloadTo(dst []byte, op RawKVOperation, entryRevisions 
 	valueLen := uint32(len(op.Value))
 	if op.Op == RawKVOpSetRID {
 		valueLen = 8
+	} else if op.Op == RawKVOpSetMaterializedRID {
+		valueLen = uint32(valueBytes)
 	} else if op.Op == RawKVOpDeleteRange {
 		keyLen, _, err = rawKVRangeBoundEncodedLen(op.Key)
 		if err != nil {
@@ -2432,6 +2463,14 @@ func writeRawKVOperationPayloadTo(dst []byte, op RawKVOperation, entryRevisions 
 		}
 		binary.LittleEndian.PutUint64(dst[off:off+8], op.RID)
 		off += 8
+	case RawKVOpSetMaterializedRID:
+		if off > len(dst) || len(dst)-off < 8 {
+			return 0, ErrCorrupt
+		}
+		binary.LittleEndian.PutUint64(dst[off:off+8], op.RID)
+		off += 8
+		copy(dst[off:], op.Value)
+		off += len(op.Value)
 	default:
 		if len(op.Value) > 0 {
 			copy(dst[off:], op.Value)
@@ -2461,6 +2500,8 @@ func writeRawKVOperationPayloadPiecesWithRevisionFlag(op RawKVOperation, entryRe
 		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
 		value = ridBuf[:]
 		valueLen = uint32(len(value))
+	} else if op.Op == RawKVOpSetMaterializedRID {
+		valueLen = uint32(valueBytes)
 	} else if op.Op == RawKVOpDeleteRange {
 		keyLen, _, err = rawKVRangeBoundEncodedLen(key)
 		if err != nil {
@@ -2484,6 +2525,12 @@ func writeRawKVOperationPayloadPiecesWithRevisionFlag(op RawKVOperation, entryRe
 	}
 	if len(key) > 0 {
 		if err := write(key); err != nil {
+			return 0, err
+		}
+	}
+	if op.Op == RawKVOpSetMaterializedRID {
+		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
+		if err := write(ridBuf[:]); err != nil {
 			return 0, err
 		}
 	}
@@ -2576,6 +2623,9 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 		entry := RawKVOperation{Op: op, Key: cloneBytesPreserveEmpty(key), Revision: revision}
 		if op == RawKVOpSetRID {
 			entry.RID = binary.LittleEndian.Uint64(value)
+		} else if op == RawKVOpSetMaterializedRID {
+			entry.RID = binary.LittleEndian.Uint64(value[:8])
+			entry.Value = cloneBytesPreserveEmpty(value[8:])
 		} else {
 			entry.Value = cloneBytesPreserveEmpty(value)
 		}
@@ -2591,10 +2641,27 @@ func validateRawKVBatchPayload(payload []byte) error {
 	return ScanRawKVBatchPayload(payload, nil)
 }
 
+func validateRawKVBatchPayloadForFormat(format PayloadFormat, payload []byte) error {
+	switch format {
+	case PayloadFormatRawKVBatchV1:
+		return ScanRawKVBatchPayload(payload, func(op RawKVOp, _, _ []byte) error {
+			if op == RawKVOpSetMaterializedRID {
+				return ErrCorrupt
+			}
+			return nil
+		})
+	case PayloadFormatRawKVBatchV2:
+		return ScanRawKVBatchPayload(payload, nil)
+	default:
+		return ErrCorrupt
+	}
+}
+
 // ScanRawKVBatchPayload validates payload and visits each op with slices that
 // reference payload. For RawKVOpSetRID, value is exactly the 8-byte
-// little-endian RID payload. Use DecodeRawKVBatchPayload when callers need
-// owned copies or typed RID fields.
+// little-endian RID payload. For RawKVOpSetMaterializedRID, value is the
+// 8-byte little-endian RID followed by the materialization bytes. Use
+// DecodeRawKVBatchPayload when callers need owned copies or typed RID fields.
 func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []byte) error) error {
 	if visit == nil {
 		return ScanRawKVBatchPayloadWithRevision(payload, nil)
@@ -2699,10 +2766,10 @@ func ScanRawKVBatchPayloadWithRevision(payload []byte, visit func(op RawKVOp, ke
 		if !valueNil {
 			value = payload[off : off+int(valueBytes)]
 		}
-		if op == RawKVOpSetRID {
-			// validateRawKVOperationShape already enforces valueLen == 8 for
-			// RawKVOpSetRID, so len(value) == 8 is guaranteed here. Only
-			// check for the zero-RID sentinel, which is always invalid.
+		if op == RawKVOpSetRID || op == RawKVOpSetMaterializedRID {
+			// validateRawKVOperationShape enforces valueLen == 8 for SetRID and
+			// valueLen >= 8 for SetMaterializedRID, so the RID prefix is present.
+			// Only check for the zero-RID sentinel, which is always invalid.
 			if binary.LittleEndian.Uint64(value) == 0 {
 				return ErrCorrupt
 			}
@@ -2795,6 +2862,14 @@ func validateRawKVOperation(op *RawKVOperation) error {
 			return ErrCorrupt
 		}
 		valueLen = 8
+	} else if op.Op == RawKVOpSetMaterializedRID {
+		if op.RID == 0 || op.Value == nil {
+			return ErrCorrupt
+		}
+		if len(op.Value) > int(^uint(0)>>1)-8 {
+			return ErrRecordTooLarge
+		}
+		valueLen = 8 + len(op.Value)
 	}
 	if commandFrameIntExceedsUint32(valueLen) {
 		return ErrRecordTooLarge
@@ -2816,6 +2891,11 @@ func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen int) error {
 		return nil
 	case RawKVOpSetRID:
 		if key == nil || valueLen != 8 {
+			return ErrCorrupt
+		}
+		return nil
+	case RawKVOpSetMaterializedRID:
+		if key == nil || valueLen < 8 {
 			return ErrCorrupt
 		}
 		return nil

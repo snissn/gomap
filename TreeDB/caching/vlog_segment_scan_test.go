@@ -8,19 +8,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
-func TestMaxValueLogRIDFromSegmentsScansLatestSegmentPerLane(t *testing.T) {
+func TestMaxValueLogRIDFromSegmentsScansAllSegments(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	oldCorruptPath := filepath.Join(dir, valueLogName(0, 1))
-	if err := os.WriteFile(oldCorruptPath, []byte{0x01}, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	lane0Older := writeRIDValueLogSegment(t, dir, 0, 1, 200)
 	lane0Tail := writeRIDValueLogSegment(t, dir, 0, 2, 22)
 	lane1Tail := writeRIDValueLogSegment(t, dir, 1, 1, 33)
 
 	segments := []logSegmentInfo{
-		{path: oldCorruptPath, size: 1, seq: 1, lane: 0, valueLog: true},
+		{path: lane0Older, size: fileSize(t, lane0Older), seq: 1, lane: 0, valueLog: true},
 		{path: lane0Tail, size: fileSize(t, lane0Tail), seq: 2, lane: 0, valueLog: true},
 		{path: lane1Tail, size: fileSize(t, lane1Tail), seq: 1, lane: 1, valueLog: true},
 		{path: filepath.Join(dir, commitLogName(9, 9)), size: 128, seq: 9, lane: 9, valueLog: false},
@@ -30,8 +27,8 @@ func TestMaxValueLogRIDFromSegmentsScansLatestSegmentPerLane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maxValueLogRIDFromSegments: %v", err)
 	}
-	if maxRID != 33 {
-		t.Fatalf("maxRID=%d want 33", maxRID)
+	if maxRID != 200 {
+		t.Fatalf("maxRID=%d want 200 from older exact-RID segment", maxRID)
 	}
 }
 

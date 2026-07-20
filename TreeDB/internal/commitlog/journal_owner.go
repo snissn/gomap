@@ -1295,6 +1295,9 @@ func (j *CommandJournal) appendRawKVSingleCommandLocked(baseAppliedLSN uint64, o
 	if err := validateRawKVOperation(&op); err != nil {
 		return 0, err
 	}
+	if op.Op == RawKVOpSetMaterializedRID {
+		return 0, ErrCommandWALUnsupportedVersion
+	}
 	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		valueLen = 8

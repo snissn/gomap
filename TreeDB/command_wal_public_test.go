@@ -19,6 +19,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -906,9 +907,10 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 	defer func() { _ = db.Close() }()
 	db.commandWALGroupCommit.testBeforeSync = func(int) {}
 	before := db.Stats()
+	value := bytes.Repeat([]byte("v"), 4096)
 
 	b := db.NewBatch()
-	if err := b.Set([]byte("external-ref"), bytes.Repeat([]byte("v"), 2048)); err != nil {
+	if err := b.Set([]byte("external-ref"), value); err != nil {
 		_ = b.Close()
 		t.Fatalf("batch Set: %v", err)
 	}
@@ -923,18 +925,298 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 	stats := db.Stats()
 	prefix := "treedb.public.batch.write_sync.phase."
 	if got := statMapUint64(t, stats, prefix+"command_external_ref_ordering.calls_total"); got != 1 {
-		t.Fatalf("phase external-ref ordering calls=%d, want 1 (stats=%#v)", got, stats)
+		t.Fatalf("phase external-ref planning calls=%d, want 1 observed no-op planning phase (stats=%#v)", got, stats)
 	}
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.sync.count_total", 1)
 	// The mutation frame and the durable-prefix barrier are distinct WAL
 	// writes, but the group still owns exactly one shared file sync.
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.write.syscalls_total", 2)
 	requirePublicStatDelta(t, before, stats, "treedb.command_wal.file_sync.calls_total", 1)
-	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.calls_total", 1)
-	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.materialization.calls_total", 1)
+	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.calls_total", 0)
+	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.materialization.calls_total", 0)
 	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.sync.external_ref.calls_total", 0)
-	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.file_sync.calls_total", 1)
+	requirePublicStatDelta(t, before, stats, "treedb.cache.value_log.file_sync.calls_total", 0)
 	requirePublicBatchWriteSyncPhasePartitions(t, stats)
+
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(opts.Dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader materialized command frame: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		t.Fatalf("ReadCommandFrame materialized command frame: %v", err)
+	}
+	if env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV2 {
+		_ = r.Close()
+		t.Fatalf("payload format=%d, want RawKVBatchV2", env.PayloadFormat)
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		_ = r.Close()
+		t.Fatalf("DecodeRawKVBatchPayload materialized command frame: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSetMaterializedRID || ops[0].RID == 0 ||
+		string(ops[0].Key) != "external-ref" || !bytes.Equal(ops[0].Value, value) {
+		_ = r.Close()
+		t.Fatalf("materialized command ops=%+v", ops)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close materialized command reader: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint materialized command: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close materialized command DB: %v", err)
+	}
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Reopen materialized command DB: %v", err)
+	}
+	defer reopen.Close()
+	requireRawKVValue(t, reopen, []byte("external-ref"), value)
+}
+
+func TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		relaxed bool
+		write   func(Batch) error
+	}{
+		{
+			name:    "relaxed-ordinary-write",
+			relaxed: true,
+			write:   func(b Batch) error { return b.Write() },
+		},
+		{
+			name:    "relaxed-write-sync",
+			relaxed: true,
+			write:   func(b Batch) error { return b.WriteSync() },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := commandWALDurabilityProofOptions(t.TempDir())
+			if tc.relaxed {
+				ApplyProfile(&opts, ProfileCommandWALRelaxed)
+			}
+			opts.ValueLog.PointerThreshold = 1
+			opts.ValueLog.ForcePointers = true
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			b := db.NewBatch()
+			if err := b.Set([]byte("external-ref"), bytes.Repeat([]byte("v"), 4096)); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch Set: %v", err)
+			}
+			if err := tc.write(b); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch write: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("batch Close: %v", err)
+			}
+
+			r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(opts.Dir), "commit-l0-000001.log"))
+			if err != nil {
+				t.Fatalf("NewReader command frame: %v", err)
+			}
+			defer r.Close()
+			env, err := r.ReadCommandFrame()
+			if err != nil {
+				t.Fatalf("ReadCommandFrame: %v", err)
+			}
+			if env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+				t.Fatalf("payload format=%d, want RawKVBatchV1 outside strict durable writes", env.PayloadFormat)
+			}
+			ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+			if err != nil {
+				t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+			}
+			if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSetRID {
+				t.Fatalf("command ops=%+v, want one SetRID dependency", ops)
+			}
+		})
+	}
+}
+
+func TestPublicCommandWALMaterializedRIDTotalOperationBoundFallsBackAtomically(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		totalOps   int
+		wantFormat commitlog.PayloadFormat
+		wantFirst  commitlog.RawKVOp
+	}{
+		{name: "at-bound", totalOps: 256, wantFormat: commitlog.PayloadFormatRawKVBatchV2, wantFirst: commitlog.RawKVOpSetMaterializedRID},
+		{name: "over-bound", totalOps: 257, wantFormat: commitlog.PayloadFormatRawKVBatchV1, wantFirst: commitlog.RawKVOpSetRID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := commandWALDurabilityProofOptions(t.TempDir())
+			opts.ValueLog.PointerThreshold = 1024
+			opts.ValueLog.ForcePointers = false
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			b := db.NewBatchWithSize(tc.totalOps)
+			if err := b.Set([]byte("pointer"), bytes.Repeat([]byte("p"), 4096)); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch pointer Set: %v", err)
+			}
+			for i := 1; i < tc.totalOps; i++ {
+				if err := b.Set([]byte(fmt.Sprintf("inline-%03d", i)), []byte("i")); err != nil {
+					_ = b.Close()
+					t.Fatalf("batch inline Set %d: %v", i, err)
+				}
+			}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch WriteSync: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("batch Close: %v", err)
+			}
+
+			r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(opts.Dir), "commit-l0-000001.log"))
+			if err != nil {
+				t.Fatalf("NewReader operation bound: %v", err)
+			}
+			defer r.Close()
+			env, err := r.ReadCommandFrame()
+			if err != nil {
+				t.Fatalf("ReadCommandFrame operation bound: %v", err)
+			}
+			if env.PayloadFormat != tc.wantFormat {
+				t.Fatalf("operation-bound payload format=%d, want %d", env.PayloadFormat, tc.wantFormat)
+			}
+			ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+			if err != nil {
+				t.Fatalf("DecodeRawKVBatchPayload operation bound: %v", err)
+			}
+			if len(ops) != tc.totalOps {
+				t.Fatalf("operation-bound ops len=%d, want %d", len(ops), tc.totalOps)
+			}
+			if ops[0].Op != tc.wantFirst {
+				t.Fatalf("operation-bound first op=%+v, want op %d", ops[0], tc.wantFirst)
+			}
+			for i := 1; i < len(ops); i++ {
+				if ops[i].Op != commitlog.RawKVOpSet {
+					t.Fatalf("operation-bound op[%d]=%+v, want inline Set", i, ops[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPublicCommandWALMaterializedRIDRecoveryPreservesCachedAllocatorHighWater(t *testing.T) {
+	dir := t.TempDir()
+	opts := commandWALDurabilityProofOptions(dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	bootstrap, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open bootstrap command WAL: %v", err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap command WAL: %v", err)
+	}
+
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	valuePath := filepath.Join(backenddb.ValueLogDirPath(dir), "value-l0-000001.log")
+	valueWriter, err := valuelog.NewWriter(valuePath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter existing high RID: %v", err)
+	}
+	if _, err := valueWriter.Append(0, nil, 200, []byte("existing-high-water")); err != nil {
+		_ = valueWriter.Close()
+		t.Fatalf("Append existing high RID: %v", err)
+	}
+	if err := valueWriter.Sync(); err != nil {
+		_ = valueWriter.Close()
+		t.Fatalf("Sync existing high RID: %v", err)
+	}
+	if err := valueWriter.Close(); err != nil {
+		t.Fatalf("Close existing high RID: %v", err)
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSetMaterializedRID,
+		Key:   []byte("recovered"),
+		Value: []byte("materialized-older-rid"),
+		RID:   42,
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	commandPath := filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log")
+	commandWriter, err := commitlog.NewWriter(commandPath)
+	if err != nil {
+		t.Fatalf("NewWriter materialized command: %v", err)
+	}
+	if err := commandWriter.AppendCommand(commitlog.CommandEnvelope{
+		Version:         commitlog.CommandFrameVersionV2,
+		DurabilityClass: commitlog.CommandDurabilityDurable,
+		LSN:             1,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV2,
+		Payload:         payload,
+	}); err != nil {
+		_ = commandWriter.Close()
+		t.Fatalf("AppendCommand materialized command: %v", err)
+	}
+	if err := commandWriter.Sync(); err != nil {
+		_ = commandWriter.Close()
+		t.Fatalf("Sync materialized command: %v", err)
+	}
+	if err := commandWriter.Close(); err != nil {
+		t.Fatalf("Close materialized command: %v", err)
+	}
+
+	recovered, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open materialized recovery: %v", err)
+	}
+	requireRawKVValue(t, recovered, []byte("recovered"), []byte("materialized-older-rid"))
+	startRID, err := recovered.cached.ReserveValueLogRIDs(1)
+	if err != nil {
+		_ = recovered.Close()
+		t.Fatalf("ReserveValueLogRIDs after materialized recovery: %v", err)
+	}
+	if startRID <= 200 {
+		_ = recovered.Close()
+		t.Fatalf("cached allocator start RID=%d, want a RID above the all-segment high-water 200", startRID)
+	}
+	if err := recovered.SetSync([]byte("foreground"), bytes.Repeat([]byte("f"), 4096)); err != nil {
+		_ = recovered.Close()
+		t.Fatalf("foreground pointer SetSync: %v", err)
+	}
+	if err := recovered.Checkpoint(); err != nil {
+		_ = recovered.Close()
+		t.Fatalf("Checkpoint after foreground pointer: %v", err)
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatalf("Close after foreground pointer: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Reopen after foreground pointer: %v", err)
+	}
+	defer reopened.Close()
+	requireRawKVValue(t, reopened, []byte("recovered"), []byte("materialized-older-rid"))
+	requireRawKVValue(t, reopened, []byte("foreground"), bytes.Repeat([]byte("f"), 4096))
 }
 
 func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
@@ -3698,7 +3980,7 @@ func benchmarkPublicCommandWALDurableShape(b *testing.B, forcedPointers bool, sh
 
 	value := []byte("public-command-wal-value")
 	if forcedPointers {
-		value = bytes.Repeat([]byte("p"), 2048)
+		value = bytes.Repeat([]byte("p"), 4096)
 	}
 	before := db.Stats()
 	latencyCapacity := b.N
@@ -3826,9 +4108,6 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 	case "dirty_batch":
 		appendCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 1, 1, 1
 		batchWriteSyncCalls = 1
-		if forcedPointers {
-			valueLogMaterializationSyncs = 1
-		}
 	case "write_then_dirty_write_sync":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 2, 1, 1, 2, 1
 		batchWriteCalls, batchWriteSyncCalls = 1, 1
@@ -3841,11 +4120,6 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 	case "state_point_point_sync_batch_sync":
 		appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 3, 1, 2, 3, 2
 		batchWriteSyncCalls = 1
-		if forcedPointers {
-			// Public point commands remain inline command-WAL inputs. The batch
-			// materialization is the state-shaped external-value boundary.
-			valueLogMaterializationSyncs = 1
-		}
 	}
 	if durability == DurabilityDurable {
 		switch shape {
@@ -3853,14 +4127,8 @@ func publicCommandWALDurableShapeExpectedCounters(shape string, forcedPointers b
 			appendCalls, flushCalls, writeSyscalls, barrierSyncCalls = 1, 0, 1, 0
 		case "write_then_dirty_write_sync":
 			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 2, 0, 2, 2, 2, 0
-			if forcedPointers {
-				valueLogMaterializationSyncs = 2
-			}
 		case "empty_write_sync_after_write":
 			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls = 1, 0, 2, 1, 2
-			if forcedPointers {
-				valueLogMaterializationSyncs = 1
-			}
 		case "state_point_point_sync_batch_sync":
 			appendCalls, flushCalls, syncCalls, writeSyscalls, fileSyncCalls, barrierSyncCalls = 3, 0, 3, 3, 3, 0
 		}
@@ -4707,6 +4975,7 @@ func reportCommandWALBenchmarkDeltas(b *testing.B, before, after map[string]stri
 		"treedb.cache.value_log.file_sync.ns_total",
 		"treedb.cache.value_log.file_sync.rotated_segment.calls_total",
 		"treedb.cache.value_log.file_sync.rotated_segment.ns_total",
+		"treedb.cache.vlog_io.bytes",
 		"treedb.public.batch.write_sync.phase.wall.ns_total",
 		"treedb.public.batch.write_sync.phase.checkpoint_gate.ns_total",
 		"treedb.public.batch.write_sync.phase.preflight_materialization.ns_total",
@@ -5131,6 +5400,44 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 	if frames := publicCommandWALFrameCount(t, db); frames != 1 {
 		_ = db.Close()
 		t.Fatalf("command_wal.frames=%d, want one directly synced mutation", frames)
+	}
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewReader fallback command frame: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ReadCommandFrame fallback command frame: %v", err)
+	}
+	if env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("fallback payload format=%d, want RawKVBatchV1", env.PayloadFormat)
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("DecodeRawKVBatchPayload fallback command frame: %v", err)
+	}
+	for i := range ops {
+		if ops[i].Op != commitlog.RawKVOpSetRID || ops[i].RID == 0 || ops[i].Value != nil {
+			_ = r.Close()
+			_ = db.Close()
+			t.Fatalf("fallback command op[%d]=%+v, want SetRID", i, ops[i])
+		}
+	}
+	if len(ops) != len(values) {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("fallback command op count=%d, want %d", len(ops), len(values))
+	}
+	if err := r.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Close fallback command reader: %v", err)
 	}
 	for key, value := range values {
 		requireRawKVValue(t, db, []byte(key), value)

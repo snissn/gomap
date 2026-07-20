@@ -2013,6 +2013,150 @@ func TestCommandWALRawKVBatchRevisionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawKVBatchMaterializedRIDV2RoundTripAndFormatGate(t *testing.T) {
+	value := []byte("persistent-value")
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{
+		Op:       RawKVOpSetMaterializedRID,
+		Key:      []byte("materialized"),
+		Value:    value,
+		RID:      42,
+		Revision: 13,
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload materialized RID: %v", err)
+	}
+	legacyV2Envelope := CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV2,
+		Payload:       payload,
+	}
+	if _, err := EncodeCommandFrame(legacyV2Envelope); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("legacy frame with V2 payload error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	legacy, err := NewWriter(legacyPath)
+	if err != nil {
+		t.Fatalf("NewWriter legacy V2 payload: %v", err)
+	}
+	if err := legacy.AppendCommand(legacyV2Envelope); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		_ = legacy.Close()
+		t.Fatalf("AppendCommand legacy V2 payload error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	if err := legacy.AppendCommand(CommandEnvelope{
+		LSN:           2,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("AppendCommand valid V1 after rejected V2 payload: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("Close legacy V2 payload writer: %v", err)
+	}
+
+	legacyFrame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           3,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame legacy fixture: %v", err)
+	}
+	binary.LittleEndian.PutUint16(legacyFrame[52:54], uint16(PayloadFormatRawKVBatchV2))
+	if _, err := DecodeCommandFrame(legacyFrame); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("DecodeCommandFrame legacy V2 payload error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+
+	if _, err := EncodeCommandFrameV2(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV1,
+		Payload:         payload,
+	}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("V1 materialized RID error=%v, want ErrCorrupt", err)
+	}
+	directPath := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	direct, err := NewWriter(directPath)
+	if err != nil {
+		t.Fatalf("NewWriter direct materialized RID: %v", err)
+	}
+	if err := direct.AppendRawKVSingleCommandDirect(1, 0, RawKVOperation{
+		Op: RawKVOpSetMaterializedRID, Key: []byte("materialized"), Value: value, RID: 42,
+	}); !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		_ = direct.Close()
+		t.Fatalf("direct single materialized RID error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	if err := direct.Close(); err != nil {
+		t.Fatalf("Close direct materialized RID writer: %v", err)
+	}
+
+	frame, err := EncodeCommandFrameV2(CommandEnvelope{
+		Version:         CommandFrameVersionV2,
+		DurabilityClass: CommandDurabilityDurable,
+		LSN:             1,
+		Kind:            CommandKindRawKVBatch,
+		Scope:           CommandScopeRawKV,
+		PayloadFormat:   PayloadFormatRawKVBatchV2,
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrameV2 materialized RID: %v", err)
+	}
+	env, err := DecodeCommandFrameV2(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrameV2 materialized RID: %v", err)
+	}
+	ops, err := DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload materialized RID: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Op != RawKVOpSetMaterializedRID ||
+		string(ops[0].Key) != "materialized" || !bytes.Equal(ops[0].Value, value) ||
+		ops[0].RID != 42 || ops[0].Revision != 13 {
+		t.Fatalf("decoded materialized RID ops=%+v", ops)
+	}
+	fence, err := ExternalRefFenceV1FromRawKVPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("ExternalRefFenceV1FromRawKVPayload: %v", err)
+	}
+	if fence.Count != 0 {
+		t.Fatalf("materialized RID external fence count=%d, want 0", fence.Count)
+	}
+	corrupt := append([]byte(nil), frame...)
+	// Raw frame bytes do not carry their segment CRC; Reader verifies that
+	// outer checksum. Corrupt the materialized RID prefix here so the strict
+	// frame decoder still exercises its V2 payload-shape fail-closed path.
+	ridOffset := commandFrameHeaderSize + rawKVBatchHeaderSize + rawKVOpRevisionHeaderSize + len("materialized")
+	clear(corrupt[ridOffset : ridOffset+8])
+	if _, err := DecodeCommandFrameV2(corrupt); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("zero-RID V2 materialized frame error=%v, want ErrCorrupt", err)
+	}
+	if _, err := DecodeCommandFrameV2(frame[:len(frame)-1]); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("truncated V2 materialized frame error=%v, want ErrCorrupt", err)
+	}
+
+	for name, op := range map[string]RawKVOperation{
+		"zero-rid":   {Op: RawKVOpSetMaterializedRID, Key: []byte("k"), Value: value},
+		"nil-value":  {Op: RawKVOpSetMaterializedRID, Key: []byte("k"), RID: 42},
+		"nil-key":    {Op: RawKVOpSetMaterializedRID, Value: value, RID: 42},
+		"unknown-op": {Op: RawKVOp(0xff), Key: []byte("k"), Value: value, RID: 42},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := EncodeRawKVBatchPayload([]RawKVOperation{op}); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("EncodeRawKVBatchPayload error=%v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
 func TestCommandWALFeatureGateRejectsLegacyRawPayload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
 	w, err := NewWriter(path)

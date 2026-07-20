@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -356,6 +357,10 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	if len(frames) == 0 {
 		return nil
 	}
+	pendingMaterializedRIDHighWater, err := commandWALReplayPendingMaterializedRIDHighWater(frames, applied)
+	if err != nil {
+		return err
+	}
 	replayDependencies, err := captureCommandWALReplayRelaxedDependencies(db, frames, classification.DurableFrontier, ridMap)
 	if err != nil {
 		return err
@@ -412,6 +417,14 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
 		if err != nil {
 			return nil, nil, err
+		}
+		if pendingMaterializedRIDHighWater >= inlineAppender.nextRID {
+			if pendingMaterializedRIDHighWater == ^uint64(0) {
+				_ = inlineAppender.close()
+				inlineAppender = nil
+				return nil, nil, fmt.Errorf("value-log rid space exhausted")
+			}
+			inlineAppender.nextRID = pendingMaterializedRIDHighWater + 1
 		}
 		db.SetValueLogAppender(inlineAppender)
 		valueLogAppenderInstalled = true
@@ -635,7 +648,8 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 		hasUnappliedRawKVBatch = true
 		needsLogSupport := false
 		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
-			if op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value) {
+			if op == commitlog.RawKVOpSetMaterializedRID ||
+				(op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value)) {
 				needsLogSupport = true
 			}
 			return nil
@@ -652,6 +666,28 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 		return hasUnappliedRawKVBatch, nil
 	}
 	return false, nil
+}
+
+func commandWALReplayPendingMaterializedRIDHighWater(frames []commandWALReplayFrame, applied uint64) (uint64, error) {
+	var highWater uint64
+	for _, frame := range frames {
+		if frame.env.LSN <= applied || frame.env.Kind != commitlog.CommandKindRawKVBatch {
+			continue
+		}
+		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, _, value []byte) error {
+			if op != commitlog.RawKVOpSetMaterializedRID {
+				return nil
+			}
+			rid := binary.LittleEndian.Uint64(value[:8])
+			if rid > highWater {
+				highWater = rid
+			}
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return highWater, nil
 }
 
 func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
@@ -1004,51 +1040,12 @@ func newReplayInlineAppenderWithNextRID(db *DB, segments []logSegment, nextRID u
 
 func nextReplayAppenderRIDStart(segments []logSegment) (uint64, error) {
 	// RIDs are allocated from one monotonically increasing namespace. The appender
-	// only needs the high-water mark, so scan the latest value-log segment in each
-	// lane instead of rebuilding a full RID->pointer map from every segment.
-	latest := latestValueLogSegmentsByLane(segments)
-	if len(latest) == 0 {
-		return 1, nil
-	}
-	maxRID := uint64(0)
-	for i := range latest {
-		seg := &latest[i]
-		segMaxRID, err := scanValueLogFileMaxRID(&valuelog.File{ID: seg.fileID, Path: seg.path})
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return 0, err
-		}
-		if segMaxRID > maxRID {
-			maxRID = segMaxRID
-		}
-	}
-	if maxRID == ^uint64(0) {
-		return 0, fmt.Errorf("value-log rid space exhausted")
-	}
-	return maxRID + 1, nil
-}
-
-func latestValueLogSegmentsByLane(segments []logSegment) []logSegment {
-	latestByLane := make(map[int]logSegment)
-	for _, seg := range segments {
-		if !seg.valueLog {
-			continue
-		}
-		cur, ok := latestByLane[seg.lane]
-		if !ok || seg.seq > cur.seq {
-			latestByLane[seg.lane] = seg
-		}
-	}
-	latest := make([]logSegment, 0, len(latestByLane))
-	for _, seg := range latestByLane {
-		latest = append(latest, seg)
-	}
-	sort.Slice(latest, func(i, j int) bool {
-		return latest[i].lane < latest[j].lane
-	})
-	return latest
+	// only needs the high-water mark, so scan every value-log segment without
+	// rebuilding a full RID->pointer map. Recovery may append a missing exact RID
+	// below the current high-water into the newest lane-0 segment; consulting only
+	// the latest segment per lane after that repair would let allocation move
+	// backwards and reuse an existing RID on the following open.
+	return nextRewriteRIDStart(segments)
 }
 
 func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
@@ -1074,6 +1071,35 @@ func (a *replayInlineAppender) appendLocked(value []byte) (page.ValuePtr, error)
 	}
 	if err := a.registerProducedPointerLocked(ptr); err != nil {
 		return page.ValuePtr{}, err
+	}
+	a.dirty = true
+	return ptr, nil
+}
+
+func (a *replayInlineAppender) appendExactRID(rid uint64, value []byte) (page.ValuePtr, error) {
+	if a == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if rid == 0 {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid must be non-zero")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if rid >= a.nextRID && rid == ^uint64(0) {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	ptr, err := a.writer.appendValue(rid, value)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if err := a.registerProducedPointerLocked(ptr); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if rid >= a.nextRID {
+		a.nextRID = rid + 1
 	}
 	a.dirty = true
 	return ptr, nil

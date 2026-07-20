@@ -77,6 +77,17 @@ var ErrBatchDeleteRangeTooLarge = errors.New("cachingdb: batch DeleteRange mater
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
+const (
+	commandWALMaterializedRIDMaxValueBytes  = backenddb.RawKVCommandWALMaterializedRIDMaxValueBytes
+	commandWALMaterializedRIDMaxBatchBytes  = backenddb.RawKVCommandWALMaterializedRIDMaxFrameBytes
+	commandWALMaterializedRIDMaxOps         = backenddb.RawKVCommandWALMaterializedRIDMaxOperations
+	commandWALDefaultMaxSegmentBytes        = 64 << 20
+	commandWALMaterializedRIDFrameReserve   = backenddb.RawKVCommandWALMaterializedRIDFrameReserve
+	commandWALMaterializedRIDOpOverhead     = 17 + 8
+	commandWALMaterializedRIDVLogReserve    = 1 << 20
+	commandWALMaterializedRIDVLogOpOverhead = 64
+)
+
 var iteratorDebugEnabled atomic.Bool
 
 var valueLogEligiblePool sync.Pool                  // stores []int
@@ -10667,6 +10678,22 @@ func (b *Batch) OrderedEntries() []batch.Entry {
 	return b.entries
 }
 
+// ExternalCommandWALRequiresEntryScan reports whether cached preflight placed
+// any operation in the value log. The public command-WAL wrapper must then
+// encode the post-placement entries instead of its prebuilt inline payload so
+// the frame records either SetRID or SetMaterializedRID explicitly.
+func (b *Batch) ExternalCommandWALRequiresEntryScan() bool {
+	if b == nil || b.db == nil || !b.db.externalCommandWAL {
+		return false
+	}
+	for i := range b.entries {
+		if b.entries[i].Type == batch.OpPut && b.entries[i].IsPtr {
+			return true
+		}
+	}
+	return false
+}
+
 func assignLegacyPointEntryRevisions(entries []batch.Entry, revision page.EntryRevision) page.EntryRevision {
 	maxRevision := page.LegacyEntryRevision
 	for i := range entries {
@@ -12205,10 +12232,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
-	// RID allocation is monotonic, so each non-leaf lane's latest non-empty
-	// value-log segment contains that lane's high-watermark. Leaf-log append lanes
-	// share one encoded lane across multiple physical writers, so their RID seed
-	// scans every non-empty reserved leaf-log segment.
+	// Scan every non-empty segment: exact-RID command-WAL recovery may append an
+	// older missing RID into a newer segment, so the physical tail is no longer
+	// guaranteed to carry the allocator high-watermark.
 	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
@@ -33332,6 +33358,7 @@ type Batch struct {
 	entryRevision                page.EntryRevision
 	commandWALAppend             func() error
 	commandWALPreparedRevision   bool
+	commandWALMaterializedRID    bool
 	valueCopyShard               *memShard
 	appendOnlyDirectValueCopier  func([]byte) []byte
 
@@ -34430,6 +34457,7 @@ func (b *Batch) Reset() {
 	b.maxEntries = 0
 	b.commandWALAppend = nil
 	b.commandWALPreparedRevision = false
+	b.commandWALMaterializedRID = false
 	b.valueCopyShard = nil
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
@@ -36113,6 +36141,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	needRotate := false
 	needSyncBarrier := false
 	commandWALAppended := false
+	b.commandWALMaterializedRID = false
 	var retainStableViewValueMems []memtable.Table
 	var stableViewValueLeaseBytes int64
 	stableViewValueLeaseFinalized := false
@@ -36298,11 +36327,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	valueLogEnabled := b.db.valueLogEnabled()
 
 	var (
-		eligibleIdxs       []int
-		eligibleCountTotal int
-		allowPointers      bool
-		eligibleCount      int
-		multiLanePointers  bool
+		eligibleIdxs                  []int
+		eligibleCountTotal            int
+		allowPointers                 bool
+		eligibleCount                 int
+		multiLanePointers             bool
+		materializeCommandWALPointers bool
 	)
 	if !allDeletes {
 		eligibleIdxs = b.eligibleIdxs
@@ -36331,6 +36361,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			allowPointers = false
 		}
 		eligibleCount = len(eligibleIdxs)
+		materializeCommandWALPointers = durability == journalDurabilitySync &&
+			allowPointers &&
+			b.commandWALCanMaterializeValueLogPointers(eligibleIdxs)
 		if debugPtr && eligibleCountTotal > 0 {
 			b.db.debugPtrEligible.Add(int64(eligibleCountTotal))
 			if !valueLogEnabled {
@@ -36340,6 +36373,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 		}
 		multiLanePointers = allowPointers &&
+			!materializeCommandWALPointers &&
 			b.db.disableJournal &&
 			// journalDurabilityFlush is still an unsynced fast-path write. We widen
 			// multi-lane pointer batching to include it so unsynced importer batches
@@ -36355,20 +36389,31 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	)
 	needLaneForPointers := !allDeletes && !multiLanePointers && allowPointers
 	needLaneForJournal := !b.db.disableJournal
+	reserveLane := durability == journalDurabilitySync || materializeCommandWALPointers
 	if needLaneForPointers || needLaneForJournal {
-		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
+		l, err := b.db.pickLane(reserveLane, -1)
 		if err != nil {
 			unlockWriteMu()
 			return err
 		}
 		lane = l
-		if durability == journalDurabilitySync {
+		if reserveLane {
 			defer b.db.releaseLaneSync(lane)
 		}
 		if !b.db.disableJournal && allowPointers {
 			rids = make([]uint64, len(b.entries))
 		}
 	}
+	if materializeCommandWALPointers {
+		materializeCommandWALPointers = b.commandWALMaterializedRIDFitsCurrentValueLogSegment(lane, eligibleIdxs)
+		if materializeCommandWALPointers {
+			// The command frame carries both the reserved RID and the value
+			// bytes, so the value-log append is recoverable without becoming a
+			// stable dependency before the command-WAL acknowledgement.
+			durability = journalDurabilityNone
+		}
+	}
+	b.commandWALMaterializedRID = materializeCommandWALPointers
 
 	if !allDeletes && allowPointers && eligibleCount > 0 {
 		if multiLanePointers {
@@ -36472,7 +36517,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					op := &b.entries[idx]
 					op.ValuePtr = lb.ptrs[i]
 					op.IsPtr = true
-					if b.db.memtableValueLogPointers {
+					if b.db.memtableValueLogPointers && !materializeCommandWALPointers {
 						op.Value = nil
 					}
 				}
@@ -36556,7 +36601,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					op := &b.entries[idx]
 					op.ValuePtr = ptr
 					op.IsPtr = true
-					if b.db.memtableValueLogPointers {
+					if b.db.memtableValueLogPointers && !materializeCommandWALPointers {
 						op.Value = nil
 					}
 					used++
@@ -36623,11 +36668,30 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 
 	if b.commandWALAppend != nil {
+		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+			for _, idx := range b.ptrValueIdxs {
+				if idx < 0 || idx >= len(b.entries) {
+					unlockWriteMu()
+					return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
+				}
+			}
+		}
 		if err := b.commandWALAppend(); err != nil {
 			unlockWriteMu()
 			return err
 		}
 		commandWALAppended = true
+		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+			// SetMaterializedRID needs the value through the callback above. The
+			// pointer-in-memtable representation needs only ValuePtr, so clear the
+			// serialization copy before any sorted/steal publication path can take
+			// ownership of it.
+			for _, idx := range b.ptrValueIdxs {
+				if b.entries[idx].IsPtr {
+					b.entries[idx].Value = nil
+				}
+			}
+		}
 	}
 
 	if !allDeletes {
@@ -36975,6 +37039,79 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	return nil
 }
 
+func (b *Batch) commandWALCanMaterializeValueLogPointers(eligibleIdxs []int) bool {
+	if b == nil || b.db == nil || b.commandWALAppend == nil || !b.db.externalCommandWAL ||
+		len(eligibleIdxs) == 0 || len(b.entries) == 0 || len(b.entries) > commandWALMaterializedRIDMaxOps {
+		return false
+	}
+	capBytes := b.db.walMaxSegmentBytes
+	if capBytes <= 0 {
+		capBytes = commandWALDefaultMaxSegmentBytes
+	}
+	if capBytes > commandWALMaterializedRIDMaxBatchBytes {
+		capBytes = commandWALMaterializedRIDMaxBatchBytes
+	}
+	estimated := int64(commandWALMaterializedRIDFrameReserve)
+	for i, idx := range eligibleIdxs {
+		if idx < 0 || idx >= len(b.entries) {
+			return false
+		}
+		if i > 0 && idx <= eligibleIdxs[i-1] {
+			return false
+		}
+		if len(b.entries[idx].Value) == 0 || len(b.entries[idx].Value) > commandWALMaterializedRIDMaxValueBytes {
+			return false
+		}
+	}
+	eligibleCursor := 0
+	for i := range b.entries {
+		entry := &b.entries[i]
+		delta := int64(commandWALMaterializedRIDOpOverhead) + int64(len(entry.Key))
+		if entry.Type == batch.OpPut {
+			delta += int64(len(entry.Value))
+			if eligibleCursor < len(eligibleIdxs) && eligibleIdxs[eligibleCursor] == i {
+				eligibleCursor++
+			}
+		} else if entry.Type == batch.OpDeleteRange {
+			delta += int64(len(entry.Value))
+		}
+		if delta > capBytes-estimated {
+			return false
+		}
+		estimated += delta
+	}
+	return eligibleCursor == len(eligibleIdxs) && estimated <= capBytes
+}
+
+func (b *Batch) commandWALMaterializedRIDFitsCurrentValueLogSegment(l *lane, eligibleIdxs []int) bool {
+	if b == nil || b.db == nil || l == nil || len(eligibleIdxs) == 0 {
+		return false
+	}
+	maxBytes := b.db.valueLogMaxSegmentBytesForLane(l)
+	if maxBytes <= 0 {
+		return true
+	}
+	estimated := int64(commandWALMaterializedRIDVLogReserve)
+	for _, idx := range eligibleIdxs {
+		if idx < 0 || idx >= len(b.entries) {
+			return false
+		}
+		entry := &b.entries[idx]
+		delta := int64(commandWALMaterializedRIDVLogOpOverhead) + int64(len(entry.Key)) + int64(len(entry.Value))
+		if delta > maxBytes-estimated {
+			return false
+		}
+		estimated += delta
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if l.vlog == nil {
+		return true
+	}
+	size := l.vlog.Size()
+	return size <= maxBytes-estimated
+}
+
 type logSegmentInfo struct {
 	path     string
 	size     int64
@@ -37072,7 +37209,7 @@ func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segme
 
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
-	for _, seg := range ridSeedValueLogSegments(segments) {
+	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
 		}
@@ -37107,32 +37244,6 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
-}
-
-func ridSeedValueLogSegments(segments []logSegmentInfo) []logSegmentInfo {
-	if len(segments) == 0 {
-		return nil
-	}
-	out := make([]logSegmentInfo, 0, len(segments))
-	for _, seg := range segments {
-		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
-			continue
-		}
-		if seg.lane == leafLogLaneID {
-			out = append(out, seg)
-		}
-	}
-	out = append(out, tailValueLogSegmentsByLaneExcept(segments, leafLogLaneID)...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].lane != out[j].lane {
-			return out[i].lane < out[j].lane
-		}
-		if out[i].seq != out[j].seq {
-			return out[i].seq < out[j].seq
-		}
-		return out[i].path < out[j].path
-	})
-	return out
 }
 
 func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
@@ -37493,6 +37604,7 @@ func (b *Batch) Close() error {
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0
+	b.commandWALMaterializedRID = false
 	return nil
 }
 
@@ -37521,6 +37633,9 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			pointStart = len(b.entries)
 		}
 		for _, entry := range b.entries[pointStart:] {
+			if entry.IsPtr && !b.commandWALMaterializedRID {
+				entry.Value = nil
+			}
 			if err := fn(entry); err != nil {
 				return err
 			}
@@ -37529,6 +37644,9 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 	}
 
 	for _, entry := range b.entries {
+		if entry.IsPtr && !b.commandWALMaterializedRID {
+			entry.Value = nil
+		}
 		if err := fn(entry); err != nil {
 			return err
 		}

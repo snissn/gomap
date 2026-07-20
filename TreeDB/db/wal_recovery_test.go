@@ -14,23 +14,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestNextReplayAppenderRIDStartScansLatestValueLogSegmentPerLane(t *testing.T) {
+func TestNextReplayAppenderRIDStartPreservesRIDHighWaterAcrossAllSegments(t *testing.T) {
 	dir := t.TempDir()
-	older := writeRIDStartValueLogSegment(t, dir, 2, 1, 10)
-	latest := writeRIDStartValueLogSegment(t, dir, 2, 2, 200)
+	older := writeRIDStartValueLogSegment(t, dir, 2, 1, 200)
+	latest := writeRIDStartValueLogSegment(t, dir, 2, 2, 42)
 	leafLatest := writeRIDStartValueLogSegment(t, dir, rewriteLeafLogLaneID, 1, 150)
 	ignoredCommit := logSegment{lane: 2, seq: 99, path: filepath.Join(dir, "commit.log")}
-
-	gotLatest := latestValueLogSegmentsByLane([]logSegment{older, latest, leafLatest, ignoredCommit})
-	if len(gotLatest) != 2 {
-		t.Fatalf("latest segments len=%d want 2", len(gotLatest))
-	}
-	if gotLatest[0].lane != 2 || gotLatest[0].seq != 2 {
-		t.Fatalf("lane 2 latest=%+v want seq 2", gotLatest[0])
-	}
-	if gotLatest[1].lane != int(rewriteLeafLogLaneID) || gotLatest[1].seq != 1 {
-		t.Fatalf("leaf lane latest=%+v want seq 1", gotLatest[1])
-	}
 
 	next, err := nextReplayAppenderRIDStart([]logSegment{older, latest, leafLatest, ignoredCommit})
 	if err != nil {
