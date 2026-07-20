@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -254,6 +255,8 @@ type ColumnPublishPlan struct {
 	RowRemainderBytes                      int64
 	ColumnPayloadBytes                     int64
 	ManifestBytes                          int64
+	ManifestMutationRecords                int
+	ManifestMutationBytes                  int64
 	Lifecycle                              ColumnPublishLifecycleSummary
 	StageMetrics                           ColumnPublishStageMetrics
 	stableResources                        *rootpublication.StableResourceSet
@@ -268,7 +271,14 @@ type ColumnManifestRootDelta struct {
 	StoragePolicy  RootStoragePolicy
 	Identity       ColumnManifestIdentity
 	IdentityRecord [columnManifestIdentityRecordSize]byte
-	Records        []columnManifestRecord
+	// Records is the complete logical post-state manifest used for checksum,
+	// durability-closure, and correctness validation.
+	Records []columnManifestRecord
+	// Mutations is the minimal root-local change set from the base manifest to
+	// Records. MutationDelta distinguishes an intentionally empty mutation set
+	// from legacy/custom full-record root deltas.
+	Mutations     []columnManifestMutation
+	MutationDelta bool
 }
 
 // ColumnPublishLifecycleSummary summarizes lifecycle/GC-relevant asset effects
@@ -467,10 +477,10 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish root-delta construction failed: %w", err)
 	}
 	metrics.RootDeltaConstruction = time.Since(start)
-	if err := validateColumnManifestRootDeltaForPlan(rootDelta, input.BaseManifestRootID, *cfg, manifest.Identity); err != nil {
+	if err := validateColumnManifestRootDeltaForPlan(rootDelta, input.CurrentManifestRecords, input.BaseManifestRootID, *cfg, manifest.Identity); err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: invalid column publish root delta: %w", err)
 	}
-	durableResourceRequirements, err := stableColumnManifestDurableRequirements(rootDelta.Records, manifest.Identity.Generation, cfg.AssetManager.Namespace)
+	durableResourceRequirements, err := stableColumnManifestDurableRequirements(manifest.Records, manifest.Identity.Generation, cfg.AssetManager.Namespace)
 	if err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: derive durable column resource closure: %w", err)
 	}
@@ -501,6 +511,8 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		RowRemainderBytes:                      manifestPrepared.RowRemainderBytes,
 		ColumnPayloadBytes:                     manifestPrepared.ColumnPayloadBytes,
 		ManifestBytes:                          manifest.ManifestBytes,
+		ManifestMutationRecords:                columnManifestRootPublishedRecordCount(rootDelta),
+		ManifestMutationBytes:                  columnManifestRootPublishedBytes(rootDelta),
 		Lifecycle: ColumnPublishLifecycleSummary{
 			PublishedRefs:  closure.RequiredAssets,
 			PublishedBytes: closure.RequiredBytes,
@@ -548,6 +560,20 @@ func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.Ordere
 	}, nil
 }
 
+func columnManifestRootPublishedRecordCount(delta ColumnManifestRootDelta) int {
+	if delta.MutationDelta {
+		return columnManifestRootMutationRecordCount(delta.Mutations)
+	}
+	return 1 + len(delta.Records)
+}
+
+func columnManifestRootPublishedBytes(delta ColumnManifestRootDelta) int64 {
+	if delta.MutationDelta {
+		return columnManifestRootMutationBytes(delta.Mutations)
+	}
+	return columnManifestRecordsBytes(delta.Records)
+}
+
 func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.OrderedRootDeltaPublishInput, error) {
 	if delta.RootName == "" {
 		return backenddb.OrderedRootDeltaPublishInput{}, errors.New("collections: column manifest root delta missing root name")
@@ -564,9 +590,15 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.O
 	if err != nil {
 		return backenddb.OrderedRootDeltaPublishInput{}, err
 	}
+	var iter iterator.UnsafeIterator
+	if delta.MutationDelta {
+		iter = columnManifestRootMutationIterator(delta.IdentityRecord, delta.Mutations)
+	} else {
+		iter = columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records)
+	}
 	return backenddb.OrderedRootDeltaPublishInput{
 		BaseRoot:      delta.BaseRootID,
-		Iter:          columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records),
+		Iter:          iter,
 		StoragePolicy: policy,
 	}, nil
 }
@@ -587,7 +619,12 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 	if err != nil {
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
-	iter := columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records)
+	var iter iterator.UnsafeIterator
+	if delta.MutationDelta {
+		iter = columnManifestRootMutationIterator(delta.IdentityRecord, delta.Mutations)
+	} else {
+		iter = columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records)
+	}
 	defer func() { _ = iter.Close() }()
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
 	if err != nil {
@@ -828,13 +865,19 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 	if cfg.ManifestRoot == nil {
 		return ColumnManifestRootDelta{}, errors.New("missing column manifest root descriptor")
 	}
+	mutations, err := buildColumnManifestMutationDelta(input.CurrentManifestRecords, manifest.Records)
+	if err != nil {
+		return ColumnManifestRootDelta{}, err
+	}
 	return ColumnManifestRootDelta{
 		RootName:       cfg.ManifestRoot.Name,
 		BaseRootID:     input.BaseManifestRootID,
 		StoragePolicy:  cfg.ManifestRoot.StoragePolicy,
 		Identity:       manifest.Identity,
 		IdentityRecord: encodeColumnManifestIdentityRecordArray(manifest.Identity),
-		Records:        cloneColumnManifestRecords(manifest.Records),
+		Records:        manifest.Records,
+		Mutations:      mutations,
+		MutationDelta:  true,
 	}, nil
 }
 
@@ -869,7 +912,7 @@ func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) 
 	return nil
 }
 
-func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, baseRootID uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity) error {
+func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, currentRecords []columnManifestRecord, baseRootID uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity) error {
 	if cfg.ManifestRoot == nil {
 		return errors.New("missing column manifest root descriptor")
 	}
@@ -914,6 +957,23 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, baseR
 	}, snapshot.Generation, delta.Records)
 	if checksum != identity.Checksum {
 		return fmt.Errorf("manifest records checksum=%d does not match identity checksum=%d", checksum, identity.Checksum)
+	}
+	if delta.MutationDelta {
+		for i, mutation := range delta.Mutations {
+			if len(mutation.record.key) == 0 {
+				return fmt.Errorf("manifest mutation[%d] has empty key", i)
+			}
+			if i > 0 && bytes.Compare(delta.Mutations[i-1].record.key, mutation.record.key) >= 0 {
+				return fmt.Errorf("manifest mutations are not strictly sorted at index %d", i)
+			}
+		}
+		expectedMutations, err := buildColumnManifestMutationDelta(currentRecords, delta.Records)
+		if err != nil {
+			return fmt.Errorf("derive expected manifest mutation delta: %w", err)
+		}
+		if !columnManifestMutationsEqual(expectedMutations, delta.Mutations) {
+			return errors.New("manifest mutation delta does not produce logical post-state")
+		}
 	}
 	return nil
 }

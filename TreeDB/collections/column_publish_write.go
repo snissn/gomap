@@ -601,6 +601,8 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishDirectViewSegmentAppendCount += metrics.AssetMetrics.DirectViewSegmentAppendCount
 	stats.ColumnPublishRequiredAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRequiredAssetBytes, plan.RequiredAssetBytes)
 	stats.ColumnPublishManifestBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishManifestBytes, plan.ManifestBytes)
+	stats.ColumnPublishManifestMutationRecords += plan.ManifestMutationRecords
+	stats.ColumnPublishManifestMutationBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishManifestMutationBytes, plan.ManifestMutationBytes)
 }
 
 func recordColumnPublishRootDeltaMaterialization(stats *CollectionInsertStats, elapsed time.Duration) {
