@@ -2,6 +2,8 @@
   "schema_version": 1,
   "kind": "treedb_vector_partition_m2_reproduction_evidence",
   "note": "Compact reviewer-accessible evidence. Generated artifacts remain host-local; commands and digests reproduce and verify them.",
+  "implementation_commit": "7a5d61e60cec2c55ea8befe656e76631742b4b1d",
+  "implementation_commit_note": "All three fresh runs used binaries built from this exact implementation commit. Commit cec947921b190ef9370de9e1542040a962c086c5 refreshed only documentation/evidence and changed no implementation files.",
   "canonical_manifest_digest_definition": "SHA-256 of json.Marshal on the decoded typed exporter manifest, including the sorted file map. This is the logical canonical manifest digest used in source_id, not a hash of manifest.json bytes.",
   "runs": [
     {

@@ -96,6 +96,12 @@ decoded typed exporter manifest (including its canonically ordered file map),
 which is the logical manifest binding used in `source_id`; it is explicitly
 not the raw `manifest.json` file-byte hash. The manifest itself lists the raw
 SHA-256 and byte count for every exported corpus file.
+All three runs used binaries built from implementation commit
+`7a5d61e60cec2c55ea8befe656e76631742b4b1d`. The following commit
+`cec947921b190ef9370de9e1542040a962c086c5` refreshed only this documentation
+and the evidence ledger; it changed no implementation files. This separates
+the exact algorithm binding from the necessarily later commit that records its
+measurements.
 
 The 1M artifact was
 `/tmp/treedb_m2_out1m_final2_nJ3Cq0/vector_partition_f76fba39db8a51fb.json`
