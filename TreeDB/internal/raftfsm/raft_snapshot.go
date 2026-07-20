@@ -202,6 +202,12 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	return collections.WithVectorPartitionStorageBarrierV1(raftcluster.MainDBDir(f.cluster.Dir), func() error { return f.installRaftSnapshotV1Locked(reader) })
+}
+func (f *FSM) installRaftSnapshotV1Locked(reader io.Reader) error {
+	if f == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
 	if reader == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil snapshot reader")
 	}
