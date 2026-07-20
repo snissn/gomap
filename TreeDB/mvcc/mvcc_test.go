@@ -433,6 +433,14 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	if err != nil || len(segments) == 0 {
 		t.Fatalf("discover crash WAL segments: files=%v err=%v", segments, err)
 	}
+	frames, err := commitlog.ScanCommandFrameSegments(segments, commitlog.Options{})
+	if err != nil {
+		t.Fatalf("scan crash WAL segments: %v", err)
+	}
+	if len(frames) == 0 {
+		t.Fatal("crash WAL has no complete command frames")
+	}
+	incompleteSuffixLSN := frames[len(frames)-1].LSN + 1
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
 		Op:  commitlog.RawKVOpDelete,
 		Key: []byte("incomplete-relaxed-suffix"),
@@ -447,7 +455,7 @@ func TestCommitAtDurableProcessCrashRecovery(t *testing.T) {
 	}
 	if err := fixture.AppendCommandV2(commitlog.CommandEnvelope{
 		Version:         commitlog.CommandFrameVersionV2,
-		LSN:             2,
+		LSN:             incompleteSuffixLSN,
 		DurabilityClass: commitlog.CommandDurabilityRelaxed,
 		Kind:            commitlog.CommandKindRawKVBatch,
 		Scope:           commitlog.CommandScopeRawKV,

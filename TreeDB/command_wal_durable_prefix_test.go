@@ -50,27 +50,36 @@ func writeEmptyPublicCommandWALSync(db *DB) error {
 	return errors.Join(writeErr, b.Close())
 }
 
-func TestPublicCommandWALRelaxedExplicitSyncPersistsDurableV2Class(t *testing.T) {
+func TestPublicCommandWALRelaxedExplicitSyncPersistsGroupedDurablePrefix(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(relaxedCommandWALDurablePrefixOptions(dir))
 	if err != nil {
 		t.Fatalf("Open relaxed command WAL: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	// This test certifies the grouped durable-prefix representation rather than
+	// the production solo-sync optimization.
+	db.commandWALGroupCommit.testBeforeSync = func(int) {}
 
 	if err := db.SetSync([]byte("durable"), []byte("value")); err != nil {
 		t.Fatalf("SetSync: %v", err)
 	}
 
 	frames := scanPublicCommandWALV2(t, dir)
-	if len(frames) != 1 {
-		t.Fatalf("frames=%d, want 1: %+v", len(frames), frames)
+	if len(frames) != 2 {
+		t.Fatalf("frames=%d, want relaxed mutation plus grouped durable-prefix barrier: %+v", len(frames), frames)
 	}
-	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityDurable {
-		t.Fatalf("durability class=%v, want durable", got)
+	if got := frames[0].DurabilityClass; got != commitlog.CommandDurabilityRelaxed {
+		t.Fatalf("mutation durability class=%v, want relaxed group member", got)
 	}
 	if got := frames[0].Kind; got != commitlog.CommandKindRawKVBatch {
 		t.Fatalf("kind=%v, want RawKVBatch", got)
+	}
+	if got := frames[1].DurabilityClass; got != commitlog.CommandDurabilityDurable {
+		t.Fatalf("barrier durability class=%v, want durable", got)
+	}
+	if got := frames[1].Kind; got != commitlog.CommandKindDurablePrefixBarrier {
+		t.Fatalf("barrier kind=%v, want DurablePrefixBarrier", got)
 	}
 }
 
@@ -278,7 +287,7 @@ func TestPublicCommandWALRelaxedPointerDebtStatsCloseOnSetSync(t *testing.T) {
 	}
 	stats = db.Stats()
 	if got := stats["treedb.command_wal.durable_wal_lsn"]; got != "2" {
-		t.Fatalf("durable_wal_lsn=%q, want 2", got)
+		t.Fatalf("durable_wal_lsn=%q, want directly synced mutation LSN 2", got)
 	}
 	if got := stats["treedb.command_wal.dependency_debt.entries"]; got != "0" {
 		t.Fatalf("pending debt entries=%q, want 0 after SetSync", got)
