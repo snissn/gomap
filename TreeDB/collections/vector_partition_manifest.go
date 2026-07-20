@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const VectorPartitionManifestFormatV1 = "vector_partition_manifest_v1"
@@ -1330,9 +1332,16 @@ type VectorPartitionStatusV1 struct {
 
 // PublishVectorPartitionManifestV1 binds the durable generation to this
 // collection's currently declared vector-index definition before publication.
-func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV1) error {
+func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV1, resources *rootpublication.StableResourceSet) error {
 	if c == nil || c.db == nil {
+		if resources != nil {
+			resources.Release()
+		}
 		return errors.New("collections: closed collection")
+	}
+	if m.State != "ready" && resources != nil {
+		resources.Release()
+		return errors.New("collections: non-ready vector partition publication must not carry stable resources")
 	}
 	if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
 		return err
@@ -1368,6 +1377,20 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		return err
 	}
 	if m.State == "ready" {
+		if resources == nil {
+			return errors.New("collections: ready vector partition publication requires stable resources")
+		}
+		// Ownership transfers to this call even if validation fails. The producer
+		// pins remain held through verification and durable active-pointer sync.
+		defer resources.Release()
+		prepared := make([]ColumnPreparedAsset, 0, len(m.Assets)+1)
+		for _, asset := range m.Assets {
+			prepared = append(prepared, ColumnPreparedAsset{Ref: asset.Ref, Bytes: int64(asset.Bytes)})
+		}
+		prepared = append(prepared, ColumnPreparedAsset{Ref: m.RouterAsset.Ref, Bytes: int64(m.RouterAsset.Bytes)})
+		if err := validateStableColumnResourcesMatchPrepared(prepared, resources); err != nil {
+			return fmt.Errorf("collections: vector partition stable publication authority: %w", err)
+		}
 		namespace := ""
 		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil {
 			namespace = cfg.AssetManager.Namespace

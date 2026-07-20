@@ -9,7 +9,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func appendVectorPartitionStableAssetsV1(t *testing.T, d *backenddb.DB, col *Collection, fileID uint32) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
+	t.Helper()
+	lease, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	cfg := *col.meta.Options.ColumnStore
+	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(d.ColumnAssetRootDir(), cfg, fileID, []StableColumnPhysicalAssetAppend{
+		{Payload: []byte("partition-0"), Kind: ColumnAssetKindTCS1PartImage, Generation: 701, PartID: 1},
+		{Payload: []byte("partition-1"), Kind: ColumnAssetKindTCS1PartImage, Generation: 702, PartID: 2},
+		{Payload: []byte("router"), Kind: ColumnAssetKindTCS1PartImage, Generation: 703, PartID: 3},
+	}, d.StableResourceIdentityPinRegistry(), lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return refs, resources
+}
 
 func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
@@ -29,7 +51,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 		t.Fatal("missing typed state asset")
 	}
 	_ = view
-	refs := []ColumnAssetRef{writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 701, []byte("partition-0")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 702, []byte("partition-1")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 703, []byte("router"))}
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 701)
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
 		if err != nil {
@@ -45,7 +67,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	sum := sha256.Sum256(raw)
 	m.RouterAsset.Ref, m.RouterAsset.Bytes, m.RouterAsset.Checksum = refs[2], uint64(refs[2].Length), hex.EncodeToString(sum[:])
 	m.Canonicalize()
-	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
+	if err := col.PublishVectorPartitionManifestV1(m, resources); err != nil {
 		t.Fatal(err)
 	}
 	status, err := col.VectorPartitionStatusV1(def.Name, 7)
@@ -116,7 +138,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 	m.IndexDefinitionDigest = strings.Repeat("f", 64)
 	m.Canonicalize()
-	if err := col.PublishVectorPartitionManifestV1(m); err == nil {
+	if err := col.PublishVectorPartitionManifestV1(m, nil); err == nil {
 		t.Fatal("wrong index digest accepted")
 	}
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
@@ -124,7 +146,7 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 		bad := m
 		mutate(&bad)
 		bad.Canonicalize()
-		if err := col.PublishVectorPartitionManifestV1(bad); err == nil {
+		if err := col.PublishVectorPartitionManifestV1(bad, nil); err == nil {
 			t.Fatal("stale source identity accepted")
 		}
 	}
@@ -276,7 +298,7 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
 	_ = view
-	refs := []ColumnAssetRef{writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 711, []byte("partition-0")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 712, []byte("partition-1")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 713, []byte("router"))}
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, 711)
 	for i := range m.Assets {
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
 		if err != nil {
@@ -294,7 +316,7 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	m.Canonicalize()
 	held := col.lockMutation()
 	done := make(chan error, 1)
-	go func() { done <- col.PublishVectorPartitionManifestV1(m) }()
+	go func() { done <- col.PublishVectorPartitionManifestV1(m, resources) }()
 	select {
 	case err := <-done:
 		t.Fatalf("publish escaped mutation barrier: %v", err)
