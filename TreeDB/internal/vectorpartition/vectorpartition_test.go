@@ -29,6 +29,14 @@ func config() Config {
 	c.MaxEdges = 128
 	return c
 }
+
+func emptyGraph(nodes int) Graph {
+	g := Graph{Neighbors: make([][]int, nodes)}
+	for i := range g.Neighbors {
+		g.Neighbors[i] = make([]int, 0)
+	}
+	return g
+}
 func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	a, e := Build(fixture(), config())
 	if e != nil {
@@ -397,6 +405,11 @@ func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 		t.Fatal("missing graph node accepted")
 	}
 	a, _ = Build(fixture(), config())
+	a.Graph.Neighbors[0] = nil
+	if e := ValidateArtifact(a); e == nil {
+		t.Fatal("null graph row accepted")
+	}
+	a, _ = Build(fixture(), config())
 	a.IDs[1] = a.IDs[0]
 	if e := ValidateArtifact(a); e == nil {
 		t.Fatal("duplicate ID accepted")
@@ -405,6 +418,68 @@ func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 	a.Assignment = []int{0, 0, 0, 0, 0, 0}
 	if e := ValidateArtifact(a); e == nil {
 		t.Fatal("over-cap assignment accepted")
+	}
+}
+
+func TestZeroDegreeGraphRowsAreCanonicalEmptyArrays(t *testing.T) {
+	c := config()
+	c.Partitions, c.MaxVectors, c.MaxEdges = 1, 1, 4
+	isolate, err := Build([]Vector{{ID: "only", Values: []float64{1, 0}}}, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(isolate.Graph.Neighbors) != 1 || isolate.Graph.Neighbors[0] == nil || len(isolate.Graph.Neighbors[0]) != 0 {
+		t.Fatalf("isolated build emitted non-canonical graph: %#v", isolate.Graph.Neighbors)
+	}
+
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range a.Graph.Neighbors {
+		a.Graph.Neighbors[i] = make([]int, 0)
+	}
+	a.Metrics = metrics(a)
+	if err := ValidateArtifact(a); err != nil {
+		t.Fatalf("all-empty graph rejected: %v", err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`null`)) {
+		t.Fatalf("canonical all-empty graph contains null: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"neighbors":[[],`)) {
+		t.Fatalf("canonical all-empty graph does not use arrays: %s", raw)
+	}
+	roundTrip, err := DecodeArtifact(raw, len(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(roundTrip.Graph, a.Graph) {
+		t.Fatalf("canonical graph round trip changed rows: %#v", roundTrip.Graph.Neighbors)
+	}
+	digest, err := Digest(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTripDigest, err := Digest(roundTrip)
+	if err != nil || digest != roundTripDigest {
+		t.Fatalf("canonical digest changed after round trip: %q %q %v", digest, roundTripDigest, err)
+	}
+	if _, err := DecodeArtifactForRequest(raw, len(raw), a); err != nil {
+		t.Fatalf("exact request binding rejected canonical empty rows: %v", err)
+	}
+	forged := bytes.Replace(raw, []byte(`"neighbors":[[]`), []byte(`"neighbors":[null`), 1)
+	if bytes.Equal(forged, raw) {
+		t.Fatal("failed to forge null graph row")
+	}
+	if _, err := DecodeArtifact(forged, len(forged)); err == nil || !strings.Contains(err.Error(), "neighbor row must be an array") {
+		t.Fatalf("null graph row was normalized or accepted: %v", err)
+	}
+	if _, err := DecodeArtifactForRequest(forged, len(forged), a); err == nil || !strings.Contains(err.Error(), "neighbor row must be an array") {
+		t.Fatalf("request binding normalized null graph row: %v", err)
 	}
 }
 
@@ -774,7 +849,7 @@ func TestDecodeArtifactForRequestBindsGraphConfigAndIDs(t *testing.T) {
 	})
 	t.Run("graph", func(t *testing.T) {
 		response := request
-		response.Graph.Neighbors = make([][]int, len(request.Graph.Neighbors))
+		response.Graph = emptyGraph(len(request.Graph.Neighbors))
 		assertRejected(t, response)
 	})
 	// Assignment is the intended backend result. A different valid assignment
@@ -907,7 +982,7 @@ func TestBuildWithPartitionerFailsClosedAfterMutatingBackendFailure(t *testing.T
 }
 
 func TestCloneGraphBoundedUsesIndependentExactBacking(t *testing.T) {
-	original := Graph{Neighbors: [][]int{{1, 2}, {0}}}
+	original := Graph{Neighbors: [][]int{{1, 2}, {}, {0}}}
 	clone, err := cloneGraphBounded(original, 3)
 	if err != nil {
 		t.Fatal(err)
@@ -915,6 +990,9 @@ func TestCloneGraphBoundedUsesIndependentExactBacking(t *testing.T) {
 	clone.Neighbors[0][0] = 99
 	if original.Neighbors[0][0] != 1 {
 		t.Fatalf("backend graph clone aliases canonical graph: %v", original)
+	}
+	if clone.Neighbors[1] == nil {
+		t.Fatal("backend graph clone changed an empty row to null")
 	}
 	if _, err := cloneGraphBounded(original, 2); err == nil {
 		t.Fatal("oversized backend graph copy accepted")
@@ -951,7 +1029,7 @@ func TestValidatorRejectsSymmetricPolicyEvenForReciprocalGraph(t *testing.T) {
 	}
 }
 func TestReferencePartitionerCoversEveryPartition(t *testing.T) {
-	g := Graph{Neighbors: make([][]int, 8)}
+	g := emptyGraph(8)
 	a, err := (ReferencePartitioner{}).Partition(g, 4, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -967,7 +1045,7 @@ func TestReferencePartitionerCoversEveryPartition(t *testing.T) {
 	}
 }
 func TestReferencePartitionerRejectsExcessiveWork(t *testing.T) {
-	g := Graph{Neighbors: make([][]int, 16_384)}
+	g := emptyGraph(16_384)
 	if _, err := (ReferencePartitioner{}).Partition(g, 16_384, 2); err == nil {
 		t.Fatal("unbounded partition work accepted")
 	}
@@ -989,7 +1067,7 @@ func TestPartitionWorkCountsAllPassesAtEmptyGraphBoundary(t *testing.T) {
 	}
 }
 func TestReferencePartitionerRejectsVectorBoundBeforeInternalAllocation(t *testing.T) {
-	g := Graph{Neighbors: make([][]int, maxVectors+1)}
+	g := emptyGraph(maxVectors + 1)
 	if _, err := (ReferencePartitioner{}).Partition(g, 1, maxVectors+1); err == nil {
 		t.Fatal("partitioner accepted graph above direct vector bound")
 	}
@@ -1057,7 +1135,7 @@ func TestArtifactRejectsOversizedIDsAndSourceDimensions(t *testing.T) {
 func TestArtifactRejectsAggregateIDByteCap(t *testing.T) {
 	chunk := strings.Repeat("x", maxTotalIDBytes/2+1)
 	c := Config{Metric: "cosine", Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 1, Partitions: 2, MaxVectors: 2, MaxEdges: 2}
-	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: Source{SourceID: "test", Checksum: strings.Repeat("0", 64), Vectors: 2, Dimensions: 1, Metric: "cosine"}, Config: c, IDs: []string{"a" + chunk, "b" + chunk}, Graph: Graph{Neighbors: make([][]int, 2)}, Assignment: []int{0, 1}}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: Source{SourceID: "test", Checksum: strings.Repeat("0", 64), Vectors: 2, Dimensions: 1, Metric: "cosine"}, Config: c, IDs: []string{"a" + chunk, "b" + chunk}, Graph: emptyGraph(2), Assignment: []int{0, 1}}
 	if err := ValidateArtifact(a); err == nil {
 		t.Fatal("aggregate ID cap accepted")
 	}
@@ -1072,7 +1150,7 @@ func TestMetricsHighPartitionCountUsesAssignmentHistogram(t *testing.T) {
 		assignment[i] = i
 	}
 	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 1, Partitions: n, Imbalance: .05, MaxVectors: n, MaxEdges: n}
-	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: Source{SourceID: "test", Checksum: strings.Repeat("0", 64), Vectors: n, Dimensions: 1, Metric: "cosine"}, Config: c, IDs: ids, Graph: Graph{Neighbors: make([][]int, n)}, Assignment: assignment}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: Source{SourceID: "test", Checksum: strings.Repeat("0", 64), Vectors: n, Dimensions: 1, Metric: "cosine"}, Config: c, IDs: ids, Graph: emptyGraph(n), Assignment: assignment}
 	a.Metrics = metrics(a)
 	if err := ValidateArtifact(a); err != nil {
 		t.Fatal(err)

@@ -20,7 +20,10 @@ assigns every ordinal exactly once while enforcing
 checks canonical IDs, graph ordinals/self/duplicates/degree, assignment range,
 coverage, cap, and recomputed metrics. `DecodeArtifact` additionally rejects
 oversized, unknown-field, trailing, and non-canonical JSON; a backend cannot
-publish a forged metric report.
+publish a forged metric report. Every graph row is an array: zero-degree rows
+are encoded as `[]`, never `null`; strict decoding rejects `null` rather than
+normalizing it. This structural rule keeps canonical request binding and
+artifact digests stable for isolated vectors.
 
 The usable optional external adapter (`RunExternalJSONForRequestWithLimits`) is
 offline only; source-only and unbound entrypoints deliberately error because

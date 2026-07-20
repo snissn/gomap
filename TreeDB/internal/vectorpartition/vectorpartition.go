@@ -282,6 +282,12 @@ func cloneGraphBounded(g Graph, maxEdges int) (Graph, error) {
 	backing := make([]int, total)
 	at := 0
 	for i, neighbors := range g.Neighbors {
+		if len(neighbors) == 0 {
+			// Keep the canonical JSON graph shape stable: a zero-degree row is
+			// an empty array, never a nil slice serialized as null.
+			clone.Neighbors[i] = make([]int, 0)
+			continue
+		}
 		clone.Neighbors[i] = backing[at : at+len(neighbors) : at+len(neighbors)]
 		copy(clone.Neighbors[i], neighbors)
 		at += len(neighbors)
@@ -464,6 +470,11 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 		}
 	}
 	g := Graph{Neighbors: make([][]int, n)}
+	for i := range g.Neighbors {
+		// Canonical artifacts represent every zero-degree row as [] rather
+		// than null, including isolated vectors.
+		g.Neighbors[i] = make([]int, 0)
+	}
 	for i, s := range sets {
 		for j := range s {
 			if i != j {
@@ -911,6 +922,9 @@ func validateGraphAndDegree(g Graph, n, degree int) (int, error) {
 	}
 	maxObservedDegree := 0
 	for i, ns := range g.Neighbors {
+		if ns == nil {
+			return 0, errors.New("graph neighbor row must be an array")
+		}
 		if len(ns) > degree {
 			return 0, errors.New("degree cap exceeded")
 		}
