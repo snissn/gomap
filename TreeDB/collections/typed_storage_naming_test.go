@@ -331,6 +331,9 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Raft snapshot M1 fixture names the public compatibility configuration and
+	// stable typed-column append API while proving ready-manifest transport.
+	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
 	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 61, occurrences: 67},
 	{path: "TreeDB/collections/bson_set_update.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_aggregate_metadata_asset.go", classification: typedStorageLegacyDerived, matchingLines: 22, occurrences: 24},

@@ -1927,8 +1927,10 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	// publication from advancing TVIS between validation and activation.
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	c.catalogMu.RLock()
-	defer c.catalogMu.RUnlock()
+	// Do not hold catalogMu across VectorPartitionSourceIdentityV1 below:
+	// VectorIndexStatus may refresh the snapshot catalog and must take its write
+	// lock in rememberCatalog. The mutation barrier already prevents a source
+	// publication from advancing between source validation and activation.
 	if m.Collection != c.name {
 		return fmt.Errorf("collections: vector partition collection %q does not match %q", m.Collection, c.name)
 	}
