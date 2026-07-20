@@ -2,6 +2,7 @@ package rootpublication
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,9 +31,139 @@ type stableResourceEntry struct {
 // their exact prefix. Destructive transitions materialize and rebuild through
 // the ordinary exact filter path.
 type stableLogicalObligationView struct {
-	tail  *stableLogicalObligationNode
-	count int
-	index *stableLogicalObligationIndexNode
+	tail        *stableLogicalObligationNode
+	count       int
+	index       *stableLogicalObligationIndexNode
+	commitments map[ReachabilityField]stableLogicalObligationCommitment
+}
+
+// stableLogicalObligationCommitment is an order-independent cryptographic
+// multiset commitment. Count distinguishes multiplicity and sum is addition
+// modulo 2^256 of hashes that bind every obligation field. The pair supports
+// exact mutation-local add/remove checks without materializing retained
+// obligation history. Hash collisions remain the sole probabilistic boundary.
+type stableLogicalObligationCommitment struct {
+	count uint64
+	sum   [sha256.Size]byte
+}
+
+func stableLogicalObligationHash(obligation StableLogicalObligation) [sha256.Size]byte {
+	h := sha256.New()
+	writeString := func(value string) {
+		var size [8]byte
+		binary.LittleEndian.PutUint64(size[:], uint64(len(value)))
+		_, _ = h.Write(size[:])
+		_, _ = h.Write([]byte(value))
+	}
+	writeUint64 := func(value uint64) {
+		var raw [8]byte
+		binary.LittleEndian.PutUint64(raw[:], value)
+		_, _ = h.Write(raw[:])
+	}
+	writeString(obligation.Class)
+	writeString(obligation.Kind)
+	writeString(obligation.Namespace)
+	writeUint64(obligation.Generation)
+	writeUint64(obligation.PartID)
+	writeUint64(obligation.FileID)
+	writeUint64(uint64(obligation.Offset))
+	writeUint64(uint64(obligation.Length))
+	writeUint64(uint64(obligation.Checksum))
+	writeString(string(obligation.Reachability))
+	_, _ = h.Write(obligation.Digest[:])
+	var result [sha256.Size]byte
+	h.Sum(result[:0])
+	return result
+}
+
+func addStableLogicalObligationDigest(target *[sha256.Size]byte, value [sha256.Size]byte) {
+	carry := uint16(0)
+	for i := len(target) - 1; i >= 0; i-- {
+		sum := uint16(target[i]) + uint16(value[i]) + carry
+		target[i] = byte(sum)
+		carry = sum >> 8
+	}
+}
+
+func subtractStableLogicalObligationDigest(target *[sha256.Size]byte, value [sha256.Size]byte) {
+	borrow := int16(0)
+	for i := len(target) - 1; i >= 0; i-- {
+		difference := int16(target[i]) - int16(value[i]) - borrow
+		if difference < 0 {
+			difference += 1 << 8
+			borrow = 1
+		} else {
+			borrow = 0
+		}
+		target[i] = byte(difference)
+	}
+}
+
+func (commitment *stableLogicalObligationCommitment) addObligation(obligation StableLogicalObligation) {
+	commitment.count++
+	addStableLogicalObligationDigest(&commitment.sum, stableLogicalObligationHash(obligation))
+}
+
+func (commitment *stableLogicalObligationCommitment) removeObligation(obligation StableLogicalObligation) bool {
+	if commitment.count == 0 {
+		return false
+	}
+	commitment.count--
+	subtractStableLogicalObligationDigest(&commitment.sum, stableLogicalObligationHash(obligation))
+	return true
+}
+
+func (commitment *stableLogicalObligationCommitment) add(other stableLogicalObligationCommitment) {
+	commitment.count += other.count
+	addStableLogicalObligationDigest(&commitment.sum, other.sum)
+}
+
+func cloneStableLogicalObligationCommitments(source map[ReachabilityField]stableLogicalObligationCommitment) map[ReachabilityField]stableLogicalObligationCommitment {
+	if len(source) == 0 {
+		return nil
+	}
+	clone := make(map[ReachabilityField]stableLogicalObligationCommitment, len(source))
+	for field, commitment := range source {
+		clone[field] = commitment
+	}
+	return clone
+}
+
+func stableLogicalObligationCommitments(values []StableLogicalObligation) map[ReachabilityField]stableLogicalObligationCommitment {
+	if len(values) == 0 {
+		return nil
+	}
+	commitments := make(map[ReachabilityField]stableLogicalObligationCommitment)
+	for _, obligation := range values {
+		commitment := commitments[obligation.Reachability]
+		commitment.addObligation(obligation)
+		commitments[obligation.Reachability] = commitment
+	}
+	return commitments
+}
+
+func stableLogicalObligationRequirementCommitments(fields []ReachabilityField, values []StableLogicalObligation) map[ReachabilityField]stableLogicalObligationCommitment {
+	commitments := make(map[ReachabilityField]stableLogicalObligationCommitment, len(fields))
+	for _, field := range fields {
+		commitments[field] = stableLogicalObligationCommitment{}
+	}
+	for _, obligation := range values {
+		commitment := commitments[obligation.Reachability]
+		commitment.addObligation(obligation)
+		commitments[obligation.Reachability] = commitment
+	}
+	return commitments
+}
+
+func stableLogicalObligationCommitmentCount(commitments map[ReachabilityField]stableLogicalObligationCommitment) (uint64, bool) {
+	var total uint64
+	for _, commitment := range commitments {
+		if ^uint64(0)-total < commitment.count {
+			return 0, false
+		}
+		total += commitment.count
+	}
+	return total, true
 }
 
 type stableLogicalObligationNode struct {
@@ -64,9 +195,10 @@ func newStableLogicalObligationView(values []StableLogicalObligation) stableLogi
 		}
 	}
 	return stableLogicalObligationView{
-		tail:  &stableLogicalObligationNode{values: stableLogicalObligationList(values)},
-		count: len(values),
-		index: index,
+		tail:        &stableLogicalObligationNode{values: stableLogicalObligationList(values)},
+		count:       len(values),
+		index:       index,
+		commitments: stableLogicalObligationCommitments(values),
 	}
 }
 
@@ -85,10 +217,20 @@ func (view stableLogicalObligationView) appendCertified(values []StableLogicalOb
 			return stableLogicalObligationView{}, err
 		}
 	}
+	commitments := cloneStableLogicalObligationCommitments(view.commitments)
+	if commitments == nil {
+		commitments = make(map[ReachabilityField]stableLogicalObligationCommitment)
+	}
+	for _, obligation := range values {
+		commitment := commitments[obligation.Reachability]
+		commitment.addObligation(obligation)
+		commitments[obligation.Reachability] = commitment
+	}
 	next := stableLogicalObligationView{
-		tail:  &stableLogicalObligationNode{parent: view.tail, values: stableLogicalObligationList(values)},
-		count: view.count + len(values),
-		index: index,
+		tail:        &stableLogicalObligationNode{parent: view.tail, values: stableLogicalObligationList(values)},
+		count:       view.count + len(values),
+		index:       index,
+		commitments: commitments,
 	}
 	return next, nil
 }
@@ -903,6 +1045,11 @@ type StableResourceSet struct {
 type StableLogicalObligationRequirements struct {
 	ScopedFields []ReachabilityField
 	Obligations  []StableLogicalObligation
+	// commitments is derived at the normalization boundary and remains an
+	// immutable-by-convention proof of the complete per-field requirement set.
+	// It is intentionally package-private so callers cannot forge fast-path
+	// authorization independently of the normalized obligations.
+	commitments map[ReachabilityField]stableLogicalObligationCommitment
 }
 
 // StableLogicalObligationMutation is exact transition evidence supplied by a
@@ -1002,6 +1149,98 @@ func ValidateStableLogicalObligationMutationFinalRequirements(mutation StableLog
 	return nil
 }
 
+// CertifyStableLogicalObligationMutationFinalRequirements proves that mutation
+// is the complete transition from source to requirements for every scoped
+// field. It aggregates immutable per-entry commitments and applies only the
+// declared additions/removals, so retained obligation history is neither
+// scanned nor copied. A false result is an authorization decline, not malformed
+// state: callers must retain the exact full filter/validation fallback.
+func CertifyStableLogicalObligationMutationFinalRequirements(source *StableResourceSet, mutation StableLogicalObligationMutation, requirements StableLogicalObligationRequirements, excluded ...ResourceKind) (bool, error) {
+	normalizedMutation, err := NormalizeStableLogicalObligationMutation(mutation)
+	if err != nil {
+		return false, err
+	}
+	if len(normalizedMutation.ScopedFields) == 0 {
+		return false, nil
+	}
+	finalCommitments := requirements.commitments
+	if finalCommitments == nil {
+		// Requirements without a normalization-boundary commitment carry no
+		// bounded completeness proof. Decline instead of reconstructing one by
+		// scanning the complete final requirement history here.
+		return false, nil
+	}
+	finalCount, countOK := stableLogicalObligationCommitmentCount(finalCommitments)
+	if !countOK || finalCount != uint64(len(requirements.Obligations)) {
+		return false, nil
+	}
+	for _, field := range normalizedMutation.ScopedFields {
+		if _, ok := finalCommitments[field]; !ok {
+			return false, nil
+		}
+	}
+	excludedKinds := make(map[ResourceKind]struct{}, len(excluded))
+	for _, kind := range excluded {
+		if kind != "" {
+			excludedKinds[kind] = struct{}{}
+		}
+	}
+	baseCommitments := make(map[ReachabilityField]stableLogicalObligationCommitment, len(normalizedMutation.ScopedFields))
+	if source != nil {
+		source.mu.Lock()
+		defer source.mu.Unlock()
+		owner := ResourceOwnerState(source.owner.Load())
+		if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+			return false, ErrResourceOwnership
+		}
+		for _, entry := range source.entries {
+			token := activeEntryToken(entry)
+			if token == nil || token.released.Load() {
+				return false, ErrResourceOwnership
+			}
+			if _, skip := excludedKinds[token.kind]; skip {
+				continue
+			}
+			if entry.logicalObligations.count != 0 && entry.logicalObligations.commitments == nil {
+				// A non-empty legacy/incomplete view has no bounded proof. Decline
+				// rather than reconstructing it by scanning retained history.
+				return false, nil
+			}
+			entryCount, entryCountOK := stableLogicalObligationCommitmentCount(entry.logicalObligations.commitments)
+			if !entryCountOK || entryCount != uint64(entry.logicalObligations.count) {
+				return false, nil
+			}
+			for _, field := range normalizedMutation.ScopedFields {
+				commitment := baseCommitments[field]
+				commitment.add(entry.logicalObligations.commitments[field])
+				baseCommitments[field] = commitment
+			}
+		}
+	}
+	expected := cloneStableLogicalObligationCommitments(baseCommitments)
+	if expected == nil {
+		expected = make(map[ReachabilityField]stableLogicalObligationCommitment, len(normalizedMutation.ScopedFields))
+	}
+	for _, obligation := range normalizedMutation.Removed {
+		commitment := expected[obligation.Reachability]
+		if !commitment.removeObligation(obligation) {
+			return false, nil
+		}
+		expected[obligation.Reachability] = commitment
+	}
+	for _, obligation := range normalizedMutation.Added {
+		commitment := expected[obligation.Reachability]
+		commitment.addObligation(obligation)
+		expected[obligation.Reachability] = commitment
+	}
+	for _, field := range normalizedMutation.ScopedFields {
+		if expected[field] != finalCommitments[field] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // NormalizeStableLogicalObligationRequirements validates, de-duplicates, and
 // deterministically sorts one exact logical-reference closure.
 func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObligationRequirements) (StableLogicalObligationRequirements, error) {
@@ -1044,6 +1283,7 @@ func NormalizeStableLogicalObligationRequirements(requirements StableLogicalObli
 	return StableLogicalObligationRequirements{
 		ScopedFields: append([]ReachabilityField(nil), uniqueFields...),
 		Obligations:  append([]StableLogicalObligation(nil), normalized...),
+		commitments:  stableLogicalObligationRequirementCommitments(uniqueFields, normalized),
 	}, nil
 }
 

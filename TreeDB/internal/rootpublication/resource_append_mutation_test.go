@@ -66,6 +66,101 @@ func TestStableLogicalObligationAppendSupportsIndependentCandidateBranches(t *te
 	}
 }
 
+func TestStableLogicalObligationAppendPreservesImmutableCommitments(t *testing.T) {
+	baseObligation := appendMutationTestObligation(1)
+	added := appendMutationTestObligation(2)
+	added.Reachability = ReachabilityTypedColumnValue
+	base := newStableLogicalObligationView([]StableLogicalObligation{baseObligation})
+	baseCommitments := cloneStableLogicalObligationCommitments(base.commitments)
+
+	next, err := base.appendCertified([]StableLogicalObligation{added}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(base.commitments) != len(baseCommitments) || base.commitments[baseObligation.Reachability] != baseCommitments[baseObligation.Reachability] {
+		t.Fatalf("append mutated base commitments: got=%+v want=%+v", base.commitments, baseCommitments)
+	}
+	want := stableLogicalObligationCommitments([]StableLogicalObligation{added, baseObligation})
+	if len(next.commitments) != len(want) {
+		t.Fatalf("next commitment fields=%d want %d", len(next.commitments), len(want))
+	}
+	for field, commitment := range want {
+		if next.commitments[field] != commitment {
+			t.Fatalf("next commitment[%q]=%+v want %+v", field, next.commitments[field], commitment)
+		}
+	}
+}
+
+func TestStableLogicalObligationCommitmentCertifiesOnlyCompleteMutation(t *testing.T) {
+	dir := t.TempDir()
+	keep := appendMutationTestObligation(1)
+	removed := appendMutationTestObligation(2)
+	added := appendMutationTestObligation(3)
+	keep.Offset, removed.Offset, added.Offset = 0, 0, 0
+	token := stableTokenFixture(t, dir, "asset.bin", 1, 8, ReachabilityColumnManifest, "asset", func(spec *StableResourceSpec) {
+		spec.Kind = ResourceColumnAsset
+		spec.LogicalLane = "columns"
+		spec.ResourceID = "asset"
+		spec.LogicalObligations = []StableLogicalObligation{keep, removed}
+		spec.ContentSynced = true
+	})
+	builder := NewStableResourceSetBuilder()
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	base, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Release()
+	requirements, err := NormalizeStableLogicalObligationRequirements(StableLogicalObligationRequirements{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Obligations:  []StableLogicalObligation{added, keep},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Added:        []StableLogicalObligation{added},
+		Removed:      []StableLogicalObligation{removed},
+	}
+	certified, err := CertifyStableLogicalObligationMutationFinalRequirements(base, complete, requirements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !certified {
+		t.Fatal("complete mutation was not certified")
+	}
+	omittedRemoval := complete
+	omittedRemoval.Removed = nil
+	certified, err = CertifyStableLogicalObligationMutationFinalRequirements(base, omittedRemoval, requirements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certified {
+		t.Fatal("mutation omitting a required removal was certified")
+	}
+	missingProof := requirements
+	missingProof.commitments = nil
+	certified, err = CertifyStableLogicalObligationMutationFinalRequirements(base, complete, missingProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certified {
+		t.Fatal("requirements missing their normalized commitment were certified")
+	}
+	inconsistentProof := requirements
+	inconsistentProof.Obligations = append(inconsistentProof.Obligations, appendMutationTestObligation(4))
+	certified, err = CertifyStableLogicalObligationMutationFinalRequirements(base, complete, inconsistentProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certified {
+		t.Fatal("requirements inconsistent with their normalized commitment were certified")
+	}
+}
+
 func TestStableLogicalObligationMutationRequiresExactFinalRequirements(t *testing.T) {
 	retained := appendMutationTestObligation(1)
 	added := appendMutationTestObligation(2)

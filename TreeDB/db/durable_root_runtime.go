@@ -696,14 +696,26 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	inheritedStart := time.Now()
 	var inheritedWork rootpublication.StableResourceClosureWork
 	hasMutationEvidence := len(mutation.ScopedFields) != 0
-	appendOnlyMutation := hasMutationEvidence && len(mutation.Removed) == 0
+	mutationCertified := false
 	if hasMutationEvidence {
 		if err := rootpublication.ValidateStableLogicalObligationMutationFinalRequirements(mutation, requirements); err != nil {
 			return nil, fmt.Errorf("validate durable-root logical mutation evidence: %w", err)
 		}
+		mutationCertified, err = rootpublication.CertifyStableLogicalObligationMutationFinalRequirements(
+			base, mutation, requirements, excludedInheritedKinds...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("certify durable-root logical mutation completeness: %w", err)
+		}
+	}
+	appendOnlyMutation := mutationCertified && len(mutation.Removed) == 0
+	if mutationCertified {
 		inherited, inheritedWork, err = rootpublication.CloneStableResourceSetApplyingLogicalObligationMutation(base, mutation, excludedInheritedKinds...)
 	} else {
 		inherited, inheritedWork, err = rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(base, requirements, excludedInheritedKinds...)
+		if hasMutationEvidence && len(mutation.Removed) == 0 {
+			inheritedWork.AppendOnlyFallbacks++
+		}
 	}
 	if timing != nil {
 		timing.FinalizeCandidateInheritedFilter += time.Since(inheritedStart)
