@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -142,8 +143,13 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	return nil
 }
 func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits) error {
-	if a.ID == "" || a.Path == "" || len(a.ID) > l.MaxStringBytes || len(a.Path) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) {
+	if a.ID == "" || len(a.ID) > l.MaxStringBytes || len(a.Path) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || (a.Ref.Kind != "" && uint64(a.Ref.Length) != a.Bytes) {
 		return fmt.Errorf("%w: asset", ErrVectorPartitionManifestInvalid)
+	}
+	if a.Ref.Kind != "" {
+		if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
+			return fmt.Errorf("%w: asset ref", ErrVectorPartitionManifestInvalid)
+		}
 	}
 	return nil
 }
@@ -349,7 +355,11 @@ func (r *vpmReader) assets() []VectorPartitionAssetV1 {
 	return x
 }
 func (r *vpmReader) columnRef() ColumnAssetRef {
-	return ColumnAssetRef{Kind: ColumnAssetKind(r.str()), Namespace: r.str(), Generation: r.u64(), PartID: r.u64(), FileID: r.u32(), Offset: int64(r.u64()), Length: int64(r.u64()), Checksum: r.u32()}
+	k, n, g, p, f, o, l, c := r.str(), r.str(), r.u64(), r.u64(), r.u32(), r.u64(), r.u64(), r.u32()
+	if o > uint64(math.MaxInt64) || l > uint64(math.MaxInt64) {
+		r.err = errors.New("column ref int64 overflow")
+	}
+	return ColumnAssetRef{Kind: ColumnAssetKind(k), Namespace: n, Generation: g, PartID: p, FileID: f, Offset: int64(o), Length: int64(l), Checksum: c}
 }
 func (r *vpmReader) placements() []VectorPartitionPlacementV1 {
 	n := r.count(r.l.MaxPartitions)
@@ -619,6 +629,10 @@ func verifyVectorPartitionAssetsV1(root string, assets []VectorPartitionAssetV1)
 		}
 		if uint64(len(raw)) != a.Bytes {
 			return fmt.Errorf("collections: vector partition asset %q size mismatch", a.ID)
+		}
+		sum := sha256.Sum256(raw)
+		if hex.EncodeToString(sum[:]) != a.Checksum {
+			return fmt.Errorf("collections: vector partition asset %q sha256 mismatch", a.ID)
 		}
 	}
 	return nil

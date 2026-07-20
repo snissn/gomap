@@ -27,12 +27,22 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 		t.Fatal("missing typed state asset")
 	}
 	ref := view.VectorIndexState.Assets[0].Ref
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
 	for i := range m.Assets {
 		m.Assets[i].Ref = ref
 		m.Assets[i].Bytes = uint64(ref.Length)
+		m.Assets[i].Path = ""
+		m.Assets[i].Checksum = digest
 	}
 	m.RouterAsset.Ref = ref
 	m.RouterAsset.Bytes = uint64(ref.Length)
+	m.RouterAsset.Path = ""
+	m.RouterAsset.Checksum = digest
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
 		t.Fatal(err)
@@ -131,12 +141,22 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
 	ref := view.VectorIndexState.Assets[0].Ref
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
 	for i := range m.Assets {
 		m.Assets[i].Ref = ref
 		m.Assets[i].Bytes = uint64(ref.Length)
+		m.Assets[i].Path = ""
+		m.Assets[i].Checksum = digest
 	}
 	m.RouterAsset.Ref = ref
 	m.RouterAsset.Bytes = uint64(ref.Length)
+	m.RouterAsset.Path = ""
+	m.RouterAsset.Checksum = digest
 	m.Canonicalize()
 	held := col.lockMutation()
 	done := make(chan error, 1)
