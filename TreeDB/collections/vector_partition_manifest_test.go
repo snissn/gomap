@@ -54,6 +54,32 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != uint64(ref.Length*3) {
 		t.Fatalf("unexpected status: %+v", status)
 	}
+	plan, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Sources.PreparedRefs != 1 || plan.Sources.PinnedRefs != 1 {
+		t.Fatalf("partition assets were not retained as prepared+pinned: %+v", plan.Sources)
+	}
+	store, err := OpenVectorPartitionStoreV1(d.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte("not-a-generation\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
+		t.Fatal("corrupt active vector partition pointer did not fail closed")
+	}
+	if err := store.Publish(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+"-999.vpm"), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
+		t.Fatal("corrupt retained vector partition manifest did not fail closed")
+	}
 	m.IndexDefinitionDigest = strings.Repeat("f", 64)
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err == nil {
@@ -230,10 +256,28 @@ func TestVectorPartitionManifestV1DecodeCapsBeforeAllocation(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionManifestV1RejectsUntypedOrPathAssetAuthority(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	m.Assets[0].Ref = ColumnAssetRef{}
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("untyped asset reference accepted")
+	}
+	m = testVectorPartitionManifestV1()
+	m.Assets[0].Path = "relative/path"
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("path asset authority accepted")
+	}
+}
+
 func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	h := strings.Repeat("a", 64)
 	b := strings.Repeat("b", 64)
-	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", Path: "assets/p0", Checksum: b, Bytes: 12}, {ID: "partition/1", Path: "assets/p1", Checksum: b, Bytes: 13}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Path: "assets/router", Checksum: b, Bytes: 14}}
+	ref := func(partID uint64, fileID uint32, bytes int64) ColumnAssetRef {
+		return ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: partID, FileID: fileID, Length: bytes}
+	}
+	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
 	m.Canonicalize()
 	return m
 }

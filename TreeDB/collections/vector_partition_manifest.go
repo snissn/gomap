@@ -143,13 +143,11 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	return nil
 }
 func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits) error {
-	if a.ID == "" || len(a.ID) > l.MaxStringBytes || len(a.Path) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || (a.Ref.Kind != "" && uint64(a.Ref.Length) != a.Bytes) {
+	if a.ID == "" || len(a.ID) > l.MaxStringBytes || a.Path != "" || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
 		return fmt.Errorf("%w: asset", ErrVectorPartitionManifestInvalid)
 	}
-	if a.Ref.Kind != "" {
-		if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
-			return fmt.Errorf("%w: asset ref", ErrVectorPartitionManifestInvalid)
-		}
+	if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
+		return fmt.Errorf("%w: asset ref", ErrVectorPartitionManifestInvalid)
 	}
 	return nil
 }
@@ -193,7 +191,6 @@ func (m VectorPartitionManifestV1) readyDigest() string {
 	}
 	for _, a := range append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset) {
 		putStringVPM(b, a.ID)
-		putStringVPM(b, a.Path)
 		putStringVPM(b, a.Checksum)
 		putU64VPM(b, a.Bytes)
 		putColumnAssetRefVPM(b, a.Ref)
@@ -432,6 +429,75 @@ func putMembershipsVPM(b *bytes.Buffer, x []VectorPartitionMembershipV1) {
 // VectorPartitionStoreV1 uses write-sync-rename-sync publication. The active
 // pointer changes only after its complete generation has been made durable.
 type VectorPartitionStoreV1 struct{ dir string }
+
+func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []ColumnAssetRef, error) {
+	if c == nil || c.db == nil {
+		return nil, nil, nil
+	}
+	s, err := OpenVectorPartitionStoreV1(c.db.Dir())
+	if err != nil {
+		return nil, nil, err
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	byIndex := make(map[string][]VectorPartitionManifestV1)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".vpm" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if err != nil {
+			return nil, nil, err
+		}
+		m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+		if err != nil {
+			return nil, nil, fmt.Errorf("collections: vector partition manifest %q: %w", entry.Name(), err)
+		}
+		if m.Collection == c.name {
+			byIndex[m.IndexName] = append(byIndex[m.IndexName], m)
+		}
+	}
+	var prepared, pinned []ColumnAssetRef
+	for index, manifests := range byIndex {
+		ready := false
+		for _, m := range manifests {
+			ready = ready || m.State == "ready"
+			for _, asset := range append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset) {
+				if asset.Ref.Kind != "" {
+					prepared = append(prepared, asset.Ref)
+				}
+			}
+		}
+		if !ready {
+			continue
+		}
+		active, err := s.OpenActive(c.name, index)
+		if err != nil {
+			return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q: %w", index, err)
+		}
+		if active.State != "ready" {
+			return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q targets non-ready generation", index)
+		}
+		found := false
+		for _, m := range manifests {
+			if m.Generation != active.Generation {
+				continue
+			}
+			found = true
+			for _, asset := range append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset) {
+				if asset.Ref.Kind != "" {
+					pinned = append(pinned, asset.Ref)
+				}
+			}
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("collections: vector partition active generation %d for %q is not retained", active.Generation, index)
+		}
+	}
+	return prepared, pinned, nil
+}
 
 func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 	if root == "" {

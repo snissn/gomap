@@ -311,7 +311,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
-	planOpts := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,
@@ -323,7 +323,12 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		QuarantineSegments:                    opts.QuarantineSegments,
 		PinnedRefs:                            opts.PinnedRefs,
 	})
-	plan, err := c.PlanColumnAssetReachability(ctx, planOpts)
+	if err != nil {
+		return ColumnAssetGCStats{}, err
+	}
+	plan, _, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
+		ColumnAssetReachabilityOptions: planOpts,
+	})
 	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
 		Plan:             plan,

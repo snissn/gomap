@@ -103,7 +103,7 @@ func (c *Collection) columnAssetRewriteWithOptions(ctx context.Context, opts col
 }
 
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
-	planOpts := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
+	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
 		Detailed:           opts.Detailed,
 		SegmentDetails:     true,
 		CandidateRefs:      opts.CandidateRefs,
@@ -114,6 +114,9 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		QuarantineSegments: opts.QuarantineSegments,
 		PinnedRefs:         opts.PinnedRefs,
 	})
+	if err != nil {
+		return ColumnAssetRewriteStats{}, err
+	}
 	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
 		ColumnAssetReachabilityOptions: planOpts,
 		omitDetailedEntrySources:       !opts.Detailed,

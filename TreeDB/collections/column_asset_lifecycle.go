@@ -552,7 +552,13 @@ func columnAssetLifecycleNamespace(c *Collection) string {
 	return ""
 }
 
-func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) ColumnAssetReachabilityOptions {
+func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
+	prepared, pinned, err := c.vectorPartitionReachabilityRefsV1()
+	if err != nil {
+		return opts, err
+	}
+	opts.PreparedRefs = append(opts.PreparedRefs, prepared...)
+	opts.PinnedRefs = append(opts.PinnedRefs, pinned...)
 	pins := c.columnAssetLifecyclePinSetSnapshot()
 	registryRecords := c.columnAssetLifecycleRegistrySnapshot()
 	refs := columnAssetLifecycleReachabilityRefs(ColumnAssetLifecycleOptions{
@@ -571,7 +577,7 @@ func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnA
 	opts.QuarantineRefs = refs.quarantine
 	opts.QuarantineSegments = refs.quarantineSegments
 	opts.PinnedRefs = refs.pinned
-	return opts
+	return opts, nil
 }
 
 func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins []columnAssetLifecyclePinSetRecord, registryRecords []columnAssetLifecycleRegistryRecord) columnAssetLifecycleReachabilityRefSets {

@@ -296,6 +296,11 @@ const columnAssetReachabilityContextCheckInterval = 256
 // plan for the collection's isolated column asset namespace. It never deletes,
 // rewrites, or remaps assets; uncertain or untracked bytes are retained.
 func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityPlan, error) {
+	var err error
+	opts, err = c.columnAssetLifecycleAugmentReachabilityOptions(opts)
+	if err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+	}
 	plan, _, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
 		ColumnAssetReachabilityOptions: opts,
 	})
