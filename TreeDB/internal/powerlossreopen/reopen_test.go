@@ -100,6 +100,59 @@ func TestStableChildAtReopensModeledRelativeDatabaseRoot(t *testing.T) {
 	}
 }
 
+func TestStableChildCapturesParentEvidenceForAbsentDatabaseRoot(t *testing.T) {
+	sourceRoot := t.TempDir()
+	model, err := powerlossoracle.Capture(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(sourceRoot, durabilitycut.Event{
+		Point:    durabilitycut.AfterNewFileDirectorySync,
+		Resource: durabilitycut.ResourceAuxiliary,
+		Path:     sourceRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, filepath.Join(sourceRoot, "db"))
+	opts.DisableSideStores = true
+	opts.DisableBackgroundPrune = true
+	evidenceDir := filepath.Join(canonicalTempDir(t), "relative-evidence")
+	t.Setenv(powerlossoracle.EnvEvidenceDir, evidenceDir)
+	t.Setenv(powerlossoracle.EnvEvidenceCutPoint, string(durabilitycut.AfterNewFileDirectorySync))
+	t.Setenv(powerlossoracle.EnvEvidenceReopenMode, powerlossoracle.EvidenceReopenReadWrite)
+	t.Setenv(powerlossoracle.EnvReplayCut, "cut/fresh-layout/after-new-file-directory-sync/000")
+	t.Setenv(powerlossoracle.EnvReplayVariant, "fresh-layout")
+	t.Setenv(powerlossoracle.EnvReplaySeed, "1")
+
+	result, reopened, closeFn, err := powerlossreopen.StableChild(model, "db", opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Dir != filepath.Join(evidenceDir, "recovery-input", "db") || result.Rejected || reopened == nil {
+		t.Fatalf("StableChild evidence result=%+v reopened=%v", result, reopened)
+	}
+	if err := closeFn(); err != nil {
+		t.Fatal(err)
+	}
+	recoveryData, err := os.ReadFile(filepath.Join(evidenceDir, "recovery_trace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovery struct {
+		Dir                string `json:"dir"`
+		PreOpenSnapshotDir string `json:"pre_open_snapshot_dir"`
+	}
+	if err := json.Unmarshal(recoveryData, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Dir != "recovery-input/db" || recovery.PreOpenSnapshotDir != "recovery-preopen" {
+		t.Fatalf("relative recovery evidence=%+v", recovery)
+	}
+	if _, err := os.Stat(filepath.Join(evidenceDir, "recovery-preopen", "db")); !os.IsNotExist(err) {
+		t.Fatalf("pre-open snapshot unexpectedly contains absent database root: %v", err)
+	}
+}
+
 func TestStableCapturesEvidenceWhenRequested(t *testing.T) {
 	source := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, source)

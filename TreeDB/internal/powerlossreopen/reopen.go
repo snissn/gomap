@@ -86,10 +86,12 @@ func stableRelative(model *powerlossoracle.Model, relativeDir string, opts treed
 			AppliedLSN         uint64            `json:"applied_lsn"`
 			Stats              map[string]string `json:"stats"`
 		}{
-			SchemaVersion:      "treedb-power-loss-recovery-trace/v1",
-			PublicAPI:          "treedb.Open",
-			Dir:                filepath.ToSlash(filepath.Join("recovery-input", relativeDir)),
-			PreOpenSnapshotDir: filepath.ToSlash(filepath.Join("recovery-preopen", relativeDir)),
+			SchemaVersion: "treedb-power-loss-recovery-trace/v1",
+			PublicAPI:     "treedb.Open",
+			Dir:           filepath.ToSlash(filepath.Join("recovery-input", relativeDir)),
+			// The immutable snapshot and its tree hash cover the whole modeled
+			// parent. Dir may name an absent child within that parent.
+			PreOpenSnapshotDir: "recovery-preopen",
 			InputTreeSHA256:    evidence.StableImageTreeSHA256(),
 			StableFingerprint:  evidence.StableFingerprint(),
 			ReadOnly:           result.ReadOnly,
