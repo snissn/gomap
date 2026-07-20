@@ -15,6 +15,35 @@ func appendMutationTestObligation(partID uint64) StableLogicalObligation {
 	return obligation
 }
 
+func TestStableLogicalObligationFreshBulkBuildDoesNotPathCopy(t *testing.T) {
+	const obligationCount = 64
+	obligations := make([]StableLogicalObligation, obligationCount)
+	for index := range obligations {
+		obligations[index] = appendMutationTestObligation(uint64(index + 1))
+	}
+	var work StableResourceClosureWork
+	view := newStableLogicalObligationViewWithWork(obligations, &work)
+	if view.count != obligationCount {
+		t.Fatalf("fresh view count=%d want %d", view.count, obligationCount)
+	}
+	if work.LogicalIndexNodesAdmitted != obligationCount {
+		t.Fatalf("fresh nodes admitted=%d want %d", work.LogicalIndexNodesAdmitted, obligationCount)
+	}
+	var countIndexNodes func(*stableLogicalObligationIndexNode) int
+	countIndexNodes = func(node *stableLogicalObligationIndexNode) int {
+		if node == nil {
+			return 0
+		}
+		return 1 + countIndexNodes(node.left) + countIndexNodes(node.right)
+	}
+	if got := countIndexNodes(view.index); got != obligationCount {
+		t.Fatalf("fresh index nodes=%d want %d", got, obligationCount)
+	}
+	if work.RetainedIndexNodeVisits != 0 || work.RetainedIndexNodeCopies != 0 {
+		t.Fatalf("fresh build persistent-path work=%+v want zero visits/copies", work)
+	}
+}
+
 func TestStableLogicalObligationAppendDiscardDoesNotPoisonRetryBase(t *testing.T) {
 	baseObligation := appendMutationTestObligation(1)
 	added := appendMutationTestObligation(2)

@@ -180,13 +180,17 @@ type stableLogicalObligationIndexNode struct {
 }
 
 func newStableLogicalObligationView(values []StableLogicalObligation) stableLogicalObligationView {
+	return newStableLogicalObligationViewWithWork(values, nil)
+}
+
+func newStableLogicalObligationViewWithWork(values []StableLogicalObligation, work *StableResourceClosureWork) stableLogicalObligationView {
 	if len(values) == 0 {
 		return stableLogicalObligationView{}
 	}
 	var index *stableLogicalObligationIndexNode
 	for _, obligation := range values {
 		var err error
-		index, err = insertStableLogicalObligationIndex(index, obligation, nil)
+		index, err = insertFreshStableLogicalObligationIndex(index, obligation, work)
 		if err != nil {
 			// Values reaching this constructor were normalized or already held
 			// by an exact resource closure. A conflict here is an internal
@@ -337,6 +341,49 @@ func insertStableLogicalObligationIndex(root *stableLogicalObligationIndexNode, 
 		return &promoted, nil
 	}
 	return result, nil
+}
+
+// insertFreshStableLogicalObligationIndex mutates only a newly owned tree.
+// Unlike append insertion, no published view can share these nodes, so bulk
+// construction must not allocate a copied search path for every obligation.
+func insertFreshStableLogicalObligationIndex(root *stableLogicalObligationIndexNode, obligation StableLogicalObligation, work *StableResourceClosureWork) (*stableLogicalObligationIndexNode, error) {
+	key := stableLogicalObligationKey(obligation)
+	if root == nil {
+		if work != nil {
+			work.LogicalIndexNodesAdmitted++
+		}
+		return &stableLogicalObligationIndexNode{key: key, obligation: obligation, priority: stableLogicalObligationPriority(key)}, nil
+	}
+	if key == root.key {
+		if root.obligation != obligation {
+			return nil, fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+		}
+		return nil, fmt.Errorf("%w: fresh logical obligation set repeats obligation %+v", ErrResourceConflict, key)
+	}
+	if stableLogicalObligationIndexLess(key, root.key) {
+		child, err := insertFreshStableLogicalObligationIndex(root.left, obligation, work)
+		if err != nil {
+			return nil, err
+		}
+		root.left = child
+		if child.priority < root.priority {
+			root.left = child.right
+			child.right = root
+			return child, nil
+		}
+		return root, nil
+	}
+	child, err := insertFreshStableLogicalObligationIndex(root.right, obligation, work)
+	if err != nil {
+		return nil, err
+	}
+	root.right = child
+	if child.priority < root.priority {
+		root.right = child.left
+		child.left = root
+		return child, nil
+	}
+	return root, nil
 }
 
 func (view stableLogicalObligationView) rangeValues(visit func(StableLogicalObligation) bool) {
