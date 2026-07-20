@@ -18,6 +18,27 @@ func TestValidateRunPlanAcceptsFrozenExpectedRecovery(t *testing.T) {
 	}
 }
 
+func TestValidateRunPlanRecoveryDirectoryContract(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "recovery-input/db"} {
+		t.Run("accept-"+strings.ReplaceAll(dir, "/", "-"), func(t *testing.T) {
+			plan := testRunPlan()
+			plan.Cases[0].ExpectedRecovery.Dir = dir
+			if err := ValidateRunPlan(testRiskInventory(), plan); err != nil {
+				t.Fatalf("ValidateRunPlan dir=%q: %v", dir, err)
+			}
+		})
+	}
+	for _, dir := range []string{"/recovery-input/db", "../db", "recovery-input/../db", "recovery-input//db", `recovery-input\db`, "other/db"} {
+		t.Run("reject-"+strings.NewReplacer("/", "-", `\`, "-").Replace(dir), func(t *testing.T) {
+			plan := testRunPlan()
+			plan.Cases[0].ExpectedRecovery.Dir = dir
+			if err := ValidateRunPlan(testRiskInventory(), plan); err == nil || !strings.Contains(err.Error(), "recovery directory") {
+				t.Fatalf("ValidateRunPlan dir=%q error=%v", dir, err)
+			}
+		})
+	}
+}
+
 func TestValidateRunPlanRejectsIncompleteFrozenRiskCoverage(t *testing.T) {
 	plan := testRunPlan()
 	plan.Cases[0].CounterexampleID = ""

@@ -598,7 +598,7 @@ func TestValidateExecutedRecoveryMatchesFrozenExpectation(t *testing.T) {
 		ObservedEventCount: 3,
 	}
 	recovery := recoveryTraceArtifact{
-		ReadOnly: true, CommitSeq: 11, AppliedLSN: 7,
+		Dir: defaultRecoveryDir, ReadOnly: true, CommitSeq: 11, AppliedLSN: 7,
 		Stats: map[string]string{
 			"treedb.profile.resolved":                 "command_wal_durable",
 			"treedb.commit_seq":                       "11",
@@ -636,9 +636,70 @@ func TestValidateExecutedRecoveryRejectsPostHocOutcomeChange(t *testing.T) {
 		DeclaredCutPoint:   runCase.CutPoint,
 		ObservedEventCount: 1,
 	}
-	recovery := recoveryTraceArtifact{Rejected: false}
+	recovery := recoveryTraceArtifact{Dir: defaultRecoveryDir, Rejected: false}
 	err := validateExecutedRecovery(runCase, trace, recovery)
-	if err == nil || !strings.Contains(err.Error(), "want=(rejected=true") {
+	if err == nil || !strings.Contains(err.Error(), "rejected=true") {
 		t.Fatalf("validateExecutedRecovery error=%v", err)
+	}
+}
+
+func TestValidateExecutedRecoveryRequiresFrozenChildDirectory(t *testing.T) {
+	runCase := RunCase{
+		ID: "fresh-composite-layout", Profile: "command_wal_durable", Seed: 3684,
+		CutID: "cut/layout/after-directory-sync/000", CutPoint: "after-directory-sync", VariantID: "variant/fresh",
+		ReopenMode: powerLossReopenModeReadOnly, ExpectedRecovery: RecoveryExpectation{Dir: "recovery-input/db"},
+	}
+	trace := operationTraceArtifact{
+		CutID: runCase.CutID, VariantID: runCase.VariantID, Seed: "3684",
+		DeclaredCutPoint: runCase.CutPoint, ObservedEventCount: 1,
+	}
+	recovery := recoveryTraceArtifact{
+		Dir: "recovery-input/db", ReadOnly: true,
+		Stats: map[string]string{
+			"treedb.profile.resolved": "command_wal_durable", "treedb.commit_seq": "0",
+			"treedb.applied_command_lsn": "0", "treedb.durable_root.selected_slot": "0",
+			"treedb.durable_root.commit_seq": "0", "treedb.durable_root.durable_seq": "0",
+			"treedb.durable_root.freelist.generation": "0", "treedb.durable_root.manifest.entries": "0",
+			"treedb.durable_root.slot0.commit_seq": "0", "treedb.durable_root.slot1.commit_seq": "0",
+			"treedb.command_wal.durable_wal_lsn": "0",
+		},
+	}
+	runCase.State = observedWitnessState(recovery)
+	if err := validateExecutedRecovery(runCase, trace, recovery); err != nil {
+		t.Fatal(err)
+	}
+	recovery.Dir = defaultRecoveryDir
+	if err := validateExecutedRecovery(runCase, trace, recovery); err == nil || !strings.Contains(err.Error(), `dir="recovery-input"`) {
+		t.Fatalf("validateExecutedRecovery mismatched dir error=%v", err)
+	}
+}
+
+func TestBuildChildManifestFreezesNormalizedRecoveryDirectory(t *testing.T) {
+	for _, expected := range []struct {
+		name string
+		dir  string
+		want string
+	}{{name: "legacy-default", want: defaultRecoveryDir}, {name: "child", dir: "recovery-input/db", want: "recovery-input/db"}} {
+		t.Run(expected.name, func(t *testing.T) {
+			root := t.TempDir()
+			plan := testRunPlan()
+			plan.Cases[0].ExpectedRecovery.Dir = expected.dir
+			for _, name := range modeledArtifactNames {
+				path := filepath.Join(root, "evidence", plan.Cases[0].ID, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(name), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manifest, err := buildChildManifest(plan, root, nil, []executedCase{{runCase: plan.Cases[0]}}, strings.Repeat("f", 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := manifest.Witnesses[0].ExpectedRecoveryDir; got != expected.want {
+				t.Fatalf("ExpectedRecoveryDir=%q want=%q", got, expected.want)
+			}
+		})
 	}
 }

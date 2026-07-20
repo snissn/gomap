@@ -111,6 +111,37 @@ func TestVerifyArtifactsChecksContentAndRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestVerifyArtifactsAcceptsFrozenChildRecoveryDirectory(t *testing.T) {
+	root := t.TempDir()
+	manifest := testChildManifest("fresh-layout")
+	manifest.Witnesses[0].ExpectedRecoveryDir = "recovery-input/db"
+	for index := range manifest.TestBinaries {
+		manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+	}
+	writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+	if err := VerifyArtifacts(root, []ChildManifest{manifest}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyArtifactsRejectsRecoveryDirectorySubstitution(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "../db", "/recovery-input/db", `recovery-input\db`} {
+		t.Run(strings.NewReplacer("/", "-", `\`, "-").Replace(dir), func(t *testing.T) {
+			root := t.TempDir()
+			manifest := testChildManifest("fresh-layout")
+			manifest.Witnesses[0].ExpectedRecoveryDir = "recovery-input/db"
+			for index := range manifest.TestBinaries {
+				manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+			}
+			writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+			rewriteArtifactJSONField(t, root, &manifest.Witnesses[0], ArtifactKindRecoveryTrace, "dir", dir)
+			if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "expected recovery directory") {
+				t.Fatalf("VerifyArtifacts dir=%q error=%v", dir, err)
+			}
+		})
+	}
+}
+
 func TestVerifyArtifactsRejectsOperationTraceThatDoesNotMatchWitness(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")
@@ -457,6 +488,19 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	t.Helper()
 	witness := &manifest.Witnesses[0]
 	evidenceDir := filepath.Join(root, filepath.FromSlash(witness.Command.Env["TREEDB_POWERLOSS_EVIDENCE_DIR"]))
+	recoveryDir, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageFile := "index.db"
+	var imageDirectories []string
+	if child := strings.TrimPrefix(recoveryDir, defaultRecoveryDir+"/"); child != recoveryDir {
+		imageFile = filepath.Join(filepath.FromSlash(child), "index.db")
+		parts := strings.Split(child, "/")
+		for index := range parts {
+			imageDirectories = append(imageDirectories, strings.Join(parts[:index+1], "/"))
+		}
+	}
 	stableContents := []byte("stable")
 	dirtyContents := []byte("dirty")
 	for _, image := range []struct {
@@ -471,7 +515,11 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 		if err := os.MkdirAll(filepath.Join(evidenceDir, image.dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(evidenceDir, image.dir, "index.db"), image.contents, 0o600); err != nil {
+		imagePath := filepath.Join(evidenceDir, image.dir, imageFile)
+		if err := os.MkdirAll(filepath.Dir(imagePath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(imagePath, image.contents, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -480,13 +528,15 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	stableTree := imageTreeArtifact{
 		SchemaVersion: imageTreeSchemaVersion,
 		Kind:          "stable-image",
-		Files:         []imageTreeFileArtifact{{Path: "index.db", Bytes: int64(len(stableContents)), SHA256: fmt.Sprintf("%x", stableDigest)}},
+		Directories:   imageDirectories,
+		Files:         []imageTreeFileArtifact{{Path: filepath.ToSlash(imageFile), Bytes: int64(len(stableContents)), SHA256: fmt.Sprintf("%x", stableDigest)}},
 		TotalBytes:    int64(len(stableContents)),
 	}
 	dirtyTree := imageTreeArtifact{
 		SchemaVersion: imageTreeSchemaVersion,
 		Kind:          "dirty-image",
-		Files:         []imageTreeFileArtifact{{Path: "index.db", Bytes: int64(len(dirtyContents)), SHA256: fmt.Sprintf("%x", dirtyDigest)}},
+		Directories:   imageDirectories,
+		Files:         []imageTreeFileArtifact{{Path: filepath.ToSlash(imageFile), Bytes: int64(len(dirtyContents)), SHA256: fmt.Sprintf("%x", dirtyDigest)}},
 		TotalBytes:    int64(len(dirtyContents)),
 	}
 	stableFingerprint := strings.Repeat("a", 64)
@@ -515,7 +565,7 @@ func writeModeledEvidenceFixture(t *testing.T, root string, manifest *ChildManif
 	recovery := recoveryTraceArtifact{
 		SchemaVersion:      recoveryTraceSchemaVersion,
 		PublicAPI:          "treedb.Open",
-		Dir:                "recovery-input",
+		Dir:                recoveryDir,
 		PreOpenSnapshotDir: "recovery-preopen",
 		InputTreeSHA256:    stableArtifact.SHA256,
 		StableFingerprint:  stableFingerprint,

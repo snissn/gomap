@@ -124,6 +124,23 @@ func TestValidateBundleRequiresModeledReopenMode(t *testing.T) {
 	}
 }
 
+func TestValidateBundleRecoveryDirectoryContract(t *testing.T) {
+	for _, dir := range []string{"", "recovery-input", "recovery-input/db"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].ExpectedRecoveryDir = dir
+		if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err != nil {
+			t.Fatalf("ValidateBundle dir=%q: %v", dir, err)
+		}
+	}
+	for _, dir := range []string{"/recovery-input/db", "../db", "recovery-input/../db", "recovery-input//db", `recovery-input\db`, "other/db"} {
+		manifest := testChildManifest("witness-a")
+		manifest.Witnesses[0].ExpectedRecoveryDir = dir
+		if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "recovery directory") {
+			t.Fatalf("ValidateBundle dir=%q error=%v", dir, err)
+		}
+	}
+}
+
 func TestValidateChildManifestScopesCutMetadataToModeledCrashes(t *testing.T) {
 	manifest := testChildManifest("witness-a")
 	for _, tier := range []EvidenceTier{EvidenceTierCleanProcess, EvidenceTierBlockDevice} {

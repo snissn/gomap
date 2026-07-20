@@ -914,8 +914,12 @@ func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, rec
 		return fmt.Errorf("%s recovery read_only=%t want=%t", prefix, recovery.ReadOnly, wantReadOnly)
 	}
 	want := runCase.ExpectedRecovery
-	if recovery.Rejected != want.Rejected || recovery.ErrorType != want.ErrorType || recovery.CommitSeq != want.CommitSeq || recovery.AppliedLSN != want.AppliedLSN {
-		return fmt.Errorf("%s recovery=(rejected=%t error_type=%q commit=%d applied=%d) want=(rejected=%t error_type=%q commit=%d applied=%d)", prefix, recovery.Rejected, recovery.ErrorType, recovery.CommitSeq, recovery.AppliedLSN, want.Rejected, want.ErrorType, want.CommitSeq, want.AppliedLSN)
+	wantDir, err := normalizeRecoveryDir(want.Dir)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	if recovery.Dir != wantDir || recovery.Rejected != want.Rejected || recovery.ErrorType != want.ErrorType || recovery.CommitSeq != want.CommitSeq || recovery.AppliedLSN != want.AppliedLSN {
+		return fmt.Errorf("%s recovery=(dir=%q rejected=%t error_type=%q commit=%d applied=%d) want=(dir=%q rejected=%t error_type=%q commit=%d applied=%d)", prefix, recovery.Dir, recovery.Rejected, recovery.ErrorType, recovery.CommitSeq, recovery.AppliedLSN, wantDir, want.Rejected, want.ErrorType, want.CommitSeq, want.AppliedLSN)
 	}
 	if recovery.Rejected && recovery.Error == "" {
 		return fmt.Errorf("%s rejected recovery has no error text", prefix)
@@ -988,6 +992,10 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 		if err != nil {
 			return ChildManifest{}, err
 		}
+		expectedRecoveryDir, err := normalizeRecoveryDir(runCase.ExpectedRecovery.Dir)
+		if err != nil {
+			return ChildManifest{}, fmt.Errorf("powerlosscert: case %q: %w", runCase.ID, err)
+		}
 		witness := Witness{
 			ID:                     runCase.ID,
 			EvidenceTier:           EvidenceTierModeledCrash,
@@ -1002,6 +1010,7 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 			ExpectedOutcome:        runCase.ExpectedOutcome,
 			ActualOutcome:          runCase.ExpectedOutcome,
 			TypedError:             runCase.ExpectedTypedError,
+			ExpectedRecoveryDir:    expectedRecoveryDir,
 			State:                  observedWitnessState(result.recovery),
 			CounterexampleID:       runCase.CounterexampleID,
 			NegativeControlID:      runCase.NegativeControlID,

@@ -133,6 +133,7 @@ type Witness struct {
 	ExpectedOutcome        string       `json:"expected_outcome"`
 	ActualOutcome          string       `json:"actual_outcome"`
 	TypedError             string       `json:"typed_error"`
+	ExpectedRecoveryDir    string       `json:"expected_recovery_dir,omitempty"`
 	State                  WitnessState `json:"state"`
 	CounterexampleID       string       `json:"counterexample_id,omitempty"`
 	NegativeControlID      string       `json:"negative_control_id,omitempty"`
@@ -447,6 +448,9 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 		return fmt.Errorf("%s has incomplete recovery-state metadata", prefix)
 	}
 	if witness.EvidenceTier == EvidenceTierModeledCrash {
+		if _, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir); err != nil {
+			return fmt.Errorf("%s: %w", prefix, err)
+		}
 		if witness.Seed == 0 {
 			return fmt.Errorf("%s has zero seed", prefix)
 		}

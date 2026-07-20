@@ -577,7 +577,14 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 	if err := decodeStrict(data, &recovery); err != nil {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s decode: %w", prefix, err)
 	}
-	if recovery.SchemaVersion != recoveryTraceSchemaVersion || recovery.PublicAPI != "treedb.Open" || recovery.Dir != "recovery-input" || recovery.PreOpenSnapshotDir != "recovery-preopen" {
+	expectedRecoveryDir, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir)
+	if err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	if actualRecoveryDir, normalizeErr := normalizeRecoveryDir(recovery.Dir); recovery.Dir == "" || normalizeErr != nil || actualRecoveryDir != expectedRecoveryDir {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s dir=%q does not match expected recovery directory %q", prefix, recovery.Dir, expectedRecoveryDir)
+	}
+	if recovery.SchemaVersion != recoveryTraceSchemaVersion || recovery.PublicAPI != "treedb.Open" || recovery.PreOpenSnapshotDir != "recovery-preopen" {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s has invalid schema, public_api, dir, or pre_open_snapshot_dir", prefix)
 	}
 	if recovery.InputTreeSHA256 != stableArtifact.SHA256 || recovery.StableFingerprint != metrics.StableFingerprint {
