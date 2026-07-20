@@ -219,11 +219,14 @@ can therefore delay, but never bypass, deletion.
 ### V1 format and bounds
 
 The authoritative on-disk record is binary `VPM1` (big-endian magic
-`0x56504d31`, version `1`), followed by fixed-order length-prefixed fields;
+`0x56504d31`, version `2`), followed by fixed-order length-prefixed fields;
 there are no tagged optional fields. The JSON form is an inspection/exchange
 encoding of that same record: unknown fields, a second JSON value, trailing
 bytes, and non-canonical ordering fail closed. This is a pre-alpha on-disk
-format: old database directories need not be readable by new binaries.
+format: old database directories need not be readable by new binaries. Version
+2 adds a whole-record SHA-256 integrity digest covering identity, policy,
+generations, placement, every membership family, and asset descriptors; this
+is separate from the ready-set asset contract.
 
 | Record area | Required content | Validation boundary |
 | --- | --- | --- |
@@ -234,7 +237,8 @@ format: old database directories need not be readable by new binaries.
 | ready set | SHA-256 over canonical placements, partition assets and router descriptor | mismatches, mixed router/generation, or missing partition asset reject |
 
 Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
-memberships, 262,144 assets, 4 KiB strings, 16 memberships per vector, and
+memberships total across disjoint, overlap, and representative lists, 262,144
+assets, 4 KiB strings, 16 memberships per vector, and
 65,536 representatives per partition. A single asset is capped at 8 GiB and
 total referenced bytes at 16 GiB. Count-derived allocations are checked against
 these limits before allocation.
@@ -266,6 +270,12 @@ the prior target directory. Snapshot archives are copies: exporting an archive
 does not create a live reader pin or a durable catalog reference. File names
 are opaque SHA-256-derived identities; manifest fields, not host paths, are
 portable across restored DB roots.
+
+On Windows, M1 can open an already restored `vector_partitions` namespace but
+fails closed for creation, publication, activation, deletion, and reclaim
+journaling. Generic directory sync and link/remove name-persistence proofs are
+not available there; write-through rename alone is insufficient. This is an
+explicit platform capability boundary, not a claim of Unix directory durability.
 
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins

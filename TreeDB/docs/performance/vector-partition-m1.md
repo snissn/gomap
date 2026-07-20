@@ -16,4 +16,8 @@ The codec's declared 1M disjoint fixture is 12.55 metadata bytes/vector, below
 the #3910 64 bytes/vector gate. `VectorPartitionStatusV1` validates the live
 TVIS/base identity by design; its warm measurement must therefore not be read
 as a constant-time pointer lookup. The exact commands, result rows, harness RSS,
-and SHA-256 artifact hashes are recorded with the PR evidence.
+and SHA-256 artifact hashes are recorded with the PR evidence. The canonical
+machine-readable ledger is `vector-partition-m1-evidence.json`; it is explicitly
+`production_evidence=false`, records its exact candidate/base SHA and timed
+boundary, and keeps 12,000,642 manifest bytes distinct from 12,543,488 snapshot
+archive bytes.

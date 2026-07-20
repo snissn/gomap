@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "result_kind": "local_microbenchmark",
+  "measurement_status": "measured",
+  "production_evidence": false,
+  "candidate_head_sha": "02e511fcd2418c764e6f4d504f8ba2140ceff334",
+  "base_sha": "3e225cb992f0ccc6b2a0f7022c00414d8c783715",
+  "environment": {"goos":"linux","goarch":"amd64","go_toolchain":"go test", "cpu":"11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz"},
+  "timed_boundary": "one benchmark iteration; fixture setup excluded by benchmark timer; RSS is complete Go test process maximum",
+  "commands": [
+    "env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^(BenchmarkVectorPartitionManifestV1Scale|BenchmarkVectorPartitionStoreV1WarmOpen|BenchmarkVectorPartitionStatusV1Warm)$' -benchtime=1x -benchmem -count=1",
+    "env GOWORK=off go test ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$' -benchtime=1x -benchmem -count=1"
+  ],
+  "codec": [
+    {"memberships":10000,"decode_ns_op":997293,"decode_b_op":1609696,"decode_allocs_op":85,"encode_ns_op":3223032,"encode_b_op":1962592,"encode_allocs_op":109},
+    {"memberships":100000,"decode_ns_op":11619822,"decode_b_op":13997816,"decode_allocs_op":90,"encode_ns_op":18383728,"encode_b_op":17594776,"encode_allocs_op":114},
+    {"memberships":1000000,"decode_ns_op":113986675,"decode_b_op":191125336,"decode_allocs_op":95,"encode_ns_op":189531693,"encode_b_op":228014456,"encode_allocs_op":119,"manifest_bytes":12000642,"metadata_bytes_per_vector":12.000642}
+  ],
+  "warm": {"open_ns_op":67727,"open_b_op":14424,"open_allocs_op":63,"status_ns_op":41085966,"status_b_op":1144304,"status_allocs_op":3290,"collections_harness_max_rss_kb":432000},
+  "snapshot": [
+    {"memberships":10000,"archive_ns_op":106342060,"archive_bytes":663552,"install_ns_op":367483827},
+    {"memberships":100000,"archive_ns_op":70821281,"archive_bytes":1743360,"install_ns_op":346961677},
+    {"memberships":1000000,"archive_ns_op":59378419,"archive_bytes":12543488,"install_ns_op":361695147,"harness_max_rss_kb":1264540}
+  ]
+}
