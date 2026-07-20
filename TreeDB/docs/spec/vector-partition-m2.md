@@ -70,8 +70,10 @@ input/output command, resource limits, and independent validator evidence.
 `queries.f32` source files. It rejects malformed manifests, altered checksums,
 wrong float dimensions, non-finite or non-unit-normalized float32 rows, corpus
 byte overruns, and unsupported identity contracts before corpus allocation.
-It loads and validates all declared query rows but caps quality evaluation to
-the first 128 deterministic queries. Graph construction enforces global scalar
+It streams and validates all declared query rows (including checksum, exact
+size, and trailing-byte checks) but retains only the first 128 deterministic
+queries for quality evaluation; query-memory use therefore does not scale with
+the declared query-row count. Graph construction enforces global scalar
 distance work (including dimensions), bounded partition work, and chunks non-progressing skew buckets
 deterministically; leaf top-k selection is bounded by degree rather than leaf
 size. The builder emits an immutable artifact and a JSON report containing

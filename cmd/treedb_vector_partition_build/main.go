@@ -321,12 +321,9 @@ func loadCorpus(dir string, m manifest) ([]vectorpartition.Vector, [][]float64, 
 	qcount := min(m.Queries, maxQueries)
 	qs := [][]float64{}
 	if qcount > 0 {
-		q, e := readF32(filepath.Join(dir, m.QueryVectorsFile), qf, m.Queries, m.Dimensions)
+		q, e := readQueryF32(filepath.Join(dir, m.QueryVectorsFile), qf, m.Queries, m.Dimensions, qcount)
 		if e != nil {
 			return nil, nil, e
-		}
-		if err := validateNormalized(q, m.Queries, m.Dimensions); err != nil {
-			return nil, nil, err
 		}
 		for i := 0; i < qcount; i++ {
 			row := make([]float64, m.Dimensions)
@@ -367,6 +364,48 @@ func readF32(path string, fi fileInfo, rows, dims int) ([]float32, error) {
 	return a, nil
 }
 
+// readQueryF32 verifies every declared query row while retaining only the
+// bounded quality prefix. Its fixed row buffer prevents query-file allocation
+// from scaling with m.Queries.
+func readQueryF32(path string, fi fileInfo, rows, dims, retainRows int) ([]float32, error) {
+	want, ok := checkedByteCount(rows, dims)
+	if !ok || want > maxCorpusBytes || fi.Bytes != want || !canonicalSHA256(fi.SHA256) || retainRows < 0 || retainRows > rows {
+		return nil, errors.New("invalid corpus file bounds")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	r := io.TeeReader(io.LimitReader(f, want+1), h)
+	rowBytes := make([]byte, dims*4)
+	row := make([]float32, dims)
+	retained := make([]float32, retainRows*dims)
+	for i := 0; i < rows; i++ {
+		if _, err := io.ReadFull(r, rowBytes); err != nil {
+			return nil, errors.New("corpus truncated or oversized")
+		}
+		for j := range row {
+			row[j] = math.Float32frombits(binary.LittleEndian.Uint32(rowBytes[4*j:]))
+		}
+		if err := validateNormalizedRow(row); err != nil {
+			return nil, err
+		}
+		if i < retainRows {
+			copy(retained[i*dims:(i+1)*dims], row)
+		}
+	}
+	var extra [1]byte
+	if n, err := r.Read(extra[:]); err != io.EOF || n != 0 {
+		return nil, errors.New("corpus truncated or oversized")
+	}
+	if hex.EncodeToString(h.Sum(nil)) != fi.SHA256 {
+		return nil, errors.New("corpus checksum mismatch")
+	}
+	return retained, nil
+}
+
 // canonicalSHA256 accepts only the lower-case, fixed-width hex form used by
 // exporter manifests. Decode and re-encode so length/casing checks cannot
 // admit malformed non-hex metadata before corpus I/O.
@@ -386,16 +425,23 @@ func validateNormalized(values []float32, rows, dims int) error {
 		return errors.New("corpus shape mismatch")
 	}
 	for row := 0; row < rows; row++ {
-		var norm float64
-		for _, value := range values[row*dims : (row+1)*dims] {
-			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-				return errors.New("corpus contains non-finite vector")
-			}
-			norm = math.FMA(float64(value), float64(value), norm)
+		if err := validateNormalizedRow(values[row*dims : (row+1)*dims]); err != nil {
+			return err
 		}
-		if math.Abs(math.Sqrt(norm)-1) > normalizedTolerance {
-			return errors.New("corpus vector is not unit-normalized")
+	}
+	return nil
+}
+
+func validateNormalizedRow(row []float32) error {
+	var norm float64
+	for _, value := range row {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return errors.New("corpus contains non-finite vector")
 		}
+		norm = math.FMA(float64(value), float64(value), norm)
+	}
+	if math.Abs(math.Sqrt(norm)-1) > normalizedTolerance {
+		return errors.New("corpus vector is not unit-normalized")
 	}
 	return nil
 }

@@ -1,15 +1,34 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func writeQueryCorpus(t *testing.T, payload []byte) (string, fileInfo) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "queries.f32")
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	return path, fileInfo{Bytes: int64(len(payload)), SHA256: fmt.Sprintf("%x", digest)}
+}
+
+func unitQueryPayload(rows int) []byte {
+	row := make([]byte, 4)
+	binary.LittleEndian.PutUint32(row, math.Float32bits(1))
+	return bytes.Repeat(row, rows)
+}
 
 func TestOraclePartsUsesTruthMembershipNotCentroids(t *testing.T) {
 	// A centroid route could prefer partition 0 for a query near its mean. The
@@ -103,6 +122,70 @@ func TestCorpusNormalizationAndOverflowGuards(t *testing.T) {
 	if err := validateQualityWork(1_000_000, maxQueries, 4096, 64); err == nil {
 		t.Fatal("unbounded quality work accepted")
 	}
+}
+
+func TestReadQueryF32StreamsAndValidatesUnusedTail(t *testing.T) {
+	rows := maxQueries + 2
+	payload := unitQueryPayload(rows)
+	path, fi := writeQueryCorpus(t, payload)
+	got, err := readQueryF32(path, fi, rows, 1, maxQueries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != maxQueries || got[0] != 1 || got[len(got)-1] != 1 {
+		t.Fatalf("retained query prefix=%v", got)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func([]byte)
+		want   string
+	}{
+		{name: "non-finite tail", mutate: func(b []byte) { binary.LittleEndian.PutUint32(b[(rows-1)*4:], math.Float32bits(float32(math.NaN()))) }, want: "corpus contains non-finite vector"},
+		{name: "non-normalized tail", mutate: func(b []byte) { binary.LittleEndian.PutUint32(b[(rows-1)*4:], math.Float32bits(2)) }, want: "corpus vector is not unit-normalized"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := append([]byte(nil), payload...)
+			tc.mutate(bad)
+			badPath, badFI := writeQueryCorpus(t, bad)
+			if _, err := readQueryF32(badPath, badFI, rows, 1, maxQueries); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unused tail corruption error=%v want %q", err, tc.want)
+			}
+		})
+	}
+	truncatedPath, _ := writeQueryCorpus(t, payload[:len(payload)-1])
+	if _, err := readQueryF32(truncatedPath, fi, rows, 1, maxQueries); err == nil || !strings.Contains(err.Error(), "truncated or oversized") {
+		t.Fatalf("truncated query corpus error=%v", err)
+	}
+	trailingPath, _ := writeQueryCorpus(t, append(append([]byte(nil), payload...), 0))
+	if _, err := readQueryF32(trailingPath, fi, rows, 1, maxQueries); err == nil || !strings.Contains(err.Error(), "truncated or oversized") {
+		t.Fatalf("trailing query corpus error=%v", err)
+	}
+	badChecksum := fi
+	badChecksum.SHA256 = strings.Repeat("0", sha256.Size*2)
+	if _, err := readQueryF32(path, badChecksum, rows, 1, maxQueries); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("checksum mismatch error=%v", err)
+	}
+}
+
+func TestReadQueryF32RetainedMemoryIsIndependentOfDeclaredRows(t *testing.T) {
+	const rows = 262_144 // 1 MiB on disk; eager decoding allocated per row.
+	payload := unitQueryPayload(rows)
+	path, fi := writeQueryCorpus(t, payload)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, err := readQueryF32(path, fi, rows, 1, maxQueries)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != maxQueries {
+		t.Fatalf("retained queries=%d want %d", len(got), maxQueries)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<10 {
+		t.Fatalf("query validation allocated %d bytes; must not scale with %d declared rows", allocated, rows)
+	}
+	runtime.KeepAlive(got)
 }
 
 func TestLoadRejectsOversizedManifestBeforeDecode(t *testing.T) {
