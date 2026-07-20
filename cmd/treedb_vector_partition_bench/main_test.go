@@ -146,6 +146,20 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 		t.Fatalf("digest changed: %s %s", report.ArtifactSHA256, again.ArtifactSHA256)
 	}
 }
+func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
+	args := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-pivots", "8", "-partition-max-leaf-bucket", "128", "-partition-degree", "16"}
+	var stdout bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Dataset.Checksum == "" || report.Metrics.EdgeCut >= report.Metrics.StableIDHashEdgeCut {
+		t.Fatalf("checked-in 10k graph cut=%d hash=%d checksum=%s", report.Metrics.EdgeCut, report.Metrics.StableIDHashEdgeCut, report.Dataset.Checksum)
+	}
+}
 
 func TestFixtureTruthDeterministicAndChecksumStable(t *testing.T) {
 	m, err := loadFixture(fixturePath(t))

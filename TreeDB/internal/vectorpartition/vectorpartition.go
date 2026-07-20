@@ -251,6 +251,9 @@ func validateInput(v []Vector, c Config) error {
 				return errors.New("non-finite vector value")
 			}
 		}
+		if !nonZeroFiniteNorm(x.Values) {
+			return errors.New("zero-norm vector")
+		}
 	}
 	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
 		return errors.New("configured graph edge bound exceeded before allocation")
@@ -400,16 +403,36 @@ func nearest(v []Vector, ids []int, target, k int, budget *distanceBudget) ([]ca
 	return []candidate(a), nil
 }
 func distance(a, b []float64) float64 {
-	var dot, na, nb float64
+	var scaleA, scaleB float64
 	for i := range a {
-		dot = math.FMA(a[i], b[i], dot)
-		na = math.FMA(a[i], a[i], na)
-		nb = math.FMA(b[i], b[i], nb)
+		scaleA = math.Max(scaleA, math.Abs(a[i]))
+		scaleB = math.Max(scaleB, math.Abs(b[i]))
 	}
-	if na == 0 || nb == 0 {
+	if scaleA == 0 || scaleB == 0 {
 		return 1
 	}
-	return 1 - dot/math.Sqrt(na*nb)
+	var dot, na, nb float64
+	for i := range a {
+		av, bv := a[i]/scaleA, b[i]/scaleB
+		dot = math.FMA(av, bv, dot)
+		na = math.FMA(av, av, na)
+		nb = math.FMA(bv, bv, nb)
+	}
+	cosine := dot / (math.Sqrt(na) * math.Sqrt(nb))
+	if cosine > 1 {
+		cosine = 1
+	}
+	if cosine < -1 {
+		cosine = -1
+	}
+	return 1 - cosine
+}
+func nonZeroFiniteNorm(values []float64) bool {
+	var scale float64
+	for _, value := range values {
+		scale = math.Max(scale, math.Abs(value))
+	}
+	return scale > 0 && finite(scale)
 }
 
 type candidate struct {
@@ -478,6 +501,8 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 		out[i] = -1
 	}
 	loads := make([]int, parts)
+	marks := make([]int, parts)
+	candidates := make([]int, 0, maxGraphDegree(g)+1)
 	// Reserve one ordinal for each partition before affinity scoring. This
 	// matches ValidateArtifact's exact-coverage invariant even on graphs whose
 	// edges all prefer a small subset of partitions.
@@ -490,7 +515,8 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 		// affinity. Add the globally least-loaded admissible partition so a
 		// zero-affinity choice remains deterministic and balanced without a
 		// partitions-by-degree scan for every node.
-		candidates := make([]int, 0, len(g.Neighbors[node])+1)
+		candidates = candidates[:0]
+		stamp := node + 1
 		least := -1
 		for p := 0; p < parts; p++ {
 			if loads[p] < cap && (least < 0 || loads[p] < loads[least] || loads[p] == loads[least] && p < least) {
@@ -499,24 +525,18 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 		}
 		if least >= 0 {
 			candidates = append(candidates, least)
+			marks[least] = stamp
 		}
 		for _, to := range g.Neighbors[node] {
 			p := out[to]
 			if p < 0 || loads[p] >= cap {
 				continue
 			}
-			seen := false
-			for _, existing := range candidates {
-				if existing == p {
-					seen = true
-					break
-				}
-			}
-			if !seen {
+			if marks[p] != stamp {
+				marks[p] = stamp
 				candidates = append(candidates, p)
 			}
 		}
-		sort.Ints(candidates)
 		best, bscore := -1, -1
 		for _, p := range candidates {
 			score := 0
@@ -547,9 +567,14 @@ func maxGraphDegree(g Graph) int {
 	return max
 }
 func partitionWorkExceeded(n, parts, degree int) bool {
-	// Per node: one partition scan plus at most degree+1 candidate scores,
-	// each examining at most degree edges.
-	perNode := int64(parts) + int64(degree+1)*int64(degree+1)
+	// Account for the initial degree sort plus each node's partition scan,
+	// candidate-mark pass, and affinity scans. Scratch indexing removes hidden
+	// duplicate-search/sort work from the candidate path.
+	logN := int64(0)
+	for x := n; x > 1; x = (x + 1) / 2 {
+		logN++
+	}
+	perNode := int64(parts) + int64(degree) + int64(degree)*int64(degree+1) + logN
 	return exceedsProduct(maxPartitionWork, int64(n), perNode)
 }
 func exceedsProduct(limit int64, values ...int64) bool {
@@ -777,6 +802,7 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 		return Artifact{}, err
 	}
 	cmd := exec.CommandContext(ctx, command[0], append(command[1:], in, out)...)
+	configureExternalCommand(cmd)
 	stderr := &cappedBuffer{limit: maxOutput}
 	cmd.Stderr = stderr
 	if e := cmd.Run(); e != nil {

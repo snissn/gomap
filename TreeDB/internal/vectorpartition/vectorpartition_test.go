@@ -254,6 +254,27 @@ func TestExternalBackendStartedCancellationCleansPrivateTemp(t *testing.T) {
 		t.Fatalf("backend temporary directory leaked after start: %v", entries)
 	}
 }
+func TestExternalBackendDeadlineKillsPipeHoldingDescendant(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TMPDIR", root)
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; (sleep 5) & wait"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	if err == nil {
+		t.Fatal("pipe-holding descendant accepted")
+	}
+	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
+		t.Fatalf("deadline return too slow: %s", elapsed)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("descendant temp cleanup leaked: %v", entries)
+	}
+}
 func TestExternalBackendRequiresDeadline(t *testing.T) {
 	if _, err := RunExternalJSON(context.Background(), []string{"true"}, []byte("{}"), 1024); err == nil {
 		t.Fatal("deadline-less backend accepted")
@@ -447,5 +468,14 @@ func TestMetricsHighPartitionCountUsesAssignmentHistogram(t *testing.T) {
 	a.Metrics = metrics(a)
 	if err := ValidateArtifact(a); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestCosineDistanceHandlesHugeFiniteAndRejectsZeroNorm(t *testing.T) {
+	if d := distance([]float64{math.MaxFloat64, math.MaxFloat64}, []float64{math.MaxFloat64, math.MaxFloat64}); !finite(d) || math.Abs(d) > 1e-12 {
+		t.Fatalf("unstable huge cosine distance: %v", d)
+	}
+	c := config()
+	if _, err := Build([]Vector{{ID: "a", Values: []float64{0, 0}}, {ID: "b", Values: []float64{1, 0}}}, c); err == nil {
+		t.Fatal("zero norm accepted")
 	}
 }
