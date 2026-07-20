@@ -5,6 +5,7 @@ package vectorpartition
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,16 +36,38 @@ func TestExternalBackendRootExitKillsProcessGroupMember(t *testing.T) {
 	}
 	deadline := time.Now().Add(250 * time.Millisecond)
 	for {
-		err = syscall.Kill(pid, 0)
-		if err == syscall.ESRCH {
+		stopped, probeErr := processStoppedOrZombie(pid)
+		if probeErr != nil {
+			t.Fatalf("probe child pid %d: %v", pid, probeErr)
+		}
+		if stopped {
 			return
 		}
-		if err != nil {
-			t.Fatalf("probe child pid %d: %v", pid, err)
-		}
 		if time.Now().After(deadline) {
-			t.Fatalf("root-exited descendant %d still alive after process-group cleanup", pid)
+			t.Fatalf("root-exited descendant %d still running after process-group cleanup", pid)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// processStoppedOrZombie distinguishes an executing orphan from a process
+// already stopped by SIGKILL but awaiting reaping by PID 1. kill(pid, 0) alone
+// reports both as extant. POSIX ps exposes the process state across supported
+// Unix test targets; a Z state proves the descendant is no longer running.
+func processStoppedOrZombie(pid int) (bool, error) {
+	if err := syscall.Kill(pid, 0); err != nil {
+		if err == syscall.ESRCH {
+			return true, nil
+		}
+		return false, err
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return true, nil
+		}
+		return false, err
+	}
+	state := strings.TrimSpace(string(out))
+	return state == "" || strings.HasPrefix(state, "Z"), nil
 }
