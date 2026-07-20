@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -449,6 +450,49 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 	}
 	if err := m.Validate(l); err != nil {
 		return VectorPartitionManifestV1{}, err
+	}
+	return m, nil
+}
+
+// EncodeVectorPartitionManifestJSONV1 is the canonical inspection/exchange
+// form. It deliberately carries the same strict V1 object, after canonical
+// ordering and validation, rather than accepting an open-ended JSON map.
+func EncodeVectorPartitionManifestJSONV1(m VectorPartitionManifestV1) ([]byte, error) {
+	if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
+		return nil, err
+	}
+	m.Canonicalize()
+	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+		return nil, err
+	}
+	return json.Marshal(m)
+}
+
+// DecodeVectorPartitionManifestJSONV1 rejects unknown fields, multiple JSON
+// values, trailing bytes, and every unsupported/invalid manifest state.
+func DecodeVectorPartitionManifestJSONV1(raw []byte, l VectorPartitionManifestLimits) (VectorPartitionManifestV1, error) {
+	if l.MaxBytes <= 0 {
+		l = DefaultVectorPartitionManifestLimits()
+	}
+	if len(raw) > l.MaxBytes {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: JSON bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var m VectorPartitionManifestV1
+	if err := dec.Decode(&m); err != nil {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: JSON decode: %v", ErrVectorPartitionManifestInvalid, err)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: JSON trailing value", ErrVectorPartitionManifestInvalid)
+	}
+	if err := m.Validate(l); err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	canonical, err := EncodeVectorPartitionManifestJSONV1(m)
+	if err != nil || !bytes.Equal(raw, canonical) {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: noncanonical JSON", ErrVectorPartitionManifestInvalid)
 	}
 	return m, nil
 }

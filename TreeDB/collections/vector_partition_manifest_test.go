@@ -272,6 +272,23 @@ func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionManifestJSONV1RejectsUnknownAndTrailing(t *testing.T) {
+	m := testVectorPartitionManifestV1()
+	raw, err := EncodeVectorPartitionManifestJSONV1(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeVectorPartitionManifestJSONV1(raw, DefaultVectorPartitionManifestLimits()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeVectorPartitionManifestJSONV1(append(raw, []byte(` {}`)...), DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("trailing JSON accepted")
+	}
+	if _, err := DecodeVectorPartitionManifestJSONV1([]byte(`{"unknown":1}`), DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("unknown JSON field accepted")
+	}
+}
+
 func TestVectorPartitionManifestV1RejectsTrailingAndMixedReadySet(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	raw, err := EncodeVectorPartitionManifestV1(m)
