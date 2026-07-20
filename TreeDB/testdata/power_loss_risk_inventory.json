@@ -212,8 +212,8 @@
       "id": "grouped-low-traffic-lifecycle-progress",
       "members": [
         {"dimension": "acknowledgement", "value": "grouped_lifecycle"},
-        {"dimension": "acknowledgement", "value": "checkpoint"},
-        {"dimension": "acknowledgement", "value": "clean_close"},
+        {"dimension": "storage_boundary", "value": "durable_frame_barrier_append_sync"},
+        {"dimension": "storage_boundary", "value": "target_meta_write_sync"},
         {"dimension": "failure_class", "value": "dependency_closed_reopen"}
       ]
     },
