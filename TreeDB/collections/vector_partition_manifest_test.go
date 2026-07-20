@@ -28,21 +28,22 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if len(view.VectorIndexState.Assets) == 0 {
 		t.Fatal("missing typed state asset")
 	}
-	ref := view.VectorIndexState.Assets[0].Ref
-	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	_ = view
+	refs := []ColumnAssetRef{writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 701, []byte("partition-0")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 702, []byte("partition-1")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 703, []byte("router"))}
+	for i := range m.Assets {
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.Assets[i].Ref, m.Assets[i].Bytes, m.Assets[i].Checksum = refs[i], uint64(refs[i].Length), hex.EncodeToString(sum[:])
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[2])
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw)
-	digest := hex.EncodeToString(sum[:])
-	for i := range m.Assets {
-		m.Assets[i].Ref = ref
-		m.Assets[i].Bytes = uint64(ref.Length)
-		m.Assets[i].Checksum = digest
-	}
-	m.RouterAsset.Ref = ref
-	m.RouterAsset.Bytes = uint64(ref.Length)
-	m.RouterAsset.Checksum = digest
+	m.RouterAsset.Ref, m.RouterAsset.Bytes, m.RouterAsset.Checksum = refs[2], uint64(refs[2].Length), hex.EncodeToString(sum[:])
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
 		t.Fatal(err)
@@ -51,14 +52,14 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != uint64(ref.Length*3) {
+	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != uint64(refs[0].Length+refs[1].Length+refs[2].Length) {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	plan, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Sources.PreparedRefs != 1 || plan.Sources.PinnedRefs != 1 {
+	if plan.Sources.PreparedRefs != 3 || plan.Sources.PinnedRefs != 3 {
 		t.Fatalf("partition assets were not retained as prepared+pinned: %+v", plan.Sources)
 	}
 	store, err := OpenVectorPartitionStoreV1(d.Dir())
@@ -192,21 +193,22 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	m.IndexName = def.Name
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
-	ref := view.VectorIndexState.Assets[0].Ref
-	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	_ = view
+	refs := []ColumnAssetRef{writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 711, []byte("partition-0")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 712, []byte("partition-1")), writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 713, []byte("router"))}
+	for i := range m.Assets {
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.Assets[i].Ref, m.Assets[i].Bytes, m.Assets[i].Checksum = refs[i], uint64(refs[i].Length), hex.EncodeToString(sum[:])
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[2])
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw)
-	digest := hex.EncodeToString(sum[:])
-	for i := range m.Assets {
-		m.Assets[i].Ref = ref
-		m.Assets[i].Bytes = uint64(ref.Length)
-		m.Assets[i].Checksum = digest
-	}
-	m.RouterAsset.Ref = ref
-	m.RouterAsset.Bytes = uint64(ref.Length)
-	m.RouterAsset.Checksum = digest
+	m.RouterAsset.Ref, m.RouterAsset.Bytes, m.RouterAsset.Checksum = refs[2], uint64(refs[2].Length), hex.EncodeToString(sum[:])
 	m.Canonicalize()
 	held := col.lockMutation()
 	done := make(chan error, 1)
@@ -295,7 +297,7 @@ func testVectorPartitionManifestV1() VectorPartitionManifestV1 {
 	ref := func(partID uint64, fileID uint32, bytes int64) ColumnAssetRef {
 		return ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: partID, FileID: fileID, Length: bytes}
 	}
-	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
+	m := VectorPartitionManifestV1{State: "ready", Collection: "docs", IndexName: "embedding", IndexDefinitionDigest: h, SourceGeneration: 4, SourceChecksum: 9, SourceSchemaHash: 11, SourceRowCount: 2, Generation: 7, RouterGeneration: 7, PartitionCount: 2, BalancePolicy: "disjoint_v1", Placements: []VectorPartitionPlacementV1{{0, "raft-a"}, {1, "raft-a"}}, Memberships: []VectorPartitionMembershipV1{{0, 0}, {1, 1}}, Representatives: []VectorPartitionMembershipV1{{0, 0}}, Assets: []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: b, Bytes: 12, Ref: ref(1, 1, 12)}, {ID: "partition/1", PartitionID: 1, Checksum: b, Bytes: 13, Ref: ref(2, 2, 13)}}, RouterAsset: VectorPartitionAssetV1{ID: "router", Checksum: b, Bytes: 14, Ref: ref(3, 3, 14)}}
 	m.Canonicalize()
 	return m
 }
