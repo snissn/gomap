@@ -35,8 +35,9 @@ type ColumnAssetRewriteOptions struct {
 
 type columnAssetRewriteOptions struct {
 	ColumnAssetRewriteOptions
-	afterCopyHookForTest       func() error
-	afterPrePublishHookForTest func() error
+	afterCopyHookForTest            func() error
+	afterPrePublishHookForTest      func() error
+	releaseVectorPartitionReclaimID string
 }
 
 // ColumnAssetRewriteStats summarizes mixed-segment rewrite/remap.
@@ -104,15 +105,16 @@ func (c *Collection) columnAssetRewriteWithOptions(ctx context.Context, opts col
 
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
 	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptions(ColumnAssetReachabilityOptions{
-		Detailed:           opts.Detailed,
-		SegmentDetails:     true,
-		CandidateRefs:      opts.CandidateRefs,
-		PendingRefs:        opts.PendingRefs,
-		PreparedRefs:       opts.PreparedRefs,
-		PreparedQueryRefs:  opts.PreparedQueryRefs,
-		QuarantineRefs:     opts.QuarantineRefs,
-		QuarantineSegments: opts.QuarantineSegments,
-		PinnedRefs:         opts.PinnedRefs,
+		Detailed:                        opts.Detailed,
+		SegmentDetails:                  true,
+		CandidateRefs:                   opts.CandidateRefs,
+		PendingRefs:                     opts.PendingRefs,
+		PreparedRefs:                    opts.PreparedRefs,
+		PreparedQueryRefs:               opts.PreparedQueryRefs,
+		QuarantineRefs:                  opts.QuarantineRefs,
+		QuarantineSegments:              opts.QuarantineSegments,
+		PinnedRefs:                      opts.PinnedRefs,
+		releaseVectorPartitionReclaimID: opts.releaseVectorPartitionReclaimID,
 	})
 	if err != nil {
 		return ColumnAssetRewriteStats{}, err

@@ -553,7 +553,7 @@ func columnAssetLifecycleNamespace(c *Collection) string {
 }
 
 func (c *Collection) columnAssetLifecycleAugmentReachabilityOptions(opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityOptions, error) {
-	prepared, pinned, err := c.vectorPartitionReachabilityRefsV1()
+	prepared, pinned, err := c.vectorPartitionReachabilityRefsV1(opts.releaseVectorPartitionReclaimID)
 	if err != nil {
 		return opts, err
 	}

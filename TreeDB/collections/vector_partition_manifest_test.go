@@ -83,8 +83,14 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retiredGC.BytesEligible == 0 {
-		t.Fatalf("retired/deleted VPM assets stayed protected: %+v", retiredGC)
+	if retiredGC.BytesEligible != 0 {
+		t.Fatalf("reclaim record failed to retain deleted VPM assets: %+v", retiredGC)
+	}
+	if err := os.Remove(store.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncDirVPM(store.dir); err != nil {
+		t.Fatal(err)
 	}
 	if err := store.Publish(m); err != nil {
 		t.Fatal(err)
@@ -198,14 +204,14 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.writeDeleteTombstone(m.Collection, m.IndexName, m.Generation); err != nil {
+	if err := s.writeDeleteTombstone(m); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cleanup tombstone remains: %v", err)
+	if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err != nil {
+		t.Fatalf("cleanup reclaim record missing: %v", err)
 	}
 	if _, err := s.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("deleted manifest open err=%v, want not exist", err)

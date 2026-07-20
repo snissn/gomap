@@ -5,6 +5,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -658,9 +659,47 @@ type VectorPartitionStoreV1 struct{ root, dir string }
 const (
 	vectorPartitionStoreMaxEntriesV1 = 4096
 	vectorPartitionStoreMaxBytesV1   = 64 << 20
+	vectorPartitionReclaimMagicV1    = "VPR1"
 )
 
-func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []ColumnAssetRef, error) {
+// A reclaim record retains the complete canonical manifest until the dedicated
+// maintenance transaction proves that its physical ranges are gone. The hash
+// binds the record bytes before they are permitted to affect reachability.
+func encodeVectorPartitionReclaimRecordV1(m VectorPartitionManifestV1) ([]byte, error) {
+	raw, err := EncodeVectorPartitionManifestV1(m)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > DefaultVectorPartitionManifestLimits().MaxBytes {
+		return nil, fmt.Errorf("%w: reclaim record bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	sum := sha256.Sum256(raw)
+	out := make([]byte, 0, 8+len(raw)+len(sum))
+	out = append(out, vectorPartitionReclaimMagicV1...)
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(raw)))
+	out = append(out, length[:]...)
+	out = append(out, raw...)
+	out = append(out, sum[:]...)
+	return out, nil
+}
+func decodeVectorPartitionReclaimRecordV1(raw []byte) (VectorPartitionManifestV1, error) {
+	if len(raw) < 8+sha256.Size || string(raw[:4]) != vectorPartitionReclaimMagicV1 {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record header", ErrVectorPartitionManifestInvalid)
+	}
+	n := int(binary.BigEndian.Uint32(raw[4:8]))
+	if n < 1 || n > DefaultVectorPartitionManifestLimits().MaxBytes || len(raw) != 8+n+sha256.Size {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record length", ErrVectorPartitionManifestInvalid)
+	}
+	payload := raw[8 : 8+n]
+	sum := sha256.Sum256(payload)
+	if !bytes.Equal(sum[:], raw[8+n:]) {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record checksum", ErrVectorPartitionManifestInvalid)
+	}
+	return DecodeVectorPartitionManifestV1(payload, DefaultVectorPartitionManifestLimits())
+}
+
+func (c *Collection) vectorPartitionReachabilityRefsV1(releaseReclaimID string) ([]ColumnAssetRef, []ColumnAssetRef, error) {
 	if c == nil || c.db == nil {
 		return nil, nil, nil
 	}
@@ -680,6 +719,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 	prefix := safeVPM(c.name) + "-"
 	var totalBytes int64
 	var relevant int
+	var reclaimPrepared []ColumnAssetRef
 	activeNames := make(map[string]struct{})
 	retiredNames := make(map[string]struct{})
 	for {
@@ -704,6 +744,22 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 			}
 			if strings.HasSuffix(entry.Name(), ".retired") {
 				retiredNames[entry.Name()] = struct{}{}
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".deleting") {
+				raw, err := readBoundedVPM(filepath.Join(s.dir, entry.Name()), DefaultVectorPartitionManifestLimits().MaxBytes+64)
+				if err != nil {
+					return nil, nil, err
+				}
+				reclaim, err := decodeVectorPartitionReclaimRecordV1(raw)
+				if err != nil || reclaim.Collection != c.name || entry.Name() != s.deleteTombstoneName(reclaim.Collection, reclaim.IndexName, reclaim.Generation) {
+					return nil, nil, fmt.Errorf("collections: invalid vector partition reclaim record %q", entry.Name())
+				}
+				if entry.Name() != releaseReclaimID {
+					for _, asset := range append(append([]VectorPartitionAssetV1(nil), reclaim.Assets...), reclaim.RouterAsset) {
+						reclaimPrepared = append(reclaimPrepared, asset.Ref)
+					}
+				}
 				continue
 			}
 			if filepath.Ext(entry.Name()) != ".vpm" {
@@ -806,6 +862,7 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 			return nil, nil, fmt.Errorf("collections: orphan vector partition retired pointer %q", retiredName)
 		}
 	}
+	prepared = append(prepared, reclaimPrepared...)
 	return prepared, pinned, nil
 }
 func vectorPartitionManifestGenerationRetained(manifests []VectorPartitionManifestV1, generation uint64) bool {
@@ -1059,9 +1116,15 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", retiredErr)
 	}
 	if errors.Is(tombstoneErr, os.ErrNotExist) {
-		if err := s.writeDeleteTombstone(collection, index, generation); err != nil {
+		m, err := s.Open(collection, index, generation)
+		if err != nil {
 			return err
 		}
+		if err := s.writeDeleteTombstone(m); err != nil {
+			return err
+		}
+	} else if _, err := s.openDeleteTombstone(collection, index, generation); err != nil {
+		return err
 	}
 	// Detach the marker before the manifest. Thus any durable interrupted state
 	// is either a retryable tombstone with a retained manifest, or no manifest
@@ -1081,22 +1144,26 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	if err := syncDirVPM(s.dir); err != nil {
 		return err
 	}
-	if err := os.Remove(tombstone); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	return syncDirVPM(s.dir)
 }
 func (s *VectorPartitionStoreV1) deleteTombstonePath(collection, index string, generation uint64) string {
-	return filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.deleting", safeVPM(collection), safeVPM(index), generation))
+	return filepath.Join(s.dir, s.deleteTombstoneName(collection, index, generation))
 }
-func (s *VectorPartitionStoreV1) writeDeleteTombstone(collection, index string, generation uint64) error {
-	tombstone := s.deleteTombstonePath(collection, index, generation)
+func (s *VectorPartitionStoreV1) deleteTombstoneName(collection, index string, generation uint64) string {
+	return fmt.Sprintf("%s-%s-%d.deleting", safeVPM(collection), safeVPM(index), generation)
+}
+func (s *VectorPartitionStoreV1) writeDeleteTombstone(m VectorPartitionManifestV1) error {
+	tombstone := s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)
+	raw, err := encodeVectorPartitionReclaimRecordV1(m)
+	if err != nil {
+		return err
+	}
 	tmp, err := s.uniqueTemp(filepath.Base(tombstone))
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
-	if err = os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", generation)), 0600); err != nil {
+	if err = os.WriteFile(tmp, raw, 0600); err != nil {
 		return err
 	}
 	if err = syncFileVPM(tmp); err != nil {
@@ -1106,6 +1173,90 @@ func (s *VectorPartitionStoreV1) writeDeleteTombstone(collection, index string, 
 		return err
 	}
 	return syncDirVPM(s.dir)
+}
+func (s *VectorPartitionStoreV1) openDeleteTombstone(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
+	raw, err := readBoundedVPM(s.deleteTombstonePath(collection, index, generation), DefaultVectorPartitionManifestLimits().MaxBytes+64)
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	m, err := decodeVectorPartitionReclaimRecordV1(raw)
+	if err != nil || m.Collection != collection || m.IndexName != index || m.Generation != generation {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: reclaim record identity", ErrVectorPartitionManifestInvalid)
+	}
+	return m, nil
+}
+
+// ReclaimVectorPartitionGenerationV1 is the only path that releases a
+// persisted partition reclaim record. It holds the collection mutation barrier
+// throughout rewrite and GC, excludes only this exact record from VPM prepared
+// roots, and removes the record only after every original range's segment is
+// physically absent. All errors leave the checksummed record durable for retry.
+func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, index string, generation uint64) (ColumnAssetGCStats, error) {
+	var zero ColumnAssetGCStats
+	if c == nil || c.db == nil {
+		return zero, errors.New("collections: closed collection")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+		return zero, err
+	}
+	unlock := c.lockMutation()
+	defer unlock.Unlock()
+	return zero, WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		reclaimID := s.deleteTombstoneName(c.name, index, generation)
+		m, err := s.openDeleteTombstone(c.name, index, generation)
+		if err != nil {
+			return err
+		}
+		refs := make([]ColumnAssetRef, 0, len(m.Assets)+1)
+		for _, asset := range m.Assets {
+			refs = append(refs, asset.Ref)
+		}
+		refs = append(refs, m.RouterAsset.Ref)
+		rewrite, err := c.columnAssetRewrite(ctx, columnAssetRewriteOptions{
+			ColumnAssetRewriteOptions:       ColumnAssetRewriteOptions{CandidateRefs: refs},
+			releaseVectorPartitionReclaimID: reclaimID,
+		})
+		if err != nil {
+			return err
+		}
+		candidates := append(refs, rewrite.SupersededRefs...)
+		stats, err := c.columnAssetGC(ctx, ColumnAssetGCOptions{
+			CandidateRefs:                   candidates,
+			releaseVectorPartitionReclaimID: reclaimID,
+		})
+		if err != nil {
+			return err
+		}
+		for _, ref := range refs {
+			path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
+			if err != nil {
+				return err
+			}
+			if _, err := os.Stat(path); err == nil {
+				return fmt.Errorf("collections: vector partition reclaim generation %d not physically complete", generation)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if err := os.Remove(s.deleteTombstonePath(c.name, index, generation)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := syncDirVPM(s.dir); err != nil {
+			return err
+		}
+		zero = stats
+		return nil
+	})
 }
 
 type VectorPartitionStatusV1 struct {

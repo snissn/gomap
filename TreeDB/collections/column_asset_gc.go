@@ -20,14 +20,15 @@ type ColumnAssetGCOptions struct {
 	Detailed bool
 	// SegmentDetails keeps segment-level entries in the returned plan without
 	// retaining per-ref entries.
-	SegmentDetails     bool
-	CandidateRefs      []ColumnAssetRef
-	PendingRefs        []ColumnAssetRef
-	PreparedRefs       []ColumnAssetRef
-	PreparedQueryRefs  []ColumnAssetRef
-	QuarantineRefs     []ColumnAssetRef
-	QuarantineSegments []ColumnAssetQuarantineSegment
-	PinnedRefs         []ColumnAssetRef
+	SegmentDetails                  bool
+	CandidateRefs                   []ColumnAssetRef
+	PendingRefs                     []ColumnAssetRef
+	PreparedRefs                    []ColumnAssetRef
+	PreparedQueryRefs               []ColumnAssetRef
+	QuarantineRefs                  []ColumnAssetRef
+	QuarantineSegments              []ColumnAssetQuarantineSegment
+	PinnedRefs                      []ColumnAssetRef
+	releaseVectorPartitionReclaimID string
 }
 
 // ColumnAssetGCStats summarizes safe whole-segment column asset reclamation.
@@ -322,6 +323,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		QuarantineRefs:                        opts.QuarantineRefs,
 		QuarantineSegments:                    opts.QuarantineSegments,
 		PinnedRefs:                            opts.PinnedRefs,
+		releaseVectorPartitionReclaimID:       opts.releaseVectorPartitionReclaimID,
 	})
 	if err != nil {
 		return ColumnAssetGCStats{}, err
