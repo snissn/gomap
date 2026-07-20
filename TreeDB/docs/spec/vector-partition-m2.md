@@ -64,10 +64,10 @@ host. They are offline quality/resource evidence, not a server speed claim:
 |---|---:|---:|---:|---:|---:|---:|
 | 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | 1.560s | 36.2 MB | 95.59 | 0.900 | 0.594 / 0.163 | 1.0512 |
 | 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | 3.023s | 112.1 MB | 64.62 | 0.775 | 0.475 / 0.250 | 1.0048 |
-| 1M x 16, r2/d8/leaf64, 16 parts, 4 probes | 34.266s | 1.443 GB | 72.47 | 0.794 | 0.300 / 0.100 | 1.000112 |
+| 1M x 16, r2/d8/leaf64, 16 parts, 4 probes | 36.872s CPU 45.743s | 1.325 GB | 72.47 | 0.794 | 0.300 / 0.100 | 1.000112 |
 
 The 1M artifact was
-`/tmp/treedb_m2_build1m_7jEG/vector_partition_9274f9f3d7b900dd.json`
+`/tmp/treedb_m2_build1m_cpu_WYHa/vector_partition_9274f9f3d7b900dd.json`
 (SHA-256 `9274f9f3d7b900dd931881c2ce544b68ac6ddac198008ab307c6b57469f62ec1`);
 the matching report sits beside it. Its deterministic source corpus is
 `/tmp/treedb_m2_export1m_rHdo`, generated with:
