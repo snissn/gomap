@@ -70,12 +70,13 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 		HeadSHA            string `json:"head_sha"`
 		BaseSHA            string `json:"base_sha"`
 		GoVersion          string `json:"go_version"`
-		HardwareContext    struct {
+		HardwareContext    string `json:"hardware_context"`
+		HardwareDetails    struct {
 			OS            string `json:"os"`
 			CPU           string `json:"cpu"`
 			PhysicalCores int    `json:"physical_cores"`
 			LogicalCPUs   int    `json:"logical_cpus"`
-		} `json:"hardware_context"`
+		} `json:"hardware_details"`
 		Dataset struct {
 			Name                  string `json:"name"`
 			Scales                []int  `json:"scales"`
@@ -89,7 +90,7 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 			ExcludedClaims  string `json:"excluded_claims"`
 		} `json:"fixture_attribution"`
 		TimedBoundary string   `json:"timed_boundary"`
-		Commands      []string `json:"commands"`
+		Command       []string `json:"command"`
 		RawArtifacts  []struct {
 			Path string `json:"path"`
 			Hash string `json:"sha256"`
@@ -101,6 +102,17 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 			LargestArchiveBytes int64   `json:"largest_snapshot_archive_bytes"`
 			Attribution         string  `json:"attribution"`
 		} `json:"storage_metrics"`
+		Stages []struct {
+			Name              string `json:"name"`
+			MeasurementStatus string `json:"measurement_status"`
+		} `json:"stages"`
+		Metrics struct {
+			MeasurementStatus      string  `json:"measurement_status"`
+			PeakProcessRSSBytes    int64   `json:"peak_process_rss_bytes"`
+			FinalManifestBytes     int64   `json:"final_manifest_bytes"`
+			MetadataBytesPerVector float64 `json:"metadata_bytes_per_vector"`
+			MetricScope            string  `json:"metric_scope"`
+		} `json:"metrics"`
 		Codec []codecMeasurement `json:"codec"`
 		Warm  struct {
 			Open   operation `json:"open"`
@@ -125,8 +137,8 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 			t.Fatalf("%s is not an exact SHA-1: %q (%v)", label, value, err)
 		}
 	}
-	if ledger.HeadSHA == ledger.BaseSHA || !strings.HasPrefix(ledger.GoVersion, "go1.") || ledger.HardwareContext.OS == "" || ledger.HardwareContext.CPU == "" || ledger.HardwareContext.PhysicalCores <= 0 || ledger.HardwareContext.LogicalCPUs < ledger.HardwareContext.PhysicalCores {
-		t.Fatalf("incomplete candidate/environment provenance: head=%q base=%q go=%q hardware=%+v", ledger.HeadSHA, ledger.BaseSHA, ledger.GoVersion, ledger.HardwareContext)
+	if ledger.HeadSHA == ledger.BaseSHA || !strings.HasPrefix(ledger.GoVersion, "go1.") || ledger.HardwareContext == "" || ledger.HardwareDetails.OS == "" || ledger.HardwareDetails.CPU == "" || ledger.HardwareDetails.PhysicalCores <= 0 || ledger.HardwareDetails.LogicalCPUs < ledger.HardwareDetails.PhysicalCores {
+		t.Fatalf("incomplete candidate/environment provenance: head=%q base=%q go=%q hardware=%q details=%+v", ledger.HeadSHA, ledger.BaseSHA, ledger.GoVersion, ledger.HardwareContext, ledger.HardwareDetails)
 	}
 	wantScales := []int{10000, 100000, 1000000}
 	if ledger.Dataset.Name != "synthetic_ready_manifest_scale_v1" || fmt.Sprint(ledger.Dataset.Scales) != fmt.Sprint(wantScales) || ledger.Dataset.MembershipShape == "" || !strings.Contains(ledger.Dataset.AuthorityConstruction, "excluded") {
@@ -135,11 +147,11 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 	if !strings.Contains(ledger.FixtureAttribution.CorrectnessPath, "genuine") || !strings.Contains(ledger.FixtureAttribution.PerformancePath, "test-only synthetic") || ledger.FixtureAttribution.MeasuredStorage == "" || !strings.Contains(ledger.FixtureAttribution.ExcludedClaims, "not ANN") || !strings.Contains(ledger.TimedBoundary, "complete go test process") {
 		t.Fatalf("incomplete fixture/timing boundary: fixture=%+v boundary=%q", ledger.FixtureAttribution, ledger.TimedBoundary)
 	}
-	if len(ledger.Commands) != 8 {
-		t.Fatalf("got %d benchmark commands, want 8", len(ledger.Commands))
+	if len(ledger.Command) != 8 {
+		t.Fatalf("got %d benchmark commands, want 8", len(ledger.Command))
 	}
-	seenCommands := make(map[string]struct{}, len(ledger.Commands))
-	for _, command := range ledger.Commands {
+	seenCommands := make(map[string]struct{}, len(ledger.Command))
+	for _, command := range ledger.Command {
 		if !strings.Contains(command, "GOWORK=off go test") || !strings.Contains(command, "-benchtime=1x") || !strings.Contains(command, "-benchmem") || !strings.Contains(command, "-count=1") {
 			t.Fatalf("incomplete exact benchmark command: %q", command)
 		}
@@ -150,6 +162,17 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 	}
 	if ledger.StorageMetrics.ManifestBytes != 12000642 || ledger.StorageMetrics.MetadataBytesPerVec != 12.000642 || ledger.StorageMetrics.GateBytesPerVec != 64 || ledger.StorageMetrics.LargestArchiveBytes != 12573184 || ledger.StorageMetrics.MetadataBytesPerVec >= ledger.StorageMetrics.GateBytesPerVec || ledger.StorageMetrics.ManifestBytes == ledger.StorageMetrics.LargestArchiveBytes || !strings.Contains(ledger.StorageMetrics.Attribution, "not metadata bytes") {
 		t.Fatalf("invalid or conflated storage metrics: %+v", ledger.StorageMetrics)
+	}
+	if len(ledger.Stages) != 3 {
+		t.Fatalf("got %d M0-style evidence stages, want 3", len(ledger.Stages))
+	}
+	for _, stage := range ledger.Stages {
+		if stage.Name == "" || stage.MeasurementStatus != "measured" {
+			t.Fatalf("invalid evidence stage: %+v", stage)
+		}
+	}
+	if ledger.Metrics.MeasurementStatus != "measured" || ledger.Metrics.PeakProcessRSSBytes != 2612731904 || ledger.Metrics.FinalManifestBytes != ledger.StorageMetrics.ManifestBytes || ledger.Metrics.MetadataBytesPerVector != ledger.StorageMetrics.MetadataBytesPerVec || ledger.Metrics.MetricScope == "" {
+		t.Fatalf("invalid M0-style summary metrics: %+v", ledger.Metrics)
 	}
 	if len(ledger.Codec) != len(wantScales) || len(ledger.Snapshot) != len(wantScales) {
 		t.Fatalf("incomplete scale series: codec=%d snapshot=%d", len(ledger.Codec), len(ledger.Snapshot))

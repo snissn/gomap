@@ -6,7 +6,8 @@
   "head_sha": "0aae57a7a3f6ddb9dea3b7a789559928f6428071",
   "base_sha": "dc383529612a5a81be8d499bfcd7b09f1b7873e5",
   "go_version": "go1.26.0 linux/amd64",
-  "hardware_context": {
+  "hardware_context": "Linux 6.8.0-124-generic x86_64; 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz; 6 physical cores; 12 logical CPUs",
+  "hardware_details": {
     "os": "Linux 6.8.0-124-generic x86_64",
     "cpu": "11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz",
     "physical_cores": 6,
@@ -25,7 +26,7 @@
     "excluded_claims": "not ANN search throughput, production Raft throughput, or a production corpus measurement"
   },
   "timed_boundary": "one benchmark iteration; fixture and authority setup excluded by the Go benchmark timer; peak RSS covers the complete go test process, including compile and setup",
-  "commands": [
+  "command": [
     "/usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionManifestV1Scale$/^rows=10000$/^(decode_validate|encode)$' -benchtime=1x -benchmem -count=1",
     "/usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionManifestV1Scale$/^rows=100000$/^(decode_validate|encode)$' -benchtime=1x -benchmem -count=1",
     "/usr/bin/time -v env GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkVectorPartitionManifestV1Scale$/^rows=1000000$/^(decode_validate|encode)$' -benchtime=1x -benchmem -count=1",
@@ -47,6 +48,18 @@
     "gate_bytes_per_vector": 64,
     "largest_snapshot_archive_bytes": 12573184,
     "attribution": "manifest bytes measure the encoded VPM1 record; archive bytes measure the complete snapshot tar stream and are not metadata bytes per vector"
+  },
+  "stages": [
+    {"name": "codec", "measurement_status": "measured"},
+    {"name": "warm_open_status", "measurement_status": "measured"},
+    {"name": "raft_snapshot_archive_install", "measurement_status": "measured"}
+  ],
+  "metrics": {
+    "measurement_status": "measured",
+    "peak_process_rss_bytes": 2612731904,
+    "final_manifest_bytes": 12000642,
+    "metadata_bytes_per_vector": 12.000642,
+    "metric_scope": "summary only; operation-specific time, allocation, archive, and RSS metrics are reported below"
   },
   "codec": [
     {
