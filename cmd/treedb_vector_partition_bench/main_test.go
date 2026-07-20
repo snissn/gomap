@@ -146,6 +146,39 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 		t.Fatalf("digest changed: %s %s", report.ArtifactSHA256, again.ArtifactSHA256)
 	}
 }
+
+func TestPartitionStageEdgeClampPreservesRepetitionCapacity(t *testing.T) {
+	cfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-degree", "16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.partition.MaxEdges, 64_000_000; got != want {
+		t.Fatalf("MaxEdges=%d want %d; repetition capacity was lost", got, want)
+	}
+	capacity := cfg.partition.MaxEdges / cfg.partition.Repetitions / cfg.partition.Degree
+	if capacity < 250_001 {
+		t.Fatalf("large valid partition shape capacity=%d want at least 250001", capacity)
+	}
+	if int64(maxVectors+1)*int64(cfg.partition.Degree) <= int64(cfg.partition.MaxEdges)/int64(cfg.partition.Repetitions) {
+		t.Fatalf("true over-cap shape accepted by edge budget: capacity=%d", capacity)
+	}
+}
+
+func TestPartitionProvenanceSuffixPreservesFilenameAndRejectsShortInputs(t *testing.T) {
+	digest := strings.Repeat("d", 64)
+	base := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	got, err := provenanceSuffix(digest, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("d", 12) + "_" + strings.Repeat("a", 12) + "_" + strings.Repeat("b", 12); got != want {
+		t.Fatalf("suffix=%q want %q", got, want)
+	}
+	if _, err := provenanceSuffix("short", base, head); err == nil {
+		t.Fatal("short digest accepted")
+	}
+}
 func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	args := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-pivots", "8", "-partition-max-leaf-bucket", "128", "-partition-degree", "16"}
 	var stdout bytes.Buffer
@@ -156,7 +189,7 @@ func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "32a5b5cf2dc13f800040661c88d5602322478276e197433a95eaa1fe1effad98" || report.Metrics.EdgeCut != 5184 || report.Metrics.StableIDHashEdgeCut != 149877 {
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "9af8ddca00b42caa04f06f69dcc5991532193a3e95642d723cddaff664a04a11" || report.Metrics.EdgeCut != 5184 || report.Metrics.StableIDHashEdgeCut != 149877 {
 		t.Fatalf("frozen 10k regression changed: report=%+v", report)
 	}
 }

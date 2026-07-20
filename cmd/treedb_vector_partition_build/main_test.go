@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -129,5 +131,65 @@ func TestReportMarksUnavailableAccountingWithoutMeasuredZero(t *testing.T) {
 		if got, ok := fields[name].(bool); !ok || got {
 			t.Fatalf("unavailable accounting not explicit for %s: %s", name, raw)
 		}
+	}
+}
+
+func TestOracleQualityGateAllowsFullProbeParityOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		oracle, stableHash float64
+		probes, partitions int
+		want               bool
+	}{
+		{name: "one partition parity", oracle: 1, stableHash: 1, probes: 1, partitions: 1, want: true},
+		{name: "full probe parity", oracle: 1, stableHash: 1, probes: 4, partitions: 4, want: true},
+		{name: "partial probe equality rejected", oracle: .8, stableHash: .8, probes: 1, partitions: 4, want: false},
+		{name: "partial probe improvement accepted", oracle: .9, stableHash: .8, probes: 1, partitions: 4, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := passesOracleQualityGate(tc.oracle, tc.stableHash, tc.probes, tc.partitions); got != tc.want {
+				t.Fatalf("passesOracleQualityGate(%v, %v, %d, %d)=%v want %v", tc.oracle, tc.stableHash, tc.probes, tc.partitions, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSingleDocumentBuildWritesFiniteReport(t *testing.T) {
+	dataset, out := t.TempDir(), t.TempDir()
+	unit := []byte{0, 0, 128, 63}
+	digest := sha256.Sum256(unit)
+	for _, name := range []string{"documents.f32", "queries.f32"} {
+		if err := os.WriteFile(filepath.Join(dataset, name), unit, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := manifest{Version: 1, Generator: "treedb_vector_synthetic_v1", Docs: 1, Dimensions: 1, Queries: 1, TopK: 1, GroupModulo: 1, Metric: "cosine", Normalized: true, DocumentIDPattern: "doc-%06d", DocumentVectorsFile: "documents.f32", QueryVectorsFile: "queries.f32", FloatFormat: "float32_le_row_major", Files: map[string]fileInfo{"documents.f32": {Bytes: 4, SHA256: fmt.Sprintf("%x", digest)}, "queries.f32": {Bytes: 4, SHA256: fmt.Sprintf("%x", digest)}}}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataset, "manifest.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"-dataset", dataset, "-out", out, "-partitions", "1", "-probes", "1", "-repetitions", "1", "-pivots", "2", "-max-leaf-bucket", "2", "-degree", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := filepath.Glob(filepath.Join(out, "vector_partition_report_*.json"))
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("reports=%v err=%v", reports, err)
+	}
+	reportRaw, err := os.ReadFile(reports[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got report
+	if err := json.Unmarshal(reportRaw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.GraphNeighborRecall != 0 || math.IsNaN(got.GraphNeighborRecall) || math.IsInf(got.GraphNeighborRecall, 0) {
+		t.Fatalf("single-document graph recall=%v", got.GraphNeighborRecall)
+	}
+	if _, err := os.Stat(got.ArtifactPath); err != nil {
+		t.Fatalf("artifact was not retained with report: %v", err)
 	}
 }

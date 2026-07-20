@@ -409,8 +409,13 @@ func parseConfig(args []string) (config, error) {
 	cfg.partition.Seed = cfg.seed
 	cfg.partition.Partitions = cfg.partitions
 	cfg.partition.MaxVectors = cfg.maxVectors
-	if cfg.partition.MaxEdges > maxVectors*cfg.partition.Degree {
-		cfg.partition.MaxEdges = maxVectors * cfg.partition.Degree
+	// The graph validator reserves the edge budget for every repetition. Keep
+	// that capacity when constraining the default by the configured input cap.
+	// All operands are independently bounded by parse/build validation, but use
+	// int64 so this preflight cannot overflow on narrower integer targets.
+	maxEdgesForInput := int64(cfg.maxVectors) * int64(cfg.partition.Degree) * int64(cfg.partition.Repetitions)
+	if maxEdgesForInput > 0 && maxEdgesForInput < int64(cfg.partition.MaxEdges) {
+		cfg.partition.MaxEdges = int(maxEdgesForInput)
 	}
 	return cfg, nil
 }
@@ -433,10 +438,14 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	if err != nil {
 		return err
 	}
+	suffix, err := provenanceSuffix(digest, cfg.baseSHA, cfg.headSHA)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(cfg.out, 0755); err != nil {
 		return err
 	}
-	name := fmt.Sprintf("vector_partition_%s_%s_%s.json", digest[:12], cfg.baseSHA[:12], cfg.headSHA[:12])
+	name := "vector_partition_" + suffix + ".json"
 	path := filepath.Join(cfg.out, name)
 	if err := os.WriteFile(path, bytes, 0644); err != nil {
 		return err
@@ -460,7 +469,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	if report.ReportBytes != int64(len(raw)) {
 		return errors.New("compact partition report byte accounting did not converge")
 	}
-	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+digest[:12]+"_"+cfg.baseSHA[:12]+"_"+cfg.headSHA[:12]+".json"), raw, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+suffix+".json"), raw, 0644); err != nil {
 		return err
 	}
 	if cfg.format == "json" {
@@ -469,6 +478,15 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	}
 	_, err = fmt.Fprintf(stdout, "partition artifact=%s edges=%d cut=%d cap=%d\n", path, artifact.Metrics.GraphEdges, artifact.Metrics.EdgeCut, artifact.Metrics.Cap)
 	return err
+}
+
+const provenanceSuffixBytes = 12
+
+func provenanceSuffix(digest, baseSHA, headSHA string) (string, error) {
+	if len(digest) < provenanceSuffixBytes || len(baseSHA) < provenanceSuffixBytes || len(headSHA) < provenanceSuffixBytes {
+		return "", errors.New("partition artifact provenance digest/SHA is too short for filename")
+	}
+	return digest[:provenanceSuffixBytes] + "_" + baseSHA[:provenanceSuffixBytes] + "_" + headSHA[:provenanceSuffixBytes], nil
 }
 
 var knownStages = []string{"exact_global_top_k", "partition_oracle", "exact_representative_routing", "approximate_representative_routing", "exact_partition_local", "treedb_partition_local_hnsw", "end_to_end_distributed_simulation"}

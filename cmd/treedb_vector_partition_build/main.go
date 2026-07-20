@@ -161,7 +161,7 @@ func run(args []string) error {
 	qualityStart := time.Now()
 	gr := graphRecall(vs, art, min(graphRecallSamples, len(vs)))
 	pr, hr := oracleRecall(vs, qs, art, probes, 10)
-	if pr <= hr {
+	if !passesOracleQualityGate(pr, hr, probes, partitions) {
 		return fmt.Errorf("quality gate failed: partition oracle recall@10 %.4f <= stable hash %.4f at probes=%d", pr, hr, probes)
 	}
 	qualityWall := time.Since(qualityStart).Nanoseconds()
@@ -233,6 +233,16 @@ func run(args []string) error {
 	fmt.Printf("partition artifact=%s report=%s digest=%s final_bytes=%d oracle_recall_at_10=%.4f hash_recall_at_10=%.4f\n", path, reportPath, digest, r.FinalBytes, pr, hr)
 	_ = cap
 	return nil
+}
+
+// passesOracleQualityGate requires a strict improvement for partial routing.
+// At full coverage both routes inspect every partition, so equality is the
+// expected parity result rather than a quality failure.
+func passesOracleQualityGate(oracle, stableHash float64, probes, partitions int) bool {
+	if probes == partitions {
+		return oracle >= stableHash
+	}
+	return oracle > stableHash
 }
 func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
 	f, e := os.Open(filepath.Join(dir, "manifest.json"))
@@ -423,8 +433,12 @@ func graphRecall(v []vectorpartition.Vector, a vectorpartition.Artifact, n int) 
 		return 0
 	}
 	sum := 0.0
+	valid := 0
 	for i := 0; i < n; i++ {
 		want := nearest(v, v[i].Values, min(10, len(v)-1), func(j int) bool { return j != i })
+		if len(want) == 0 {
+			continue
+		}
 		seen := map[int]bool{}
 		for _, j := range a.Graph.Neighbors[i] {
 			seen[j] = true
@@ -436,8 +450,12 @@ func graphRecall(v []vectorpartition.Vector, a vectorpartition.Artifact, n int) 
 			}
 		}
 		sum += float64(hit) / float64(len(want))
+		valid++
 	}
-	return sum / float64(n)
+	if valid == 0 {
+		return 0
+	}
+	return sum / float64(valid)
 }
 
 // oracleRecall intentionally has no centroid/router step: it uses the global
