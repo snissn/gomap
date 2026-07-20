@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ChildManifestSchemaVersion  = "treedb-power-loss-child/v1"
+	ChildManifestSchemaVersion  = "treedb-power-loss-child/v2"
 	RiskInventorySchemaVersion  = "treedb-power-loss-risk-inventory/v1"
 	CoverageReportSchemaVersion = "treedb-power-loss-coverage/v1"
 	SelectionPlanSchemaVersion  = "treedb-power-loss-selection/v1"

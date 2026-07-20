@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v2"
+const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v3"
 
 const CertifiedRepositoryRef = "refs/remotes/origin/main"
 
@@ -32,7 +32,7 @@ const defaultRecoveryDir = "recovery-input"
 
 // normalizeRecoveryDir validates the logical, slash-separated path recorded in
 // portable certification artifacts. An omitted path preserves the legacy
-// public-open root used by v1 child manifests and v2 run plans.
+// public-open root used by pre-directory-contract plans.
 func normalizeRecoveryDir(dir string) (string, error) {
 	if dir == "" {
 		return defaultRecoveryDir, nil

@@ -25,7 +25,7 @@ func TestCommittedRiskInventoryIsValid(t *testing.T) {
 }
 
 func TestParseChildManifestRejectsUnknownFields(t *testing.T) {
-	data := []byte(`{"schema_version":"treedb-power-loss-child/v1","unexpected":true}`)
+	data := []byte(`{"schema_version":"treedb-power-loss-child/v2","unexpected":true}`)
 	if _, err := ParseChildManifest(data); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("ParseChildManifest error=%v, want unknown-field rejection", err)
 	}

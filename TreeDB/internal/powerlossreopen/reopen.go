@@ -86,7 +86,7 @@ func stableRelative(model *powerlossoracle.Model, relativeDir string, opts treed
 			AppliedLSN         uint64            `json:"applied_lsn"`
 			Stats              map[string]string `json:"stats"`
 		}{
-			SchemaVersion: "treedb-power-loss-recovery-trace/v1",
+			SchemaVersion: "treedb-power-loss-recovery-trace/v2",
 			PublicAPI:     "treedb.Open",
 			Dir:           filepath.ToSlash(filepath.Join("recovery-input", relativeDir)),
 			// The immutable snapshot and its tree hash cover the whole modeled

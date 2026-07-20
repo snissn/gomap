@@ -17,7 +17,7 @@ import (
 const (
 	operationTraceSchemaVersion = "treedb-power-loss-operation-trace/v1"
 	imageTreeSchemaVersion      = "treedb-power-loss-image-tree/v1"
-	recoveryTraceSchemaVersion  = "treedb-power-loss-recovery-trace/v1"
+	recoveryTraceSchemaVersion  = "treedb-power-loss-recovery-trace/v2"
 	metricsSchemaVersion        = "treedb-power-loss-metrics/v1"
 	commandLogSchemaVersion     = "treedb-power-loss-command-log/v1"
 )

@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseRunPlanRejectsUnknownFields(t *testing.T) {
-	if _, err := ParseRunPlan([]byte(`{"schema_version":"treedb-power-loss-run-plan/v2","unknown":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, err := ParseRunPlan([]byte(`{"schema_version":"treedb-power-loss-run-plan/v3","unknown":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("ParseRunPlan unknown-field error=%v", err)
 	}
 }

@@ -94,7 +94,14 @@ The evidence directory must be empty. Capture writes:
 - `recovery_trace.json` from the normal public open path, bound to the SHA-256
   of `stable_image_tree.json` and the model's stable fingerprint; and
 - `metrics.json` with image sizes, file counts, trace count, and stable-image
-  fingerprint.
+fingerprint.
+
+The directory-bound contract uses run-plan and witness-contract schema v3,
+child-manifest schema v2, and recovery-trace schema v2. The plan freezes the
+expected slash-separated recovery directory; the child manifest retains that
+expectation, and the trace must identify the same canonical `recovery-input`
+root or descendant. These version bumps are intentional because strict readers
+of the preceding schemas do not accept the new fields or child-root semantics.
 
 Every modeled witness registers those five JSON files and
 `command_log.json` at their canonical names directly below its declared
@@ -122,7 +129,7 @@ not evidence.
 
 ## Exact-SHA runner
 
-`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and version-2
+`TreeDB/cmd/power_loss_certify` consumes a strict risk inventory and version-3
 run plan. The plan freezes `refs/remotes/origin/main`, its exact repository SHA,
 PR provenance, replay selector, profile, reopen mode, expected outcome, typed
 error, complete expected recovery state, per-case timeout, captured-output
