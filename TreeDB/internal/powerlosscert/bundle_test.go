@@ -326,6 +326,27 @@ func TestVerifyArtifactsRejectsInvalidDeclaredReplayWindow(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("trace-variant-mismatch", func(t *testing.T) {
+		root := t.TempDir()
+		manifest := testChildManifest("witness-a")
+		witness := &manifest.Witnesses[0]
+		witness.ReplayWindow = "variant-a"
+		witness.Command.Env[powerLossReplayWindowEnv] = witness.ReplayWindow
+		witness.CutID = "cut/checkpoint-generation-2/after-meta-write/000"
+		witness.CutOccurrence = 0
+		witness.ObservedEventCount = 1
+		witness.Command.Env["TREEDB_POWERLOSS_CUT_ID"] = witness.CutID
+		for index := range manifest.TestBinaries {
+			manifest.TestBinaries[index] = writeArtifactFixture(t, root, manifest.TestBinaries[index].Kind, manifest.TestBinaries[index].Path, "binary")
+		}
+		writeModeledEvidenceFixture(t, root, &manifest, "after-meta-write")
+		rewriteArtifactJSONField(t, root, witness, ArtifactKindOperationTrace, "variant_id", "variant-b")
+
+		if err := VerifyArtifacts(root, []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "does not match variant_id") {
+			t.Fatalf("VerifyArtifacts trace-variant mismatch error=%v", err)
+		}
+	})
 }
 
 func TestVerifyArtifactsRejectsImageBytesThatDoNotMatchTree(t *testing.T) {
