@@ -715,6 +715,36 @@ func putMembershipsVPM(b *bytes.Buffer, x []VectorPartitionMembershipV1) {
 // pointer changes only after its complete generation has been made durable.
 type VectorPartitionStoreV1 struct{ root, dir string }
 
+// vectorPartitionPublishHooksV1 is deliberately test-only fault injection at
+// real persistence boundaries. It lets reopen tests verify the actual on-disk
+// recovery invariant rather than infer it from a successful call return.
+var vectorPartitionPublishHooksV1 struct {
+	sync.RWMutex
+	at func(string) error
+}
+
+func setVectorPartitionPublishHookForTestV1(at func(string) error) func() {
+	vectorPartitionPublishHooksV1.Lock()
+	old := vectorPartitionPublishHooksV1.at
+	vectorPartitionPublishHooksV1.at = at
+	vectorPartitionPublishHooksV1.Unlock()
+	return func() {
+		vectorPartitionPublishHooksV1.Lock()
+		vectorPartitionPublishHooksV1.at = old
+		vectorPartitionPublishHooksV1.Unlock()
+	}
+}
+
+func vectorPartitionPublishFaultV1(boundary string) error {
+	vectorPartitionPublishHooksV1.RLock()
+	hook := vectorPartitionPublishHooksV1.at
+	vectorPartitionPublishHooksV1.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(boundary)
+}
+
 const (
 	vectorPartitionStoreMaxEntriesV1 = 4096
 	vectorPartitionStoreMaxBytesV1   = 64 << 20
@@ -1235,6 +1265,9 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	if e = syncFileVPM(tmp); e != nil {
 		return e
 	}
+	if e = vectorPartitionPublishFaultV1("generation_temp_synced"); e != nil {
+		return e
+	}
 	target := filepath.Join(s.dir, name)
 	if e = os.Link(tmp, target); e != nil {
 		if !errors.Is(e, os.ErrExist) {
@@ -1245,7 +1278,13 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 			return fmt.Errorf("%w: generation %d already published with different bytes", ErrVectorPartitionManifestInvalid, m.Generation)
 		}
 	}
+	if e = vectorPartitionPublishFaultV1("generation_linked"); e != nil {
+		return e
+	}
 	if e = syncDirVPM(s.dir); e != nil {
+		return e
+	}
+	if e = vectorPartitionPublishFaultV1("generation_dir_synced"); e != nil {
 		return e
 	}
 	if m.State == "ready" {
@@ -1262,7 +1301,13 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		if e = syncFileVPM(atmp); e != nil {
 			return e
 		}
+		if e = vectorPartitionPublishFaultV1("active_temp_synced"); e != nil {
+			return e
+		}
 		if e = renameVPM(atmp, active); e != nil {
+			return e
+		}
+		if e = vectorPartitionPublishFaultV1("active_renamed"); e != nil {
 			return e
 		}
 		// The replacement pointer is durable before a stale retired marker is
@@ -1270,11 +1315,20 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		if e = syncDirVPM(s.dir); e != nil {
 			return e
 		}
+		if e = vectorPartitionPublishFaultV1("active_dir_synced"); e != nil {
+			return e
+		}
 		if err := os.Remove(retired); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		if e = vectorPartitionPublishFaultV1("retired_removed"); e != nil {
+			return e
+		}
 	}
-	return syncDirVPM(s.dir)
+	if e = syncDirVPM(s.dir); e != nil {
+		return e
+	}
+	return vectorPartitionPublishFaultV1("publication_complete")
 }
 func (s *VectorPartitionStoreV1) uniqueTemp(name string) (string, error) {
 	var nonce [12]byte

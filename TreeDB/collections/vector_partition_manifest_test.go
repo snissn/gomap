@@ -270,6 +270,60 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionStoreV1PublishFaultWindowsReopenOldOrCompleteNew(t *testing.T) {
+	if !vpmNamespacePersistenceSupported() {
+		t.Skip("namespace persistence unsupported")
+	}
+	boundaries := []string{"generation_temp_synced", "generation_linked", "generation_dir_synced", "active_temp_synced", "active_renamed", "active_dir_synced", "retired_removed", "publication_complete"}
+	for _, boundary := range boundaries {
+		t.Run(boundary, func(t *testing.T) {
+			root := t.TempDir()
+			store, err := OpenVectorPartitionStoreV1(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := testVectorPartitionManifestV1()
+			if err := store.publishLocked(old); err != nil {
+				t.Fatal(err)
+			}
+			candidate := old
+			candidate.Generation, candidate.RouterGeneration = old.Generation+1, old.Generation+1
+			candidate.Canonicalize()
+			stop := setVectorPartitionPublishHookForTestV1(func(at string) error {
+				if at == boundary {
+					return errors.New("injected publication interruption")
+				}
+				return nil
+			})
+			err = store.publishLocked(candidate)
+			stop()
+			if err == nil || !strings.Contains(err.Error(), "injected publication interruption") {
+				t.Fatalf("publish err=%v want injected interruption", err)
+			}
+			reopened, err := OpenExistingVectorPartitionStoreV1(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, err := reopened.OpenActive(old.Collection, old.IndexName)
+			if err != nil {
+				t.Fatalf("reopen active after %s: %v", boundary, err)
+			}
+			if active.Generation != old.Generation && active.Generation != candidate.Generation {
+				t.Fatalf("active generation after %s=%d want old=%d or complete new=%d", boundary, active.Generation, old.Generation, candidate.Generation)
+			}
+			for _, generation := range []uint64{old.Generation, candidate.Generation} {
+				m, openErr := reopened.Open(old.Collection, old.IndexName, generation)
+				if openErr != nil && generation == old.Generation {
+					t.Fatalf("old generation unreadable after %s: %v", boundary, openErr)
+				}
+				if openErr == nil && m.Generation != generation {
+					t.Fatalf("generation %d decoded as %d", generation, m.Generation)
+				}
+			}
+		})
+	}
+}
+
 func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testing.T) {
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
