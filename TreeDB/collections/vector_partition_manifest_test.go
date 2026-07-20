@@ -10,25 +10,25 @@ import (
 )
 
 func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
-	d := openCollectionCommandWALDB(t, t.TempDir())
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer d.Close()
-	def := VectorIndexDefinition{Name: "embedding", Field: "v", Metric: VectorMetricCosine, Dimensions: 3, Strategy: VectorIndexStrategyColumnGraph}
-	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
-		t.Fatal(err)
-	}
-	col, err := mgr.OpenCollection("docs")
-	if err != nil {
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
 	}
 	m := testVectorPartitionManifestV1()
-	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(col.meta.VectorIndexes[0])
+	m.IndexName = def.Name
+	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
 	writeVectorPartitionAssetsForTest(t, d.Dir(), &m)
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
 		t.Fatal(err)
 	}
-	status, err := col.VectorPartitionStatusV1("embedding", 7)
+	status, err := col.VectorPartitionStatusV1(def.Name, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,15 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err == nil {
 		t.Fatal("wrong index digest accepted")
+	}
+	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	for _, mutate := range []func(*VectorPartitionManifestV1){func(x *VectorPartitionManifestV1) { x.SourceGeneration++ }, func(x *VectorPartitionManifestV1) { x.SourceChecksum++ }, func(x *VectorPartitionManifestV1) { x.SourceSchemaHash++ }, func(x *VectorPartitionManifestV1) { x.SourceRowCount++ }} {
+		bad := m
+		mutate(&bad)
+		bad.Canonicalize()
+		if err := col.PublishVectorPartitionManifestV1(bad); err == nil {
+			t.Fatal("stale source identity accepted")
+		}
 	}
 }
 

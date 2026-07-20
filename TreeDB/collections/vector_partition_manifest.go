@@ -534,6 +534,9 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 	if m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(*def) {
 		return errors.New("collections: vector partition index definition digest mismatch")
 	}
+	if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
+		return err
+	}
 	if m.State == "ready" {
 		if err := verifyVectorPartitionAssetsV1(c.db.Dir(), append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)); err != nil {
 			return err
@@ -544,6 +547,28 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		return e
 	}
 	return s.Publish(m)
+}
+
+// validateVectorPartitionSourceIdentityV1 deliberately obtains the source
+// identity from the live TVIS/column-manifest authority, rather than trusting a
+// builder-supplied copy. VectorIndexStatus validates TVIS against the active
+// manifest and its typed assets before this snapshot is inspected.
+func (c *Collection) validateVectorPartitionSourceIdentityV1(m VectorPartitionManifestV1) error {
+	status, err := c.VectorIndexStatus(m.IndexName)
+	if err != nil {
+		return fmt.Errorf("collections: vector partition source status: %w", err)
+	}
+	if !status.Loaded || status.State != VectorIndexStateColumnGraphLoaded {
+		return fmt.Errorf("collections: vector partition source index %q is not a loaded TVIS generation", m.IndexName)
+	}
+	_, graph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(m.IndexName)
+	if err != nil {
+		return fmt.Errorf("collections: vector partition source identity: %w", err)
+	}
+	if m.SourceGeneration != graph.BaseManifestGeneration || m.SourceChecksum != graph.BaseManifestChecksum || m.SourceSchemaHash != graph.BaseSchemaHash || m.SourceRowCount != uint64(graph.RowCount) {
+		return fmt.Errorf("collections: vector partition source identity mismatch")
+	}
+	return nil
 }
 
 func verifyVectorPartitionAssetsV1(root string, assets []VectorPartitionAssetV1) error {
