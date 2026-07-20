@@ -157,6 +157,26 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 	}
 }
 
+func TestVectorPartitionStoreV1SameGenerationPublicationIsExactByteIdempotent(t *testing.T) {
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	if err := s.Publish(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Publish(m); err != nil {
+		t.Fatalf("identical retry: %v", err)
+	}
+	changed := m
+	changed.Assets[0].Checksum = strings.Repeat("c", 64)
+	changed.Canonicalize()
+	if err := s.Publish(changed); err == nil {
+		t.Fatal("same generation with different bytes overwrote published manifest")
+	}
+}
+
 func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *testing.T) {
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer d.Close()
