@@ -2,7 +2,10 @@
 // The implementation remains internal; this is not a server/runtime API.
 package vectorpartition
 
-import internal "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
+import (
+	"context"
+	internal "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
+)
 
 type Vector = internal.Vector
 type Config = internal.Config
@@ -25,4 +28,7 @@ func CanonicalJSON(a Artifact) ([]byte, error) { return internal.CanonicalJSON(a
 func Digest(a Artifact) (string, error)        { return internal.Digest(a) }
 func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 	return internal.DecodeArtifact(raw, maxBytes)
+}
+func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOutput int) (Artifact, error) {
+	return internal.RunExternalJSON(ctx, command, input, maxOutput)
 }

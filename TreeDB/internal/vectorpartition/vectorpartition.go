@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -100,11 +101,13 @@ type Artifact struct {
 // ordinals only; ValidateArtifact independently verifies every invariant.
 type Partitioner interface {
 	Name() string
+	License() string
 	Partition(Graph, int, int) ([]int, error)
 }
 type ReferencePartitioner struct{}
 
-func (ReferencePartitioner) Name() string { return "treedb_reference_greedy_v1" }
+func (ReferencePartitioner) Name() string    { return "treedb_reference_greedy_v1" }
+func (ReferencePartitioner) License() string { return "TreeDB repository license" }
 
 func Build(vectors []Vector, cfg Config) (Artifact, error) {
 	return BuildWithPartitioner(vectors, cfg, Source{SourceID: "inline_vectors_v1"}, ReferencePartitioner{})
@@ -114,7 +117,7 @@ func Build(vectors []Vector, cfg Config) (Artifact, error) {
 // partitioner's result is never trusted: graph, assignment, source and metrics
 // are independently validated before the artifact is returned.
 func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend Partitioner) (Artifact, error) {
-	if backend == nil || backend.Name() == "" {
+	if backend == nil || backend.Name() == "" || backend.License() == "" || len(backend.License()) > 1024 {
 		return Artifact{}, errors.New("partition backend identity is required")
 	}
 	if err := validateInput(vectors, cfg); err != nil {
@@ -144,7 +147,7 @@ func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend P
 	if source.Checksum != "" && source != computed {
 		return Artifact{}, errors.New("source identity does not match input snapshot")
 	}
-	art := Artifact{SchemaVersion: SchemaVersion, Backend: backend.Name(), BackendLicense: "TreeDB clean-room reference implementation (repository license)", Source: computed, Config: cfg, IDs: ids, Graph: g, Assignment: a}
+	art := Artifact{SchemaVersion: SchemaVersion, Backend: backend.Name(), BackendLicense: backend.License(), Source: computed, Config: cfg, IDs: ids, Graph: g, Assignment: a}
 	art.Metrics = metrics(art)
 	if err := ValidateArtifact(art); err != nil {
 		return Artifact{}, err
@@ -155,9 +158,16 @@ func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend P
 func sourceFor(v []Vector, metric, id string) Source {
 	h := sha256.New()
 	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(len(v)))
+	h.Write(b[:])
+	binary.BigEndian.PutUint64(b[:], uint64(len(v[0].Values)))
+	h.Write(b[:])
+	h.Write([]byte(metric))
+	h.Write([]byte{0})
 	for _, x := range v {
+		binary.BigEndian.PutUint64(b[:], uint64(len(x.ID)))
+		h.Write(b[:])
 		h.Write([]byte(x.ID))
-		h.Write([]byte{0})
 		for _, f := range x.Values {
 			binary.BigEndian.PutUint64(b[:], math.Float64bits(f))
 			h.Write(b[:])
@@ -424,7 +434,7 @@ func stableIDPartition(id string, partitions int) int {
 }
 
 func ValidateArtifact(a Artifact) error {
-	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.Backend) > 256 || a.BackendLicense == "" || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
+	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.Backend) > 256 || a.BackendLicense == "" || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || strings.ToLower(a.Source.Checksum) != a.Source.Checksum || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
 		return errors.New("malformed partition artifact")
 	}
 	if err := validateInput(makeVectors(a.IDs, a.Graph.Neighbors), a.Config); err != nil {
@@ -449,7 +459,7 @@ func ValidateArtifact(a Artifact) error {
 		return errors.New("invalid source checksum")
 	}
 	for _, n := range loads {
-		if n > cap {
+		if n == 0 || n > cap {
 			return errors.New("partition cap exceeded")
 		}
 	}
@@ -523,10 +533,26 @@ func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 	return a, nil
 }
 
+// DecodeArtifactForSource additionally binds untrusted backend output to the
+// source snapshot supplied by the caller.
+func DecodeArtifactForSource(raw []byte, maxBytes int, expected Source) (Artifact, error) {
+	a, err := DecodeArtifact(raw, maxBytes)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if a.Source != expected {
+		return Artifact{}, errors.New("backend artifact source does not match expected snapshot")
+	}
+	return a, nil
+}
+
 // RunExternalJSON is an optional offline adapter seam. It never becomes a
 // TreeDB runtime dependency. Its output is written to a private temp path and
 // removed on cancellation, timeout, command failure, or invalid output.
 func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOutput int) (Artifact, error) {
+	return RunExternalJSONForSource(ctx, command, input, maxOutput, Source{})
+}
+func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, expected Source) (Artifact, error) {
 	if ctx == nil {
 		return Artifact{}, errors.New("external backend requires context deadline")
 	}
@@ -566,6 +592,9 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 	}
 	if len(raw) > maxOutput {
 		return Artifact{}, errors.New("external partition backend output exceeds cap")
+	}
+	if expected.SourceID != "" {
+		return DecodeArtifactForSource(raw, maxOutput, expected)
 	}
 	return DecodeArtifact(raw, maxOutput)
 }

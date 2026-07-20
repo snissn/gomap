@@ -170,7 +170,8 @@ func TestExternalBackendRequiresDeadline(t *testing.T) {
 
 type badPartitioner struct{}
 
-func (badPartitioner) Name() string { return "bad" }
+func (badPartitioner) Name() string    { return "bad" }
+func (badPartitioner) License() string { return "test license" }
 func (badPartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	return make([]int, len(g.Neighbors)), nil
 }
