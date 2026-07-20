@@ -1208,14 +1208,28 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 	staleReason := "generation_building"
 	if m.State == "ready" {
 		staleReason = "inactive"
-		if current, err := s.OpenActive(c.name, index); err == nil && current.Generation == generation {
-			active, staleReason = true, ""
-		} else if _, err := s.OpenRetired(c.name, index); err == nil {
-			staleReason = "retired"
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		current, activeErr := s.OpenActive(c.name, index)
+		switch {
+		case activeErr == nil:
+			if current.Generation == generation {
+				active, staleReason = true, ""
+			} else {
+				staleReason = "replaced"
+			}
+		case !errors.Is(activeErr, os.ErrNotExist):
 			staleReason = "pointer_invalid"
+		default:
+			retired, retiredErr := s.OpenRetired(c.name, index)
+			switch {
+			case retiredErr == nil && retired.Generation == generation:
+				staleReason = "retired"
+			case retiredErr == nil:
+				staleReason = "inactive"
+			case !errors.Is(retiredErr, os.ErrNotExist):
+				staleReason = "pointer_invalid"
+			}
 		}
-		if err := c.validateVectorPartitionSourceIdentityV1(m); err != nil {
+		if staleReason != "pointer_invalid" && c.validateVectorPartitionSourceIdentityV1(m) != nil {
 			active = false
 			staleReason = "source_stale"
 		}

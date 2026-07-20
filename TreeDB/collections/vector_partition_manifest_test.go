@@ -92,6 +92,10 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte("not-a-generation\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	status, err = col.VectorPartitionStatusV1(def.Name, m.Generation)
+	if err != nil || status.StaleReason != "pointer_invalid" || status.Active {
+		t.Fatalf("corrupt active pointer status=%+v err=%v", status, err)
+	}
 	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
 		t.Fatal("corrupt active vector partition pointer did not fail closed")
 	}
