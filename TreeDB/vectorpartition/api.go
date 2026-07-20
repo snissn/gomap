@@ -19,7 +19,11 @@ type ReferencePartitioner = internal.ReferencePartitioner
 
 const SchemaVersion = internal.SchemaVersion
 
-func DefaultConfig() Config                        { return internal.DefaultConfig() }
+func DefaultConfig() Config         { return internal.DefaultConfig() }
+func ValidateConfig(c Config) error { return internal.ValidateConfig(c) }
+func ValidateInputShape(c Config, vectors, dimensions int) error {
+	return internal.ValidateInputShape(c, vectors, dimensions)
+}
 func Build(v []Vector, c Config) (Artifact, error) { return internal.Build(v, c) }
 func BuildWithPartitioner(v []Vector, c Config, s Source, p Partitioner) (Artifact, error) {
 	return internal.BuildWithPartitioner(v, c, s, p)

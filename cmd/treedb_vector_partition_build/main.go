@@ -120,12 +120,10 @@ func run(args []string) error {
 	if dataset == "" || out == "" || probes < 1 || probes > partitions {
 		return errors.New("dataset/out and probes within partitions required")
 	}
-	loadStart := time.Now()
-	m, vs, qs, err := load(dataset)
+	m, err := loadManifest(dataset)
 	if err != nil {
 		return err
 	}
-	loadWall := time.Since(loadStart).Nanoseconds()
 	cfg := vectorpartition.DefaultConfig()
 	cfg.Partitions = partitions
 	cfg.Seed = seed
@@ -135,9 +133,18 @@ func run(args []string) error {
 	cfg.Degree = degree
 	cfg.Imbalance = imbalance
 	const graphRecallSamples = 64
-	if err := validateQualityWork(len(vs), len(qs), m.Dimensions, min(graphRecallSamples, len(vs))); err != nil {
+	if err := vectorpartition.ValidateInputShape(cfg, m.Docs, m.Dimensions); err != nil {
 		return err
 	}
+	if err := validateQualityWork(m.Docs, min(m.Queries, maxQueries), m.Dimensions, min(graphRecallSamples, m.Docs)); err != nil {
+		return err
+	}
+	loadStart := time.Now()
+	vs, qs, err := loadCorpus(dataset, m)
+	if err != nil {
+		return err
+	}
+	loadWall := time.Since(loadStart).Nanoseconds()
 	start := time.Now()
 	cpuStart, buildCPUAvailable := cpuNanos()
 	art, phases, err := vectorpartition.BuildWithPartitionerPhased(vs, cfg, vectorpartition.Source{SourceID: "exporter_manifest:" + manifestDigest(m)}, vectorpartition.ReferencePartitioner{})
@@ -245,45 +252,60 @@ func passesOracleQualityGate(oracle, stableHash float64, probes, partitions int)
 	return oracle > stableHash
 }
 func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
+	m, err := loadManifest(dir)
+	if err != nil {
+		return m, nil, nil, err
+	}
+	vs, qs, err := loadCorpus(dir, m)
+	return m, vs, qs, err
+}
+
+func loadManifest(dir string) (manifest, error) {
 	f, e := os.Open(filepath.Join(dir, "manifest.json"))
 	if e != nil {
-		return manifest{}, nil, nil, e
+		return manifest{}, e
 	}
 	defer f.Close()
 	raw, e := io.ReadAll(io.LimitReader(f, maxManifest+1))
 	if e != nil {
-		return manifest{}, nil, nil, e
+		return manifest{}, e
 	}
 	if len(raw) > maxManifest {
-		return manifest{}, nil, nil, errors.New("manifest too large")
+		return manifest{}, errors.New("manifest too large")
 	}
 	var m manifest
 	d := json.NewDecoder(strings.NewReader(string(raw)))
 	d.DisallowUnknownFields()
 	if e = d.Decode(&m); e != nil {
-		return m, nil, nil, e
+		return m, e
 	}
 	var extra any
 	if e = d.Decode(&extra); e != io.EOF {
-		return m, nil, nil, errors.New("manifest has trailing JSON")
+		return m, errors.New("manifest has trailing JSON")
 	}
 	if m.Version != 1 || m.Generator != "treedb_vector_synthetic_v1" || m.Docs < 1 || m.Docs > 1_000_000 || m.Dimensions < 1 || m.Dimensions > 4096 || m.Queries < 1 || m.Queries > 1_000_000 || m.TopK < 1 || m.TopK > 1024 || m.GroupModulo < 1 || m.ExactTruthQueries < 0 || m.ExactTruthQueries > m.Queries || m.Metric != "cosine" || !m.Normalized || m.FloatFormat != "float32_le_row_major" || m.DocumentIDPattern != "doc-%06d" || !safeCorpusName(m.DocumentVectorsFile) || !safeCorpusName(m.QueryVectorsFile) || m.DocumentVectorsFile == m.QueryVectorsFile {
-		return m, nil, nil, errors.New("unsupported exporter manifest")
+		return m, errors.New("unsupported exporter manifest")
 	}
 	if m.Files == nil {
-		return m, nil, nil, errors.New("manifest files missing")
+		return m, errors.New("manifest files missing")
 	}
-	df, ok := m.Files[m.DocumentVectorsFile]
-	qf, qok := m.Files[m.QueryVectorsFile]
+	_, ok := m.Files[m.DocumentVectorsFile]
+	_, qok := m.Files[m.QueryVectorsFile]
 	if !ok || !qok {
-		return m, nil, nil, errors.New("manifest corpus file entry missing")
+		return m, errors.New("manifest corpus file entry missing")
 	}
+	return m, nil
+}
+
+func loadCorpus(dir string, m manifest) ([]vectorpartition.Vector, [][]float64, error) {
+	df := m.Files[m.DocumentVectorsFile]
+	qf := m.Files[m.QueryVectorsFile]
 	docs, e := readF32(filepath.Join(dir, m.DocumentVectorsFile), df, m.Docs, m.Dimensions)
 	if e != nil {
-		return m, nil, nil, e
+		return nil, nil, e
 	}
 	if err := validateNormalized(docs, m.Docs, m.Dimensions); err != nil {
-		return m, nil, nil, err
+		return nil, nil, err
 	}
 	vs := make([]vectorpartition.Vector, m.Docs)
 	for i := range vs {
@@ -298,10 +320,10 @@ func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
 	if qcount > 0 {
 		q, e := readF32(filepath.Join(dir, m.QueryVectorsFile), qf, m.Queries, m.Dimensions)
 		if e != nil {
-			return m, nil, nil, e
+			return nil, nil, e
 		}
 		if err := validateNormalized(q, m.Queries, m.Dimensions); err != nil {
-			return m, nil, nil, err
+			return nil, nil, err
 		}
 		for i := 0; i < qcount; i++ {
 			row := make([]float64, m.Dimensions)
@@ -311,7 +333,7 @@ func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
 			qs = append(qs, row)
 		}
 	}
-	return m, vs, qs, nil
+	return vs, qs, nil
 }
 func safeCorpusName(name string) bool {
 	return name != "" && !filepath.IsAbs(name) && filepath.Base(name) == name && !strings.Contains(name, "\\")

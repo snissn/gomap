@@ -193,3 +193,39 @@ func TestSingleDocumentBuildWritesFiniteReport(t *testing.T) {
 		t.Fatalf("artifact was not retained with report: %v", err)
 	}
 }
+
+func TestRunPreflightsManifestShapeAndConfigBeforeCorpusIO(t *testing.T) {
+	writeManifestOnly := func(t *testing.T, docs, dimensions int) string {
+		t.Helper()
+		dataset := t.TempDir()
+		m := manifest{Version: 1, Generator: "treedb_vector_synthetic_v1", Docs: docs, Dimensions: dimensions, Queries: 1, TopK: 1, GroupModulo: 1, Metric: "cosine", Normalized: true, DocumentIDPattern: "doc-%06d", DocumentVectorsFile: "missing-documents.f32", QueryVectorsFile: "missing-queries.f32", FloatFormat: "float32_le_row_major", Files: map[string]fileInfo{"missing-documents.f32": {Bytes: 4, SHA256: strings.Repeat("0", 64)}, "missing-queries.f32": {Bytes: 4, SHA256: strings.Repeat("0", 64)}}}
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dataset, "manifest.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return dataset
+	}
+	for _, tc := range []struct {
+		name string
+		docs int
+		dims int
+		args []string
+		want string
+	}{
+		{name: "over-cap shape", docs: 1_000_000, dims: 4096, want: "configured graph scalar-work bound exceeded before allocation"},
+		{name: "invalid requested config", docs: 1, dims: 1, args: []string{"-partitions", "1", "-probes", "1", "-repetitions", "33"}, want: "invalid vector partition configuration"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataset := writeManifestOnly(t, tc.docs, tc.dims)
+			args := []string{"-dataset", dataset, "-out", t.TempDir()}
+			args = append(args, tc.args...)
+			err := run(args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("run error=%v want %q before missing corpus I/O", err, tc.want)
+			}
+		})
+	}
+}

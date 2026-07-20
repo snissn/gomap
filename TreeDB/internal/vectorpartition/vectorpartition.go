@@ -266,11 +266,8 @@ func sourceFor(v []Vector, metric, id string) Source {
 }
 
 func validateInput(v []Vector, c Config) error {
-	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges {
-		return errors.New("invalid vector partition configuration")
-	}
-	if len(v) < c.Partitions || len(v) > c.MaxVectors {
-		return errors.New("vector count outside configured bounds")
+	if err := ValidateConfig(c); err != nil {
+		return err
 	}
 	dims := 0
 	totalIDBytes := 0
@@ -297,10 +294,32 @@ func validateInput(v []Vector, c Config) error {
 			return errors.New("zero-norm vector")
 		}
 	}
-	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
+	return ValidateInputShape(c, len(v), dims)
+}
+
+// ValidateConfig validates bounded offline builder options before corpus I/O.
+func ValidateConfig(c Config) error {
+	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges {
+		return errors.New("invalid vector partition configuration")
+	}
+	return nil
+}
+
+// ValidateInputShape checks count-derived graph bounds before vector allocation.
+func ValidateInputShape(c Config, vectors, dimensions int) error {
+	if err := ValidateConfig(c); err != nil {
+		return err
+	}
+	if vectors < c.Partitions || vectors > c.MaxVectors {
+		return errors.New("vector count outside configured bounds")
+	}
+	if dimensions < 1 || dimensions > maxDimensions {
+		return errors.New("invalid vector dimensions")
+	}
+	if int64(vectors)*int64(c.Degree) > int64(c.MaxEdges) || int64(vectors)*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
 		return errors.New("configured graph edge bound exceeded before allocation")
 	}
-	if exceedsProduct(maxDistanceWork, int64(len(v)), int64(c.MaxLeafBucket), int64(c.Repetitions), int64(dims)) {
+	if exceedsProduct(maxDistanceWork, int64(vectors), int64(c.MaxLeafBucket), int64(c.Repetitions), int64(dimensions)) {
 		return errors.New("configured graph scalar-work bound exceeded before allocation")
 	}
 	return nil

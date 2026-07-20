@@ -289,6 +289,9 @@ func run(args []string, stdout io.Writer) (runErr error) {
 		// The partition builder owns only the frozen vector corpus and its own
 		// graph controls. Simulation probes, overlaps, stages, top-k and memory
 		// planning are intentionally irrelevant here.
+		if err := vectorpartition.ValidateInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
+			return err
+		}
 		vectors, queries := deterministicFixture(fixture)
 		if fixtureChecksumFromData(vectors, queries) != fixture.Checksum {
 			return errors.New("fixture checksum does not match generated vector/query/truth stream")
