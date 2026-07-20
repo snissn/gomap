@@ -36362,7 +36362,8 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			allowPointers = false
 		}
 		eligibleCount = len(eligibleIdxs)
-		materializeCommandWALPointers = allowPointers &&
+		materializeCommandWALPointers = durability == journalDurabilitySync &&
+			allowPointers &&
 			b.commandWALCanMaterializeValueLogPointers(eligibleIdxs)
 		if debugPtr && eligibleCountTotal > 0 {
 			b.db.debugPtrEligible.Add(int64(eligibleCountTotal))

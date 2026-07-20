@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io/fs"
 	"math"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -352,6 +354,10 @@ func benchmarkConcurrentAcknowledgement(b *testing.B, profile benchmarkProfile, 
 	reportLatencyPercentiles(b, profile.class, latencies)
 	reportStoreCounters(b, before, store.stats(), b.N, 0)
 	b.ReportMetric(float64(concurrency), "workers")
+	if tree, ok := store.(*treeDBStore); ok {
+		reportTreeDBLifecycleAndStorage(b, tree, uint64(benchmarkWarmupCommits+b.N), mutations[0].key, b.N)
+		return
+	}
 	if err := store.close(); err != nil {
 		b.Fatalf("close: %v", err)
 	}
@@ -486,6 +492,8 @@ type treeDBStore struct {
 	db      *treedb.DB
 	mvcc    *mvcc.Store
 	mode    mvcc.CommitMode
+	profile treedb.Profile
+	dir     string
 	scratch []mvcc.Mutation
 }
 
@@ -506,7 +514,7 @@ func openTreeDB(tb testing.TB, dir string, profile treedb.Profile, mode mvcc.Com
 	if err != nil {
 		tb.Fatalf("open TreeDB profile=%s: %v", profile, err)
 	}
-	return &treeDBStore{db: db, mvcc: mvcc.New(db), mode: mode}
+	return &treeDBStore{db: db, mvcc: mvcc.New(db), mode: mode, profile: profile, dir: dir}
 }
 
 func (s *treeDBStore) commitAt(timestamp uint64, mutations []mutation) error {
@@ -539,6 +547,87 @@ func (s *treeDBStore) getAt(key []byte, timestamp uint64) ([]byte, bool, error) 
 func (s *treeDBStore) stats() map[string]string { return s.db.Stats() }
 func (s *treeDBStore) close() error             { return s.db.Close() }
 
+type treeDBStorageBytes struct {
+	total      uint64
+	commandWAL uint64
+	valueLog   uint64
+}
+
+func reportTreeDBLifecycleAndStorage(b *testing.B, store *treeDBStore, timestamp uint64, key []byte, writeCommits int) {
+	b.Helper()
+	before := measureTreeDBStorageBytes(b, store.dir)
+	reportTreeDBStorageBytes(b, "pre_checkpoint", before, writeCommits)
+
+	started := time.Now()
+	if err := store.db.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint: %v", err)
+	}
+	b.ReportMetric(float64(time.Since(started).Nanoseconds()), "checkpoint_ns")
+	after := measureTreeDBStorageBytes(b, store.dir)
+	reportTreeDBStorageBytes(b, "post_checkpoint", after, writeCommits)
+
+	started = time.Now()
+	if err := store.close(); err != nil {
+		b.Fatalf("close: %v", err)
+	}
+	b.ReportMetric(float64(time.Since(started).Nanoseconds()), "close_ns")
+
+	opts := treedb.OptionsFor(store.profile, store.dir)
+	started = time.Now()
+	reopened, err := treedb.Open(opts)
+	if err != nil {
+		b.Fatalf("reopen: %v", err)
+	}
+	b.ReportMetric(float64(time.Since(started).Nanoseconds()), "reopen_ns")
+	result, err := mvcc.New(reopened).GetAt(key, timestamp)
+	if err != nil || result.State != mvcc.Present {
+		_ = reopened.Close()
+		b.Fatalf("reopen GetAt state=%d err=%v", result.State, err)
+	}
+	if err := reopened.Close(); err != nil {
+		b.Fatalf("reopened close: %v", err)
+	}
+}
+
+func measureTreeDBStorageBytes(b *testing.B, root string) treeDBStorageBytes {
+	b.Helper()
+	var measured treeDBStorageBytes
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		size := uint64(info.Size())
+		measured.total += size
+		name := filepath.Base(path)
+		switch {
+		case strings.HasPrefix(name, "commit-l"):
+			measured.commandWAL += size
+		case strings.HasPrefix(name, "value-l"):
+			measured.valueLog += size
+		}
+		return nil
+	})
+	if err != nil {
+		b.Fatalf("measure TreeDB storage: %v", err)
+	}
+	return measured
+}
+
+func reportTreeDBStorageBytes(b *testing.B, phase string, measured treeDBStorageBytes, writeCommits int) {
+	b.Helper()
+	denominator := float64(max(writeCommits, 1))
+	b.ReportMetric(float64(measured.total)/denominator, phase+"_storage_B/write_commit")
+	b.ReportMetric(float64(measured.commandWAL)/denominator, phase+"_command_wal_B/write_commit")
+	b.ReportMetric(float64(measured.valueLog)/denominator, phase+"_value_log_B/write_commit")
+}
+
 type storeCounterMetric struct {
 	key         string
 	name        string
@@ -546,6 +635,7 @@ type storeCounterMetric struct {
 }
 
 var storeCounterMetrics = []storeCounterMetric{
+	{key: "treedb.command_wal.write.bytes_total", name: "command_wal_write_B/write_commit", denominator: "writes"},
 	{key: "treedb.command_wal.sync.count_total", name: "command_wal_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.command_wal.flush.count_total", name: "command_wal_flushes/write_commit", denominator: "writes"},
 	{key: "treedb.command_wal.file_sync.calls_total", name: "command_wal_file_syncs/write_commit", denominator: "writes"},
@@ -557,6 +647,8 @@ var storeCounterMetrics = []storeCounterMetric{
 	{key: "treedb.cache.value_log.sync.calls_total", name: "value_log_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.cache.value_log.file_sync.calls_total", name: "value_log_file_syncs/write_commit", denominator: "writes"},
 	{key: "treedb.cache.value_log.directory_sync.calls_total", name: "value_log_directory_syncs/write_commit", denominator: "writes"},
+	{key: "treedb.cache.vlog_writev.bytes", name: "value_log_writev_B/write_commit", denominator: "writes"},
+	{key: "treedb.cache.vlog_write.bytes", name: "value_log_write_B/write_commit", denominator: "writes"},
 	{key: "treedb.cache.checkpoint.runs", name: "checkpoints/write_commit", denominator: "writes"},
 	{key: "treedb.publish.ordered_root_delta_group.calls_total", name: "root_publications/write_commit", denominator: "writes"},
 	{key: "treedb.cache.write.wait_for_checkpoint.count_total", name: "checkpoint_caller_waits/write_commit", denominator: "writes"},

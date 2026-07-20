@@ -977,6 +977,73 @@ func TestPublicCommandWALBatchWriteSyncExternalRefOrderingPhaseStats(t *testing.
 	requireRawKVValue(t, reopen, []byte("external-ref"), value)
 }
 
+func TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		relaxed bool
+		write   func(Batch) error
+	}{
+		{
+			name:    "relaxed-ordinary-write",
+			relaxed: true,
+			write:   func(b Batch) error { return b.Write() },
+		},
+		{
+			name:    "relaxed-write-sync",
+			relaxed: true,
+			write:   func(b Batch) error { return b.WriteSync() },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := commandWALDurabilityProofOptions(t.TempDir())
+			if tc.relaxed {
+				ApplyProfile(&opts, ProfileCommandWALRelaxed)
+			}
+			opts.ValueLog.PointerThreshold = 1
+			opts.ValueLog.ForcePointers = true
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			b := db.NewBatch()
+			if err := b.Set([]byte("external-ref"), bytes.Repeat([]byte("v"), 4096)); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch Set: %v", err)
+			}
+			if err := tc.write(b); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch write: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("batch Close: %v", err)
+			}
+
+			r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(opts.Dir), "commit-l0-000001.log"))
+			if err != nil {
+				t.Fatalf("NewReader command frame: %v", err)
+			}
+			defer r.Close()
+			env, err := r.ReadCommandFrame()
+			if err != nil {
+				t.Fatalf("ReadCommandFrame: %v", err)
+			}
+			if env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+				t.Fatalf("payload format=%d, want RawKVBatchV1 outside strict durable writes", env.PayloadFormat)
+			}
+			ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+			if err != nil {
+				t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+			}
+			if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSetRID {
+				t.Fatalf("command ops=%+v, want one SetRID dependency", ops)
+			}
+		})
+	}
+}
+
 func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	ApplyProfile(&opts, ProfileCommandWALRelaxed)
