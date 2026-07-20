@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -466,12 +467,22 @@ func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint6
 }
 func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
 	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".active")
+	info, e := os.Stat(p)
+	if e != nil {
+		return VectorPartitionManifestV1{}, e
+	}
+	if info.Size() < 2 || info.Size() > 32 {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer size", ErrVectorPartitionManifestInvalid)
+	}
 	raw, e := os.ReadFile(p)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
-	var generation uint64
-	if _, e = fmt.Sscanf(string(raw), "%d\n", &generation); e != nil || generation == 0 {
+	if raw[len(raw)-1] != '\n' || bytes.IndexByte(raw[:len(raw)-1], '\n') >= 0 {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
+	}
+	generation, e := strconv.ParseUint(string(raw[:len(raw)-1]), 10, 64)
+	if e != nil || generation == 0 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
 	}
 	return s.Open(collection, index, generation)
@@ -492,8 +503,12 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 	if !eligibility.Deletable() {
 		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
 	}
-	if active, err := s.OpenActive(collection, index); err == nil && active.Generation == generation {
-		return fmt.Errorf("collections: vector partition generation %d is active", generation)
+	if active, err := s.OpenActive(collection, index); err == nil {
+		if active.Generation == generation {
+			return fmt.Errorf("collections: vector partition generation %d is active", generation)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
 	}
 	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
 	if e := os.Remove(p); e != nil {

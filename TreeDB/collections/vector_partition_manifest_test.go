@@ -99,6 +99,12 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	if err := s.Delete("docs", "embedding", 7, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(s.dir, safeVPM("docs")+"-"+safeVPM("embedding")+".active"), []byte("8\ntrailing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("docs", "embedding", 8, VectorPartitionCleanupEligibilityV1{}); err == nil {
+		t.Fatal("corrupt active pointer did not fail closed")
+	}
 }
 
 func TestVectorPartitionManifestV1CanonicalRoundTripAndReopen(t *testing.T) {
