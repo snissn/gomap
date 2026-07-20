@@ -897,7 +897,14 @@ func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint6
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
-	return DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	m, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	if err != nil {
+		return VectorPartitionManifestV1{}, err
+	}
+	if m.Collection != collection || m.IndexName != index || m.Generation != generation {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: stored identity mismatch", ErrVectorPartitionManifestInvalid)
+	}
+	return m, nil
 }
 func readBoundedVPM(path string, max int) ([]byte, error) {
 	f, err := os.Open(path)
