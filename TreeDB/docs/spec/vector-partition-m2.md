@@ -23,10 +23,11 @@ oversized, unknown-field, trailing, and non-canonical JSON; a backend cannot
 publish a forged metric report.
 
 An optional external adapter (`RunExternalJSON`) is offline only. It receives
-an explicit command, private input/output paths, context cancellation, and an
-output-byte cap. It removes the entire private temporary directory on command
-failure, cancellation, timeout, malformed output, or success. No external
-partitioner is currently selected or required.
+an explicit command, private input/output paths, context cancellation, a
+fully bound expected source snapshot, and an output-byte cap. It removes the
+entire private temporary directory on command failure, cancellation, timeout,
+malformed output, or success. No external partitioner is currently selected or
+required.
 
 ## Reproducible M0 fixture invocation
 
@@ -52,8 +53,11 @@ input/output command, resource limits, and independent validator evidence.
 `treedb_vector_dataset_export` manifest plus checksummed `documents.f32` and
 `queries.f32` source files. It rejects malformed manifests, altered checksums,
 wrong float dimensions, corpus byte overruns, and unsupported identity
-contracts before corpus allocation. The builder emits an immutable artifact
-and a JSON report containing wall/CPU time, peak RSS, temp/final bytes,
+contracts before corpus allocation. Graph construction also enforces a global
+distance-evaluation budget and chunks non-progressing skew buckets
+deterministically; leaf top-k selection is bounded by degree rather than leaf
+size. The builder emits an immutable artifact and a JSON report containing
+load, build, quality, and total-command wall time, build CPU time, peak RSS, temp/final bytes,
 bytes/vector, balance, graph degree/cut/hash-cut, sampled graph-neighbor
 recall, and fixed-probe partition-oracle and hash baseline recall@10.
 
@@ -62,12 +66,12 @@ host. They are offline quality/resource evidence, not a server speed claim:
 
 | corpus and builder configuration | wall | peak RSS | artifact bytes/vector | graph recall sample | partition recall@10 / hash | cap/balance |
 |---|---:|---:|---:|---:|---:|---:|
-| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | 1.597s CPU 1.901s | 34.6 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
-| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | 2.888s CPU 5.016s | 108.4 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.0048 |
-| 1M x 16, r2/d8/leaf64, 16 parts, 4 probes | 34.927s CPU 58.008s | 1.330 GB | 72.47 | 0.781 (64 samples) | 1.000 / 0.700 | 1.000112 |
+| 10k x 64, r4/d16/leaf128, 16 parts, 2 probes | build 1.237s / total 1.360s, CPU 1.365s | 33.3 MB | 95.59 | 0.809 (64 samples) | 0.863 / 0.413 | 1.0512 |
+| 100k x 16, r2/d8/leaf64, 16 parts, 4 probes | build 1.937s / total 2.437s, CPU 2.466s | 118.4 MB | 64.62 | 0.759 (64 samples) | 1.000 / 0.588 | 1.0048 |
+| 1M x 16, r2/d8/leaf64, 16 parts, 4 probes | build 22.335s / total 27.234s, CPU 27.750s | 1.068 GB | 72.47 | 0.781 (64 samples) | 1.000 / 0.700 | 1.000112 |
 
 The 1M artifact was
-`/tmp/treedb_m2_final1m_HPRB/vector_partition_9274f9f3d7b900dd.json`
+`/tmp/treedb_m2_final1m_rzfX/vector_partition_9274f9f3d7b900dd.json`
 (SHA-256 `9274f9f3d7b900dd931881c2ce544b68ac6ddac198008ab307c6b57469f62ec1`);
 the matching report sits beside it. Its deterministic source corpus is
 `/tmp/treedb_m2_export1m_rHdo`, generated with:
@@ -95,6 +99,11 @@ quality row is therefore scoped to that declared one-query fixed-budget corpus,
 not a population-level claim. The 10k and 100k rows use 16 and 8 deterministic
 query vectors respectively. `FinalBytes` is artifact plus compact provenance
 report bytes; reports no longer embed or print a duplicate artifact payload.
-The final 1M report records graph build 30.488s, backend partition 0.310s,
-validation 2.336s, temporary disk 0 bytes, artifact 72,473,746 bytes, report
-2,415 bytes, and final output 72,476,161 bytes.
+The final 1M report records load 0.264s, graph build 18.736s, backend
+partition 0.313s, validation 1.544s, quality 0.989s, temporary disk 0 bytes,
+artifact 72,473,746 bytes, report 2,513 bytes, and final output 72,476,259
+bytes.
+
+Peak RSS is `/proc/self/status` `VmHWM` for the builder process. It includes
+the loaded corpus, graph, assignment, quality-oracle work, Go runtime and GC;
+it does not represent a TreeDB server resident-memory claim.

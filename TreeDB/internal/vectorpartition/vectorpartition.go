@@ -34,7 +34,9 @@ const (
 	maxDegree       = 1024
 	maxPartitions   = 16384
 	maxIDBytes      = 1 << 20
+	maxTotalIDBytes = 64 << 20
 	maxDistanceWork = int64(1_000_000_000)
+	maxCarveDepth   = 64
 )
 
 // Vector IDs must be unique and are canonically ordered before construction.
@@ -202,10 +204,12 @@ func validateInput(v []Vector, c Config) error {
 		return errors.New("vector count outside configured bounds")
 	}
 	dims := 0
+	totalIDBytes := 0
 	for _, x := range v {
-		if x.ID == "" || len(x.ID) > maxIDBytes {
+		if x.ID == "" || len(x.ID) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(x.ID) {
 			return errors.New("empty vector ID")
 		}
+		totalIDBytes += len(x.ID)
 		if dims == 0 {
 			dims = len(x.Values)
 			if dims < 1 || dims > maxDimensions {
@@ -234,10 +238,11 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	for i := range sets {
 		sets[i] = make(map[int]float64, c.Degree)
 	}
+	budget := distanceBudget{remaining: maxDistanceWork}
 	for rep := 0; rep < c.Repetitions; rep++ {
 		r := rand.New(rand.NewSource(c.Seed + int64(rep)*0x9e3779b))
 		order := r.Perm(n)
-		if err := carveDepth(v, order, c, sets, 0); err != nil {
+		if err := carveDepth(v, order, c, sets, 0, &budget); err != nil {
 			return Graph{}, err
 		}
 	}
@@ -258,10 +263,27 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	}
 	return g, nil
 }
-func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth int) error {
+
+// distanceBudget bounds every cosine evaluation in the pivot and leaf phases.
+// It is runtime-enforced because input geometry, rather than configuration
+// alone, determines recursive bucket shape.
+type distanceBudget struct{ remaining int64 }
+
+func (b *distanceBudget) take(n int64) error {
+	if n < 0 || n > b.remaining {
+		return errors.New("graph distance-work budget exceeded")
+	}
+	b.remaining -= n
+	return nil
+}
+
+func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth int, budget *distanceBudget) error {
 	if len(ids) <= c.MaxLeafBucket {
 		for _, i := range ids {
-			nearest := nearest(v, ids, i, c.Degree)
+			nearest, err := nearest(v, ids, i, c.Degree, budget)
+			if err != nil {
+				return err
+			}
 			for _, candidate := range nearest {
 				addCandidateBounded(sets[i], candidate.i, candidate.x, c.Degree)
 			}
@@ -269,16 +291,26 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth i
 		return nil
 	}
 	k := min(c.Pivots, len(ids))
+	if depth >= maxCarveDepth {
+		return carveChunks(v, ids, c, sets, depth, budget)
+	}
 	pivots := append([]int(nil), ids[:k]...)
 	buckets := make([][]int, k)
 	for _, i := range ids {
+		if err := budget.take(int64(k)); err != nil {
+			return err
+		}
+		var distances [maxPivots]float64
+		for p := range pivots {
+			distances[p] = distance(v[i].Values, v[pivots[p]].Values)
+		}
 		best, second := 0, -1
-		bestD := distance(v[i].Values, v[pivots[0]].Values)
+		bestD := distances[0]
 		for p := 1; p < k; p++ {
-			d := distance(v[i].Values, v[pivots[p]].Values)
+			d := distances[p]
 			if d < bestD || d == bestD && pivots[p] < pivots[best] {
 				second, best, bestD = best, p, d
-			} else if second < 0 || d < distance(v[i].Values, v[pivots[second]].Values) || d == distance(v[i].Values, v[pivots[second]].Values) && pivots[p] < pivots[second] {
+			} else if second < 0 || d < distances[second] || d == distances[second] && pivots[p] < pivots[second] {
 				second = p
 			}
 		}
@@ -291,43 +323,56 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth i
 		}
 	}
 	for _, b := range buckets {
-		if len(b) == len(ids) { // duplicate/skew progress guarantee: deterministic chunking.
-			for start := 0; start < len(b); start += c.MaxLeafBucket {
-				end := min(start+c.MaxLeafBucket, len(b))
-				if err := carveDepth(v, b[start:end], c, sets, depth+1); err != nil {
-					return err
-				}
+		// A n-1 bucket can otherwise recurse one ordinal at a time on skewed
+		// geometry. Chunk the current membership deterministically instead.
+		if len(b) >= len(ids)-1 {
+			if err := carveChunks(v, b, c, sets, depth, budget); err != nil {
+				return err
 			}
 			continue
 		}
 		if len(b) > 0 {
-			if err := carveDepth(v, b, c, sets, depth+1); err != nil {
+			if err := carveDepth(v, b, c, sets, depth+1, budget); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
 }
-func nearest(v []Vector, ids []int, target, k int) []candidate {
-	type d struct {
-		i int
-		x float64
+func carveChunks(v []Vector, ids []int, c Config, sets []map[int]float64, depth int, budget *distanceBudget) error {
+	for start := 0; start < len(ids); start += c.MaxLeafBucket {
+		end := min(start+c.MaxLeafBucket, len(ids))
+		if err := carveDepth(v, ids[start:end], c, sets, depth+1, budget); err != nil {
+			return err
+		}
 	}
-	a := make([]d, 0, len(ids)-1)
+	return nil
+}
+func nearest(v []Vector, ids []int, target, k int, budget *distanceBudget) ([]candidate, error) {
+	a := make([]candidate, 0, min(k, len(ids)-1))
 	for _, j := range ids {
 		if j != target {
-			a = append(a, d{j, distance(v[target].Values, v[j].Values)})
+			if err := budget.take(1); err != nil {
+				return nil, err
+			}
+			c := candidate{j, distance(v[target].Values, v[j].Values)}
+			if len(a) < k {
+				a = append(a, c)
+				continue
+			}
+			worst := 0
+			for x := 1; x < len(a); x++ {
+				if a[worst].x < a[x].x || a[worst].x == a[x].x && a[worst].i < a[x].i {
+					worst = x
+				}
+			}
+			if c.x < a[worst].x || c.x == a[worst].x && c.i < a[worst].i {
+				a[worst] = c
+			}
 		}
 	}
 	sort.Slice(a, func(i, j int) bool { return a[i].x < a[j].x || a[i].x == a[j].x && a[i].i < a[j].i })
-	if len(a) > k {
-		a = a[:k]
-	}
-	out := make([]candidate, len(a))
-	for i := range a {
-		out[i] = candidate{a[i].i, a[i].x}
-	}
-	return out
+	return a, nil
 }
 func distance(a, b []float64) float64 {
 	var dot, na, nb float64
@@ -418,7 +463,20 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 }
 func partitionCap(n, p int, e float64) int { return int(math.Ceil((1 + e) * float64(n) / float64(p))) }
 func metrics(a Artifact) Metrics {
+	return metricsWithLoads(a, nil)
+}
+
+// metricsWithLoads accepts a validated assignment histogram when available so
+// validation does not need a second partitions-sized scan to compute the same
+// maximum load.
+func metricsWithLoads(a Artifact, loads []int) Metrics {
 	m := Metrics{Cap: partitionCap(len(a.IDs), a.Config.Partitions, a.Config.Imbalance)}
+	if loads == nil {
+		loads = make([]int, a.Config.Partitions)
+		for _, p := range a.Assignment {
+			loads[p]++
+		}
+	}
 	for i, ns := range a.Graph.Neighbors {
 		m.GraphEdges += len(ns)
 		if len(ns) > m.MaxDegree {
@@ -433,13 +491,7 @@ func metrics(a Artifact) Metrics {
 			}
 		}
 	}
-	for p := 0; p < a.Config.Partitions; p++ {
-		n := 0
-		for _, x := range a.Assignment {
-			if x == p {
-				n++
-			}
-		}
+	for _, n := range loads {
 		if n > m.MaxPartitionSize {
 			m.MaxPartitionSize = n
 		}
@@ -452,10 +504,10 @@ func stableIDPartition(id string, partitions int) int {
 }
 
 func ValidateArtifact(a Artifact) error {
-	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.Backend) > 256 || a.BackendLicense == "" || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || strings.ToLower(a.Source.Checksum) != a.Source.Checksum || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
+	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.Backend) > 256 || a.BackendLicense == "" || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || strings.ToLower(a.Source.Checksum) != a.Source.Checksum || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Dimensions > maxDimensions || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
 		return errors.New("malformed partition artifact")
 	}
-	if err := validateInput(makeVectors(a.IDs, a.Graph.Neighbors), a.Config); err != nil {
+	if err := validateArtifactConfig(a.IDs, a.Config); err != nil {
 		return fmt.Errorf("artifact config: %w", err)
 	}
 	if err := validateGraph(a.Graph, len(a.IDs), a.Config.Degree); err != nil {
@@ -463,10 +515,15 @@ func ValidateArtifact(a Artifact) error {
 	}
 	cap := partitionCap(len(a.IDs), a.Config.Partitions, a.Config.Imbalance)
 	loads := make([]int, a.Config.Partitions)
+	var totalIDBytes int
 	for i, id := range a.IDs {
 		if id == "" || i > 0 && id <= a.IDs[i-1] {
 			return errors.New("IDs not unique canonical order")
 		}
+		if len(id) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(id) {
+			return errors.New("artifact ID bytes exceed cap")
+		}
+		totalIDBytes += len(id)
 		p := a.Assignment[i]
 		if p < 0 || p >= a.Config.Partitions {
 			return errors.New("assignment out of range")
@@ -481,9 +538,18 @@ func ValidateArtifact(a Artifact) error {
 			return errors.New("partition cap exceeded")
 		}
 	}
-	m := metrics(a)
+	m := metricsWithLoads(a, loads)
 	if a.Metrics.GraphEdges != m.GraphEdges || a.Metrics.MaxDegree != m.MaxDegree || a.Metrics.EdgeCut != m.EdgeCut || a.Metrics.StableIDHashEdgeCut != m.StableIDHashEdgeCut || a.Metrics.MaxPartitionSize != m.MaxPartitionSize || a.Metrics.Cap != m.Cap {
 		return errors.New("artifact metrics do not match graph and assignment")
+	}
+	return nil
+}
+func validateArtifactConfig(ids []string, c Config) error {
+	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || len(ids) < c.Partitions || len(ids) > c.MaxVectors {
+		return errors.New("invalid artifact configuration")
+	}
+	if int64(len(ids))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(ids))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
+		return errors.New("artifact graph bound exceeded")
 	}
 	return nil
 }
@@ -506,14 +572,6 @@ func validateGraph(g Graph, n, degree int) error {
 	return nil
 }
 
-// makeVectors supplies structural validation without allocating payload-sized copies.
-func makeVectors(ids []string, g [][]int) []Vector {
-	v := make([]Vector, len(ids))
-	for i := range v {
-		v[i] = Vector{ID: ids[i], Values: []float64{0}}
-	}
-	return v
-}
 func CanonicalJSON(a Artifact) ([]byte, error) {
 	if err := ValidateArtifact(a); err != nil {
 		return nil, err
@@ -568,9 +626,12 @@ func DecodeArtifactForSource(raw []byte, maxBytes int, expected Source) (Artifac
 // TreeDB runtime dependency. Its output is written to a private temp path and
 // removed on cancellation, timeout, command failure, or invalid output.
 func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOutput int) (Artifact, error) {
-	return RunExternalJSONForSource(ctx, command, input, maxOutput, Source{})
+	return Artifact{}, errors.New("external backend requires expected source binding")
 }
 func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, expected Source) (Artifact, error) {
+	if err := validateExpectedSource(expected); err != nil {
+		return Artifact{}, err
+	}
 	if ctx == nil {
 		return Artifact{}, errors.New("external backend requires context deadline")
 	}
@@ -611,10 +672,17 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 	if len(raw) > maxOutput {
 		return Artifact{}, errors.New("external partition backend output exceeds cap")
 	}
-	if expected.SourceID != "" {
-		return DecodeArtifactForSource(raw, maxOutput, expected)
+	return DecodeArtifactForSource(raw, maxOutput, expected)
+}
+
+func validateExpectedSource(s Source) error {
+	if s.SourceID == "" || len(s.SourceID) > 1024 || len(s.Checksum) != 64 || strings.ToLower(s.Checksum) != s.Checksum || s.Vectors < 1 || s.Vectors > maxVectors || s.Dimensions < 1 || s.Dimensions > maxDimensions || s.Metric != "cosine" {
+		return errors.New("invalid expected source binding")
 	}
-	return DecodeArtifact(raw, maxOutput)
+	if _, err := hex.DecodeString(s.Checksum); err != nil {
+		return errors.New("invalid expected source binding")
+	}
+	return nil
 }
 
 type cappedBuffer struct {

@@ -36,3 +36,6 @@ func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOutput int) (Artifact, error) {
 	return internal.RunExternalJSON(ctx, command, input, maxOutput)
 }
+func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, source Source) (Artifact, error) {
+	return internal.RunExternalJSONForSource(ctx, command, input, maxOutput, source)
+}

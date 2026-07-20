@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,6 +67,29 @@ func TestGraphDegreeAndCapOnDuplicateSkew(t *testing.T) {
 	}
 	if a.Metrics.MaxPartitionSize > a.Metrics.Cap {
 		t.Fatal("partition cap")
+	}
+}
+func TestSkewedPivotBucketsUseDeterministicChunkFallback(t *testing.T) {
+	v := make([]Vector, 128)
+	for i := range v {
+		// Identical directions force a single pivot bucket; this formerly
+		// exercised unbounded recursive depth on sufficiently skewed inputs.
+		v[i] = Vector{ID: fmt.Sprintf("skew-%03d", i), Values: []float64{1, 0}}
+	}
+	c := config()
+	c.MaxLeafBucket = 8
+	c.Degree = 4
+	c.MaxVectors = len(v)
+	c.MaxEdges = 1024
+	a, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateArtifact(a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nearest(v, []int{0, 1, 2}, 0, 2, &distanceBudget{remaining: 1}); err == nil {
+		t.Fatal("leaf distance-work budget was not enforced")
 	}
 }
 func TestMalformedFailsClosed(t *testing.T) {
@@ -148,7 +173,7 @@ func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 	t.Setenv("TMPDIR", root)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	cancel()
-	_, err := RunExternalJSON(ctx, []string{"sh", "-c", "sleep 1"}, []byte("{}"), 1024)
+	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "sleep 1"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
 	if err == nil {
 		t.Fatal("cancelled backend accepted")
 	}
@@ -165,6 +190,36 @@ func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 func TestExternalBackendRequiresDeadline(t *testing.T) {
 	if _, err := RunExternalJSON(context.Background(), []string{"true"}, []byte("{}"), 1024); err == nil {
 		t.Fatal("deadline-less backend accepted")
+	}
+}
+
+func TestExternalBackendRejectsUnboundExpectedSourceBeforeExecution(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for _, source := range []Source{
+		{},
+		{SourceID: "only-id"},
+		{SourceID: "id", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "l2"},
+	} {
+		if _, err := RunExternalJSONForSource(ctx, []string{"definitely-not-an-executable"}, []byte("{}"), 1024, source); err == nil || !strings.Contains(err.Error(), "invalid expected source binding") {
+			t.Fatalf("unbound expected source reached backend: source=%+v err=%v", source, err)
+		}
+	}
+}
+
+func TestDecodeArtifactForSourceRejectsForgedSource(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := a.Source
+	expected.Checksum = strings.Repeat("f", 64)
+	if _, err := DecodeArtifactForSource(raw, len(raw), expected); err == nil {
+		t.Fatal("forged expected source accepted")
 	}
 }
 
@@ -202,5 +257,39 @@ func TestBoundedUnionKeepsClosestNotLowestOrdinal(t *testing.T) {
 	}
 	if _, ok := s[99]; !ok {
 		t.Fatal("closest candidate lost")
+	}
+}
+func TestArtifactRejectsOversizedIDsAndSourceDimensions(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Source.Dimensions = 5000
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("oversized source dimensions accepted")
+	}
+	a, err = Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.IDs[0] = strings.Repeat("x", maxIDBytes+1)
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("oversized ID accepted")
+	}
+}
+
+func TestMetricsHighPartitionCountUsesAssignmentHistogram(t *testing.T) {
+	const n = 16_384
+	ids := make([]string, n)
+	assignment := make([]int, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("doc-%06d", i)
+		assignment[i] = i
+	}
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 1, Partitions: n, Imbalance: .05, MaxVectors: n, MaxEdges: n}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: Source{SourceID: "test", Checksum: strings.Repeat("0", 64), Vectors: n, Dimensions: 1, Metric: "cosine"}, Config: c, IDs: ids, Graph: Graph{Neighbors: make([][]int, n)}, Assignment: assignment}
+	a.Metrics = metrics(a)
+	if err := ValidateArtifact(a); err != nil {
+		t.Fatal(err)
 	}
 }

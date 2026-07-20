@@ -4,6 +4,7 @@
 package main
 
 import (
+	"container/heap"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -62,11 +63,14 @@ type report struct {
 	Config                    vectorpartition.Config  `json:"config"`
 	Metrics                   vectorpartition.Metrics `json:"metrics"`
 	ArtifactPath              string                  `json:"artifact_path"`
+	LoadWallNanos             int64                   `json:"load_wall_nanos"`
 	BuildWallNanos            int64                   `json:"build_wall_nanos"`
 	BuildCPUNanos             int64                   `json:"build_cpu_nanos"`
 	GraphBuildNanos           int64                   `json:"graph_build_nanos"`
 	BackendPartitionNanos     int64                   `json:"backend_partition_nanos"`
 	ValidationNanos           int64                   `json:"validation_nanos"`
+	QualityWallNanos          int64                   `json:"quality_wall_nanos"`
+	TotalCommandWallNanos     int64                   `json:"total_command_wall_nanos"`
 	PeakRSSBytes              int64                   `json:"peak_rss_bytes"`
 	TemporaryBytes            int64                   `json:"temporary_bytes"`
 	ArtifactBytes             int64                   `json:"artifact_bytes"`
@@ -89,6 +93,7 @@ func main() {
 	}
 }
 func run(args []string) error {
+	commandStart := time.Now()
 	var dataset, out string
 	var partitions, probes, reps, pivots, leaf, degree int
 	var imbalance float64
@@ -110,10 +115,12 @@ func run(args []string) error {
 	if dataset == "" || out == "" || probes < 1 || probes > partitions {
 		return errors.New("dataset/out and probes within partitions required")
 	}
+	loadStart := time.Now()
 	m, vs, qs, err := load(dataset)
 	if err != nil {
 		return err
 	}
+	loadWall := time.Since(loadStart).Nanoseconds()
 	cfg := vectorpartition.DefaultConfig()
 	cfg.Partitions = partitions
 	cfg.Seed = seed
@@ -137,12 +144,14 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	qualityStart := time.Now()
 	const graphRecallSamples = 64
 	gr := graphRecall(vs, art, min(graphRecallSamples, len(vs)))
 	pr, hr := oracleRecall(vs, qs, art, probes, 10)
 	if pr <= hr {
 		return fmt.Errorf("quality gate failed: partition oracle recall@10 %.4f <= stable hash %.4f at probes=%d", pr, hr, probes)
 	}
+	qualityWall := time.Since(qualityStart).Nanoseconds()
 	if err := os.MkdirAll(out, 0755); err != nil {
 		return err
 	}
@@ -154,7 +163,7 @@ func run(args []string) error {
 	st, _ := os.Stat(path)
 	cap := art.Metrics.Cap
 	bal := float64(art.Metrics.MaxPartitionSize) * float64(partitions) / float64(len(vs))
-	r := report{SchemaVersion: 1, ResultKind: "offline_partition_builder_exporter_v1", Dataset: m, Source: art.Source, Config: art.Config, Metrics: art.Metrics, ArtifactPath: path, BuildWallNanos: wall, BuildCPUNanos: cpuNanos() - cpuStart, GraphBuildNanos: phases.GraphBuildNanos, BackendPartitionNanos: phases.BackendPartitionNanos, ValidationNanos: phases.ValidationNanos, PeakRSSBytes: peakRSS(), TemporaryBytes: 0, ArtifactBytes: st.Size(), BytesPerVector: float64(st.Size()) / float64(len(vs)), Balance: bal, GraphNeighborRecall: gr, GraphNeighborSamples: min(graphRecallSamples, len(vs)), PartitionOracleRecallAt10: pr, StableHashRecallAt10: hr, Probes: probes, ArtifactSHA256: digest}
+	r := report{SchemaVersion: 1, ResultKind: "offline_partition_builder_exporter_v1", Dataset: m, Source: art.Source, Config: art.Config, Metrics: art.Metrics, ArtifactPath: path, LoadWallNanos: loadWall, BuildWallNanos: wall, BuildCPUNanos: cpuNanos() - cpuStart, GraphBuildNanos: phases.GraphBuildNanos, BackendPartitionNanos: phases.BackendPartitionNanos, ValidationNanos: phases.ValidationNanos, QualityWallNanos: qualityWall, PeakRSSBytes: peakRSS(), TemporaryBytes: 0, ArtifactBytes: st.Size(), BytesPerVector: float64(st.Size()) / float64(len(vs)), Balance: bal, GraphNeighborRecall: gr, GraphNeighborSamples: min(graphRecallSamples, len(vs)), PartitionOracleRecallAt10: pr, StableHashRecallAt10: hr, Probes: probes, ArtifactSHA256: digest}
 	rr, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -162,23 +171,44 @@ func run(args []string) error {
 	reportPath := filepath.Join(out, "vector_partition_report_"+digest[:16]+".json")
 	// Account for the report itself without embedding the artifact or writing a
 	// second giant JSON stream. A bounded fixed-point pass stabilizes FinalBytes.
-	for i := 0; i < 2; i++ {
+	converged := false
+	for i := 0; i < 8; i++ {
+		r.TotalCommandWallNanos = time.Since(commandStart).Nanoseconds()
 		r.ReportBytes = int64(len(rr))
 		r.FinalBytes = r.ArtifactBytes + r.ReportBytes
 		rr, err = json.Marshal(r)
 		if err != nil {
 			return err
 		}
+		if int64(len(rr)) == r.ReportBytes {
+			converged = true
+			break
+		}
+	}
+	if !converged {
+		return errors.New("report byte accounting did not converge")
 	}
 	if err = os.WriteFile(reportPath, rr, 0644); err != nil {
 		return err
+	}
+	actual, err := os.Stat(reportPath)
+	if err != nil {
+		return err
+	}
+	if actual.Size() != r.ReportBytes || r.FinalBytes != r.ArtifactBytes+actual.Size() {
+		return errors.New("report byte accounting mismatch")
 	}
 	fmt.Printf("partition artifact=%s report=%s digest=%s final_bytes=%d oracle_recall_at_10=%.4f hash_recall_at_10=%.4f\n", path, reportPath, digest, r.FinalBytes, pr, hr)
 	_ = cap
 	return nil
 }
 func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
-	raw, e := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	f, e := os.Open(filepath.Join(dir, "manifest.json"))
+	if e != nil {
+		return manifest{}, nil, nil, e
+	}
+	defer f.Close()
+	raw, e := io.ReadAll(io.LimitReader(f, maxManifest+1))
 	if e != nil {
 		return manifest{}, nil, nil, e
 	}
@@ -191,10 +221,22 @@ func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
 	if e = d.Decode(&m); e != nil {
 		return m, nil, nil, e
 	}
-	if m.Version != 1 || m.Generator != "treedb_vector_synthetic_v1" || m.Docs < 1 || m.Docs > 1_000_000 || m.Dimensions < 1 || m.Dimensions > 4096 || m.Metric != "cosine" || m.FloatFormat != "float32_le_row_major" || m.DocumentIDPattern != "doc-%06d" {
+	var extra any
+	if e = d.Decode(&extra); e != io.EOF {
+		return m, nil, nil, errors.New("manifest has trailing JSON")
+	}
+	if m.Version != 1 || m.Generator != "treedb_vector_synthetic_v1" || m.Docs < 1 || m.Docs > 1_000_000 || m.Dimensions < 1 || m.Dimensions > 4096 || m.Metric != "cosine" || !m.Normalized || m.FloatFormat != "float32_le_row_major" || m.DocumentIDPattern != "doc-%06d" || !safeCorpusName(m.DocumentVectorsFile) || !safeCorpusName(m.QueryVectorsFile) {
 		return m, nil, nil, errors.New("unsupported exporter manifest")
 	}
-	docs, e := readF32(filepath.Join(dir, m.DocumentVectorsFile), m.Files[m.DocumentVectorsFile], m.Docs, m.Dimensions)
+	if m.Files == nil {
+		return m, nil, nil, errors.New("manifest files missing")
+	}
+	df, ok := m.Files[m.DocumentVectorsFile]
+	qf, qok := m.Files[m.QueryVectorsFile]
+	if !ok || !qok {
+		return m, nil, nil, errors.New("manifest corpus file entry missing")
+	}
+	docs, e := readF32(filepath.Join(dir, m.DocumentVectorsFile), df, m.Docs, m.Dimensions)
 	if e != nil {
 		return m, nil, nil, e
 	}
@@ -209,7 +251,7 @@ func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
 	qcount := min(m.Queries, maxQueries)
 	qs := [][]float64{}
 	if qcount > 0 {
-		q, e := readF32(filepath.Join(dir, m.QueryVectorsFile), m.Files[m.QueryVectorsFile], m.Queries, m.Dimensions)
+		q, e := readF32(filepath.Join(dir, m.QueryVectorsFile), qf, m.Queries, m.Dimensions)
 		if e != nil {
 			return m, nil, nil, e
 		}
@@ -223,9 +265,12 @@ func load(dir string) (manifest, []vectorpartition.Vector, [][]float64, error) {
 	}
 	return m, vs, qs, nil
 }
+func safeCorpusName(name string) bool {
+	return name != "" && !filepath.IsAbs(name) && filepath.Base(name) == name && !strings.Contains(name, "\\")
+}
 func readF32(path string, fi fileInfo, rows, dims int) ([]float32, error) {
 	want := int64(rows) * int64(dims) * 4
-	if want < 1 || want > maxCorpusBytes || fi.Bytes != want || len(fi.SHA256) != 64 {
+	if want < 1 || want > maxCorpusBytes || fi.Bytes != want || len(fi.SHA256) != 64 || strings.ToLower(fi.SHA256) != fi.SHA256 {
 		return nil, errors.New("invalid corpus file bounds")
 	}
 	f, e := os.Open(path)
@@ -261,26 +306,38 @@ func dot(a, b []float64) float64 {
 	return x
 }
 func nearest(v []vectorpartition.Vector, q []float64, k int, include func(int) bool) []int {
-	type c struct {
-		i int
-		d float64
-	}
-	a := make([]c, 0)
+	a := make(candidateMaxHeap, 0, k)
 	for i, x := range v {
 		if include(i) {
-			a = append(a, c{i, 1 - dot(x.Values, q)})
+			c := candidate{i, 1 - dot(x.Values, q)}
+			if len(a) < k {
+				heap.Push(&a, c)
+			} else if candidateLess(c, a[0]) {
+				a[0] = c
+				heap.Fix(&a, 0)
+			}
 		}
 	}
-	sort.Slice(a, func(i, j int) bool { return a[i].d < a[j].d || a[i].d == a[j].d && a[i].i < a[j].i })
-	if len(a) > k {
-		a = a[:k]
-	}
+	sort.Slice(a, func(i, j int) bool { return candidateLess(a[i], a[j]) })
 	o := make([]int, len(a))
 	for i := range a {
 		o[i] = a[i].i
 	}
 	return o
 }
+
+type candidate struct {
+	i int
+	d float64
+}
+type candidateMaxHeap []candidate
+
+func (h candidateMaxHeap) Len() int           { return len(h) }
+func (h candidateMaxHeap) Less(i, j int) bool { return candidateLess(h[j], h[i]) }
+func (h candidateMaxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *candidateMaxHeap) Push(x any)        { *h = append(*h, x.(candidate)) }
+func (h *candidateMaxHeap) Pop() any          { o := *h; x := o[len(o)-1]; *h = o[:len(o)-1]; return x }
+func candidateLess(a, b candidate) bool       { return a.d < b.d || a.d == b.d && a.i < b.i }
 func graphRecall(v []vectorpartition.Vector, a vectorpartition.Artifact, n int) float64 {
 	if n == 0 {
 		return 0
