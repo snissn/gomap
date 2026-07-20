@@ -112,6 +112,14 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err := store.Deactivate(m.Collection, m.IndexName); err != nil {
 		t.Fatal(err)
 	}
+	pin, err = col.AcquireVectorPartitionReaderPinV1(def.Name, m.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err == nil {
+		t.Fatal("delete succeeded while partition reader was pinned")
+	}
+	pin.Release()
 	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
 		t.Fatal(err)
 	}
