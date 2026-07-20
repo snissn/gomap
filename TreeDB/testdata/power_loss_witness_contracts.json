@@ -33,7 +33,13 @@
     3844,
     3851,
     3856,
-    3859
+    3859,
+    3865,
+    3893,
+    3920,
+    3926,
+    3927,
+    3930
   ],
   "cases": [
     {
@@ -486,30 +492,30 @@
       "failure_classes": [
         "dependency_closed_reopen"
       ],
-      "expected_durable_horizon": "authoritative collection resources close through durable root sequence 4",
+      "expected_durable_horizon": "behaviorally queried collection and side-store resources select commit 13 and applied command LSN 19",
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
-        "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
-        "freelist_generation": "generation=10",
-        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=4",
+        "root_meta_generation": "selected_slot=1 commit_seq=13 slot0=12 slot1=13",
+        "freelist_generation": "generation=23",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=9",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
-        "wal_lineage": "profile=command_wal_durable applied_lsn=5",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=4",
-        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=6"
+        "wal_lineage": "profile=command_wal_durable applied_lsn=19",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=10",
+        "cleanup_maintenance_pins": "slot0_commit_seq=12 slot1_commit_seq=13"
       },
       "seed": 3674,
-      "cut_id": "cut/public-authoritative-resources-stable-image/after-meta-sync/000",
+      "cut_id": "cut/public-authoritative-resources-stable-image/after-meta-sync/011",
       "variant_id": "public-authoritative-resources-stable-image",
       "cut_point": "after-meta-sync",
       "reopen_mode": "read-only",
       "expected_recovery": {
         "rejected": false,
         "error_type": "",
-        "commit_seq": 6,
-        "applied_lsn": 5
+        "commit_seq": 13,
+        "applied_lsn": 19
       },
-      "claim_boundary": "normal public read-only reopen of authoritative collection resources"
+      "claim_boundary": "normal public read-only reopen behaviorally queries primary, secondary, text, physical column, vector, TemplateV1, and maindb dictionary-compressed value-log resources; live templatedb value-log compression is not claimed"
     },
     {
       "id": "retained-new-meta-index",
@@ -911,6 +917,349 @@
         "applied_lsn": 0
       },
       "claim_boundary": "normal public read-write reopen of the modeled full-dirty writeback image"
+    },
+    {
+      "id": "grouped-multi-waiter-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedAcknowledgementsPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_multi_waiter",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "four waiters -> mutation frames -> one durable-prefix barrier -> public command-WAL replay",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "the shared barrier through LSN 5 replays all four acknowledgements as commit 6",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=6 slot0=5 slot1=6",
+        "freelist_generation": "generation=7",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=5",
+        "durable_lsn": "durable_wal_lsn=5 durable_root_seq=6",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=6"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-acknowledgements-stable-image/after-dependency-file-sync/000",
+      "variant_id": "public-grouped-acknowledgements-stable-image",
+      "cut_point": "after-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 6,
+        "applied_lsn": 5
+      },
+      "claim_boundary": "normal public read-write reopen replays one deterministic four-waiter acknowledged group"
+    },
+    {
+      "id": "grouped-dependency-failure-no-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedDependencyFailurePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_dependency_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "forming group -> dependency-sync failure -> no waiter acknowledgement -> prior stable root",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "group_dependency_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the failed group advances neither the stable command prefix nor commit 1",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=1 slot0=1 slot1=0",
+        "freelist_generation": "generation=2",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=1",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=0"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-dependency-failure-stable-image/before-dependency-file-sync/000",
+      "variant_id": "public-grouped-dependency-failure-stable-image",
+      "cut_point": "before-dependency-file-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 1,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen proves all four failed waiters remain absent"
+    },
+    {
+      "id": "grouped-ambiguous-failure-no-ack",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_ambiguous_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "four mutation frames plus prefix append -> pre-sync ambiguity -> no waiter acknowledgement -> prior stable root",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "group_ambiguous_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the pre-sync ambiguous group advances neither the stable command prefix nor commit 1",
+      "expected_outcome": "accepted:old-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=1 slot0=1 slot1=0",
+        "freelist_generation": "generation=2",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=0",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=1",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=0"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-ambiguous-failure-stable-image/after-dependency-append/004",
+      "variant_id": "public-grouped-ambiguous-failure-stable-image",
+      "cut_point": "after-dependency-append",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 1,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen proves a fully appended but unsynced four-waiter group receives no partial acknowledgement"
+    },
+    {
+      "id": "grouped-dependency-failure-dirty-atomic",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedDependencyFailureDirtyPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_dependency_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "forming group -> dependency-sync failure -> no waiter acknowledgement -> complete dirty WAL writeback -> atomic public replay",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "group_dependency_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the complete dirty command-WAL prefix through LSN 4 replays all four unacknowledged mutations atomically as commit 5",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=4",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=5",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
+      },
+      "seed": 15425837517959215427,
+      "cut_id": "cut/public-grouped-dependency-failure-dirty-wal/before-dependency-file-sync/000",
+      "variant_id": "cut/public-grouped-dependency-failure-dirty-wal/before-dependency-file-sync/000/variant/full-writeback",
+      "cut_point": "before-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 5,
+        "applied_lsn": 4
+      },
+      "claim_boundary": "all source waiters fail and the source handle poisons; a crash image containing every dirty command-WAL byte may expose the group only as one complete replayed prefix"
+    },
+    {
+      "id": "grouped-ambiguous-failure-dirty-atomic",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_ambiguous_failure",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "four mutation frames plus prefix append -> pre-sync ambiguity -> no waiter acknowledgement -> complete dirty WAL writeback -> atomic public replay",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "group_ambiguous_failure_no_ack"
+      ],
+      "expected_durable_horizon": "the complete dirty command-WAL prefix through LSN 4 replays all four unacknowledged mutations atomically as commit 5",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=5 slot0=5 slot1=4",
+        "freelist_generation": "generation=6",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=4",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=5",
+        "cleanup_maintenance_pins": "slot0_commit_seq=5 slot1_commit_seq=4"
+      },
+      "seed": 7257721757473077420,
+      "cut_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-dependency-append/004",
+      "variant_id": "cut/public-grouped-ambiguous-failure-dirty-wal/after-dependency-append/004/variant/full-writeback",
+      "cut_point": "after-dependency-append",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 5,
+        "applied_lsn": 4
+      },
+      "claim_boundary": "all source waiters fail and the source handle poisons; a crash image containing every dirty command-WAL byte may expose the group only as one complete replayed prefix"
+    },
+    {
+      "id": "grouped-rotation-external-closure",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedRotationExternalPublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_rotation_external",
+      "data_resource_shapes": [
+        "forced_value_log_pointers",
+        "command_wal_rotation"
+      ],
+      "dependency_graph": "external value resources -> grouped dependency barrier -> rotated and active command-WAL segments -> public replay",
+      "storage_boundaries": [
+        "resource_create_write_sync",
+        "wal_old_segment_sync",
+        "new_segment_namespace_sync",
+        "durable_frame_barrier_append_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "the external dependency barrier and both WAL segment syncs replay commit 3 through LSN 2",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=3 slot0=3 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=2",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=2",
+        "durable_lsn": "durable_wal_lsn=2 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-rotation-external-stable-image/after-dependency-file-sync/002",
+      "variant_id": "public-grouped-rotation-external-stable-image",
+      "cut_point": "after-dependency-file-sync",
+      "reopen_mode": "read-write",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 3,
+        "applied_lsn": 2
+      },
+      "claim_boundary": "normal public read-write reopen after the external barrier and both rotated command-WAL segment syncs"
+    },
+    {
+      "id": "grouped-low-traffic-lifecycle",
+      "package": "./TreeDB",
+      "test_name": "TestPowerLossCertificationGroupedLifecyclePublicReopen",
+      "profile": "command_wal_durable",
+      "acknowledgement_shape": "grouped_lifecycle",
+      "data_resource_shapes": [
+        "inline_values"
+      ],
+      "dependency_graph": "low-traffic timeout -> singleton group barrier -> checkpoint -> close lifecycle",
+      "storage_boundaries": [
+        "durable_frame_barrier_append_sync",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "stable_bytes_only",
+      "failure_classes": [
+        "dependency_closed_reopen"
+      ],
+      "expected_durable_horizon": "the timeout-triggered singleton reaches checkpointed commit 2 with applied LSN 2",
+      "expected_outcome": "accepted:stable-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=1 commit_seq=2 slot0=1 slot1=2",
+        "freelist_generation": "generation=4",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=command_wal_durable applied_lsn=2",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=2",
+        "cleanup_maintenance_pins": "slot0_commit_seq=1 slot1_commit_seq=2"
+      },
+      "seed": 3674,
+      "cut_id": "cut/public-grouped-lifecycle-stable-image/after-meta-sync/000",
+      "variant_id": "public-grouped-lifecycle-stable-image",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 2,
+        "applied_lsn": 2
+      },
+      "claim_boundary": "normal public read-only reopen after deterministic low-traffic timeout, checkpoint, and close progress"
+    },
+    {
+      "id": "retained-stale-build-base-retry",
+      "package": "./TreeDB/db",
+      "test_name": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+      "profile": "no_wal_fast",
+      "acknowledgement_shape": "checkpoint",
+      "data_resource_shapes": [
+        "combined_nested_roots"
+      ],
+      "dependency_graph": "predecessor root publication -> successor built on stale base -> rejection before acknowledgement -> retry -> checkpoint",
+      "storage_boundaries": [
+        "cow_index_freelist_root_record_write",
+        "target_meta_write_sync"
+      ],
+      "writeback_variant": "all_dirty_bytes",
+      "failure_classes": [
+        "stale_build_base_rejected_retry"
+      ],
+      "expected_durable_horizon": "the rejected stale successor is absent and its retry joins the predecessor at selected commit 4",
+      "expected_outcome": "accepted:new-root",
+      "expected_typed_error": "none",
+      "state": {
+        "root_meta_generation": "selected_slot=0 commit_seq=4 slot0=4 slot1=2",
+        "freelist_generation": "generation=7",
+        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
+        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
+        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
+        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=3",
+        "cleanup_maintenance_pins": "slot0_commit_seq=4 slot1_commit_seq=2"
+      },
+      "counterexample_id": "stale-build-base-root-publication",
+      "seed": 12505447533306515078,
+      "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000",
+      "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback",
+      "cut_point": "after-meta-sync",
+      "reopen_mode": "read-only",
+      "expected_recovery": {
+        "rejected": false,
+        "error_type": "",
+        "commit_seq": 4,
+        "applied_lsn": 0
+      },
+      "claim_boundary": "normal public read-only reopen after a private deterministic publication rendezvous reproduces #3865 and behaviorally verifies the accepted predecessor and retry"
     }
   ]
 }

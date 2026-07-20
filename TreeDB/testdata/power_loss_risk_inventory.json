@@ -2,11 +2,11 @@
   "schema_version": "treedb-power-loss-risk-inventory/v1",
   "dimensions": {
     "profile": ["command_wal_durable", "command_wal_relaxed", "no_wal_fast"],
-    "acknowledgement": ["ordinary_write_and_batch", "flush", "all_explicit_sync_forms", "empty_explicit_sync", "checkpoint", "clean_close", "open_recovery"],
+    "acknowledgement": ["ordinary_write_and_batch", "flush", "all_explicit_sync_forms", "empty_explicit_sync", "checkpoint", "clean_close", "open_recovery", "grouped_multi_waiter", "grouped_dependency_failure", "grouped_ambiguous_failure", "grouped_rotation_external", "grouped_lifecycle"],
     "resource_shape": ["inline_values", "forced_value_log_pointers", "outer_leaves", "combined_nested_roots", "dictionaries_templates", "column_vector_text_auxiliary_assets", "delete_reuse", "command_wal_rotation"],
     "storage_boundary": ["resource_create_write_sync", "parent_namespace_create_rename_sync", "cow_index_freelist_root_record_write", "index_sync_excluding_meta", "target_meta_write_sync", "wal_old_segment_sync", "new_segment_namespace_sync", "durable_frame_barrier_append_sync", "maintenance_unlink", "wal_unlink", "page_resource_reuse"],
     "writeback_variant": ["stable_bytes_only", "target_metadata_alone", "all_but_one_dependency", "name_without_required_data", "data_without_required_name", "all_dirty_bytes", "bounded_format_tear", "old_live_page_reuse"],
-    "failure_class": ["dependency_closed_reopen", "retryable_pre_meta_failure", "ambiguous_post_meta_poison", "stale_maintenance_cleanup_capability", "corrupt_durable_prefix_hole", "discardable_relaxed_suffix", "fallback_older_complete_root"]
+    "failure_class": ["dependency_closed_reopen", "retryable_pre_meta_failure", "ambiguous_post_meta_poison", "stale_maintenance_cleanup_capability", "corrupt_durable_prefix_hole", "discardable_relaxed_suffix", "fallback_older_complete_root", "group_dependency_failure_no_ack", "group_ambiguous_failure_no_ack", "stale_build_base_rejected_retry"]
   },
   "retained_counterexamples": [
     "new-meta-before-index-closure",
@@ -16,7 +16,8 @@
     "torn-target-meta",
     "relaxed-command-frame-before-rid",
     "chunked-sync-intermediate-root",
-    "older-meta-live-page-reused"
+    "older-meta-live-page-reused",
+    "stale-build-base-root-publication"
   ],
   "required_negative_controls": [
     "target-meta-without-dependency-closure",
@@ -170,6 +171,59 @@
         {"dimension": "storage_boundary", "value": "page_resource_reuse"},
         {"dimension": "writeback_variant", "value": "old_live_page_reuse"},
         {"dimension": "failure_class", "value": "fallback_older_complete_root"}
+      ]
+    },
+    {
+      "id": "grouped-multi-waiter-durable-prefix",
+      "members": [
+        {"dimension": "profile", "value": "command_wal_durable"},
+        {"dimension": "acknowledgement", "value": "grouped_multi_waiter"},
+        {"dimension": "storage_boundary", "value": "durable_frame_barrier_append_sync"},
+        {"dimension": "failure_class", "value": "dependency_closed_reopen"}
+      ]
+    },
+    {
+      "id": "grouped-dependency-failure-no-ack",
+      "members": [
+        {"dimension": "acknowledgement", "value": "grouped_dependency_failure"},
+        {"dimension": "storage_boundary", "value": "durable_frame_barrier_append_sync"},
+        {"dimension": "failure_class", "value": "group_dependency_failure_no_ack"}
+      ]
+    },
+    {
+      "id": "grouped-ambiguous-failure-no-ack",
+      "members": [
+        {"dimension": "acknowledgement", "value": "grouped_ambiguous_failure"},
+        {"dimension": "storage_boundary", "value": "durable_frame_barrier_append_sync"},
+        {"dimension": "failure_class", "value": "group_ambiguous_failure_no_ack"}
+      ]
+    },
+    {
+      "id": "grouped-rotation-external-closure",
+      "members": [
+        {"dimension": "acknowledgement", "value": "grouped_rotation_external"},
+        {"dimension": "resource_shape", "value": "forced_value_log_pointers"},
+        {"dimension": "resource_shape", "value": "command_wal_rotation"},
+        {"dimension": "storage_boundary", "value": "wal_old_segment_sync"},
+        {"dimension": "storage_boundary", "value": "new_segment_namespace_sync"}
+      ]
+    },
+    {
+      "id": "grouped-low-traffic-lifecycle-progress",
+      "members": [
+        {"dimension": "acknowledgement", "value": "grouped_lifecycle"},
+        {"dimension": "storage_boundary", "value": "durable_frame_barrier_append_sync"},
+        {"dimension": "storage_boundary", "value": "target_meta_write_sync"},
+        {"dimension": "failure_class", "value": "dependency_closed_reopen"}
+      ]
+    },
+    {
+      "id": "stale-build-base-rejected-before-retry",
+      "members": [
+        {"dimension": "profile", "value": "no_wal_fast"},
+        {"dimension": "acknowledgement", "value": "checkpoint"},
+        {"dimension": "storage_boundary", "value": "cow_index_freelist_root_record_write"},
+        {"dimension": "failure_class", "value": "stale_build_base_rejected_retry"}
       ]
     }
   ]

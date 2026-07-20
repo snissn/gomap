@@ -110,6 +110,7 @@ var CounterexampleWitnesses = []CounterexampleWitness{
 	{ID: "relaxed-command-frame-before-rid", Package: "./TreeDB", TestName: "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID"},
 	{ID: "chunked-sync-intermediate-root", Package: "./TreeDB", TestName: "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot"},
 	{ID: "older-meta-live-page-reused", Package: "./TreeDB/db", TestName: "TestPowerLossOracleCounterexampleRecoverablePageReuse"},
+	{ID: "stale-build-base-root-publication", Package: "./TreeDB/db", TestName: "TestPowerLossCertificationStaleBuildBasePublicReopen"},
 }
 
 // VariantObservation is the structured result of one real public Open. Tests

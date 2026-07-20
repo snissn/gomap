@@ -9,7 +9,8 @@
     "torn-target-meta",
     "relaxed-command-frame-before-rid",
     "chunked-sync-intermediate-root",
-    "older-meta-live-page-reused"
+    "older-meta-live-page-reused",
+    "stale-build-base-root-publication"
   ],
   "entries": [
     {
@@ -132,6 +133,21 @@
       "owner": "#3679",
       "disposition": "resolved",
       "replay": {"package": "./TreeDB/db", "test_name": "TestPowerLossOracleCounterexampleRecoverablePageReuse", "cut_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001", "variant_id": "cut/older-meta-live-page-reuse/before-index-data-sync/001/variant/old-page-reuse/index%2Ffirst-reused-old-live-page", "seed": 6916576305815329643}
+    },
+    {
+      "id": "stale-build-base-root-publication",
+      "invariant": "stale-build-base-publication",
+      "producer_operation": "ordered-root successor publication built against a displaced durable base",
+      "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000",
+      "cut_point": "after-meta-sync",
+      "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback",
+      "seed": 12505447533306515078,
+      "variant_families": ["full-writeback"],
+      "expected_result": "new-root",
+      "observed_result": "new-root",
+      "owner": "#3865",
+      "disposition": "resolved",
+      "replay": {"package": "./TreeDB/db", "test_name": "TestPowerLossCertificationStaleBuildBasePublicReopen", "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000", "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback", "seed": 12505447533306515078}
     }
   ]
 }
