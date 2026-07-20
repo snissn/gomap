@@ -406,7 +406,7 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
 	}
 	started := time.Now()
-	artifact, err := vectorpartition.Build(input, cfg.partition)
+	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		return fmt.Errorf("build validated vector partition artifact: %w", err)
 	}

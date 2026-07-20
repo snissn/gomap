@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func fixture() []Vector {
@@ -145,7 +146,7 @@ func TestGraphPartitionBeatsStableIDHashOnClusteredFixture(t *testing.T) {
 func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TMPDIR", root)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	cancel()
 	_, err := RunExternalJSON(ctx, []string{"sh", "-c", "sleep 1"}, []byte("{}"), 1024)
 	if err == nil {
@@ -159,5 +160,46 @@ func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 		if entry.IsDir() && filepath.Base(entry.Name()) != "" {
 			t.Fatalf("backend temporary directory leaked: %s", entry.Name())
 		}
+	}
+}
+func TestExternalBackendRequiresDeadline(t *testing.T) {
+	if _, err := RunExternalJSON(context.Background(), []string{"true"}, []byte("{}"), 1024); err == nil {
+		t.Fatal("deadline-less backend accepted")
+	}
+}
+
+type badPartitioner struct{}
+
+func (badPartitioner) Name() string { return "bad" }
+func (badPartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
+	return make([]int, len(g.Neighbors)), nil
+}
+func TestBuildWithPartitionerValidatesBackendOutputAndSource(t *testing.T) {
+	_, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "fixture", Checksum: "00"}, badPartitioner{})
+	if err == nil {
+		t.Fatal("mismatched source accepted")
+	}
+	if _, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "fixture"}, badPartitioner{}); err == nil {
+		t.Fatal("malicious assignment accepted")
+	}
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Graph.Neighbors[0] = []int{2, 1}
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("noncanonical neighbor ordering accepted")
+	}
+}
+func TestBoundedUnionKeepsClosestNotLowestOrdinal(t *testing.T) {
+	s := map[int]float64{}
+	addCandidateBounded(s, 99, .1, 2)
+	addCandidateBounded(s, 1, .9, 2)
+	addCandidateBounded(s, 50, .2, 2)
+	if _, ok := s[1]; ok {
+		t.Fatal("ordinal-only truncation retained distant neighbor")
+	}
+	if _, ok := s[99]; !ok {
+		t.Fatal("closest candidate lost")
 	}
 }

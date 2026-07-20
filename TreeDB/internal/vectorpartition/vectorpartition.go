@@ -66,10 +66,22 @@ type Metrics struct {
 	MaxPartitionSize    int `json:"max_partition_size"`
 	Cap                 int `json:"cap"`
 }
+
+// Source binds an artifact to the exact immutable input snapshot. SourceID is
+// caller supplied (for example exporter manifest digest); Checksum is computed
+// over canonical stable-ID/vector bits and never accepted on trust.
+type Source struct {
+	SourceID   string `json:"source_id"`
+	Checksum   string `json:"checksum"`
+	Vectors    int    `json:"vectors"`
+	Dimensions int    `json:"dimensions"`
+	Metric     string `json:"metric"`
+}
 type Artifact struct {
 	SchemaVersion  int      `json:"schema_version"`
 	Backend        string   `json:"backend"`
 	BackendLicense string   `json:"backend_license"`
+	Source         Source   `json:"source"`
 	Config         Config   `json:"config"`
 	IDs            []string `json:"ids"`
 	Graph          Graph    `json:"graph"`
@@ -88,6 +100,16 @@ type ReferencePartitioner struct{}
 func (ReferencePartitioner) Name() string { return "treedb_reference_greedy_v1" }
 
 func Build(vectors []Vector, cfg Config) (Artifact, error) {
+	return BuildWithPartitioner(vectors, cfg, Source{SourceID: "inline_vectors_v1"}, ReferencePartitioner{})
+}
+
+// BuildWithPartitioner is the usable offline backend seam. The supplied
+// partitioner's result is never trusted: graph, assignment, source and metrics
+// are independently validated before the artifact is returned.
+func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend Partitioner) (Artifact, error) {
+	if backend == nil || backend.Name() == "" {
+		return Artifact{}, errors.New("partition backend identity is required")
+	}
 	if err := validateInput(vectors, cfg); err != nil {
 		return Artifact{}, err
 	}
@@ -103,7 +125,7 @@ func Build(vectors []Vector, cfg Config) (Artifact, error) {
 		return Artifact{}, err
 	}
 	cap := partitionCap(len(v), cfg.Partitions, cfg.Imbalance)
-	a, err := ReferencePartitioner{}.Partition(g, cfg.Partitions, cap)
+	a, err := backend.Partition(g, cfg.Partitions, cap)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -111,12 +133,30 @@ func Build(vectors []Vector, cfg Config) (Artifact, error) {
 	for i := range v {
 		ids[i] = v[i].ID
 	}
-	art := Artifact{SchemaVersion: SchemaVersion, Backend: ReferencePartitioner{}.Name(), BackendLicense: "TreeDB clean-room reference implementation (repository license)", Config: cfg, IDs: ids, Graph: g, Assignment: a}
+	computed := sourceFor(v, cfg.Metric, source.SourceID)
+	if source.Checksum != "" && source != computed {
+		return Artifact{}, errors.New("source identity does not match input snapshot")
+	}
+	art := Artifact{SchemaVersion: SchemaVersion, Backend: backend.Name(), BackendLicense: "TreeDB clean-room reference implementation (repository license)", Source: computed, Config: cfg, IDs: ids, Graph: g, Assignment: a}
 	art.Metrics = metrics(art)
 	if err := ValidateArtifact(art); err != nil {
 		return Artifact{}, err
 	}
 	return art, nil
+}
+
+func sourceFor(v []Vector, metric, id string) Source {
+	h := sha256.New()
+	var b [8]byte
+	for _, x := range v {
+		h.Write([]byte(x.ID))
+		h.Write([]byte{0})
+		for _, f := range x.Values {
+			binary.BigEndian.PutUint64(b[:], math.Float64bits(f))
+			h.Write(b[:])
+		}
+	}
+	return Source{SourceID: id, Checksum: hex.EncodeToString(h.Sum(nil)), Vectors: len(v), Dimensions: len(v[0].Values), Metric: metric}
 }
 
 func validateInput(v []Vector, c Config) error {
@@ -155,9 +195,9 @@ func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
 func buildGraph(v []Vector, c Config) (Graph, error) {
 	n := len(v)
-	sets := make([]map[int]struct{}, n)
+	sets := make([]map[int]float64, n)
 	for i := range sets {
-		sets[i] = make(map[int]struct{}, c.Degree)
+		sets[i] = make(map[int]float64, c.Degree)
 	}
 	for rep := 0; rep < c.Repetitions; rep++ {
 		r := rand.New(rand.NewSource(c.Seed + int64(rep)*0x9e3779b))
@@ -183,12 +223,12 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	}
 	return g, nil
 }
-func carveDepth(v []Vector, ids []int, c Config, sets []map[int]struct{}, depth int) error {
+func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth int) error {
 	if len(ids) <= c.MaxLeafBucket {
 		for _, i := range ids {
 			nearest := nearest(v, ids, i, c.Degree)
-			for _, j := range nearest {
-				addSetBounded(sets[i], j, c.Degree)
+			for _, candidate := range nearest {
+				addCandidateBounded(sets[i], candidate.i, candidate.x, c.Degree)
 			}
 		}
 		return nil
@@ -233,7 +273,7 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]struct{}, depth 
 	}
 	return nil
 }
-func nearest(v []Vector, ids []int, target, k int) []int {
+func nearest(v []Vector, ids []int, target, k int) []candidate {
 	type d struct {
 		i int
 		x float64
@@ -248,9 +288,9 @@ func nearest(v []Vector, ids []int, target, k int) []int {
 	if len(a) > k {
 		a = a[:k]
 	}
-	out := make([]int, len(a))
+	out := make([]candidate, len(a))
 	for i := range a {
-		out[i] = a[i].i
+		out[i] = candidate{a[i].i, a[i].x}
 	}
 	return out
 }
@@ -266,23 +306,33 @@ func distance(a, b []float64) float64 {
 	}
 	return 1 - dot/math.Sqrt(na*nb)
 }
-func addSetBounded(s map[int]struct{}, x, cap int) {
-	if _, ok := s[x]; ok {
+
+type candidate struct {
+	i int
+	x float64
+}
+
+func addCandidateBounded(s map[int]float64, x int, d float64, cap int) {
+	if old, ok := s[x]; ok {
+		if d < old {
+			s[x] = d
+		}
 		return
 	}
 	if len(s) < cap {
-		s[x] = struct{}{}
+		s[x] = d
 		return
 	}
 	worst := -1
-	for v := range s {
-		if v > worst {
-			worst = v
+	worstD := -1.0
+	for i, v := range s {
+		if v > worstD || v == worstD && i > worst {
+			worst, worstD = i, v
 		}
 	}
-	if x < worst {
+	if d < worstD || d == worstD && x < worst {
 		delete(s, worst)
-		s[x] = struct{}{}
+		s[x] = d
 	}
 }
 
@@ -367,7 +417,7 @@ func stableIDPartition(id string, partitions int) int {
 }
 
 func ValidateArtifact(a Artifact) error {
-	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
+	if a.SchemaVersion != SchemaVersion || a.Backend == "" || len(a.Backend) > 256 || a.BackendLicense == "" || len(a.BackendLicense) > 1024 || a.Source.SourceID == "" || len(a.Source.SourceID) > 1024 || len(a.Source.Checksum) != 64 || a.Source.Vectors != len(a.IDs) || a.Source.Dimensions < 1 || a.Source.Metric != a.Config.Metric || len(a.IDs) == 0 || len(a.IDs) != len(a.Graph.Neighbors) || len(a.IDs) != len(a.Assignment) {
 		return errors.New("malformed partition artifact")
 	}
 	if err := validateInput(makeVectors(a.IDs, a.Graph.Neighbors), a.Config); err != nil {
@@ -388,6 +438,9 @@ func ValidateArtifact(a Artifact) error {
 		}
 		loads[p]++
 	}
+	if _, err := hex.DecodeString(a.Source.Checksum); err != nil {
+		return errors.New("invalid source checksum")
+	}
 	for _, n := range loads {
 		if n > cap {
 			return errors.New("partition cap exceeded")
@@ -407,12 +460,12 @@ func validateGraph(g Graph, n, degree int) error {
 		if len(ns) > degree {
 			return errors.New("degree cap exceeded")
 		}
-		seen := map[int]bool{}
+		previous := -1
 		for _, j := range ns {
-			if j < 0 || j >= n || j == i || seen[j] {
+			if j < 0 || j >= n || j == i || j <= previous {
 				return errors.New("invalid graph edge")
 			}
-			seen[j] = true
+			previous = j
 		}
 	}
 	return nil
@@ -467,7 +520,13 @@ func DecodeArtifact(raw []byte, maxBytes int) (Artifact, error) {
 // TreeDB runtime dependency. Its output is written to a private temp path and
 // removed on cancellation, timeout, command failure, or invalid output.
 func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOutput int) (Artifact, error) {
-	if len(command) == 0 || maxOutput < 1 {
+	if ctx == nil {
+		return Artifact{}, errors.New("external backend requires context deadline")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return Artifact{}, errors.New("external backend requires context deadline")
+	}
+	if len(command) == 0 || maxOutput < 1 || len(input) > maxOutput {
 		return Artifact{}, errors.New("invalid external backend command")
 	}
 	dir, err := os.MkdirTemp("", "treedb-vectorpartition-backend-*")
@@ -481,8 +540,13 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 		return Artifact{}, err
 	}
 	cmd := exec.CommandContext(ctx, command[0], append(command[1:], in, out)...)
-	if b, e := cmd.CombinedOutput(); e != nil {
-		return Artifact{}, fmt.Errorf("external partition backend: %w: %s", e, bytes.TrimSpace(b))
+	stderr := &cappedBuffer{limit: maxOutput}
+	cmd.Stderr = stderr
+	if e := cmd.Run(); e != nil {
+		return Artifact{}, fmt.Errorf("external partition backend: %w: %s", e, bytes.TrimSpace(stderr.Bytes()))
+	}
+	if stderr.exceeded {
+		return Artifact{}, errors.New("external partition backend stderr exceeds cap")
 	}
 	f, e := os.Open(out)
 	if e != nil {
@@ -497,6 +561,20 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 		return Artifact{}, errors.New("external partition backend output exceeds cap")
 	}
 	return DecodeArtifact(raw, maxOutput)
+}
+
+type cappedBuffer struct {
+	bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if len(p) > b.limit-b.Len() {
+		b.exceeded = true
+		return len(p), nil
+	}
+	return b.Buffer.Write(p)
 }
 func Digest(a Artifact) (string, error) {
 	b, e := CanonicalJSON(a)
