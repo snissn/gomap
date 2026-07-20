@@ -164,12 +164,15 @@ type DB struct {
 	lifecycleMu                          sync.RWMutex
 	commandWALCached                     bool
 	commandWALPendingMu                  sync.Mutex
+	commandWALPublicPublishMu            sync.Mutex
+	commandWALPublicOperationGate        sync.RWMutex
 	commandWALPublicPayloadPool          sync.Pool
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
 	commandWALCheckpointCutoverLast      atomic.Uint64
 	commandWALCheckpointCutoverErr       error
 	commandWALLiveFrames                 atomic.Uint64
+	commandWALGroupCommit                publicCommandWALGroupCommit
 	commandWALPublicBatchSetCalls        atomic.Uint64
 	commandWALPublicBatchSetBytes        atomic.Uint64
 	commandWALPublicBatchSetViewCalls    atomic.Uint64
@@ -221,6 +224,8 @@ type publicBatchWriteSyncPhaseSample struct {
 	commandAppendObserved                          bool
 	commandFlush                                   time.Duration
 	commandFlushObserved                           bool
+	commandGroupCommitWait                         time.Duration
+	commandGroupCommitWaitObserved                 bool
 	commandSync                                    time.Duration
 	commandSyncObserved                            bool
 	commandPostAppendPendingLSNBookkeeping         time.Duration
@@ -249,6 +254,8 @@ type publicBatchWriteSyncPhaseStats struct {
 	commandAppendNs                             atomic.Uint64
 	commandFlushCalls                           atomic.Uint64
 	commandFlushNs                              atomic.Uint64
+	commandGroupCommitWaitCalls                 atomic.Uint64
+	commandGroupCommitWaitNs                    atomic.Uint64
 	commandSyncCalls                            atomic.Uint64
 	commandSyncNs                               atomic.Uint64
 	commandPostAppendPendingLSNBookkeepingCalls atomic.Uint64
@@ -392,6 +399,7 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 	commandExternalRefOrderingNs := nonNegativeDurationNs(sample.commandExternalRefOrdering)
 	commandAppendNs := nonNegativeDurationNs(sample.commandAppend)
 	commandFlushNs := nonNegativeDurationNs(sample.commandFlush)
+	commandGroupCommitWaitNs := nonNegativeDurationNs(sample.commandGroupCommitWait)
 	commandSyncNs := nonNegativeDurationNs(sample.commandSync)
 	commandPostAppendPendingLSNBookkeepingNs := nonNegativeDurationNs(sample.commandPostAppendPendingLSNBookkeeping)
 	commandEmptyBarrierNs := nonNegativeDurationNs(sample.commandEmptyBarrier)
@@ -410,6 +418,7 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 		commandExternalRefOrderingNs +
 		commandAppendNs +
 		commandFlushNs +
+		commandGroupCommitWaitNs +
 		commandSyncNs +
 		commandPostAppendPendingLSNBookkeepingNs +
 		commandEmptyBarrierNs
@@ -452,6 +461,10 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 		s.commandFlushCalls.Add(1)
 	}
 	s.commandFlushNs.Add(commandFlushNs)
+	if sample.commandGroupCommitWaitObserved {
+		s.commandGroupCommitWaitCalls.Add(1)
+	}
+	s.commandGroupCommitWaitNs.Add(commandGroupCommitWaitNs)
 	if sample.commandSyncObserved {
 		s.commandSyncCalls.Add(1)
 	}
@@ -477,7 +490,7 @@ func publicBatchWriteSyncPhaseStatsInto(stats map[string]string, enabled bool, s
 	stats[prefix+"enabled"] = strconv.FormatBool(enabled)
 	stats[prefix+"scope"] = "command_wal_public_batch_write_sync"
 	stats[prefix+"top_level_partition"] = "checkpoint_gate+preflight_materialization+command_callback+memtable_publication_reset+residual"
-	stats[prefix+"command_callback_partition"] = "command_public_payload_entry_scan_preparation+command_publish_lock_barrier_wait+command_backend_intent_planning_serialization+command_external_ref_ordering+command_append+(command_flush|command_sync)+command_post_append_pending_lsn_bookkeeping+command_empty_barrier+command_other"
+	stats[prefix+"command_callback_partition"] = "command_public_payload_entry_scan_preparation+command_publish_lock_barrier_wait+command_backend_intent_planning_serialization+command_external_ref_ordering+command_append+command_flush+command_group_commit_wait+command_sync+command_post_append_pending_lsn_bookkeeping+command_empty_barrier+command_other"
 	stats[prefix+"calls_total"] = fmt.Sprintf("%d", s.calls.Load())
 	stats[prefix+"errors_total"] = fmt.Sprintf("%d", s.errors.Load())
 	stats[prefix+"wall.ns_total"] = fmt.Sprintf("%d", s.wallNs.Load())
@@ -496,6 +509,8 @@ func publicBatchWriteSyncPhaseStatsInto(stats map[string]string, enabled bool, s
 	stats[prefix+"command_append.ns_total"] = fmt.Sprintf("%d", s.commandAppendNs.Load())
 	stats[prefix+"command_flush.calls_total"] = fmt.Sprintf("%d", s.commandFlushCalls.Load())
 	stats[prefix+"command_flush.ns_total"] = fmt.Sprintf("%d", s.commandFlushNs.Load())
+	stats[prefix+"command_group_commit_wait.calls_total"] = fmt.Sprintf("%d", s.commandGroupCommitWaitCalls.Load())
+	stats[prefix+"command_group_commit_wait.ns_total"] = fmt.Sprintf("%d", s.commandGroupCommitWaitNs.Load())
 	stats[prefix+"command_sync.calls_total"] = fmt.Sprintf("%d", s.commandSyncCalls.Load())
 	stats[prefix+"command_sync.ns_total"] = fmt.Sprintf("%d", s.commandSyncNs.Load())
 	stats[prefix+"command_post_append_pending_lsn_bookkeeping.calls_total"] = fmt.Sprintf("%d", s.commandPostAppendPendingLSNBookkeepingCalls.Load())
@@ -1135,6 +1150,7 @@ func (db *DB) publicCachedExpvarStatsInto(stats map[string]string) {
 		return
 	}
 	db.publicCommandWALBatchStatsInto(stats)
+	db.publicCommandWALGroupStatsInto(stats)
 	db.publicOperationStatsInto(stats)
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	maintenanceStatsInto(stats, &db.maintenance)
@@ -1686,6 +1702,7 @@ func (db *DB) Close() error {
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 	}
+	db.closePublicCommandWALGroupCommit()
 
 	// Always close backend if present
 	if db.backend != nil {
@@ -1901,9 +1918,12 @@ func (db *DB) Set(key, value []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), db.commandWALOrdinaryWriteRequiresSync())
+			var publication publicCommandWALPublication
+			err := db.cached.SetAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, assignRevision, db.commandWALOrdinaryWriteRequiresSync(), &publication)
 			})
+			db.finishPublicCommandWALGroupPublication(publication, err)
+			return err
 		}
 		return db.cached.Set(key, value)
 	}
@@ -1922,9 +1942,12 @@ func (db *DB) SetSync(key, value []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), true)
+			var publication publicCommandWALPublication
+			err := db.cached.SetAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, assignRevision, true, &publication)
 			})
+			db.finishPublicCommandWALGroupPublication(publication, err)
+			return err
 		}
 		return db.cached.SetSync(key, value)
 	}
@@ -2061,9 +2084,12 @@ func (db *DB) Delete(key []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), db.commandWALOrdinaryWriteRequiresSync())
+			var publication publicCommandWALPublication
+			err := db.cached.DeleteAfterCommandWALAppendWithPreparedRevision(key, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, assignRevision, db.commandWALOrdinaryWriteRequiresSync(), &publication)
 			})
+			db.finishPublicCommandWALGroupPublication(publication, err)
+			return err
 		}
 		return db.cached.Delete(key)
 	}
@@ -2084,13 +2110,15 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			return nil
 		}
 		appended := false
+		var publication publicCommandWALPublication
 		err := db.cached.DeleteRangeAfterCommandWALAppend(start, end, func() error {
-			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, db.commandWALOrdinaryWriteRequiresSync()); err != nil {
+			if err := db.appendPublicRawKVDeleteRangeCommand(start, end, db.commandWALOrdinaryWriteRequiresSync(), &publication); err != nil {
 				return err
 			}
 			appended = true
 			return nil
 		})
+		db.finishPublicCommandWALGroupPublication(publication, err)
 		if err != nil && appended && db.backend != nil {
 			db.backend.MarkCommandWALRecoveryRequired()
 		}
@@ -2131,9 +2159,12 @@ func (db *DB) DeleteSync(key []byte) error {
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), true)
+			var publication publicCommandWALPublication
+			err := db.cached.DeleteAfterCommandWALAppendWithPreparedRevision(key, func(assignRevision func() page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, assignRevision, true, &publication)
 			})
+			db.finishPublicCommandWALGroupPublication(publication, err)
+			return err
 		}
 		return db.cached.DeleteSync(key)
 	}
@@ -2258,6 +2289,7 @@ func (db *DB) Stats() map[string]string {
 		db.profileStatsInto(stats)
 		db.publicCommandWALLiveStatsInto(stats)
 		db.publicCommandWALBatchStatsInto(stats)
+		db.publicCommandWALGroupStatsInto(stats)
 		db.publicRawSpanNativeStatsInto(stats)
 		db.publicOperationStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode

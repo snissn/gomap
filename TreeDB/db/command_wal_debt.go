@@ -19,6 +19,22 @@ type CommandWALDependencyDebt struct {
 	entries []commandWALDependencyDebtEntry
 }
 
+func (debt *CommandWALDependencyDebt) entryCountThrough(lsn uint64) uint64 {
+	if debt == nil || lsn == 0 {
+		return 0
+	}
+	debt.mu.Lock()
+	var count uint64
+	for _, entry := range debt.entries {
+		if entry.firstLSN > lsn {
+			break
+		}
+		count++
+	}
+	debt.mu.Unlock()
+	return count
+}
+
 type commandWALDependencyDebtEntry struct {
 	firstLSN      uint64
 	lastLSN       uint64
