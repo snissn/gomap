@@ -211,17 +211,8 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
 	defer func() { _ = sourceFSM.Close() }()
 
-	store, err := collections.OpenVectorPartitionStoreV1(sourceDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest := raftSnapshotVectorPartitionManifestForTest(t, sourceDB)
-	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, collections.VectorPartitionAssetV1{}, ""
-	manifest.Canonicalize()
-	if err := store.Publish(manifest); err != nil {
-		t.Fatal(err)
-	}
 	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"partition-snapshot","name":"metadata"}`))
+	manifest := stageRaftSnapshotReadyVectorPartitionForTest(t, sourceDB, 1)
 	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +227,7 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := targetStore.Open(manifest.Collection, manifest.IndexName, manifest.Generation)
+	got, err := targetStore.OpenActive(manifest.Collection, manifest.IndexName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,10 +244,14 @@ func TestRaftSnapshotV1InstallPreservesVectorPartitionManifestNamespace(t *testi
 		if err != nil {
 			t.Fatalf("restored partition asset %q: %v", asset.ID, err)
 		}
-		if crc32.ChecksumIEEE(raw) != asset.Ref.Checksum {
+		end := asset.Ref.Offset + asset.Ref.Length
+		if asset.Ref.Offset < 0 || asset.Ref.Length < 0 || end > int64(len(raw)) {
+			t.Fatalf("restored partition asset %q range offset=%d length=%d outside segment bytes=%d", asset.ID, asset.Ref.Offset, asset.Ref.Length, len(raw))
+		}
+		if crc32.ChecksumIEEE(raw[asset.Ref.Offset:end]) != asset.Ref.Checksum {
 			t.Fatalf("restored partition asset %q checksum mismatch", asset.ID)
 		}
-		sum := sha256.Sum256(raw)
+		sum := sha256.Sum256(raw[asset.Ref.Offset:end])
 		if hex.EncodeToString(sum[:]) != asset.Checksum {
 			t.Fatalf("restored partition asset %q digest mismatch", asset.ID)
 		}
@@ -303,16 +298,7 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 			sourceFSM := openRaftSnapshotFSMForTest(b, sourceDB, sourceDir, true)
 			defer sourceFSM.Close()
 			applySnapshotSourceEntries(b, sourceFSM, []byte(`{"_id":"benchmark","name":"snapshot"}`))
-			store, err := collections.OpenVectorPartitionStoreV1(sourceDir)
-			if err != nil {
-				b.Fatal(err)
-			}
-			manifest := raftSnapshotVectorPartitionManifestForBenchmark(b, sourceDB, rows)
-			manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, collections.VectorPartitionAssetV1{}, ""
-			manifest.Canonicalize()
-			if err := store.Publish(manifest); err != nil {
-				b.Fatal(err)
-			}
+			_ = stageRaftSnapshotReadyVectorPartitionForTest(b, sourceDB, rows)
 			b.Run("archive", func(b *testing.B) {
 				var archiveBytes int
 				for i := 0; i < b.N; i++ {
@@ -334,7 +320,11 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 					targetDB := openRaftSnapshotFSMTestDB(b, targetDir, false)
 					targetFSM := openRaftSnapshotFSMForTest(b, targetDB, targetDir, true)
 					installRaftSnapshotForTest(b, targetFSM, snapshot)
-					if _, err := collections.OpenExistingVectorPartitionStoreV1(targetDir); err != nil {
+					targetStore, err := collections.OpenExistingVectorPartitionStoreV1(targetDir)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if _, err := targetStore.OpenActive("docs", "embedding"); err != nil {
 						b.Fatal(err)
 					}
 					targetFSM.Close()
@@ -345,43 +335,104 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 	}
 }
 
-func raftSnapshotVectorPartitionManifestForBenchmark(tb testing.TB, database *backenddb.DB, rows int) collections.VectorPartitionManifestV1 {
-	m := raftSnapshotVectorPartitionManifestForTest(tb, database)
-	m.SourceRowCount = uint64(rows)
-	m.Memberships = make([]collections.VectorPartitionMembershipV1, rows)
-	for i := range m.Memberships {
-		m.Memberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+// stageRaftSnapshotReadyVectorPartitionForTest builds a ready manifest through
+// the collection authority in a separate local DB, then stages its durable
+// side-store namespace into the Raft-owned source. Direct collection work must
+// not advance the Raft source DB's applied-LSN outside durable Raft progress.
+func stageRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, source *backenddb.DB, rows int) collections.VectorPartitionManifestV1 {
+	tb.Helper()
+	authorityDir := tb.TempDir()
+	authority := openRaftSnapshotFSMTestDB(tb, authorityDir, false)
+	defer authority.Close()
+	manifest := publishRaftSnapshotReadyVectorPartitionForTest(tb, authority, rows)
+	for _, pair := range [][2]string{{filepath.Join(authorityDir, "vector_partitions"), filepath.Join(source.Dir(), "vector_partitions")}, {authority.ColumnAssetRootDir(), source.ColumnAssetRootDir()}} {
+		if err := copyRaftSnapshotFixtureTree(pair[0], pair[1]); err != nil {
+			tb.Fatalf("stage ready vector partition %s: %v", pair[0], err)
+		}
 	}
-	m.Canonicalize()
-	return m
+	return manifest
 }
 
-func raftSnapshotVectorPartitionManifestForTest(t testing.TB, database *backenddb.DB) collections.VectorPartitionManifestV1 {
-	t.Helper()
-	asset := func(partID uint64, fileID uint32, raw []byte) collections.VectorPartitionAssetV1 {
-		path := filepath.Join(database.ColumnAssetRootDir(), "snapshot-test", "assets", "segments", fmt.Sprintf("segment-%06d.tca", fileID))
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
+func copyRaftSnapshotFixtureTree(source, target string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if err := os.WriteFile(path, raw, 0600); err != nil {
-			t.Fatal(err)
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
 		}
-		sum := sha256.Sum256(raw)
-		return collections.VectorPartitionAssetV1{ID: fmt.Sprintf("asset/%d", fileID), Checksum: hex.EncodeToString(sum[:]), Bytes: uint64(len(raw)), Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "snapshot-test", Generation: 4, PartID: partID, FileID: fileID, Length: int64(len(raw)), Checksum: crc32.ChecksumIEEE(raw)}}
+		destination := filepath.Join(target, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0700)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, raw, 0600)
+	})
+}
+
+func publishRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, database *backenddb.DB, rows int) collections.VectorPartitionManifestV1 {
+	tb.Helper()
+	if rows < 1 {
+		tb.Fatal("ready vector partition requires at least one source row")
 	}
-	partition := asset(1, 1, []byte("partition-data"))
-	partition.ID = "partition/0"
-	router := asset(2, 2, []byte("router-payload"))
-	router.ID = "router"
+	meta := collections.CollectionMeta{Name: "docs", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{Enabled: true, AssetManager: &collections.ColumnAssetManagerConfig{Kind: collections.ColumnAssetManagerValueLogShaped, IsolatedNamespace: true, Namespace: "docs/vector-partition-assets"}, Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: 3}}}}, VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: 3, Strategy: collections.VectorIndexStrategyColumnGraph}}}
+	mgr := collections.NewCollectionManager(database)
+	if _, err := mgr.CreateCollection(&meta); err != nil {
+		tb.Fatalf("CreateCollection docs: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		tb.Fatalf("OpenCollection docs: %v", err)
+	}
+	for i := 0; i < rows; i++ {
+		id := []byte(fmt.Sprintf("partition-%d", i))
+		doc := []byte(fmt.Sprintf(`{"_id":"partition-%d","embedding":[1,0,0]}`, i))
+		if _, err := col.Insert(id, doc); err != nil {
+			tb.Fatalf("Insert source row %d: %v", i, err)
+		}
+	}
+	if _, err := col.RebuildVectorIndex("embedding"); err != nil {
+		tb.Fatalf("RebuildVectorIndex embedding: %v", err)
+	}
+	identity, err := col.VectorPartitionSourceIdentityV1("embedding")
+	if err != nil {
+		tb.Fatalf("VectorPartitionSourceIdentityV1: %v", err)
+	}
+	lease, err := database.AcquireStableResourceCaptureLease()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer lease.Release()
+	refs, resources, err := collections.AppendColumnPhysicalAssetsWithStableResources(database.ColumnAssetRootDir(), *col.Meta().Options.ColumnStore, 41, []collections.StableColumnPhysicalAssetAppend{{Payload: []byte("partition-data"), Kind: collections.ColumnAssetKindTCS1PartImage, Generation: 7, PartID: 1}, {Payload: []byte("router-payload"), Kind: collections.ColumnAssetKindTCS1PartImage, Generation: 7, PartID: 2}}, database.StableResourceIdentityPinRegistry(), lease)
+	if err != nil {
+		tb.Fatalf("AppendColumnPhysicalAssetsWithStableResources: %v", err)
+	}
+	asset := func(id string, partitionID uint32, ref collections.ColumnAssetRef) collections.VectorPartitionAssetV1 {
+		raw, err := os.ReadFile(filepath.Join(database.ColumnAssetRootDir(), ref.Namespace, "assets", "segments", fmt.Sprintf("segment-%06d.tca", ref.FileID)))
+		if err != nil {
+			tb.Fatal(err)
+		}
+		end := ref.Offset + ref.Length
+		if ref.Offset < 0 || ref.Length < 0 || end > int64(len(raw)) {
+			tb.Fatalf("asset %q range offset=%d length=%d outside segment bytes=%d", id, ref.Offset, ref.Length, len(raw))
+		}
+		sum := sha256.Sum256(raw[ref.Offset:end])
+		return collections.VectorPartitionAssetV1{ID: id, PartitionID: partitionID, Checksum: hex.EncodeToString(sum[:]), Bytes: uint64(ref.Length), Ref: ref}
+	}
+	partition, router := asset("partition/0", 0, refs[0]), asset("router", 0, refs[1])
 	manifest := collections.VectorPartitionManifestV1{
 		State:                 "ready",
 		Collection:            "docs",
 		IndexName:             "embedding",
-		IndexDefinitionDigest: strings.Repeat("a", 64),
-		SourceGeneration:      4,
-		SourceChecksum:        9,
-		SourceSchemaHash:      11,
-		SourceRowCount:        1,
+		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(col.Meta().VectorIndexes[0]),
+		SourceGeneration:      identity.Generation,
+		SourceChecksum:        identity.Checksum,
+		SourceSchemaHash:      identity.SchemaHash,
+		SourceRowCount:        identity.RowCount,
 		Generation:            7,
 		RouterGeneration:      7,
 		PartitionCount:        1,
@@ -392,6 +443,10 @@ func raftSnapshotVectorPartitionManifestForTest(t testing.TB, database *backendd
 		RouterAsset:           router,
 	}
 	manifest.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(manifest, resources); err != nil {
+		resources.Release()
+		tb.Fatalf("PublishVectorPartitionManifestV1: %v", err)
+	}
 	return manifest
 }
 

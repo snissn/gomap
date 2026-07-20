@@ -74,6 +74,17 @@ type VectorPartitionManifestV1 struct {
 	ReadySetDigest                                                     string
 }
 
+// VectorPartitionSourceIdentityV1 identifies the loaded vector-index
+// generation a ready partition manifest must bind. Builders obtain this from
+// the collection immediately before publication rather than reconstructing it
+// from untrusted inputs.
+type VectorPartitionSourceIdentityV1 struct {
+	Generation uint64
+	Checksum   uint64
+	SchemaHash uint64
+	RowCount   uint64
+}
+
 func VectorIndexDefinitionDigestV1(d VectorIndexDefinition) string {
 	// Fixed field order avoids JSON/map ambiguity and binds the declared index,
 	// not a loose duplicate of its schema.
@@ -1915,21 +1926,37 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 // builder-supplied copy. VectorIndexStatus validates TVIS against the active
 // manifest and its typed assets before this snapshot is inspected.
 func (c *Collection) validateVectorPartitionSourceIdentityV1(m VectorPartitionManifestV1) error {
-	status, err := c.VectorIndexStatus(m.IndexName)
+	identity, err := c.VectorPartitionSourceIdentityV1(m.IndexName)
 	if err != nil {
-		return fmt.Errorf("collections: vector partition source status: %w", err)
+		return err
 	}
-	if !status.Loaded || status.State != VectorIndexStateColumnGraphLoaded {
-		return fmt.Errorf("collections: vector partition source index %q is not a loaded TVIS generation", m.IndexName)
-	}
-	_, graph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(m.IndexName)
-	if err != nil {
-		return fmt.Errorf("collections: vector partition source identity: %w", err)
-	}
-	if m.SourceGeneration != graph.BaseManifestGeneration || m.SourceChecksum != graph.BaseManifestChecksum || m.SourceSchemaHash != graph.BaseSchemaHash || m.SourceRowCount != uint64(graph.RowCount) {
+	if m.SourceGeneration != identity.Generation || m.SourceChecksum != identity.Checksum || m.SourceSchemaHash != identity.SchemaHash || m.SourceRowCount != identity.RowCount {
 		return fmt.Errorf("collections: vector partition source identity mismatch")
 	}
 	return nil
+}
+
+// VectorPartitionSourceIdentityV1 returns the authoritative identity of a
+// loaded column-graph vector index for a ready partition publication.
+func (c *Collection) VectorPartitionSourceIdentityV1(indexName string) (VectorPartitionSourceIdentityV1, error) {
+	if c == nil {
+		return VectorPartitionSourceIdentityV1{}, errCollectionNil
+	}
+	if c.db == nil {
+		return VectorPartitionSourceIdentityV1{}, errCollectionDBNil
+	}
+	status, err := c.VectorIndexStatus(indexName)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source status: %w", err)
+	}
+	if !status.Loaded || status.State != VectorIndexStateColumnGraphLoaded {
+		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source index %q is not a loaded TVIS generation", indexName)
+	}
+	_, graph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(indexName)
+	if err != nil {
+		return VectorPartitionSourceIdentityV1{}, fmt.Errorf("collections: vector partition source identity: %w", err)
+	}
+	return VectorPartitionSourceIdentityV1{Generation: graph.BaseManifestGeneration, Checksum: graph.BaseManifestChecksum, SchemaHash: graph.BaseSchemaHash, RowCount: uint64(graph.RowCount)}, nil
 }
 
 func verifyVectorPartitionAssetsV1(root, namespace string, assets []VectorPartitionAssetV1) error {
