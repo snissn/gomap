@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -55,6 +56,38 @@ func TestVectorPartitionWindowsExistingNamespaceMutatorsLeaveNoTrace(t *testing.
 		if after := snapshotVPMWindowsTree(t, root); !bytes.Equal(after, before) {
 			t.Fatalf("%s mutated namespace: before=%q after=%q", name, before, after)
 		}
+	}
+}
+
+func TestVectorPartitionWindowsOpenExistingReadyNamespaceIsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "vector_partitions")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	raw, err := EncodeVectorPartitionManifestV1(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := safeVPM(m.Collection) + "-" + safeVPM(m.IndexName) + "-" + strconv.FormatUint(m.Generation, 10) + ".vpm"
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte(strconv.FormatUint(m.Generation, 10)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotVPMWindowsTree(t, root)
+	store, err := OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.OpenActive(m.Collection, m.IndexName)
+	if err != nil || got.Generation != m.Generation || got.State != "ready" {
+		t.Fatalf("OpenActive=%+v err=%v", got, err)
+	}
+	if after := snapshotVPMWindowsTree(t, root); !bytes.Equal(before, after) {
+		t.Fatal("read-only recovery mutated restored namespace")
 	}
 }
 
