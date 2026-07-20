@@ -1054,6 +1054,26 @@ func TestValidatorRejectsSymmetricPolicyEvenForReciprocalGraph(t *testing.T) {
 		t.Fatal("decode accepted a reciprocal symmetric artifact")
 	}
 }
+
+func TestSymmetricConfigFailsBeforeInputOrBackendWork(t *testing.T) {
+	c := config()
+	c.Symmetric = true
+	if err := ValidateConfig(c); err == nil || err.Error() != "symmetric graph policy is not supported" {
+		t.Fatalf("ValidateConfig error=%v", err)
+	}
+	called := false
+	poison := []Vector{{ID: string([]byte{0xff}), Values: []float64{math.NaN()}}}
+	_, err := BuildWithPartitioner(poison, c, Source{SourceID: "symmetric-preflight"}, identityPartitioner{name: "poison", license: "test", called: &called})
+	if err == nil || err.Error() != "symmetric graph policy is not supported" {
+		t.Fatalf("symmetric build did not fail in config preflight: %v", err)
+	}
+	if called {
+		t.Fatal("symmetric config reached partition backend")
+	}
+	if _, err := Build(fixture(), config()); err != nil {
+		t.Fatalf("directed build regressed: %v", err)
+	}
+}
 func TestReferencePartitionerCoversEveryPartition(t *testing.T) {
 	g := emptyGraph(8)
 	a, err := (ReferencePartitioner{}).Partition(g, 4, 2)
