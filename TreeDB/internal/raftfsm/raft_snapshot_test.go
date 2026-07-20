@@ -287,7 +287,68 @@ func TestRaftSnapshotV1ExportWaitsForVectorPartitionStorageBarrier(t *testing.T)
 	}
 }
 
-func raftSnapshotVectorPartitionManifestForTest(t *testing.T, database *backenddb.DB) collections.VectorPartitionManifestV1 {
+func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
+	for _, rows := range []int{10_000, 100_000, 1_000_000} {
+		b.Run(fmt.Sprintf("memberships=%d", rows), func(b *testing.B) {
+			root := b.TempDir()
+			sourceDir := filepath.Join(root, "source")
+			sourceDB := openRaftSnapshotFSMTestDB(b, sourceDir, true)
+			defer sourceDB.Close()
+			sourceFSM := openRaftSnapshotFSMForTest(b, sourceDB, sourceDir, true)
+			defer sourceFSM.Close()
+			applySnapshotSourceEntries(b, sourceFSM, []byte(`{"_id":"benchmark","name":"snapshot"}`))
+			store, err := collections.OpenVectorPartitionStoreV1(sourceDir)
+			if err != nil {
+				b.Fatal(err)
+			}
+			manifest := raftSnapshotVectorPartitionManifestForBenchmark(b, sourceDB, rows)
+			if err := store.Publish(manifest); err != nil {
+				b.Fatal(err)
+			}
+			b.Run("archive", func(b *testing.B) {
+				var archiveBytes int
+				for i := 0; i < b.N; i++ {
+					snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+					if err != nil {
+						b.Fatal(err)
+					}
+					archiveBytes = len(readRaftSnapshotArchiveForTest(b, snapshot))
+				}
+				b.ReportMetric(float64(archiveBytes), "archive-bytes")
+			})
+			snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Run("install", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					targetDir := filepath.Join(root, fmt.Sprintf("target-%d", i))
+					targetDB := openRaftSnapshotFSMTestDB(b, targetDir, false)
+					targetFSM := openRaftSnapshotFSMForTest(b, targetDB, targetDir, true)
+					installRaftSnapshotForTest(b, targetFSM, snapshot)
+					if _, err := collections.OpenExistingVectorPartitionStoreV1(targetDir); err != nil {
+						b.Fatal(err)
+					}
+					targetFSM.Close()
+					targetDB.Close()
+				}
+			})
+		})
+	}
+}
+
+func raftSnapshotVectorPartitionManifestForBenchmark(tb testing.TB, database *backenddb.DB, rows int) collections.VectorPartitionManifestV1 {
+	m := raftSnapshotVectorPartitionManifestForTest(tb, database)
+	m.SourceRowCount = uint64(rows)
+	m.Memberships = make([]collections.VectorPartitionMembershipV1, rows)
+	for i := range m.Memberships {
+		m.Memberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Canonicalize()
+	return m
+}
+
+func raftSnapshotVectorPartitionManifestForTest(t testing.TB, database *backenddb.DB) collections.VectorPartitionManifestV1 {
 	t.Helper()
 	asset := func(partID uint64, fileID uint32, raw []byte) collections.VectorPartitionAssetV1 {
 		path := filepath.Join(database.ColumnAssetRootDir(), "snapshot-test", "assets", "segments", fmt.Sprintf("segment-%06d.tca", fileID))
