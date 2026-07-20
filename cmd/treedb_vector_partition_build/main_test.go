@@ -110,3 +110,24 @@ func TestLoadRejectsOversizedManifestBeforeDecode(t *testing.T) {
 		t.Fatal("oversized manifest accepted")
 	}
 }
+
+func TestReportMarksUnavailableAccountingWithoutMeasuredZero(t *testing.T) {
+	raw, err := json.Marshal(report{BuildCPUAvailable: false, TotalCommandCPUAvailable: false, PeakRSSAvailable: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"build_cpu_nanos", "total_command_cpu_nanos", "peak_rss_bytes"} {
+		if _, ok := fields[name]; ok {
+			t.Fatalf("unavailable accounting emitted fabricated %s: %s", name, raw)
+		}
+	}
+	for _, name := range []string{"build_cpu_available", "total_command_cpu_available", "peak_rss_available"} {
+		if got, ok := fields[name].(bool); !ok || got {
+			t.Fatalf("unavailable accounting not explicit for %s: %s", name, raw)
+		}
+	}
+}

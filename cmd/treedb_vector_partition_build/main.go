@@ -16,10 +16,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -67,14 +65,17 @@ type report struct {
 	ArtifactPath              string                  `json:"artifact_path"`
 	LoadWallNanos             int64                   `json:"load_wall_nanos"`
 	BuildWallNanos            int64                   `json:"build_wall_nanos"`
-	BuildCPUNanos             int64                   `json:"build_cpu_nanos"`
+	BuildCPUNanos             *int64                  `json:"build_cpu_nanos,omitempty"`
+	BuildCPUAvailable         bool                    `json:"build_cpu_available"`
 	GraphBuildNanos           int64                   `json:"graph_build_nanos"`
 	BackendPartitionNanos     int64                   `json:"backend_partition_nanos"`
 	ValidationNanos           int64                   `json:"validation_nanos"`
 	QualityWallNanos          int64                   `json:"quality_wall_nanos"`
 	TotalCommandWallNanos     int64                   `json:"total_command_wall_nanos"`
-	TotalCommandCPUNanos      int64                   `json:"total_command_cpu_nanos"`
-	PeakRSSBytes              int64                   `json:"peak_rss_bytes"`
+	TotalCommandCPUNanos      *int64                  `json:"total_command_cpu_nanos,omitempty"`
+	TotalCommandCPUAvailable  bool                    `json:"total_command_cpu_available"`
+	PeakRSSBytes              *int64                  `json:"peak_rss_bytes,omitempty"`
+	PeakRSSAvailable          bool                    `json:"peak_rss_available"`
 	TemporaryBytes            int64                   `json:"temporary_bytes"`
 	ArtifactBytes             int64                   `json:"artifact_bytes"`
 	ReportBytes               int64                   `json:"report_bytes"`
@@ -97,7 +98,7 @@ func main() {
 }
 func run(args []string) error {
 	commandStart := time.Now()
-	commandCPUStart := cpuNanos()
+	commandCPUStart, commandCPUAvailable := cpuNanos()
 	var dataset, out string
 	var partitions, probes, reps, pivots, leaf, degree int
 	var imbalance float64
@@ -138,13 +139,17 @@ func run(args []string) error {
 		return err
 	}
 	start := time.Now()
-	cpuStart := cpuNanos()
+	cpuStart, buildCPUAvailable := cpuNanos()
 	art, phases, err := vectorpartition.BuildWithPartitionerPhased(vs, cfg, vectorpartition.Source{SourceID: "exporter_manifest:" + manifestDigest(m)}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		return err
 	}
 	wall := time.Since(start).Nanoseconds()
-	buildCPU := cpuNanos() - cpuStart
+	var buildCPU *int64
+	if cpuEnd, ok := cpuNanos(); buildCPUAvailable && ok {
+		v := cpuEnd - cpuStart
+		buildCPU = &v
+	}
 	digest, err := vectorpartition.Digest(art)
 	if err != nil {
 		return err
@@ -174,7 +179,12 @@ func run(args []string) error {
 	}
 	cap := art.Metrics.Cap
 	bal := float64(art.Metrics.MaxPartitionSize) * float64(partitions) / float64(len(vs))
-	r := report{SchemaVersion: 1, ResultKind: "offline_partition_builder_exporter_v1", Dataset: m, Source: art.Source, Config: art.Config, Metrics: art.Metrics, ArtifactPath: path, LoadWallNanos: loadWall, BuildWallNanos: wall, BuildCPUNanos: buildCPU, GraphBuildNanos: phases.GraphBuildNanos, BackendPartitionNanos: phases.BackendPartitionNanos, ValidationNanos: phases.ValidationNanos, QualityWallNanos: qualityWall, PeakRSSBytes: peakRSS(), TemporaryBytes: 0, ArtifactBytes: st.Size(), BytesPerVector: float64(st.Size()) / float64(len(vs)), Balance: bal, GraphNeighborRecall: gr, GraphNeighborSamples: min(graphRecallSamples, len(vs)), PartitionOracleRecallAt10: pr, StableHashRecallAt10: hr, Probes: probes, ArtifactSHA256: digest}
+	peakRSSBytes, peakRSSAvailable := peakRSS()
+	var peakRSSValue *int64
+	if peakRSSAvailable {
+		peakRSSValue = &peakRSSBytes
+	}
+	r := report{SchemaVersion: 1, ResultKind: "offline_partition_builder_exporter_v1", Dataset: m, Source: art.Source, Config: art.Config, Metrics: art.Metrics, ArtifactPath: path, LoadWallNanos: loadWall, BuildWallNanos: wall, BuildCPUNanos: buildCPU, BuildCPUAvailable: buildCPU != nil, GraphBuildNanos: phases.GraphBuildNanos, BackendPartitionNanos: phases.BackendPartitionNanos, ValidationNanos: phases.ValidationNanos, QualityWallNanos: qualityWall, PeakRSSBytes: peakRSSValue, PeakRSSAvailable: peakRSSAvailable, TemporaryBytes: 0, ArtifactBytes: st.Size(), BytesPerVector: float64(st.Size()) / float64(len(vs)), Balance: bal, GraphNeighborRecall: gr, GraphNeighborSamples: min(graphRecallSamples, len(vs)), PartitionOracleRecallAt10: pr, StableHashRecallAt10: hr, Probes: probes, ArtifactSHA256: digest}
 	rr, err := json.Marshal(r)
 	if err != nil {
 		return err
@@ -185,7 +195,17 @@ func run(args []string) error {
 	converged := false
 	for i := 0; i < 8; i++ {
 		r.TotalCommandWallNanos = time.Since(commandStart).Nanoseconds()
-		r.TotalCommandCPUNanos = cpuNanos() - commandCPUStart
+		if commandCPUAvailable {
+			if cpuEnd, ok := cpuNanos(); ok {
+				v := cpuEnd - commandCPUStart
+				r.TotalCommandCPUNanos = &v
+				r.TotalCommandCPUAvailable = true
+			} else {
+				commandCPUAvailable = false
+				r.TotalCommandCPUNanos = nil
+				r.TotalCommandCPUAvailable = false
+			}
+		}
 		r.ReportBytes = int64(len(rr))
 		r.FinalBytes = r.ArtifactBytes + r.ReportBytes
 		rr, err = json.Marshal(r)
@@ -482,28 +502,6 @@ func recall(a, b []int) float64 {
 		}
 	}
 	return float64(n) / float64(len(a))
-}
-func peakRSS() int64 {
-	runtime.GC()
-	b, e := os.ReadFile("/proc/self/status")
-	if e != nil {
-		return 0
-	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(l, "VmHWM:") {
-			var kb int64
-			fmt.Sscanf(l, "VmHWM: %d kB", &kb)
-			return kb * 1024
-		}
-	}
-	return 0
-}
-func cpuNanos() int64 {
-	var r syscall.Rusage
-	if syscall.Getrusage(syscall.RUSAGE_SELF, &r) != nil {
-		return 0
-	}
-	return (r.Utime.Sec+r.Stime.Sec)*1e9 + (r.Utime.Usec+r.Stime.Usec)*1e3
 }
 func min(a, b int) int {
 	if a < b {
