@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 const VectorPartitionManifestFormatV1 = "vector_partition_manifest_v1"
@@ -23,10 +22,10 @@ var ErrVectorPartitionManifestInvalid = errors.New("collections: invalid vector 
 
 // VectorPartitionManifestLimits caps decoded state before any count-derived
 // allocation. Defaults deliberately leave ample headroom below int limits.
-type VectorPartitionManifestLimits struct{ MaxBytes, MaxPartitions, MaxMemberships, MaxAssets, MaxStringBytes int }
+type VectorPartitionManifestLimits struct{ MaxBytes, MaxPartitions, MaxMemberships, MaxAssets, MaxStringBytes, MaxMembershipsPerVector, MaxRepresentativesPerPartition int }
 
 func DefaultVectorPartitionManifestLimits() VectorPartitionManifestLimits {
-	return VectorPartitionManifestLimits{16 << 20, 1 << 16, 1 << 20, 1 << 18, 4096}
+	return VectorPartitionManifestLimits{16 << 20, 1 << 16, 1 << 20, 1 << 18, 4096, 16, 1 << 16}
 }
 
 type VectorPartitionAssetV1 struct {
@@ -45,18 +44,19 @@ type VectorPartitionMembershipV1 struct {
 // VectorPartitionManifestV1 is canonical only when its variable-length lists
 // are sorted. ReadySetDigest is SHA-256 of its required assets and placements.
 type VectorPartitionManifestV1 struct {
-	Format                                             string
-	Collection, IndexName, IndexDefinitionDigest       string
-	SourceGeneration, SourceChecksum, SourceSchemaHash uint64
-	Generation, RouterGeneration                       uint64
-	PartitionCount                                     uint32
-	BalancePolicy                                      string
-	Placements                                         []VectorPartitionPlacementV1
-	Memberships                                        []VectorPartitionMembershipV1
-	Representatives                                    []VectorPartitionMembershipV1
-	Assets                                             []VectorPartitionAssetV1
-	RouterAsset                                        VectorPartitionAssetV1
-	ReadySetDigest                                     string
+	Format, State                                                      string
+	Collection, IndexName, IndexDefinitionDigest                       string
+	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
+	Generation, RouterGeneration                                       uint64
+	PartitionCount                                                     uint32
+	BalancePolicy                                                      string
+	Placements                                                         []VectorPartitionPlacementV1
+	Memberships                                                        []VectorPartitionMembershipV1
+	OverlapMemberships                                                 []VectorPartitionMembershipV1
+	Representatives                                                    []VectorPartitionMembershipV1
+	Assets                                                             []VectorPartitionAssetV1
+	RouterAsset                                                        VectorPartitionAssetV1
+	ReadySetDigest                                                     string
 }
 
 func VectorIndexDefinitionDigestV1(d VectorIndexDefinition) string {
@@ -79,14 +79,21 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	if l.MaxBytes <= 0 {
 		l = DefaultVectorPartitionManifestLimits()
 	}
-	if m.Format != VectorPartitionManifestFormatV1 || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
+	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
 	}
-	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || !isSHA256VPM(m.ReadySetDigest) {
+	if len(m.Placements) != int(m.PartitionCount) || len(m.Assets) == 0 || len(m.Assets) > l.MaxAssets || len(m.Memberships) != int(m.SourceRowCount) || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || (m.State == "ready" && !isSHA256VPM(m.ReadySetDigest)) {
 		return fmt.Errorf("%w: incomplete ready set or capped list", ErrVectorPartitionManifestInvalid)
 	}
-	if err := validateAssetVPM(m.RouterAsset, l); err != nil {
-		return err
+	if m.State == "ready" {
+		if m.RouterGeneration != m.Generation {
+			return fmt.Errorf("%w: router generation", ErrVectorPartitionManifestInvalid)
+		}
+		if err := validateAssetVPM(m.RouterAsset, l); err != nil {
+			return err
+		}
+	} else if m.RouterGeneration != 0 || m.ReadySetDigest != "" || m.RouterAsset != (VectorPartitionAssetV1{}) {
+		return fmt.Errorf("%w: building ready references", ErrVectorPartitionManifestInvalid)
 	}
 	seenP := make(map[uint32]struct{}, len(m.Placements))
 	lastP := uint32(0)
@@ -105,10 +112,13 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 			return fmt.Errorf("%w: missing partition %d", ErrVectorPartitionManifestInvalid, i)
 		}
 	}
-	if err := validateMembershipsVPM(m.Memberships, seenP, "membership"); err != nil {
+	if err := validateMembershipsVPM(m.Memberships, seenP, "membership", m.SourceRowCount, true); err != nil {
 		return err
 	}
-	if err := validateMembershipsVPM(m.Representatives, seenP, "representative"); err != nil {
+	if err := validateMembershipsVPM(m.OverlapMemberships, seenP, "overlap", m.SourceRowCount, false); err != nil {
+		return err
+	}
+	if err := validateMembershipsVPM(m.Representatives, seenP, "representative", m.SourceRowCount, false); err != nil {
 		return err
 	}
 	lastID := ""
@@ -121,7 +131,7 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 		}
 		lastID = a.ID
 	}
-	if m.ReadySetDigest != m.readyDigest() {
+	if m.State == "ready" && m.ReadySetDigest != m.readyDigest() {
 		return fmt.Errorf("%w: ready-set digest mismatch", ErrVectorPartitionManifestInvalid)
 	}
 	return nil
@@ -132,9 +142,14 @@ func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits)
 	}
 	return nil
 }
-func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]struct{}, kind string) error {
+func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]struct{}, kind string, rows uint64, base bool) error {
 	var prev VectorPartitionMembershipV1
+	counts := make(map[uint64]int)
 	for i, x := range ms {
+		if x.VectorOrdinal >= rows || counts[x.VectorOrdinal] >= 16 {
+			return fmt.Errorf("%w: %s ordinal/cap", ErrVectorPartitionManifestInvalid, kind)
+		}
+		counts[x.VectorOrdinal]++
 		if _, ok := ps[x.PartitionID]; !ok {
 			return fmt.Errorf("%w: %s unknown partition", ErrVectorPartitionManifestInvalid, kind)
 		}
@@ -142,6 +157,13 @@ func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]stru
 			return fmt.Errorf("%w: noncanonical %s", ErrVectorPartitionManifestInvalid, kind)
 		}
 		prev = x
+	}
+	if base {
+		for i := uint64(0); i < rows; i++ {
+			if counts[i] != 1 {
+				return fmt.Errorf("%w: disjoint coverage", ErrVectorPartitionManifestInvalid)
+			}
+		}
 	}
 	return nil
 }
@@ -155,10 +177,14 @@ func isSHA256VPM(s string) bool {
 func (m VectorPartitionManifestV1) readyDigest() string {
 	b := bytes.NewBuffer(nil)
 	for _, p := range m.Placements {
-		fmt.Fprintf(b, "p/%d/%s\n", p.PartitionID, p.GroupID)
+		putU32VPM(b, p.PartitionID)
+		putStringVPM(b, p.GroupID)
 	}
 	for _, a := range append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset) {
-		fmt.Fprintf(b, "a/%s/%s/%s/%d\n", a.ID, a.Path, a.Checksum, a.Bytes)
+		putStringVPM(b, a.ID)
+		putStringVPM(b, a.Path)
+		putStringVPM(b, a.Checksum)
+		putU64VPM(b, a.Bytes)
 	}
 	h := sha256.Sum256(b.Bytes())
 	return hex.EncodeToString(h[:])
@@ -169,6 +195,9 @@ func (m *VectorPartitionManifestV1) Canonicalize() {
 	if m.Format == "" {
 		m.Format = VectorPartitionManifestFormatV1
 	}
+	if m.State == "" {
+		m.State = "building"
+	}
 	sort.Slice(m.Placements, func(i, j int) bool { return m.Placements[i].PartitionID < m.Placements[j].PartitionID })
 	sort.Slice(m.Memberships, func(i, j int) bool {
 		a, b := m.Memberships[i], m.Memberships[j]
@@ -178,8 +207,14 @@ func (m *VectorPartitionManifestV1) Canonicalize() {
 		a, b := m.Representatives[i], m.Representatives[j]
 		return a.VectorOrdinal < b.VectorOrdinal || a.VectorOrdinal == b.VectorOrdinal && a.PartitionID < b.PartitionID
 	})
+	sort.Slice(m.OverlapMemberships, func(i, j int) bool {
+		a, b := m.OverlapMemberships[i], m.OverlapMemberships[j]
+		return a.VectorOrdinal < b.VectorOrdinal || a.VectorOrdinal == b.VectorOrdinal && a.PartitionID < b.PartitionID
+	})
 	sort.Slice(m.Assets, func(i, j int) bool { return m.Assets[i].ID < m.Assets[j].ID })
-	m.ReadySetDigest = m.readyDigest()
+	if m.State == "ready" {
+		m.ReadySetDigest = m.readyDigest()
+	}
 }
 
 // EncodeVectorPartitionManifestV1 is a strict, stable binary record. There
@@ -194,16 +229,17 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
 	putU32VPM(b, 1)
-	for _, s := range []string{m.Format, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
 	}
-	for _, n := range []uint64{m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.Generation, m.RouterGeneration} {
+	for _, n := range []uint64{m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount, m.Generation, m.RouterGeneration} {
 		putU64VPM(b, n)
 	}
 	putU32VPM(b, m.PartitionCount)
 	putAssetsVPM(b, []VectorPartitionAssetV1{m.RouterAsset})
 	putPlacementsVPM(b, m.Placements)
 	putMembershipsVPM(b, m.Memberships)
+	putMembershipsVPM(b, m.OverlapMemberships)
 	putMembershipsVPM(b, m.Representatives)
 	putAssetsVPM(b, m.Assets)
 	return b.Bytes(), nil
@@ -220,13 +256,14 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
-	ss := []*string{&m.Format, &m.Collection, &m.IndexName, &m.IndexDefinitionDigest, &m.BalancePolicy, &m.ReadySetDigest}
+	ss := []*string{&m.Format, &m.State, &m.Collection, &m.IndexName, &m.IndexDefinitionDigest, &m.BalancePolicy, &m.ReadySetDigest}
 	for _, p := range ss {
 		*p = r.str()
 	}
 	m.SourceGeneration = r.u64()
 	m.SourceChecksum = r.u64()
 	m.SourceSchemaHash = r.u64()
+	m.SourceRowCount = r.u64()
 	m.Generation = r.u64()
 	m.RouterGeneration = r.u64()
 	m.PartitionCount = r.u32()
@@ -236,6 +273,7 @@ func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits
 	}
 	m.Placements = r.placements()
 	m.Memberships = r.memberships()
+	m.OverlapMemberships = r.memberships()
 	m.Representatives = r.memberships()
 	m.Assets = r.assets()
 	if r.err != nil || r.off != len(raw) {
@@ -388,16 +426,140 @@ func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
 	if e = os.Rename(tmp, filepath.Join(s.dir, name)); e != nil {
 		return e
 	}
+	if m.State == "ready" {
+		active := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active")
+		atmp := active + ".tmp"
+		if e = os.WriteFile(atmp, []byte(fmt.Sprintf("%d\n", m.Generation)), 0600); e != nil {
+			return e
+		}
+		if e = syncFileVPM(atmp); e != nil {
+			return e
+		}
+		if e = os.Rename(atmp, active); e != nil {
+			return e
+		}
+	}
 	return syncDirVPM(s.dir)
 }
 func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
-	raw, e := os.ReadFile(filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation)))
+	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
+	info, e := os.Stat(p)
+	if e != nil {
+		return VectorPartitionManifestV1{}, e
+	}
+	if info.Size() < 0 || info.Size() > int64(DefaultVectorPartitionManifestLimits().MaxBytes) {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: stored bytes cap", ErrVectorPartitionManifestInvalid)
+	}
+	raw, e := os.ReadFile(p)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
 	return DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
 }
-func safeVPM(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, "/", "_"), "\\", "_") }
+func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
+	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".active")
+	raw, e := os.ReadFile(p)
+	if e != nil {
+		return VectorPartitionManifestV1{}, e
+	}
+	var generation uint64
+	if _, e = fmt.Sscanf(string(raw), "%d\n", &generation); e != nil || generation == 0 {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
+	}
+	return s.Open(collection, index, generation)
+}
+
+// VectorPartitionCleanupEligibilityV1 makes every external reachability
+// condition explicit. M1 never infers catalog or backup references.
+type VectorPartitionCleanupEligibilityV1 struct {
+	Active                                            bool
+	ReaderPins, SnapshotReferences, CatalogReferences uint64
+}
+
+func (e VectorPartitionCleanupEligibilityV1) Deletable() bool {
+	return !e.Active && e.ReaderPins == 0 && e.SnapshotReferences == 0 && e.CatalogReferences == 0
+}
+
+func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
+	if !eligibility.Deletable() {
+		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
+	}
+	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
+	if e := os.Remove(p); e != nil {
+		return e
+	}
+	return syncDirVPM(s.dir)
+}
+
+type VectorPartitionStatusV1 struct {
+	Manifest                                                VectorPartitionManifestV1
+	Ready                                                   bool
+	StaleReason                                             string
+	PartitionCount, GroupCount                              uint32
+	Memberships, OverlapMemberships, AssetBytes, ReaderPins uint64
+}
+
+// PublishVectorPartitionManifestV1 binds the durable generation to this
+// collection's currently declared vector-index definition before publication.
+func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV1) error {
+	if c == nil || c.db == nil {
+		return errors.New("collections: closed collection")
+	}
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	if m.Collection != c.name {
+		return fmt.Errorf("collections: vector partition collection %q does not match %q", m.Collection, c.name)
+	}
+	var def *VectorIndexDefinition
+	for i := range c.meta.VectorIndexes {
+		if c.meta.VectorIndexes[i].Name == m.IndexName {
+			def = &c.meta.VectorIndexes[i]
+			break
+		}
+	}
+	if def == nil {
+		return fmt.Errorf("collections: unknown vector index %q", m.IndexName)
+	}
+	if m.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(*def) {
+		return errors.New("collections: vector partition index definition digest mismatch")
+	}
+	s, e := OpenVectorPartitionStoreV1(c.db.Dir())
+	if e != nil {
+		return e
+	}
+	return s.Publish(m)
+}
+
+func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (VectorPartitionStatusV1, error) {
+	if c == nil || c.db == nil {
+		return VectorPartitionStatusV1{}, errors.New("collections: closed collection")
+	}
+	s, e := OpenVectorPartitionStoreV1(c.db.Dir())
+	if e != nil {
+		return VectorPartitionStatusV1{}, e
+	}
+	m, e := s.Open(c.name, index, generation)
+	if e != nil {
+		return VectorPartitionStatusV1{}, e
+	}
+	groups, seen := map[string]struct{}{}, map[uint64]struct{}{}
+	var total, overlap uint64
+	for _, p := range m.Placements {
+		groups[p.GroupID] = struct{}{}
+	}
+	for _, a := range m.Assets {
+		total += a.Bytes
+	}
+	total += m.RouterAsset.Bytes
+	for _, x := range m.Memberships {
+		if _, ok := seen[x.VectorOrdinal]; ok {
+			overlap++
+		}
+		seen[x.VectorOrdinal] = struct{}{}
+	}
+	return VectorPartitionStatusV1{Manifest: m, Ready: true, PartitionCount: m.PartitionCount, GroupCount: uint32(len(groups)), Memberships: uint64(len(m.Memberships)), OverlapMemberships: overlap, AssetBytes: total}, nil
+}
+func safeVPM(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func syncFileVPM(p string) error {
 	f, e := os.OpenFile(p, os.O_RDWR, 0)
 	if e != nil {

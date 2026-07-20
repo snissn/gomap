@@ -161,6 +161,31 @@ Raft read. M1 owns persisted generation/placement; M2 partitions; M3 overlap
 and local packs; M4 router; M5 routed reads; M6 merge/fanout; M7 lifecycle; M8
 real multi-group matched-recall evidence.
 
+## M1 durable generation record
+
+`collections.VectorPartitionManifestV1` is the M1 binary record, with format
+`vector_partition_manifest_v1`. It binds a collection, the SHA-256 digest of
+the existing `VectorIndexDefinition`, source base generation/checksum/schema
+and row count, derived partition generation, and a complete logical
+partition-to-Raft-group mapping. Logical partition IDs are dense `[0,n)` and
+are not `_id` token partitions; multiple logical partitions can name one Raft
+group.
+
+The record separates `building` from `ready`. A building record has no router
+or ready-set reference and is never active. A ready record requires a matching
+router generation and canonical SHA-256 ready-set digest over length-prefixed
+placement and asset descriptors. It contains exactly one disjoint membership
+for every source ordinal and separately records bounded overlap memberships.
+All decoded count-derived allocations, strings, assets, memberships and record
+bytes are capped before allocation; unknown/trailing records fail closed.
+
+Local publication writes and syncs the generation, renames it, then (only for a
+ready generation) write-sync-renames an active pointer. Readers therefore see
+an old complete pointer or a new complete pointer, never a partial generation.
+Raft snapshot archives include `db/vector_partitions`. Deletion requires an
+explicit proof that the generation is inactive and has no reader pin, snapshot
+reference, or catalog reference; M1 does not infer those external references.
+
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
 vector/query checksums, dimensions, metric, query set, and an exhaustive

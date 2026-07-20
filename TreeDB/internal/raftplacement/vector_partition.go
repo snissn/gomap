@@ -1,6 +1,7 @@
 package raftplacement
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -37,7 +38,7 @@ func (c ResolvedCatalogV1) ValidateVectorPartitionPlacementV1(p VectorPartitionP
 	if err := validateCollectionRef(p.Collection); err != nil {
 		return errors.Join(ErrInvalidVectorPartitionPlacement, err)
 	}
-	if p.IndexName == "" || len(p.IndexDefinitionDigest) != 64 || p.SourceGeneration == 0 || p.PartitionGeneration == 0 || p.PartitionCount == 0 || len(p.Partitions) != int(p.PartitionCount) {
+	if p.IndexName == "" || len(p.IndexDefinitionDigest) != 64 || !isSHA256HexVectorPartitionV1(p.IndexDefinitionDigest) || p.SourceGeneration == 0 || p.PartitionGeneration == 0 || p.PartitionCount == 0 || len(p.Partitions) != int(p.PartitionCount) {
 		return ErrInvalidVectorPartitionPlacement
 	}
 	parts := append([]VectorPartitionGroupV1(nil), p.Partitions...)
@@ -51,4 +52,9 @@ func (c ResolvedCatalogV1) ValidateVectorPartitionPlacementV1(p VectorPartitionP
 		}
 	}
 	return nil
+}
+
+func isSHA256HexVectorPartitionV1(s string) bool {
+	_, err := hex.DecodeString(s)
+	return err == nil && len(s) == 64
 }

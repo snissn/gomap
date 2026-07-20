@@ -35,6 +35,9 @@ var raftSnapshotMainDBEntriesV1 = []string{
 	"value_vlog",
 	"leaf_vlog",
 	"column_assets",
+	// M1 vector-partition manifests are durable derived state. Omitting this
+	// namespace would make a restored ready generation silently partial.
+	"vector_partitions",
 }
 
 var raftSnapshotSideStoreEntriesV1 = []string{
