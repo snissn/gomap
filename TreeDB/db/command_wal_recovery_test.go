@@ -1818,6 +1818,38 @@ func TestCommandWALMaterializedRIDRecoveryReusesMatchingRID(t *testing.T) {
 	}
 }
 
+func TestCommandWALMaterializedRIDRecoveryPreservesExistingRIDHighWaterAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	bootstrap := openCommandWALDB(t, dir)
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeValueLogRID(t, dir, 200, []byte("existing-high-water"))
+	writeCommandWALRawKVFrameWithFormat(t, dir, 1, 1, commitlog.PayloadFormatRawKVBatchV2, []commitlog.RawKVOperation{{
+		Op: commitlog.RawKVOpSetMaterializedRID, Key: []byte("recovered"), RID: 42, Value: []byte("materialized-older-rid"),
+	}})
+
+	recovered := openCommandWALDB(t, dir)
+	assertDBValue(t, recovered, "recovered", "materialized-older-rid")
+	if err := recovered.Close(); err != nil {
+		t.Fatalf("Close recovered db: %v", err)
+	}
+
+	reopened := openCommandWALDB(t, dir)
+	defer reopened.Close()
+	appender, ok := reopened.currentValueLogAppender().(*replayInlineAppender)
+	if !ok {
+		t.Fatalf("value-log appender type=%T, want replayInlineAppender", reopened.currentValueLogAppender())
+	}
+	appender.mu.Lock()
+	nextRID := appender.nextRID
+	appender.mu.Unlock()
+	if nextRID != 201 {
+		t.Fatalf("next value-log RID=%d, want 201 after exact-RID recovery below existing high-water", nextRID)
+	}
+}
+
 func TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame(t *testing.T) {
 	t.Run("matching", func(t *testing.T) {
 		dir := t.TempDir()

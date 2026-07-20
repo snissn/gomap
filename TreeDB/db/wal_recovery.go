@@ -1005,51 +1005,12 @@ func newReplayInlineAppenderWithNextRID(db *DB, segments []logSegment, nextRID u
 
 func nextReplayAppenderRIDStart(segments []logSegment) (uint64, error) {
 	// RIDs are allocated from one monotonically increasing namespace. The appender
-	// only needs the high-water mark, so scan the latest value-log segment in each
-	// lane instead of rebuilding a full RID->pointer map from every segment.
-	latest := latestValueLogSegmentsByLane(segments)
-	if len(latest) == 0 {
-		return 1, nil
-	}
-	maxRID := uint64(0)
-	for i := range latest {
-		seg := &latest[i]
-		segMaxRID, err := scanValueLogFileMaxRID(&valuelog.File{ID: seg.fileID, Path: seg.path})
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return 0, err
-		}
-		if segMaxRID > maxRID {
-			maxRID = segMaxRID
-		}
-	}
-	if maxRID == ^uint64(0) {
-		return 0, fmt.Errorf("value-log rid space exhausted")
-	}
-	return maxRID + 1, nil
-}
-
-func latestValueLogSegmentsByLane(segments []logSegment) []logSegment {
-	latestByLane := make(map[int]logSegment)
-	for _, seg := range segments {
-		if !seg.valueLog {
-			continue
-		}
-		cur, ok := latestByLane[seg.lane]
-		if !ok || seg.seq > cur.seq {
-			latestByLane[seg.lane] = seg
-		}
-	}
-	latest := make([]logSegment, 0, len(latestByLane))
-	for _, seg := range latestByLane {
-		latest = append(latest, seg)
-	}
-	sort.Slice(latest, func(i, j int) bool {
-		return latest[i].lane < latest[j].lane
-	})
-	return latest
+	// only needs the high-water mark, so scan every value-log segment without
+	// rebuilding a full RID->pointer map. Recovery may append a missing exact RID
+	// below the current high-water into the newest lane-0 segment; consulting only
+	// the latest segment per lane after that repair would let allocation move
+	// backwards and reuse an existing RID on the following open.
+	return nextRewriteRIDStart(segments)
 }
 
 func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {

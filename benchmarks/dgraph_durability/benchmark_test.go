@@ -355,7 +355,8 @@ func benchmarkConcurrentAcknowledgement(b *testing.B, profile benchmarkProfile, 
 	reportStoreCounters(b, before, store.stats(), b.N, 0)
 	b.ReportMetric(float64(concurrency), "workers")
 	if tree, ok := store.(*treeDBStore); ok {
-		reportTreeDBLifecycleAndStorage(b, tree, uint64(benchmarkWarmupCommits+b.N), mutations[0].key, b.N)
+		totalWriteCommits := benchmarkWarmupCommits + b.N
+		reportTreeDBLifecycleAndStorage(b, tree, uint64(totalWriteCommits), mutations[0].key, totalWriteCommits)
 		return
 	}
 	if err := store.close(); err != nil {
