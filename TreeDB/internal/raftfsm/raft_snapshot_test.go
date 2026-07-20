@@ -298,7 +298,8 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 			sourceFSM := openRaftSnapshotFSMForTest(b, sourceDB, sourceDir, true)
 			defer sourceFSM.Close()
 			applySnapshotSourceEntries(b, sourceFSM, []byte(`{"_id":"benchmark","name":"snapshot"}`))
-			_ = stageRaftSnapshotReadyVectorPartitionForTest(b, sourceDB, rows)
+			manifest := stageRaftSnapshotReadyVectorPartitionForTest(b, sourceDB, 1)
+			stageRaftSnapshotSyntheticReadyScaleForBenchmark(b, sourceDir, manifest, rows)
 			b.Run("archive", func(b *testing.B) {
 				var archiveBytes int
 				for i := 0; i < b.N; i++ {
@@ -332,6 +333,44 @@ func BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall(b *testing.B) {
 				}
 			})
 		})
+	}
+}
+
+// stageRaftSnapshotSyntheticReadyScaleForBenchmark expands only the durable
+// M1 manifest record after a real collection-authorized ready generation has
+// been staged. It intentionally excludes construction of a rows-sized TVIS or
+// HNSW graph: archive/install evidence here measures bounded manifest metadata
+// and side-store transport, while TestRaftSnapshotV1InstallPreserves...
+// separately proves authority publication and active ready recovery.
+func stageRaftSnapshotSyntheticReadyScaleForBenchmark(tb testing.TB, root string, manifest collections.VectorPartitionManifestV1, rows int) {
+	tb.Helper()
+	if rows < 1 {
+		tb.Fatal("synthetic ready scale requires positive rows")
+	}
+	manifest.SourceRowCount = uint64(rows)
+	manifest.Memberships = make([]collections.VectorPartitionMembershipV1, rows)
+	for i := range manifest.Memberships {
+		manifest.Memberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	manifest.Canonicalize()
+	raw, err := collections.EncodeVectorPartitionManifestV1(manifest)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if rows == 1_000_000 && len(raw) > rows*64 {
+		tb.Fatalf("synthetic ready manifest=%d bytes exceeds 64 B/vector", len(raw))
+	}
+	path := filepath.Join(root, "vector_partitions", "docs-embedding-7.vpm")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		tb.Fatal(err)
+	}
+	store, err := collections.OpenExistingVectorPartitionStoreV1(root)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	got, err := store.OpenActive("docs", "embedding")
+	if err != nil || got.SourceRowCount != uint64(rows) {
+		tb.Fatalf("synthetic ready fixture active=%+v err=%v", got, err)
 	}
 }
 
