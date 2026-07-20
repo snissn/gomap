@@ -1,7 +1,13 @@
 package docs_test
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,22 +33,169 @@ func TestVectorPartitionM1EvidenceSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	type operation struct {
+		NSOp             int64 `json:"ns_op"`
+		BOp              int64 `json:"b_op"`
+		AllocsOp         int64 `json:"allocs_op"`
+		ProcessPeakRSSKB int64 `json:"process_peak_rss_kb"`
+	}
+	type codecMeasurement struct {
+		Memberships          int    `json:"memberships"`
+		DecodeValidateNSOp   int64  `json:"decode_validate_ns_op"`
+		DecodeValidateBOp    int64  `json:"decode_validate_b_op"`
+		DecodeValidateAllocs int64  `json:"decode_validate_allocs_op"`
+		EncodeNSOp           int64  `json:"encode_ns_op"`
+		EncodeBOp            int64  `json:"encode_b_op"`
+		EncodeAllocs         int64  `json:"encode_allocs_op"`
+		ProcessPeakRSSKB     int64  `json:"process_peak_rss_kb"`
+		RSSContext           string `json:"rss_context"`
+	}
+	type snapshotMeasurement struct {
+		Memberships      int    `json:"memberships"`
+		ArchiveNSOp      int64  `json:"archive_ns_op"`
+		ArchiveBytes     int64  `json:"archive_bytes"`
+		ArchiveBOp       int64  `json:"archive_b_op"`
+		ArchiveAllocsOp  int64  `json:"archive_allocs_op"`
+		InstallNSOp      int64  `json:"install_ns_op"`
+		InstallBOp       int64  `json:"install_b_op"`
+		InstallAllocsOp  int64  `json:"install_allocs_op"`
+		ProcessPeakRSSKB int64  `json:"process_peak_rss_kb"`
+		RSSContext       string `json:"rss_context"`
+	}
 	var ledger struct {
 		SchemaVersion      int    `json:"schema_version"`
 		ResultKind         string `json:"result_kind"`
+		MeasurementStatus  string `json:"measurement_status"`
 		ProductionEvidence bool   `json:"production_evidence"`
-		Candidate          string `json:"candidate_head_sha"`
-		RawArtifacts       []struct {
+		HeadSHA            string `json:"head_sha"`
+		BaseSHA            string `json:"base_sha"`
+		GoVersion          string `json:"go_version"`
+		HardwareContext    struct {
+			OS            string `json:"os"`
+			CPU           string `json:"cpu"`
+			PhysicalCores int    `json:"physical_cores"`
+			LogicalCPUs   int    `json:"logical_cpus"`
+		} `json:"hardware_context"`
+		Dataset struct {
+			Name                  string `json:"name"`
+			Scales                []int  `json:"scales"`
+			MembershipShape       string `json:"membership_shape"`
+			AuthorityConstruction string `json:"authority_construction"`
+		} `json:"dataset"`
+		FixtureAttribution struct {
+			CorrectnessPath string `json:"correctness_path"`
+			PerformancePath string `json:"performance_path"`
+			MeasuredStorage string `json:"measured_storage"`
+			ExcludedClaims  string `json:"excluded_claims"`
+		} `json:"fixture_attribution"`
+		TimedBoundary string   `json:"timed_boundary"`
+		Commands      []string `json:"commands"`
+		RawArtifacts  []struct {
+			Path string `json:"path"`
 			Hash string `json:"sha256"`
 		} `json:"raw_artifacts"`
-		Codec []struct {
-			Metadata float64 `json:"metadata_bytes_per_vector"`
-		} `json:"codec"`
+		StorageMetrics struct {
+			ManifestBytes       int64   `json:"manifest_bytes_at_1000000"`
+			MetadataBytesPerVec float64 `json:"metadata_bytes_per_vector_at_1000000"`
+			GateBytesPerVec     float64 `json:"gate_bytes_per_vector"`
+			LargestArchiveBytes int64   `json:"largest_snapshot_archive_bytes"`
+			Attribution         string  `json:"attribution"`
+		} `json:"storage_metrics"`
+		Codec []codecMeasurement `json:"codec"`
+		Warm  struct {
+			Open   operation `json:"open"`
+			Status operation `json:"status"`
+		} `json:"warm"`
+		Snapshot []snapshotMeasurement `json:"snapshot"`
 	}
-	if err := json.Unmarshal(raw, &ledger); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&ledger); err != nil {
 		t.Fatal(err)
 	}
-	if ledger.SchemaVersion != 1 || ledger.ResultKind != "local_microbenchmark" || ledger.ProductionEvidence || len(ledger.Candidate) != 40 || len(ledger.RawArtifacts) != 1 || len(ledger.RawArtifacts[0].Hash) != 64 || len(ledger.Codec) != 3 || ledger.Codec[2].Metadata != 12.000642 {
-		t.Fatalf("invalid M1 evidence ledger: %+v", ledger)
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatalf("M1 evidence has trailing JSON: %v", err)
+	}
+	if ledger.SchemaVersion != 2 || ledger.ResultKind != "local_microbenchmark" || ledger.MeasurementStatus != "measured" || ledger.ProductionEvidence {
+		t.Fatalf("invalid M1 evidence identity: schema=%d kind=%q status=%q production=%v", ledger.SchemaVersion, ledger.ResultKind, ledger.MeasurementStatus, ledger.ProductionEvidence)
+	}
+	for label, value := range map[string]string{"head_sha": ledger.HeadSHA, "base_sha": ledger.BaseSHA} {
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != sha1.Size {
+			t.Fatalf("%s is not an exact SHA-1: %q (%v)", label, value, err)
+		}
+	}
+	if ledger.HeadSHA == ledger.BaseSHA || !strings.HasPrefix(ledger.GoVersion, "go1.") || ledger.HardwareContext.OS == "" || ledger.HardwareContext.CPU == "" || ledger.HardwareContext.PhysicalCores <= 0 || ledger.HardwareContext.LogicalCPUs < ledger.HardwareContext.PhysicalCores {
+		t.Fatalf("incomplete candidate/environment provenance: head=%q base=%q go=%q hardware=%+v", ledger.HeadSHA, ledger.BaseSHA, ledger.GoVersion, ledger.HardwareContext)
+	}
+	wantScales := []int{10000, 100000, 1000000}
+	if ledger.Dataset.Name != "synthetic_ready_manifest_scale_v1" || fmt.Sprint(ledger.Dataset.Scales) != fmt.Sprint(wantScales) || ledger.Dataset.MembershipShape == "" || !strings.Contains(ledger.Dataset.AuthorityConstruction, "excluded") {
+		t.Fatalf("invalid dataset attribution: %+v", ledger.Dataset)
+	}
+	if !strings.Contains(ledger.FixtureAttribution.CorrectnessPath, "genuine") || !strings.Contains(ledger.FixtureAttribution.PerformancePath, "test-only synthetic") || ledger.FixtureAttribution.MeasuredStorage == "" || !strings.Contains(ledger.FixtureAttribution.ExcludedClaims, "not ANN") || !strings.Contains(ledger.TimedBoundary, "complete go test process") {
+		t.Fatalf("incomplete fixture/timing boundary: fixture=%+v boundary=%q", ledger.FixtureAttribution, ledger.TimedBoundary)
+	}
+	if len(ledger.Commands) != 8 {
+		t.Fatalf("got %d benchmark commands, want 8", len(ledger.Commands))
+	}
+	seenCommands := make(map[string]struct{}, len(ledger.Commands))
+	for _, command := range ledger.Commands {
+		if !strings.Contains(command, "GOWORK=off go test") || !strings.Contains(command, "-benchtime=1x") || !strings.Contains(command, "-benchmem") || !strings.Contains(command, "-count=1") {
+			t.Fatalf("incomplete exact benchmark command: %q", command)
+		}
+		if _, exists := seenCommands[command]; exists {
+			t.Fatalf("duplicate benchmark command: %q", command)
+		}
+		seenCommands[command] = struct{}{}
+	}
+	if ledger.StorageMetrics.ManifestBytes != 12000642 || ledger.StorageMetrics.MetadataBytesPerVec != 12.000642 || ledger.StorageMetrics.GateBytesPerVec != 64 || ledger.StorageMetrics.LargestArchiveBytes != 12573184 || ledger.StorageMetrics.MetadataBytesPerVec >= ledger.StorageMetrics.GateBytesPerVec || ledger.StorageMetrics.ManifestBytes == ledger.StorageMetrics.LargestArchiveBytes || !strings.Contains(ledger.StorageMetrics.Attribution, "not metadata bytes") {
+		t.Fatalf("invalid or conflated storage metrics: %+v", ledger.StorageMetrics)
+	}
+	if len(ledger.Codec) != len(wantScales) || len(ledger.Snapshot) != len(wantScales) {
+		t.Fatalf("incomplete scale series: codec=%d snapshot=%d", len(ledger.Codec), len(ledger.Snapshot))
+	}
+	for i, scale := range wantScales {
+		codec := ledger.Codec[i]
+		if codec.Memberships != scale || codec.DecodeValidateNSOp <= 0 || codec.DecodeValidateBOp <= 0 || codec.DecodeValidateAllocs <= 0 || codec.EncodeNSOp <= 0 || codec.EncodeBOp <= 0 || codec.EncodeAllocs <= 0 || codec.ProcessPeakRSSKB <= 0 || codec.RSSContext == "" {
+			t.Fatalf("invalid codec scale %d: %+v", scale, codec)
+		}
+		snapshot := ledger.Snapshot[i]
+		if snapshot.Memberships != scale || snapshot.ArchiveNSOp <= 0 || snapshot.ArchiveBytes <= 0 || snapshot.ArchiveBOp <= 0 || snapshot.ArchiveAllocsOp <= 0 || snapshot.InstallNSOp <= 0 || snapshot.InstallBOp <= 0 || snapshot.InstallAllocsOp <= 0 || snapshot.ProcessPeakRSSKB <= 0 || snapshot.RSSContext == "" {
+			t.Fatalf("invalid snapshot scale %d: %+v", scale, snapshot)
+		}
+	}
+	for name, op := range map[string]operation{"open": ledger.Warm.Open, "status": ledger.Warm.Status} {
+		if op.NSOp <= 0 || op.BOp <= 0 || op.AllocsOp <= 0 || op.ProcessPeakRSSKB <= 0 {
+			t.Fatalf("invalid warm %s measurement: %+v", name, op)
+		}
+	}
+	if len(ledger.RawArtifacts) != 1 || len(ledger.RawArtifacts[0].Hash) != sha256.Size*2 || filepath.IsAbs(ledger.RawArtifacts[0].Path) || strings.HasPrefix(filepath.Clean(ledger.RawArtifacts[0].Path), "..") {
+		t.Fatalf("invalid raw artifact descriptor: %+v", ledger.RawArtifacts)
+	}
+	rawArtifact, err := os.ReadFile(filepath.Join(root, "docs", filepath.FromSlash(ledger.RawArtifacts[0].Path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash, err := hex.DecodeString(ledger.RawArtifacts[0].Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotHash := sha256.Sum256(rawArtifact)
+	if !strings.EqualFold(hex.EncodeToString(gotHash[:]), hex.EncodeToString(wantHash)) {
+		t.Fatalf("raw artifact hash mismatch: got %x want %x", gotHash, wantHash)
+	}
+	rawText := string(rawArtifact)
+	for _, needle := range []string{"# candidate: " + ledger.HeadSHA, ledger.BaseSHA, "BenchmarkVectorPartitionManifestV1Scale", "BenchmarkVectorPartitionStoreV1WarmOpen", "BenchmarkVectorPartitionStatusV1Warm", "BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall"} {
+		if !strings.Contains(rawText, needle) {
+			t.Fatalf("raw artifact missing %q", needle)
+		}
+	}
+	if got := strings.Count(rawText, "EXIT_CODE=0"); got != 9 {
+		t.Fatalf("raw artifact has %d successful command sentinels, want 9", got)
+	}
+	for _, stale := range []string{"vector-partition-m1-02e511fcd.raw.txt", "vector-partition-m1-collections.txt", "vector-partition-m1-raft-snapshot.txt"} {
+		if _, err := os.Stat(filepath.Join(root, "docs", "performance", stale)); !os.IsNotExist(err) {
+			t.Fatalf("stale M1 evidence artifact %q still exists or stat failed: %v", stale, err)
+		}
 	}
 }

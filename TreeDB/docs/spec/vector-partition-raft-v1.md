@@ -277,6 +277,22 @@ journaling. Generic directory sync and link/remove name-persistence proofs are
 not available there; write-through rename alone is insufficient. This is an
 explicit platform capability boundary, not a claim of Unix directory durability.
 
+### M1 evidence boundary
+
+M1 correctness tests publish a genuinely authorized ready generation and prove
+that its manifest, active pointer, router asset, and partition assets survive
+close/reopen and Raft snapshot/install before `OpenActive` succeeds. The scale
+benchmark is narrower: `synthetic_ready_manifest_scale_v1` derives a test-only
+ready manifest from a valid template, expands only its memberships, and keeps
+fixture and authority construction outside the timer. It does not expose a
+production authorization bypass and is not production Raft or ANN evidence.
+
+The evidence ledger reports encoded VPM1 manifest bytes separately from full
+snapshot archive bytes. Only the former is used for the metadata-bytes/vector
+gate; the latter also includes the archived side-store namespace and referenced
+assets. Full-process maximum RSS includes compile and setup, while `B/op` and
+allocations/op are scoped to the timed benchmark operation.
+
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
 vector/query checksums, dimensions, metric, query set, and an exhaustive
