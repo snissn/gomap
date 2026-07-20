@@ -170,6 +170,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #2483 final vector-search docs closeout index for accepted exact FP32,
     scalar_u8, RaBitQ, and BRQ evidence, #2487 snapshot rows, no-promote
     caveats, and #2494 crossover-pending status.
+- `TreeDB/docs/spec/vector-partition-m2.md`
+  - issue #3911 clean-room offline dense-ball graph sketch, deterministic
+    balanced reference backend, artifact validation, and M0 builder command.
 - `TreeDB/docs/spec/quantized-prepared-hnsw-closeout-2588.md`
   - issue #2588 closeout for the #2584 prepared HNSW quantized fast-path stack,
     including #2591 10k x 768 gate rows, exact FP32 guardrails, promoted

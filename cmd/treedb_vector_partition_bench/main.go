@@ -21,10 +21,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 const (
@@ -69,6 +71,25 @@ type config struct {
 	headSHA      string
 	hnsw         *treeDBPartitionHNSW
 	memory       benchmarkMemoryPlan
+	stage        string
+	partition    vectorpartition.Config
+}
+
+type partitionRun struct {
+	SchemaVersion  int                     `json:"schema_version"`
+	ResultKind     string                  `json:"result_kind"`
+	Dataset        fixtureManifest         `json:"dataset"`
+	Source         vectorpartition.Source  `json:"source"`
+	Config         vectorpartition.Config  `json:"config"`
+	Metrics        vectorpartition.Metrics `json:"metrics"`
+	BuildNanos     int64                   `json:"build_nanos"`
+	ArtifactSHA256 string                  `json:"artifact_sha256"`
+	BaseSHA        string                  `json:"base_sha"`
+	HeadSHA        string                  `json:"head_sha"`
+	ArtifactPath   string                  `json:"artifact_path"`
+	ArtifactBytes  int64                   `json:"artifact_bytes"`
+	ReportBytes    int64                   `json:"report_bytes"`
+	FinalBytes     int64                   `json:"final_bytes"`
 }
 
 type fixtureManifest struct {
@@ -255,17 +276,36 @@ func run(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if err := validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes); err != nil {
-		return err
+	if cfg.stage == "partition" {
+		err = validatePartitionFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
+	} else {
+		err = validateFixtureWithCaps(fixture, cfg.maxVectors, cfg.maxBytes)
 	}
-	if cfg.topK > fixture.Vectors {
-		return errors.New("top-k cannot exceed fixture vectors")
+	if err != nil {
+		return err
 	}
 	if cfg.partitions > fixture.Vectors {
 		return errors.New("partitions cannot exceed fixture vectors")
 	}
 	if cfg.seed != fixture.Seed {
 		return fmt.Errorf("-seed %d does not match fixture seed %d", cfg.seed, fixture.Seed)
+	}
+	if cfg.stage == "partition" {
+		// The partition builder owns only the frozen vector corpus and its own
+		// graph controls. Simulation probes, overlaps, stages, top-k and memory
+		// planning are intentionally irrelevant here.
+		if err := vectorpartition.ValidateReferenceInputShape(cfg.partition, fixture.Vectors, fixture.Dimensions); err != nil {
+			return err
+		}
+		// The artifact's Source.Checksum is computed over these generated vectors
+		// by BuildWithPartitioner. The manifest checksum additionally commits the
+		// simulation-only query/truth stream, so verifying it here would recreate
+		// queries and exact truth that this stage deliberately does not own.
+		vectors := deterministicVectors(fixture)
+		return runPartitionStage(cfg, fixture, vectors, stdout)
+	}
+	if cfg.topK > fixture.Vectors {
+		return errors.New("top-k cannot exceed fixture vectors")
 	}
 	if _, err := validateBenchmarkWork(cfg, fixture, maxBenchmarkWorkUnits); err != nil {
 		return err
@@ -317,7 +357,7 @@ func run(args []string, stdout io.Writer) (runErr error) {
 }
 
 func parseConfig(args []string) (config, error) {
-	cfg := config{format: "json", topK: 10, recallTarget: .9, seed: 1}
+	cfg := config{format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation", partition: vectorpartition.DefaultConfig()}
 	var probes, overlap string
 	var stages string
 	fs := flag.NewFlagSet("treedb_vector_partition_bench", flag.ContinueOnError)
@@ -330,11 +370,23 @@ func parseConfig(args []string) (config, error) {
 	fs.Int64Var(&cfg.seed, "seed", cfg.seed, "fixture generation seed (must match manifest)")
 	fs.StringVar(&cfg.format, "format", cfg.format, "json or text")
 	fs.StringVar(&cfg.out, "out", "", "artifact directory")
+	fs.StringVar(&cfg.stage, "stage", cfg.stage, "simulation or partition")
+	fs.IntVar(&cfg.partition.Repetitions, "partition-repetitions", cfg.partition.Repetitions, "dense-ball graph sketch repetitions")
+	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
+	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
+	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
+	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.StringVar(&stages, "stages", "all", "comma-separated independently enabled loss stages, or all")
 	fs.IntVar(&cfg.maxVectors, "max-vectors", maxVectors, "maximum combined fixture vector/query count before allocation")
 	fs.Int64Var(&cfg.maxBytes, "max-fixture-bytes", maxFixtureBytes, "maximum modeled peak bytes for benchmark-owned fixture and working material")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
+	}
+	// The offline M2 builder does not execute M0 probe simulations. Preserve
+	// the simulation requirement while allowing the issue's partition-stage
+	// invocation to omit a meaningless -probes flag.
+	if cfg.stage == "partition" && probes == "" {
+		probes = "1"
 	}
 	var err error
 	if cfg.probes, err = parseInts(probes); err != nil {
@@ -343,7 +395,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.overlaps, err = parseFloats(overlap); err != nil {
 		return config{}, fmt.Errorf("overlap: %w", err)
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" {
+	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
@@ -363,7 +415,87 @@ func parseConfig(args []string) (config, error) {
 	if len(cfg.stages) == 0 {
 		return config{}, errors.New("stages must name known stages or all")
 	}
+	cfg.partition.Seed = cfg.seed
+	cfg.partition.Partitions = cfg.partitions
+	cfg.partition.MaxVectors = cfg.maxVectors
+	// The graph validator reserves the edge budget for every repetition. Keep
+	// that capacity when constraining the default by the configured input cap.
+	// All operands are independently bounded by parse/build validation, but use
+	// int64 so this preflight cannot overflow on narrower integer targets.
+	maxEdgesForInput := int64(cfg.maxVectors) * int64(cfg.partition.Degree) * int64(cfg.partition.Repetitions)
+	if maxEdgesForInput > 0 && maxEdgesForInput < int64(cfg.partition.MaxEdges) {
+		cfg.partition.MaxEdges = int(maxEdgesForInput)
+	}
 	return cfg, nil
+}
+
+func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64, stdout io.Writer) error {
+	input := make([]vectorpartition.Vector, len(vectors))
+	for i, values := range vectors {
+		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: values}
+	}
+	started := time.Now()
+	artifact, err := vectorpartition.BuildWithPartitioner(input, cfg.partition, vectorpartition.Source{SourceID: "m0_fixture:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	if err != nil {
+		return fmt.Errorf("build validated vector partition artifact: %w", err)
+	}
+	bytes, err := vectorpartition.CanonicalJSON(artifact)
+	if err != nil {
+		return err
+	}
+	digest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		return err
+	}
+	suffix, err := provenanceSuffix(digest, cfg.baseSHA, cfg.headSHA)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cfg.out, 0755); err != nil {
+		return err
+	}
+	name := "vector_partition_" + suffix + ".json"
+	path := filepath.Join(cfg.out, name)
+	if err := os.WriteFile(path, bytes, 0644); err != nil {
+		return err
+	}
+	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Source: artifact.Source, Config: artifact.Config, Metrics: artifact.Metrics, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path, ArtifactBytes: int64(len(bytes))}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < 8; i++ {
+		report.ReportBytes = int64(len(raw))
+		report.FinalBytes = report.ArtifactBytes + report.ReportBytes
+		raw, err = json.Marshal(report)
+		if err != nil {
+			return err
+		}
+		if int64(len(raw)) == report.ReportBytes {
+			break
+		}
+	}
+	if report.ReportBytes != int64(len(raw)) {
+		return errors.New("compact partition report byte accounting did not converge")
+	}
+	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+suffix+".json"), raw, 0644); err != nil {
+		return err
+	}
+	if cfg.format == "json" {
+		_, err = fmt.Fprintln(stdout, string(raw))
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "partition artifact=%s edges=%d cut=%d cap=%d\n", path, artifact.Metrics.GraphEdges, artifact.Metrics.EdgeCut, artifact.Metrics.Cap)
+	return err
+}
+
+const provenanceSuffixBytes = 12
+
+func provenanceSuffix(digest, baseSHA, headSHA string) (string, error) {
+	if len(digest) < provenanceSuffixBytes || len(baseSHA) < provenanceSuffixBytes || len(headSHA) < provenanceSuffixBytes {
+		return "", errors.New("partition artifact provenance digest/SHA is too short for filename")
+	}
+	return digest[:provenanceSuffixBytes] + "_" + baseSHA[:provenanceSuffixBytes] + "_" + headSHA[:provenanceSuffixBytes], nil
 }
 
 var knownStages = []string{"exact_global_top_k", "partition_oracle", "exact_representative_routing", "approximate_representative_routing", "exact_partition_local", "treedb_partition_local_hnsw", "end_to_end_distributed_simulation"}
@@ -534,7 +666,10 @@ func validateFixture(m fixtureManifest) error {
 	return validateFixtureWithCaps(m, maxVectors, maxFixtureBytes)
 }
 func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) error {
-	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Queries > capVectors || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+	if err := validateFixtureSyntax(m, capVectors); err != nil {
+		return err
+	}
+	if m.Queries > capVectors {
 		return errors.New("unsupported or malformed fixture manifest")
 	}
 	if int64(m.Vectors)+int64(m.Queries) > int64(capVectors) {
@@ -542,6 +677,26 @@ func validateFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) 
 	}
 	if int64(m.Vectors)+int64(m.Queries) > capBytes/(int64(m.Dimensions)*8) {
 		return errors.New("fixture float64 data alone exceeds pre-allocation memory cap")
+	}
+	return nil
+}
+
+// validatePartitionFixtureWithCaps applies only syntax/integrity and vector
+// corpus allocation caps. Partition mode never generates the query/truth
+// stream, so simulation-only query count and byte limits do not apply here.
+func validatePartitionFixtureWithCaps(m fixtureManifest, capVectors int, capBytes int64) error {
+	if err := validateFixtureSyntax(m, capVectors); err != nil {
+		return err
+	}
+	if int64(m.Vectors) > capBytes/(int64(m.Dimensions)*8) {
+		return errors.New("partition vector data exceeds pre-allocation memory cap")
+	}
+	return nil
+}
+
+func validateFixtureSyntax(m fixtureManifest, capVectors int) error {
+	if m.SchemaVersion != schemaVersion || m.Fixture == "" || m.Generator != fixtureGenerator || m.Arithmetic != fixtureArithmetic || m.Vectors < 1 || m.Vectors > capVectors || m.Queries < 1 || m.Dimensions < 1 || m.Dimensions > maxDimensions || m.Metric != "cosine" || len(m.Checksum) != 64 {
+		return errors.New("unsupported or malformed fixture manifest")
 	}
 	_, e := hex.DecodeString(m.Checksum)
 	return e
@@ -826,6 +981,14 @@ func memoryScaleCeil(value, numerator, denominator int64) (int64, error) {
 // deterministicFixture has intentionally visible cluster/boundary pairs and a
 // duplicate pair, so tie ordering remains part of the executable M0 contract.
 func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
+	v := deterministicVectors(m)
+	return v, deterministicQueries(v, m)
+}
+
+// deterministicVectors is the partition-stage corpus generator. It must not
+// inspect m.Queries: partition artifacts bind the vector corpus only, while
+// simulation mode separately generates and verifies queries and exact truth.
+func deterministicVectors(m fixtureManifest) [][]float64 {
 	v := contiguousFloat64Matrix(m.Vectors, m.Dimensions)
 	for i := range v {
 		row := v[i]
@@ -839,11 +1002,15 @@ func deterministicFixture(m fixtureManifest) ([][]float64, [][]float64) {
 	if len(v) > 1 {
 		copy(v[1], v[0])
 	}
+	return v
+}
+
+func deterministicQueries(v [][]float64, m fixtureManifest) [][]float64 {
 	q := contiguousFloat64Matrix(m.Queries, m.Dimensions)
 	for i := range q {
 		copy(q[i], v[(i*7919+17)%len(v)])
 	}
-	return v, q
+	return q
 }
 
 func contiguousFloat64Matrix(rows, dimensions int) [][]float64 {

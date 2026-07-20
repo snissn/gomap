@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func fixturePath(t *testing.T) string {
@@ -101,6 +102,198 @@ func TestFixtureArithmeticUsesExplicitFMA(t *testing.T) {
 	m.Arithmetic = "implicit_multiply_add"
 	if err := validateFixture(m); err == nil {
 		t.Fatal("fixture with unspecified contraction behavior accepted")
+	}
+}
+
+func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
+	dataset := writeFixtureForTest(t, 16, 2, 4)
+	args := []string{"-dataset", dataset, "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "4", "-partition-degree", "2"}
+	var first bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &first); err != nil {
+		t.Fatal(err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(first.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ResultKind != "offline_partition_builder" || report.Metrics.MaxPartitionSize > report.Metrics.Cap || report.ArtifactBytes <= 0 || report.ReportBytes <= 0 || report.FinalBytes != report.ArtifactBytes+report.ReportBytes {
+		t.Fatalf("report=%+v", report)
+	}
+	raw, err := os.ReadFile(report.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := vectorpartition.DecodeArtifact(raw, len(raw))
+	if err != nil || artifact.Source != report.Source || artifact.Metrics != report.Metrics {
+		t.Fatalf("artifact does not match compact report: artifact=%+v err=%v", artifact, err)
+	}
+	if bytes.Contains(first.Bytes(), []byte("\"assignment\"")) || bytes.Contains(first.Bytes(), []byte("\"neighbors\"")) {
+		t.Fatalf("stdout contains duplicate artifact payload: %s", first.Bytes())
+	}
+	if _, err := os.Stat(report.ArtifactPath); err != nil {
+		t.Fatal(err)
+	}
+	var second bytes.Buffer
+	args[3] = t.TempDir()
+	if err := runWithHermeticProvenance(t, args, &second); err != nil {
+		t.Fatal(err)
+	}
+	var again partitionRun
+	if err := json.Unmarshal(second.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if report.ArtifactSHA256 != again.ArtifactSHA256 {
+		t.Fatalf("digest changed: %s %s", report.ArtifactSHA256, again.ArtifactSHA256)
+	}
+}
+
+func TestPartitionStageEdgeClampPreservesRepetitionCapacity(t *testing.T) {
+	cfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-degree", "16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.partition.MaxEdges, 64_000_000; got != want {
+		t.Fatalf("MaxEdges=%d want %d; repetition capacity was lost", got, want)
+	}
+	capacity := cfg.partition.MaxEdges / cfg.partition.Repetitions / cfg.partition.Degree
+	if capacity < 250_001 {
+		t.Fatalf("large valid partition shape capacity=%d want at least 250001", capacity)
+	}
+	if int64(maxVectors+1)*int64(cfg.partition.Degree) <= int64(cfg.partition.MaxEdges)/int64(cfg.partition.Repetitions) {
+		t.Fatalf("true over-cap shape accepted by edge budget: capacity=%d", capacity)
+	}
+}
+
+func TestPartitionProvenanceSuffixPreservesFilenameAndRejectsShortInputs(t *testing.T) {
+	digest := strings.Repeat("d", 64)
+	base := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	got, err := provenanceSuffix(digest, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("d", 12) + "_" + strings.Repeat("a", 12) + "_" + strings.Repeat("b", 12); got != want {
+		t.Fatalf("suffix=%q want %q", got, want)
+	}
+	if _, err := provenanceSuffix("short", base, head); err == nil {
+		t.Fatal("short digest accepted")
+	}
+}
+func TestCheckedIn10kFixtureGraphCutBeatsStableHash(t *testing.T) {
+	args := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "1", "-stage", "partition", "-partition-repetitions", "4", "-partition-pivots", "8", "-partition-max-leaf-bucket", "128", "-partition-degree", "16"}
+	var stdout bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Dataset.Checksum != "2413ef7c2f65a4b5ce8ecc3846f473fd85d337a87511538f962af7cdf6aec291" || report.Source.Checksum != "6515025f540b955d453de99cf13f1efc002fd91135b2745b722c19e8d736e386" || report.ArtifactSHA256 != "9af8ddca00b42caa04f06f69dcc5991532193a3e95642d723cddaff664a04a11" || report.Metrics.EdgeCut != 5184 || report.Metrics.StableIDHashEdgeCut != 149877 {
+		t.Fatalf("frozen 10k regression changed: report=%+v", report)
+	}
+}
+func TestPartitionStageSkipsSimulationOnlyValidation(t *testing.T) {
+	args := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "16", "-probes", "16", "-overlap", "1", "-top-k", "10001", "-stages", "treedb_partition_local_hnsw", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "64", "-partition-degree", "4"}
+	var stdout bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || report.ArtifactPath == "" {
+		t.Fatalf("partition artifact missing: report=%+v err=%v", report, err)
+	}
+}
+
+func TestPartitionStageIgnoresLargeSimulationOnlyQueryStream(t *testing.T) {
+	const vectors = 20_000
+	m := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "partition-only-large-query-stream",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       vectors,
+		Queries:       maxVectors - vectors,
+		Dimensions:    1,
+		Metric:        "cosine",
+		Seed:          1,
+		Checksum:      strings.Repeat("0", 64),
+	}
+	dataset := t.TempDir()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataset, "fixture_manifest.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-dataset", dataset, "-out", t.TempDir(), "-partitions", "4", "-probes", "1", "-stage", "partition", "-partition-repetitions", "1", "-partition-pivots", "2", "-partition-max-leaf-bucket", "2", "-partition-degree", "1"}
+	var first bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &first); err != nil {
+		t.Fatalf("partition stage charged simulation-only queries: %v", err)
+	}
+	var report partitionRun
+	if err := json.Unmarshal(first.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	artifactRaw, err := os.ReadFile(report.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Source != report.Source || artifact.Source.Vectors != vectors || artifact.Source.Dimensions != 1 {
+		t.Fatalf("partition artifact lost vector-corpus identity: %+v", artifact.Source)
+	}
+	args[3] = t.TempDir()
+	var second bytes.Buffer
+	if err := runWithHermeticProvenance(t, args, &second); err != nil {
+		t.Fatal(err)
+	}
+	var again partitionRun
+	if err := json.Unmarshal(second.Bytes(), &again); err != nil {
+		t.Fatal(err)
+	}
+	if report.ArtifactSHA256 != again.ArtifactSHA256 || report.Source != again.Source {
+		t.Fatalf("partition-only output changed with irrelevant query stream: first=%+v second=%+v", report, again)
+	}
+}
+
+func TestPartitionFixtureValidationUsesVectorOnlyCaps(t *testing.T) {
+	base := fixtureManifest{
+		SchemaVersion: schemaVersion,
+		Fixture:       "partition-vector-boundary",
+		Generator:     fixtureGenerator,
+		Arithmetic:    fixtureArithmetic,
+		Vectors:       maxVectors,
+		Queries:       1,
+		Dimensions:    1,
+		Metric:        "cosine",
+		Checksum:      strings.Repeat("0", 64),
+	}
+	if err := validatePartitionFixtureWithCaps(base, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("max vector corpus plus required query rejected in partition mode: %v", err)
+	}
+	queryHeavy := base
+	queryHeavy.Queries = maxVectors * 4
+	if err := validatePartitionFixtureWithCaps(queryHeavy, maxVectors, maxFixtureBytes); err != nil {
+		t.Fatalf("irrelevant query count affected partition mode: %v", err)
+	}
+	if err := validateFixtureWithCaps(queryHeavy, maxVectors, maxFixtureBytes); err == nil {
+		t.Fatal("simulation accepted query-heavy fixture")
+	}
+	overCount := base
+	overCount.Vectors++
+	if err := validatePartitionFixtureWithCaps(overCount, maxVectors, maxFixtureBytes); err == nil {
+		t.Fatal("partition mode accepted over-count vector corpus")
+	}
+	overBytes := base
+	overBytes.Vectors = 2
+	overBytes.Dimensions = 2
+	if err := validatePartitionFixtureWithCaps(overBytes, maxVectors, 8); err == nil {
+		t.Fatal("partition mode accepted over-byte vector corpus")
 	}
 }
 

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "kind": "treedb_vector_partition_m2_reproduction_evidence",
+  "note": "Compact reviewer-accessible evidence. Generated artifacts remain host-local; commands and digests reproduce and verify them.",
+  "implementation_commit": "58db38e173093126e5b1ef3c92d79e160d63b0cf",
+  "implementation_commit_note": "All three fresh runs used binaries built from this exact commit after merging origin/main 3e225cb99. The following evidence commit changes only documentation/evidence.",
+  "canonical_manifest_digest_definition": "SHA-256 of json.Marshal on the decoded typed exporter manifest, including the sorted file map. This is the logical canonical manifest digest used in source_id, not a hash of manifest.json bytes.",
+  "runs": [
+    {
+      "name": "10k",
+      "docs": 10000,
+      "queries": 16,
+      "dimensions": 64,
+      "canonical_manifest_digest": "ea980008813897107cd1a150b96e2ef497ec4d26b815dbbc5f9b8d6ddef6ed58",
+      "source_checksum": "64bc8b935db050e2cb126f6e1bca6e4378d56464b0141128726b3445d4a34b62",
+      "artifact_sha256": "c270226154a4e7410bb4140d63abfe36bebc0d0de9cdbf7c894298225d76c935",
+      "report_sha256": "8e9b411983de00468172a2f2cfdc863dfca332eb13a95034e88e44f4a140f5fe"
+    },
+    {
+      "name": "100k",
+      "docs": 100000,
+      "queries": 8,
+      "dimensions": 16,
+      "canonical_manifest_digest": "04ab185b349d794b034550b117d9cbc20dff8131bb1c1986e63d52191240c2ec",
+      "source_checksum": "e56afe5df826acc8ab2bea01b09c3676a7ccf2cbf2743a46a0f63ce741ffd0c3",
+      "artifact_sha256": "627778e026d177320e4aace2f32883aa1656c1d36f9f5005d1d9e41f55fdc3ae",
+      "report_sha256": "edb8aed70d4ea45ff160d9c90c05d7d591199885e4cf64cef35705e109ce7a38"
+    },
+    {
+      "name": "1m",
+      "docs": 1000000,
+      "queries": 1,
+      "dimensions": 16,
+      "canonical_manifest_digest": "a7814b879e2e5d49c9038502fe7c7eb26fa5b2917af72b87d2d1321f66ab2f5b",
+      "source_checksum": "b6f7ce2ab91728cd869139672d8e902618f792e4cb10a8679bfc6612146f7f42",
+      "artifact_sha256": "f76fba39db8a51fb11b669962b92a97d64956f75a76137cea0e80cbe42d42413",
+      "report_sha256": "86501b152bd43242d2c53f0640aed52658a44045aa856b8dfb4041f4c1a9adcf"
+    }
+  ]
+}
