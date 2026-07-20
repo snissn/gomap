@@ -140,10 +140,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		if opts.DryRun {
 			return stats, nil
 		}
-		return stats, fmt.Errorf("%w: collection=%q namespace=%q unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
+		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d quarantine_segment_mismatches=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
 			plan.Namespace,
+			plan.Refs.Uncertain,
 			plan.Segments.Unknown,
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,

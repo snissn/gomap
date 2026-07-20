@@ -273,6 +273,80 @@ func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorPartitionReclaimV1ReclaimsCoResidentRecords(t *testing.T) {
+	_, d, col, _ := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}})
+	defer d.Close()
+	lease, err := d.AcquireStableResourceCaptureLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := *col.meta.Options.ColumnStore
+	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(d.ColumnAssetRootDir(), cfg, 801, []StableColumnPhysicalAssetAppend{
+		{Payload: []byte("a0"), Kind: ColumnAssetKindTCS1PartImage, Generation: 801, PartID: 1},
+		{Payload: []byte("a1"), Kind: ColumnAssetKindTCS1PartImage, Generation: 802, PartID: 2},
+	}, d.StableResourceIdentityPinRegistry(), lease)
+	lease.Release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources.Release()
+	store, err := OpenVectorPartitionStoreV1(d.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for generation, offset := range []int{0, 1} {
+		m := testVectorPartitionManifestV1()
+		m.Collection = col.name
+		m.State = "building"
+		m.Generation = uint64(generation + 11)
+		m.RouterGeneration = 0
+		m.SourceRowCount = 1
+		m.PartitionCount = 1
+		m.Placements = []VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}}
+		m.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}}
+		m.OverlapMemberships = nil
+		m.Representatives = nil
+		m.Assets = []VectorPartitionAssetV1{{ID: "partition/0", PartitionID: 0, Checksum: strings.Repeat("a", 64), Bytes: uint64(refs[offset].Length), Ref: refs[offset]}}
+		m.RouterAsset = VectorPartitionAssetV1{}
+		for i := range m.Assets {
+			raw, e := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), m.Assets[i].Ref)
+			if e != nil {
+				t.Fatal(e)
+			}
+			sum := sha256.Sum256(raw)
+			m.Assets[i].Checksum = hex.EncodeToString(sum[:])
+		}
+		m.Canonicalize()
+		m.ReadySetDigest = ""
+		if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Publish(m); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, "embedding", 11); err != nil {
+		t.Fatal(err)
+	}
+	for _, generation := range []uint64{11, 12} {
+		if _, err := os.Stat(store.deleteTombstonePath(col.name, "embedding", generation)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("reclaim record %d remains: %v", generation, err)
+		}
+	}
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shared segment remains: %v", err)
+	}
+}
+
 func TestVectorPartitionReclaimRecordV1ChecksumFailsClosed(t *testing.T) {
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {

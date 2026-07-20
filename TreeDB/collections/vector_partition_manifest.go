@@ -1342,7 +1342,9 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 			for _, asset := range record.m.Assets {
 				refs = append(refs, asset.Ref)
 			}
-			refs = append(refs, record.m.RouterAsset.Ref)
+			if record.m.RouterAsset.Ref.Kind != "" {
+				refs = append(refs, record.m.RouterAsset.Ref)
+			}
 		}
 		rewrite, err := c.columnAssetRewrite(ctx, columnAssetRewriteOptions{
 			ColumnAssetRewriteOptions:        ColumnAssetRewriteOptions{CandidateRefs: refs},
@@ -1361,7 +1363,11 @@ func (c *Collection) ReclaimVectorPartitionGenerationV1(ctx context.Context, ind
 		}
 		for _, record := range records {
 			complete := true
-			for _, asset := range append(append([]VectorPartitionAssetV1(nil), record.m.Assets...), record.m.RouterAsset) {
+			assets := append([]VectorPartitionAssetV1(nil), record.m.Assets...)
+			if record.m.RouterAsset.Ref.Kind != "" {
+				assets = append(assets, record.m.RouterAsset)
+			}
+			for _, asset := range assets {
 				path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), asset.Ref)
 				if err != nil {
 					return err
