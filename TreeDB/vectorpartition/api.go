@@ -16,6 +16,7 @@ type Source = internal.Source
 type PhaseMetrics = internal.PhaseMetrics
 type Partitioner = internal.Partitioner
 type ReferencePartitioner = internal.ReferencePartitioner
+type ExternalJSONLimits = internal.ExternalJSONLimits
 
 const SchemaVersion = internal.SchemaVersion
 
@@ -45,4 +46,7 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 }
 func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, source Source) (Artifact, error) {
 	return internal.RunExternalJSONForSource(ctx, command, input, maxOutput, source)
+}
+func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, source Source) (Artifact, error) {
+	return internal.RunExternalJSONForSourceWithLimits(ctx, command, input, limits, source)
 }

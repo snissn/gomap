@@ -25,7 +25,10 @@ publish a forged metric report.
 The usable optional external adapter (`RunExternalJSONForSource`) is offline
 only; the unbound `RunExternalJSON` deliberately errors. It receives
 an explicit command, private input/output paths, context cancellation, a
-fully bound expected source snapshot, and an output-byte cap. It removes the
+fully bound expected source snapshot, and independent request/output-byte
+caps. The default request cap is derived from bounded M2 graph ordinals and
+ID serialization; callers may set a smaller request cap without inflating the
+output cap. It removes the
 entire private temporary directory on command failure, cancellation, timeout,
 malformed output, or success. On Unix it also kills the dedicated process group
 after `Wait`, including when the root exits normally while a same-group child

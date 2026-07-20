@@ -294,6 +294,11 @@ func loadManifest(dir string) (manifest, error) {
 	if !ok || !qok {
 		return m, errors.New("manifest corpus file entry missing")
 	}
+	for _, name := range []string{m.DocumentVectorsFile, m.QueryVectorsFile} {
+		if !canonicalSHA256(m.Files[name].SHA256) {
+			return m, errors.New("invalid corpus checksum")
+		}
+	}
 	return m, nil
 }
 
@@ -340,7 +345,7 @@ func safeCorpusName(name string) bool {
 }
 func readF32(path string, fi fileInfo, rows, dims int) ([]float32, error) {
 	want, ok := checkedByteCount(rows, dims)
-	if !ok || want > maxCorpusBytes || fi.Bytes != want || len(fi.SHA256) != 64 || strings.ToLower(fi.SHA256) != fi.SHA256 {
+	if !ok || want > maxCorpusBytes || fi.Bytes != want || !canonicalSHA256(fi.SHA256) {
 		return nil, errors.New("invalid corpus file bounds")
 	}
 	f, e := os.Open(path)
@@ -363,6 +368,15 @@ func readF32(path string, fi fileInfo, rows, dims int) ([]float32, error) {
 	}
 	return a, nil
 }
+
+// canonicalSHA256 accepts only the lower-case, fixed-width hex form used by
+// exporter manifests. Decode and re-encode so length/casing checks cannot
+// admit malformed non-hex metadata before corpus I/O.
+func canonicalSHA256(s string) bool {
+	decoded, err := hex.DecodeString(s)
+	return err == nil && len(decoded) == sha256.Size && hex.EncodeToString(decoded) == s
+}
+
 func checkedByteCount(rows, dims int) (int64, bool) {
 	if rows < 1 || dims < 1 || int64(rows) > math.MaxInt64/int64(dims) || int64(rows)*int64(dims) > math.MaxInt64/4 {
 		return 0, false

@@ -400,6 +400,55 @@ func TestExternalBackendRequiresDeadline(t *testing.T) {
 	}
 }
 
+func TestExternalBackendSeparatesInputAndOutputCaps(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := bytes.Repeat([]byte("x"), len(raw)+1)
+	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	got, err := RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, input, ExternalJSONLimits{MaxInput: len(input), MaxOutput: len(raw)}, a.Source)
+	if err != nil {
+		t.Fatalf("larger bounded input with compact response rejected: %v", err)
+	}
+	if !reflect.DeepEqual(got, a) {
+		t.Fatal("external backend response changed")
+	}
+}
+
+func TestExternalBackendRejectsInputCapBeforeExecution(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := RunExternalJSONForSourceWithLimits(ctx, []string{"definitely-not-an-executable"}, []byte("{}"), ExternalJSONLimits{MaxInput: 1, MaxOutput: 1024}, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	if err == nil || !strings.Contains(err.Error(), "input exceeds cap") {
+		t.Fatalf("over-input cap reached backend or returned wrong error: %v", err)
+	}
+}
+
+func TestExternalBackendStillRejectsOutputOverflow(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := CanonicalJSON(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TREE_DB_TEST_RESPONSE", string(raw))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = RunExternalJSONForSourceWithLimits(ctx, []string{"sh", "-c", "printf '%s' \"$TREE_DB_TEST_RESPONSE\" > \"$1\""}, []byte("{}"), ExternalJSONLimits{MaxInput: 2, MaxOutput: len(raw) - 1}, a.Source)
+	if err == nil || !strings.Contains(err.Error(), "output exceeds cap") {
+		t.Fatalf("output overflow accepted or wrong error: %v", err)
+	}
+}
+
 func TestExternalBackendRejectsUnboundExpectedSourceBeforeExecution(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

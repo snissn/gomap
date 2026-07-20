@@ -40,6 +40,10 @@ const (
 	maxDistanceWork  = int64(20_000_000_000) // scalar cosine dimensions
 	maxPartitionWork = int64(250_000_000)
 	maxCarveDepth    = 64
+	// External JSON can carry every bounded graph ordinal (up to nine bytes each
+	// in canonical JSON), all bounded ID bytes, and one bounded per-vector field.
+	// This is a request/output ceiling, separate from a caller's output cap.
+	maxExternalJSONBytes = maxTotalIDBytes + maxEdges*9 + maxVectors*16
 )
 
 // Vector IDs must be unique and are canonically ordered before construction.
@@ -106,6 +110,13 @@ type Artifact struct {
 	Graph          Graph    `json:"graph"`
 	Assignment     []int    `json:"assignment"`
 	Metrics        Metrics  `json:"metrics"`
+}
+
+// ExternalJSONLimits independently bounds the private request file and the
+// backend response/stderr. Both must remain within the M2 serialization cap.
+type ExternalJSONLimits struct {
+	MaxInput  int
+	MaxOutput int
 }
 
 // Partitioner is the deliberately narrow backend seam. Implementations return
@@ -910,6 +921,13 @@ func RunExternalJSON(ctx context.Context, command []string, input []byte, maxOut
 	return Artifact{}, errors.New("external backend requires expected source binding")
 }
 func RunExternalJSONForSource(ctx context.Context, command []string, input []byte, maxOutput int, expected Source) (Artifact, error) {
+	return RunExternalJSONForSourceWithLimits(ctx, command, input, ExternalJSONLimits{MaxInput: maxExternalJSONBytes, MaxOutput: maxOutput}, expected)
+}
+
+// RunExternalJSONForSourceWithLimits runs an optional backend with separately
+// bounded request and response files. It is for callers that need a smaller
+// request cap than the M2-derived default without weakening the output cap.
+func RunExternalJSONForSourceWithLimits(ctx context.Context, command []string, input []byte, limits ExternalJSONLimits, expected Source) (Artifact, error) {
 	if err := validateExpectedSource(expected); err != nil {
 		return Artifact{}, err
 	}
@@ -919,8 +937,11 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 	if _, ok := ctx.Deadline(); !ok {
 		return Artifact{}, errors.New("external backend requires context deadline")
 	}
-	if len(command) == 0 || maxOutput < 1 || len(input) > maxOutput {
+	if len(command) == 0 || limits.MaxInput < 1 || limits.MaxInput > maxExternalJSONBytes || limits.MaxOutput < 1 || limits.MaxOutput > maxExternalJSONBytes {
 		return Artifact{}, errors.New("invalid external backend command")
+	}
+	if len(input) > limits.MaxInput {
+		return Artifact{}, errors.New("external partition backend input exceeds cap")
 	}
 	dir, err := os.MkdirTemp("", "treedb-vectorpartition-backend-*")
 	if err != nil {
@@ -934,7 +955,7 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 	}
 	cmd := exec.CommandContext(ctx, command[0], append(command[1:], in, out)...)
 	configureExternalCommand(cmd)
-	stderr := &cappedBuffer{limit: maxOutput}
+	stderr := &cappedBuffer{limit: limits.MaxOutput}
 	cmd.Stderr = stderr
 	e := cmd.Run()
 	// CommandContext only invokes Cancel while the root process is running.
@@ -952,14 +973,14 @@ func RunExternalJSONForSource(ctx context.Context, command []string, input []byt
 		return Artifact{}, e
 	}
 	defer f.Close()
-	raw, e := io.ReadAll(io.LimitReader(f, int64(maxOutput)+1))
+	raw, e := io.ReadAll(io.LimitReader(f, int64(limits.MaxOutput)+1))
 	if e != nil {
 		return Artifact{}, e
 	}
-	if len(raw) > maxOutput {
+	if len(raw) > limits.MaxOutput {
 		return Artifact{}, errors.New("external partition backend output exceeds cap")
 	}
-	return DecodeArtifactForSource(raw, maxOutput, expected)
+	return DecodeArtifactForSource(raw, limits.MaxOutput, expected)
 }
 
 func validateExpectedSource(s Source) error {
