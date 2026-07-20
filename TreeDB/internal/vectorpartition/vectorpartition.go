@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -277,7 +278,7 @@ func validateInput(v []Vector, c Config) error {
 	dims := 0
 	totalIDBytes := 0
 	for _, x := range v {
-		if x.ID == "" || len(x.ID) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(x.ID) {
+		if x.ID == "" || !utf8.ValidString(x.ID) || len(x.ID) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(x.ID) {
 			return errors.New("empty vector ID")
 		}
 		totalIDBytes += len(x.ID)
@@ -324,10 +325,27 @@ func ValidateInputShape(c Config, vectors, dimensions int) error {
 	if int64(vectors)*int64(c.Degree) > int64(c.MaxEdges) || int64(vectors)*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
 		return errors.New("configured graph edge bound exceeded before allocation")
 	}
-	if exceedsProduct(maxDistanceWork, int64(vectors), int64(c.MaxLeafBucket), int64(c.Repetitions), int64(dimensions)) {
+	if graphDistanceWorkExceeds(c, vectors, dimensions) {
 		return errors.New("configured graph scalar-work bound exceeded before allocation")
 	}
 	return nil
+}
+
+// graphDistanceWorkExceeds accounts for the shape-fixed first-carve pivot
+// comparisons and the worst bounded leaf comparisons in every repetition.
+// Recursive carve work is geometry-dependent and remains guarded by
+// distanceBudget at runtime.
+func graphDistanceWorkExceeds(c Config, vectors, dimensions int) bool {
+	topLevelPivots := 0
+	if vectors > c.MaxLeafBucket {
+		topLevelPivots = min(c.Pivots, vectors)
+	}
+	if exceedsProduct(maxDistanceWork, int64(vectors), int64(topLevelPivots), int64(c.Repetitions), int64(dimensions)) {
+		return true
+	}
+	topLevelPivotWork := int64(vectors) * int64(topLevelPivots) * int64(c.Repetitions) * int64(dimensions)
+	leafComparisons := max(0, min(c.MaxLeafBucket, vectors)-1)
+	return exceedsProduct(maxDistanceWork-topLevelPivotWork, int64(vectors), int64(leafComparisons), int64(c.Repetitions), int64(dimensions))
 }
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
 
@@ -734,7 +752,7 @@ func ValidateArtifact(a Artifact) error {
 	}
 	var totalIDBytes int
 	for i, id := range a.IDs {
-		if id == "" || i > 0 && id <= a.IDs[i-1] {
+		if id == "" || !utf8.ValidString(id) || i > 0 && id <= a.IDs[i-1] {
 			return errors.New("IDs not unique canonical order")
 		}
 		if len(id) > maxIDBytes || totalIDBytes > maxTotalIDBytes-len(id) {

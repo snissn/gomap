@@ -131,6 +131,48 @@ func TestBuildRejectsOverCapBeforeVectorElementValidation(t *testing.T) {
 		t.Fatalf("Build error=%v; count cap must reject before element validation", err)
 	}
 }
+
+func TestBuildAndArtifactRejectInvalidUTF8IDs(t *testing.T) {
+	vectors := fixture()
+	vectors[0].ID = string([]byte{0xff})
+	if _, err := Build(vectors, config()); err == nil {
+		t.Fatal("Build accepted an invalid UTF-8 vector ID")
+	}
+	artifact, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.IDs[0] = string([]byte{0xff})
+	if _, err := CanonicalJSON(artifact); err == nil {
+		t.Fatal("CanonicalJSON accepted an artifact with an invalid UTF-8 ID")
+	}
+	validArtifact, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := CanonicalJSON(validArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeArtifact(canonical, len(canonical)); err != nil {
+		t.Fatalf("strict decode rejected a valid canonical artifact: %v", err)
+	}
+}
+
+func TestInputShapePreflightCountsTopLevelPivotWork(t *testing.T) {
+	c := DefaultConfig()
+	c.Partitions = 1
+	c.Repetitions = 1
+	c.Pivots = maxPivots
+	c.MaxLeafBucket = 2
+	c.Degree = 1
+	if err := ValidateInputShape(c, 300_000, 64); err != nil {
+		t.Fatalf("pivot-work boundary below cap rejected: %v", err)
+	}
+	if err := ValidateInputShape(c, 310_000, 64); err == nil || !strings.Contains(err.Error(), "scalar-work") {
+		t.Fatalf("pivot-work shape error=%v; expected scalar-work rejection", err)
+	}
+}
 func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 	a, e := Build(fixture(), config())
 	if e != nil {
