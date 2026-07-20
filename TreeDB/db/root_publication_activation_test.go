@@ -33,6 +33,58 @@ func TestCommitPublicationAcceptedClassifiesOnlyPostAcceptanceErrors(t *testing.
 	}
 }
 
+func TestQueuedRootPublicationVisibleResourceCloneFailureAllowsCreatedSegmentCleanup(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	idx := database.idx.Load()
+	if idx == nil {
+		t.Fatal("missing active index")
+	}
+	builder, err := database.acquireRootPublicationBuilderV1()
+	if err != nil {
+		t.Fatalf("acquire root-publication builder: %v", err)
+	}
+	defer builder.Release()
+
+	cloneErr := errors.New("visible resource clone failed")
+	database.rootPublication.mu.Lock()
+	database.rootPublication.poison = cloneErr
+	database.rootPublication.mu.Unlock()
+	defer func() {
+		database.rootPublication.mu.Lock()
+		database.rootPublication.poison = nil
+		database.rootPublication.mu.Unlock()
+	}()
+
+	_, err = database.finalizeQueuedRootPublicationV1(
+		database.rootPublication,
+		builder,
+		idx,
+		database.meta,
+		0,
+		0,
+		nil,
+		false,
+		finalizeCommitPost{},
+		nil,
+		nil,
+		nil,
+		finalizeCommitOptions{},
+		nil,
+		func() {},
+	)
+	if !errors.Is(err, cloneErr) {
+		t.Fatalf("finalize error=%v, want visible resource clone failure", err)
+	}
+	if !finalizeCommitErrorAllowsCreatedSegmentCleanup(err) {
+		t.Fatalf("finalize error=%v did not preserve pre-publication cleanup-safe classification", err)
+	}
+}
+
 func TestActivatedRootPublicationTripsFormerDirectPublisher(t *testing.T) {
 	database, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed})
 	if err != nil {

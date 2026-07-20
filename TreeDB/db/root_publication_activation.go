@@ -624,7 +624,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	candidateTiming.FinalizeCandidateVisibleBaseClone += time.Since(visibleBaseCloneStart)
 	candidateTiming.FinalizeCandidateResourceWork.Add(visibleBaseWork)
 	if err != nil {
-		return post, err
+		return post, prePublishErr(err)
 	}
 	defer visibleBase.Release()
 

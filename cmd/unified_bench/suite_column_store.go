@@ -259,7 +259,7 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishCandidateVisibleCloneMS     float64                                `json:"column_publish_candidate_visible_clone_duration_ms,omitempty"`
 	ColumnPublishCandidateCOWPrepareMS       float64                                `json:"column_publish_candidate_cow_prepare_duration_ms,omitempty"`
 	ColumnPublishCandidateOtherMS            float64                                `json:"column_publish_candidate_other_duration_ms,omitempty"`
-	ColumnPublishCandidateResourceWork       columnStoreCandidateResourceWorkMetric `json:"column_publish_candidate_resource_work,omitempty"`
+	ColumnPublishCandidateResourceWork       columnStoreCandidateResourceWorkMetric `json:"column_publish_candidate_resource_work"`
 
 	ColumnPublishFinalizeEnqueueActivationDurationMS float64 `json:"column_publish_finalize_enqueue_activation_duration_ms,omitempty"`
 	ColumnPublishFinalizeAdmissionWaitDurationMS     float64 `json:"column_publish_finalize_admission_wait_duration_ms,omitempty"`

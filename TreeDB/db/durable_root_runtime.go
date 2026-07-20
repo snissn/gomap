@@ -695,6 +695,11 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	var inherited *rootpublication.StableResourceSet
 	inheritedStart := time.Now()
 	var inheritedWork rootpublication.StableResourceClosureWork
+	// Mutation handling is fail-closed: uncertified evidence uses the full
+	// inherited filter, destructive mutations require full closure validation,
+	// and append-only merge declines fall back to ordinary merge plus validation.
+	// The no-addition fast path is counted below; successful append-only merges
+	// with additions are counted by MergeAppendOnlyLogicalObligations.
 	hasMutationEvidence := len(mutation.ScopedFields) != 0
 	mutationCertified := false
 	if hasMutationEvidence {
