@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func fixturePath(t *testing.T) string {
@@ -115,8 +116,19 @@ func TestPartitionStageWritesValidatedDeterministicArtifact(t *testing.T) {
 	if err := json.Unmarshal(first.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.ResultKind != "offline_partition_builder" || report.Artifact.Metrics.MaxPartitionSize > report.Artifact.Metrics.Cap {
+	if report.ResultKind != "offline_partition_builder" || report.Metrics.MaxPartitionSize > report.Metrics.Cap || report.ArtifactBytes <= 0 || report.ReportBytes <= 0 || report.FinalBytes != report.ArtifactBytes+report.ReportBytes {
 		t.Fatalf("report=%+v", report)
+	}
+	raw, err := os.ReadFile(report.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := vectorpartition.DecodeArtifact(raw, len(raw))
+	if err != nil || artifact.Source != report.Source || artifact.Metrics != report.Metrics {
+		t.Fatalf("artifact does not match compact report: artifact=%+v err=%v", artifact, err)
+	}
+	if bytes.Contains(first.Bytes(), []byte("\"assignment\"")) || bytes.Contains(first.Bytes(), []byte("\"neighbors\"")) {
+		t.Fatalf("stdout contains duplicate artifact payload: %s", first.Bytes())
 	}
 	if _, err := os.Stat(report.ArtifactPath); err != nil {
 		t.Fatal(err)

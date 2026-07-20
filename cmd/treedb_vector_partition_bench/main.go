@@ -76,15 +76,20 @@ type config struct {
 }
 
 type partitionRun struct {
-	SchemaVersion  int                      `json:"schema_version"`
-	ResultKind     string                   `json:"result_kind"`
-	Dataset        fixtureManifest          `json:"dataset"`
-	Artifact       vectorpartition.Artifact `json:"artifact"`
-	BuildNanos     int64                    `json:"build_nanos"`
-	ArtifactSHA256 string                   `json:"artifact_sha256"`
-	BaseSHA        string                   `json:"base_sha"`
-	HeadSHA        string                   `json:"head_sha"`
-	ArtifactPath   string                   `json:"artifact_path"`
+	SchemaVersion  int                     `json:"schema_version"`
+	ResultKind     string                  `json:"result_kind"`
+	Dataset        fixtureManifest         `json:"dataset"`
+	Source         vectorpartition.Source  `json:"source"`
+	Config         vectorpartition.Config  `json:"config"`
+	Metrics        vectorpartition.Metrics `json:"metrics"`
+	BuildNanos     int64                   `json:"build_nanos"`
+	ArtifactSHA256 string                  `json:"artifact_sha256"`
+	BaseSHA        string                  `json:"base_sha"`
+	HeadSHA        string                  `json:"head_sha"`
+	ArtifactPath   string                  `json:"artifact_path"`
+	ArtifactBytes  int64                   `json:"artifact_bytes"`
+	ReportBytes    int64                   `json:"report_bytes"`
+	FinalBytes     int64                   `json:"final_bytes"`
 }
 
 type fixtureManifest struct {
@@ -429,12 +434,26 @@ func runPartitionStage(cfg config, fixture fixtureManifest, vectors [][]float64,
 	if err := os.WriteFile(path, bytes, 0644); err != nil {
 		return err
 	}
-	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Artifact: artifact, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path}
+	report := partitionRun{SchemaVersion: 1, ResultKind: "offline_partition_builder", Dataset: fixture, Source: artifact.Source, Config: artifact.Config, Metrics: artifact.Metrics, BuildNanos: time.Since(started).Nanoseconds(), ArtifactSHA256: digest, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, ArtifactPath: path, ArtifactBytes: int64(len(bytes))}
 	raw, err := json.Marshal(report)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+digest[:12]+"_"+cfg.baseSHA[:12]+"_"+cfg.headSHA[:12]+".json"), append(raw, '\n'), 0644); err != nil {
+	for i := 0; i < 8; i++ {
+		report.ReportBytes = int64(len(raw))
+		report.FinalBytes = report.ArtifactBytes + report.ReportBytes
+		raw, err = json.Marshal(report)
+		if err != nil {
+			return err
+		}
+		if int64(len(raw)) == report.ReportBytes {
+			break
+		}
+	}
+	if report.ReportBytes != int64(len(raw)) {
+		return errors.New("compact partition report byte accounting did not converge")
+	}
+	if err := os.WriteFile(filepath.Join(cfg.out, "vector_partition_build_"+digest[:12]+"_"+cfg.baseSHA[:12]+"_"+cfg.headSHA[:12]+".json"), raw, 0644); err != nil {
 		return err
 	}
 	if cfg.format == "json" {

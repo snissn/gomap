@@ -47,6 +47,17 @@ func TestDenseBallGraphAndPartitionDeterministic(t *testing.T) {
 	if e := ValidateArtifact(a); e != nil {
 		t.Fatal(e)
 	}
+	if got, want := mustDigest(t, a), "9ec528eff2020ba0d6af5a73b069ce9ba2368850270fb7b561a27d45c889e80e"; got != want {
+		t.Fatalf("tiny canonical graph/assignment bytes changed: got %s want %s", got, want)
+	}
+}
+func mustDigest(t *testing.T, a Artifact) string {
+	t.Helper()
+	d, err := Digest(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 func TestGraphDegreeAndCapOnDuplicateSkew(t *testing.T) {
 	v := make([]Vector, 12)
@@ -97,7 +108,7 @@ func TestMalformedFailsClosed(t *testing.T) {
 		name string
 		v    []Vector
 		c    Config
-	}{{"empty", nil, config()}, {"duplicate", []Vector{{"a", []float64{1}}, {"a", []float64{1}}}, func() Config { c := config(); c.Partitions = 2; return c }()}, {"nonfinite", []Vector{{"a", []float64{math.NaN()}}, {"b", []float64{1}}}, func() Config { c := config(); c.Partitions = 2; return c }()}}
+	}{{"empty", nil, config()}, {"duplicate", []Vector{{"a", []float64{1}}, {"a", []float64{1}}}, func() Config { c := config(); c.Partitions = 2; return c }()}, {"wrong-dimension", []Vector{{"a", []float64{1}}, {"b", []float64{1, 0}}}, func() Config { c := config(); c.Partitions = 2; return c }()}, {"nonfinite", []Vector{{"a", []float64{math.NaN()}}, {"b", []float64{1}}}, func() Config { c := config(); c.Partitions = 2; return c }()}}
 	for _, x := range cases {
 		if _, e := Build(x.v, x.c); e == nil {
 			t.Fatalf("%s accepted", x.name)
@@ -118,6 +129,21 @@ func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 	if e := ValidateArtifact(a); e == nil {
 		t.Fatal("self edge accepted")
 	}
+	a, _ = Build(fixture(), config())
+	a.Graph.Neighbors = a.Graph.Neighbors[:len(a.Graph.Neighbors)-1]
+	if e := ValidateArtifact(a); e == nil {
+		t.Fatal("missing graph node accepted")
+	}
+	a, _ = Build(fixture(), config())
+	a.IDs[1] = a.IDs[0]
+	if e := ValidateArtifact(a); e == nil {
+		t.Fatal("duplicate ID accepted")
+	}
+	a, _ = Build(fixture(), config())
+	a.Assignment = []int{0, 0, 0, 0, 0, 0}
+	if e := ValidateArtifact(a); e == nil {
+		t.Fatal("over-cap assignment accepted")
+	}
 }
 
 func TestStrictDecoderRejectsNonCanonicalAndMetricForgery(t *testing.T) {
@@ -131,6 +157,9 @@ func TestStrictDecoderRejectsNonCanonicalAndMetricForgery(t *testing.T) {
 	}
 	if _, err := DecodeArtifact(raw, len(raw)); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := DecodeArtifact(raw, len(raw)-1); err == nil {
+		t.Fatal("over-max decoder input accepted")
 	}
 	if _, err := DecodeArtifact(append(raw, '\n'), len(raw)+1); err == nil {
 		t.Fatal("noncanonical whitespace accepted")
@@ -167,6 +196,27 @@ func TestGraphPartitionBeatsStableIDHashOnClusteredFixture(t *testing.T) {
 		t.Fatalf("graph cut=%d hash=%d", a.Metrics.EdgeCut, a.Metrics.StableIDHashEdgeCut)
 	}
 }
+func TestGraphPartitionBeatsStableIDHashOnDeterministic10kClusters(t *testing.T) {
+	const n = 10_000
+	v := make([]Vector, n)
+	for i := range v {
+		cluster := i % 16
+		values := make([]float64, 16)
+		values[cluster] = 1
+		values[(cluster+1)%16] = float64(i%17) * 1e-6
+		v[i] = Vector{ID: fmt.Sprintf("cluster-%02d-%04d", cluster, i/16), Values: values}
+	}
+	c := DefaultConfig()
+	c.Partitions, c.Repetitions, c.Pivots, c.MaxLeafBucket, c.Degree = 16, 1, 4, 64, 4
+	c.MaxVectors, c.MaxEdges = n, n*c.Degree
+	a, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Metrics.EdgeCut >= a.Metrics.StableIDHashEdgeCut {
+		t.Fatalf("10k clustered edge cut=%d hash=%d", a.Metrics.EdgeCut, a.Metrics.StableIDHashEdgeCut)
+	}
+}
 
 func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 	root := t.TempDir()
@@ -185,6 +235,23 @@ func TestExternalBackendCancellationCleansPrivateTemp(t *testing.T) {
 		if entry.IsDir() && filepath.Base(entry.Name()) != "" {
 			t.Fatalf("backend temporary directory leaked: %s", entry.Name())
 		}
+	}
+}
+func TestExternalBackendStartedCancellationCleansPrivateTemp(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TMPDIR", root)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := RunExternalJSONForSource(ctx, []string{"sh", "-c", "printf '{' > \"$1\"; sleep 1"}, []byte("{}"), 1024, Source{SourceID: "expected", Checksum: strings.Repeat("0", 64), Vectors: 1, Dimensions: 1, Metric: "cosine"})
+	if err == nil {
+		t.Fatal("started backend cancellation accepted")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("backend temporary directory leaked after start: %v", entries)
 	}
 }
 func TestExternalBackendRequiresDeadline(t *testing.T) {
@@ -230,6 +297,84 @@ func (badPartitioner) License() string { return "test license" }
 func (badPartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	return make([]int, len(g.Neighbors)), nil
 }
+
+type assignmentPartitioner struct{ assignment []int }
+
+func (p assignmentPartitioner) Name() string    { return "assignment-test" }
+func (p assignmentPartitioner) License() string { return "test" }
+func (p assignmentPartitioner) Partition(Graph, int, int) ([]int, error) {
+	return p.assignment, nil
+}
+func TestBuildFailsClosedOnMalformedBackendAssignment(t *testing.T) {
+	for _, assignment := range [][]int{nil, {0}, {0, 1, 0, 1, 0, 1, 0}, {-1, 0, 0, 1, 1, 0}, {2, 0, 0, 1, 1, 0}} {
+		if _, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "fixture"}, assignmentPartitioner{assignment}); err == nil {
+			t.Fatalf("malformed assignment accepted: %v", assignment)
+		}
+	}
+}
+func TestValidatorEnforcesSymmetricPolicy(t *testing.T) {
+	a, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, to := -1, -1
+	for i, ns := range a.Graph.Neighbors {
+		if len(ns) > 0 {
+			from, to = i, ns[0]
+			break
+		}
+	}
+	if from < 0 {
+		t.Fatal("fixture graph has no edge")
+	}
+	for i, ns := range a.Graph.Neighbors {
+		if i != to {
+			continue
+		}
+		for at, node := range ns {
+			if node == from {
+				a.Graph.Neighbors[i] = append(ns[:at], ns[at+1:]...)
+				break
+			}
+		}
+	}
+	a.Config.Symmetric = true
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("non-reciprocal graph accepted as symmetric")
+	}
+}
+func TestReferencePartitionerCoversEveryPartition(t *testing.T) {
+	g := Graph{Neighbors: make([][]int, 8)}
+	a, err := (ReferencePartitioner{}).Partition(g, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make([]bool, 4)
+	for _, p := range a {
+		seen[p] = true
+	}
+	for p, ok := range seen {
+		if !ok {
+			t.Fatalf("partition %d left empty: %v", p, a)
+		}
+	}
+}
+func TestReferencePartitionerRejectsExcessiveWork(t *testing.T) {
+	g := Graph{Neighbors: make([][]int, 16_384)}
+	if _, err := (ReferencePartitioner{}).Partition(g, 16_384, 2); err == nil {
+		t.Fatal("unbounded partition work accepted")
+	}
+}
+func TestLeafNearestTieBreaksByOrdinal(t *testing.T) {
+	v := []Vector{{"a", []float64{1, 0}}, {"b", []float64{0, 1}}, {"c", []float64{0, -1}}, {"d", []float64{-1, 0}}}
+	got, err := nearest(v, []int{0, 1, 2, 3}, 0, 2, &distanceBudget{remaining: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].i != 1 || got[1].i != 2 {
+		t.Fatalf("ties not ordinal-stable: %+v", got)
+	}
+}
 func TestBuildWithPartitionerValidatesBackendOutputAndSource(t *testing.T) {
 	_, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "fixture", Checksum: "00"}, badPartitioner{})
 	if err == nil {
@@ -237,6 +382,9 @@ func TestBuildWithPartitionerValidatesBackendOutputAndSource(t *testing.T) {
 	}
 	if _, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "fixture"}, badPartitioner{}); err == nil {
 		t.Fatal("malicious assignment accepted")
+	}
+	if _, err := BuildWithPartitioner(fixture(), config(), Source{SourceID: "fixture", Metric: "cosine"}, ReferencePartitioner{}); err == nil {
+		t.Fatal("partial source identity accepted")
 	}
 	a, err := Build(fixture(), config())
 	if err != nil {
@@ -275,6 +423,14 @@ func TestArtifactRejectsOversizedIDsAndSourceDimensions(t *testing.T) {
 	a.IDs[0] = strings.Repeat("x", maxIDBytes+1)
 	if err := ValidateArtifact(a); err == nil {
 		t.Fatal("oversized ID accepted")
+	}
+}
+func TestArtifactRejectsAggregateIDByteCap(t *testing.T) {
+	chunk := strings.Repeat("x", maxTotalIDBytes/2+1)
+	c := Config{Metric: "cosine", Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 1, Partitions: 2, MaxVectors: 2, MaxEdges: 2}
+	a := Artifact{SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: Source{SourceID: "test", Checksum: strings.Repeat("0", 64), Vectors: 2, Dimensions: 1, Metric: "cosine"}, Config: c, IDs: []string{"a" + chunk, "b" + chunk}, Graph: Graph{Neighbors: make([][]int, 2)}, Assignment: []int{0, 1}}
+	if err := ValidateArtifact(a); err == nil {
+		t.Fatal("aggregate ID cap accepted")
 	}
 }
 

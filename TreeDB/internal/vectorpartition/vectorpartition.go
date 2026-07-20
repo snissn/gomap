@@ -5,6 +5,7 @@ package vectorpartition
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -24,19 +25,20 @@ import (
 )
 
 const (
-	SchemaVersion   = 1
-	maxVectors      = 1_000_000
-	maxDimensions   = 4096
-	maxEdges        = 64_000_000
-	maxRepetitions  = 32
-	maxPivots       = 1024
-	maxLeafBucket   = 65536
-	maxDegree       = 1024
-	maxPartitions   = 16384
-	maxIDBytes      = 1 << 20
-	maxTotalIDBytes = 64 << 20
-	maxDistanceWork = int64(1_000_000_000)
-	maxCarveDepth   = 64
+	SchemaVersion    = 1
+	maxVectors       = 1_000_000
+	maxDimensions    = 4096
+	maxEdges         = 64_000_000
+	maxRepetitions   = 32
+	maxPivots        = 1024
+	maxLeafBucket    = 65536
+	maxDegree        = 1024
+	maxPartitions    = 16384
+	maxIDBytes       = 1 << 20
+	maxTotalIDBytes  = 64 << 20
+	maxDistanceWork  = int64(20_000_000_000) // scalar cosine dimensions
+	maxPartitionWork = int64(250_000_000)
+	maxCarveDepth    = 64
 )
 
 // Vector IDs must be unique and are canonically ordered before construction.
@@ -130,8 +132,15 @@ func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend P
 }
 func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, backend Partitioner) (Artifact, PhaseMetrics, error) {
 	var phases PhaseMetrics
-	if backend == nil || backend.Name() == "" || backend.License() == "" || len(backend.License()) > 1024 {
+	if backend == nil {
 		return Artifact{}, phases, errors.New("partition backend identity is required")
+	}
+	backendName, backendLicense := backend.Name(), backend.License()
+	if backendName == "" || len(backendName) > 256 || backendLicense == "" || len(backendLicense) > 1024 {
+		return Artifact{}, phases, errors.New("partition backend identity is required")
+	}
+	if err := validateRequestedSource(source); err != nil {
+		return Artifact{}, phases, err
 	}
 	if err := validateInput(vectors, cfg); err != nil {
 		return Artifact{}, phases, err
@@ -156,15 +165,18 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	if err != nil {
 		return Artifact{}, phases, err
 	}
+	if _, err := validateAssignment(a, len(v), cfg); err != nil {
+		return Artifact{}, phases, fmt.Errorf("partition backend assignment: %w", err)
+	}
 	ids := make([]string, len(v))
 	for i := range v {
 		ids[i] = v[i].ID
 	}
 	computed := sourceFor(v, cfg.Metric, source.SourceID)
-	if source.Checksum != "" && source != computed {
+	if source != (Source{SourceID: source.SourceID}) && source != computed {
 		return Artifact{}, phases, errors.New("source identity does not match input snapshot")
 	}
-	art := Artifact{SchemaVersion: SchemaVersion, Backend: backend.Name(), BackendLicense: backend.License(), Source: computed, Config: cfg, IDs: ids, Graph: g, Assignment: a}
+	art := Artifact{SchemaVersion: SchemaVersion, Backend: backendName, BackendLicense: backendLicense, Source: computed, Config: cfg, IDs: ids, Graph: g, Assignment: a}
 	art.Metrics = metrics(art)
 	started = time.Now()
 	if err := ValidateArtifact(art); err != nil {
@@ -173,6 +185,21 @@ func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, bac
 	}
 	phases.ValidationNanos = time.Since(started).Nanoseconds()
 	return art, phases, nil
+}
+func validateRequestedSource(s Source) error {
+	if s.SourceID == "" || len(s.SourceID) > 1024 {
+		return errors.New("source ID is required")
+	}
+	if s == (Source{SourceID: s.SourceID}) {
+		return nil
+	}
+	if len(s.Checksum) != 64 || strings.ToLower(s.Checksum) != s.Checksum || s.Vectors < 1 || s.Vectors > maxVectors || s.Dimensions < 1 || s.Dimensions > maxDimensions || s.Metric != "cosine" {
+		return errors.New("partial source identity is not allowed")
+	}
+	if _, err := hex.DecodeString(s.Checksum); err != nil {
+		return errors.New("partial source identity is not allowed")
+	}
+	return nil
 }
 
 func sourceFor(v []Vector, metric, id string) Source {
@@ -225,8 +252,11 @@ func validateInput(v []Vector, c Config) error {
 			}
 		}
 	}
-	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) || int64(len(v))*int64(c.MaxLeafBucket)*int64(c.Repetitions) > maxDistanceWork {
+	if int64(len(v))*int64(c.Degree) > int64(c.MaxEdges) || int64(len(v))*int64(c.Degree) > int64(c.MaxEdges)/int64(c.Repetitions) {
 		return errors.New("configured graph edge bound exceeded before allocation")
+	}
+	if exceedsProduct(maxDistanceWork, int64(len(v)), int64(c.MaxLeafBucket), int64(c.Repetitions), int64(dims)) {
+		return errors.New("configured graph scalar-work bound exceeded before allocation")
 	}
 	return nil
 }
@@ -264,7 +294,7 @@ func buildGraph(v []Vector, c Config) (Graph, error) {
 	return g, nil
 }
 
-// distanceBudget bounds every cosine evaluation in the pivot and leaf phases.
+// distanceBudget bounds scalar operations in the pivot and leaf phases.
 // It is runtime-enforced because input geometry, rather than configuration
 // alone, determines recursive bucket shape.
 type distanceBudget struct{ remaining int64 }
@@ -297,7 +327,7 @@ func carveDepth(v []Vector, ids []int, c Config, sets []map[int]float64, depth i
 	pivots := append([]int(nil), ids[:k]...)
 	buckets := make([][]int, k)
 	for _, i := range ids {
-		if err := budget.take(int64(k)); err != nil {
+		if err := budget.take(int64(k) * int64(len(v[i].Values))); err != nil {
 			return err
 		}
 		var distances [maxPivots]float64
@@ -349,30 +379,25 @@ func carveChunks(v []Vector, ids []int, c Config, sets []map[int]float64, depth 
 	return nil
 }
 func nearest(v []Vector, ids []int, target, k int, budget *distanceBudget) ([]candidate, error) {
-	a := make([]candidate, 0, min(k, len(ids)-1))
+	a := make(candidateMaxHeap, 0, min(k, len(ids)-1))
 	for _, j := range ids {
 		if j != target {
-			if err := budget.take(1); err != nil {
+			if err := budget.take(int64(len(v[target].Values))); err != nil {
 				return nil, err
 			}
 			c := candidate{j, distance(v[target].Values, v[j].Values)}
 			if len(a) < k {
-				a = append(a, c)
+				heap.Push(&a, c)
 				continue
 			}
-			worst := 0
-			for x := 1; x < len(a); x++ {
-				if a[worst].x < a[x].x || a[worst].x == a[x].x && a[worst].i < a[x].i {
-					worst = x
-				}
-			}
-			if c.x < a[worst].x || c.x == a[worst].x && c.i < a[worst].i {
-				a[worst] = c
+			if candidateBetter(c, a[0]) {
+				a[0] = c
+				heap.Fix(&a, 0)
 			}
 		}
 	}
 	sort.Slice(a, func(i, j int) bool { return a[i].x < a[j].x || a[i].x == a[j].x && a[i].i < a[j].i })
-	return a, nil
+	return []candidate(a), nil
 }
 func distance(a, b []float64) float64 {
 	var dot, na, nb float64
@@ -391,6 +416,19 @@ type candidate struct {
 	i int
 	x float64
 }
+type candidateMaxHeap []candidate
+
+func (h candidateMaxHeap) Len() int           { return len(h) }
+func (h candidateMaxHeap) Less(i, j int) bool { return candidateBetter(h[j], h[i]) }
+func (h candidateMaxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *candidateMaxHeap) Push(x any)        { *h = append(*h, x.(candidate)) }
+func (h *candidateMaxHeap) Pop() any {
+	old := *h
+	x := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return x
+}
+func candidateBetter(a, b candidate) bool { return a.x < b.x || a.x == b.x && a.i < b.i }
 
 func addCandidateBounded(s map[int]float64, x int, d float64, cap int) {
 	if old, ok := s[x]; ok {
@@ -424,6 +462,9 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 	if err := validateGraph(g, n, maxVectors); err != nil {
 		return nil, err
 	}
+	if partitionWorkExceeded(n, parts, maxGraphDegree(g)) {
+		return nil, errors.New("partition work bound exceeded before allocation")
+	}
 	order := make([]int, n)
 	for i := range order {
 		order[i] = i
@@ -437,12 +478,47 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 		out[i] = -1
 	}
 	loads := make([]int, parts)
-	for _, node := range order {
-		best, bscore := -1, -1
+	// Reserve one ordinal for each partition before affinity scoring. This
+	// matches ValidateArtifact's exact-coverage invariant even on graphs whose
+	// edges all prefer a small subset of partitions.
+	for partition := 0; partition < parts; partition++ {
+		out[order[partition]] = partition
+		loads[partition] = 1
+	}
+	for _, node := range order[parts:] {
+		// Only partitions already represented by a neighbor can have a positive
+		// affinity. Add the globally least-loaded admissible partition so a
+		// zero-affinity choice remains deterministic and balanced without a
+		// partitions-by-degree scan for every node.
+		candidates := make([]int, 0, len(g.Neighbors[node])+1)
+		least := -1
 		for p := 0; p < parts; p++ {
-			if loads[p] >= cap {
+			if loads[p] < cap && (least < 0 || loads[p] < loads[least] || loads[p] == loads[least] && p < least) {
+				least = p
+			}
+		}
+		if least >= 0 {
+			candidates = append(candidates, least)
+		}
+		for _, to := range g.Neighbors[node] {
+			p := out[to]
+			if p < 0 || loads[p] >= cap {
 				continue
 			}
+			seen := false
+			for _, existing := range candidates {
+				if existing == p {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				candidates = append(candidates, p)
+			}
+		}
+		sort.Ints(candidates)
+		best, bscore := -1, -1
+		for _, p := range candidates {
 			score := 0
 			for _, to := range g.Neighbors[node] {
 				if out[to] == p {
@@ -460,6 +536,31 @@ func (ReferencePartitioner) Partition(g Graph, parts, cap int) ([]int, error) {
 		loads[best]++
 	}
 	return out, nil
+}
+func maxGraphDegree(g Graph) int {
+	max := 0
+	for _, ns := range g.Neighbors {
+		if len(ns) > max {
+			max = len(ns)
+		}
+	}
+	return max
+}
+func partitionWorkExceeded(n, parts, degree int) bool {
+	// Per node: one partition scan plus at most degree+1 candidate scores,
+	// each examining at most degree edges.
+	perNode := int64(parts) + int64(degree+1)*int64(degree+1)
+	return exceedsProduct(maxPartitionWork, int64(n), perNode)
+}
+func exceedsProduct(limit int64, values ...int64) bool {
+	p := int64(1)
+	for _, value := range values {
+		if value < 0 || value != 0 && p > limit/value {
+			return true
+		}
+		p *= value
+	}
+	return p > limit
 }
 func partitionCap(n, p int, e float64) int { return int(math.Ceil((1 + e) * float64(n) / float64(p))) }
 func metrics(a Artifact) Metrics {
@@ -513,8 +614,9 @@ func ValidateArtifact(a Artifact) error {
 	if err := validateGraph(a.Graph, len(a.IDs), a.Config.Degree); err != nil {
 		return err
 	}
-	cap := partitionCap(len(a.IDs), a.Config.Partitions, a.Config.Imbalance)
-	loads := make([]int, a.Config.Partitions)
+	if a.Config.Symmetric && !hasReciprocalEdges(a.Graph) {
+		return errors.New("symmetric graph has non-reciprocal edge")
+	}
 	var totalIDBytes int
 	for i, id := range a.IDs {
 		if id == "" || i > 0 && id <= a.IDs[i-1] {
@@ -524,25 +626,48 @@ func ValidateArtifact(a Artifact) error {
 			return errors.New("artifact ID bytes exceed cap")
 		}
 		totalIDBytes += len(id)
-		p := a.Assignment[i]
-		if p < 0 || p >= a.Config.Partitions {
-			return errors.New("assignment out of range")
-		}
-		loads[p]++
 	}
 	if _, err := hex.DecodeString(a.Source.Checksum); err != nil {
 		return errors.New("invalid source checksum")
 	}
-	for _, n := range loads {
-		if n == 0 || n > cap {
-			return errors.New("partition cap exceeded")
-		}
+	loads, err := validateAssignment(a.Assignment, len(a.IDs), a.Config)
+	if err != nil {
+		return err
 	}
 	m := metricsWithLoads(a, loads)
 	if a.Metrics.GraphEdges != m.GraphEdges || a.Metrics.MaxDegree != m.MaxDegree || a.Metrics.EdgeCut != m.EdgeCut || a.Metrics.StableIDHashEdgeCut != m.StableIDHashEdgeCut || a.Metrics.MaxPartitionSize != m.MaxPartitionSize || a.Metrics.Cap != m.Cap {
 		return errors.New("artifact metrics do not match graph and assignment")
 	}
 	return nil
+}
+func validateAssignment(assignment []int, n int, c Config) ([]int, error) {
+	if len(assignment) != n {
+		return nil, errors.New("assignment length mismatch")
+	}
+	cap := partitionCap(n, c.Partitions, c.Imbalance)
+	loads := make([]int, c.Partitions)
+	for _, p := range assignment {
+		if p < 0 || p >= c.Partitions {
+			return nil, errors.New("assignment out of range")
+		}
+		loads[p]++
+	}
+	for _, n := range loads {
+		if n == 0 || n > cap {
+			return nil, errors.New("partition cap exceeded")
+		}
+	}
+	return loads, nil
+}
+func hasReciprocalEdges(g Graph) bool {
+	for i, ns := range g.Neighbors {
+		for _, j := range ns {
+			if at := sort.SearchInts(g.Neighbors[j], i); at == len(g.Neighbors[j]) || g.Neighbors[j][at] != i {
+				return false
+			}
+		}
+	}
+	return true
 }
 func validateArtifactConfig(ids []string, c Config) error {
 	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || len(ids) < c.Partitions || len(ids) > c.MaxVectors {
