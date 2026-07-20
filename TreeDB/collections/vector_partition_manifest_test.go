@@ -37,6 +37,33 @@ func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Col
 	return refs, resources
 }
 
+// vectorPartitionManifestWithFreshStableAssetsV1 keeps negative authority
+// tests from short-circuiting on absent resource authority: the caller gets a
+// structurally valid ready manifest and the exact nonnil authority for its
+// referenced assets.
+func vectorPartitionManifestWithFreshStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, base VectorPartitionManifestV1, fileID uint32) (VectorPartitionManifestV1, *rootpublication.StableResourceSet) {
+	t.Helper()
+	refs, resources := appendVectorPartitionStableAssetsV1(t, d, col, fileID)
+	for i := range base.Assets {
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
+		if err != nil {
+			resources.Release()
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		base.Assets[i].Ref, base.Assets[i].Bytes, base.Assets[i].Checksum = refs[i], uint64(refs[i].Length), hex.EncodeToString(sum[:])
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[len(refs)-1])
+	if err != nil {
+		resources.Release()
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	base.RouterAsset.Ref, base.RouterAsset.Bytes, base.RouterAsset.Checksum = refs[len(refs)-1], uint64(refs[len(refs)-1].Length), hex.EncodeToString(sum[:])
+	base.Canonicalize()
+	return base, resources
+}
+
 func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer func() { _ = d.Close() }()
@@ -185,18 +212,25 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if _, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{}); err == nil {
 		t.Fatal("corrupt retained vector partition manifest did not fail closed")
 	}
-	m.IndexDefinitionDigest = strings.Repeat("f", 64)
-	m.Canonicalize()
-	if err := col.PublishVectorPartitionManifestV1(m, nil); err == nil {
-		t.Fatal("wrong index digest accepted")
+	wrongIndex, wrongIndexResources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, m, 801)
+	wrongIndex.IndexDefinitionDigest = strings.Repeat("f", 64)
+	wrongIndex.Canonicalize()
+	wrongIndexErr := col.PublishVectorPartitionManifestV1(wrongIndex, wrongIndexResources)
+	wrongIndexResources.Release()
+	if wrongIndexErr == nil || !strings.Contains(wrongIndexErr.Error(), "index definition digest mismatch") {
+		t.Fatalf("wrong index digest err=%v want intended digest mismatch", wrongIndexErr)
 	}
-	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
-	for _, mutate := range []func(*VectorPartitionManifestV1){func(x *VectorPartitionManifestV1) { x.SourceGeneration++ }, func(x *VectorPartitionManifestV1) { x.SourceChecksum++ }, func(x *VectorPartitionManifestV1) { x.SourceSchemaHash++ }, func(x *VectorPartitionManifestV1) { x.SourceRowCount++ }} {
-		bad := m
+	for i, mutate := range []func(*VectorPartitionManifestV1){func(x *VectorPartitionManifestV1) { x.SourceGeneration++ }, func(x *VectorPartitionManifestV1) { x.SourceChecksum++ }, func(x *VectorPartitionManifestV1) { x.SourceSchemaHash++ }, func(x *VectorPartitionManifestV1) { x.SourceRowCount++ }} {
+		bad, staleResources := vectorPartitionManifestWithFreshStableAssetsV1(t, d, col, m, 802+uint32(i))
 		mutate(&bad)
+		if bad.SourceRowCount > m.SourceRowCount {
+			bad.Memberships = append(bad.Memberships, VectorPartitionMembershipV1{VectorOrdinal: uint64(len(bad.Memberships)), PartitionID: 0})
+		}
 		bad.Canonicalize()
-		if err := col.PublishVectorPartitionManifestV1(bad, nil); err == nil {
-			t.Fatal("stale source identity accepted")
+		staleErr := col.PublishVectorPartitionManifestV1(bad, staleResources)
+		staleResources.Release()
+		if staleErr == nil || !strings.Contains(staleErr.Error(), "source identity mismatch") {
+			t.Fatalf("stale source identity err=%v want intended mismatch", staleErr)
 		}
 	}
 }
