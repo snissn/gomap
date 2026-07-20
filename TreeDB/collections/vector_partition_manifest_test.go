@@ -17,7 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
-func appendVectorPartitionStableAssetsV1(t *testing.T, d *backenddb.DB, col *Collection, fileID uint32) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
+func appendVectorPartitionStableAssetsV1(t testing.TB, d *backenddb.DB, col *Collection, fileID uint32) ([]ColumnAssetRef, *rootpublication.StableResourceSet) {
 	t.Helper()
 	lease, err := d.AcquireStableResourceCaptureLease()
 	if err != nil {
@@ -929,4 +929,48 @@ func BenchmarkVectorPartitionStoreV1WarmOpen(b *testing.B) {
 			}
 		}
 	})
+}
+
+// BenchmarkVectorPartitionStatusV1Warm measures the public status path after a
+// real ready publication.  It deliberately uses producer-issued stable
+// resources so this does not benchmark an authority-bypassing fixture.
+func BenchmarkVectorPartitionStatusV1Warm(b *testing.B) {
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(b, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.IndexName = def.Name
+	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	_, graph, _, err := col.columnVectorGraphPhysicalRowReaderSnapshotView(def.Name)
+	if err != nil {
+		b.Fatal(err)
+	}
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = graph.BaseManifestGeneration, graph.BaseManifestChecksum, graph.BaseSchemaHash, uint64(graph.RowCount)
+	refs, resources := appendVectorPartitionStableAssetsV1(b, d, col, 702)
+	for i := range m.Assets {
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.Assets[i].Ref, m.Assets[i].Bytes, m.Assets[i].Checksum = refs[i], uint64(refs[i].Length), hex.EncodeToString(sum[:])
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[2])
+	if err != nil {
+		b.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	m.RouterAsset.Ref, m.RouterAsset.Bytes, m.RouterAsset.Checksum = refs[2], uint64(refs[2].Length), hex.EncodeToString(sum[:])
+	m.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(m, resources); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := col.VectorPartitionStatusV1(def.Name, m.Generation); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

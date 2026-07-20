@@ -216,6 +216,57 @@ with both original and superseded refs, and retains the journal until all of
 their segment debt is physically absent; the durable-root fallback generation
 can therefore delay, but never bypass, deletion.
 
+### V1 format and bounds
+
+The authoritative on-disk record is binary `VPM1` (big-endian magic
+`0x56504d31`, version `1`), followed by fixed-order length-prefixed fields;
+there are no tagged optional fields. The JSON form is an inspection/exchange
+encoding of that same record: unknown fields, a second JSON value, trailing
+bytes, and non-canonical ordering fail closed. This is a pre-alpha on-disk
+format: old database directories need not be readable by new binaries.
+
+| Record area | Required content | Validation boundary |
+| --- | --- | --- |
+| identity | collection, index name, SHA-256 index-definition digest; source generation/checksum/schema/row count; partition and router generations | exact live TVIS/base identity; ready router generation equals partition generation |
+| placement | dense logical `partition_id` to one Raft group, with many logical partitions allowed per group | IDs are exactly `[0, partition_count)` and canonical |
+| memberships | one disjoint membership per source ordinal; bounded overlap and representatives | ordinal/partition coverage, sorted order, per-vector and per-partition caps |
+| assets | typed `ColumnAssetRef`, length, CRC, SHA-256 and logical asset ID for each partition plus router | references are namespace-bound, unique, streamed and checksum-verified before ready publication |
+| ready set | SHA-256 over canonical placements, partition assets and router descriptor | mismatches, mixed router/generation, or missing partition asset reject |
+
+Default decode limits are 16 MiB encoded bytes, 65,536 partitions, 1,048,576
+memberships, 262,144 assets, 4 KiB strings, 16 memberships per vector, and
+65,536 representatives per partition. A single asset is capped at 8 GiB and
+total referenced bytes at 16 GiB. Count-derived allocations are checked against
+these limits before allocation.
+
+### Lifecycle, publication, and cleanup authority
+
+| Transition | Durable order | Observable result |
+| --- | --- | --- |
+| build -> retained building | write generation temp, `fsync`, link/rename, directory `fsync` | complete non-active building record only |
+| build -> ready active | validate live source and producer stable-resource set; stream assets; persist generation; then write/`fsync`/rename active pointer and directory | old complete active pointer or new complete active pointer, never a partial manifest |
+| active -> retired | persist retired marker and directory sync, then remove active marker and sync | prepared-only generation is not active |
+| retired -> deleting | require inactive plus zero reader pins and caller-proved zero snapshot/catalog references; persist checksummed reclaim journal before removing manifest | retryable reclaim debt survives crash/reopen |
+| deleting -> absent | journal superseded refs before any mixed-segment remap; GC physical segment debt; remove journal only when all original and superseded segments are absent | incomplete fallback is retried, never treated as deletion |
+
+The storage barrier is canonical-root scoped (including symlink aliases) and
+serializes publication, deletion, reader acquisition, and snapshot export.
+`AcquireVectorPartitionReaderPinV1` returns an idempotently released handle;
+`VectorPartitionStatusV1` reports its count and deletion rechecks it under the
+same barrier. `SnapshotReferences` and `CatalogReferences` are deliberately
+external, caller-supplied proofs in M1. M7, not M1, owns their durable catalog
+derivation and cluster cutover authority.
+
+### Snapshot and portability semantics
+
+Raft export copies `db/vector_partitions` together with column assets while
+holding the same root barrier. Restore replaces the side-store namespace, so a
+restored manifest’s typed refs resolve against the archived assets instead of
+the prior target directory. Snapshot archives are copies: exporting an archive
+does not create a live reader pin or a durable catalog reference. File names
+are opaque SHA-256-derived identities; manifest fields, not host paths, are
+portable across restored DB roots.
+
 `cmd/treedb_vector_dataset_export` also supports a declared 1M-vector local
 corpus (`-docs 1000000`) within its pre-allocation byte caps. Its manifest pins
 vector/query checksums, dimensions, metric, query set, and an exhaustive

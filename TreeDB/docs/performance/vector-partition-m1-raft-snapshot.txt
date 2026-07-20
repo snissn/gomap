@@ -1,0 +1,10 @@
+command: /usr/bin/time -v env GOWORK=off go test ./TreeDB/internal/raftfsm -run '^$' -bench '^BenchmarkRaftSnapshotV1VectorPartitionArchiveInstall$' -benchtime=1x -benchmem -count=1
+candidate: 27cb544c2078baba7da9ff451125706daa1484f4
+
+memberships=10000 archive: 39347398 ns/op, 665600 archive-bytes, 2219632 B/op, 1755 allocs/op
+memberships=10000 install: 202366953 ns/op, 57099424 B/op, 9097 allocs/op
+memberships=100000 archive: 27939603 ns/op, 1745920 archive-bytes, 4510424 B/op, 769 allocs/op
+memberships=100000 install: 196216071 ns/op, 56572832 B/op, 8478 allocs/op
+memberships=1000000 archive: 38680889 ns/op, 12545536 archive-bytes, 25706680 B/op, 784 allocs/op
+memberships=1000000 install: 202166237 ns/op, 56508360 B/op, 8433 allocs/op
+Go harness maximum RSS: 323328 kB
