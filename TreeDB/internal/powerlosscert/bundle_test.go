@@ -214,6 +214,21 @@ func TestVerifyArtifactsRequiresTraceToEndAtDeclaredCutOccurrence(t *testing.T) 
 	}
 }
 
+func TestReplayWindowCutCountRetainsPrefixButScopesAddress(t *testing.T) {
+	events := []string{
+		"cut:after-meta-write:meta",
+		"cut:after-meta-write:meta",
+		"replay-window:variant-a",
+		"cut:after-meta-write:meta",
+	}
+	if got := replayWindowCutCount(events, "after-meta-write", "variant-a"); got != 1 {
+		t.Fatalf("windowed matching events=%d want 1", got)
+	}
+	if got := replayWindowCutCount(events, "after-meta-write", "variant-b"); got != 3 {
+		t.Fatalf("legacy full-trace matching events=%d want 3", got)
+	}
+}
+
 func TestVerifyArtifactsRejectsModeledEvidenceReuseAcrossWitnesses(t *testing.T) {
 	root := t.TempDir()
 	manifest := testChildManifest("witness-a")

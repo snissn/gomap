@@ -41,7 +41,8 @@
     3927,
     3930,
     3932,
-    3934
+    3934,
+    3936
   ],
   "cases": [
     {
@@ -498,16 +499,17 @@
       "expected_outcome": "accepted:stable-root",
       "expected_typed_error": "none",
       "state": {
-        "root_meta_generation": "selected_slot=1 commit_seq=13 slot0=12 slot1=13",
-        "freelist_generation": "generation=23",
+        "root_meta_generation": "selected_commit_seq=13 fallback_commit_seq=12",
+        "freelist_generation": "generation=persisted",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=9",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=command_wal_durable applied_lsn=19",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=10",
-        "cleanup_maintenance_pins": "slot0_commit_seq=12 slot1_commit_seq=13"
+        "durable_lsn": "durable_wal_lsn=0 durable_root_commit_seq=13",
+        "cleanup_maintenance_pins": "selected_commit_seq=13 fallback_commit_seq=12"
       },
+      "state_comparison": "logical_horizon",
       "seed": 3674,
-      "cut_id": "cut/public-authoritative-resources-stable-image/after-meta-sync/011",
+      "cut_id": "cut/public-authoritative-resources-stable-image/after-meta-sync/000",
       "variant_id": "public-authoritative-resources-stable-image",
       "cut_point": "after-meta-sync",
       "reopen_mode": "read-only",
