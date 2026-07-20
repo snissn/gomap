@@ -154,7 +154,18 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 		restoreCut()
 		t.Fatalf("checkpoint predecessor before retry: %v", err)
 	}
+	retryModel, err := powerlossoracle.Capture(dir)
+	if err != nil {
+		restoreCut()
+		t.Fatalf("capture retry durability baseline: %v", err)
+	}
 	observeMu.Lock()
+	// The stale-build rendezvous above is asserted behaviorally. Rebase the
+	// byte model after its predecessor checkpoint so the terminal evidence
+	// trace addresses only the distinguishable retry's meta-sync occurrence.
+	// Otherwise the predecessor checkpoint and retry both appear as occurrence
+	// zero candidates and the evidence writer correctly rejects the trace.
+	model = retryModel
 	checkpointArmed = true
 	observeMu.Unlock()
 	if err := publishDelta("sys/certification/second", "retry-second"); err != nil {
@@ -173,6 +184,15 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed = true
+	terminalMetaSyncs := 0
+	for _, event := range model.Trace() {
+		if strings.HasPrefix(event, "cut:after-meta-sync:") {
+			terminalMetaSyncs++
+		}
+	}
+	if terminalMetaSyncs != 1 {
+		t.Fatalf("terminal retry trace contains %d after-meta-sync events, want one", terminalMetaSyncs)
+	}
 
 	result, recovered, closeRecovered, err := powerlossreopen.Stable(model, opts, true)
 	if err != nil {
