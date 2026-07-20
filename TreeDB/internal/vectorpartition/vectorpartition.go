@@ -269,6 +269,11 @@ func validateInput(v []Vector, c Config) error {
 	if err := ValidateConfig(c); err != nil {
 		return err
 	}
+	// Reject count-derived allocation abuse before examining a caller-owned
+	// element. Dimensions still require the post-scan shape validation below.
+	if len(v) < c.Partitions || len(v) > c.MaxVectors {
+		return errors.New("vector count outside configured bounds")
+	}
 	dims := 0
 	totalIDBytes := 0
 	for _, x := range v {

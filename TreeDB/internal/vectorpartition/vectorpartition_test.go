@@ -116,6 +116,21 @@ func TestMalformedFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRejectsOverCapBeforeVectorElementValidation(t *testing.T) {
+	sharedValues := make([]float64, maxDimensions)
+	sharedValues[0] = math.NaN()
+	vectors := make([]Vector, maxVectors+1)
+	for i := range vectors {
+		// Every entry shares the same backing values; if Build scans even one
+		// element, its empty ID/non-finite value would produce a different error.
+		vectors[i] = Vector{Values: sharedValues}
+	}
+	_, err := Build(vectors, DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "vector count outside configured bounds") {
+		t.Fatalf("Build error=%v; count cap must reject before element validation", err)
+	}
+}
 func TestValidatorRejectsCorruptBackendOutput(t *testing.T) {
 	a, e := Build(fixture(), config())
 	if e != nil {
