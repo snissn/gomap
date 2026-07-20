@@ -198,6 +198,19 @@ func TestBatchPtrValueArena_RecycledAfterMaterializedCommandWALAppend(t *testing
 	if count := countBatchArenaLeaseChunks(db, db.mutableShards[0].mem); count != 1 {
 		t.Fatalf("expected only the main batch arena lease after materialized command WAL append; got %d chunks", count)
 	}
+	for i := 0; i < 256; i++ {
+		b.Reset()
+		iterKey := []byte(fmt.Sprintf("materialized-command-wal-%03d", i))
+		iterVal := bytes.Repeat([]byte{byte(i)}, 64)
+		if err := b.Set(iterKey, iterVal); err != nil {
+			t.Fatalf("set reuse %d: %v", i, err)
+		}
+		if err := b.WriteAfterCommandWALAppend(true, func() error {
+			return b.Replay(func(batch.Entry) error { return nil })
+		}); err != nil {
+			t.Fatalf("write reuse %d: %v", i, err)
+		}
+	}
 
 	got, err := db.Get(key)
 	if err != nil {

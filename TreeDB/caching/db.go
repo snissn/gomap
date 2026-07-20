@@ -36668,11 +36668,30 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 
 	if b.commandWALAppend != nil {
+		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+			for _, idx := range b.ptrValueIdxs {
+				if idx < 0 || idx >= len(b.entries) {
+					unlockWriteMu()
+					return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
+				}
+			}
+		}
 		if err := b.commandWALAppend(); err != nil {
 			unlockWriteMu()
 			return err
 		}
 		commandWALAppended = true
+		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+			// SetMaterializedRID needs the value through the callback above. The
+			// pointer-in-memtable representation needs only ValuePtr, so clear the
+			// serialization copy before any sorted/steal publication path can take
+			// ownership of it.
+			for _, idx := range b.ptrValueIdxs {
+				if b.entries[idx].IsPtr {
+					b.entries[idx].Value = nil
+				}
+			}
+		}
 	}
 
 	if !allDeletes {
@@ -36959,13 +36978,6 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
 				unlockWriteMu()
 				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
-			}
-			// Materialized command-WAL pointers retain their values through the
-			// append callback so SetMaterializedRID can serialize them. After the
-			// callback succeeds, pointer-in-memtable publication stores only the
-			// pointer metadata and does not borrow those value bytes.
-			if b.commandWALMaterializedRID && b.db.memtableValueLogPointers && b.entries[idx].IsPtr {
-				continue
 			}
 			if b.entries[idx].Value == nil {
 				continue
