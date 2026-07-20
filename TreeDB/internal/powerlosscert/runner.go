@@ -721,6 +721,9 @@ func executeRunCase(outputRoot string, plan RunPlan, runCase RunCase, binary Art
 		"TREEDB_POWERLOSS_REOPEN_MODE":      runCase.ReopenMode,
 		powerLossProfileEnv:                 runCase.Profile,
 	}
+	if runCase.ReplayWindow != "" {
+		env[powerLossReplayWindowEnv] = runCase.ReplayWindow
+	}
 	ledgerPath := filepath.Join(outputRoot, "inputs", "power_loss_counterexamples.json")
 	if _, err := os.Stat(ledgerPath); err == nil {
 		env["TREEDB_POWERLOSS_COUNTEREXAMPLE_LEDGER"] = "inputs/power_loss_counterexamples.json"
@@ -899,7 +902,7 @@ func environmentList(values map[string]string) []string {
 
 func validateExecutedRecovery(runCase RunCase, trace operationTraceArtifact, recovery recoveryTraceArtifact) error {
 	prefix := fmt.Sprintf("powerlosscert: case %q", runCase.ID)
-	if trace.CutID != runCase.CutID || trace.VariantID != runCase.VariantID || trace.Seed != strconv.FormatUint(runCase.Seed, 10) || trace.DeclaredCutPoint != runCase.CutPoint {
+	if trace.CutID != runCase.CutID || trace.VariantID != runCase.VariantID || trace.Seed != strconv.FormatUint(runCase.Seed, 10) || trace.DeclaredCutPoint != runCase.CutPoint || trace.ReplayWindow != runCase.ReplayWindow {
 		return fmt.Errorf("%s operation trace does not match the frozen replay selector", prefix)
 	}
 	_, occurrence, err := parseCutAddress(runCase.CutID)
@@ -1073,6 +1076,7 @@ func buildChildManifest(plan RunPlan, outputRoot string, binaries map[string]Art
 			ExpectedRecoveryDir:    expectedRecoveryDir,
 			State:                  state,
 			StateComparison:        runCase.StateComparison,
+			ReplayWindow:           runCase.ReplayWindow,
 			CounterexampleID:       runCase.CounterexampleID,
 			NegativeControlID:      runCase.NegativeControlID,
 			Seed:                   runCase.Seed,

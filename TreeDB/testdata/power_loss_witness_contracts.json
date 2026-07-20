@@ -1,5 +1,5 @@
 {
-  "schema_version": "treedb-power-loss-witness-contracts/v3",
+  "schema_version": "treedb-power-loss-witness-contracts/v4",
   "issue": 3684,
   "required_pull_requests": [
     3706,
@@ -513,6 +513,7 @@
       "variant_id": "public-authoritative-resources-stable-image",
       "cut_point": "after-meta-sync",
       "reopen_mode": "read-only",
+      "replay_window": "public-authoritative-resources-stable-image",
       "expected_recovery": {
         "rejected": false,
         "error_type": "",

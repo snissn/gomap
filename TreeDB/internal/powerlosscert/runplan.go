@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v3"
+const RunPlanSchemaVersion = "treedb-power-loss-run-plan/v4"
 
 const CertifiedRepositoryRef = "refs/remotes/origin/main"
 
@@ -70,6 +70,7 @@ type RunCase struct {
 	VariantID              string              `json:"variant_id"`
 	CutPoint               string              `json:"cut_point"`
 	ReopenMode             string              `json:"reopen_mode"`
+	ReplayWindow           string              `json:"replay_window,omitempty"`
 	ExpectedRecovery       RecoveryExpectation `json:"expected_recovery"`
 	ClaimBoundary          string              `json:"claim_boundary"`
 }
@@ -205,6 +206,9 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 	if runCase.ReopenMode != powerLossReopenModeReadWrite && runCase.ReopenMode != powerLossReopenModeReadOnly {
 		return fmt.Errorf("%s has invalid reopen mode %q", prefix, runCase.ReopenMode)
 	}
+	if runCase.ReplayWindow != "" && runCase.ReplayWindow != runCase.VariantID {
+		return fmt.Errorf("%s replay window=%q does not match variant id=%q", prefix, runCase.ReplayWindow, runCase.VariantID)
+	}
 	if runCase.StateComparison != stateComparisonExact && runCase.StateComparison != stateComparisonLogicalHorizon {
 		return fmt.Errorf("%s has invalid state comparison %q", prefix, runCase.StateComparison)
 	}
@@ -236,6 +240,9 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 		powerLossReopenModeEnv:              runCase.ReopenMode,
 		powerLossProfileEnv:                 runCase.Profile,
 	}
+	if runCase.ReplayWindow != "" {
+		env[powerLossReplayWindowEnv] = runCase.ReplayWindow
+	}
 	witness := Witness{
 		ID:                     runCase.ID,
 		EvidenceTier:           EvidenceTierModeledCrash,
@@ -253,6 +260,7 @@ func validateRunCase(inventory RiskInventory, runCase RunCase) error {
 		ExpectedRecoveryDir:    expectedRecoveryDir,
 		State:                  runCase.State,
 		StateComparison:        runCase.StateComparison,
+		ReplayWindow:           runCase.ReplayWindow,
 		CounterexampleID:       runCase.CounterexampleID,
 		NegativeControlID:      runCase.NegativeControlID,
 		Seed:                   runCase.Seed,

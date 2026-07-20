@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ChildManifestSchemaVersion  = "treedb-power-loss-child/v2"
+	ChildManifestSchemaVersion  = "treedb-power-loss-child/v3"
 	RiskInventorySchemaVersion  = "treedb-power-loss-risk-inventory/v1"
 	CoverageReportSchemaVersion = "treedb-power-loss-coverage/v1"
 	SelectionPlanSchemaVersion  = "treedb-power-loss-selection/v1"
@@ -27,6 +27,7 @@ const (
 
 const (
 	powerLossReopenModeEnv       = "TREEDB_POWERLOSS_REOPEN_MODE"
+	powerLossReplayWindowEnv     = "TREEDB_POWERLOSS_REPLAY_WINDOW"
 	powerLossReopenModeReadWrite = "read-write"
 	powerLossReopenModeReadOnly  = "read-only"
 	powerLossProfileEnv          = "TREEDB_POWERLOSS_PROFILE"
@@ -136,6 +137,7 @@ type Witness struct {
 	ExpectedRecoveryDir    string       `json:"expected_recovery_dir,omitempty"`
 	State                  WitnessState `json:"state"`
 	StateComparison        string       `json:"state_comparison,omitempty"`
+	ReplayWindow           string       `json:"replay_window,omitempty"`
 	CounterexampleID       string       `json:"counterexample_id,omitempty"`
 	NegativeControlID      string       `json:"negative_control_id,omitempty"`
 	Seed                   uint64       `json:"seed"`
@@ -450,6 +452,9 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	}
 	if witness.StateComparison != stateComparisonExact && witness.StateComparison != stateComparisonLogicalHorizon {
 		return fmt.Errorf("%s has invalid state comparison %q", prefix, witness.StateComparison)
+	}
+	if got := witness.Command.Env[powerLossReplayWindowEnv]; got != witness.ReplayWindow {
+		return fmt.Errorf("%s command env %s=%q does not match replay window %q", prefix, powerLossReplayWindowEnv, got, witness.ReplayWindow)
 	}
 	if witness.EvidenceTier == EvidenceTierModeledCrash {
 		if _, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir); err != nil {

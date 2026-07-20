@@ -165,6 +165,20 @@ func TestEvidenceRequestFromEnvRequiresValidReopenMode(t *testing.T) {
 	}
 }
 
+func TestEvidenceRequestFromEnvRejectsReplayWindowVariantMismatch(t *testing.T) {
+	t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
+	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadOnly)
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
+	t.Setenv(EnvEvidenceReplayWindow, "variant-b")
+
+	if _, err := EvidenceRequestFromEnv(); err == nil || !strings.Contains(err.Error(), "does not match replay variant") {
+		t.Fatalf("EvidenceRequestFromEnv replay-window mismatch error=%v", err)
+	}
+}
+
 func TestBeginEvidenceFromEnvRejectsReopenModeMismatchBeforeCapture(t *testing.T) {
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {
@@ -247,6 +261,7 @@ func TestBeginEvidenceFromEnvScopesOccurrenceAfterReplayWindowAndRetainsPrefix(t
 	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
 	t.Setenv(EnvReplayVariant, "variant-a")
 	t.Setenv(EnvReplaySeed, "1")
+	t.Setenv(EnvEvidenceReplayWindow, "variant-a")
 
 	session, err := BeginEvidenceFromEnv(model, false)
 	if err != nil {
@@ -263,8 +278,11 @@ func TestBeginEvidenceFromEnvScopesOccurrenceAfterReplayWindowAndRetainsPrefix(t
 	if err := json.Unmarshal(data, &trace); err != nil {
 		t.Fatal(err)
 	}
-	if got := replayWindowCutCount(trace.Events, string(durabilitycut.AfterMetaWrite), "variant-a"); got != 1 {
-		t.Fatalf("window-relative trace cuts=%d want 1", got)
+	if got, err := replayWindowCutCount(trace.Events, string(durabilitycut.AfterMetaWrite), "variant-a"); err != nil || got != 1 {
+		t.Fatalf("window-relative trace cuts=%d error=%v want 1", got, err)
+	}
+	if trace.ReplayWindow != "variant-a" {
+		t.Fatalf("trace replay window=%q want variant-a", trace.ReplayWindow)
 	}
 	allCuts := 0
 	for _, event := range trace.Events {
@@ -275,6 +293,86 @@ func TestBeginEvidenceFromEnvScopesOccurrenceAfterReplayWindowAndRetainsPrefix(t
 	if allCuts != 3 {
 		t.Fatalf("retained full-trace cuts=%d want 3", allCuts)
 	}
+}
+
+func TestBeginEvidenceFromEnvRejectsInvalidReplayWindowTrace(t *testing.T) {
+	newModel := func(t *testing.T) (*Model, string) {
+		t.Helper()
+		source := t.TempDir()
+		if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		model, err := Capture(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return model, source
+	}
+	setEnv := func(t *testing.T) {
+		t.Helper()
+		t.Setenv(EnvEvidenceDir, filepath.Join(canonicalTempDir(t), "evidence"))
+		t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+		t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
+		t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+		t.Setenv(EnvReplayVariant, "variant-a")
+		t.Setenv(EnvReplaySeed, "1")
+		t.Setenv(EnvEvidenceReplayWindow, "variant-a")
+	}
+	observe := func(t *testing.T, model *Model, source string) {
+		t.Helper()
+		if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("missing-marker", func(t *testing.T) {
+		model, source := newModel(t)
+		observe(t, model, source)
+		setEnv(t)
+		if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "exactly one replay-window marker") {
+			t.Fatalf("BeginEvidenceFromEnv missing-marker error=%v", err)
+		}
+	})
+
+	t.Run("duplicate-marker", func(t *testing.T) {
+		model, source := newModel(t)
+		if err := model.BeginReplayWindow("variant-a"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.BeginReplayWindow("variant-a"); err != nil {
+			t.Fatal(err)
+		}
+		observe(t, model, source)
+		setEnv(t)
+		if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "exactly one replay-window marker") {
+			t.Fatalf("BeginEvidenceFromEnv duplicate-marker error=%v", err)
+		}
+	})
+
+	t.Run("marker-after-last-cut", func(t *testing.T) {
+		model, source := newModel(t)
+		observe(t, model, source)
+		if err := model.BeginReplayWindow("variant-a"); err != nil {
+			t.Fatal(err)
+		}
+		setEnv(t)
+		if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "does not precede a matching cut") {
+			t.Fatalf("BeginEvidenceFromEnv misordered-marker error=%v", err)
+		}
+	})
+
+	t.Run("undeclared-marker", func(t *testing.T) {
+		model, source := newModel(t)
+		if err := model.BeginReplayWindow("variant-a"); err != nil {
+			t.Fatal(err)
+		}
+		observe(t, model, source)
+		setEnv(t)
+		t.Setenv(EnvEvidenceReplayWindow, "")
+		if _, err := BeginEvidenceFromEnv(model, false); err == nil || !strings.Contains(err.Error(), "without a declared replay window") {
+			t.Fatalf("BeginEvidenceFromEnv undeclared-marker error=%v", err)
+		}
+	})
 }
 
 func TestBeginEvidenceFromEnvRejectsSymlinkedEvidenceRoot(t *testing.T) {
