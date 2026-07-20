@@ -22,6 +22,7 @@ type freshLayoutNamespaceCase struct {
 	partial           bool
 	point             durabilitycut.Point
 	path              func(parent, database string) string
+	wantOccurrence    int
 	wantStableDirs    []string
 }
 
@@ -30,6 +31,7 @@ func TestPowerLossCertificationFreshCompositeBeforeOuterParentSync(t *testing.T)
 		variantID:      "fresh-layout-composite-before-outer-parent-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
+		wantOccurrence: 1,
 		wantStableDirs: []string{"."},
 	})
 }
@@ -39,6 +41,7 @@ func TestPowerLossCertificationFreshCompositeBeforeRootSync(t *testing.T) {
 		variantID:      "fresh-layout-composite-before-root-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(_, database string) string { return database },
+		wantOccurrence: 0,
 		wantStableDirs: []string{"."},
 	})
 }
@@ -48,6 +51,7 @@ func TestPowerLossCertificationFreshCompositeAfterRootSync(t *testing.T) {
 		variantID:      "fresh-layout-composite-after-root-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(_, database string) string { return database },
+		wantOccurrence: 0,
 		wantStableDirs: []string{"."},
 	})
 }
@@ -57,6 +61,7 @@ func TestPowerLossCertificationFreshCompositeAfterOuterParentSync(t *testing.T) 
 		variantID:      "fresh-layout-composite-after-outer-parent-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
+		wantOccurrence: 1,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
 	})
 }
@@ -66,6 +71,7 @@ func TestPowerLossCertificationFreshCompositeBeforeMainDBParentSync(t *testing.T
 		variantID:      "fresh-layout-composite-before-maindb-parent-sync",
 		point:          durabilitycut.BeforeNewFileDirectorySync,
 		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
+		wantOccurrence: 5,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb"},
 	})
 }
@@ -75,6 +81,7 @@ func TestPowerLossCertificationFreshCompositeAfterMainDBParentSync(t *testing.T)
 		variantID:      "fresh-layout-composite-after-maindb-parent-sync",
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
+		wantOccurrence: 5,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb", "db/maindb/column_assets", "db/maindb/leaf_vlog", "db/maindb/value_vlog", "db/maindb/wal"},
 	})
 }
@@ -85,6 +92,7 @@ func TestPowerLossCertificationPartialCompositeAfterOuterParentSync(t *testing.T
 		partial:        true,
 		point:          durabilitycut.AfterNewFileDirectorySync,
 		path:           func(parent, _ string) string { return parent },
+		wantOccurrence: 1,
 		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
 	})
 }
@@ -95,6 +103,7 @@ func TestPowerLossCertificationFreshFlatBeforeOuterParentSync(t *testing.T) {
 		disableSideStores: true,
 		point:             durabilitycut.BeforeNewFileDirectorySync,
 		path:              func(parent, _ string) string { return parent },
+		wantOccurrence:    0,
 		wantStableDirs:    []string{"."},
 	})
 }
@@ -105,6 +114,7 @@ func TestPowerLossCertificationFreshFlatAfterOuterParentSync(t *testing.T) {
 		disableSideStores: true,
 		point:             durabilitycut.AfterNewFileDirectorySync,
 		path:              func(parent, _ string) string { return parent },
+		wantOccurrence:    0,
 		wantStableDirs:    []string{".", "db"},
 	})
 }
@@ -118,13 +128,6 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCutID := fmt.Sprintf("cut/%s/%s/000", testCase.variantID, testCase.point)
-	if selector != (powerlossoracle.ReplaySelector{}) {
-		if selector.CutID != wantCutID || selector.VariantID != testCase.variantID || selector.Seed != powerLossOracleSeed {
-			t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, testCase.variantID, powerLossOracleSeed)
-		}
-	}
-
 	parent := t.TempDir()
 	databaseDir := filepath.Join(parent, "db")
 	model, err := powerlossoracle.Capture(parent)
@@ -144,6 +147,8 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 	cutErr := errors.New("power-loss-certification: fresh-layout namespace cut")
 	wantPath := filepath.Clean(testCase.path(parent, databaseDir))
 	cutTriggered := false
+	pointOccurrence := 0
+	targetOccurrence := -1
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Path != "" && !pathWithinRoot(parent, event.Path) {
 			// Writable open conservatively repairs ancestors above the modeled
@@ -154,8 +159,14 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 		if err := model.Observe(parent, event); err != nil {
 			return err
 		}
+		occurrence := -1
+		if event.Point == testCase.point {
+			occurrence = pointOccurrence
+			pointOccurrence++
+		}
 		if !cutTriggered && event.Resource == durabilitycut.ResourceAuxiliary && event.Point == testCase.point && filepath.Clean(event.Path) == wantPath {
 			cutTriggered = true
+			targetOccurrence = occurrence
 			return cutErr
 		}
 		return nil
@@ -165,8 +176,18 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 	if database != nil {
 		_ = database.Close()
 	}
-	if !cutTriggered || !errors.Is(openErr, cutErr) {
+	if !cutTriggered || targetOccurrence < 0 || !errors.Is(openErr, cutErr) {
 		t.Fatalf("fresh-layout Open error=%v cutTriggered=%t want injected cut at %s %q", openErr, cutTriggered, testCase.point, wantPath)
+	}
+	if targetOccurrence != testCase.wantOccurrence {
+		t.Fatalf("fresh-layout target occurrence=%d want frozen address occurrence=%d", targetOccurrence, testCase.wantOccurrence)
+	}
+	wantCutID := fmt.Sprintf("cut/%s/%s/%03d", testCase.variantID, testCase.point, targetOccurrence)
+	t.Logf("fresh-layout evidence address=%s", wantCutID)
+	if selector != (powerlossoracle.ReplaySelector{}) {
+		if selector.CutID != wantCutID || selector.VariantID != testCase.variantID || selector.Seed != powerLossOracleSeed {
+			t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, testCase.variantID, powerLossOracleSeed)
+		}
 	}
 	stableImage := t.TempDir()
 	if err := model.MaterializeStable(stableImage); err != nil {

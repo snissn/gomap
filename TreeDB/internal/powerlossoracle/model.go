@@ -5,6 +5,7 @@ package powerlossoracle
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -85,6 +86,7 @@ type ByteRange struct{ Offset, Length int64 }
 // sync followed by rename and directory sync has realistic semantics.
 type Model struct {
 	nextID           uint64
+	nextDirID        uint64
 	inodes           map[uint64]*inode
 	volatile         map[string]uint64
 	stable           map[string]uint64
@@ -175,12 +177,14 @@ func capture(root string, excludeLockFiles bool, excluded []string) (*Model, err
 }
 
 func newModel() *Model {
+	rootIdentity := syntheticDirectoryIdentity(1)
 	return &Model{
+		nextDirID:    1,
 		inodes:       make(map[uint64]*inode),
 		volatile:     make(map[string]uint64),
 		stable:       make(map[string]uint64),
-		volatileDirs: map[string]rootpublication.StableIdentity{".": {}},
-		stableDirs:   map[string]rootpublication.StableIdentity{".": {}},
+		volatileDirs: map[string]rootpublication.StableIdentity{".": rootIdentity},
+		stableDirs:   map[string]rootpublication.StableIdentity{".": rootIdentity},
 	}
 }
 
@@ -202,6 +206,7 @@ func (m *Model) allocateWithIdentity(volatile, stable []byte, identity rootpubli
 func (m *Model) Clone() *Model {
 	out := newModel()
 	out.nextID = m.nextID
+	out.nextDirID = m.nextDirID
 	out.excludeLockFiles = m.excludeLockFiles
 	for id, node := range m.inodes {
 		out.inodes[id] = &inode{
@@ -913,12 +918,19 @@ func (m *Model) StableFingerprint() string {
 func (m *Model) ensureVolatileParents(path string) {
 	for dir := cleanInternal(pathpkg.Dir(path)); ; dir = cleanInternal(pathpkg.Dir(dir)) {
 		if _, exists := m.volatileDirs[dir]; !exists {
-			m.volatileDirs[dir] = rootpublication.StableIdentity{}
+			m.nextDirID++
+			m.volatileDirs[dir] = syntheticDirectoryIdentity(m.nextDirID)
 		}
 		if dir == "." {
 			return
 		}
 	}
+}
+
+func syntheticDirectoryIdentity(id uint64) rootpublication.StableIdentity {
+	var objectID [16]byte
+	binary.BigEndian.PutUint64(objectID[8:], id)
+	return rootpublication.StableIdentity{Platform: "powerlossoracle", ObjectID: objectID}
 }
 
 func captureStableIdentity(path string) (rootpublication.StableIdentity, error) {

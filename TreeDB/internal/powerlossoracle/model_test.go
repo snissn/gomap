@@ -453,6 +453,45 @@ func TestSyncDirReplacementPrunesOldDurableSubtree(t *testing.T) {
 	}
 }
 
+func TestSyncDirSyntheticReplacementPrunesOldDurableSubtree(t *testing.T) {
+	model := newModel()
+	if err := model.Create("dir/old/value", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SyncFile("dir/old/value"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"dir/old", "dir", "."} {
+		if err := model.SyncDir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldIdentity := model.stableDirs["dir"]
+	if err := model.Unlink("dir"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Create("dir/new/value", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	newIdentity := model.volatileDirs["dir"]
+	if !validStableIdentity(oldIdentity) || !validStableIdentity(newIdentity) || rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity) {
+		t.Fatalf("synthetic directory replacement identities old=%+v new=%+v", oldIdentity, newIdentity)
+	}
+	if err := model.SyncDir("."); err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "dir", "old", "value")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("synthetic replacement retained old durable subtree: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(crashDir, "dir")); err != nil || !info.IsDir() {
+		t.Fatalf("synthetic replacement directory missing from stable image: info=%v err=%v", info, err)
+	}
+}
+
 func TestRenameOverwritePreservesInodeUntilDestinationDirectorySync(t *testing.T) {
 	model := newModel()
 	for path, value := range map[string]string{"dir/source": "source", "dir/destination": "destination"} {
