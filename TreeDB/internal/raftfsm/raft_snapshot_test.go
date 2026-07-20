@@ -388,11 +388,23 @@ func publishRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, database *bac
 	if err != nil {
 		tb.Fatalf("OpenCollection docs: %v", err)
 	}
-	for i := 0; i < rows; i++ {
-		id := []byte(fmt.Sprintf("partition-%d", i))
-		doc := []byte(fmt.Sprintf(`{"_id":"partition-%d","embedding":[1,0,0]}`, i))
-		if _, err := col.Insert(id, doc); err != nil {
-			tb.Fatalf("Insert source row %d: %v", i, err)
+	// InsertBatch keeps setup bounded: row-at-a-time command-WAL publication
+	// repeatedly materializes growing collection state and turns even the 10k
+	// benchmark fixture into an O(rows^2) memory workload.
+	const batchRows = 1024
+	for start := 0; start < rows; start += batchRows {
+		end := start + batchRows
+		if end > rows {
+			end = rows
+		}
+		ids := make([][]byte, 0, end-start)
+		docs := make([][]byte, 0, end-start)
+		for i := start; i < end; i++ {
+			ids = append(ids, []byte(fmt.Sprintf("partition-%d", i)))
+			docs = append(docs, []byte(fmt.Sprintf(`{"_id":"partition-%d","embedding":[1,0,0]}`, i)))
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			tb.Fatalf("InsertBatch source rows [%d,%d): %v", start, end, err)
 		}
 	}
 	if _, err := col.RebuildVectorIndex("embedding"); err != nil {
@@ -438,9 +450,12 @@ func publishRaftSnapshotReadyVectorPartitionForTest(tb testing.TB, database *bac
 		PartitionCount:        1,
 		BalancePolicy:         "disjoint_v1",
 		Placements:            []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "raft-a"}},
-		Memberships:           []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}},
+		Memberships:           make([]collections.VectorPartitionMembershipV1, rows),
 		Assets:                []collections.VectorPartitionAssetV1{partition},
 		RouterAsset:           router,
+	}
+	for i := range manifest.Memberships {
+		manifest.Memberships[i] = collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
 	}
 	manifest.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(manifest, resources); err != nil {
