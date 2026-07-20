@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
@@ -13,13 +13,13 @@ import (
 // placement. Its PartitionID is a derived ANN identity, never a document-ID
 // token partition, and several logical partitions may name one Raft group.
 type VectorPartitionPlacementRecordV1 struct {
-	Collection            CollectionRefV1
-	IndexName             string
-	IndexDefinitionDigest string
-	SourceGeneration      uint64
-	PartitionGeneration   uint64
-	PartitionCount        uint32
-	Partitions            []VectorPartitionGroupV1
+	Collection                                                         CollectionRefV1
+	IndexName                                                          string
+	IndexDefinitionDigest                                              string
+	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
+	PartitionGeneration                                                uint64
+	PartitionCount                                                     uint32
+	Partitions                                                         []VectorPartitionGroupV1
 }
 type VectorPartitionGroupV1 struct {
 	PartitionID uint32
@@ -38,12 +38,10 @@ func (c ResolvedCatalogV1) ValidateVectorPartitionPlacementV1(p VectorPartitionP
 	if err := validateCollectionRef(p.Collection); err != nil {
 		return errors.Join(ErrInvalidVectorPartitionPlacement, err)
 	}
-	if p.IndexName == "" || len(p.IndexDefinitionDigest) != 64 || !isSHA256HexVectorPartitionV1(p.IndexDefinitionDigest) || p.SourceGeneration == 0 || p.PartitionGeneration == 0 || p.PartitionCount == 0 || len(p.Partitions) != int(p.PartitionCount) {
+	if p.IndexName == "" || len(p.IndexDefinitionDigest) != 64 || !isSHA256HexVectorPartitionV1(p.IndexDefinitionDigest) || p.SourceGeneration == 0 || p.SourceRowCount == 0 || p.PartitionGeneration == 0 || p.PartitionCount == 0 || len(p.Partitions) != int(p.PartitionCount) {
 		return ErrInvalidVectorPartitionPlacement
 	}
-	parts := append([]VectorPartitionGroupV1(nil), p.Partitions...)
-	sort.Slice(parts, func(i, j int) bool { return parts[i].PartitionID < parts[j].PartitionID })
-	for i, part := range parts {
+	for i, part := range p.Partitions {
 		if part.PartitionID != uint32(i) || part.GroupID == "" {
 			return fmt.Errorf("%w: incomplete or duplicate logical partition", ErrInvalidVectorPartitionPlacement)
 		}
@@ -56,5 +54,5 @@ func (c ResolvedCatalogV1) ValidateVectorPartitionPlacementV1(p VectorPartitionP
 
 func isSHA256HexVectorPartitionV1(s string) bool {
 	_, err := hex.DecodeString(s)
-	return err == nil && len(s) == 64
+	return err == nil && len(s) == 64 && s == strings.ToLower(s)
 }

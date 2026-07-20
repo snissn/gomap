@@ -5,6 +5,7 @@ package collections
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 const VectorPartitionManifestFormatV1 = "vector_partition_manifest_v1"
@@ -31,9 +33,9 @@ func DefaultVectorPartitionManifestLimits() VectorPartitionManifestLimits {
 }
 
 type VectorPartitionAssetV1 struct {
-	ID, Path, Checksum string
-	Bytes              uint64
-	Ref                ColumnAssetRef
+	ID, Checksum string
+	Bytes        uint64
+	Ref          ColumnAssetRef
 }
 type VectorPartitionPlacementV1 struct {
 	PartitionID uint32
@@ -143,13 +145,75 @@ func (m VectorPartitionManifestV1) Validate(l VectorPartitionManifestLimits) err
 	return nil
 }
 func validateAssetVPM(a VectorPartitionAssetV1, l VectorPartitionManifestLimits) error {
-	if a.ID == "" || len(a.ID) > l.MaxStringBytes || a.Path != "" || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
+	if a.ID == "" || len(a.ID) > l.MaxStringBytes || !isSHA256VPM(a.Checksum) || a.Ref.Offset < 0 || a.Ref.Length < 0 || uint64(a.Ref.Length) != a.Bytes {
 		return fmt.Errorf("%w: asset", ErrVectorPartitionManifestInvalid)
 	}
 	if err := validateColumnAssetRefForPlan(a.Ref); err != nil {
 		return fmt.Errorf("%w: asset ref", ErrVectorPartitionManifestInvalid)
 	}
 	return nil
+}
+
+func encodedSizeVPM(m VectorPartitionManifestV1, l VectorPartitionManifestLimits) (int, error) {
+	// Every addition is checked before allocating the encoder buffer. The
+	// decoder's byte cap is also the encoder's hard cap.
+	n := uint64(8) // magic + version
+	add := func(v uint64) error {
+		if v > uint64(l.MaxBytes) || n > uint64(l.MaxBytes)-v {
+			return fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
+		}
+		n += v
+		return nil
+	}
+	str := func(s string) error { return add(4 + uint64(len(s))) }
+	asset := func(a VectorPartitionAssetV1) error {
+		if err := str(a.ID); err != nil {
+			return err
+		}
+		if err := str(a.Checksum); err != nil {
+			return err
+		}
+		if err := str(string(a.Ref.Kind)); err != nil {
+			return err
+		}
+		if err := str(a.Ref.Namespace); err != nil {
+			return err
+		}
+		return add(8*5 + 4 + 4) // bytes + generation + part + offset + length + file + checksum
+	}
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.BalancePolicy, m.ReadySetDigest} {
+		if err := str(s); err != nil {
+			return 0, err
+		}
+	}
+	if err := add(8*6 + 4 + 4); err != nil {
+		return 0, err
+	} // fixed fields and router asset count
+	if err := asset(m.RouterAsset); err != nil {
+		return 0, err
+	}
+	if err := add(4 + uint64(len(m.Placements))*4); err != nil {
+		return 0, err
+	}
+	for _, p := range m.Placements {
+		if err := str(p.GroupID); err != nil {
+			return 0, err
+		}
+	}
+	for _, ms := range [][]VectorPartitionMembershipV1{m.Memberships, m.OverlapMemberships, m.Representatives} {
+		if err := add(4 + uint64(len(ms))*12); err != nil {
+			return 0, err
+		}
+	}
+	if err := add(4); err != nil {
+		return 0, err
+	}
+	for _, a := range m.Assets {
+		if err := asset(a); err != nil {
+			return 0, err
+		}
+	}
+	return int(n), nil
 }
 func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]struct{}, kind string, rows uint64, base bool, capPer int) error {
 	var prev VectorPartitionMembershipV1
@@ -177,26 +241,25 @@ func validateMembershipsVPM(ms []VectorPartitionMembershipV1, ps map[uint32]stru
 	return nil
 }
 func isSHA256VPM(s string) bool {
-	if len(s) != 64 {
+	if len(s) != 64 || s != strings.ToLower(s) {
 		return false
 	}
 	_, e := hex.DecodeString(s)
 	return e == nil
 }
 func (m VectorPartitionManifestV1) readyDigest() string {
-	b := bytes.NewBuffer(nil)
+	h := sha256.New()
 	for _, p := range m.Placements {
-		putU32VPM(b, p.PartitionID)
-		putStringVPM(b, p.GroupID)
+		writeU32VPM(h, p.PartitionID)
+		writeStringVPM(h, p.GroupID)
 	}
 	for _, a := range append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset) {
-		putStringVPM(b, a.ID)
-		putStringVPM(b, a.Checksum)
-		putU64VPM(b, a.Bytes)
-		putColumnAssetRefVPM(b, a.Ref)
+		writeStringVPM(h, a.ID)
+		writeStringVPM(h, a.Checksum)
+		writeU64VPM(h, a.Bytes)
+		writeColumnAssetRefVPM(h, a.Ref)
 	}
-	h := sha256.Sum256(b.Bytes())
-	return hex.EncodeToString(h[:])
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Canonicalize sorts caller-provided lists then fills the ready-set digest.
@@ -233,7 +296,11 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err != nil {
 		return nil, err
 	}
-	b := bytes.NewBuffer(nil)
+	size, err := encodedSizeVPM(m, DefaultVectorPartitionManifestLimits())
+	if err != nil {
+		return nil, err
+	}
+	b := bytes.NewBuffer(make([]byte, 0, size))
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
@@ -251,9 +318,6 @@ func EncodeVectorPartitionManifestV1(m VectorPartitionManifestV1) ([]byte, error
 	putMembershipsVPM(b, m.OverlapMemberships)
 	putMembershipsVPM(b, m.Representatives)
 	putAssetsVPM(b, m.Assets)
-	if b.Len() > DefaultVectorPartitionManifestLimits().MaxBytes {
-		return nil, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
-	}
 	return b.Bytes(), nil
 }
 func DecodeVectorPartitionManifestV1(raw []byte, l VectorPartitionManifestLimits) (VectorPartitionManifestV1, error) {
@@ -347,7 +411,7 @@ func (r *vpmReader) assets() []VectorPartitionAssetV1 {
 	}
 	x := make([]VectorPartitionAssetV1, n)
 	for i := range x {
-		x[i] = VectorPartitionAssetV1{ID: r.str(), Path: r.str(), Checksum: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
+		x[i] = VectorPartitionAssetV1{ID: r.str(), Checksum: r.str(), Bytes: r.u64(), Ref: r.columnRef()}
 	}
 	return x
 }
@@ -390,12 +454,35 @@ func putU64VPM(b *bytes.Buffer, n uint64) {
 	binary.BigEndian.PutUint64(x[:], n)
 	b.Write(x[:])
 }
+func writeU32VPM(h interface{ Write([]byte) (int, error) }, n uint32) {
+	var x [4]byte
+	binary.BigEndian.PutUint32(x[:], n)
+	_, _ = h.Write(x[:])
+}
+func writeU64VPM(h interface{ Write([]byte) (int, error) }, n uint64) {
+	var x [8]byte
+	binary.BigEndian.PutUint64(x[:], n)
+	_, _ = h.Write(x[:])
+}
+func writeStringVPM(h interface{ Write([]byte) (int, error) }, s string) {
+	writeU32VPM(h, uint32(len(s)))
+	_, _ = h.Write([]byte(s))
+}
+func writeColumnAssetRefVPM(h interface{ Write([]byte) (int, error) }, r ColumnAssetRef) {
+	writeStringVPM(h, string(r.Kind))
+	writeStringVPM(h, r.Namespace)
+	writeU64VPM(h, r.Generation)
+	writeU64VPM(h, r.PartID)
+	writeU32VPM(h, r.FileID)
+	writeU64VPM(h, uint64(r.Offset))
+	writeU64VPM(h, uint64(r.Length))
+	writeU32VPM(h, r.Checksum)
+}
 func putStringVPM(b *bytes.Buffer, s string) { putU32VPM(b, uint32(len(s))); b.WriteString(s) }
 func putAssetsVPM(b *bytes.Buffer, x []VectorPartitionAssetV1) {
 	putU32VPM(b, uint32(len(x)))
 	for _, a := range x {
 		putStringVPM(b, a.ID)
-		putStringVPM(b, a.Path)
 		putStringVPM(b, a.Checksum)
 		putU64VPM(b, a.Bytes)
 		putColumnAssetRefVPM(b, a.Ref)
@@ -430,11 +517,19 @@ func putMembershipsVPM(b *bytes.Buffer, x []VectorPartitionMembershipV1) {
 // pointer changes only after its complete generation has been made durable.
 type VectorPartitionStoreV1 struct{ dir string }
 
+const (
+	vectorPartitionStoreMaxEntriesV1 = 4096
+	vectorPartitionStoreMaxBytesV1   = 64 << 20
+)
+
 func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []ColumnAssetRef, error) {
 	if c == nil || c.db == nil {
 		return nil, nil, nil
 	}
-	s, err := OpenVectorPartitionStoreV1(c.db.Dir())
+	s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -443,10 +538,38 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 		return nil, nil, err
 	}
 	byIndex := make(map[string][]VectorPartitionManifestV1)
+	prefix := safeVPM(c.name) + "-"
+	var totalBytes int64
+	var retained int
+	activeNames := make(map[string]struct{})
+	retiredNames := make(map[string]struct{})
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".vpm" {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
 			continue
 		}
+		if strings.HasSuffix(entry.Name(), ".active") {
+			activeNames[entry.Name()] = struct{}{}
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".retired") {
+			retiredNames[entry.Name()] = struct{}{}
+			continue
+		}
+		if filepath.Ext(entry.Name()) != ".vpm" {
+			return nil, nil, fmt.Errorf("collections: unexpected vector partition entry %q", entry.Name())
+		}
+		retained++
+		if retained > vectorPartitionStoreMaxEntriesV1 {
+			return nil, nil, fmt.Errorf("collections: vector partition retained manifest cap")
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, nil, err
+		}
+		if info.Size() < 0 || info.Size() > int64(DefaultVectorPartitionManifestLimits().MaxBytes) || totalBytes > vectorPartitionStoreMaxBytesV1-info.Size() {
+			return nil, nil, fmt.Errorf("collections: vector partition retained bytes cap")
+		}
+		totalBytes += info.Size()
 		raw, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
 		if err != nil {
 			return nil, nil, err
@@ -460,6 +583,8 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 		}
 	}
 	var prepared, pinned []ColumnAssetRef
+	expectedActive := make(map[string]struct{})
+	expectedRetired := make(map[string]struct{})
 	for index, manifests := range byIndex {
 		ready := false
 		for _, m := range manifests {
@@ -473,9 +598,21 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 		if !ready {
 			continue
 		}
+		expectedActive[safeVPM(c.name)+"-"+safeVPM(index)+".active"] = struct{}{}
 		active, err := s.OpenActive(c.name, index)
 		if err != nil {
-			return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q: %w", index, err)
+			if !errors.Is(err, os.ErrNotExist) {
+				return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q: %w", index, err)
+			}
+			retired, retiredErr := s.OpenRetired(c.name, index)
+			if retiredErr != nil {
+				return nil, nil, fmt.Errorf("collections: vector partition active/retired pointer for %q: %w", index, retiredErr)
+			}
+			expectedRetired[safeVPM(c.name)+"-"+safeVPM(index)+".retired"] = struct{}{}
+			if !vectorPartitionManifestGenerationRetained(manifests, retired.Generation) {
+				return nil, nil, fmt.Errorf("collections: retired vector partition generation %d for %q is not retained", retired.Generation, index)
+			}
+			continue
 		}
 		if active.State != "ready" {
 			return nil, nil, fmt.Errorf("collections: vector partition active pointer for %q targets non-ready generation", index)
@@ -496,7 +633,25 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 			return nil, nil, fmt.Errorf("collections: vector partition active generation %d for %q is not retained", active.Generation, index)
 		}
 	}
+	for activeName := range activeNames {
+		if _, ok := expectedActive[activeName]; !ok {
+			return nil, nil, fmt.Errorf("collections: orphan vector partition active pointer %q", activeName)
+		}
+	}
+	for retiredName := range retiredNames {
+		if _, ok := expectedRetired[retiredName]; !ok {
+			return nil, nil, fmt.Errorf("collections: orphan vector partition retired pointer %q", retiredName)
+		}
+	}
 	return prepared, pinned, nil
+}
+func vectorPartitionManifestGenerationRetained(manifests []VectorPartitionManifestV1, generation uint64) bool {
+	for _, m := range manifests {
+		if m.Generation == generation {
+			return true
+		}
+	}
+	return false
 }
 
 func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
@@ -509,13 +664,35 @@ func OpenVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
 	}
 	return &VectorPartitionStoreV1{d}, nil
 }
+
+// OpenExistingVectorPartitionStoreV1 is read-only with respect to directory
+// creation. Status and reclamation planning use it so observation cannot
+// create durable state.
+func OpenExistingVectorPartitionStoreV1(root string) (*VectorPartitionStoreV1, error) {
+	if root == "" {
+		return nil, errors.New("collections: empty vector partition store root")
+	}
+	d := filepath.Join(root, "vector_partitions")
+	info, err := os.Stat(d)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%w: store is not a directory", ErrVectorPartitionManifestInvalid)
+	}
+	return &VectorPartitionStoreV1{d}, nil
+}
 func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
 	raw, e := EncodeVectorPartitionManifestV1(m)
 	if e != nil {
 		return e
 	}
 	name := fmt.Sprintf("%s-%s-%d.vpm", safeVPM(m.Collection), safeVPM(m.IndexName), m.Generation)
-	tmp := filepath.Join(s.dir, "."+name+".tmp")
+	tmp, e := s.uniqueTemp(name)
+	if e != nil {
+		return e
+	}
+	defer os.Remove(tmp)
 	if e = os.WriteFile(tmp, raw, 0600); e != nil {
 		return e
 	}
@@ -525,9 +702,23 @@ func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
 	if e = os.Rename(tmp, filepath.Join(s.dir, name)); e != nil {
 		return e
 	}
+	if e = syncDirVPM(s.dir); e != nil {
+		return e
+	}
 	if m.State == "ready" {
 		active := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active")
-		atmp := active + ".tmp"
+		retired := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired")
+		if err := os.Remove(retired); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if e = syncDirVPM(s.dir); e != nil {
+			return e
+		}
+		atmp, e := s.uniqueTemp(filepath.Base(active))
+		if e != nil {
+			return e
+		}
+		defer os.Remove(atmp)
 		if e = os.WriteFile(atmp, []byte(fmt.Sprintf("%d\n", m.Generation)), 0600); e != nil {
 			return e
 		}
@@ -539,6 +730,13 @@ func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
 		}
 	}
 	return syncDirVPM(s.dir)
+}
+func (s *VectorPartitionStoreV1) uniqueTemp(name string) (string, error) {
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.dir, "."+name+"."+hex.EncodeToString(nonce[:])+".tmp"), nil
 }
 func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint64) (VectorPartitionManifestV1, error) {
 	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
@@ -556,7 +754,13 @@ func (s *VectorPartitionStoreV1) Open(collection, index string, generation uint6
 	return DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
 }
 func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPartitionManifestV1, error) {
-	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".active")
+	return s.openPointer(collection, index, ".active")
+}
+func (s *VectorPartitionStoreV1) OpenRetired(collection, index string) (VectorPartitionManifestV1, error) {
+	return s.openPointer(collection, index, ".retired")
+}
+func (s *VectorPartitionStoreV1) openPointer(collection, index, suffix string) (VectorPartitionManifestV1, error) {
+	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+suffix)
 	info, e := os.Stat(p)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
@@ -576,6 +780,38 @@ func (s *VectorPartitionStoreV1) OpenActive(collection, index string) (VectorPar
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
 	}
 	return s.Open(collection, index, generation)
+}
+
+// Deactivate replaces the active pointer with a durable retired marker. The
+// marker identifies the last active generation for audit/cleanup while making
+// its assets prepared-only rather than query-pinned after the directory sync.
+func (s *VectorPartitionStoreV1) Deactivate(collection, index string) error {
+	active, err := s.OpenActive(collection, index)
+	if err != nil {
+		return err
+	}
+	retired := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")
+	tmp, err := s.uniqueTemp(filepath.Base(retired))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err = os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", active.Generation)), 0600); err != nil {
+		return err
+	}
+	if err = syncFileVPM(tmp); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, retired); err != nil {
+		return err
+	}
+	if err = syncDirVPM(s.dir); err != nil {
+		return err
+	}
+	if err = os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".active")); err != nil {
+		return err
+	}
+	return syncDirVPM(s.dir)
 }
 
 // VectorPartitionCleanupEligibilityV1 makes every external reachability
@@ -599,6 +835,18 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
+	}
+	if retired, err := s.OpenRetired(collection, index); err == nil {
+		if retired.Generation == generation {
+			if err := os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")); err != nil {
+				return err
+			}
+			if err := syncDirVPM(s.dir); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", err)
 	}
 	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
 	if e := os.Remove(p); e != nil {
@@ -722,7 +970,13 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 		groups[p.GroupID] = struct{}{}
 	}
 	for _, a := range m.Assets {
+		if math.MaxUint64-total < a.Bytes {
+			return VectorPartitionStatusV1{}, fmt.Errorf("%w: asset byte overflow", ErrVectorPartitionManifestInvalid)
+		}
 		total += a.Bytes
+	}
+	if math.MaxUint64-total < m.RouterAsset.Bytes {
+		return VectorPartitionStatusV1{}, fmt.Errorf("%w: asset byte overflow", ErrVectorPartitionManifestInvalid)
 	}
 	total += m.RouterAsset.Bytes
 	return VectorPartitionStatusV1{Manifest: m, Ready: m.State == "ready", StaleReason: map[bool]string{true: "", false: "generation_building"}[m.State == "ready"], PartitionCount: m.PartitionCount, GroupCount: uint32(len(groups)), Memberships: uint64(len(m.Memberships)), OverlapMemberships: uint64(len(m.OverlapMemberships)), AssetBytes: total}, nil

@@ -3,6 +3,7 @@ package collections
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,12 +37,10 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	for i := range m.Assets {
 		m.Assets[i].Ref = ref
 		m.Assets[i].Bytes = uint64(ref.Length)
-		m.Assets[i].Path = ""
 		m.Assets[i].Checksum = digest
 	}
 	m.RouterAsset.Ref = ref
 	m.RouterAsset.Bytes = uint64(ref.Length)
-	m.RouterAsset.Path = ""
 	m.RouterAsset.Checksum = digest
 	m.Canonicalize()
 	if err := col.PublishVectorPartitionManifestV1(m); err != nil {
@@ -96,27 +95,6 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	}
 }
 
-func writeVectorPartitionAssetsForTest(t *testing.T, root string, m *VectorPartitionManifestV1) {
-	t.Helper()
-	assets := append(append([]VectorPartitionAssetV1(nil), m.Assets...), m.RouterAsset)
-	for i := range assets {
-		raw := []byte(assets[i].ID)
-		p := filepath.Join(root, assets[i].Path)
-		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, raw, 0600); err != nil {
-			t.Fatal(err)
-		}
-		h := sha256.Sum256(raw)
-		assets[i].Bytes = uint64(len(raw))
-		assets[i].Checksum = hex.EncodeToString(h[:])
-	}
-	copy(m.Assets, assets[:len(m.Assets)])
-	m.RouterAsset = assets[len(assets)-1]
-	m.Canonicalize()
-}
-
 func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
@@ -152,6 +130,33 @@ func TestVectorPartitionStoreV1CleanupRefusesReachableGeneration(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testing.T) {
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	if err := s.Publish(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OpenActive(m.Collection, m.IndexName); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("active after deactivate err=%v, want not exist", err)
+	}
+	retired, err := s.OpenRetired(m.Collection, m.IndexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired.Generation != m.Generation {
+		t.Fatalf("retired generation=%d want %d", retired.Generation, m.Generation)
+	}
+	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatalf("retired generation should be cleanup eligible: %v", err)
+	}
+}
+
 func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *testing.T) {
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
 	defer d.Close()
@@ -176,12 +181,10 @@ func TestCollectionVectorPartitionManifestV1PublicationSharesMutationBarrier(t *
 	for i := range m.Assets {
 		m.Assets[i].Ref = ref
 		m.Assets[i].Bytes = uint64(ref.Length)
-		m.Assets[i].Path = ""
 		m.Assets[i].Checksum = digest
 	}
 	m.RouterAsset.Ref = ref
 	m.RouterAsset.Bytes = uint64(ref.Length)
-	m.RouterAsset.Path = ""
 	m.RouterAsset.Checksum = digest
 	m.Canonicalize()
 	held := col.lockMutation()
@@ -256,18 +259,12 @@ func TestVectorPartitionManifestV1DecodeCapsBeforeAllocation(t *testing.T) {
 	}
 }
 
-func TestVectorPartitionManifestV1RejectsUntypedOrPathAssetAuthority(t *testing.T) {
+func TestVectorPartitionManifestV1RejectsUntypedAssetAuthority(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.Assets[0].Ref = ColumnAssetRef{}
 	m.Canonicalize()
 	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
 		t.Fatal("untyped asset reference accepted")
-	}
-	m = testVectorPartitionManifestV1()
-	m.Assets[0].Path = "relative/path"
-	m.Canonicalize()
-	if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
-		t.Fatal("path asset authority accepted")
 	}
 }
 
