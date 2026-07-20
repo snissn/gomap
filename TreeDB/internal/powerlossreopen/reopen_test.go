@@ -62,6 +62,7 @@ func TestStableChildAtReopensModeledRelativeDatabaseRoot(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, sourceDB)
 	opts.DisableSideStores = true
 	opts.DisableBackgroundPrune = true
+	opts.ValueLog.PointerThreshold = 1
 	db, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatal(err)

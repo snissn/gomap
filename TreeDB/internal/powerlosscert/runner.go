@@ -475,7 +475,7 @@ func prospectiveSquashMergeTreeFallback(repoRoot string, gitEnvironment []string
 	}
 	defer func() { _ = os.RemoveAll(privateRoot) }()
 	checkout := filepath.Join(privateRoot, "checkout")
-	if _, err := commandOutputWithEnvironment("", gitEnvironment, gitBinary, "clone", "--no-checkout", "--no-hardlinks", "--", repoRoot, checkout); err != nil {
+	if _, err := commandOutputWithEnvironment("", gitEnvironment, gitBinary, "clone", "--no-checkout", "--shared", "--", repoRoot, checkout); err != nil {
 		return "", fmt.Errorf("clone isolated merge-tree checkout: %w", err)
 	}
 	if _, err := commandOutputWithEnvironment(checkout, gitEnvironment, gitBinary, "checkout", "--detach", parent); err != nil {
