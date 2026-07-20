@@ -166,7 +166,10 @@ func TestStrictDecoderRejectsNonCanonicalAndMetricForgery(t *testing.T) {
 		t.Fatal("noncanonical whitespace accepted")
 	}
 	a.Metrics.EdgeCut++
-	bad, _ := json.Marshal(a)
+	bad, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := DecodeArtifact(bad, len(bad)); err == nil {
 		t.Fatal("forged metrics accepted")
 	}
