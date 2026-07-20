@@ -426,35 +426,27 @@ func TestBuildFailsClosedOnMalformedBackendAssignment(t *testing.T) {
 		}
 	}
 }
-func TestValidatorEnforcesSymmetricPolicy(t *testing.T) {
+func TestValidatorRejectsSymmetricPolicyEvenForReciprocalGraph(t *testing.T) {
 	a, err := Build(fixture(), config())
 	if err != nil {
 		t.Fatal(err)
 	}
-	from, to := -1, -1
-	for i, ns := range a.Graph.Neighbors {
-		if len(ns) > 0 {
-			from, to = i, ns[0]
-			break
-		}
+	a.Graph.Neighbors = [][]int{{1}, {0}, {3}, {2}, {5}, {4}}
+	loads, err := validateAssignment(a.Assignment, len(a.IDs), a.Config)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if from < 0 {
-		t.Fatal("fixture graph has no edge")
-	}
-	for i, ns := range a.Graph.Neighbors {
-		if i != to {
-			continue
-		}
-		for at, node := range ns {
-			if node == from {
-				a.Graph.Neighbors[i] = append(ns[:at], ns[at+1:]...)
-				break
-			}
-		}
-	}
+	a.Metrics = metricsWithLoads(a, loads)
 	a.Config.Symmetric = true
 	if err := ValidateArtifact(a); err == nil {
-		t.Fatal("non-reciprocal graph accepted as symmetric")
+		t.Fatal("reciprocal graph accepted as symmetric")
+	}
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeArtifact(raw, len(raw)); err == nil {
+		t.Fatal("decode accepted a reciprocal symmetric artifact")
 	}
 }
 func TestReferencePartitionerCoversEveryPartition(t *testing.T) {

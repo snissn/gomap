@@ -705,8 +705,8 @@ func ValidateArtifact(a Artifact) error {
 	if err := validateGraph(a.Graph, len(a.IDs), a.Config.Degree); err != nil {
 		return err
 	}
-	if a.Config.Symmetric && !hasReciprocalEdges(a.Graph) {
-		return errors.New("symmetric graph has non-reciprocal edge")
+	if a.Config.Symmetric {
+		return errors.New("symmetric graph policy is not supported")
 	}
 	var totalIDBytes int
 	for i, id := range a.IDs {
@@ -749,16 +749,6 @@ func validateAssignment(assignment []int, n int, c Config) ([]int, error) {
 		}
 	}
 	return loads, nil
-}
-func hasReciprocalEdges(g Graph) bool {
-	for i, ns := range g.Neighbors {
-		for _, j := range ns {
-			if at := sort.SearchInts(g.Neighbors[j], i); at == len(g.Neighbors[j]) || g.Neighbors[j][at] != i {
-				return false
-			}
-		}
-	}
-	return true
 }
 func validateArtifactConfig(ids []string, c Config) error {
 	if c.Metric != "cosine" || c.Repetitions < 1 || c.Repetitions > maxRepetitions || c.Pivots < 2 || c.Pivots > maxPivots || c.MaxLeafBucket < 2 || c.MaxLeafBucket > maxLeafBucket || c.Degree < 1 || c.Degree > maxDegree || c.Partitions < 1 || c.Partitions > maxPartitions || !finite(c.Imbalance) || c.Imbalance < 0 || c.Imbalance > 1 || c.MaxVectors < 1 || c.MaxVectors > maxVectors || c.MaxEdges < 1 || c.MaxEdges > maxEdges || len(ids) < c.Partitions || len(ids) > c.MaxVectors {
