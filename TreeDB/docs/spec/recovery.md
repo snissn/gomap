@@ -252,6 +252,12 @@ records are synced before roots plus `AppliedLSN`; a crash after that append can
 retry by matching and reusing the same RID. Legacy `SetRID` remains a lookup-only
 operation with its external dependency fence.
 
+Exact-RID repair can place a lower RID in a newer physical segment. Backend
+replay and the public cached allocator therefore derive their RID high-water by
+scanning every non-empty persistent value-log segment, not only each lane's
+physical tail. Foreground allocation after recovery must remain above that
+all-segment high-water.
+
 For target versioned raw-KV entries, the replay executor assigns the same
 revision contract as live apply from the persisted raw-KV revision domain.
 Command-WAL replay uses the accepted command LSN as the mutation revision only

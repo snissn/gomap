@@ -58,7 +58,7 @@ creation/rotation concern, not a per-operation durability barrier.
 
 ### Bounded materialized pointer-backed dirty `WriteSync`
 
-When a batch has at most 256 pointer-eligible operations, every eligible value
+When a batch has at most 256 total operations, every eligible value
 is at most 64 KiB, the conservative full command-frame estimate is at most
 1 MiB and below the configured command segment cap, and a capped active
 value-log segment has enough conservatively reserved space to avoid rotation:

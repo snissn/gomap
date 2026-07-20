@@ -12232,10 +12232,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
-	// RID allocation is monotonic, so each non-leaf lane's latest non-empty
-	// value-log segment contains that lane's high-watermark. Leaf-log append lanes
-	// share one encoded lane across multiple physical writers, so their RID seed
-	// scans every non-empty reserved leaf-log segment.
+	// Scan every non-empty segment: exact-RID command-WAL recovery may append an
+	// older missing RID into a newer segment, so the physical tail is no longer
+	// guaranteed to carry the allocator high-watermark.
 	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
@@ -37023,7 +37022,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 
 func (b *Batch) commandWALCanMaterializeValueLogPointers(eligibleIdxs []int) bool {
 	if b == nil || b.db == nil || b.commandWALAppend == nil || !b.db.externalCommandWAL ||
-		len(eligibleIdxs) == 0 || len(eligibleIdxs) > commandWALMaterializedRIDMaxOps {
+		len(eligibleIdxs) == 0 || len(b.entries) == 0 || len(b.entries) > commandWALMaterializedRIDMaxOps {
 		return false
 	}
 	capBytes := b.db.walMaxSegmentBytes
@@ -37191,7 +37190,7 @@ func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segme
 
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
-	for _, seg := range ridSeedValueLogSegments(segments) {
+	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
 		}
@@ -37226,32 +37225,6 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
-}
-
-func ridSeedValueLogSegments(segments []logSegmentInfo) []logSegmentInfo {
-	if len(segments) == 0 {
-		return nil
-	}
-	out := make([]logSegmentInfo, 0, len(segments))
-	for _, seg := range segments {
-		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
-			continue
-		}
-		if seg.lane == leafLogLaneID {
-			out = append(out, seg)
-		}
-	}
-	out = append(out, tailValueLogSegmentsByLaneExcept(segments, leafLogLaneID)...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].lane != out[j].lane {
-			return out[i].lane < out[j].lane
-		}
-		if out[i].seq != out[j].seq {
-			return out[i].seq < out[j].seq
-		}
-		return out[i].path < out[j].path
-	})
-	return out
 }
 
 func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {

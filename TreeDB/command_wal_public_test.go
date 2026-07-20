@@ -19,6 +19,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1042,6 +1043,180 @@ func TestPublicCommandWALMaterializedRIDRequiresStrictDurableWrite(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestPublicCommandWALMaterializedRIDTotalOperationBoundFallsBackAtomically(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		totalOps   int
+		wantFormat commitlog.PayloadFormat
+		wantFirst  commitlog.RawKVOp
+	}{
+		{name: "at-bound", totalOps: 256, wantFormat: commitlog.PayloadFormatRawKVBatchV2, wantFirst: commitlog.RawKVOpSetMaterializedRID},
+		{name: "over-bound", totalOps: 257, wantFormat: commitlog.PayloadFormatRawKVBatchV1, wantFirst: commitlog.RawKVOpSetRID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := commandWALDurabilityProofOptions(t.TempDir())
+			opts.ValueLog.PointerThreshold = 1024
+			opts.ValueLog.ForcePointers = false
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			b := db.NewBatchWithSize(tc.totalOps)
+			if err := b.Set([]byte("pointer"), bytes.Repeat([]byte("p"), 4096)); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch pointer Set: %v", err)
+			}
+			for i := 1; i < tc.totalOps; i++ {
+				if err := b.Set([]byte(fmt.Sprintf("inline-%03d", i)), []byte("i")); err != nil {
+					_ = b.Close()
+					t.Fatalf("batch inline Set %d: %v", i, err)
+				}
+			}
+			if err := b.WriteSync(); err != nil {
+				_ = b.Close()
+				t.Fatalf("batch WriteSync: %v", err)
+			}
+			if err := b.Close(); err != nil {
+				t.Fatalf("batch Close: %v", err)
+			}
+
+			r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(opts.Dir), "commit-l0-000001.log"))
+			if err != nil {
+				t.Fatalf("NewReader operation bound: %v", err)
+			}
+			defer r.Close()
+			env, err := r.ReadCommandFrame()
+			if err != nil {
+				t.Fatalf("ReadCommandFrame operation bound: %v", err)
+			}
+			if env.PayloadFormat != tc.wantFormat {
+				t.Fatalf("operation-bound payload format=%d, want %d", env.PayloadFormat, tc.wantFormat)
+			}
+			ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+			if err != nil {
+				t.Fatalf("DecodeRawKVBatchPayload operation bound: %v", err)
+			}
+			if len(ops) != tc.totalOps {
+				t.Fatalf("operation-bound ops len=%d, want %d", len(ops), tc.totalOps)
+			}
+			if ops[0].Op != tc.wantFirst {
+				t.Fatalf("operation-bound first op=%+v, want op %d", ops[0], tc.wantFirst)
+			}
+			for i := 1; i < len(ops); i++ {
+				if ops[i].Op != commitlog.RawKVOpSet {
+					t.Fatalf("operation-bound op[%d]=%+v, want inline Set", i, ops[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPublicCommandWALMaterializedRIDRecoveryPreservesCachedAllocatorHighWater(t *testing.T) {
+	dir := t.TempDir()
+	opts := commandWALDurabilityProofOptions(dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	bootstrap, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open bootstrap command WAL: %v", err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("Close bootstrap command WAL: %v", err)
+	}
+
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	valuePath := filepath.Join(backenddb.ValueLogDirPath(dir), "value-l0-000001.log")
+	valueWriter, err := valuelog.NewWriter(valuePath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter existing high RID: %v", err)
+	}
+	if _, err := valueWriter.Append(0, nil, 200, []byte("existing-high-water")); err != nil {
+		_ = valueWriter.Close()
+		t.Fatalf("Append existing high RID: %v", err)
+	}
+	if err := valueWriter.Sync(); err != nil {
+		_ = valueWriter.Close()
+		t.Fatalf("Sync existing high RID: %v", err)
+	}
+	if err := valueWriter.Close(); err != nil {
+		t.Fatalf("Close existing high RID: %v", err)
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSetMaterializedRID,
+		Key:   []byte("recovered"),
+		Value: []byte("materialized-older-rid"),
+		RID:   42,
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	commandPath := filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log")
+	commandWriter, err := commitlog.NewWriter(commandPath)
+	if err != nil {
+		t.Fatalf("NewWriter materialized command: %v", err)
+	}
+	if err := commandWriter.AppendCommand(commitlog.CommandEnvelope{
+		Version:         commitlog.CommandFrameVersionV2,
+		DurabilityClass: commitlog.CommandDurabilityDurable,
+		LSN:             1,
+		Kind:            commitlog.CommandKindRawKVBatch,
+		Scope:           commitlog.CommandScopeRawKV,
+		PayloadFormat:   commitlog.PayloadFormatRawKVBatchV2,
+		Payload:         payload,
+	}); err != nil {
+		_ = commandWriter.Close()
+		t.Fatalf("AppendCommand materialized command: %v", err)
+	}
+	if err := commandWriter.Sync(); err != nil {
+		_ = commandWriter.Close()
+		t.Fatalf("Sync materialized command: %v", err)
+	}
+	if err := commandWriter.Close(); err != nil {
+		t.Fatalf("Close materialized command: %v", err)
+	}
+
+	recovered, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open materialized recovery: %v", err)
+	}
+	requireRawKVValue(t, recovered, []byte("recovered"), []byte("materialized-older-rid"))
+	startRID, err := recovered.cached.ReserveValueLogRIDs(1)
+	if err != nil {
+		_ = recovered.Close()
+		t.Fatalf("ReserveValueLogRIDs after materialized recovery: %v", err)
+	}
+	if startRID <= 200 {
+		_ = recovered.Close()
+		t.Fatalf("cached allocator start RID=%d, want a RID above the all-segment high-water 200", startRID)
+	}
+	if err := recovered.SetSync([]byte("foreground"), bytes.Repeat([]byte("f"), 4096)); err != nil {
+		_ = recovered.Close()
+		t.Fatalf("foreground pointer SetSync: %v", err)
+	}
+	if err := recovered.Checkpoint(); err != nil {
+		_ = recovered.Close()
+		t.Fatalf("Checkpoint after foreground pointer: %v", err)
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatalf("Close after foreground pointer: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Reopen after foreground pointer: %v", err)
+	}
+	defer reopened.Close()
+	requireRawKVValue(t, reopened, []byte("recovered"), []byte("materialized-older-rid"))
+	requireRawKVValue(t, reopened, []byte("foreground"), bytes.Repeat([]byte("f"), 4096))
 }
 
 func TestPublicCommandWALStateShapedDurabilityLedger(t *testing.T) {
