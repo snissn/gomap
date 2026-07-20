@@ -1164,9 +1164,9 @@
         "cleanup_maintenance_pins": "slot0_commit_seq=4 slot1_commit_seq=2"
       },
       "counterexample_id": "stale-build-base-root-publication",
-      "seed": 3674,
+      "seed": 12505447533306515078,
       "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000",
-      "variant_id": "public-stale-build-base-retry-stable-image",
+      "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback",
       "cut_point": "after-meta-sync",
       "reopen_mode": "read-only",
       "expected_recovery": {

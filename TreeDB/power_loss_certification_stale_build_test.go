@@ -14,7 +14,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const staleBuildBaseVariantID = "public-stale-build-base-retry-stable-image"
+const (
+	staleBuildBaseCutID     = "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000"
+	staleBuildBaseVariantID = "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback"
+	staleBuildBaseSeed      = uint64(12505447533306515078)
+)
 
 // TestPowerLossCertificationStaleBuildBasePublicReopen retains the #3865
 // counterexample at a real publication rendezvous: a successor finishes its
@@ -45,7 +49,7 @@ func TestPowerLossCertificationStaleBuildBasePublicReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireGroupCertificationSelector(t, staleBuildBaseVariantID, durabilitycut.AfterMetaSync, 0)
+	requireCertificationSelector(t, staleBuildBaseCutID, staleBuildBaseVariantID, staleBuildBaseSeed)
 	metaSyncs := 0
 	frozen := false
 	var observeMu sync.Mutex

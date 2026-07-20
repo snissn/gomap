@@ -352,6 +352,11 @@ func testPowerLossCertificationGroupedFailure(t *testing.T, variantID string, po
 }
 
 func requireGroupCertificationSelector(t *testing.T, variantID string, point durabilitycut.Point, occurrence int) {
+	cutID := fmt.Sprintf("cut/%s/%s/%03d", variantID, point, occurrence)
+	requireCertificationSelector(t, cutID, variantID, groupedCertificationSeed)
+}
+
+func requireCertificationSelector(t *testing.T, cutID, variantID string, seed uint64) {
 	t.Helper()
 	selector, err := powerlossoracle.ReplaySelectorFromEnv()
 	if err != nil {
@@ -360,9 +365,8 @@ func requireGroupCertificationSelector(t *testing.T, variantID string, point dur
 	if selector == (powerlossoracle.ReplaySelector{}) {
 		return
 	}
-	wantCutID := fmt.Sprintf("cut/%s/%s/%03d", variantID, point, occurrence)
-	if selector.CutID != wantCutID || selector.VariantID != variantID || selector.Seed != groupedCertificationSeed {
-		t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, variantID, groupedCertificationSeed)
+	if selector.CutID != cutID || selector.VariantID != variantID || selector.Seed != seed {
+		t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, cutID, variantID, seed)
 	}
 }
 

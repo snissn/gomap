@@ -1070,6 +1070,18 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 				powerlossoracle.VariantOldPageReuse: powerlossoracle.ExpectedOldRoot,
 			},
 		},
+		{
+			ID:               "public-stale-build-base-retry-stable-image",
+			Point:            powerlossoracle.AfterMetaSync,
+			Occurrence:       0,
+			Model:            model,
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "stale-build-base-retry", Path: "maindb/index.db"}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+				powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
+				powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
+			},
+		},
 	}
 	generated := make(map[string][]powerlossoracle.Variant, len(specs))
 	for _, spec := range specs {
@@ -1079,14 +1091,6 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 		}
 		generated[coverage.CutID] = variants
 	}
-	const staleBuildCutID = "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000"
-	generated[staleBuildCutID] = []powerlossoracle.Variant{{
-		CutID:    staleBuildCutID,
-		ID:       "public-stale-build-base-retry-stable-image",
-		Family:   powerlossoracle.VariantFullWriteback,
-		Seed:     3674,
-		Expected: powerlossoracle.ExpectedNewRoot,
-	}}
 	return generated
 }
 
