@@ -21,6 +21,8 @@ const (
 	groupedAckVariantID             = "public-grouped-acknowledgements-stable-image"
 	groupedDependencyFailureVariant = "public-grouped-dependency-failure-stable-image"
 	groupedAmbiguousFailureVariant  = "public-grouped-ambiguous-failure-stable-image"
+	groupedDependencyDirtyVariant   = "public-grouped-dependency-failure-dirty-wal"
+	groupedAmbiguousDirtyVariant    = "public-grouped-ambiguous-failure-dirty-wal"
 	groupedRotationExternalVariant  = "public-grouped-rotation-external-stable-image"
 	groupedLifecycleVariant         = "public-grouped-lifecycle-stable-image"
 )
@@ -102,7 +104,16 @@ func TestPowerLossCertificationGroupedAcknowledgementsPublicReopen(t *testing.T)
 // a dependency-sync failure acknowledges none of a forming group, poisons the
 // source handle, and leaves the prior stable image normally reopenable.
 func TestPowerLossCertificationGroupedDependencyFailurePublicReopen(t *testing.T) {
-	testPowerLossCertificationGroupedFailure(t, groupedDependencyFailureVariant, durabilitycut.BeforeDependencyFileSync, 0)
+	testPowerLossCertificationGroupedStableFailure(t, groupedDependencyFailureVariant, durabilitycut.BeforeDependencyFileSync, 0)
+}
+
+// TestPowerLossCertificationGroupedDependencyFailureDirtyPublicReopen proves
+// the other legal crash outcome at the same unacknowledged failure: if every
+// dirty command-WAL byte reaches disk despite the failed sync, recovery may
+// replay the group, but it must recover the complete group rather than a
+// partially acknowledged prefix.
+func TestPowerLossCertificationGroupedDependencyFailureDirtyPublicReopen(t *testing.T) {
+	testPowerLossCertificationGroupedDirtyFailure(t, groupedDependencyDirtyVariant, durabilitycut.BeforeDependencyFileSync, 0)
 }
 
 // TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen cuts after
@@ -110,7 +121,16 @@ func TestPowerLossCertificationGroupedDependencyFailurePublicReopen(t *testing.T
 // before the file sync. The entire group must fail rather than partially ack.
 func TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen(t *testing.T) {
 	const waiters = 4
-	testPowerLossCertificationGroupedFailure(t, groupedAmbiguousFailureVariant, durabilitycut.AfterDependencyAppend, waiters)
+	testPowerLossCertificationGroupedStableFailure(t, groupedAmbiguousFailureVariant, durabilitycut.AfterDependencyAppend, waiters)
+}
+
+// TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen promotes
+// the complete userspace WAL append into the modeled stable image. Recovery
+// may expose the unacknowledged group, but only atomically as one complete
+// command-WAL prefix.
+func TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen(t *testing.T) {
+	const waiters = 4
+	testPowerLossCertificationGroupedDirtyFailure(t, groupedAmbiguousDirtyVariant, durabilitycut.AfterDependencyAppend, waiters)
 }
 
 // TestPowerLossCertificationGroupedRotationExternalPublicReopen retains the
@@ -276,7 +296,93 @@ func TestPowerLossCertificationGroupedLifecyclePublicReopen(t *testing.T) {
 	}
 }
 
-func testPowerLossCertificationGroupedFailure(t *testing.T, variantID string, point durabilitycut.Point, occurrence int) {
+type groupedFailureCutResult struct {
+	model   *powerlossoracle.Model
+	opts    Options
+	dir     string
+	walPath string
+}
+
+func testPowerLossCertificationGroupedStableFailure(t *testing.T, variantID string, point durabilitycut.Point, occurrence int) {
+	t.Helper()
+	requireGroupCertificationSelector(t, variantID, point, occurrence)
+	result := exercisePowerLossCertificationGroupedFailure(t, point, occurrence)
+	recovered, closeRecovered := reopenGroupedCertificationStable(t, result.model, result.opts)
+	defer closeRecovered()
+	for index := 0; index < 4; index++ {
+		key := []byte(fmt.Sprintf("failure-group/%d", index))
+		value, err := recovered.Get(key)
+		if err != nil {
+			t.Fatalf("read unacknowledged %q: %v", key, err)
+		}
+		if len(value) != 0 {
+			t.Fatalf("unacknowledged %q recovered as %q", key, value)
+		}
+	}
+}
+
+func testPowerLossCertificationGroupedDirtyFailure(t *testing.T, variantID string, point durabilitycut.Point, occurrence int) {
+	t.Helper()
+	result := exercisePowerLossCertificationGroupedFailure(t, point, occurrence)
+	if result.walPath == "" {
+		t.Fatal("grouped failure cut emitted no command-WAL path")
+	}
+	rel, err := filepath.Rel(result.dir, result.walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel = filepath.ToSlash(rel)
+	ranges, err := result.model.ChangedRanges(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranges) == 0 {
+		t.Fatalf("grouped failure command WAL %q has no modeled dirty ranges", rel)
+	}
+	variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+		ID:         variantID,
+		Point:      point,
+		Occurrence: occurrence,
+		Model:      result.model,
+		Dependencies: []powerlossoracle.DirtyResource{{
+			Kind: powerlossoracle.ResourceCommandWAL, ID: "failed-group-command-wal", Path: rel, Ranges: ranges,
+		}},
+		RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantSyncedOnly, powerlossoracle.VariantFullWriteback},
+		ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{
+			powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
+			powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.ByFamily[powerlossoracle.VariantFullWriteback] != 1 {
+		t.Fatalf("full-writeback coverage=%v want one", coverage.ByFamily)
+	}
+	var full *powerlossoracle.Variant
+	for index := range variants {
+		if variants[index].Family == powerlossoracle.VariantFullWriteback {
+			full = &variants[index]
+			break
+		}
+	}
+	if full == nil {
+		t.Fatal("generated no full-writeback grouped failure variant")
+	}
+	requireCertificationSelector(t, full.CutID, full.ID, full.Seed)
+	recovered, closeRecovered := reopenGroupedCertificationStable(t, full.Model, result.opts)
+	defer closeRecovered()
+	for index := 0; index < 4; index++ {
+		key := []byte(fmt.Sprintf("failure-group/%d", index))
+		value, err := recovered.Get(key)
+		if err != nil || string(value) != "value" {
+			t.Fatalf("dirty-writeback recovered %q=%q err=%v want complete group value", key, value, err)
+		}
+	}
+	t.Logf("grouped dirty full-writeback selector cut=%s variant=%s seed=%d", full.CutID, full.ID, full.Seed)
+}
+
+func exercisePowerLossCertificationGroupedFailure(t *testing.T, point durabilitycut.Point, occurrence int) groupedFailureCutResult {
 	t.Helper()
 	const waiters = 4
 	dir := t.TempDir()
@@ -299,10 +405,10 @@ func testPowerLossCertificationGroupedFailure(t *testing.T, variantID string, po
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireGroupCertificationSelector(t, variantID, point, occurrence)
 	cutErr := errors.New("power-loss-certification: grouped acknowledgement cut")
 	seen := 0
 	cut := false
+	walPath := ""
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if cut {
 			return cutErr
@@ -312,6 +418,7 @@ func testPowerLossCertificationGroupedFailure(t *testing.T, variantID string, po
 		}
 		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
 			if seen == occurrence {
+				walPath = event.Path
 				cut = true
 				return cutErr
 			}
@@ -336,19 +443,7 @@ func testPowerLossCertificationGroupedFailure(t *testing.T, variantID string, po
 		t.Logf("close poisoned source: %v", err)
 	}
 	closed = true
-
-	recovered, closeRecovered := reopenGroupedCertificationStable(t, model, opts)
-	defer closeRecovered()
-	for index := 0; index < waiters; index++ {
-		key := []byte(fmt.Sprintf("failure-group/%d", index))
-		value, err := recovered.Get(key)
-		if err != nil {
-			t.Fatalf("read unacknowledged %q: %v", key, err)
-		}
-		if len(value) != 0 {
-			t.Fatalf("unacknowledged %q recovered as %q", key, value)
-		}
-	}
+	return groupedFailureCutResult{model: model, opts: opts, dir: dir, walPath: walPath}
 }
 
 func requireGroupCertificationSelector(t *testing.T, variantID string, point durabilitycut.Point, occurrence int) {

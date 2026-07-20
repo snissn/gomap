@@ -420,13 +420,35 @@ func (m *Model) observeNamespace(root string, event durabilitycut.Event) error {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(event.NewPath)
+		info, err := os.Stat(event.NewPath)
 		if err != nil {
-			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
+			return fmt.Errorf("powerlossoracle: stat created path %q: %w", event.NewPath, err)
 		}
 		identity, err := captureStableIdentity(event.NewPath)
 		if err != nil {
 			return err
+		}
+		if info.IsDir() {
+			m.ensureVolatileParents(path)
+			m.volatileDirs[path] = identity
+			m.trace = append(m.trace, "create-dir:"+path)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("powerlossoracle: created path %q is unsupported type %s", event.NewPath, info.Mode())
+		}
+		data, err := os.ReadFile(event.NewPath)
+		if err != nil {
+			return fmt.Errorf("powerlossoracle: read created file %q: %w", event.NewPath, err)
+		}
+		if id, exists := m.volatile[path]; exists {
+			if _, stable := m.stable[path]; stable {
+				return fmt.Errorf("powerlossoracle: file already exists %q", path)
+			}
+			m.inodes[id].volatile = clone(data)
+			m.inodes[id].stableIdentity = physicalStableIdentity(identity)
+			m.trace = append(m.trace, "create-observed:"+path)
+			return nil
 		}
 		return m.createWithIdentity(path, data, identity)
 	case durabilitycut.NamespaceRename:

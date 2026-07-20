@@ -14,7 +14,6 @@ const (
 	powerLossWitnessNamespaceTest  = "TestPowerLossOracleAdversarialNewFileNamespaceMismatch"
 	powerLossWitnessRelaxedRIDTest = "TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID"
 	powerLossWitnessChunkedTest    = "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot"
-	powerLossWitnessStaleBuildTest = "TestPowerLossCertificationStaleBuildBasePublicReopen"
 )
 
 // Keep these anchors in a file separate from the witnesses. Renaming or
@@ -42,10 +41,6 @@ func TestPowerLossCounterexampleWitnessRegistryAnchors(t *testing.T) {
 		seenIDs[witness.ID] = true
 		switch witness.Package {
 		case "./TreeDB":
-			if witness.TestName == powerLossWitnessStaleBuildTest {
-				// Anchored by the owning internal-package registry test.
-				continue
-			}
 			registered[powerLossWitnessTestKey{pkg: witness.Package, testName: witness.TestName}] = true
 		case "./TreeDB/db":
 			// Anchored by the owning package's separate registry test.

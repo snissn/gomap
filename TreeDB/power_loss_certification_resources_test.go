@@ -2,8 +2,13 @@ package treedb_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -24,13 +29,6 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCutID := "cut/" + authoritativeResourcesVariantID + "/after-meta-sync/000"
-	if selector != (powerlossoracle.ReplaySelector{}) {
-		if selector.CutID != wantCutID || selector.VariantID != authoritativeResourcesVariantID || selector.Seed != powerLossOracleSeed {
-			t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, authoritativeResourcesVariantID, powerLossOracleSeed)
-		}
-	}
-
 	dir := t.TempDir()
 	backgroundErrors := make(chan error, 16)
 	opts := treedb.OptionsFor(profile, dir)
@@ -75,29 +73,88 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		}
 	}()
 
-	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
-
 	model, err := powerlossoracle.Capture(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cutErr := errors.New("power-loss-certification: stop after authoritative-resource checkpoint meta sync")
+	mainDir := filepath.Clean(filepath.Join(dir, "maindb"))
+	metaSyncs := 0
+	observedEvents := 0
+	selectedOccurrence := -1
+	namespaceEvents := 0
+	dictDBPersistenceEvents := 0
+	authoritativeAssetPersistenceEvents := 0
+	armed := false
+	var observeMu sync.Mutex
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observeMu.Lock()
+		defer observeMu.Unlock()
+		observedEvents++
 		if err := model.Observe(dir, event); err != nil {
 			return err
 		}
+		paths := append([]string(nil), event.Paths...)
+		paths = append(paths, event.Root, event.Path, event.OldPath, event.NewPath)
+		if event.Namespace != "" {
+			namespaceEvents++
+		}
+		for _, path := range paths {
+			clean := filepath.Clean(path)
+			if pathContainsComponent(clean, "dictdb") && (event.Namespace != "" || event.Point == durabilitycut.AfterDependencyFileSync || event.Point == durabilitycut.AfterNewFileDirectorySync || event.Point == durabilitycut.AfterMetaSync) {
+				dictDBPersistenceEvents++
+			}
+			if (pathContainsComponent(clean, "column_assets") || strings.Contains(filepath.ToSlash(clean), "vector")) &&
+				(event.Namespace != "" || event.Point == durabilitycut.AfterDependencyFileSync || event.Point == durabilitycut.AfterNewFileDirectorySync) {
+				authoritativeAssetPersistenceEvents++
+			}
+		}
 		if event.Point == durabilitycut.AfterMetaSync {
-			return cutErr
+			occurrence := metaSyncs
+			metaSyncs++
+			if armed && filepath.Clean(event.Root) == mainDir {
+				selectedOccurrence = occurrence
+				return cutErr
+			}
 		}
 		return nil
 	})
-	// Keep the rebuilt vector manifest current: a no-op checkpoint still crosses
-	// the production metadata-sync boundary without introducing a later write.
-	err = backend.Checkpoint()
+
+	// Capture precedes every collection, dictionary, column, and vector write so
+	// the model must earn those bytes and names through observed production
+	// persistence events rather than importing them as initially stable.
+	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
+	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
+	observeMu.Lock()
+	armed = true
+	observeMu.Unlock()
+	// Publish one deterministic terminal marker after all asynchronous resource
+	// work is quiescent. The selected cut is the marker's real maindb metadata
+	// sync, so the evidence address cannot drift with dictdb scheduling.
+	boundaryKey := []byte("certification/authoritative-resource-boundary")
+	boundaryValue := []byte("stable")
+	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {
+		restore()
+		t.Fatalf("write authoritative resource boundary: %v", err)
+	}
+	err = database.Checkpoint()
 	restore()
 	if !errors.Is(err, cutErr) {
 		t.Fatalf("checkpoint cut error=%v want=%v", err, cutErr)
 	}
+	if selectedOccurrence < 0 {
+		t.Fatal("authoritative-resource checkpoint did not select a maindb meta-sync occurrence")
+	}
+	wantCutID := "cut/" + authoritativeResourcesVariantID + "/after-meta-sync/" + fmt.Sprintf("%03d", selectedOccurrence)
+	if selector != (powerlossoracle.ReplaySelector{}) {
+		if selector.CutID != wantCutID || selector.VariantID != authoritativeResourcesVariantID || selector.Seed != powerLossOracleSeed {
+			t.Fatalf("replay selector=(%q,%q,%d) want=(%q,%q,%d)", selector.CutID, selector.VariantID, selector.Seed, wantCutID, authoritativeResourcesVariantID, powerLossOracleSeed)
+		}
+	}
+	if namespaceEvents == 0 || dictDBPersistenceEvents == 0 || authoritativeAssetPersistenceEvents == 0 {
+		t.Fatalf("resource creation persistence coverage namespace=%d dictdb=%d assets=%d", namespaceEvents, dictDBPersistenceEvents, authoritativeAssetPersistenceEvents)
+	}
+	t.Logf("authoritative resource cut occurrence=%d namespace_events=%d dictdb_persistence_events=%d asset_persistence_events=%d", selectedOccurrence, namespaceEvents, dictDBPersistenceEvents, authoritativeAssetPersistenceEvents)
 	if err := database.Close(); err != nil && !errors.Is(err, cutErr) {
 		t.Logf("close after injected post-meta cut: %v", err)
 	}
@@ -115,9 +172,46 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 		t.Fatal("public Open returned no database")
 	}
 	assertAuthoritativeResourceWitness(t, reopened, witness)
+	if value, err := reopened.Get(boundaryKey); err != nil || string(value) != string(boundaryValue) {
+		t.Fatalf("authoritative resource boundary=%q err=%v want=%q", value, err, boundaryValue)
+	}
 	if err := closeReopened(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func waitForAuthoritativeResourceObserverQuiescence(t *testing.T, mu *sync.Mutex, events *int, backgroundErrors <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	last := -1
+	stableSince := time.Now()
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-backgroundErrors:
+			t.Fatalf("authoritative resource background error while quiescing: %v", err)
+		default:
+		}
+		mu.Lock()
+		current := *events
+		mu.Unlock()
+		if current != last {
+			last = current
+			stableSince = time.Now()
+		} else if time.Since(stableSince) >= 500*time.Millisecond {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("authoritative resource durability events did not quiesce; last count=%d", last)
+}
+
+func pathContainsComponent(path, component string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == component {
+			return true
+		}
+	}
+	return false
 }
 
 func certificationProfileFromEnv(t *testing.T) (string, treedb.Profile) {

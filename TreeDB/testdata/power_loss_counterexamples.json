@@ -147,7 +147,7 @@
       "observed_result": "new-root",
       "owner": "#3865",
       "disposition": "resolved",
-      "replay": {"package": "./TreeDB", "test_name": "TestPowerLossCertificationStaleBuildBasePublicReopen", "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000", "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback", "seed": 12505447533306515078}
+      "replay": {"package": "./TreeDB/db", "test_name": "TestPowerLossCertificationStaleBuildBasePublicReopen", "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000", "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback", "seed": 12505447533306515078}
     }
   ]
 }

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -228,6 +229,7 @@ func ensureColumnAssetManagerNamespace(namespace columnAssetManagerNamespace) er
 		if !os.IsNotExist(err) {
 			return err
 		}
+		created := false
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			if !errors.Is(err, os.ErrExist) {
 				return err
@@ -238,6 +240,13 @@ func ensureColumnAssetManagerNamespace(namespace columnAssetManagerNamespace) er
 			}
 			if !info.IsDir() {
 				return fmt.Errorf("collections: column asset manager path %q is not a directory", dir)
+			}
+		} else {
+			created = true
+		}
+		if created {
+			if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, filepath.Dir(dir), "", dir); err != nil {
+				return err
 			}
 		}
 		parent := filepath.Dir(dir)
@@ -286,8 +295,31 @@ func ensureStableColumnAssetManagerNamespace(namespace columnAssetManagerNamespa
 		if parent == nil {
 			return nil, fmt.Errorf("%w: stable column namespace parent %q has no retained authority", rootpublication.ErrUnresolvedResource, parentPath)
 		}
+		_, statErr := os.Stat(cleanDir)
+		missingBefore := errors.Is(statErr, os.ErrNotExist)
+		if statErr != nil && !missingBefore {
+			return nil, statErr
+		}
 		child, err := rootpublication.EnsureStableChildDirectory(parent, filepath.Base(cleanDir), 0o700, registry)
 		if err != nil {
+			return nil, err
+		}
+		if missingBefore {
+			if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, parentPath, "", cleanDir); err != nil {
+				_ = child.Close()
+				return nil, err
+			}
+		}
+		persistencePath := parentPath
+		if runtime.GOOS == "windows" {
+			persistencePath = cleanDir
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, persistencePath, persistencePath); err != nil {
+			_ = child.Close()
+			return nil, err
+		}
+		if err := durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, persistencePath, persistencePath); err != nil {
+			_ = child.Close()
 			return nil, err
 		}
 		handles[cleanDir] = child
@@ -427,7 +459,7 @@ func writeColumnAssetToManagerWithStableResource(rootDir string, cfg ColumnStore
 			if err != nil {
 				return false, err
 			}
-			if err := namespaceToken.Stabilize(); err != nil {
+			if err := stabilizeColumnAssetNamespaceForPublish(namespaceToken, namespace); err != nil {
 				namespaceToken.Release()
 				return false, err
 			}
@@ -526,6 +558,12 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
 	if created {
+		if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, namespace.SegmentDir, "", assetPath); err != nil {
+			_ = file.Close()
+			return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
+		}
+	}
+	if created {
 		// Creation does not establish pathname durability. Keep the cache
 		// unknown until the successful publish path stabilizes the directory.
 		clearColumnAssetSegmentDirSyncKnown(assetPath)
@@ -578,7 +616,7 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 	ref.Offset = offset
 	start := time.Now()
 	closeStats.FileSyncCount++
-	if err := syncColumnAssetSegmentFileForPublish(file); err != nil {
+	if err := syncColumnAssetSegmentFileObserved(file, namespace.SegmentDir); err != nil {
 		closeStats.FileSync += time.Since(start)
 		return fail(err)
 	}
@@ -1397,6 +1435,11 @@ func initializeColumnPhysicalAssetSegmentAppenderStableOpen(appender *columnPhys
 	appender.created = created
 	appender.stableParent = parent
 	appender.stableChildName = filepath.Base(appender.assetPath)
+	if created {
+		if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceAuxiliary, appender.namespace.SegmentDir, "", appender.assetPath); err != nil {
+			return nil, errors.Join(err, appender.abort())
+		}
+	}
 	var err error
 	appender.stableParentIdentity, err = rootpublication.StableIdentityFromFile(parent)
 	if err != nil {
@@ -1727,7 +1770,7 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 		if err != nil {
 			return nil, err
 		}
-		if err := namespaceToken.Stabilize(); err != nil {
+		if err := stabilizeColumnAssetNamespaceForPublish(namespaceToken, a.namespace); err != nil {
 			namespaceToken.Release()
 			return nil, err
 		}
@@ -1853,7 +1896,7 @@ func (a *columnPhysicalAssetSegmentAppender) closeWithStableValidation(validate 
 		if !a.failed {
 			start := time.Now()
 			a.closeStats.FileSyncCount++
-			fileSyncErr = syncColumnAssetSegmentFileForPublish(a.file)
+			fileSyncErr = syncColumnAssetSegmentFileObserved(a.file, a.namespace.SegmentDir)
 			a.closeStats.FileSync += time.Since(start)
 		}
 		if !a.failed && fileSyncErr == nil && a.stableRegistry != nil {
@@ -2958,9 +3001,39 @@ func columnAssetSegmentLockIndex(name string) uint64 {
 	return hash % uint64(len(columnAssetSegmentWriteLocks))
 }
 
+func syncColumnAssetSegmentFileObserved(file *os.File, root string) error {
+	if file == nil {
+		return syncColumnAssetSegmentFileForPublish(file)
+	}
+	path := file.Name()
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceAuxiliary, root, path); err != nil {
+		return err
+	}
+	if err := syncColumnAssetSegmentFileForPublish(file); err != nil {
+		return err
+	}
+	return durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceAuxiliary, root, path)
+}
+
+func stabilizeColumnAssetNamespaceForPublish(token *rootpublication.StableNamespaceToken, namespace columnAssetManagerNamespace) error {
+	if token == nil {
+		return errors.New("collections: stable column asset namespace token is nil")
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, namespace.SegmentDir, namespace.SegmentDir); err != nil {
+		return err
+	}
+	if err := token.Stabilize(); err != nil {
+		return err
+	}
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, namespace.SegmentDir, namespace.SegmentDir)
+}
+
 func syncColumnAssetDir(dir string) error {
 	if runtime.GOOS == "windows" || dir == "" {
 		return nil
+	}
+	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir); err != nil {
+		return err
 	}
 	file, err := os.Open(dir)
 	if err != nil {
@@ -2977,5 +3050,5 @@ func syncColumnAssetDir(dir string) error {
 		}
 		return err
 	}
-	return nil
+	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceAuxiliary, dir, dir)
 }

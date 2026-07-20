@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -16,6 +15,8 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -109,7 +110,7 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 	docs := make([][]byte, authoritativeDocumentCount)
 	for i := range ids {
 		ids[i] = []byte(fmt.Sprintf("doc-%02d", i))
-		docs[i] = []byte(fmt.Sprintf(`{"title":"durability beacon%02d","body":"stable resource closure","kind":"kind_%s","score":%d,"embedding":[1,0,%d]}`, i, []string{"even", "odd"}[i%2], i, i%2))
+		docs[i] = []byte(fmt.Sprintf(`{"title":"durability beacon%02d","body":"stable resource closure","kind":"kind_%s","score":%d,"embedding":[1,%d,%d]}`, i, []string{"even", "odd"}[i%2], i, i, i*i))
 	}
 	collection, err := manager.OpenCollection(meta.Name)
 	if err != nil {
@@ -163,16 +164,18 @@ func prepareAuthoritativeResourceWitness(t *testing.T, database *treedb.DB, dir 
 	// dictdb dependency. Collection TemplateV1 above witnesses collection template
 	// roots only: public treedb.Open deliberately forces live templatedb value-log
 	// compression off, so this test makes no claim that it is active.
-	writeDictionaryTrainingBatch(t, database, "certification/dict-training/a", 128)
+	// Exactly one minimum training cohort keeps dictionary publication and its
+	// durability-event count deterministic while still crossing TrainBytes.
+	writeDictionaryTrainingBatch(t, database, "certification/dict-training/a", 8)
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	waitForPublishedValueLogDictionary(t, database, backgroundErrors)
-	dictionaryKey, dictionaryData := writeDictionaryTrainingBatch(t, database, "certification/dict-frame/b", 64)
+	dictionaryKey, dictionaryData := writeDictionaryTrainingBatch(t, database, "certification/dict-frame/b", 1)
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	requireDictionaryEncodedValueLogFrame(t, filepath.Join(dir, "maindb", "value_vlog"), database.Stats())
+	requireDictionaryEncodedValueLogFrame(t, database, filepath.Join(dir, "maindb", "value_vlog"), dictionaryKey, database.Stats())
 	status, err := vectorCollection.RebuildVectorIndex("embedding_graph")
 	if err != nil {
 		t.Fatal(err)
@@ -257,14 +260,15 @@ func assertAuthoritativeResourceWitness(t *testing.T, reopened *treedb.DB, witne
 		t.Fatal(err)
 	}
 	vector, err := vectorCollection.SearchVectorIndex(collections.VectorIndexSearchOptions{
-		IndexName: "embedding_graph", Query: []float32{1, 0, 1}, TopK: 8, EfSearch: 24,
+		IndexName: "embedding_graph", Query: []float32{1, 7, 49}, TopK: 1, EfSearch: authoritativeDocumentCount,
 		StatsMode: collections.VectorIndexSearchStatsModeBenchmarkDebug,
 	})
 	if err != nil {
 		t.Fatalf("SearchVectorIndex: %v", err)
 	}
-	if vector.Status.State != collections.VectorIndexStateColumnGraphLoaded || !vector.Status.Loaded || vector.Status.RebuildNeeded || len(vector.Results) == 0 {
-		t.Fatalf("SearchVectorIndex response=%+v want reopened loaded results", vector)
+	if vector.Status.State != collections.VectorIndexStateColumnGraphLoaded || !vector.Status.Loaded || vector.Status.RebuildNeeded ||
+		len(vector.Results) != 1 || !bytes.Equal(vector.Results[0].ID, witness.primaryID) {
+		t.Fatalf("SearchVectorIndex response=%+v want reopened loaded top-1 document %q", vector, witness.primaryID)
 	}
 
 	templateCollection, err := manager.OpenCollection(authoritativeTemplateCollection)
@@ -329,60 +333,57 @@ func waitForPublishedValueLogDictionary(t *testing.T, database *treedb.DB, backg
 	t.Fatalf("dictionary publication timed out: last_applied_dict_id=%q frames_attempted=%q", stats["treedb.cache.vlog_dict.last_applied_dict_id"], stats["treedb.cache.vlog_dict.frames_attempted"])
 }
 
-func requireDictionaryEncodedValueLogFrame(t *testing.T, valueLogDir string, stats map[string]string) {
+func requireDictionaryEncodedValueLogFrame(t *testing.T, database *treedb.DB, valueLogDir string, key []byte, stats map[string]string) {
 	t.Helper()
-	frames, err := dictionaryEncodedValueLogFrames(valueLogDir)
-	if err != nil {
-		t.Fatal(err)
+	backend := treedb.PowerLossCertificationBackendForTest(database)
+	if backend == nil {
+		t.Fatal("public TreeDB handle has no collection backend")
 	}
+	snapshot := backend.AcquireSnapshot()
+	if snapshot == nil {
+		t.Fatal("dictionary frame proof acquired no backend snapshot")
+	}
+	defer func() { _ = snapshot.Close() }()
+	state, ok := snapshot.StateToken()
+	if !ok || state.RootPageID == 0 {
+		t.Fatalf("dictionary frame proof snapshot state=%+v available=%t", state, ok)
+	}
+	entry, err := snapshot.GetEntryAtRoot(state.RootPageID, key)
+	if err != nil {
+		t.Fatalf("dictionary frame proof GetEntryAtRoot(%q): %v", key, err)
+	}
+	ptr := entry.ValuePtr
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(ptr.FileID) || !page.ValuePtrIsGrouped(ptr) || ptr.Offset < 4 {
+		t.Fatalf("dictionary frame proof key=%q flags=%#x ptr=%+v want grouped value-log pointer", key, entry.Flags, ptr)
+	}
+	path := valuelog.SegmentPath(valueLogDir, ptr.FileID)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("dictionary frame proof read %s: %v", path, err)
+	}
+	recordStart := int(ptr.Offset - 4)
+	if recordStart < 0 || recordStart+valuelog.HeaderSize > len(raw) {
+		t.Fatalf("dictionary frame proof key=%q record start=%d file_bytes=%d", key, recordStart, len(raw))
+	}
+	header := raw[recordStart : recordStart+valuelog.HeaderSize]
+	if header[4] != valuelog.Version || header[5]&byte(1) == 0 {
+		t.Fatalf("dictionary frame proof key=%q record version=%d flags=%#x", key, header[4], header[5])
+	}
+	payloadBytes := int(binary.LittleEndian.Uint32(header[16:20]))
+	payloadStart := recordStart + valuelog.HeaderSize
+	payloadEnd := payloadStart + payloadBytes
+	if payloadBytes <= 0 || payloadEnd < payloadStart || payloadEnd > len(raw) {
+		t.Fatalf("dictionary frame proof key=%q invalid payload bytes=%d file_bytes=%d", key, payloadBytes, len(raw))
+	}
+	frame, _, offsets, _, err := valuelog.DecodeFrame(raw[payloadStart:payloadEnd])
+	if err != nil {
+		t.Fatalf("dictionary frame proof key=%q decode %s at %d: %v", key, path, recordStart, err)
+	}
+	subIndex := page.ValuePtrSubIndex(ptr)
 	dictID, _ := strconv.ParseUint(stats["treedb.cache.vlog_dict.last_applied_dict_id"], 10, 64)
-	if frames == 0 || dictID == 0 {
-		t.Fatalf("dictionary frame proof disk_frames=%d dict_id=%q", frames, stats["treedb.cache.vlog_dict.last_applied_dict_id"])
+	if frame.DictID == 0 || frame.Flags&valuelog.FrameFlagCompressed == 0 || int(subIndex) >= int(frame.K) || len(offsets) != int(frame.K)+1 || dictID == 0 {
+		t.Fatalf("dictionary frame proof key=%q ptr=%+v frame=%+v offsets=%d published_dict_id=%q", key, ptr, frame, len(offsets), stats["treedb.cache.vlog_dict.last_applied_dict_id"])
 	}
-}
-
-func dictionaryEncodedValueLogFrames(valueLogDir string) (int, error) {
-	paths, err := filepath.Glob(filepath.Join(valueLogDir, "value-l*.log"))
-	if err != nil {
-		return 0, err
-	}
-	if len(paths) == 0 {
-		return 0, fmt.Errorf("no value-log segments under %s", valueLogDir)
-	}
-	sort.Strings(paths)
-	frames := 0
-	for _, path := range paths {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return 0, err
-		}
-		for offset := 0; offset < len(raw); {
-			if len(raw)-offset < valuelog.HeaderSize {
-				return 0, fmt.Errorf("value-log segment %s has truncated record header at %d", path, offset)
-			}
-			header := raw[offset : offset+valuelog.HeaderSize]
-			if header[4] != valuelog.Version {
-				return 0, fmt.Errorf("value-log segment %s record at %d has version %d", path, offset, header[4])
-			}
-			payloadBytes := int(binary.LittleEndian.Uint32(header[16:20]))
-			next := offset + valuelog.HeaderSize + payloadBytes
-			if payloadBytes < 0 || next < offset || next > len(raw) {
-				return 0, fmt.Errorf("value-log segment %s record at %d has invalid payload length %d", path, offset, payloadBytes)
-			}
-			const groupedRecordFlag = byte(1)
-			if header[5]&groupedRecordFlag != 0 {
-				frameHeader, _, _, _, err := valuelog.DecodeFrame(raw[offset+valuelog.HeaderSize : next])
-				if err != nil {
-					return 0, fmt.Errorf("decode grouped frame %s at %d: %w", path, offset, err)
-				}
-				if frameHeader.DictID != 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
-					frames++
-				}
-			}
-			offset = next
-		}
-	}
-	return frames, nil
 }
 
 func assertJSONDocumentEqual(t *testing.T, got, want []byte, label string) {
