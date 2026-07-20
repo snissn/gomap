@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -1088,6 +1089,60 @@ type VectorPartitionCleanupEligibilityV1 struct {
 	ReaderPins, SnapshotReferences, CatalogReferences uint64
 }
 
+var vectorPartitionReaderPinsV1 = struct {
+	sync.Mutex
+	counts map[string]uint64
+}{counts: make(map[string]uint64)}
+
+func vectorPartitionReaderPinKeyV1(root, collection, index string, generation uint64) string {
+	return filepath.Clean(root) + "\x00" + collection + "\x00" + index + "\x00" + strconv.FormatUint(generation, 10)
+}
+
+// VectorPartitionReaderPinV1 is an explicit M1 lifecycle handle. Query
+// routing is deferred, but any consumer that opens a generation can hold this
+// handle across use so status and cleanup observe real in-process readers.
+type VectorPartitionReaderPinV1 struct {
+	key  string
+	once sync.Once
+}
+
+func (p *VectorPartitionReaderPinV1) Release() {
+	if p == nil {
+		return
+	}
+	p.once.Do(func() {
+		vectorPartitionReaderPinsV1.Lock()
+		defer vectorPartitionReaderPinsV1.Unlock()
+		if vectorPartitionReaderPinsV1.counts[p.key] <= 1 {
+			delete(vectorPartitionReaderPinsV1.counts, p.key)
+		} else {
+			vectorPartitionReaderPinsV1.counts[p.key]--
+		}
+	})
+}
+func vectorPartitionReaderPinCountV1(root, collection, index string, generation uint64) uint64 {
+	vectorPartitionReaderPinsV1.Lock()
+	defer vectorPartitionReaderPinsV1.Unlock()
+	return vectorPartitionReaderPinsV1.counts[vectorPartitionReaderPinKeyV1(root, collection, index, generation)]
+}
+func (c *Collection) AcquireVectorPartitionReaderPinV1(index string, generation uint64) (*VectorPartitionReaderPinV1, error) {
+	if c == nil || c.db == nil {
+		return nil, errors.New("collections: closed collection")
+	}
+	s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.Open(c.name, index, generation); err != nil {
+		return nil, err
+	}
+	key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, generation)
+	vectorPartitionReaderPinsV1.Lock()
+	vectorPartitionReaderPinsV1.counts[key]++
+	vectorPartitionReaderPinsV1.Unlock()
+	return &VectorPartitionReaderPinV1{key: key}, nil
+}
+
 func (e VectorPartitionCleanupEligibilityV1) Deletable() bool {
 	return !e.Active && e.ReaderPins == 0 && e.SnapshotReferences == 0 && e.CatalogReferences == 0
 }
@@ -1098,6 +1153,9 @@ func (s *VectorPartitionStoreV1) Delete(collection, index string, generation uin
 func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generation uint64, eligibility VectorPartitionCleanupEligibilityV1) error {
 	if !eligibility.Deletable() {
 		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
+	}
+	if pins := vectorPartitionReaderPinCountV1(s.root, collection, index, generation); pins != 0 {
+		return fmt.Errorf("collections: vector partition generation %d has %d reader pins", generation, pins)
 	}
 	tombstone := s.deleteTombstonePath(collection, index, generation)
 	_, tombstoneErr := os.Stat(tombstone)
@@ -1343,6 +1401,14 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		resources.Release()
 		return errors.New("collections: non-ready vector partition publication must not carry stable resources")
 	}
+	if m.State == "ready" {
+		if resources == nil {
+			return errors.New("collections: ready vector partition publication requires stable resources")
+		}
+		// Transfer ownership before any preflight or source check: every ready
+		// return path must release the producer's exact identity pins once.
+		defer resources.Release()
+	}
 	if err := preflightVectorPartitionManifestV1(m, DefaultVectorPartitionManifestLimits()); err != nil {
 		return err
 	}
@@ -1377,12 +1443,6 @@ func (c *Collection) PublishVectorPartitionManifestV1(m VectorPartitionManifestV
 		return err
 	}
 	if m.State == "ready" {
-		if resources == nil {
-			return errors.New("collections: ready vector partition publication requires stable resources")
-		}
-		// Ownership transfers to this call even if validation fails. The producer
-		// pins remain held through verification and durable active-pointer sync.
-		defer resources.Release()
 		prepared := make([]ColumnPreparedAsset, 0, len(m.Assets)+1)
 		for _, asset := range m.Assets {
 			prepared = append(prepared, ColumnPreparedAsset{Ref: asset.Ref, Bytes: int64(asset.Bytes)})
@@ -1531,7 +1591,7 @@ func (c *Collection) VectorPartitionStatusV1(index string, generation uint64) (V
 			staleReason = "source_stale"
 		}
 	}
-	return VectorPartitionStatusV1{Manifest: m, Ready: m.State == "ready", Active: active, StaleReason: staleReason, PartitionCount: m.PartitionCount, GroupCount: uint32(len(groups)), Memberships: uint64(len(m.Memberships)), OverlapMemberships: uint64(len(m.OverlapMemberships)), AssetBytes: total}, nil
+	return VectorPartitionStatusV1{Manifest: m, Ready: m.State == "ready", Active: active, StaleReason: staleReason, PartitionCount: m.PartitionCount, GroupCount: uint32(len(groups)), Memberships: uint64(len(m.Memberships)), OverlapMemberships: uint64(len(m.OverlapMemberships)), AssetBytes: total, ReaderPins: vectorPartitionReaderPinCountV1(c.db.Dir(), c.name, index, generation)}, nil
 }
 func safeVPM(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func syncFileVPM(p string) error {
