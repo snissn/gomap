@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -97,6 +98,11 @@ func TestStableChildAtReopensModeledRelativeDatabaseRoot(t *testing.T) {
 
 	if _, _, _, err := powerlossreopen.StableChildAt(filepath.Join(canonicalTempDir(t), "escape-parent"), "../db", model, opts, true); err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("StableChildAt traversal error=%v", err)
+	}
+	if runtime.GOOS == "windows" {
+		if _, _, _, err := powerlossreopen.StableChildAt(filepath.Join(canonicalTempDir(t), "volume-parent"), `C:db`, model, opts, true); err == nil || !strings.Contains(err.Error(), "relative path") {
+			t.Fatalf("StableChildAt volume-qualified error=%v", err)
+		}
 	}
 }
 

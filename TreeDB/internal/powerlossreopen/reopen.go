@@ -196,7 +196,7 @@ func openAt(materializationRoot, dir string, model *powerlossoracle.Model, opts 
 }
 
 func cleanRelativeDir(relativeDir string) (string, error) {
-	if relativeDir == "" || filepath.IsAbs(relativeDir) {
+	if relativeDir == "" || filepath.IsAbs(relativeDir) || filepath.VolumeName(relativeDir) != "" {
 		return "", fmt.Errorf("powerlossreopen: child directory %q must be a non-empty relative path", relativeDir)
 	}
 	clean := filepath.Clean(relativeDir)

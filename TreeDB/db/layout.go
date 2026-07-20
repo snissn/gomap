@@ -354,6 +354,15 @@ func storageLayoutPathDepth(path string) int {
 
 var syncStorageLayoutDir = syncStorageLayoutDirRequired
 
+var syncStorageLayoutDirHandle = func(dir string) error {
+	file, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	return file.Sync()
+}
+
 func syncStorageLayoutDirRequired(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("treedb: empty storage layout namespace")
@@ -367,12 +376,7 @@ func syncStorageLayoutDirRequired(dir string) error {
 			ErrRecoveryRequired,
 		)
 	}
-	file, err := os.Open(dir)
-	if err != nil {
-		return errors.Join(err, ErrRecoveryRequired)
-	}
-	defer func() { _ = file.Close() }()
-	if err := file.Sync(); err != nil {
+	if err := syncStorageLayoutDirHandle(dir); err != nil {
 		lowerErr := strings.ToLower(err.Error())
 		if errors.Is(err, syscall.EINVAL) ||
 			errors.Is(err, syscall.EPERM) ||

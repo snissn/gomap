@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,46 +22,70 @@ type freshLayoutNamespaceCase struct {
 	partial           bool
 	point             durabilitycut.Point
 	path              func(parent, database string) string
+	wantStableDirs    []string
 }
 
 func TestPowerLossCertificationFreshCompositeBeforeOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID: "fresh-layout-composite-before-outer-parent-sync",
-		point:     durabilitycut.BeforeNewFileDirectorySync,
-		path:      func(parent, _ string) string { return parent },
+		variantID:      "fresh-layout-composite-before-outer-parent-sync",
+		point:          durabilitycut.BeforeNewFileDirectorySync,
+		path:           func(parent, _ string) string { return parent },
+		wantStableDirs: []string{"."},
+	})
+}
+
+func TestPowerLossCertificationFreshCompositeBeforeRootSync(t *testing.T) {
+	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
+		variantID:      "fresh-layout-composite-before-root-sync",
+		point:          durabilitycut.BeforeNewFileDirectorySync,
+		path:           func(_, database string) string { return database },
+		wantStableDirs: []string{"."},
 	})
 }
 
 func TestPowerLossCertificationFreshCompositeAfterRootSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID: "fresh-layout-composite-after-root-sync",
-		point:     durabilitycut.AfterNewFileDirectorySync,
-		path:      func(_, database string) string { return database },
+		variantID:      "fresh-layout-composite-after-root-sync",
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(_, database string) string { return database },
+		wantStableDirs: []string{"."},
 	})
 }
 
 func TestPowerLossCertificationFreshCompositeAfterOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID: "fresh-layout-composite-after-outer-parent-sync",
-		point:     durabilitycut.AfterNewFileDirectorySync,
-		path:      func(parent, _ string) string { return parent },
+		variantID:      "fresh-layout-composite-after-outer-parent-sync",
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(parent, _ string) string { return parent },
+		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
+	})
+}
+
+func TestPowerLossCertificationFreshCompositeBeforeMainDBParentSync(t *testing.T) {
+	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
+		variantID:      "fresh-layout-composite-before-maindb-parent-sync",
+		point:          durabilitycut.BeforeNewFileDirectorySync,
+		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
+		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb"},
 	})
 }
 
 func TestPowerLossCertificationFreshCompositeAfterMainDBParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID: "fresh-layout-composite-after-maindb-parent-sync",
-		point:     durabilitycut.AfterNewFileDirectorySync,
-		path:      func(_, database string) string { return filepath.Join(database, "maindb") },
+		variantID:      "fresh-layout-composite-after-maindb-parent-sync",
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(_, database string) string { return filepath.Join(database, "maindb") },
+		wantStableDirs: []string{".", "db", "db/dictdb", "db/dictdb/column_assets", "db/dictdb/leaf_vlog", "db/dictdb/value_vlog", "db/dictdb/wal", "db/maindb", "db/maindb/column_assets", "db/maindb/leaf_vlog", "db/maindb/value_vlog", "db/maindb/wal"},
 	})
 }
 
 func TestPowerLossCertificationPartialCompositeAfterOuterParentSync(t *testing.T) {
 	testPowerLossCertificationFreshLayout(t, freshLayoutNamespaceCase{
-		variantID: "partial-layout-composite-after-outer-parent-sync",
-		partial:   true,
-		point:     durabilitycut.AfterNewFileDirectorySync,
-		path:      func(parent, _ string) string { return parent },
+		variantID:      "partial-layout-composite-after-outer-parent-sync",
+		partial:        true,
+		point:          durabilitycut.AfterNewFileDirectorySync,
+		path:           func(parent, _ string) string { return parent },
+		wantStableDirs: []string{".", "db", "db/dictdb", "db/maindb"},
 	})
 }
 
@@ -70,6 +95,7 @@ func TestPowerLossCertificationFreshFlatBeforeOuterParentSync(t *testing.T) {
 		disableSideStores: true,
 		point:             durabilitycut.BeforeNewFileDirectorySync,
 		path:              func(parent, _ string) string { return parent },
+		wantStableDirs:    []string{"."},
 	})
 }
 
@@ -79,6 +105,7 @@ func TestPowerLossCertificationFreshFlatAfterOuterParentSync(t *testing.T) {
 		disableSideStores: true,
 		point:             durabilitycut.AfterNewFileDirectorySync,
 		path:              func(parent, _ string) string { return parent },
+		wantStableDirs:    []string{".", "db"},
 	})
 }
 
@@ -141,6 +168,15 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 	if !cutTriggered || !errors.Is(openErr, cutErr) {
 		t.Fatalf("fresh-layout Open error=%v cutTriggered=%t want injected cut at %s %q", openErr, cutTriggered, testCase.point, wantPath)
 	}
+	stableImage := t.TempDir()
+	if err := model.MaterializeStable(stableImage); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := relativeDirectories(stableImage); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(got, testCase.wantStableDirs) {
+		t.Fatalf("stable namespace directories=%v want=%v", got, testCase.wantStableDirs)
+	}
 
 	readOnly := os.Getenv(powerlossoracle.EnvEvidenceReopenMode) == powerlossoracle.EvidenceReopenReadOnly
 	if readOnly {
@@ -167,6 +203,25 @@ func testPowerLossCertificationFreshLayout(t *testing.T, testCase freshLayoutNam
 	if err := closeReopened(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func relativeDirectories(root string) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		dirs = append(dirs, filepath.ToSlash(relative))
+		return nil
+	})
+	return dirs, err
 }
 
 func pathWithinRoot(root, path string) bool {

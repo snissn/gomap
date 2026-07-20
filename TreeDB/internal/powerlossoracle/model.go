@@ -664,9 +664,14 @@ func (m *Model) SyncDir(dir string) error {
 		}
 	}
 	removedTrees := make([]string, 0)
-	for child := range m.stableDirs {
+	for child, stableIdentity := range m.stableDirs {
 		if child != "." && cleanInternal(pathpkg.Dir(child)) == dir {
-			if _, stillVisible := m.volatileDirs[child]; !stillVisible {
+			volatileIdentity, stillVisible := m.volatileDirs[child]
+			replaced := stillVisible &&
+				validStableIdentity(stableIdentity) &&
+				validStableIdentity(volatileIdentity) &&
+				!rootpublication.SamePhysicalIdentity(stableIdentity, volatileIdentity)
+			if !stillVisible || replaced {
 				removedTrees = append(removedTrees, child)
 			}
 			delete(m.stableDirs, child)
@@ -887,13 +892,17 @@ func (m *Model) UseObservedTrace(observed *Model) error {
 // and bytes at a cut without materializing them.
 func (m *Model) StableFingerprint() string {
 	h := sha256.New()
-	dirs := keys(m.stableDirs)
+	reachableDirs, reachableFiles := reachableNamespace(m.stableDirs, m.stable)
+	dirs := keys(reachableDirs)
 	sort.Strings(dirs)
 	for _, dir := range dirs {
-		_, _ = fmt.Fprintf(h, "d:%s\x00", dir)
+		identity := physicalStableIdentity(reachableDirs[dir])
+		_, _ = fmt.Fprintf(h, "d:%s:%s:%d:%x\x00", dir, identity.Platform, identity.VolumeID, identity.ObjectID)
 	}
-	for _, path := range m.StablePaths() {
-		id := m.stable[path]
+	paths := keys(reachableFiles)
+	sort.Strings(paths)
+	for _, path := range paths {
+		id := reachableFiles[path]
 		_, _ = fmt.Fprintf(h, "f:%s:%d:", path, id)
 		_, _ = h.Write(m.inodes[id].stable)
 		_, _ = h.Write([]byte{0})
