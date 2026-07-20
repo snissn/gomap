@@ -66,6 +66,29 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	activeGC, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{DryRun: true, CandidateRefs: refs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeGC.BytesEligible != 0 {
+		t.Fatalf("active VPM assets became reclaimable: %+v", activeGC)
+	}
+	if err := store.Deactivate(m.Collection, m.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatal(err)
+	}
+	retiredGC, err := col.ColumnAssetGC(t.Context(), ColumnAssetGCOptions{DryRun: true, CandidateRefs: refs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retiredGC.BytesEligible == 0 {
+		t.Fatalf("retired/deleted VPM assets stayed protected: %+v", retiredGC)
+	}
+	if err := store.Publish(m); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(store.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active"), []byte("not-a-generation\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
