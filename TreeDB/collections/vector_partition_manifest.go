@@ -80,6 +80,21 @@ func VectorIndexDefinitionDigestV1(d VectorIndexDefinition) string {
 		binary.BigEndian.PutUint64(x[:], n)
 		b.Write(x[:])
 	}
+	putU32VPM(b, uint32(len(d.QuantizedIndexes)))
+	for _, q := range d.QuantizedIndexes {
+		putStringVPM(b, q.Name)
+		putStringVPM(b, q.Codec)
+		putU32VPM(b, q.Version)
+		if q.ScalarU8Calibration == nil {
+			putU32VPM(b, 0)
+		} else {
+			putU32VPM(b, 1)
+			putStringVPM(b, string(q.ScalarU8Calibration.Mode))
+			putStringVPM(b, string(q.ScalarU8Calibration.Grouping))
+			putStringVPM(b, string(q.ScalarU8Calibration.AlphaPolicy.Name))
+			putU32VPM(b, q.ScalarU8Calibration.AlphaPolicy.QuantilePPM)
+		}
+	}
 	h := sha256.Sum256(b.Bytes())
 	return hex.EncodeToString(h[:])
 }
