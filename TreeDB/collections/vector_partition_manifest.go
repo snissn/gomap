@@ -784,6 +784,17 @@ func (c *Collection) vectorPartitionReachabilityRefsV1() ([]ColumnAssetRef, []Co
 		if !found {
 			return nil, nil, fmt.Errorf("collections: vector partition active generation %d for %q is not retained", active.Generation, index)
 		}
+		// Publication and deactivation deliberately tolerate a crash with both
+		// markers present. The retired generation remains prepared-only until a
+		// retry removes its marker, while the active one is the sole pinned set.
+		if retired, retiredErr := s.OpenRetired(c.name, index); retiredErr == nil {
+			expectedRetired[safeVPM(c.name)+"-"+safeVPM(index)+".retired"] = struct{}{}
+			if !vectorPartitionManifestGenerationRetained(manifests, retired.Generation) {
+				return nil, nil, fmt.Errorf("collections: retired vector partition generation %d for %q is not retained", retired.Generation, index)
+			}
+		} else if !errors.Is(retiredErr, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("collections: vector partition retired pointer for %q: %w", index, retiredErr)
+		}
 	}
 	for activeName := range activeNames {
 		if _, ok := expectedActive[activeName]; !ok {
@@ -843,6 +854,13 @@ func (s *VectorPartitionStoreV1) Publish(m VectorPartitionManifestV1) error {
 	return WithVectorPartitionStorageBarrierV1(s.root, func() error { return s.publishLocked(m) })
 }
 func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) error {
+	if m.State == "ready" {
+		if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err == nil {
+			return fmt.Errorf("%w: generation %d is deleting", ErrVectorPartitionManifestInvalid, m.Generation)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	raw, e := EncodeVectorPartitionManifestV1(m)
 	if e != nil {
 		return e
@@ -875,12 +893,6 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 	if m.State == "ready" {
 		active := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".active")
 		retired := filepath.Join(s.dir, safeVPM(m.Collection)+"-"+safeVPM(m.IndexName)+".retired")
-		if err := os.Remove(retired); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if e = syncDirVPM(s.dir); e != nil {
-			return e
-		}
 		atmp, e := s.uniqueTemp(filepath.Base(active))
 		if e != nil {
 			return e
@@ -894,6 +906,14 @@ func (s *VectorPartitionStoreV1) publishLocked(m VectorPartitionManifestV1) erro
 		}
 		if e = os.Rename(atmp, active); e != nil {
 			return e
+		}
+		// The replacement pointer is durable before a stale retired marker is
+		// removed. A crash may therefore retain both markers, never neither.
+		if e = syncDirVPM(s.dir); e != nil {
+			return e
+		}
+		if err := os.Remove(retired); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 	}
 	return syncDirVPM(s.dir)
@@ -943,21 +963,28 @@ func (s *VectorPartitionStoreV1) OpenRetired(collection, index string) (VectorPa
 }
 func (s *VectorPartitionStoreV1) openPointer(collection, index, suffix string) (VectorPartitionManifestV1, error) {
 	p := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+suffix)
-	raw, e := readBoundedVPM(p, 32)
+	generation, e := readVectorPartitionPointerGenerationV1(p)
 	if e != nil {
 		return VectorPartitionManifestV1{}, e
 	}
+	return s.Open(collection, index, generation)
+}
+func readVectorPartitionPointerGenerationV1(p string) (uint64, error) {
+	raw, e := readBoundedVPM(p, 32)
+	if e != nil {
+		return 0, e
+	}
 	if len(raw) < 2 || len(raw) > 32 {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer size", ErrVectorPartitionManifestInvalid)
+		return 0, fmt.Errorf("%w: active pointer size", ErrVectorPartitionManifestInvalid)
 	}
 	if raw[len(raw)-1] != '\n' || bytes.IndexByte(raw[:len(raw)-1], '\n') >= 0 {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
+		return 0, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
 	}
 	generation, e := strconv.ParseUint(string(raw[:len(raw)-1]), 10, 64)
 	if e != nil || generation == 0 {
-		return VectorPartitionManifestV1{}, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
+		return 0, fmt.Errorf("%w: active pointer", ErrVectorPartitionManifestInvalid)
 	}
-	return s.Open(collection, index, generation)
+	return generation, nil
 }
 
 // Deactivate replaces the active pointer with a durable retired marker. The
@@ -1013,6 +1040,11 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	if !eligibility.Deletable() {
 		return fmt.Errorf("collections: vector partition generation %d is still reachable", generation)
 	}
+	tombstone := s.deleteTombstonePath(collection, index, generation)
+	_, tombstoneErr := os.Stat(tombstone)
+	if tombstoneErr != nil && !errors.Is(tombstoneErr, os.ErrNotExist) {
+		return tombstoneErr
+	}
 	if active, err := s.OpenActive(collection, index); err == nil {
 		if active.Generation == generation {
 			return fmt.Errorf("collections: vector partition generation %d is active", generation)
@@ -1020,11 +1052,27 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("collections: vector partition cleanup active pointer: %w", err)
 	}
-	retiredMatches := false
-	if retired, err := s.OpenRetired(collection, index); err == nil {
-		retiredMatches = retired.Generation == generation
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", err)
+	retiredPath := filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")
+	retiredGeneration, retiredErr := readVectorPartitionPointerGenerationV1(retiredPath)
+	retiredMatches := retiredErr == nil && retiredGeneration == generation
+	if retiredErr != nil && !errors.Is(retiredErr, os.ErrNotExist) {
+		return fmt.Errorf("collections: vector partition cleanup retired pointer: %w", retiredErr)
+	}
+	if errors.Is(tombstoneErr, os.ErrNotExist) {
+		if err := s.writeDeleteTombstone(collection, index, generation); err != nil {
+			return err
+		}
+	}
+	// Detach the marker before the manifest. Thus any durable interrupted state
+	// is either a retryable tombstone with a retained manifest, or no manifest
+	// and no pointer that could resurrect it.
+	if retiredMatches {
+		if err := os.Remove(retiredPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := syncDirVPM(s.dir); err != nil {
+			return err
+		}
 	}
 	p := filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.vpm", safeVPM(collection), safeVPM(index), generation))
 	if e := os.Remove(p); e != nil && !errors.Is(e, os.ErrNotExist) {
@@ -1033,17 +1081,31 @@ func (s *VectorPartitionStoreV1) deleteLocked(collection, index string, generati
 	if err := syncDirVPM(s.dir); err != nil {
 		return err
 	}
-	if retiredMatches || errors.Is(s.OpenRetiredError(collection, index), os.ErrNotExist) {
-		if err := os.Remove(filepath.Join(s.dir, safeVPM(collection)+"-"+safeVPM(index)+".retired")); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return syncDirVPM(s.dir)
+	if err := os.Remove(tombstone); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	return nil
+	return syncDirVPM(s.dir)
 }
-func (s *VectorPartitionStoreV1) OpenRetiredError(collection, index string) error {
-	_, err := s.OpenRetired(collection, index)
-	return err
+func (s *VectorPartitionStoreV1) deleteTombstonePath(collection, index string, generation uint64) string {
+	return filepath.Join(s.dir, fmt.Sprintf("%s-%s-%d.deleting", safeVPM(collection), safeVPM(index), generation))
+}
+func (s *VectorPartitionStoreV1) writeDeleteTombstone(collection, index string, generation uint64) error {
+	tombstone := s.deleteTombstonePath(collection, index, generation)
+	tmp, err := s.uniqueTemp(filepath.Base(tombstone))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err = os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", generation)), 0600); err != nil {
+		return err
+	}
+	if err = syncFileVPM(tmp); err != nil {
+		return err
+	}
+	if err = os.Link(tmp, tombstone); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return syncDirVPM(s.dir)
 }
 
 type VectorPartitionStatusV1 struct {

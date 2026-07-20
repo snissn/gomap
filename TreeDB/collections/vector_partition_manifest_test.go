@@ -186,6 +186,32 @@ func TestVectorPartitionStoreV1DeactivateDurablyRetiresActiveGeneration(t *testi
 	}
 }
 
+func TestVectorPartitionStoreV1CleanupResumesDurableTombstone(t *testing.T) {
+	s, err := OpenVectorPartitionStoreV1(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	if err := s.Publish(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Deactivate(m.Collection, m.IndexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeDeleteTombstone(m.Collection, m.IndexName, m.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(m.Collection, m.IndexName, m.Generation, VectorPartitionCleanupEligibilityV1{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleanup tombstone remains: %v", err)
+	}
+	if _, err := s.Open(m.Collection, m.IndexName, m.Generation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted manifest open err=%v, want not exist", err)
+	}
+}
+
 func TestVectorPartitionStoreV1SameGenerationPublicationIsExactByteIdempotent(t *testing.T) {
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
