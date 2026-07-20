@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -130,11 +132,13 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if retiredGC.BytesEligible != 0 {
 		t.Fatalf("reclaim record failed to retain deleted VPM assets: %+v", retiredGC)
 	}
-	if err := os.Remove(store.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := col.ReclaimVectorPartitionGenerationV1(ctx, m.IndexName, m.Generation); err != nil {
+		t.Fatalf("public VPM reclaim: %v", err)
 	}
-	if err := syncDirVPM(store.dir); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(store.deleteTombstonePath(m.Collection, m.IndexName, m.Generation)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed reclaim record remains: %v", err)
 	}
 	if err := store.Publish(m); err != nil {
 		t.Fatal(err)
