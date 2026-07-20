@@ -489,14 +489,25 @@ func BenchmarkVectorPartitionManifestV1Scale(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			b.ReportMetric(float64(len(raw))/float64(rows), "metadata-bytes/vector")
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
-				if err != nil || got.SourceRowCount != uint64(rows) {
-					b.Fatalf("decode: %v", err)
-				}
+			if rows == 1_000_000 && len(raw) > rows*64 {
+				b.Fatalf("encoded disjoint metadata=%d bytes (%0.2f/vector), exceeds 64 B/vector gate", len(raw), float64(len(raw))/float64(rows))
 			}
+			b.ReportMetric(float64(len(raw))/float64(rows), "metadata-bytes/vector")
+			b.Run("decode_validate", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					got, err := DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+					if err != nil || got.SourceRowCount != uint64(rows) {
+						b.Fatalf("decode: %v", err)
+					}
+				}
+			})
+			b.Run("encode", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					if _, err := EncodeVectorPartitionManifestV1(m); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
 		})
 	}
 }
