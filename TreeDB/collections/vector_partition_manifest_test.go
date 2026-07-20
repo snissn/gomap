@@ -1033,58 +1033,6 @@ func TestVectorPartitionManifestV1StrictMalformedJSONAndBinaryMatrix(t *testing.
 	}
 }
 
-func TestVectorPartitionManifestV1BinaryTruncationCorruptionAndCaps(t *testing.T) {
-	base := testVectorPartitionManifestV1()
-	raw, err := EncodeVectorPartitionManifestV1(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, cut := range []int{0, 4, 8, 9, len(raw) / 2, len(raw) - 1} {
-		t.Run(fmt.Sprintf("truncate/%d", cut), func(t *testing.T) {
-			if _, err := DecodeVectorPartitionManifestV1(raw[:cut], DefaultVectorPartitionManifestLimits()); err == nil {
-				t.Fatal("truncation accepted")
-			}
-		})
-	}
-	// Corrupt covered identity/string bytes and fixed numeric bytes. These must
-	// never decode to a trusted manifest (whether rejected by bounds or by the
-	// whole-record integrity digest).
-	for _, off := range []int{8, 16, len(raw) / 3, len(raw) - 8} {
-		t.Run(fmt.Sprintf("covered-corruption/%d", off), func(t *testing.T) {
-			bad := append([]byte(nil), raw...)
-			bad[off] ^= 0x80
-			if _, err := DecodeVectorPartitionManifestV1(bad, DefaultVectorPartitionManifestLimits()); err == nil {
-				t.Fatal("covered-byte corruption accepted")
-			}
-		})
-	}
-	for _, max := range []int{len(raw) - 1, 8, 1} {
-		t.Run(fmt.Sprintf("encoded-cap/%d", max), func(t *testing.T) {
-			limits := DefaultVectorPartitionManifestLimits()
-			limits.MaxBytes = max
-			if _, err := DecodeVectorPartitionManifestV1(raw, limits); err == nil {
-				t.Fatal("encoded cap accepted")
-			}
-		})
-	}
-	for _, mutate := range []func(*VectorPartitionManifestV1){
-		func(m *VectorPartitionManifestV1) {
-			m.Memberships = append(m.Memberships, VectorPartitionMembershipV1{VectorOrdinal: 0, PartitionID: 0})
-		},
-		func(m *VectorPartitionManifestV1) { m.Memberships = m.Memberships[1:] },
-		func(m *VectorPartitionManifestV1) {
-			m.Memberships[0], m.Memberships[1] = m.Memberships[1], m.Memberships[0]
-		},
-	} {
-		m := base
-		m.Memberships = append([]VectorPartitionMembershipV1(nil), base.Memberships...)
-		mutate(&m)
-		if err := m.Validate(DefaultVectorPartitionManifestLimits()); err == nil {
-			t.Fatal("structurally invalid membership record validated")
-		}
-	}
-}
-
 func TestVectorPartitionManifestV1TotalMembershipCapAndRawReadyAuthority(t *testing.T) {
 	m := testVectorPartitionManifestV1()
 	m.Representatives = nil

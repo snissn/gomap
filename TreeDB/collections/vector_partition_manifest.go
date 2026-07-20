@@ -564,6 +564,9 @@ type vpmReader struct {
 }
 
 func (r *vpmReader) u32() uint32 {
+	if r.err != nil {
+		return 0
+	}
 	if r.off+4 > len(r.b) {
 		r.err = errors.New("truncated")
 		return 0
@@ -573,6 +576,9 @@ func (r *vpmReader) u32() uint32 {
 	return v
 }
 func (r *vpmReader) u64() uint64 {
+	if r.err != nil {
+		return 0
+	}
 	if r.off+8 > len(r.b) {
 		r.err = errors.New("truncated")
 		return 0
@@ -582,6 +588,9 @@ func (r *vpmReader) u64() uint64 {
 	return v
 }
 func (r *vpmReader) str() string {
+	if r.err != nil {
+		return ""
+	}
 	n := r.u32()
 	if r.err != nil || n > uint32(r.l.MaxStringBytes) || uint64(r.off)+uint64(n) > uint64(len(r.b)) {
 		r.err = errors.New("string cap/truncated")
@@ -592,15 +601,39 @@ func (r *vpmReader) str() string {
 	return s
 }
 func (r *vpmReader) count(max int) int {
+	if r.err != nil {
+		return 0
+	}
 	n := r.u32()
-	if r.err != nil || uint64(n) > uint64(max) {
+	if r.err != nil {
+		return 0
+	}
+	if uint64(n) > uint64(max) {
 		r.err = errors.New("count cap")
 		return 0
 	}
 	return int(n)
 }
+
+func (r *vpmReader) allocationCount(max, minItemBytes int, label string) int {
+	n := r.count(max)
+	if r.err != nil {
+		return 0
+	}
+	// A declared count must fit even if every remaining item uses its shortest
+	// legal encoding. Check this before make so a tiny corrupt record cannot
+	// turn a permissive caller-supplied cap into a large allocation request.
+	if minItemBytes <= 0 || n > (len(r.b)-r.off)/minItemBytes {
+		r.err = fmt.Errorf("%s count exceeds remaining bytes", label)
+		return 0
+	}
+	return n
+}
+
 func (r *vpmReader) assets() []VectorPartitionAssetV1 {
-	n := r.count(r.l.MaxAssets)
+	// partition + two empty strings + bytes + the shortest column reference.
+	const minAssetBytes = 4 + 4 + 4 + 8 + (4 + 4 + 8 + 8 + 4 + 8 + 8 + 4)
+	n := r.allocationCount(r.l.MaxAssets, minAssetBytes, "asset")
 	if r.err != nil {
 		return nil
 	}
@@ -618,7 +651,8 @@ func (r *vpmReader) columnRef() ColumnAssetRef {
 	return ColumnAssetRef{Kind: ColumnAssetKind(k), Namespace: n, Generation: g, PartID: p, FileID: f, Offset: int64(o), Length: int64(l), Checksum: c}
 }
 func (r *vpmReader) placements() []VectorPartitionPlacementV1 {
-	n := r.count(r.l.MaxPartitions)
+	const minPlacementBytes = 4 + 4 // partition + empty group string
+	n := r.allocationCount(r.l.MaxPartitions, minPlacementBytes, "placement")
 	if r.err != nil {
 		return nil
 	}
@@ -629,8 +663,12 @@ func (r *vpmReader) placements() []VectorPartitionPlacementV1 {
 	return x
 }
 func (r *vpmReader) memberships() []VectorPartitionMembershipV1 {
-	n := r.count(r.l.MaxMemberships)
-	if r.err != nil || n > r.l.MaxMemberships-r.membershipTotal {
+	const membershipBytes = 8 + 4
+	n := r.allocationCount(r.l.MaxMemberships, membershipBytes, "membership")
+	if r.err != nil {
+		return nil
+	}
+	if n > r.l.MaxMemberships-r.membershipTotal {
 		r.err = errors.New("total membership cap")
 		return nil
 	}
