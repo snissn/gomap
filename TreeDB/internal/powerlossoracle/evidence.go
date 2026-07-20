@@ -132,13 +132,7 @@ func BeginEvidenceFromEnv(model *Model, readOnly bool) (*EvidenceSession, error)
 		return nil, err
 	}
 	trace := portableEvidenceTrace(model.Trace())
-	cutPrefix := "cut:" + request.CutPoint + ":"
-	observed := 0
-	for _, event := range trace {
-		if strings.HasPrefix(event, cutPrefix) {
-			observed++
-		}
-	}
+	observed := replayWindowCutCount(trace, request.CutPoint, request.Selector.VariantID)
 	if observed == 0 {
 		return nil, errorsf("declared cut point %q was not observed", request.CutPoint)
 	}
@@ -212,6 +206,22 @@ func BeginEvidenceFromEnv(model *Model, readOnly bool) (*EvidenceSession, error)
 		stableTreeSHA256:   stableTreeSHA256,
 		stableFingerprint:  model.StableFingerprint(),
 	}, nil
+}
+
+func replayWindowCutCount(trace []string, cutPoint, variantID string) int {
+	cutPrefix := "cut:" + cutPoint + ":"
+	windowMarker := replayWindowMarker(variantID)
+	observed := 0
+	for _, event := range trace {
+		if event == windowMarker {
+			observed = 0
+			continue
+		}
+		if strings.HasPrefix(event, cutPrefix) {
+			observed++
+		}
+	}
+	return observed
 }
 
 func portableEvidenceTrace(trace []string) []string {

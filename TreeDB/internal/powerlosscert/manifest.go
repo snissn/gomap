@@ -135,6 +135,7 @@ type Witness struct {
 	TypedError             string       `json:"typed_error"`
 	ExpectedRecoveryDir    string       `json:"expected_recovery_dir,omitempty"`
 	State                  WitnessState `json:"state"`
+	StateComparison        string       `json:"state_comparison,omitempty"`
 	CounterexampleID       string       `json:"counterexample_id,omitempty"`
 	NegativeControlID      string       `json:"negative_control_id,omitempty"`
 	Seed                   uint64       `json:"seed"`
@@ -446,6 +447,9 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	state := witness.State
 	if state.RootMetaGeneration == "" || state.FreelistGeneration == "" || state.ExternalFrontiers == "" || state.NamespaceGeneration == "" || state.WALLineage == "" || state.DurableLSN == "" || state.CleanupPins == "" {
 		return fmt.Errorf("%s has incomplete recovery-state metadata", prefix)
+	}
+	if witness.StateComparison != stateComparisonExact && witness.StateComparison != stateComparisonLogicalHorizon {
+		return fmt.Errorf("%s has invalid state comparison %q", prefix, witness.StateComparison)
 	}
 	if witness.EvidenceTier == EvidenceTierModeledCrash {
 		if _, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir); err != nil {

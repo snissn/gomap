@@ -128,11 +128,17 @@ func TestPowerLossCertificationAuthoritativeResourcesPublicReopen(t *testing.T) 
 	witness := prepareAuthoritativeResourceWitness(t, database, dir, backgroundErrors)
 	waitForAuthoritativeResourceObserverQuiescence(t, &observeMu, &observedEvents, backgroundErrors)
 	observeMu.Lock()
+	if err := model.BeginReplayWindow(authoritativeResourcesVariantID); err != nil {
+		observeMu.Unlock()
+		t.Fatal(err)
+	}
+	metaSyncs = 0
 	armed = true
 	observeMu.Unlock()
 	// Publish one deterministic terminal marker after all asynchronous resource
 	// work is quiescent. The selected cut is the marker's real maindb metadata
-	// sync, so the evidence address cannot drift with dictdb scheduling.
+	// sync and its occurrence is relative to the explicit replay window. The
+	// complete pre-window persistence trace remains in the evidence artifact.
 	boundaryKey := []byte("certification/authoritative-resource-boundary")
 	boundaryValue := []byte("stable")
 	if err := database.SetSync(boundaryKey, boundaryValue); err != nil {

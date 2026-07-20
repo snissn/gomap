@@ -219,6 +219,64 @@ func TestBeginEvidenceFromEnvRequiresTraceToEndAtReplayOccurrence(t *testing.T) 
 	}
 }
 
+func TestBeginEvidenceFromEnvScopesOccurrenceAfterReplayWindowAndRetainsPrefix(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model, err := Capture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.BeginReplayWindow("variant-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(source, durabilitycut.Event{Point: durabilitycut.AfterMetaWrite, Resource: durabilitycut.ResourceMeta}); err != nil {
+		t.Fatal(err)
+	}
+
+	evidenceDir := filepath.Join(canonicalTempDir(t), "evidence")
+	t.Setenv(EnvEvidenceDir, evidenceDir)
+	t.Setenv(EnvEvidenceCutPoint, string(durabilitycut.AfterMetaWrite))
+	t.Setenv(EnvEvidenceReopenMode, EvidenceReopenReadWrite)
+	t.Setenv(EnvReplayCut, "cut/checkpoint-generation-2/after-meta-write/000")
+	t.Setenv(EnvReplayVariant, "variant-a")
+	t.Setenv(EnvReplaySeed, "1")
+
+	session, err := BeginEvidenceFromEnv(model, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ObservedEventCount != 1 {
+		t.Fatalf("observed event count=%d want window-relative 1", session.ObservedEventCount)
+	}
+	var trace evidenceTrace
+	data, err := os.ReadFile(filepath.Join(evidenceDir, "operation_trace.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &trace); err != nil {
+		t.Fatal(err)
+	}
+	if got := replayWindowCutCount(trace.Events, string(durabilitycut.AfterMetaWrite), "variant-a"); got != 1 {
+		t.Fatalf("window-relative trace cuts=%d want 1", got)
+	}
+	allCuts := 0
+	for _, event := range trace.Events {
+		if strings.HasPrefix(event, "cut:"+string(durabilitycut.AfterMetaWrite)+":") {
+			allCuts++
+		}
+	}
+	if allCuts != 3 {
+		t.Fatalf("retained full-trace cuts=%d want 3", allCuts)
+	}
+}
+
 func TestBeginEvidenceFromEnvRejectsSymlinkedEvidenceRoot(t *testing.T) {
 	source := t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "index.db"), []byte("old"), 0o600); err != nil {

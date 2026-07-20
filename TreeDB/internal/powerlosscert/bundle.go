@@ -398,13 +398,7 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 	if trace.VariantID == "" {
 		return operationTraceArtifact{}, fmt.Errorf("%s has empty variant_id", prefix)
 	}
-	matchingEvents := 0
-	cutPrefix := "cut:" + witness.CutPoint + ":"
-	for _, event := range trace.Events {
-		if strings.HasPrefix(event, cutPrefix) {
-			matchingEvents++
-		}
-	}
+	matchingEvents := replayWindowCutCount(trace.Events, witness.CutPoint, trace.VariantID)
 	if trace.ObservedEventCount != matchingEvents || trace.ObservedEventCount != witness.ObservedEventCount {
 		return operationTraceArtifact{}, fmt.Errorf("%s observed_event_count=%d matching_events=%d witness=%d", prefix, trace.ObservedEventCount, matchingEvents, witness.ObservedEventCount)
 	}
@@ -426,6 +420,22 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 		return operationTraceArtifact{}, fmt.Errorf("%s command env TREEDB_POWERLOSS_EVIDENCE_DIR is empty", prefix)
 	}
 	return trace, nil
+}
+
+func replayWindowCutCount(events []string, cutPoint, variantID string) int {
+	cutPrefix := "cut:" + cutPoint + ":"
+	windowMarker := "replay-window:" + variantID
+	matching := 0
+	for _, event := range events {
+		if event == windowMarker {
+			matching = 0
+			continue
+		}
+		if strings.HasPrefix(event, cutPrefix) {
+			matching++
+		}
+	}
+	return matching
 }
 
 func verifyImageTree(root, evidenceDir, manifestID, witnessID string, artifact Artifact, kind string) (imageTreeArtifact, error) {
@@ -600,7 +610,11 @@ func verifyRecoveryTrace(root, evidenceDir, manifestID string, witness Witness, 
 	if err := validateRecoveryStats(recovery, witness.Command.Env[powerLossProfileEnv]); err != nil {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
 	}
-	if got := observedWitnessState(recovery); got != witness.State {
+	got, err := observedWitnessStateForComparison(recovery, witness.StateComparison)
+	if err != nil {
+		return recoveryTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)
+	}
+	if got != witness.State {
 		return recoveryTraceArtifact{}, fmt.Errorf("%s observed state=%+v does not match manifest state=%+v", prefix, got, witness.State)
 	}
 	recoveryDir := filepath.Join(root, filepath.FromSlash(evidenceDir), recovery.Dir)
