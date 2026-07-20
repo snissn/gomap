@@ -21,15 +21,9 @@ var vectorPartitionStorageBarriersV1 = struct {
 }{entries: make(map[string]*vectorPartitionStorageBarrierEntryV1)}
 
 func WithVectorPartitionStorageBarrierV1(root string, fn func() error) error {
-	if root == "" {
-		return errors.New("collections: empty vector partition barrier root")
-	}
-	canonical, err := filepath.Abs(root)
+	canonical, err := canonicalVectorPartitionStorageRootV1(root)
 	if err != nil {
 		return err
-	}
-	if resolved, resolveErr := filepath.EvalSymlinks(canonical); resolveErr == nil {
-		canonical = resolved
 	}
 	vectorPartitionStorageBarriersV1.Lock()
 	entry := vectorPartitionStorageBarriersV1.entries[canonical]
@@ -50,4 +44,18 @@ func WithVectorPartitionStorageBarrierV1(root string, fn func() error) error {
 		vectorPartitionStorageBarriersV1.Unlock()
 	}()
 	return fn()
+}
+
+func canonicalVectorPartitionStorageRootV1(root string) (string, error) {
+	if root == "" {
+		return "", errors.New("collections: empty vector partition barrier root")
+	}
+	canonical, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(canonical); resolveErr == nil {
+		canonical = resolved
+	}
+	return canonical, nil
 }

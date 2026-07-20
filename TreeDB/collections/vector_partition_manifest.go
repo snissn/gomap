@@ -1095,7 +1095,11 @@ var vectorPartitionReaderPinsV1 = struct {
 }{counts: make(map[string]uint64)}
 
 func vectorPartitionReaderPinKeyV1(root, collection, index string, generation uint64) string {
-	return filepath.Clean(root) + "\x00" + collection + "\x00" + index + "\x00" + strconv.FormatUint(generation, 10)
+	canonical, err := canonicalVectorPartitionStorageRootV1(root)
+	if err != nil {
+		return ""
+	}
+	return canonical + "\x00" + collection + "\x00" + index + "\x00" + strconv.FormatUint(generation, 10)
 }
 
 // VectorPartitionReaderPinV1 is an explicit M1 lifecycle handle. Query
@@ -1129,18 +1133,26 @@ func (c *Collection) AcquireVectorPartitionReaderPinV1(index string, generation 
 	if c == nil || c.db == nil {
 		return nil, errors.New("collections: closed collection")
 	}
-	s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.Open(c.name, index, generation); err != nil {
-		return nil, err
-	}
-	key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, generation)
-	vectorPartitionReaderPinsV1.Lock()
-	vectorPartitionReaderPinsV1.counts[key]++
-	vectorPartitionReaderPinsV1.Unlock()
-	return &VectorPartitionReaderPinV1{key: key}, nil
+	var pin *VectorPartitionReaderPinV1
+	err := WithVectorPartitionStorageBarrierV1(c.db.Dir(), func() error {
+		s, err := OpenExistingVectorPartitionStoreV1(c.db.Dir())
+		if err != nil {
+			return err
+		}
+		if _, err := s.Open(c.name, index, generation); err != nil {
+			return err
+		}
+		key := vectorPartitionReaderPinKeyV1(c.db.Dir(), c.name, index, generation)
+		if key == "" {
+			return errors.New("collections: invalid vector partition pin root")
+		}
+		vectorPartitionReaderPinsV1.Lock()
+		vectorPartitionReaderPinsV1.counts[key]++
+		vectorPartitionReaderPinsV1.Unlock()
+		pin = &VectorPartitionReaderPinV1{key: key}
+		return nil
+	})
+	return pin, err
 }
 
 func (e VectorPartitionCleanupEligibilityV1) Deletable() bool {

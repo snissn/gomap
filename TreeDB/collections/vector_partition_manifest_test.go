@@ -77,6 +77,20 @@ func TestCollectionVectorPartitionManifestV1BindsIndexAndReopens(t *testing.T) {
 	if !status.Ready || status.GroupCount != 1 || status.AssetBytes != uint64(refs[0].Length+refs[1].Length+refs[2].Length) {
 		t.Fatalf("unexpected status: %+v", status)
 	}
+	pin, err := col.AcquireVectorPartitionReaderPinV1(def.Name, m.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = col.VectorPartitionStatusV1(def.Name, m.Generation)
+	if err != nil || status.ReaderPins != 1 {
+		t.Fatalf("pinned status=%+v err=%v", status, err)
+	}
+	pin.Release()
+	pin.Release()
+	status, err = col.VectorPartitionStatusV1(def.Name, m.Generation)
+	if err != nil || status.ReaderPins != 0 {
+		t.Fatalf("released status=%+v err=%v", status, err)
+	}
 	plan, err := col.PlanColumnAssetReachability(t.Context(), ColumnAssetReachabilityOptions{})
 	if err != nil {
 		t.Fatal(err)
