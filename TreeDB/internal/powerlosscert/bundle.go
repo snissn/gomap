@@ -402,6 +402,9 @@ func verifyOperationTrace(root, manifestID string, witness Witness, traceArtifac
 	if trace.ReplayWindow != witness.ReplayWindow {
 		return operationTraceArtifact{}, fmt.Errorf("%s replay_window=%q want=%q", prefix, trace.ReplayWindow, witness.ReplayWindow)
 	}
+	if trace.ReplayWindow != "" && trace.ReplayWindow != trace.VariantID {
+		return operationTraceArtifact{}, fmt.Errorf("%s replay_window=%q does not match variant_id=%q", prefix, trace.ReplayWindow, trace.VariantID)
+	}
 	matchingEvents, err := replayWindowCutCount(trace.Events, witness.CutPoint, trace.ReplayWindow)
 	if err != nil {
 		return operationTraceArtifact{}, fmt.Errorf("%s: %w", prefix, err)

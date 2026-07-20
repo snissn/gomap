@@ -456,6 +456,9 @@ func validateWitness(prefix string, witness Witness, binaries map[string]bool) e
 	if got := witness.Command.Env[powerLossReplayWindowEnv]; got != witness.ReplayWindow {
 		return fmt.Errorf("%s command env %s=%q does not match replay window %q", prefix, powerLossReplayWindowEnv, got, witness.ReplayWindow)
 	}
+	if witness.ReplayWindow != "" && witness.Command.Env["TREEDB_POWERLOSS_VARIANT_ID"] != witness.ReplayWindow {
+		return fmt.Errorf("%s replay window %q does not match command variant %q", prefix, witness.ReplayWindow, witness.Command.Env["TREEDB_POWERLOSS_VARIANT_ID"])
+	}
 	if witness.EvidenceTier == EvidenceTierModeledCrash {
 		if _, err := normalizeRecoveryDir(witness.ExpectedRecoveryDir); err != nil {
 			return fmt.Errorf("%s: %w", prefix, err)

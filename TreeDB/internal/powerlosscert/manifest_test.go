@@ -56,6 +56,16 @@ func TestValidateBundleRejectsPriorChildManifestSchema(t *testing.T) {
 	}
 }
 
+func TestValidateBundleBindsReplayWindowToCommandVariant(t *testing.T) {
+	manifest := testChildManifest("witness-a")
+	witness := &manifest.Witnesses[0]
+	witness.ReplayWindow = "variant-b"
+	witness.Command.Env[powerLossReplayWindowEnv] = witness.ReplayWindow
+	if err := ValidateBundle(testRepositorySHA, testRiskInventory(), []ChildManifest{manifest}); err == nil || !strings.Contains(err.Error(), "does not match command variant") {
+		t.Fatalf("ValidateBundle replay-window variant binding error=%v", err)
+	}
+}
+
 func TestValidateBundleRejectsModeledEvidenceReuseAcrossWitnesses(t *testing.T) {
 	manifest := testChildManifest("witness-a")
 	reused := manifest.Witnesses[0]
